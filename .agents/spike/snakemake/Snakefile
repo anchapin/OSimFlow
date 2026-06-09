@@ -1,0 +1,179 @@
+# =============================================================================
+# Snakefile — OSimFlow Snakemake spike
+# =============================================================================
+# This Snakefile is a 1:1 mapping of the six Nextflow modules
+# (modules/PROCESS_*.nf) to Snakemake rules. The structure is intended
+# to be reviewed side-by-side with the custom-Python Campaign class at
+# .agents/spike/custom_python/osimflow/campaign.py.
+#
+# Key contrasts with the Nextflow skeleton:
+#   * Per-rule `container:` directive is local to the rule — no per-profile
+#     YAML to keep in sync.
+#   * Dynamic container tag is `container: f"ghcr.io/anchapin/openstudio_cli_image:{config[openstudio_version]}"`.
+#   * Resume is content-hash based, identical in spirit to Nextflow's
+#     cache 'lenient' and the custom-Python SQLiteCache.
+#   * Python rules: contributors who already know Python do not need to
+#     learn Groovy or a custom DSL.
+# =============================================================================
+
+import hashlib
+import json
+from pathlib import Path
+
+configfile: "config/config.yaml"
+
+# Dynamic container tag — same pattern as the custom-Python executor.
+CONTAINER_OS = f"ghcr.io/anchapin/openstudio_cli_image:{config['openstudio_version']}"
+CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
+
+# Snakemake evaluates paths relative to the *Snakemake* working directory
+# (set by --directory), not the Snakefile location. Resolve OUTDIR and
+# WORK to absolute paths so the input functions below don't get confused
+# by the run directory.
+OUTDIR = Path(config["outdir"]).resolve()
+WORK = (OUTDIR / "work").resolve()
+SAMPLES_JSON = WORK / "samples.json"
+SAMPLE_IDS_TXT = WORK / "sample_ids.txt"
+
+
+# ---------------------------------------------------------------------------
+# Helpers — minimal. The point is to keep the Snakefile readable.
+# ---------------------------------------------------------------------------
+def sha256_of_files(paths):
+    h = hashlib.sha256()
+    for p in sorted(paths, key=str):
+        h.update(str(p).encode() + b"\0")
+        pp = Path(p)
+        if pp.is_file():
+            h.update(pp.read_bytes())
+    return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Targets (the public outputs the user gets)
+# ---------------------------------------------------------------------------
+rule all:
+    input:
+        OUTDIR / "aggregated_results.csv",
+        OUTDIR / "failed_simulations.csv",
+        directory(OUTDIR / "plots"),
+
+
+# ---------------------------------------------------------------------------
+# 1. LHS sample generation — single-shot
+# ---------------------------------------------------------------------------
+rule generate_lhs_samples:
+    input:
+        variables_yml = config["input_variables"],
+    output:
+        samples_json = WORK / "samples.json",
+    params:
+        n = config["n_samples"],
+    container: CONTAINER_PY
+    script:
+        "scripts/generate_lhs.py"
+
+
+# ---------------------------------------------------------------------------
+# 2. Apply parameters — fan out
+# ---------------------------------------------------------------------------
+def _apply_inputs(wildcards):
+    return {
+        "samples_json": SAMPLES_JSON,
+        "template": config["template_sim_package"],
+    }
+
+def _apply_params(wildcards):
+    # Read samples.json — at rule-resolution time Snakemake has already
+    # scheduled generate_lhs_samples to produce it. Snakemake guarantees
+    # this rule does not run until the LHS step has completed because
+    # samples_json is a declared input.
+    samples = json.loads(SAMPLES_JSON.read_text())["samples"]
+    s = next(x for x in samples if x["sample_id"] == wildcards.sid)
+    return s["values"]
+
+rule apply_parameters:
+    input:
+        unpack(_apply_inputs),
+    output:
+        out_dir = directory(WORK / "apply" / "{sid}"),
+    params:
+        params_dict = _apply_params,
+    container: CONTAINER_PY
+    script:
+        "scripts/apply_params_to_model.py"
+
+
+# ---------------------------------------------------------------------------
+# 3. Run OpenStudio simulation — fan out, heavy step
+# ---------------------------------------------------------------------------
+rule run_openstudio_sim:
+    input:
+        out_dir = WORK / "apply" / "{sid}",
+    output:
+        sim_dir = directory(WORK / "sim" / "{sid}"),
+    container: CONTAINER_OS
+    script:
+        "scripts/run_openstudio_sim.py"
+
+
+# ---------------------------------------------------------------------------
+# 4. Extract KPIs — fan out
+# ---------------------------------------------------------------------------
+rule extract_kpis:
+    input:
+        sim_dir = WORK / "sim" / "{sid}",
+    output:
+        kpi_json = WORK / "kpis" / "kpi_{sid}.json",
+    container: CONTAINER_PY
+    script:
+        "scripts/extract_kpis.py"
+
+
+# ---------------------------------------------------------------------------
+# 5. Aggregate results — single-shot, all KPIs collected
+# ---------------------------------------------------------------------------
+def _aggregate_input_kpis(wildcards):
+    """Read sample IDs from the LHS step's side-output (sample_ids.txt).
+    Snakemake evaluates input functions eagerly at DAG-build time, so we
+    can NOT depend on another input file. Instead, the LHS step is
+    declared with a *checkpoint* so Snakemake re-evaluates downstream
+    rules after it runs. For the spike, we use a static list derived
+    from n_samples — see comment on the aggregate_results rule."""
+    return [str(WORK / "kpis" / f"kpi_{sid}.json") for sid in STATIC_SAMPLE_IDS]
+
+def _aggregate_input_sims(wildcards):
+    return [str(WORK / "sim" / sid) for sid in STATIC_SAMPLE_IDS]
+
+# Static list of sample IDs derived from n_samples. This is the standard
+# Snakemake workaround for "input functions can't read other inputs" —
+# a real production implementation would use `checkpoint generate_lhs_samples`
+# + `aggregate_results` to support dynamic sample counts. For the spike
+# we keep things simple.
+STATIC_SAMPLE_IDS = [f"{i+1:04d}" for i in range(int(config["n_samples"]))]
+
+rule aggregate_results:
+    input:
+        kpis = _aggregate_input_kpis,
+        sims = _aggregate_input_sims,
+    output:
+        csv = OUTDIR / "aggregated_results.csv",
+        parquet = OUTDIR / "aggregated_results.parquet",
+        failed = OUTDIR / "failed_simulations.csv",
+    container: CONTAINER_PY
+    script:
+        "scripts/aggregate_results.py"
+
+
+# ---------------------------------------------------------------------------
+# 6. Generate basic plots — single-shot
+# ---------------------------------------------------------------------------
+rule generate_basic_plots:
+    input:
+        csv = OUTDIR / "aggregated_results.csv",
+        failed = OUTDIR / "failed_simulations.csv",
+    output:
+        plots_dir = directory(OUTDIR / "plots"),
+    container: CONTAINER_PY
+    script:
+        "scripts/generate_plots.py"

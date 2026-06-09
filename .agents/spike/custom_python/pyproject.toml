@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osimflow-spike"
+version = "0.0.1"
+description = "Custom-Python driver spike for OSimFlow (see .agents/results/)"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6",
+    "submitit>=1.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["osimflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

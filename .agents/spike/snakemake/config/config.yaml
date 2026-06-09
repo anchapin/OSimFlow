@@ -1,0 +1,6 @@
+archive_intermediates: false
+input_variables: /home/alex/Projects/OSimFlow/.agents/spike/work/fixtures/variables.yml
+n_samples: 5
+openstudio_version: 3.4.0
+outdir: /home/alex/Projects/OSimFlow/.agents/spike/work/snakemake_out
+template_sim_package: /home/alex/Projects/OSimFlow/.agents/spike/work/fixtures/template_sim_package

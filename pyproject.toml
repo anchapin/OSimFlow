@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osimflow"
+version = "0.1.0-dev"
+description = "Community-driven parametric OpenStudio simulation campaigns"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "OSimFlow maintainers"},
+]
+keywords = [
+    "openstudio",
+    "energyplus",
+    "building-energy",
+    "parametric",
+    "workflow",
+    "nextflow-alternative",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Hydrology",
+]
+dependencies = [
+    "pyyaml>=6",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2",
+    "pyarrow>=12",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "tqdm>=4.65",
+    "submitit>=1.5; platform_system != 'Windows'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+]
+aws = [
+    "boto3>=1.28",
+]
+slurm = [
+    "submitit>=1.5",
+]
+
+[project.scripts]
+osimflow = "osimflow.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/anchapin/OSimFlow"
+Issues = "https://github.com/anchapin/OSimFlow/issues"
+
+[tool.setuptools]
+packages = ["osimflow", "osimflow.executors"]
+
+[tool.setuptools.package-data]
+osimflow = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+]
