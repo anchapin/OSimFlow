@@ -1,0 +1,105 @@
+import subprocess
+import sys
+import json
+from pathlib import Path
+import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+BIN = PROJECT_ROOT / "bin"
+
+def test_generate_lhs(tmp_path):
+    var_yml = tmp_path / "variables.yml"
+    var_yml.write_text("""
+variables:
+  - name: param1
+    distribution: uniform
+    min: 1.0
+    max: 5.0
+""")
+    out_dir = tmp_path / "out"
+    out_json = out_dir / "samples.json"
+
+    res = subprocess.run([
+        sys.executable, str(BIN / "generate_lhs.py"),
+        "--variables_yml", str(var_yml),
+        "--n_samples", "2",
+        "--out", str(out_json)
+    ], check=True)
+
+    assert out_json.exists()
+    data = json.loads(out_json.read_text())
+    assert data["n_samples"] == 2
+    assert len(data["samples"]) == 2
+    assert "param1" in data["samples"][0]["values"]
+    assert (out_dir / "0001.params.json").exists()
+
+
+def test_extract_kpis(tmp_path):
+    sim_dir = tmp_path / "sim"
+    sim_dir.mkdir()
+
+    # We won't test sqlite here because we can't easily mock the DB.
+    # We will just ensure the stub behavior works (graceful fallback).
+    out_kpi = tmp_path / "kpi.json"
+
+    res = subprocess.run([
+        sys.executable, str(BIN / "extract_kpis.py"),
+        "--simulation_dir", str(sim_dir),
+        "--sample_id", "0001",
+        "--out", str(out_kpi)
+    ], check=True)
+
+    assert out_kpi.exists()
+    data = json.loads(out_kpi.read_text())
+    assert data["sample_id"] == "0001"
+    assert "kpis" in data
+
+
+def test_aggregate_results(tmp_path):
+    sim_dir = tmp_path / "sim" / "0001"
+    sim_dir.mkdir(parents=True)
+
+    kpi_file = tmp_path / "kpi_0001.json"
+    kpi_file.write_text(json.dumps({
+        "sample_id": "0001",
+        "kpis": {"eui": 100.0}
+    }))
+
+    out_csv = tmp_path / "agg.csv"
+    out_fail = tmp_path / "fail.csv"
+
+    res = subprocess.run([
+        sys.executable, str(BIN / "aggregate_results.py"),
+        "--kpis", str(kpi_file),
+        "--simulation_dirs", str(sim_dir),
+        "--out_csv", str(out_csv),
+        "--out_failed", str(out_fail)
+    ], check=True)
+
+    assert out_csv.exists()
+    assert out_fail.exists()
+
+    df = pd.read_csv(out_csv)
+    assert len(df) == 1
+    assert "eui" in df.columns
+
+
+def test_generate_plots(tmp_path):
+    out_csv = tmp_path / "agg.csv"
+    out_fail = tmp_path / "fail.csv"
+
+    out_csv.write_text("sample_id,eui_kwh_m2_yr,var1\n0001,100,1\n0002,110,2")
+    out_fail.write_text("sample_id,error_summary,exit_code,log_path\n0003,Error,1,log")
+
+    out_plots = tmp_path / "plots"
+
+    res = subprocess.run([
+        sys.executable, str(BIN / "generate_plots.py"),
+        "--results_csv", str(out_csv),
+        "--failed_csv", str(out_fail),
+        "--outdir", str(out_plots)
+    ], check=True)
+
+    assert (out_plots / "eui_histogram.png").exists()
+    assert (out_plots / "failure_summary.png").exists()
+    assert (out_plots / "top_var_vs_eui.png").exists()
