@@ -1,0 +1,75 @@
+# =============================================================================
+# .github/workflows/openstudio-cli-image.yml
+# =============================================================================
+# STUB — Phase 3 deliverable per PRD §5.2.
+#
+# Goal: build and publish ghcr.io/anchapin/openstudio_cli_image:<version>
+#       for at least two OpenStudio CLI versions (e.g. 3.4.0 and a newer one).
+#
+# This file currently only documents the *trigger shape* and the steps that
+# will live here. The actual `docker build` invocation is not implemented
+# because building the OpenStudio CLI image requires the proprietary
+# NREL installer, which has its own licensing and binary-distribution
+# constraints that must be resolved before automating the build.
+#
+# When implemented, this workflow will:
+#   1. On tag push of pattern `osim-cli-v*` OR manual workflow_dispatch.
+#   2. Extract the OpenStudio CLI version from the tag/dispatch input.
+#   3. Pull the official NREL OpenStudio docker base (or run the installer
+#      in a throwaway container).
+#   4. Build the OSimFlow layer (add bin/ scripts, set ENTRYPOINT).
+#   5. Push to ghcr.io/anchapin/openstudio_cli_image:<version>.
+#   6. Sign the image with cosign.
+# =============================================================================
+
+name: build-openstudio-cli-image
+
+on:
+  # TODO(impl): enable tag-triggered builds once the OpenStudio CLI
+  # distribution constraints are resolved.
+  # push:
+  #   tags: [ 'osim-cli-v*' ]
+  workflow_dispatch:
+    inputs:
+      openstudio_version:
+        description: 'OpenStudio CLI version (e.g. 3.4.0)'
+        required: true
+        default: '3.4.0'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write   # for cosign keyless signing once enabled
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        if: false   # disabled until build is implemented
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push openstudio_cli_image
+        if: false   # disabled until build is implemented
+        run: |
+          VERSION="${{ inputs.openstudio_version }}"
+          docker build \
+            --build-arg OPENSTUDIO_VERSION="${VERSION}" \
+            -t "ghcr.io/anchapin/openstudio_cli_image:${VERSION}" \
+            -f docker/openstudio_cli/Dockerfile .
+          docker push "ghcr.io/anchapin/openstudio_cli_image:${VERSION}"
+
+      - name: Sign image with cosign
+        if: false   # disabled until build is implemented
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.1.1'
+        # ...

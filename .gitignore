@@ -1,0 +1,52 @@
+# =============================================================================
+# OSimFlow — gitignore
+# =============================================================================
+# Nextflow / pipeline run artifacts
+.work/
+.nextflow.log*
+.nextflow/
+results/
+nf-core/
+
+# Python (bin/ scripts and any helpers)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.envrc
+
+# OpenStudio / EnergyPlus output artifacts that may leak via user_scripts
+*.osm
+*.osw
+*.idf
+*.epw
+eplusout.*
+sqlite3.db
+
+# Container build artifacts
+*.tar
+*.tar.gz
+docker-image-*
+
+# IDE / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Coverage / build reports
+htmlcov/
+.coverage
+coverage.xml
+build/
+dist/
+
+# Local-only samples / smoke-test inputs
+samples-local/
