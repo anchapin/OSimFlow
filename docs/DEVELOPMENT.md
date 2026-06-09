@@ -35,7 +35,7 @@ broken.** This is the pre-push safety net; do not skip it.
 | Goal                          | Command                       |
 | ----------------------------- | ----------------------------- |
 | Lint (read-only)              | `make lint`                   |
-| Auto-format                   | `make format`                 |
+| Auto-format (ruff)            | `make format`                 |
 | Type-check (mypy strict)      | `make typecheck`              |
 | Run full test suite           | `make test`                   |
 | Run tests + coverage gate     | `make test-cov`               |

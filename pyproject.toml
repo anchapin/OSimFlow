@@ -46,7 +46,6 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "ruff>=0.6",
-    "black>=24",
     "mypy>=1.10",
     "types-PyYAML",
     "pre-commit>=3.7",
@@ -136,22 +135,6 @@ fixable = ["ALL"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["osimflow"]
-
-# ---------------------------------------------------------------------------
-# Black (formatter; line-length matches Ruff above)
-# ---------------------------------------------------------------------------
-[tool.black]
-line-length = 100
-target-version = ["py311"]
-extend-exclude = '''
-/(
-    \.agents
-  | \.venv
-  | \.git
-  | build
-  | dist
-)/
-'''
 
 # ---------------------------------------------------------------------------
 # mypy --strict on the public API surface (osimflow/). bin/ and

@@ -29,9 +29,8 @@ install: ## pip install -e ".[dev,aws,slurm]"
 lint: ## ruff check (linter)
 	$(RUFF) check .
 
-format: ## ruff format + black (write)
+format: ## ruff format (write)
 	$(RUFF) format .
-	$(BLACK) .
 
 typecheck: ## mypy --strict (osimflow/)
 	$(MYPY) osimflow
@@ -42,8 +41,8 @@ test: ## pytest (full suite, no coverage gate)
 test-cov: ## pytest --cov with 85% gate
 	$(PYTEST) --cov=osimflow --cov-report=term-missing --cov-fail-under=85
 
-test-fast: ## pytest unit + contract only (pre-commit mirror)
-	$(PYTEST) tests/unit tests/contract -x -q
+test-fast: ## pytest contract only (pre-commit mirror)
+	$(PYTEST) tests/contract -x -q
 
 contract: agents-contract docs-sync ## run both contract checks
 
@@ -56,9 +55,8 @@ docs-sync: ## check docs/ references resolve
 precommit: ## pre-commit run --all-files
 	$(PRECOMMIT) run --all-files
 
-act: ## local CI mirror (lint + unit + contract)
+act: ## local CI mirror (lint + contract)
 	act -j lint
-	act -j unit
 	act -j agents-contract
 
 clean: ## remove caches

@@ -6,15 +6,14 @@ fail is a regression we want to catch.
 
 Each test corresponds to one acceptance criterion in issue #15:
 
-  1. ruff runs clean                              -> test_ruff_passes
-  2. black is formatted                           -> test_black_passes
+  1. ruff lint runs clean                         -> test_ruff_passes
+  2. ruff format is clean                         -> test_ruff_format_passes
   3. mypy --strict on osimflow/                   -> test_mypy_strict_passes
   4. coverage gate >= 85%                         -> test_coverage_gate
-  5. AGENTS.md lists every public symbol          -> test_agents_md_contract
-  6. AGENTS.md lists every bin/*.py               -> test_agents_md_contract
-  7. pre-commit config validates                  -> test_precommit_config_valid
-  8. CI workflow YAMLs parse                      -> test_workflows_yaml_valid
-  9. docs/ cross-references resolve               -> test_docs_sync
+  5. AGENTS.md / code contract                    -> test_agents_md_contract
+  6. pre-commit config validates                  -> test_precommit_config_valid
+  7. CI workflow YAMLs parse                      -> test_workflows_yaml_valid
+  8. docs/ cross-references resolve               -> test_docs_sync
 """
 
 import subprocess
@@ -46,10 +45,8 @@ def ruff_result() -> subprocess.CompletedProcess[str]:
 
 
 @pytest.fixture(scope="module")
-def black_result() -> subprocess.CompletedProcess[str]:
-    return _run(
-        [sys.executable, "-m", "black", "--check", "--quiet", "."],
-    )
+def ruff_format_result() -> subprocess.CompletedProcess[str]:
+    return _run([sys.executable, "-m", "ruff", "format", "--check", "."])
 
 
 @pytest.fixture(scope="module")
@@ -81,23 +78,24 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
 
 def test_ruff_passes(ruff_result: subprocess.CompletedProcess[str]) -> None:
     """ruff check must exit 0 on the whole repo."""
-    assert (
-        ruff_result.returncode == 0
-    ), f"ruff check failed:\nstdout:\n{ruff_result.stdout}\nstderr:\n{ruff_result.stderr}"
+    assert ruff_result.returncode == 0, (
+        f"ruff check failed:\nstdout:\n{ruff_result.stdout}\nstderr:\n{ruff_result.stderr}"
+    )
 
 
-def test_black_passes(black_result: subprocess.CompletedProcess[str]) -> None:
-    """black --check must exit 0 on the whole repo."""
-    assert (
-        black_result.returncode == 0
-    ), f"black --check failed:\nstdout:\n{black_result.stdout}\nstderr:\n{black_result.stderr}"
+def test_ruff_format_passes(ruff_format_result: subprocess.CompletedProcess[str]) -> None:
+    """ruff format --check must exit 0 on the whole repo."""
+    assert ruff_format_result.returncode == 0, (
+        f"ruff format --check failed:\nstdout:\n{ruff_format_result.stdout}\n"
+        f"stderr:\n{ruff_format_result.stderr}"
+    )
 
 
 def test_mypy_strict_passes(mypy_result: subprocess.CompletedProcess[str]) -> None:
     """mypy --strict (configured in pyproject.toml) must exit 0 on osimflow/."""
-    assert (
-        mypy_result.returncode == 0
-    ), f"mypy failed:\nstdout:\n{mypy_result.stdout}\nstderr:\n{mypy_result.stderr}"
+    assert mypy_result.returncode == 0, (
+        f"mypy failed:\nstdout:\n{mypy_result.stdout}\nstderr:\n{mypy_result.stderr}"
+    )
 
 
 def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> None:
@@ -121,9 +119,9 @@ def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> N
             "--fail-under=85",
         ]
     )
-    assert (
-        report.returncode == 0
-    ), f"coverage --fail-under=85 failed:\nstdout:\n{report.stdout}\nstderr:\n{report.stderr}"
+    assert report.returncode == 0, (
+        f"coverage --fail-under=85 failed:\nstdout:\n{report.stdout}\nstderr:\n{report.stderr}"
+    )
 
 
 def test_agents_md_contract() -> None:
@@ -135,9 +133,9 @@ def test_agents_md_contract() -> None:
     contract are blocked by CI.
     """
     res = _run([sys.executable, "tools/check_agents_contract.py"])
-    assert (
-        res.returncode == 0
-    ), f"AGENTS.md contract check failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"AGENTS.md contract check failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
 
 
 def test_precommit_config_valid() -> None:
@@ -148,9 +146,9 @@ def test_precommit_config_valid() -> None:
     res = _run(
         [sys.executable, "-m", "pre_commit", "validate-config", str(cfg)],
     )
-    assert (
-        res.returncode == 0
-    ), f"pre-commit validate-config failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"pre-commit validate-config failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
 
 
 def test_workflows_yaml_valid() -> None:
@@ -182,6 +180,6 @@ def test_docs_sync() -> None:
     in the working tree. `<!-- docs-skip -->` opts a file out.
     """
     res = _run([sys.executable, "tools/check_docs_sync.py"])
-    assert (
-        res.returncode == 0
-    ), f"docs sync check failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"docs sync check failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )

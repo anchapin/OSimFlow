@@ -46,9 +46,6 @@ jobs:
       - name: ruff format (check)
         run: python -m ruff format --check .
 
-      - name: black (check)
-        run: python -m black --check .
-
       - name: mypy (osimflow/)
         run: python -m mypy osimflow
 
