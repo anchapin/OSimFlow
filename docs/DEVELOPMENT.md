@@ -12,16 +12,29 @@ a `make` equivalent.
 ## 1. One-time setup
 
 ```bash
-# Editable install with all dev deps
-python -m pip install -e ".[dev,aws,slurm]"
+# Create the project virtualenv and editable-install with all dev deps.
+# `make install` is equivalent to `pip install -e ".[dev,aws,slurm]"`
+# but it always uses the project venv (`.venv/`), which is what every
+# other target (`make test`, `make lint`, `make typecheck`, ...) also
+# uses. Without the venv, system `pytest` will resolve first on $PATH
+# and fail with `ModuleNotFoundError: submitit / boto3 / types-PyYAML`.
+make install
 
 # Install pre-commit hooks (runs on every git commit)
-pre-commit install
+.venv/bin/pre-commit install
 
 # Optional: install `act` to mirror CI locally (https://github.com/nektos/act)
 #   macOS:   brew install act
 #   Linux:   curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash
 ```
+
+> **Why the venv matters.** The Makefile hard-codes every tool
+> invocation (`.venv/bin/pytest`, `.venv/bin/mypy`, ...) so that
+> there is exactly one supported way to run the project. If you skip
+> `make install` and try to use a global `pytest` / `mypy` / `ruff`,
+> those binaries will either be missing or point at a different
+> Python that lacks the `[dev,aws,slurm]` extras. Stick to `make`
+> targets or invoke the tools through `.venv/bin/` explicitly.
 
 `pre-commit install` registers hooks for: ruff, black, mypy, gitleaks,
 the AGENTS.md contract check, the docs sync check, and the unit +
@@ -118,8 +131,10 @@ act -j ci
   Docker limitations.
 - `act` runs the GitHub Actions runner in a container; if your local
   environment differs from `ubuntu-latest`, expect some flakiness.
-- The OpenStudio CLI image build job is **disabled by default** (see
-  the comment at the top of `.github/workflows/openstudio-cli-image.yml`).
+- OSimFlow has no project-owned OpenStudio image build pipeline; the
+  weekly `openstudio-image-availability` workflow checks the
+  upstream `nrel/openstudio` tag set on Docker Hub. See
+  [`docs/openstudio-image-distribution.md`](openstudio-image-distribution.md).
 
 ---
 

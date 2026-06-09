@@ -148,19 +148,23 @@ If a docs change is intentionally deferred, write `// docs: skip —
 
 ## 5. Adding a new OpenStudio CLI version
 
-When a new OpenStudio CLI version is released, the project
-(`openstudio_cli_image:<version>`) image needs to be added to the
-build matrix. Today this is a manual process:
+When a new OpenStudio CLI version is released upstream on Docker Hub
+(`nrel/openstudio`), advertise it in OSimFlow. This is a docs +
+workflow-matrix change, not a build:
 
-1. Update `.github/workflows/openstudio-cli-image.yml` to add the new
-   version to the build matrix.
-2. Add the version to the supported-versions table in
-   [`docs/OSimFlow.md`](OSimFlow.md).
-3. Smoke-test the new image with `osimflow run --executor local
-   --openstudio_version <new>` against a known-good template package.
+1. Confirm the new tag exists: `docker manifest inspect
+   docker.io/nrel/openstudio:<new_version>` returns a digest.
+2. Add the new version to the matrix in
+   `.github/workflows/openstudio-image-availability.yml`.
+3. Add the new version to the supported-versions table in
+   [`docs/openstudio-image-distribution.md`](openstudio-image-distribution.md).
+4. Smoke-test it with `osimflow run --executor local
+   --openstudio_version <new_version> --n_samples 1` against a
+   known-good template package; confirm `eplusout.sql` is non-empty.
 
-The container-build workflow is currently a stub; see the comment at
-the top of that file.
+No image build is required: OSimFlow consumes the upstream
+`nrel/openstudio` image directly (see ADR-0002 and
+[`docs/openstudio-image-distribution.md`](openstudio-image-distribution.md)).
 
 ---
 

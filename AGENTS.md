@@ -26,12 +26,12 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor` | All conform to the same `submit()` → `Handle` interface. |
 | Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
 | AWS Batch backend | **`boto3`** (future) | Stub today; `AWSBatchExecutor.submit()` is a placeholder. |
-| Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two pre-built images: `openstudio_cli_image:<version>` and `scientific_python_image`. |
+| Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
 | Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
 | Statistical sampling | **`scipy.stats`** | Latin Hypercube Sampling (LHS) of design variables. |
 | Data processing | **Python 3.11+**, **`pandas`**, **`pyarrow`** (Parquet) | KPI extraction, aggregation, error parsing. |
 | Plotting | **`matplotlib`** + **`seaborn`** | 1–3 static summary plots (PNG/PDF). |
-| Container registry | **`ghcr.io`** | Tags: `ghcr.io/anchapin/openstudio_cli_image:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
+| Container registry | **Docker Hub** (OpenStudio) + **`ghcr.io`** (scientific Python) | `docker.io/nrel/openstudio:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
 | Monitoring | **BYO: per-campaign `run.json` + tqdm** | See `.agents/results/monitoring-decision.md`. No external service. |
 | CI/CD | **GitHub Actions** | (workflow to be added post-MVP) |
 
@@ -169,18 +169,28 @@ Re-running with the same `--outdir` is a cache hit on every step. The first run 
 
 ## 5. Testing
 
-Tests live under `tests/`. Run with pytest:
+Tests live under `tests/`. **Always run them through the project
+`.venv` — the Makefile hard-codes the venv paths so a bare
+`pytest` will resolve to a Python interpreter that does not have
+`submitit`, `boto3`, or `types-PyYAML` installed and the suite will
+fail with `ModuleNotFoundError`.** The supported entry points are:
 
 ```bash
-# All tests
-pytest
+# Canonical: uses .venv/bin/pytest under the hood
+make test           # full suite
+make test-fast      # contract + unit, no coverage gate
+make test-cov       # full suite + 85% coverage gate
 
-# Just the cache invalidation suite
-pytest tests/integration/test_cache_invalidation.py -v
-
-# With coverage
-pytest --cov=osimflow
+# Direct (when you need a single file or a custom flag) — must use
+# the venv's pytest, not whatever `pytest` is first on $PATH:
+.venv/bin/pytest tests/integration/test_cache_invalidation.py -v
+.venv/bin/pytest --cov=osimflow
 ```
+
+If a test command in this document says "pytest" without a leading
+`.venv/bin/`, that is shorthand for the canonical `make test` form.
+Do **not** invoke the system `pytest`; if it resolves at all on
+your shell, it will silently run with the wrong interpreter.
 
 When implementing the real `bin/*.py` logic, add:
 - **End-to-end smoke test** with 1-3 samples and a tiny template package, verifying the four output artifacts (`aggregated_results.csv`, `failed_simulations.csv`, KPI JSONs, plot files).
@@ -229,7 +239,7 @@ When implementing the real `bin/*.py` logic, add:
 | **`variables.yml`** | User-supplied input file declaring which parameters vary and their LHS distributions. |
 | **BYOS** | "Bring Your Own Script" — user-provided Python scripts in `user_scripts/` that override default `bin/` logic. The override interface is a Python function signature. |
 | **`run.json`** | The per-campaign monitoring trace (per-step timing, per-sample status, cache hit/miss). The primary observability artifact. |
-| **`openstudio_cli_image:<version>`** | The dynamic container image tag, selected via `--openstudio_version`. |
+| **`nrel/openstudio:<version>`** | The dynamic container image tag (consumed from Docker Hub), selected via `--openstudio_version`. The project does not own this image. |
 
 ---
 
@@ -239,7 +249,7 @@ These are *known traps* the PRD explicitly calls out. When you write code, check
 
 1. **Large `eplusout.err` files** — delete from the work directory on successful simulation (PRD §1.4 *Intelligent Intermediate File Optimization*). The Campaign does this in `step_run_openstudio_sim` after a successful handle.result().
 2. **Pre-flight parameter checks** — `step_apply_parameters` (via `bin/apply_params_to_model.py`) must verify that every LHS variable actually maps to an existing measure argument or `.osm` attribute *before* the simulation runs (PRD §1.4 *Pre-flight Parameter Applicability Validation*). Fail fast with a clear error.
-3. **OpenStudio version pinning** — version lives in the **container tag** (`CONTAINER_OS.format(version=...)`) passed to the executor, not in `variables.yml` or env vars. The `openstudio_cli_image:<version>` is dynamically selected in `step_run_openstudio_sim` from `--openstudio_version`.
+3. **OpenStudio version pinning** — version lives in the **container tag** (`CONTAINER_OS.format(version=...)`) passed to the executor, not in `variables.yml` or env vars. The `nrel/openstudio:<version>` is dynamically selected in `step_run_openstudio_sim` from `--openstudio_version`. See [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md) for the cache-key shape.
 4. **Failed simulation summaries** — `failed_simulations.csv` must contain the *first* "Severe Error" line from each `eplusout.err`, not the whole file. Use `grep -m 1 "  * Severe"`. Implemented in `bin/aggregate_results.py`.
 5. **`--archive_intermediates`** — when set, publish: all campaign inputs (`template_sim_package`, `variables.yml`) **and** per-sample `.osw/.osm` + `eplusout.sql`. Don't blindly archive `eplusout.err`/`eplusout.log` — too large. This is a future addition to the `Campaign` orchestrator (copy a step's `publishDir` pattern).
 6. **AWS Batch security** — IAM roles for EC2 instances, not long-lived access keys (PRD §6 *Cloud Security Practices*). `AWSBatchExecutor` must source credentials from the IAM role on the compute environment, never from `boto3` long-lived keys.
@@ -288,6 +298,8 @@ Use these patterns to decide where to make a change.
   - §5.2 — Phase 3 Deliverables
   - §6 — Potential Challenges & Considerations
 - [Architecture decision (`.agents/results/architecture/0001-workflow-framework.md`)](.agents/results/architecture/0001-workflow-framework.md) — why we use a custom Python driver instead of Nextflow.
+- [OpenStudio image distribution (`docs/openstudio-image-distribution.md`)](docs/openstudio-image-distribution.md) — where the OpenStudio CLI container comes from, and why we don't build it ourselves.
+- [ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md) — the decision record for adopting `nrel/openstudio` directly.
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why BYO monitoring (no Tower).
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) — *to be written*

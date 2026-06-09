@@ -1,0 +1,114 @@
+# =============================================================================
+# .github/workflows/openstudio-image-availability.yml
+# =============================================================================
+# Watches the upstream `nrel/openstudio` image on Docker Hub to detect
+# removal or deprecation of any version OSimFlow advertises. See
+# `docs/openstudio-image-distribution.md` and ADR-0002 for the rationale:
+# OSimFlow consumes the upstream NREL image directly and owns no build
+# pipeline of its own, so the only "release" risk we need to catch is
+# upstream tag deletion.
+#
+# Triggers:
+#   - schedule: weekly Monday 06:00 UTC
+#   - workflow_dispatch: manual, with a custom `versions` input
+#
+# Behaviour:
+#   1. For each version in the matrix, `docker manifest inspect` the
+#      `docker.io/nrel/openstudio:<version>` tag.
+#   2. If the manifest is missing, fail the job and open an issue.
+#   3. If the manifest is present, log the resolved digest so the
+#      maintainer can confirm `--openstudio_version` pinning still
+#      resolves to the expected content.
+#
+# Updating the version matrix: edit `SUPPORTED_VERSIONS` below and open
+# a PR. The matrix is intentionally hand-maintained (small, N <= 6) so
+# the failure mode is "loud", not "silent".
+# =============================================================================
+
+name: openstudio-image-availability
+
+on:
+  schedule:
+    # Weekly Monday 06:00 UTC. Cheap (~10s run); catches NREL deprecation
+    # within 7 days at worst.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: "Comma-separated OpenStudio versions to check (default: SUPPORTED_VERSIONS)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write   # so we can auto-open a ticket on failure
+
+jobs:
+  check:
+    name: docker manifest inspect nrel/openstudio:<version>
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          # Mirror the version list in `pyproject.toml` classifiers
+          # and the docs table in `docs/openstudio-image-distribution.md`.
+          - "3.7.0"
+          - "3.8.0"
+          - "3.9.0"
+          - "3.10.0"
+          - "3.11.0"
+    steps:
+      - name: Resolve versions (allow manual override)
+        id: versions
+        env:
+          DEFAULT: ${{ join(matrix.version, ',') }}
+          OVERRIDE: ${{ inputs.versions }}
+        run: |
+          if [ -n "${OVERRIDE}" ]; then
+            echo "list=${OVERRIDE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=${DEFAULT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check ${{ matrix.version }} on Docker Hub
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          if ! docker manifest inspect "docker.io/nrel/openstudio:${VERSION}" >/dev/null 2>&1; then
+            echo "::error title=Upstream image missing::nrel/openstudio:${VERSION} is not resolvable on Docker Hub."
+            echo "MISSING=1" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          digest="$(docker manifest inspect "docker.io/nrel/openstudio:${VERSION}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["Descriptor"]["digest"])')"
+          echo "nrel/openstudio:${VERSION} -> ${digest}"
+
+      - name: Open issue on failure
+        if: failure()
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          gh issue create \
+            --title "Upstream OpenStudio image missing: nrel/openstudio:${VERSION}" \
+            --label "dependencies,help wanted" \
+            --body "$(cat <<EOF
+          The weekly availability check for \`nrel/openstudio:${VERSION}\` failed.
+          This image is the runtime base for OSimFlow's \`RUN_OPENSTUDIO_SIM\` step
+          (see \`docs/openstudio-image-distribution.md\` and ADR-0002).
+
+          **Impact**: \`osimflow run --openstudio_version ${VERSION}\` will fail at
+          container pull time until the version is either dropped from the
+          supported matrix or the upstream tag is restored.
+
+          **Actions**:
+          1. Check whether NREL has re-tagged or moved the version (see
+             https://hub.docker.com/r/nrel/openstudio/tags).
+          2. If deprecated permanently, remove \`${VERSION}\` from the
+             matrix in \`.github/workflows/openstudio-image-availability.yml\`
+             and from any \`--openstudio_version\` documentation.
+          3. If transient, wait and let the next weekly run re-check.
+          EOF
+          )"
