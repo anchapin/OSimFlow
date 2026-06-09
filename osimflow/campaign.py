@@ -137,10 +137,13 @@ class Campaign:
             extract_ok = state.get("extract_exit_code") == 0
             # A sample is "ok" if every step that ran succeeded.
             status = "ok" if apply_ok and sim_ok and extract_ok else "failed"
+            # Coerce optional stringy fields via str() rather than dropping
+            # non-None values: previous code accepted any truthy value, and
+            # JSON-serializing Path/str objects in run.json requires str().
             eplusout_sql_obj = state.get("eplusout_sql")
-            eplusout_sql = str(eplusout_sql_obj) if isinstance(eplusout_sql_obj, str) else None
+            eplusout_sql = None if eplusout_sql_obj is None else str(eplusout_sql_obj)
             error_summary_obj = state.get("error_summary")
-            error_summary = str(error_summary_obj) if isinstance(error_summary_obj, str) else None
+            error_summary = None if error_summary_obj is None else str(error_summary_obj)
             self.trace.sample_done(
                 SampleTrace(
                     sample_id=sid,

@@ -112,20 +112,15 @@ def _check_token(token: str) -> str | None:
     """Return None if the token is fine, else an error string describing
     what is wrong."""
     if token.startswith("../"):
-        # Relative-from-doc reference. Resolve by stripping the leading
-        # "../" components; we only need to check that the destination
-        # exists *somewhere* under the repo root.
-        parts = token.split("/")
-        # Walk up from docs/ to repo root, then down.
-        sum(1 for p in parts if p == "..")
-        remainder = "/".join(p for p in parts if p != "..")
-        if remainder:
-            # docs/ is one level under the repo root; one `..` = repo root.
-            # Strip exactly one .. (we're already in docs/).
-            stripped = remainder
-            target = REPO_ROOT / stripped
-        else:
+        # Relative-from-doc reference. The check is "does the destination
+        # exist *somewhere* under the repo root". We resolve by stripping
+        # the leading `..` segments; multiple `..`s are all collapsed
+        # (we don't track the source file's depth here — that's a future
+        # enhancement, see issue #15 follow-ups).
+        remainder = "/".join(p for p in token.split("/") if p != "..")
+        if not remainder:
             return None
+        target = REPO_ROOT / remainder
     else:
         target = REPO_ROOT / token
     if not target.exists():

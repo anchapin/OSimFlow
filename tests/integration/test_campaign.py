@@ -128,6 +128,10 @@ def test_run_writes_run_json_with_expected_schema(campaign: Campaign, outdir: Pa
     assert len(data["per_sample"]) == 2
     statuses = {row["status"] for row in data["per_sample"]}
     assert statuses == {"ok"}
+    # eplusout_sql must be a string (JSON-serializable), not a Path object
+    # (regression for the "isinstance(x, str)" cast that dropped Path values).
+    for row in data["per_sample"]:
+        assert isinstance(row["eplusout_sql"], str)
 
 
 def test_step_generate_lhs_returns_deterministic_samples(
