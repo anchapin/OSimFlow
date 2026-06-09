@@ -18,10 +18,10 @@ This is a SKELETON. Implementation TODO:
 
 Run with `--help` once implemented.
 """
+
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
@@ -48,9 +48,11 @@ def main() -> int:
         dest = args.out / src.name
         if src.is_dir():
             import shutil
+
             shutil.copytree(src, dest, dirs_exist_ok=True)
         else:
             import shutil
+
             shutil.copy2(src, dest)
 
     return 0

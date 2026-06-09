@@ -5,6 +5,7 @@ Foundation selected via the architecture decision in
 in `.agents/results/decision-verdict.md`. This is the canonical public
 API; everything else is an implementation detail.
 """
+
 from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
 from .config import CampaignConfig, load_config

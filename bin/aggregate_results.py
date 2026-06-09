@@ -18,6 +18,7 @@ This is a SKELETON. Implementation TODO:
 
 Run with `--help` once implemented.
 """
+
 from __future__ import annotations
 
 import argparse

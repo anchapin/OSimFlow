@@ -10,10 +10,9 @@ same signature as `default_apply_parameters` below. The Campaign
 discovers it via `inspect.signature` and calls it directly — no second
 CLI surface to maintain.
 """
+
 import json
 import logging
-import os
-import shutil
 import subprocess
 import sys
 import time
@@ -33,7 +32,7 @@ BIN = PROJECT_ROOT / "bin"
 # ---------------------------------------------------------------------------
 def default_apply_parameters(
     template: Path,
-    parameters: dict,
+    parameters: dict[str, object],
     sample_id: str,
     out: Path,
 ) -> Path:
@@ -51,13 +50,20 @@ def default_apply_parameters(
     param_file.write_text(json.dumps(parameters, sort_keys=True))
     result = subprocess.run(
         [
-            sys.executable, str(BIN / "apply_params_to_model.py"),
-            "--template", str(template),
-            "--parameter_set", str(param_file),
-            "--sample_id", sample_id,
-            "--out", str(out_dir),
+            sys.executable,
+            str(BIN / "apply_params_to_model.py"),
+            "--template",
+            str(template),
+            "--parameter_set",
+            str(param_file),
+            "--sample_id",
+            sample_id,
+            "--out",
+            str(out_dir),
         ],
-        check=False, capture_output=True, text=True,
+        check=False,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         log.error("apply_params failed for %s: %s", sample_id, result.stderr)
@@ -81,6 +87,7 @@ def default_apply_parameters(
 # logging redirected to the per-sample log files written by the
 # Campaign.
 
+
 def run_openstudio_sim(
     modified_sim_package: Path,
     sample_id: str,
@@ -102,8 +109,7 @@ def run_openstudio_sim(
     """
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
-    log.info("simulating sample=%s version=%s -> %s",
-             sample_id, openstudio_version, sim_out)
+    log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
     # STUB: replace with `subprocess.run(["openstudio.cli", "run", ...])`
     # inside the openstudio_cli_image:<version> container.
     time.sleep(simulate_work_s)
@@ -121,12 +127,18 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     kpi_path = out / f"kpi_{sample_id}.json"
     result = subprocess.run(
         [
-            sys.executable, str(BIN / "extract_kpis.py"),
-            "--simulation_dir", str(simulation_dir),
-            "--sample_id", sample_id,
-            "--out", str(kpi_path),
+            sys.executable,
+            str(BIN / "extract_kpis.py"),
+            "--simulation_dir",
+            str(simulation_dir),
+            "--sample_id",
+            sample_id,
+            "--out",
+            str(kpi_path),
         ],
-        check=False, capture_output=True, text=True,
+        check=False,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         log.error("extract_kpis failed for %s: %s", sample_id, result.stderr)
@@ -137,7 +149,7 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
 # ---------------------------------------------------------------------------
 # Aggregation & plotting
 # ---------------------------------------------------------------------------
-def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) -> dict:
+def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) -> dict[str, Path]:
     """Aggregate per-sample KPIs into CSV/Parquet/failed-CSV. Returns paths."""
     out.mkdir(parents=True, exist_ok=True)
     csv_path = out / "aggregated_results.csv"
@@ -145,14 +157,22 @@ def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) ->
     parquet_path = out / "aggregated_results.parquet"
     result = subprocess.run(
         [
-            sys.executable, str(BIN / "aggregate_results.py"),
-            "--kpis", *(str(p) for p in kpi_files),
-            "--simulation_dirs", *(str(p) for p in sim_dirs),
-            "--out_csv", str(csv_path),
-            "--out_parquet", str(parquet_path),
-            "--out_failed", str(failed_path),
+            sys.executable,
+            str(BIN / "aggregate_results.py"),
+            "--kpis",
+            *(str(p) for p in kpi_files),
+            "--simulation_dirs",
+            *(str(p) for p in sim_dirs),
+            "--out_csv",
+            str(csv_path),
+            "--out_parquet",
+            str(parquet_path),
+            "--out_failed",
+            str(failed_path),
         ],
-        check=False, capture_output=True, text=True,
+        check=False,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         log.error("aggregate_results failed: %s", result.stderr)
@@ -169,12 +189,18 @@ def generate_plots(csv_path: Path, failed_path: Path, out: Path) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
-            sys.executable, str(BIN / "generate_plots.py"),
-            "--results_csv", str(csv_path),
-            "--failed_csv", str(failed_path),
-            "--outdir", str(out),
+            sys.executable,
+            str(BIN / "generate_plots.py"),
+            "--results_csv",
+            str(csv_path),
+            "--failed_csv",
+            str(failed_path),
+            "--outdir",
+            str(out),
         ],
-        check=False, capture_output=True, text=True,
+        check=False,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         log.error("generate_plots failed: %s", result.stderr)

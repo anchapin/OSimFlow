@@ -21,6 +21,7 @@ Invalidation rules (per PRD §6 gotcha #3 and the analysis in
 
 The DB schema is small enough to inspect with `sqlite3 cache.db ".schema"`.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -29,8 +30,8 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Optional
 
 log = logging.getLogger("osimflow.cache")
 
@@ -55,6 +56,7 @@ CREATE INDEX IF NOT EXISTS ix_cache_step ON cache_entries(step);
 @dataclasses.dataclass(frozen=True)
 class CacheKey:
     """Inputs that, if any one changes, invalidate the cached output."""
+
     step: str
     sample_id: str
     openstudio_version: str
@@ -66,14 +68,14 @@ class CacheKey:
 def sha256_of_files(paths: Iterable[Path]) -> str:
     """Hash a set of files (path-sorted for determinism)."""
     h = hashlib.sha256()
-    for p in sorted(paths, key=lambda x: str(x)):
+    for p in sorted(paths, key=str):
         h.update(str(p).encode())
         h.update(b"\0")
         if p.is_file():
             h.update(p.read_bytes())
         else:
             # directory: hash the sorted listing
-            for child in sorted(p.rglob("*"), key=lambda x: str(x)):
+            for child in sorted(p.rglob("*"), key=str):
                 h.update(str(child.relative_to(p)).encode())
                 h.update(b"\0")
                 if child.is_file():
@@ -81,7 +83,7 @@ def sha256_of_files(paths: Iterable[Path]) -> str:
     return h.hexdigest()
 
 
-def sha256_of_dict(d: dict) -> str:
+def sha256_of_dict(d: dict[str, object]) -> str:
     """Stable hash of a JSON-serializable dict (sort_keys=True)."""
     blob = json.dumps(d, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()
@@ -102,15 +104,21 @@ class SQLiteCache:
         c.row_factory = sqlite3.Row
         return c
 
-    def lookup(self, key: CacheKey) -> Optional[Path]:
+    def lookup(self, key: CacheKey) -> Path | None:
         """Return the cached output path if this exact key is present and successful."""
         with self._conn() as c:
             row = c.execute(
                 """SELECT output_path, exit_code FROM cache_entries
                    WHERE step=? AND sample_id=? AND openstudio_version=?
                      AND inputs_sha256=? AND code_sha256=? AND container_digest=?""",
-                (key.step, key.sample_id, key.openstudio_version,
-                 key.inputs_sha256, key.code_sha256, key.container_digest),
+                (
+                    key.step,
+                    key.sample_id,
+                    key.openstudio_version,
+                    key.inputs_sha256,
+                    key.code_sha256,
+                    key.container_digest,
+                ),
             ).fetchone()
         if row is None:
             return None
@@ -132,12 +140,26 @@ class SQLiteCache:
                     code_sha256, container_digest, output_path,
                     started_at, finished_at, exit_code)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (key.step, key.sample_id, key.openstudio_version,
-                 key.inputs_sha256, key.code_sha256, key.container_digest,
-                 str(output_path), time.time(), time.time(), exit_code),
+                (
+                    key.step,
+                    key.sample_id,
+                    key.openstudio_version,
+                    key.inputs_sha256,
+                    key.code_sha256,
+                    key.container_digest,
+                    str(output_path),
+                    time.time(),
+                    time.time(),
+                    exit_code,
+                ),
             )
-        log.info("cache STORE step=%s sample=%s exit=%d -> %s",
-                 key.step, key.sample_id, exit_code, output_path)
+        log.info(
+            "cache STORE step=%s sample=%s exit=%d -> %s",
+            key.step,
+            key.sample_id,
+            exit_code,
+            output_path,
+        )
 
     def invalidate_step(self, step: str) -> int:
         """Drop every entry for a given step. Used by --openstudio_version bumps."""
@@ -157,10 +179,10 @@ class SQLiteCache:
         log.info("cache INVALIDATE step=%s sample=%s (%d rows)", step, sample_id, n)
         return n
 
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, object]:
         with self._conn() as c:
             n_total = c.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
-            by_step = dict(c.execute(
-                "SELECT step, COUNT(*) FROM cache_entries GROUP BY step"
-            ).fetchall())
+            by_step = dict(
+                c.execute("SELECT step, COUNT(*) FROM cache_entries GROUP BY step").fetchall()
+            )
         return {"total": n_total, "by_step": by_step}

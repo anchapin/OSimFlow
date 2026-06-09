@@ -1,0 +1,56 @@
+# =============================================================================
+# .github/workflows/docs.yml — build docs (mkdocs placeholder)
+# =============================================================================
+# This is a *stub* workflow for the docs build. It validates that mkdocs
+# can build the docs/ tree without errors; the GH Pages deploy step is
+# deferred until the docs site has enough content to be worth deploying.
+#
+# When implementing, replace the build step with:
+#   pip install mkdocs mkdocs-material
+#   mkdocs build --strict
+#   # deploy to gh-pages via peaceiris/actions-gh-pages or similar
+# =============================================================================
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Skip (no mkdocs.yml yet)
+        run: |
+          if [ ! -f mkdocs.yml ]; then
+            echo "::notice::No mkdocs.yml found — skipping docs build."
+            echo "::notice::The docs/ tree is still validated by tools/check_docs_sync.py in the ci job."
+            exit 0
+          fi
+          echo "mkdocs.yml found; this is a placeholder for the build step."
+
+      # When mkdocs.yml is added, replace the above with:
+      # - name: Setup Python
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: "3.12"
+      # - name: Install mkdocs
+      #   run: pip install mkdocs mkdocs-material
+      # - name: Build
+      #   run: mkdocs build --strict

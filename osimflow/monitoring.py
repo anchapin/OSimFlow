@@ -20,6 +20,7 @@ Optional pieces (deferred to post-MVP):
   - MLflow integration (~30 LoC) behind a `--mlflow_tracking_uri` flag.
   - Streamlit dashboard for browsing past `run.json` files (~100 LoC).
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -27,13 +28,14 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 log = logging.getLogger("osimflow.monitoring")
 
 # Soft dependency: tqdm is preferred but not required.
 try:
     from tqdm.auto import tqdm
+
     _HAS_TQDM = True
 except ImportError:  # pragma: no cover
     tqdm = None
@@ -43,28 +45,30 @@ except ImportError:  # pragma: no cover
 @dataclasses.dataclass
 class StepTrace:
     """One row in the run.json `steps` array."""
+
     step: str
-    cache: str           # "HIT", "MISS", "HIT×N", "MISS×N", "SKIPPED"
+    cache: str  # "HIT", "MISS", "HIT×N", "MISS×N", "SKIPPED"
     elapsed_s: float
     exit_code: int
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         return dataclasses.asdict(self)
 
 
 @dataclasses.dataclass
 class SampleTrace:
     """One row in the run.json `per_sample` array."""
+
     sample_id: str
-    status: str          # "ok", "failed", "cached"
+    status: str  # "ok", "failed", "cached"
     elapsed_s: float
     apply_exit_code: int = 0
     sim_exit_code: int = 0
     extract_exit_code: int = 0
-    eplusout_sql: Optional[str] = None  # path if produced
-    error_summary: Optional[str] = None
+    eplusout_sql: str | None = None  # path if produced
+    error_summary: str | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
 
 
@@ -73,10 +77,10 @@ class RunTrace:
 
     SCHEMA_VERSION = 1
 
-    def __init__(self, campaign_id: str, config_summary: dict):
+    def __init__(self, campaign_id: str, config_summary: dict[str, object]):
         self.campaign_id = campaign_id
         self.started_at = time.time()
-        self.finished_at: Optional[float] = None
+        self.finished_at: float | None = None
         self.config_summary = config_summary
         self.steps: list[StepTrace] = []
         self.per_sample: list[SampleTrace] = []
@@ -86,7 +90,7 @@ class RunTrace:
     # ------------------------------------------------------------------
     # Step hooks (called by the Campaign)
     # ------------------------------------------------------------------
-    def step_started(self, step: str, total: Optional[int] = None) -> None:
+    def step_started(self, step: str, total: int | None = None) -> None:
         """Optionally show a tqdm bar for the step. Total = expected item count."""
         if _HAS_TQDM and total and total > 1:
             self._bars[step] = tqdm(total=total, desc=step, unit="sample")
@@ -105,11 +109,15 @@ class RunTrace:
         bar = self._bars.pop(step, None)
         if bar is not None:
             bar.close()
-        self.steps.append(StepTrace(
-            step=step, cache=cache, elapsed_s=elapsed_s, exit_code=exit_code,
-        ))
-        log.info("step %s done cache=%s elapsed=%.2fs exit=%d",
-                 step, cache, elapsed_s, exit_code)
+        self.steps.append(
+            StepTrace(
+                step=step,
+                cache=cache,
+                elapsed_s=elapsed_s,
+                exit_code=exit_code,
+            )
+        )
+        log.info("step %s done cache=%s elapsed=%.2fs exit=%d", step, cache, elapsed_s, exit_code)
 
     def sample_done(self, trace: SampleTrace) -> None:
         self.per_sample.append(trace)
@@ -120,7 +128,7 @@ class RunTrace:
     def finalize(self) -> None:
         self.finished_at = time.time()
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         n_succeeded = sum(1 for s in self.per_sample if s.status == "ok")
         n_failed = sum(1 for s in self.per_sample if s.status == "failed")
         return {

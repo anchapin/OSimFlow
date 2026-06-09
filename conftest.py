@@ -4,6 +4,7 @@ Adds the project root to sys.path so `import osimflow` works without an
 editable install. Tests that need the project on sys.path will work
 either way.
 """
+
 import sys
 from pathlib import Path
 

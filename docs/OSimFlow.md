@@ -5,7 +5,7 @@
 ### 1.1. Project Goal
 The **primary goal** of the OSimFlow MVP is to **generate a comprehensive and actionable plan for developing a Minimum Viable Product (MVP) that integrates OpenStudio CLI with a scalable, Python-native orchestration framework**. This integration aims to **enable scalable batch simulations across diverse computing environments (cloud and on-premise)**, incorporating essential pre-processing (e.g., Latin Hypercube Sampling) and post-processing functionalities for OpenStudio users.
 
-> **Note on the implementation language.** The PRD was originally written when the project intended to use Nextflow. After an architecture spike (see `.agents/results/decision-verdict.md` and `architecture/0001-workflow-framework.md`), the project switched to a custom Python driver. The product vision, target audience, and MVP scope in this PRD are unchanged; the architecture (§4) and technology stack (§4.3) sections have been updated to reflect the new foundation.
+> **Note on the implementation language.** The PRD was originally written when the project intended to use Nextflow. After an architecture spike (see `.agents/results/decision-verdict.md` and `.agents/results/architecture/0001-workflow-framework.md`), the project switched to a custom Python driver. The product vision, target audience, and MVP scope in this PRD are unchanged; the architecture (§4) and technology stack (§4.3) sections have been updated to reflect the new foundation.
 
 ### 1.2. Vision Statement
 **OSimFlow empowers OpenStudio users to effortlessly launch and manage large-scale parametric energy simulation campaigns with high reproducibility, scalability, and environmental agnosticism**, fostering a collaborative ecosystem for building performance analysis.
@@ -113,7 +113,7 @@ Each step is a `Campaign` method that:
     *   **Container**: `scientific_python_image:latest`.
 
 *   **`step_run_openstudio_sim`**
-    *   **Description**: The core simulation engine. For each parameterized sample, calls `osimflow.work.run_openstudio_sim` (which delegates to `bin/run_openstudio_sim.py`, or invokes `openstudio.cli run -w workflow.osw` inside the dynamically selected `openstudio_cli_image:<version>` container). Captures `eplusout.sql`, `eplusout.err`, `eplusout.log`, and `stdout/stderr` to the per-sample work directory.
+    *   **Description**: The core simulation engine. For each parameterized sample, calls `osimflow.work.run_openstudio_sim` (which currently is a stub that writes placeholder `eplusout.sql` / `eplusout.err`; the real implementation will invoke `openstudio.cli run -w workflow.osw` inside the dynamically selected `openstudio_cli_image:<version>` container). Captures `eplusout.sql`, `eplusout.err`, `eplusout.log`, and `stdout/stderr` to the per-sample work directory.
     *   **Inputs**: per-sample `modified_sim_package_dir`, `openstudio_version` (str).
     *   **Outputs**: `dict[sample_id, simulation_output_dir]`.
     *   **Container**: `openstudio_cli_image:<user_specified_version>` (dynamic).

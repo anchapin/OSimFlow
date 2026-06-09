@@ -5,10 +5,10 @@ the PRD §1.4 calls out as required (`--input_variables`,
 `--template_sim_package`, `--n_samples`, `--outdir`,
 `--openstudio_version`, `--archive_intermediates`).
 """
+
 import dataclasses
 import logging
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger("osimflow.config")
 
@@ -21,8 +21,8 @@ class CampaignConfig:
     outdir: Path
     openstudio_version: str
     archive_intermediates: bool = False
-    custom_apply_script: Optional[Path] = None
-    custom_kpi_extractor: Optional[Path] = None
+    custom_apply_script: Path | None = None
+    custom_kpi_extractor: Path | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -37,25 +37,32 @@ class CampaignConfig:
         return self.work_dir / "cache.sqlite"
 
 
-def load_config(args: dict) -> CampaignConfig:
-    """Resolve a config from a flat dict (e.g. argparse namespace -> vars)."""
-    variables_yml = Path(args["input_variables"]).resolve()
-    template = Path(args["template_sim_package"]).resolve()
+def load_config(args: dict[str, object]) -> CampaignConfig:
+    """Resolve a config from a flat dict (e.g. argparse namespace -> vars).
+
+    Each value is narrowed via `str()` / `bool()` / `int()` because argparse
+    already validates types — the cast here is purely a type-checker
+    shim, not a runtime guarantee.
+    """
+    variables_yml = Path(str(args["input_variables"])).resolve()
+    template = Path(str(args["template_sim_package"])).resolve()
     if not variables_yml.exists():
         raise FileNotFoundError(f"variables_yml not found: {variables_yml}")
     if not template.exists():
         raise FileNotFoundError(f"template_sim_package not found: {template}")
 
-    outdir = Path(args["outdir"]).resolve()
+    outdir = Path(str(args["outdir"])).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
+    custom_apply = args.get("custom_apply_script")
+    custom_kpi = args.get("custom_kpi_extractor")
     return CampaignConfig(
         input_variables=variables_yml,
         template_sim_package=template,
-        n_samples=int(args["n_samples"]),
+        n_samples=int(str(args["n_samples"])),
         outdir=outdir,
         openstudio_version=str(args["openstudio_version"]),
         archive_intermediates=bool(args.get("archive_intermediates", False)),
-        custom_apply_script=Path(args["custom_apply_script"]).resolve() if args.get("custom_apply_script") else None,
-        custom_kpi_extractor=Path(args["custom_kpi_extractor"]).resolve() if args.get("custom_kpi_extractor") else None,
+        custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,
+        custom_kpi_extractor=Path(str(custom_kpi)).resolve() if custom_kpi else None,
     )

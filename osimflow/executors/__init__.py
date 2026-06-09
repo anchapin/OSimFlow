@@ -14,28 +14,48 @@ This mirrors `submitit.Future`-style ergonomics intentionally: it is the
 mental model the team will use, and the SlurmExecutor returns real
 `submitit.Future` objects directly.
 """
+
 import abc
 import dataclasses
 import logging
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 log = logging.getLogger("osimflow.executors")
 
 
 @dataclasses.dataclass
 class Handle:
-    """A future-like handle. Substrate-specific implementations subclass this."""
-    job_id: str
-    _future: Future
+    """A future-like handle. Substrate-specific implementations subclass this.
 
-    def result(self, timeout: Optional[float] = None) -> Any:
-        return self._future.result(timeout=timeout)
+    The Handle abstracts over both `concurrent.futures.Future` (local)
+    and `submitit.Future` (Slurm), whose `.result()` and `.done()`
+    signatures differ slightly. We unify them here.
+    """
+
+    job_id: str
+    _future: Future[Any]
+
+    def result(self, timeout: float | None = None) -> Any:
+        # submitit.Future.result() does not accept `timeout`; ignore the
+        # argument for that substrate. concurrent.futures.Future accepts it.
+        try:
+            return self._future.result(timeout=timeout)
+        except TypeError:
+            return self._future.result()
 
     def done(self) -> bool:
-        return self._future.done()
+        try:
+            return self._future.done()
+        except AttributeError:
+            # submitit jobs have no done(); poll via _future._job_state or
+            # trust that result() with no timeout returns immediately if
+            # the job is finished. Fall back to a getattr that doesn't
+            # blow up.
+            return getattr(self._future, "_completed", False)
 
 
 class BaseExecutor(abc.ABC):
@@ -52,7 +72,7 @@ class BaseExecutor(abc.ABC):
         cpus: int = 1,
         memory_mb: int = 1024,
         time_min: int = 60,
-        container: Optional[str] = None,
+        container: str | None = None,
         **kwargs: Any,
     ) -> Handle: ...
 
@@ -69,12 +89,19 @@ class LocalExecutor(BaseExecutor):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="osimflow")
 
     def submit(
-        self, fn, *args,
-        name="task", cpus=1, memory_mb=1024, time_min=60, container=None, **kwargs,
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        name: str = "task",
+        cpus: int = 1,
+        memory_mb: int = 1024,
+        time_min: int = 60,
+        container: str | None = None,
+        **kwargs: Any,
     ) -> Handle:
         # Resource directives are advisory on the local executor.
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
-        fut = self._pool.submit(fn, *args)
+        fut: Future[Any] = self._pool.submit(fn, *args)
         return Handle(job_id=f"local-{id(fut)}", _future=fut)
 
     def shutdown(self) -> None:
@@ -98,7 +125,7 @@ class SlurmExecutor(BaseExecutor):
     def __init__(
         self,
         partition: str = "short",
-        account: Optional[str] = None,
+        account: str | None = None,
         cpus_per_task: int = 2,
         mem_gb: int = 4,
         time_h: int = 2,
@@ -106,7 +133,8 @@ class SlurmExecutor(BaseExecutor):
     ):
         # Lazy import so users who only ever run the local executor do
         # not pay the submitit import cost.
-        import submitit
+        import submitit  # noqa: PLC0415
+
         self._submitit = submitit
 
         self.partition = partition
@@ -149,8 +177,15 @@ class SlurmExecutor(BaseExecutor):
         self._ex = ex
 
     def submit(
-        self, fn, *args,
-        name="task", cpus=1, memory_mb=1024, time_min=60, container=None, **kwargs,
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        name: str = "task",
+        cpus: int = 1,
+        memory_mb: int = 1024,
+        time_min: int = 60,
+        container: str | None = None,
+        **kwargs: Any,
     ) -> Handle:
         # submitit does not let us override per-submit cpus/mem easily
         # because the executor-level config is what controls the sbatch
@@ -158,21 +193,26 @@ class SlurmExecutor(BaseExecutor):
         # production. For now we emit the resource directive into the
         # task's log line so it appears in Tower.
         if container:
-            log.info("slurm submit name=%s cpus=%d mem=%dMB container=%s",
-                     name, cpus, memory_mb, container)
+            log.info(
+                "slurm submit name=%s cpus=%d mem=%dMB container=%s",
+                name,
+                cpus,
+                memory_mb,
+                container,
+            )
         else:
             log.info("slurm submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
 
         def _wrapped() -> Any:
             # Resource directive also becomes an env var so the task can
             # read it (e.g. OpenStudio CLI threading control).
-            os.environ["OSIMFLOW_OS_VERSION"] = kwargs.get("openstudio_version", "N/A")
+            os.environ["OSIMFLOW_OS_VERSION"] = str(kwargs.get("openstudio_version", "N/A"))
             if container:
                 os.environ["OSIMFLOW_CONTAINER"] = container
             return fn(*args)
 
-        fut = self._ex.submit(_wrapped)
-        return Handle(job_id=fut.job_id, _future=fut)
+        fut: Any = self._ex.submit(_wrapped)
+        return Handle(job_id=str(fut.job_id), _future=fut)
 
     def shutdown(self) -> None:
         # submitit.AutoExecutor has no explicit shutdown; the underlying
@@ -198,23 +238,30 @@ class AWSBatchExecutor(BaseExecutor):
 
     name = "aws_batch"
 
-    def __init__(self, job_queue: str = "osimflow-batch-queue", job_definition: Optional[str] = None):
+    def __init__(self, job_queue: str = "osimflow-batch-queue", job_definition: str | None = None):
         self.job_queue = job_queue
         self.job_definition = job_definition or "osimflow-job-def"
         # We do NOT import boto3 here; the real implementation would lazy-load.
         log.warning("AWSBatchExecutor is a STUB — no real submissions will occur")
 
     def submit(
-        self, fn, *args,
-        name="task", cpus=1, memory_mb=1024, time_min=60, container=None, **kwargs,
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        name: str = "task",
+        cpus: int = 1,
+        memory_mb: int = 1024,
+        time_min: int = 60,
+        container: str | None = None,
+        **kwargs: Any,
     ) -> Handle:
         # Wrap the real call in a thread that would, in production, do
         # boto3 submit_job. The thread completes "successfully" with None
         # so the Campaign can exercise its end-of-run logic.
         log.info("aws_batch submit name=%s container=%s (STUB)", name, container)
         pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="awsbatch-stub")
-        fut = pool.submit(lambda: None)  # real impl would await Batch task
-        return Handle(job_id=f"awsbatch-stub-{int(time.time()*1000)}", _future=fut)
+        fut: Future[Any] = pool.submit(lambda: None)  # real impl would await Batch task
+        return Handle(job_id=f"awsbatch-stub-{int(time.time() * 1000)}", _future=fut)
 
     def shutdown(self) -> None:
         pass

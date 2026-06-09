@@ -9,13 +9,12 @@ These tests are the gate for approval criterion #2 in
 Each test sets up a cache, performs an action, mutates something, and
 asserts the cache key no longer matches.
 """
-import json
-import shutil
+
 from pathlib import Path
 
 import pytest
 
-from osimflow.cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
+from osimflow.cache import CacheKey, SQLiteCache, sha256_of_files
 
 
 @pytest.fixture
@@ -91,10 +90,12 @@ def test_openstudio_version_change_invalidates_only_sim_step(
     out = tmp_path / "out.txt"
     out.write_text("kpis")
     # Store entries across all steps for os_version=3.4.0
-    for step, sid in [("GENERATE_LHS_SAMPLES", "ALL"),
-                       ("APPLY_PARAMETERS", "S1"),
-                       ("RUN_OPENSTUDIO_SIM", "S1"),
-                       ("EXTRACT_KPIS", "S1")]:
+    for step, sid in [
+        ("GENERATE_LHS_SAMPLES", "ALL"),
+        ("APPLY_PARAMETERS", "S1"),
+        ("RUN_OPENSTUDIO_SIM", "S1"),
+        ("EXTRACT_KPIS", "S1"),
+    ]:
         k = CacheKey(step, sid, "3.4.0", "h", "h", "img")
         tmp_cache.store(k, out, exit_code=0)
     assert tmp_cache.stats()["total"] == 4
@@ -116,9 +117,11 @@ def test_template_sim_package_change_invalidates_apply_and_run(
     the simulation that uses it must both be re-run."""
     out = tmp_path / "out.txt"
     out.write_text("x")
-    for step, sid in [("APPLY_PARAMETERS", "S1"),
-                       ("RUN_OPENSTUDIO_SIM", "S1"),
-                       ("EXTRACT_KPIS", "S1")]:
+    for step, sid in [
+        ("APPLY_PARAMETERS", "S1"),
+        ("RUN_OPENSTUDIO_SIM", "S1"),
+        ("EXTRACT_KPIS", "S1"),
+    ]:
         k = CacheKey(step, sid, "3.4.0", "old-template-h", "h", "img")
         tmp_cache.store(k, out, exit_code=0)
     # The Campaign recomputes inputs_sha256 from the template content, so
@@ -128,9 +131,7 @@ def test_template_sim_package_change_invalidates_apply_and_run(
     assert tmp_cache.lookup(new_key) is None
 
 
-def test_variables_yml_change_invalidates_lhs_only(
-    tmp_cache: SQLiteCache, tmp_path: Path
-) -> None:
+def test_variables_yml_change_invalidates_lhs_only(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     """Changing variables.yml invalidates LHS, which is a different code path
     (we'd need to also invalidate apply/run/extract because their sample_ids
     may change). For the spike we demonstrate the LHS invalidation only."""
