@@ -50,7 +50,11 @@ from .work import (
 
 log = logging.getLogger("osimflow.campaign")
 
-CONTAINER_OS = "ghcr.io/anchapin/openstudio_cli_image:{version}"
+# Image registries. The OpenStudio CLI image is consumed directly from
+# NREL's upstream `nrel/openstudio` on Docker Hub — see
+# `docs/openstudio-image-distribution.md` and ADR-0002 for the rationale.
+# The scientific Python image remains a project-owned ghcr.io artifact.
+CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 
 

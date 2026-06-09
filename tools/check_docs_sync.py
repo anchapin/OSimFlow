@@ -38,7 +38,9 @@ PATH_SKIP_SUBSTRINGS = (
     "eplusout",
     "openstudio_cli_image",  # container tag, not a local path
     "scientific_python_image",
+    "nrel/openstudio",  # container image name, not a local path
     "ghcr.io",  # container registry, not a local file
+    "docker.io",  # container registry, not a local file
     "scipy.stats",  # module path, not a file
     "os.path",  # module path, not a file
     "pathlib",  # module path, not a file

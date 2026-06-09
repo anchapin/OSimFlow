@@ -76,9 +76,10 @@ def default_apply_parameters(
 # ---------------------------------------------------------------------------
 # This stub is a placeholder for the real implementation, which will
 # invoke `openstudio.cli run -w workflow.osw` inside the
-# `openstudio_cli_image:<version>` container. The container is selected
-# by the executor via the `container` parameter on submit; the function
-# itself only sees the work directory.
+# `nrel/openstudio:<version>` container (consumed from Docker Hub;
+# see `docs/openstudio-image-distribution.md` and ADR-0002). The
+# container is selected by the executor via the `container` parameter
+# on submit; the function itself only sees the work directory.
 #
 # The stub simulates work with a short sleep and writes placeholder
 # eplusout.sql / eplusout.err so the downstream extract step has
@@ -111,7 +112,7 @@ def run_openstudio_sim(
     sim_out.mkdir(parents=True, exist_ok=True)
     log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
     # STUB: replace with `subprocess.run(["openstudio.cli", "run", ...])`
-    # inside the openstudio_cli_image:<version> container.
+    # inside the nrel/openstudio:<version> container.
     time.sleep(simulate_work_s)
     (sim_out / "eplusout.sql").write_text("-- placeholder sql")
     (sim_out / "eplusout.err").write_text("")  # success: empty err

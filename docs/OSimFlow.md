@@ -7,6 +7,8 @@ The **primary goal** of the OSimFlow MVP is to **generate a comprehensive and ac
 
 > **Note on the implementation language.** The PRD was originally written when the project intended to use Nextflow. After an architecture spike (see `.agents/results/decision-verdict.md` and `.agents/results/architecture/0001-workflow-framework.md`), the project switched to a custom Python driver. The product vision, target audience, and MVP scope in this PRD are unchanged; the architecture (§4) and technology stack (§4.3) sections have been updated to reflect the new foundation.
 
+> **Note on the OpenStudio CLI image source (ADR-0002, 2026-06-09).** §1.4, §3.2, and §5.2 below describe a project-owned `ghcr.io/osimflow/openstudio_cli_image:<version>` built by an in-repo CI/CD pipeline. In practice, NREL already publishes exactly that artifact on Docker Hub as `nrel/openstudio` (192+ tags, including every stable release 3.6.1 → 3.11.0). Per ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`), OSimFlow consumes the upstream image directly and owns no build pipeline. The product contract is unchanged — users still pin versions with `--openstudio_version` — but the implementation is now `docker.io/nrel/openstudio:<version>`. See `docs/openstudio-image-distribution.md` for the full rationale, supported version matrix, and break-glass plan.
+
 ### 1.2. Vision Statement
 **OSimFlow empowers OpenStudio users to effortlessly launch and manage large-scale parametric energy simulation campaigns with high reproducibility, scalability, and environmental agnosticism**, fostering a collaborative ecosystem for building performance analysis.
 
@@ -116,7 +118,7 @@ Each step is a `Campaign` method that:
     *   **Description**: The core simulation engine. For each parameterized sample, calls `osimflow.work.run_openstudio_sim` (which currently is a stub that writes placeholder `eplusout.sql` / `eplusout.err`; the real implementation will invoke `openstudio.cli run -w workflow.osw` inside the dynamically selected `openstudio_cli_image:<version>` container). Captures `eplusout.sql`, `eplusout.err`, `eplusout.log`, and `stdout/stderr` to the per-sample work directory.
     *   **Inputs**: per-sample `modified_sim_package_dir`, `openstudio_version` (str).
     *   **Outputs**: `dict[sample_id, simulation_output_dir]`.
-    *   **Container**: `openstudio_cli_image:<user_specified_version>` (dynamic).
+    *   **Container**: `nrel/openstudio:<user_specified_version>` (dynamic; see `docs/openstudio-image-distribution.md`).
 
 *   **`step_extract_kpis`**
     *   **Description**: For each simulated sample, calls `osimflow.work.extract_kpis` (which delegates to `bin/extract_kpis.py`, or a user-supplied `extract_kpis` function via `--custom_kpi_extractor`). Parses `eplusout.sql` and other relevant files, extracting user-defined KPIs into a JSON per sample.
@@ -146,7 +148,7 @@ Each step is a `Campaign` method that:
 *   **Statistical Sampling**: `scipy.stats.qmc.LatinHypercube` (for LHS)
 *   **Plotting**: `matplotlib/seaborn`
 *   **Programming Languages**: Python 3.11+
-*   **Container Registry**: `ghcr.io` (for OpenStudio CLI images)
+*   **Container Registry**: `docker.io` (for `nrel/openstudio` — OSimFlow consumes the upstream image directly) + `ghcr.io` (for the project-owned `scientific_python_image`); see `docs/openstudio-image-distribution.md`.
 *   **Monitoring**: Bring-your-own — per-campaign `run.json` trace + optional MLflow (see `.agents/results/monitoring-decision.md`)
 *   **CI/CD**: GitHub Actions (workflow to be added post-MVP)
 
@@ -162,7 +164,7 @@ The completion of the MVP will be marked by **Phase 3: Multi-Environment Orchest
 ### 5.2. Phase 3 Deliverables
 *   **Comprehensive executor adapters** (`osimflow/executors/`): `LocalExecutor` (done), `SlurmExecutor` (real-Slurm wiring, not just debug), `AWSBatchExecutor` (boto3 wiring).
 *   **Detailed deployment guides for AWS and Slurm** (setup of S3, AWS Batch CE/Queue, ECR, Slurm partition, `submitit` job logs).
-*   **Automated CI/CD for at least two pre-built `openstudio_cli_image` versions** (e.g., 3.4.0 and a newer one) available via `ghcr.io`.
+*   **Automated CI/CD for at least two pre-built OpenStudio CLI image versions** (currently 3.7.0, 3.8.0, 3.9.0, 3.10.0, 3.11.0) available via `nrel/openstudio` on Docker Hub. Resolved per `docs/openstudio-image-distribution.md`; OSimFlow owns no image-build pipeline.
 *   **Implementation of `--openstudio_version` CLI parameter functionality** to dynamically select the container image tag in `step_run_openstudio_sim` (already done in the foundation — verify under real container).
 *   **Comprehensive end-to-end integration tests** for execution across local, docker, aws_batch, and slurm profiles, verifying output integrity.
 *   **Full User Guide** (installation, basic usage, `variables.yml` spec, resource allocation guidance, `run.json` interpretation).
