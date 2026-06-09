@@ -10,7 +10,7 @@
 
 The full vision, scope, and technical architecture are defined in [`docs/OSimFlow.md`](docs/OSimFlow.md) (PRD). This file is the AI-assistant counterpart: it tells you the conventions, the gotchas, and the routing logic so you don't have to re-derive them from the PRD every time.
 
-**Foundation decision:** the project uses a custom Python driver (replacing the original Nextflow skeleton — see `.agents/results/decision-verdict.md` and `architecture/0001-workflow-framework.md`). The custom driver is built on `submitit` (Slurm), `dask-jobqueue` (alternative HPC), and a thin Boto3-based AWS Batch adapter. Per-sample work is heavy (5 min – 4 h) and embarrassingly parallel.
+**Foundation decision:** the project uses a custom Python driver (replacing the original Nextflow skeleton — see `.agents/results/decision-verdict.md` and `.agents/results/architecture/0001-workflow-framework.md`). The custom driver is built on `submitit` (Slurm), `dask-jobqueue` (alternative HPC), and a thin Boto3-based AWS Batch adapter. Per-sample work is heavy (5 min – 4 h) and embarrassingly parallel.
 
 **Current status:** **Pre-MVP / skeleton.** The repository contains the PRD, project docs, and Python *stubs* for the six processes from PRD §4.2. The orchestration foundation (the `osimflow/` package) is now landed; the next step is filling in the `bin/*.py` logic that the work layer calls. See the *Next steps* section at the bottom of `decision-verdict.md`.
 
@@ -69,6 +69,47 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 ## 4. Build & run commands
 
 > All commands assume CWD = repo root. The orchestration foundation runs end-to-end against stub `bin/*.py` scripts (no real OpenStudio CLI needed for the MVP smoke test); see `tests/integration/test_cache_invalidation.py` for the cache-correctness gate.
+
+### DAG step names (referenced from `osimflow/campaign.py`)
+
+The 6-step DAG that the `Campaign` class drives:
+
+- `GENERATE_LHS_SAMPLES` — single-shot, no fan-out.
+- `APPLY_PARAMETERS` — fan-out over N samples.
+- `RUN_OPENSTUDIO_SIM` — fan-out over N samples (heavy).
+- `EXTRACT_KPIS` — fan-out over N samples.
+- `AGGREGATE_RESULTS` — one shot after all KPIs.
+- `GENERATE_BASIC_PLOTS` — one shot after aggregation.
+
+### CLI flags (referenced from `osimflow/__main__.py`)
+
+- `--executor` (local / slurm / aws_batch)
+- `--max-workers` (local executor parallelism)
+- `--slurm-partition`, `--slurm-account`, `--slurm-real`
+- `--aws-batch-queue`, `--aws-batch-job-definition`
+- `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
+- `--openstudio_version`, `--archive_intermediates`
+- `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
+- `--log_level`
+
+### Developer workflow targets (Makefile)
+
+The `Makefile` is the canonical day-to-day interface. Every CI job has a
+`make` equivalent:
+
+```bash
+make install    # pip install -e ".[dev,aws,slurm]"
+make lint       # ruff check
+make format     # ruff format + black
+make typecheck  # mypy --strict (osimflow/)
+make test       # pytest (full suite)
+make test-fast  # pytest unit + contract only (pre-commit mirror)
+make contract   # tools/check_agents_contract.py + tools/check_docs_sync.py
+make precommit  # pre-commit run --all-files (the pre-push safety net)
+make act        # local CI mirror via nektos/act
+```
+
+See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for the day-to-day workflow.
 
 ### Install
 
@@ -161,6 +202,7 @@ When implementing the real `bin/*.py` logic, add:
 - **BYOS contract**: a user-supplied function (in `user_scripts/`) is discovered by name. The Campaign validates the function signature with `inspect.signature`. Never define the same contract twice (once as a Python function, once as a CLI surface).
 - **Cache key rule**: any code that affects per-step behavior must be hashed into the cache key. See `osimflow/campaign.py:_compute_code_hashes` for the pattern.
 - **Executor resource directives**: `cpus`, `memory_mb`, `time_min` are advisory on `LocalExecutor`, propagated to Slurm via `submitit`'s `update_parameters` for `SlurmExecutor`, and translated to Boto3 `containerOverrides` for `AWSBatchExecutor`. Add new resource kinds by extending the `submit()` signature, not by adding process-local config.
+- **Enforcement**: the rules above are enforced by `ruff` (style), `black` (format), `mypy --strict` (types), and the AGENTS.md / docs contract checks. Run `make precommit` before pushing; CI mirrors the same checks. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ### Shell / CLI
 - All user-facing scripts use `set -euo pipefail`.
