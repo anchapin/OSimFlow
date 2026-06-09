@@ -1,14 +1,27 @@
 # =============================================================================
 # OSimFlow — gitignore
 # =============================================================================
-# Nextflow / pipeline run artifacts
+# Campaign run artifacts (per-campaign outdir, including work/ subdir)
 .work/
-.nextflow.log*
-.nextflow/
-results/
-nf-core/
+/results/
+example_results/
+slurm_logs/
 
-# Python (bin/ scripts and any helpers)
+# Spike/architecture-decision artifacts: venvs and work dirs only
+.agents/spike/.venv/
+.agents/spike/*/work/
+.agents/spike/*/.venv/
+.agents/spike/work/custom_python_out/
+.agents/spike/work/snakemake_out/
+.agents/spike/work/cache_test_*/
+# Keep .agents/spike/work/fixtures/ (the variable.yml and template
+# fixture the spike scripts depend on) — not ignored above.
+
+# Snakemake runtime caches (anywhere in the tree)
+**/.snakemake/
+**/.snakemake_timestamp
+
+# Python (osimflow/ package, bin/ scripts, any helpers)
 __pycache__/
 *.py[cod]
 *.egg-info/

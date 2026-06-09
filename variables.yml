@@ -1,0 +1,15 @@
+# variables.yml — example schema for the OSimFlow LHS sampler.
+# See docs/OSimFlow.md §1.4 (Pre-flight Parameter Applicability Validation).
+variables:
+  - name: window_u_value
+    distribution: uniform
+    min: 1.0
+    max: 5.0
+  - name: infiltration_rate
+    distribution: lognormal
+    mean: 0.5
+    sigma: 0.2
+  - name: hvac_setpoint
+    distribution: uniform
+    min: 20.0
+    max: 24.0

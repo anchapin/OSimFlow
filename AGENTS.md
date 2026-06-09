@@ -6,11 +6,13 @@
 
 ## 1. Project summary
 
-**OSimFlow** is a community-driven open-source **Nextflow DSL2** framework that wraps the **OpenStudio CLI** to run large-scale, reproducible, parametric building-energy simulation campaigns. It targets **OpenStudio users** — energy modelers, researchers, and design-optimization practitioners — who need to launch hundreds to thousands of `openstudio.cli run` invocations across cloud (**AWS Batch**) or on-premise HPC (**Slurm**) without writing bespoke orchestration glue for each campaign.
+**OSimFlow** is a community-driven open-source **Python** framework that wraps the **OpenStudio CLI** to run large-scale, reproducible, parametric building-energy simulation campaigns. It targets **OpenStudio users** — energy modelers, researchers, and design-optimization practitioners — who need to launch hundreds to thousands of `openstudio.cli run` invocations across cloud (**AWS Batch**) or on-premise HPC (**Slurm**) without writing bespoke orchestration glue for each campaign.
 
 The full vision, scope, and technical architecture are defined in [`docs/OSimFlow.md`](docs/OSimFlow.md) (PRD). This file is the AI-assistant counterpart: it tells you the conventions, the gotchas, and the routing logic so you don't have to re-derive them from the PRD every time.
 
-**Current status:** **Pre-MVP / skeleton.** The repository contains the PRD, project docs, and Nextflow/Python *stubs* for the six processes from PRD §4.2. Nothing is wired up yet. The first implementation commit will follow.
+**Foundation decision:** the project uses a custom Python driver (replacing the original Nextflow skeleton — see `.agents/results/decision-verdict.md` and `architecture/0001-workflow-framework.md`). The custom driver is built on `submitit` (Slurm), `dask-jobqueue` (alternative HPC), and a thin Boto3-based AWS Batch adapter. Per-sample work is heavy (5 min – 4 h) and embarrassingly parallel.
+
+**Current status:** **Pre-MVP / skeleton.** The repository contains the PRD, project docs, and Python *stubs* for the six processes from PRD §4.2. The orchestration foundation (the `osimflow/` package) is now landed; the next step is filling in the `bin/*.py` logic that the work layer calls. See the *Next steps* section at the bottom of `decision-verdict.md`.
 
 **MVP target:** PRD §5.2 — multi-environment orchestration, OpenStudio version selection, robustness/refinement. Estimated 3–4 weeks of focused work.
 
@@ -20,17 +22,18 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Workflow orchestration | **Nextflow DSL2** | `nextflow.enable.dsl=2`. One process per `.nf` file under `modules/`. |
-| Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
+| Workflow orchestration | **Custom Python driver** (`osimflow/`) | ~300 LoC `Campaign` class; subcommand CLI `osimflow run`. |
+| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor` | All conform to the same `submit()` → `Handle` interface. |
+| Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
+| AWS Batch backend | **`boto3`** (future) | Stub today; `AWSBatchExecutor.submit()` is a placeholder. |
 | Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two pre-built images: `openstudio_cli_image:<version>` and `scientific_python_image`. |
-| Cloud platform (prioritized) | **AWS Batch** | Profiles in `conf/aws_batch.config`. |
-| On-prem HPC (prioritized) | **Slurm** | Profiles in `conf/slurm.config`. |
+| Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
 | Statistical sampling | **`scipy.stats`** | Latin Hypercube Sampling (LHS) of design variables. |
 | Data processing | **Python 3.11+**, **`pandas`**, **`pyarrow`** (Parquet) | KPI extraction, aggregation, error parsing. |
 | Plotting | **`matplotlib`** + **`seaborn`** | 1–3 static summary plots (PNG/PDF). |
 | Container registry | **`ghcr.io`** | Tags: `ghcr.io/anchapin/openstudio_cli_image:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
-| Monitoring | **Nextflow Tower** | Native compatibility; provide `-with-tower` flag. |
-| CI/CD | **GitHub Actions** | See `.github/workflows/openstudio-cli-image.yml`. |
+| Monitoring | **BYO: per-campaign `run.json` + tqdm** | See `.agents/results/monitoring-decision.md`. No external service. |
+| CI/CD | **GitHub Actions** | (workflow to be added post-MVP) |
 
 ---
 
@@ -38,28 +41,26 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Path | Purpose |
 |---|---|
-| `main.nf` | Top-level workflow entry point. Orchestrates the six processes. |
-| `nextflow.config` | Global Nextflow config: `nextflow.enable.dsl=2`, default params, profile registration. |
-| `modules/PROCESS_GENERATE_LHS_SAMPLES.nf` | Reads `variables.yml`, calls `bin/generate_lhs.py`. |
-| `modules/PROCESS_APPLY_PARAMETERS.nf` | Applies a parameter set to the `template_sim_package` (`.osm` or `.osw`). Runs pre-flight checks. |
-| `modules/PROCESS_RUN_OPENSTUDIO_SIM.nf` | Runs `openstudio.cli run` in `openstudio_cli_image:<version>`. |
-| `modules/PROCESS_EXTRACT_KPIS.nf` | Parses `eplusout.sql`/CSV for KPIs. |
-| `modules/PROCESS_AGGREGATE_RESULTS.nf` | Collects all KPIs into one CSV/Parquet + produces `failed_simulations.csv`. |
-| `modules/PROCESS_GENERATE_BASIC_PLOTS.nf` | Generates 1–3 static summary plots. |
-| `conf/docker.config` | Local/CI execution profile (Docker). |
-| `conf/slurm.config` | HPC execution profile (Slurm + Singularity). |
-| `conf/aws_batch.config` | Cloud execution profile (AWS Batch). |
+| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, executors. |
+| `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
+| `osimflow/cache.py` | `SQLiteCache` + `CacheKey` — explicit, testable resume semantics. |
+| `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
+| `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
+| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor`. |
+| `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
+| `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats). |
 | `bin/apply_params_to_model.py` | Default parameter-application logic. |
 | `bin/extract_kpis.py` | Default KPI extractor. |
 | `bin/aggregate_results.py` | Result aggregation + error-summary extraction. |
 | `bin/generate_plots.py` | Matplotlib/seaborn plot generator. |
+| `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
 | `docs/OSimFlow.md` | The PRD — the source of truth for scope and architecture. |
 | `docs/CONTRIBUTING.md` | Contributor onboarding (stub for Phase 3). |
 | `docs/GOVERNANCE.md` | Community governance model (stub for Phase 3). |
-| `tests/` | End-to-end integration tests (placeholder; PRD §5.2). |
-| `.github/workflows/openstudio-cli-image.yml` | CI/CD stub for building `ghcr.io/anchapin/openstudio_cli_image:<version>`. |
+| `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
+| `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit). |
 | `LICENSE` | MIT. |
 | `README.md` | One-paragraph project pitch + status. |
 
@@ -67,73 +68,104 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 ## 4. Build & run commands
 
-> All commands assume CWD = repo root. Stubs are not yet runnable end-to-end; these examples show the *target* invocation shape so AI assistants can keep the user-facing contract stable.
+> All commands assume CWD = repo root. The orchestration foundation runs end-to-end against stub `bin/*.py` scripts (no real OpenStudio CLI needed for the MVP smoke test); see `tests/integration/test_cache_invalidation.py` for the cache-correctness gate.
+
+### Install
 
 ```bash
-# Print the campaign help
-nextflow run . --help
+# Editable install with dev + aws + slurm extras
+pip install -e ".[dev,aws,slurm]"
 
-# Local smoke run: 10 samples via Docker, default OpenStudio version
-nextflow run . -profile docker \
+# Minimal install (no slurm/boto3 — local executor only)
+pip install -e .
+```
+
+### Run a campaign
+
+```bash
+# Local smoke run: 5 samples, local executor
+osimflow run \
+  --executor local \
   --input_variables variables.yml \
-  --n_samples 10 \
   --template_sim_package ./example_package \
-  --outdir ./results
+  --n_samples 5 \
+  --outdir ./results \
+  --openstudio_version 3.4.0
 
-# HPC run via Slurm + Singularity, pinned OpenStudio version
-nextflow run . -profile slurm \
+# HPC run via Slurm — pined OpenStudio version, real Slurm (not debug)
+osimflow run \
+  --executor slurm \
+  --slurm-real \
+  --slurm_partition short \
   --openstudio_version 3.4.0 \
   --input_variables variables.yml \
   --n_samples 500
 
 # Cloud run on AWS Batch
-nextflow run . -profile aws_batch \
+osimflow run \
+  --executor aws_batch \
+  --aws-batch-queue osimflow-batch-queue \
   --openstudio_version 3.5.0 \
   --archive_intermediates
 
-# Monitor with Nextflow Tower
-nextflow run . -profile docker -with-tower
-
 # User-provided custom KPI extractor
-nextflow run . -profile docker \
-  --custom_kpi_extractor user_scripts/my_kpis.py
+osimflow run \
+  --executor local \
+  --custom_kpi_extractor user_scripts/my_kpis.py \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 10 \
+  --outdir ./results
 ```
+
+The campaign writes `${outdir}/run.json` with per-step timing and per-sample status; this is the primary monitoring artifact (see `.agents/results/monitoring-decision.md`).
+
+### Resume a partial run
+
+Re-running with the same `--outdir` is a cache hit on every step. The first run takes 50s; the second run takes 0.1s (verified — see `decision-verdict.md` §1).
 
 ---
 
 ## 5. Testing
 
-> **Placeholder.** PRD §5.2 calls for "comprehensive end-to-end integration tests for execution across local, docker, aws_batch, and slurm profiles." Tests will live under `tests/` once the pipeline is implemented.
+Tests live under `tests/`. Run with pytest:
 
-When implementing tests:
-- Use small `n_samples` (1–3) and a tiny template package.
-- Verify the four output artifacts: `aggregated_results.csv`, `failed_simulations.csv`, KPI JSON per sample, and 1+ plot files.
-- Mock or skip the `openstudio_cli_image` build by using a pre-built tag from `ghcr.io`.
-- Add a "Performance Benchmarking" smoke test (PRD §5.2) that records wall-clock + memory for a 3-sample run.
+```bash
+# All tests
+pytest
+
+# Just the cache invalidation suite
+pytest tests/integration/test_cache_invalidation.py -v
+
+# With coverage
+pytest --cov=osimflow
+```
+
+When implementing the real `bin/*.py` logic, add:
+- **End-to-end smoke test** with 1-3 samples and a tiny template package, verifying the four output artifacts (`aggregated_results.csv`, `failed_simulations.csv`, KPI JSONs, plot files).
+- **Per-step unit tests** for each `bin/*.py` script.
+- **Pre-flight parameter check tests** — the LHS variable name must map to a real measure argument / `.osm` attribute.
+- **Performance Benchmarking** smoke test (PRD §5.2) that records wall-clock + memory for a 3-sample run.
 
 ---
 
 ## 6. Code style
 
-### Python (bin/, user_scripts/)
+### Python (osimflow/, bin/, user_scripts/, tests/)
 - **PEP 8** + **type hints** everywhere. Public functions must have full annotations.
 - Use `pathlib.Path` over `os.path`. Use `logging` (not `print`).
 - Exceptions: catch, log with `exc_info=True`, **re-raise**. Never swallow.
-- CLI entry points: use `argparse` with mutually-exclusive groups for the BYOS override args.
+- The package targets Python 3.11+. Do not add `from __future__ import annotations` (the syntax is supported natively).
+- CLI entry points use `argparse` with subcommands (`osimflow run ...`).
 - For OpenStudio Python bindings, isolate all `import openstudio` calls behind a `try/except` and provide a clear error message if the bindings aren't installed (relevant in `scientific_python_image` builds that don't include the heavy C++ stack).
-
-### Nextflow (modules/*.nf, main.nf, nextflow.config)
-- **DSL2 only.** Every process in its own file under `modules/`.
-- Every process gets a `tag` so Tower logs are readable (e.g., `tag "$sample_id"`).
-- Use `publishDir` with `mode: 'copy'` and an explicit `pattern` to control what lands in `--outdir`.
-- Inputs that are files/directories use `path` or `tuple val(...), path(...)`; never `file` (deprecated in DSL2).
-- Container directives live in `conf/*.config`, not inline in process files.
-- `cache 'lenient'` is the default; opt into `cache 'strict'` only for processes with verifiable side effects.
-- **Naming**: `PROCESS_<UPPER_SNAKE>` for files; `<verb>_<noun>` for process names (e.g., `RUN_OPENSTUDIO_SIM`).
+- **BYOS contract**: a user-supplied function (in `user_scripts/`) is discovered by name. The Campaign validates the function signature with `inspect.signature`. Never define the same contract twice (once as a Python function, once as a CLI surface).
+- **Cache key rule**: any code that affects per-step behavior must be hashed into the cache key. See `osimflow/campaign.py:_compute_code_hashes` for the pattern.
+- **Executor resource directives**: `cpus`, `memory_mb`, `time_min` are advisory on `LocalExecutor`, propagated to Slurm via `submitit`'s `update_parameters` for `SlurmExecutor`, and translated to Boto3 `containerOverrides` for `AWSBatchExecutor`. Add new resource kinds by extending the `submit()` signature, not by adding process-local config.
 
 ### Shell / CLI
 - All user-facing scripts use `set -euo pipefail`.
 - Long options over short ones in documentation (e.g., `--openstudio_version` not `-o`).
+- Per-sample stdout/stderr land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 
 ---
 
@@ -153,8 +185,8 @@ When implementing tests:
 | **Measure** | An OpenStudio plug-in (Ruby or Python) that modifies a model or workflow. Arguments are exposed in `.osw`. |
 | **`template_sim_package`** | A user-supplied directory containing a base `.osm`/`.osw` and any required measure scripts. The campaign's starting point. |
 | **`variables.yml`** | User-supplied input file declaring which parameters vary and their LHS distributions. |
-| **BYOS** | "Bring Your Own Script" — user-provided Python scripts in `user_scripts/` that override default `bin/` logic. |
-| **Tower** | Seqera Platform (formerly Nextflow Tower) for monitoring Nextflow runs. |
+| **BYOS** | "Bring Your Own Script" — user-provided Python scripts in `user_scripts/` that override default `bin/` logic. The override interface is a Python function signature. |
+| **`run.json`** | The per-campaign monitoring trace (per-step timing, per-sample status, cache hit/miss). The primary observability artifact. |
 | **`openstudio_cli_image:<version>`** | The dynamic container image tag, selected via `--openstudio_version`. |
 
 ---
@@ -163,14 +195,16 @@ When implementing tests:
 
 These are *known traps* the PRD explicitly calls out. When you write code, check yourself against this list:
 
-1. **Large `eplusout.err` files** — delete from the work directory on successful simulation (PRD §1.4 *Intelligent Intermediate File Optimization*). Don't publish to `--outdir` unless `--archive_intermediates` is set.
-2. **Pre-flight parameter checks** — `PROCESS_APPLY_PARAMETERS` must verify that every LHS variable actually maps to an existing measure argument or `.osm` attribute *before* the simulation runs (PRD §1.4 *Pre-flight Parameter Applicability Validation*). Fail fast with a clear error.
-3. **OpenStudio version pinning** — version lives in the **container tag**, not in `variables.yml` or env vars. The `openstudio_cli_image:<version>` is dynamically selected in `PROCESS_RUN_OPENSTUDIO_SIM` from `--openstudio_version`.
-4. **Failed simulation summaries** — `failed_simulations.csv` must contain the *first* "Severe Error" line from each `eplusout.err`, not the whole file. Use `grep -m 1 "  * Severe"`.
-5. **`--archive_intermediates`** — when set, publish: all campaign inputs (`template_sim_package`, `variables.yml`) **and** per-sample `.osw/.osm` + `eplusout.sql`. Don't blindly archive `eplusout.err`/`eplusout.log` — too large.
-6. **AWS Batch security** — IAM roles for EC2 instances, not long-lived access keys (PRD §6 *Cloud Security Practices*).
+1. **Large `eplusout.err` files** — delete from the work directory on successful simulation (PRD §1.4 *Intelligent Intermediate File Optimization*). The Campaign does this in `step_run_openstudio_sim` after a successful handle.result().
+2. **Pre-flight parameter checks** — `step_apply_parameters` (via `bin/apply_params_to_model.py`) must verify that every LHS variable actually maps to an existing measure argument or `.osm` attribute *before* the simulation runs (PRD §1.4 *Pre-flight Parameter Applicability Validation*). Fail fast with a clear error.
+3. **OpenStudio version pinning** — version lives in the **container tag** (`CONTAINER_OS.format(version=...)`) passed to the executor, not in `variables.yml` or env vars. The `openstudio_cli_image:<version>` is dynamically selected in `step_run_openstudio_sim` from `--openstudio_version`.
+4. **Failed simulation summaries** — `failed_simulations.csv` must contain the *first* "Severe Error" line from each `eplusout.err`, not the whole file. Use `grep -m 1 "  * Severe"`. Implemented in `bin/aggregate_results.py`.
+5. **`--archive_intermediates`** — when set, publish: all campaign inputs (`template_sim_package`, `variables.yml`) **and** per-sample `.osw/.osm` + `eplusout.sql`. Don't blindly archive `eplusout.err`/`eplusout.log` — too large. This is a future addition to the `Campaign` orchestrator (copy a step's `publishDir` pattern).
+6. **AWS Batch security** — IAM roles for EC2 instances, not long-lived access keys (PRD §6 *Cloud Security Practices*). `AWSBatchExecutor` must source credentials from the IAM role on the compute environment, never from `boto3` long-lived keys.
 7. **OpenStudio Measure dependencies** — custom Ruby/Python measure deps must be packaged *inside* the `template_sim_package`, not installed at runtime.
 8. **Large time-series data** — hourly outputs for thousands of samples get huge fast. Default to daily/monthly aggregates in `aggregated_results.csv`; keep hourly data only in per-sample `.sql` files behind `--archive_intermediates`.
+9. **Cache invalidation on `bin/*.py` edits** — the cache key includes a SHA-256 of every `bin/*.py` file (`code_hashes["bin"]`), so editing a script invalidates the cache for the affected step. **Do not** introduce a step that bypasses this hashing.
+10. **SlurmExecutor `debug=True` by default** — without `--slurm-real`, jobs run locally. This is the documented `submitit` pattern. Always pass `--slurm_real` in production.
 
 ---
 
@@ -180,14 +214,16 @@ Use these patterns to decide where to make a change.
 
 | If the user asks to… | Edit |
 |---|---|
-| Add a new KPI | `bin/extract_kpis.py` **and** `modules/PROCESS_EXTRACT_KPIS.nf` (update `publishDir` pattern if it should land in `--outdir`). |
-| Add a new sampling distribution | `bin/generate_lhs.py` (extend `scipy.stats.qmc.LatinHypercube` mapping) **and** `docs/` examples in `variables.yml` spec. |
-| Add a new execution platform | New `conf/<platform>.config` **and** register in `nextflow.config` under `profiles { ... }`. |
-| Add a new process | New `modules/PROCESS_<NAME>.nf` **and** wire into `main.nf` channels **and** update the directory map in this file. |
-| Change a default OpenStudio version | `.github/workflows/openstudio-cli-image.yml` (new build matrix entry) **and** `nextflow.config` `params.default_openstudio_version`. |
-| Add a user-facing CLI flag | `main.nf` `params.<flag>` **and** the `--help` snippet in this file's §4 **and** `nextflow.config` default. |
+| Add a new KPI | `bin/extract_kpis.py` (and the schema doc in `osimflow/monitoring.py:SampleTrace`). |
+| Add a new sampling distribution | `osimflow/campaign.py:step_generate_lhs` (extend the distribution dispatch) **and** update the `variables.yml` example in `docs/`. |
+| Add a new execution platform | New class in `osimflow/executors/__init__.py` (subclass `BaseExecutor`) **and** add the executor choice to `osimflow/__main__.py:_build_executor`. |
+| Add a new step to the DAG | A new method on `Campaign` in `osimflow/campaign.py` **and** call it from `Campaign.run` **and** emit `StepTrace` hooks. Update the directory map in this file. |
+| Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py`. |
+| Add a user-facing CLI flag | `osimflow/__main__.py:_build_parser` (add the `add_argument` call) **and** the `CampaignConfig` dataclass in `osimflow/config.py` **and** the `load_config` parser. |
 | Change KPI output schema | `bin/extract_kpis.py` (output dict shape) **and** `bin/aggregate_results.py` (column ordering) **and** update the `variables.yml` example in `docs/`. |
-| Fix a bug in parameter application | `bin/apply_params_to_model.py` first; only touch `PROCESS_APPLY_PARAMETERS.nf` if you also need different Nextflow semantics (retry, cache, publishDir). |
+| Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different Campaign semantics (retry, cache, monitoring). |
+| Add a new cache invalidation rule | `osimflow/campaign.py:step_*` (the cache key construction) **and** a test in `tests/integration/test_cache_invalidation.py`. |
+| Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
 
 ---
 
@@ -195,9 +231,9 @@ Use these patterns to decide where to make a change.
 
 - **Never commit** `.osm`, `.osw`, `.idf`, `.epw`, `eplusout.*` files. The `.gitignore` already excludes them; double-check before staging.
 - For very large inputs that *must* be tracked, use **`git-lfs`** — don't bypass the gitignore.
-- **AWS**: IAM roles for EC2 compute environment only. No long-lived AWS access keys in the repo or in `nextflow.config`.
-- **Singularity on shared HPC**: never bind-mount secrets; pass via Nextflow `secret` directive, not environment.
-- **BYOS user scripts**: when a user supplies a script, treat it as untrusted. Validate the function signature, sandbox the working directory, and apply a per-script timeout in the wrapping Python entrypoint.
+- **AWS**: IAM roles for EC2 compute environment only. No long-lived AWS access keys in the repo or in any config file. The `AWSBatchExecutor` must source credentials from the IAM role on the compute environment.
+- **Singularity on shared HPC**: never bind-mount secrets; pass via env vars or submitit's `ex.update_parameters(setup=...)`, not as container mounts.
+- **BYOS user scripts**: when a user supplies a script, treat it as untrusted. The Campaign loads it via `importlib.util` and validates the function signature with `inspect.signature`. The default `LocalExecutor` runs in a thread pool with no resource limits — when wiring `SlurmExecutor` to production, set a per-job timeout (`time_min`) to bound blast radius.
 
 ---
 
@@ -209,8 +245,10 @@ Use these patterns to decide where to make a change.
   - §4.2 — Key Modules/Processes
   - §5.2 — Phase 3 Deliverables
   - §6 — Potential Challenges & Considerations
+- [Architecture decision (`.agents/results/architecture/0001-workflow-framework.md`)](.agents/results/architecture/0001-workflow-framework.md) — why we use a custom Python driver instead of Nextflow.
+- [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
+- [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why BYO monitoring (no Tower).
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) — *to be written*
 - [GOVERNANCE.md](docs/GOVERNANCE.md) — *to be written*
-- [Nextflow DSL2 docs](https://www.nextflow.io/docs/latest/dsl2.html)
+- [`submitit` documentation](https://github.com/facebookincubator/submitit) — the Slurm executor backend.
 - [OpenStudio CLI reference](https://openstudio.net/docs/cli/)
-- [Seqera Platform / Tower](https://seqera.io/platform/)
