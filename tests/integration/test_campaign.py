@@ -60,7 +60,23 @@ def workdir(tmp_path: Path) -> Path:
 def template_pkg(workdir: Path) -> Path:
     pkg = workdir / "template"
     pkg.mkdir()
-    (pkg / "model.osm").write_text("-- placeholder osm\n")
+    # The .osm is in test-mode JSON form: a dict of attribute name -> default.
+    # Each variable declared in variables.yml (u1, u2, ln1) must exist as an
+    # attribute or measure argument here, otherwise the pre-flight check
+    # (PRD §1.4) correctly fails the apply step. The test fixture is
+    # intentionally permissive: every declared variable has a matching
+    # attribute so the stub apply path can run end-to-end.
+    (pkg / "model.osm").write_text(
+        json.dumps(
+            {
+                "attributes": {
+                    "u1": 0.0,
+                    "u2": 10.0,
+                    "ln1": 1.0,
+                }
+            }
+        )
+    )
     (pkg / "workflow.osw").write_text(json.dumps({"name": "stub"}))
     return pkg
 
