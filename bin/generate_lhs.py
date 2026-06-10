@@ -31,8 +31,8 @@ This is a SKELETON. Implementation TODO:
             ...
           ]
         }
-  5. ALSO write per-sample parameter files (one per sample) so the nextflow
-     downstream process can tuple() them up.
+  5. ALSO write per-sample parameter files (one per sample) so the
+     downstream APPLY_PARAMETERS step can pick each one up.
 
 Run with `--help` once implemented.
 """

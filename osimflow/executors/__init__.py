@@ -191,7 +191,7 @@ class SlurmExecutor(BaseExecutor):
         # because the executor-level config is what controls the sbatch
         # header. Per-submit cpus/mem would be plumbed via a closure in
         # production. For now we emit the resource directive into the
-        # task's log line so it appears in Tower.
+        # task's log line so it appears in run.json / external logs.
         if container:
             log.info(
                 "slurm submit name=%s cpus=%d mem=%dMB container=%s",

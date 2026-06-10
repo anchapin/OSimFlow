@@ -1,7 +1,6 @@
 """Campaign orchestrator.
 
-This is the ~300-line class that replaces the seven Nextflow files
-(`main.nf` + six `modules/PROCESS_*.nf`) that the project used to ship.
+This is the ~300-line class that drives the six-step campaign DAG.
 The shape is:
 
     1. GENERATE_LHS_SAMPLES — one shot, no fan-out.
