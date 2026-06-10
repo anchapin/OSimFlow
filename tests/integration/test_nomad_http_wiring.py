@@ -34,7 +34,7 @@ Acceptance criteria from the issue:
     requirements.txt.
 
 The tests mock ``urllib.request.urlopen`` so no real Nomad cluster is
-needed in CI; the test is portable to any Python 3.11+ environment.
+needed in CI; the test is portable to any Python 3.12+ environment.
 """
 
 from __future__ import annotations

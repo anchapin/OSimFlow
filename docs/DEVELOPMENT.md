@@ -98,11 +98,20 @@ broken.** This is the pre-push safety net; do not skip it.
    gh pr create --fill
    ```
 
-6. **Wait for CI.** The four jobs are:
-   - `lint` (PR-only, ~30s) — fast style feedback.
-   - `ci` (push to main + PR, ~3-5 min) — full lint + typecheck + tests.
-   - `agents-contract` (PR-only) — AGENTS.md / docs drift check.
-   - `docs` (PR + main, when `mkdocs.yml` lands) — docs build.
+6. **Wait for CI.** The `ci` workflow is split into five parallel jobs
+   (issue #76) so wall-clock time is dominated by the slowest single
+   job, not the sum of all checks. The jobs are:
+   - `lint` (ruff check + format check) — ~30s.
+   - `typecheck` (mypy --strict on `osimflow/`) — ~60s.
+   - `test` (pytest with 85% coverage gate, runs after lint + typecheck).
+   - `contract` (AGENTS.md / docs drift check) — ~10s.
+   - `security` (`pip-audit` against the dependency set) — ~30s.
+   - `bench` (push to main + manual dispatch only; not a PR gate).
+   A green check on every required job is the gate to merge.
+   The `docs` workflow runs separately on docs-only path filters.
+   Lint-only fast feedback (pre-`ci.yml` split) used to live in
+   `.github/workflows/lint.yml`; it has been folded into the
+   consolidated `lint` job in `ci.yml`.
 
 7. **Address review comments** and re-push; the same CI jobs re-run.
 
@@ -118,7 +127,7 @@ make act
 ```
 
 This runs the `lint`, `unit`, and `agents-contract` jobs against your
-local checkout. The full `ci` matrix (Python 3.11 + 3.12) is more
+local checkout. The full `ci` matrix (Python 3.12) is more
 expensive; run it with:
 
 ```bash
@@ -144,7 +153,37 @@ and platform-specific configuration.
 
 ---
 
-## 5. Troubleshooting
+## 5. Branch protection rules (recommended)
+
+The `main` branch on `anchapin/OSimFlow` is protected. Maintainers
+should configure the following in **Settings → Branches → Branch
+protection rules → `main`** so a green CI is a hard gate to merge:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| **Require a pull request before merging** | ✅ | No direct pushes to `main`; everything goes through a reviewed PR. |
+| **Require approvals** | 1 | At least one other maintainer reviews the change. |
+| **Dismiss stale pull request approvals** | ✅ when new commits are pushed | Forces re-review on force-push. |
+| **Require status checks to pass before merging** | ✅ | Enforce CI as the merge gate. |
+| **Required status checks** (search-and-pick the exact names) | `lint`, `typecheck`, `test`, `contract`, `security` | Every job in `.github/workflows/ci.yml` is required. |
+| **Require linear history** | ✅ | Enforces rebase/merge, keeps `git log` clean. |
+| **Do not allow bypassing the above settings** | ✅ | Even admins must follow the rules. |
+| **Allow force pushes** | ❌ | Force pushes to `main` rewrite history for everyone. |
+| **Allow deletions** | ❌ | The branch should never be deleted. |
+| **Block creation of new branches matching `v*`** | ❌ (allow) | `release.yml` creates annotated tags; we don't block branches. |
+
+Optional but recommended:
+
+- **Require signed commits** — most contributors use SSH-signed
+  commits; this catches a compromised local key quickly.
+- **Include administrators** in the "do not bypass" rule so an
+  emergency hot-push still has to be reviewed out-of-band.
+- **Auto-merge after CI** via [Mergify](https://mergify.com/) or
+  `gh pr merge --auto --squash` after an approval lands.
+
+---
+
+## 6. Troubleshooting
 
 ### pre-commit is slow on the first run
 
@@ -198,7 +237,7 @@ files. To opt a specific docs file out of the check, add
 
 ---
 
-## 6. When you get stuck
+## 7. When you get stuck
 
 - Search existing issues: <https://github.com/anchapin/OSimFlow/issues>
 - Open a new issue with the `question` label.

@@ -147,7 +147,7 @@ Each step is a `Campaign` method that:
 *   **On-Premise HPC**: Slurm (prioritized)
 *   **Statistical Sampling**: `scipy.stats.qmc.LatinHypercube` (for LHS)
 *   **Plotting**: `matplotlib/seaborn`
-*   **Programming Languages**: Python 3.11+
+*   **Programming Languages**: Python 3.12+
 *   **Container Registry**: `docker.io` (for `nrel/openstudio` — OSimFlow consumes the upstream image directly) + `ghcr.io` (for the project-owned `scientific_python_image`); see `docs/openstudio-image-distribution.md`.
 *   **Monitoring**: Bring-your-own — per-campaign `run.json` trace + optional MLflow (see `.agents/results/monitoring-decision.md`)
 *   **CI/CD**: GitHub Actions (workflow to be added post-MVP)
