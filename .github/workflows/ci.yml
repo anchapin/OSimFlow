@@ -308,4 +308,4 @@ jobs:
 
       - name: Run Nomad E2E tests
         run: |
-          .venv/bin/pytest tests/integration/nomad_e2e/ -v -m nomad_e2e
+          .venv/bin/pytest tests/integration/nomad_e2e/ -v -m nomad_e2e --no-cov
