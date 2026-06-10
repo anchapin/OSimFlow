@@ -97,12 +97,21 @@ class MappedParameter:
         default: the value present in the template, if any.
         step_index: for .osw arguments, which step they live in (0-based).
             ``None`` for .osm attributes.
+        object_type: for .osm attributes that use dotted notation
+            (e.g. ``SpaceType_Office.lighting_power_density``), the
+            OpenStudio object type (e.g. ``"SpaceType"``).
+            ``None`` for simple attribute names and .osw arguments.
+        object_name: for .osm attributes that use dotted notation,
+            the name of the specific object instance (e.g. ``"Office"``).
+            ``None`` for simple attribute names and .osw arguments.
     """
 
     name: str
     kind: str  # "attribute" | "measure_argument"
     default: Any = None
     step_index: int | None = None
+    object_type: str | None = None
+    object_name: str | None = None
 
 
 class UnmappedParameterError(ValueError):
@@ -111,6 +120,78 @@ class UnmappedParameterError(ValueError):
     The error message lists every unmapped name so the user can fix
     variables.yml in one pass.
     """
+
+
+class OSMAttributeError(ValueError):
+    """Raised when a dotted .osm attribute path cannot be resolved."""
+
+
+# ---------------------------------------------------------------------------
+# Dotted name parsing for .osm attributes
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class DottedName:
+    """Parsed components of a dotted .osm variable name.
+
+    Supports two forms:
+      * Simple: ``"lighting_power_density"`` → attribute only.
+      * Dotted: ``"SpaceType_Office.lighting_power_density"``
+        → object_type + object_name + attribute.
+
+    Attributes:
+        object_type: the OpenStudio IDD object type (e.g. ``"SpaceType"``).
+            ``None`` for simple (non-dotted) names.
+        object_name: the name of the specific object instance
+            (e.g. ``"Office"``).  ``None`` for simple names.
+        attribute: the attribute/property name on the resolved object.
+    """
+
+    object_type: str | None
+    object_name: str | None
+    attribute: str
+
+
+def parse_dotted_name(name: str) -> DottedName:
+    """Parse a variable name into .osm resolution components.
+
+    Dotted names use the format ``ObjectType_InstanceName.attribute``.
+    The underscore between type and instance name is the separator within
+    the object specifier; the dot separates the object from its attribute.
+
+    Examples::
+
+        >>> parse_dotted_name("SpaceType_Office.lighting_power_density")
+        DottedName(object_type='SpaceType', object_name='Office', attribute='lighting_power_density')
+        >>> parse_dotted_name("lighting_power_density")
+        DottedName(object_type=None, object_name=None, attribute='lighting_power_density')
+
+    Raises:
+        OSMAttributeError: if the name has a dot but the left side does
+            not contain an underscore (i.e. no ``ObjectType_InstanceName``
+            pair).
+    """
+    if "." not in name:
+        return DottedName(object_type=None, object_name=None, attribute=name)
+    parts = name.split(".", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise OSMAttributeError(
+            f"Invalid dotted .osm attribute name {name!r}: expected "
+            f"'ObjectType_InstanceName.attribute'"
+        )
+    object_spec = parts[0]
+    attribute = parts[1]
+    if "_" not in object_spec:
+        raise OSMAttributeError(
+            f"Invalid dotted .osm attribute name {name!r}: the object "
+            f"specifier '{object_spec}' must contain an underscore to "
+            f"separate ObjectType from InstanceName (e.g. 'SpaceType_Office')"
+        )
+    obj_parts = object_spec.split("_", 1)
+    return DottedName(
+        object_type=obj_parts[0],
+        object_name=obj_parts[1],
+        attribute=attribute,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -244,10 +325,10 @@ def _select_template_file(template: Path) -> Path:
 def parse_osm_attributes(template: Path) -> dict[str, MappedParameter]:
     """Parse an .osm file and return a name→MappedParameter map.
 
-    In production this would use `openstudio.model.Model.load(template)`
-    to walk the model and collect attribute names. For unit tests, we
-    support a JSON convention: if the file content starts with ``{``, it
-    is treated as ``{"attributes": {name: default, ...}}``.
+    In production this uses ``openstudio.openstudiomodelcore.Model`` to
+    walk the model and collect settable attribute names. For unit tests,
+    we support a JSON convention: if the file content starts with ``{``,
+    it is treated as ``{"attributes": {name: default, ...}}``.
 
     The CLI entry point logs a clear message when the JSON path is taken.
     """
@@ -274,16 +355,162 @@ def parse_osm_attributes(template: Path) -> dict[str, MappedParameter]:
             "bindings. Either install `openstudio` or use the test-mode "
             "JSON convention (file content must start with '{')."
         )
-    # If the bindings are available, we *should* be using them. But
-    # building the full attribute index requires walking the model —
-    # a non-trivial implementation. For the scope of this issue we
-    # document the integration point and surface a clear error if the
-    # user is on the production path.
-    raise NotImplementedError(
-        "Production .osm attribute index requires a full OpenStudio "
-        "model walk; tracked separately. The test-mode JSON convention "
-        "is fully supported."
-    )
+    return _parse_osm_production(template)
+
+
+def _parse_osm_production(template: Path) -> dict[str, MappedParameter]:
+    """Walk an OpenStudio model and collect settable attributes.
+
+    Uses the OpenStudio Python bindings (lazy-imported) to load the model,
+    then iterates over model objects to discover attributes that can be
+    parameterized. Each discovered attribute is registered as a
+    :class:`MappedParameter` with ``object_type`` and ``object_name``
+    populated from the model object.
+
+    The discovery covers common object types with well-known setters:
+    ``SpaceType``, ``Construction``, ``ThermalZone``, ``Lights``,
+    ``People``, and ``BuildingStory``. The attribute names follow the
+    convention ``<ObjectType>_<instanceName>.<attribute>``.
+
+    Raises:
+        OpenStudioBindingsMissingError: if the bindings are not importable.
+    """
+    try:
+        import openstudio  # noqa: PLC0415
+    except ImportError as exc:
+        raise OpenStudioBindingsMissingError(
+            "Cannot parse a binary .osm without the OpenStudio Python "
+            "bindings. Install `openstudio` on the executor host."
+        ) from exc
+
+    model = openstudio.openstudiomodelcore.Model.load(str(template))
+    if model is None:
+        raise ValueError(f"OpenStudio failed to load model from {template}")
+
+    result: dict[str, MappedParameter] = {}
+    # Map OpenStudio object types to their attribute discoverers.
+    # Each entry is (getter_fn, [(sdk_attr, display_attr, default_val)]).
+    _discover_space_types(model, result)
+    _discover_thermal_zones(model, result)
+    _discover_constructions(model, result)
+    _discover_lights(model, result)
+    _discover_people(model, result)
+    return result
+
+
+def _discover_space_types(model: Any, result: dict[str, MappedParameter]) -> None:
+    """Discover settable attributes from SpaceType objects."""
+    import openstudio  # noqa: PLC0415
+
+    for st in openstudio.openstudiomodelcore.SpaceType.getSpaceTypes(model):
+        name = st.nameString()
+        if not name:
+            continue
+        lpd = st.lightingPowerPerFloorArea()
+        if lpd.is_initialized():
+            key = f"SpaceType_{name}.lighting_power_density"
+            result[key] = MappedParameter(
+                name=key,
+                kind="attribute",
+                default=lpd.get(),
+                object_type="SpaceType",
+                object_name=name,
+            )
+
+
+def _discover_thermal_zones(model: Any, result: dict[str, MappedParameter]) -> None:
+    """Discover settable attributes from ThermalZone objects."""
+    import openstudio  # noqa: PLC0415
+
+    for tz in openstudio.openstudiomodelcore.ThermalZone.getThermalZones(model):
+        name = tz.nameString()
+        if not name:
+            continue
+        # Cooling setpoint
+        clg = tz.coolingSetpointTemperatureSchedule()
+        if clg.is_initialized():
+            key = f"ThermalZone_{name}.cooling_setpoint"
+            result[key] = MappedParameter(
+                name=key,
+                kind="attribute",
+                default=None,
+                object_type="ThermalZone",
+                object_name=name,
+            )
+        # Heating setpoint
+        htg = tz.heatingSetpointTemperatureSchedule()
+        if htg.is_initialized():
+            key = f"ThermalZone_{name}.heating_setpoint"
+            result[key] = MappedParameter(
+                name=key,
+                kind="attribute",
+                default=None,
+                object_type="ThermalZone",
+                object_name=name,
+            )
+
+
+def _discover_constructions(model: Any, result: dict[str, MappedParameter]) -> None:
+    """Discover settable attributes from Construction objects."""
+    import openstudio  # noqa: PLC0415
+
+    for c in openstudio.openstudiomodelcore.Construction.getConstructions(model):
+        name = c.nameString()
+        if not name:
+            continue
+        # Thermal conductance via assembly U-factor
+        uf = c.thermalConductance()
+        if uf.is_initialized():
+            key = f"Construction_{name}.u_value"
+            result[key] = MappedParameter(
+                name=key,
+                kind="attribute",
+                default=uf.get(),
+                object_type="Construction",
+                object_name=name,
+            )
+
+
+def _discover_lights(model: Any, result: dict[str, MappedParameter]) -> None:
+    """Discover settable attributes from Lights objects."""
+    import openstudio  # noqa: PLC0415
+
+    for lt in openstudio.openstudiomodelcore.Lights.getLights(model):
+        name = lt.nameString()
+        if not name:
+            continue
+        # Lighting level (W)
+        ll = lt.lightingLevel()
+        if ll.is_initialized():
+            key = f"Lights_{name}.lighting_level"
+            result[key] = MappedParameter(
+                name=key,
+                kind="attribute",
+                default=ll.get(),
+                object_type="Lights",
+                object_name=name,
+            )
+
+
+def _discover_people(model: Any, result: dict[str, MappedParameter]) -> None:
+    """Discover settable attributes from People objects."""
+    import openstudio  # noqa: PLC0415
+
+    for p in openstudio.openstudiomodelcore.People.getPeople(model):
+        name = p.nameString()
+        if not name:
+            continue
+        # People per floor area
+        ppd = p.peopleperSpaceFloorArea()
+        if ppd.is_initialized():
+            key = f"People_{name}.people_per_floor_area"
+            result[key] = MappedParameter(
+                name=key,
+                kind="attribute",
+                default=ppd.get(),
+                object_type="People",
+                object_name=name,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +564,99 @@ def preflight_check(
         )
 
 
+def preflight_validate_osm_paths(
+    parameters: dict[str, Any],
+    mappings: dict[str, MappedParameter],
+    model: Any | None = None,
+) -> list[str]:
+    """Validate that dotted .osm attribute paths reference real model objects.
+
+    For parameters whose mappings have ``object_type`` and ``object_name``
+    set (i.e. dotted names like ``SpaceType_Office.lighting_power_density``),
+    this function checks that the referenced object exists in the model.
+
+    When ``model`` is ``None`` (bindings not available or JSON-mode .osm),
+    the function is a no-op and returns an empty list — the path
+    validation is only meaningful against a loaded OpenStudio model.
+
+    Args:
+        parameters: the LHS parameter dict.
+        mappings: the name→MappedParameter map from ``_build_mappings``.
+        model: a loaded ``openstudio.openstudiomodelcore.Model`` instance,
+            or ``None`` to skip validation.
+
+    Returns:
+        A list of warning messages for paths that could not be validated
+        (empty on success).
+
+    Raises:
+        OSMAttributeError: if a dotted path references an object type or
+            name that does not exist in the model.
+    """
+    if model is None:
+        return []
+    try:
+        import openstudio  # noqa: PLC0415
+    except ImportError:
+        return []
+
+    warnings: list[str] = []
+    invalid_paths: list[str] = []
+
+    for name in parameters:
+        mapping = mappings.get(name)
+        if mapping is None:
+            continue
+        if mapping.kind != "attribute":
+            continue
+        if mapping.object_type is None or mapping.object_name is None:
+            continue
+        # Dotted path: validate that the object exists in the model.
+        found = _resolve_model_object(model, openstudio, mapping.object_type, mapping.object_name)
+        if found is None:
+            invalid_paths.append(
+                f"{mapping.object_type} '{mapping.object_name}' (from variable '{name}')"
+            )
+
+    if invalid_paths:
+        raise OSMAttributeError(
+            "Pre-flight .osm path validation failed: the following "
+            "object references do not exist in the model: "
+            + "; ".join(invalid_paths)
+            + ". Check the object_type and object_name in variables.yml."
+        )
+    return warnings
+
+
+def _resolve_model_object(
+    model: Any,
+    openstudio: Any,
+    object_type: str,
+    object_name: str,
+) -> Any | None:
+    """Resolve an OpenStudio model object by type and name.
+
+    Returns the model object, or ``None`` if no matching object exists.
+    """
+    type_dispatch: dict[str, Any] = {
+        "SpaceType": openstudio.openstudiomodelcore.SpaceType,
+        "ThermalZone": openstudio.openstudiomodelcore.ThermalZone,
+        "Construction": openstudio.openstudiomodelcore.Construction,
+        "Lights": openstudio.openstudiomodelcore.Lights,
+        "People": openstudio.openstudiomodelcore.People,
+        "BuildingStory": openstudio.openstudiomodelcore.BuildingStory,
+    }
+    idd_type = type_dispatch.get(object_type)
+    if idd_type is None:
+        log.warning("Unsupported .osm object type %r — skipping validation", object_type)
+        return None
+    objects = idd_type.__getattribute__("get" + object_type + "s")(model)
+    for obj in objects:
+        if obj.nameString() == object_name:
+            return obj
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Default logic: copy template to out/<sample_id>/, mutate in place
 # ---------------------------------------------------------------------------
@@ -388,17 +708,17 @@ def _mutate_osm(
     parameters: dict[str, Any],
     mappings: dict[str, MappedParameter],
 ) -> None:
-    """Mutate a JSON-mode .osm file in place.
+    """Mutate an .osm file in place (JSON-mode or production XML).
+
+    For JSON-mode files (starting with ``{``), applies simple attribute
+    writes. For production XML .osm files, delegates to
+    :func:`_mutate_osm_production` which uses the OpenStudio Python
+    bindings.
 
     Raises:
         OpenStudioBindingsMissingError: the file is a binary/XML .osm
             and the OpenStudio Python bindings are not installed on
             this host. Install them to enable the production path.
-        NotImplementedError: the bindings ARE installed but the
-            production .osm mutation code path is not implemented yet
-            (it requires a full OpenStudio model walk; tracked
-            separately). The CLI surfaces each error with a distinct
-            log message.
     """
     text = osm_path.read_text()
     if not text.lstrip().startswith("{"):
@@ -412,16 +732,208 @@ def _mutate_osm(
                 "host, or use the test-mode JSON convention (file "
                 "content must start with '{')."
             )
-        raise NotImplementedError(
-            "Production .osm mutation requires a full OpenStudio model "
-            "walk; tracked separately. The test-mode JSON convention is "
-            "fully supported."
-        )
+        _mutate_osm_production(osm_path, parameters, mappings)
+        return
+    # JSON-mode stub
     data = json.loads(text)
     for name, value in parameters.items():
         if name in mappings and mappings[name].kind == "attribute":
             data.setdefault("attributes", {})[name] = value
     osm_path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _mutate_osm_production(
+    osm_path: Path,
+    parameters: dict[str, Any],
+    mappings: dict[str, MappedParameter],
+) -> None:
+    """Mutate a production XML .osm file using the OpenStudio Python bindings.
+
+    Loads the model via ``openstudio.openstudiomodelcore.Model.load``,
+    resolves each parameter to the corresponding model object and
+    attribute, applies the mutation, and saves the model back to disk.
+
+    Variable names can be:
+      * Simple: ``"lighting_power_density"`` — applies to the model
+        level or the first matching attribute.
+      * Dotted: ``"SpaceType_Office.lighting_power_density"`` — resolves
+        to a specific model object by type and name.
+
+    Type coercion rules:
+      * ``float`` → passed directly to SDK numeric setters.
+      * ``str`` → passed directly to SDK string setters.
+      * ``int`` → coerced to ``float`` for numeric setters; for enum-like
+        attributes that expect an integer index, the int is passed as-is.
+
+    Raises:
+        OpenStudioBindingsMissingError: if the bindings are not importable.
+        OSMAttributeError: if a dotted path does not resolve to a model object.
+    """
+    try:
+        import openstudio  # noqa: PLC0415
+    except ImportError as exc:
+        raise OpenStudioBindingsMissingError(
+            "Cannot mutate a production .osm without the OpenStudio Python "
+            "bindings. Install `openstudio` on the executor host."
+        ) from exc
+
+    model = openstudio.openstudiomodelcore.Model.load(str(osm_path))
+    if model is None:
+        raise ValueError(f"OpenStudio failed to load model from {osm_path}")
+
+    for name, value in parameters.items():
+        mapping = mappings.get(name)
+        if mapping is None or mapping.kind != "attribute":
+            continue
+        _apply_osm_mutation(model, openstudio, mapping, value)
+
+    # Save the mutated model back to the same path.
+    model.save(str(osm_path), overwrite=True)
+    log.info("Mutated production .osm saved to %s", osm_path)
+
+
+def _apply_osm_mutation(
+    model: Any,
+    openstudio: Any,
+    mapping: MappedParameter,
+    value: Any,
+) -> None:
+    """Apply a single parameter mutation to an OpenStudio model.
+
+    Resolves the target object and attribute, performs type coercion,
+    and calls the appropriate SDK setter.
+
+    Raises:
+        OSMAttributeError: if the object or attribute cannot be resolved.
+    """
+    attribute = mapping.name
+    obj: Any = model  # Default: model-level attribute
+
+    # If dotted name, resolve to the specific model object.
+    if mapping.object_type is not None and mapping.object_name is not None:
+        obj = _resolve_model_object(model, openstudio, mapping.object_type, mapping.object_name)
+        if obj is None:
+            raise OSMAttributeError(
+                f"Cannot resolve {mapping.object_type} "
+                f"'{mapping.object_name}' for variable '{mapping.name}'. "
+                f"The object does not exist in the model."
+            )
+        # For dotted names, use the parsed attribute (the part after the dot).
+        parsed = parse_dotted_name(mapping.name)
+        attribute = parsed.attribute
+
+    # Coerce the value type and apply.
+    coerced = _coerce_value(value)
+    _set_attribute(obj, openstudio, mapping.object_type, attribute, coerced)
+
+
+def _coerce_value(value: Any) -> Any:
+    """Coerce a parameter value for the OpenStudio SDK.
+
+    Rules:
+      * ``int`` → ``float`` (OpenStudio numeric setters expect doubles).
+      * ``float`` → ``float`` (pass-through).
+      * ``str`` → ``str`` (pass-through).
+      * ``bool`` → ``bool`` (pass-through).
+      * Other types → raise ``TypeError``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return float(value)
+    if isinstance(value, float):
+        return value
+    if isinstance(value, str):
+        return value
+    raise TypeError(
+        f"Cannot coerce parameter value of type {type(value).__name__} "
+        f"for OpenStudio SDK: {value!r}"
+    )
+
+
+def _set_attribute(
+    obj: Any,
+    openstudio: Any,
+    object_type: str | None,
+    attribute: str,
+    value: Any,
+) -> None:
+    """Set an attribute on a resolved OpenStudio model object.
+
+    Dispatches to the correct SDK setter based on the object type and
+    attribute name. Falls back to ``obj.setString`` for unknown attributes.
+
+    Raises:
+        OSMAttributeError: if the setter fails or the attribute is
+            not recognized.
+    """
+    setter_map: dict[str, dict[str, Any]] = {
+        "SpaceType": {
+            "lighting_power_density": lambda o, v: o.setLightingPowerPerFloorArea(v),
+        },
+        "ThermalZone": {
+            "cooling_setpoint": lambda o, v: _set_schedule_constant(o, openstudio, v, "cooling"),
+            "heating_setpoint": lambda o, v: _set_schedule_constant(o, openstudio, v, "heating"),
+        },
+        "Construction": {
+            "u_value": lambda o, v: o.setThermalConductance(v),
+        },
+        "Lights": {
+            "lighting_level": lambda o, v: o.setLightingLevel(v),
+        },
+        "People": {
+            "people_per_floor_area": lambda o, v: o.setPeopleperSpaceFloorArea(v),
+        },
+    }
+
+    if object_type is not None and object_type in setter_map:
+        attr_map = setter_map[object_type]
+        setter = attr_map.get(attribute)
+        if setter is not None:
+            try:
+                setter(obj, value)
+            except Exception as exc:
+                raise OSMAttributeError(
+                    f"Failed to set {object_type}.{attribute}={value!r}: {exc}"
+                ) from exc
+            return
+
+    # Fallback: try setString (generic IDD attribute).
+    if isinstance(value, str):
+        obj.setString(attribute, value)
+    elif isinstance(value, (int, float)):
+        obj.setString(attribute, str(value))
+    else:
+        raise OSMAttributeError(
+            f"No setter for {object_type}.{attribute} with value type "
+            f"{type(value).__name__}. Define an explicit setter in "
+            f"osimflow/apply_params.py."
+        )
+
+
+def _set_schedule_constant(
+    zone: Any,
+    openstudio: Any,
+    value: float,
+    kind: str,
+) -> None:
+    """Set a constant temperature schedule on a ThermalZone.
+
+    Creates a :class:`ScheduleConstant` and assigns it as the cooling
+    or heating setpoint schedule on the zone.
+
+    Args:
+        zone: the ThermalZone model object.
+        openstudio: the openstudio module.
+        value: the temperature value (°C).
+        kind: ``"cooling"`` or ``"heating"``.
+    """
+    schedule = openstudio.openstudiomodelcore.ScheduleConstant(zone.model())
+    schedule.setValue(value)
+    if kind == "cooling":
+        zone.setCoolingSetpointTemperatureSchedule(schedule)
+    else:
+        zone.setHeatingSetpointTemperatureSchedule(schedule)
 
 
 def _mutate_osw(
@@ -497,9 +1009,9 @@ def apply_parameters(
             and the OpenStudio Python bindings are not installed on
             this host. The CLI surfaces this with an actionable message
             ("install openstudio or use the JSON convention").
-        NotImplementedError: the bindings ARE installed but the
-            production .osm mutation code path is not implemented yet.
-            This is a different failure mode from bindings-missing.
+        OSMAttributeError: a dotted .osm attribute path references an
+            object type or instance name that does not exist in the
+            model. Raised during pre-flight path validation.
     """
     original_template = template
     # Build the union of mappings from BOTH files (if directory).
