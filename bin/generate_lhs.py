@@ -10,11 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 from pathlib import Path
-import math
 
-import numpy as np
 import scipy.stats
 import scipy.stats.qmc
 import yaml
@@ -41,9 +40,20 @@ def main() -> int:
     variables = config.get("variables", [])
     if not variables:
         for i in range(args.n_samples):
-            param_file = args.out.parent / f"{i+1:04d}.params.json"
+            param_file = args.out.parent / f"{i + 1:04d}.params.json"
             param_file.write_text(json.dumps({}, indent=2))
-        args.out.write_text(json.dumps({"n_samples": args.n_samples, "variables": [], "samples": [{"sample_id": f"{i+1:04d}", "values": {}} for i in range(args.n_samples)]}, indent=2))
+        args.out.write_text(
+            json.dumps(
+                {
+                    "n_samples": args.n_samples,
+                    "variables": [],
+                    "samples": [
+                        {"sample_id": f"{i + 1:04d}", "values": {}} for i in range(args.n_samples)
+                    ],
+                },
+                indent=2,
+            )
+        )
         return 0
 
     d = len(variables)
@@ -74,18 +84,23 @@ def main() -> int:
             else:
                 raise NotImplementedError(f"distribution {dist!r} not in MVP yet")
 
-        samples.append({"sample_id": f"{i+1:04d}", "values": values})
+        samples.append({"sample_id": f"{i + 1:04d}", "values": values})
 
         # ALSO write per-sample parameter files (one per sample) so the nextflow
         # downstream process can tuple() them up.
-        param_file = args.out.parent / f"{i+1:04d}.params.json"
+        param_file = args.out.parent / f"{i + 1:04d}.params.json"
         param_file.write_text(json.dumps(values, indent=2))
 
-    args.out.write_text(json.dumps({
-        "n_samples": args.n_samples,
-        "variables": variables,
-        "samples": samples,
-    }, indent=2))
+    args.out.write_text(
+        json.dumps(
+            {
+                "n_samples": args.n_samples,
+                "variables": variables,
+                "samples": samples,
+            },
+            indent=2,
+        )
+    )
 
     return 0
 

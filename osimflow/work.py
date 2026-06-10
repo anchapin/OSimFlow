@@ -14,7 +14,6 @@ CLI surface to maintain.
 import json
 import logging
 import subprocess
-import shlex
 import sys
 import time
 from pathlib import Path
@@ -52,13 +51,20 @@ def default_apply_parameters(
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
-                sys.executable, str(BIN / "apply_params_to_model.py"),
-                "--template", str(template),
-                "--parameter_set", str(param_file),
-                "--sample_id", sample_id,
-                "--out", str(out_dir),
+                sys.executable,
+                str(BIN / "apply_params_to_model.py"),
+                "--template",
+                str(template),
+                "--parameter_set",
+                str(param_file),
+                "--sample_id",
+                sample_id,
+                "--out",
+                str(out_dir),
             ],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         log.error("apply_params failed for %s: %s", sample_id, e.stderr)
@@ -105,8 +111,7 @@ def run_openstudio_sim(
     """
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
-    log.info("simulating sample=%s version=%s -> %s",
-             sample_id, openstudio_version, sim_out)
+    log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
     # STUB: replace with `subprocess.run(["openstudio.cli", "run", ...])`  # nosec
     # inside the openstudio_cli_image:<version> container.
     time.sleep(simulate_work_s)
@@ -127,17 +132,24 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
-                sys.executable, str(BIN / "generate_lhs.py"),
-                "--variables_yml", str(variables_yml),
-                "--n_samples", str(n_samples),
-                "--out", str(samples_json),
+                sys.executable,
+                str(BIN / "generate_lhs.py"),
+                "--variables_yml",
+                str(variables_yml),
+                "--n_samples",
+                str(n_samples),
+                "--out",
+                str(samples_json),
             ],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         log.error("generate_lhs failed: %s", e.stderr)
         raise RuntimeError("generate_lhs failed") from e
     return samples_json
+
 
 def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     """Run the default KPI extractor. Returns path to the kpi JSON file."""
@@ -146,12 +158,18 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
-                sys.executable, str(BIN / "extract_kpis.py"),
-                "--simulation_dir", str(simulation_dir),
-                "--sample_id", sample_id,
-                "--out", str(kpi_path),
+                sys.executable,
+                str(BIN / "extract_kpis.py"),
+                "--simulation_dir",
+                str(simulation_dir),
+                "--sample_id",
+                sample_id,
+                "--out",
+                str(kpi_path),
             ],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
@@ -171,14 +189,22 @@ def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) ->
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
-                sys.executable, str(BIN / "aggregate_results.py"),
-                "--kpis", *(str(p) for p in kpi_files),
-                "--simulation_dirs", *(str(p) for p in sim_dirs),
-                "--out_csv", str(csv_path),
-                "--out_parquet", str(parquet_path),
-                "--out_failed", str(failed_path),
+                sys.executable,
+                str(BIN / "aggregate_results.py"),
+                "--kpis",
+                *(str(p) for p in kpi_files),
+                "--simulation_dirs",
+                *(str(p) for p in sim_dirs),
+                "--out_csv",
+                str(csv_path),
+                "--out_parquet",
+                str(parquet_path),
+                "--out_failed",
+                str(failed_path),
             ],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         log.error("aggregate_results failed: %s", e.stderr)
@@ -196,12 +222,18 @@ def generate_plots(csv_path: Path, failed_path: Path, out: Path) -> list[Path]:
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
-                sys.executable, str(BIN / "generate_plots.py"),
-                "--results_csv", str(csv_path),
-                "--failed_csv", str(failed_path),
-                "--outdir", str(out),
+                sys.executable,
+                str(BIN / "generate_plots.py"),
+                "--results_csv",
+                str(csv_path),
+                "--failed_csv",
+                str(failed_path),
+                "--outdir",
+                str(out),
             ],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         log.error("generate_plots failed: %s", e.stderr)

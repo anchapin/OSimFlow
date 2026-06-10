@@ -7,12 +7,12 @@ See docs/OSimFlow.md §4.2 (PROCESS_EXTRACT_KPIS) for the contract.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
+import sqlite3
 import sys
 from pathlib import Path
-import sqlite3
-import importlib.util
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("extract_kpis")
@@ -47,7 +47,7 @@ def get_eui_kwh_m2_yr(sql_path: Path) -> float | None:
         log.warning(f"Failed to read EUI from {sql_path}: {e}")
         return None
     finally:
-        if 'conn' in locals():
+        if "conn" in locals():
             conn.close()
 
 
@@ -77,7 +77,9 @@ def main() -> int:
         spec.loader.exec_module(custom_mod)
 
         if not hasattr(custom_mod, "extract_kpis"):
-            log.error(f"Custom extractor {args.custom_kpi_extractor} must define `extract_kpis(ctx)`.")
+            log.error(
+                f"Custom extractor {args.custom_kpi_extractor} must define `extract_kpis(ctx)`."
+            )
             return 1
 
         ctx = {
@@ -105,7 +107,7 @@ def main() -> int:
             {
                 "sample_id": args.sample_id,
                 "openstudio_version": None,  # Not readily available without os bindings
-                "kpis": kpis
+                "kpis": kpis,
             },
             indent=2,
         )

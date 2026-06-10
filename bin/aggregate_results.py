@@ -7,10 +7,10 @@ See docs/OSimFlow.md §4.2 (PROCESS_AGGREGATE_RESULTS) for the contract.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
-import json
 
 import pandas as pd
 
@@ -50,7 +50,7 @@ def extract_failure(sim_dir: Path) -> dict | None:
             "sample_id": sim_dir.name,
             "error_summary": err_summary or "eplusout.sql missing",
             "exit_code": 1 if err_summary or not sql_path.exists() else 0,
-            "log_path": str(err_path) if err_path.exists() else ""
+            "log_path": str(err_path) if err_path.exists() else "",
         }
     return None
 

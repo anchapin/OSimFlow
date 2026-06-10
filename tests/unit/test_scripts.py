@@ -1,11 +1,13 @@
+import json
 import subprocess
 import sys
-import json
 from pathlib import Path
+
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 BIN = PROJECT_ROOT / "bin"
+
 
 def test_generate_lhs(tmp_path):
     var_yml = tmp_path / "variables.yml"
@@ -19,12 +21,19 @@ variables:
     out_dir = tmp_path / "out"
     out_json = out_dir / "samples.json"
 
-    res = subprocess.run([
-        sys.executable, str(BIN / "generate_lhs.py"),
-        "--variables_yml", str(var_yml),
-        "--n_samples", "2",
-        "--out", str(out_json)
-    ], check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(BIN / "generate_lhs.py"),
+            "--variables_yml",
+            str(var_yml),
+            "--n_samples",
+            "2",
+            "--out",
+            str(out_json),
+        ],
+        check=True,
+    )
 
     assert out_json.exists()
     data = json.loads(out_json.read_text())
@@ -42,12 +51,19 @@ def test_extract_kpis(tmp_path):
     # We will just ensure the stub behavior works (graceful fallback).
     out_kpi = tmp_path / "kpi.json"
 
-    res = subprocess.run([
-        sys.executable, str(BIN / "extract_kpis.py"),
-        "--simulation_dir", str(sim_dir),
-        "--sample_id", "0001",
-        "--out", str(out_kpi)
-    ], check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(BIN / "extract_kpis.py"),
+            "--simulation_dir",
+            str(sim_dir),
+            "--sample_id",
+            "0001",
+            "--out",
+            str(out_kpi),
+        ],
+        check=True,
+    )
 
     assert out_kpi.exists()
     data = json.loads(out_kpi.read_text())
@@ -60,21 +76,26 @@ def test_aggregate_results(tmp_path):
     sim_dir.mkdir(parents=True)
 
     kpi_file = tmp_path / "kpi_0001.json"
-    kpi_file.write_text(json.dumps({
-        "sample_id": "0001",
-        "kpis": {"eui": 100.0}
-    }))
+    kpi_file.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui": 100.0}}))
 
     out_csv = tmp_path / "agg.csv"
     out_fail = tmp_path / "fail.csv"
 
-    res = subprocess.run([
-        sys.executable, str(BIN / "aggregate_results.py"),
-        "--kpis", str(kpi_file),
-        "--simulation_dirs", str(sim_dir),
-        "--out_csv", str(out_csv),
-        "--out_failed", str(out_fail)
-    ], check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(BIN / "aggregate_results.py"),
+            "--kpis",
+            str(kpi_file),
+            "--simulation_dirs",
+            str(sim_dir),
+            "--out_csv",
+            str(out_csv),
+            "--out_failed",
+            str(out_fail),
+        ],
+        check=True,
+    )
 
     assert out_csv.exists()
     assert out_fail.exists()
@@ -93,12 +114,19 @@ def test_generate_plots(tmp_path):
 
     out_plots = tmp_path / "plots"
 
-    res = subprocess.run([
-        sys.executable, str(BIN / "generate_plots.py"),
-        "--results_csv", str(out_csv),
-        "--failed_csv", str(out_fail),
-        "--outdir", str(out_plots)
-    ], check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(BIN / "generate_plots.py"),
+            "--results_csv",
+            str(out_csv),
+            "--failed_csv",
+            str(out_fail),
+            "--outdir",
+            str(out_plots),
+        ],
+        check=True,
+    )
 
     assert (out_plots / "eui_histogram.png").exists()
     assert (out_plots / "failure_summary.png").exists()

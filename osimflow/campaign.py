@@ -26,14 +26,10 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 import inspect
 import json
 import logging
-import math
-import random
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
-
-import yaml
 
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
@@ -43,6 +39,7 @@ from .work import (
     aggregate_results,
     default_apply_parameters,
     extract_kpis,
+    generate_lhs,
     generate_plots,
     run_openstudio_sim,
 )
@@ -236,25 +233,34 @@ class Campaign:
         out_dir = self.cfg.work_dir / "lhs"
         handle = self.executor.submit(
             generate_lhs,
-            self.cfg.input_variables, self.cfg.n_samples, out_dir,
+            self.cfg.input_variables,
+            self.cfg.n_samples,
+            out_dir,
             name="generate_lhs",
-            cpus=1, memory_mb=1024, time_min=5,
+            cpus=1,
+            memory_mb=1024,
+            time_min=5,
             container=CONTAINER_PY,
         )
         try:
             result_path = handle.result(timeout=120)
             self.cache.store(key, Path(result_path), exit_code=0)
-            samples = json.loads(Path(result_path).read_text())["samples"]
+            run_samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
+            samples = cast_samples(run_samples_obj)
             self.trace.step_finished(
-                "GENERATE_LHS_SAMPLES", cache="MISS",
-                elapsed_s=time.time() - t0, exit_code=0,
+                "GENERATE_LHS_SAMPLES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=0,
             )
             return samples
         except Exception as e:
             log.error("GENERATE_LHS_SAMPLES failed: %s", e)
             self.trace.step_finished(
-                "GENERATE_LHS_SAMPLES", cache="MISS",
-                elapsed_s=time.time() - t0, exit_code=1,
+                "GENERATE_LHS_SAMPLES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
             )
             raise
 

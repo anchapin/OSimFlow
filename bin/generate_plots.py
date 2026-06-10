@@ -11,8 +11,8 @@ import logging
 import sys
 from pathlib import Path
 
-import pandas as pd
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -58,8 +58,8 @@ def main() -> int:
     # 2. Scatter of top variable vs EUI
     # We find the column (excluding sample_id and eui) with highest variance
     if not results.empty and "eui_kwh_m2_yr" in results.columns:
-        numeric_cols = results.select_dtypes(include='number').columns
-        design_vars = [c for c in numeric_cols if c not in ('sample_id', 'eui_kwh_m2_yr')]
+        numeric_cols = results.select_dtypes(include="number").columns
+        design_vars = [c for c in numeric_cols if c not in ("sample_id", "eui_kwh_m2_yr")]
         if design_vars:
             variances = results[design_vars].var()
             if not variances.isna().all():
