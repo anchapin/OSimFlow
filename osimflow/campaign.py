@@ -30,6 +30,7 @@ single `run.json` trace to `${outdir}/run.json` at completion. The trace
 includes per-step timing, per-sample status, and cache hit/miss counts.
 """
 
+import dataclasses
 import inspect
 import json
 import logging
@@ -476,81 +477,164 @@ class Campaign:
         log.info("  os_version:    %s", self.cfg.openstudio_version)
         log.info("  outdir:        %s", self.cfg.outdir)
         log.info("  work_dir:      %s", self.cfg.work_dir)
+        if self.cfg.dry_run:
+            log.info("  ** DRY RUN MODE **")
+        if self.cfg.sample is not None:
+            log.info("  ** SINGLE SAMPLE MODE: sample %d **", self.cfg.sample)
         log.info("=" * 60)
 
-        # Optional MLflow tracking (issue #7). Lazy-imports mlflow only
-        # when a tracking URI is configured; the no-tracking-URI path is
-        # mlflow-free. Cleanup runs in `finally` so a step that raises
-        # mid-campaign still closes the MLflow run cleanly (the MLflow
-        # UI never shows a stuck RUNNING entry).
         run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
         if run_name is not None:
-            # Build a small view object the hook can read via getattr;
-            # the hook is duck-typed to avoid a circular import on
-            # `osimflow.config`.
             log_mlflow_params(_make_mlflow_param_view(self.cfg, self.executor.name))
 
         t0 = time.time()
         try:
-            samples: list[SampleSpec] = self.step_generate_lhs()
-            parameterized: SampleDict = self.step_apply_parameters(samples)
-            simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
-            kpi_files: list[Path] = self.step_extract_kpis(simulated)
-            aggregated: dict[str, Path] = self.step_aggregate_results(
-                kpi_files, simulated, baseline_sample_id=self._baseline_sample_id()
-            )
-            plots: list[Path] = self.step_generate_plots(
-                aggregated, baseline_sample_id=self._baseline_sample_id()
-            )
-            t1 = time.time()
-
-            # Baseline comparison metrics (issue #64). Compute after all
-            # steps have run so we have KPI data for the baseline sample.
-            self._compute_baseline_comparison(kpi_files)
-
-            # Archive campaign inputs (template_sim_package + input_variables)
-            # when --archive_intermediates is set.
-            if self.cfg.archive_intermediates:
-                inputs_archive = self.cfg.outdir / "archive" / "inputs"
-                inputs_archive.mkdir(parents=True, exist_ok=True)
-                # Copy the entire template_sim_package directory
-                pkg_dst = inputs_archive / self.cfg.template_sim_package.name
-                if pkg_dst.exists():
-                    shutil.rmtree(pkg_dst)
-                shutil.copytree(self.cfg.template_sim_package, pkg_dst)
-                log.info("archived template_sim_package -> %s", pkg_dst)
-                # Copy the input_variables file
-                shutil.copy2(
-                    self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name
-                )
-                log.info(
-                    "archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name
-                )
-
-            # Finalize the trace + run.json so the MLflow artifact is
-            # the canonical post-campaign trace. We do this inside the
-            # try block (before the finally cleanup) so the run.json
-            # file exists at the moment `log_mlflow_artifacts` reads it.
-            self._finalize_samples()
-            self.trace.finalize()
-            self.trace.write(self.cfg.outdir / "run.json")
-
-            # Log metrics + artifacts to MLflow before the run ends.
-            # The hooks are no-ops when no run is active, so this is
-            # safe to call unconditionally.
-            n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
-            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
-            log_mlflow_metrics(t1 - t0, n_succeeded, n_failed)
-            log_mlflow_artifacts(
-                aggregated["csv"],
-                aggregated["failed"],
-                self.cfg.outdir / "run.json",
-            )
+            if self.cfg.dry_run:
+                return self._run_dry_run(t0)
+            if self.cfg.sample is not None:
+                return self._run_single_sample(t0)
+            return self._run_full_campaign(t0)
         finally:
-            # End the MLflow run even if any step raised. The hook is
-            # itself exception-safe so a transient MLflow error cannot
-            # mask the original failure.
             maybe_end_mlflow_run()
+
+    def _run_dry_run(self, t0: float) -> dict[str, object]:
+        """Dry-run mode: 1 sample, local executor, steps 1-4 only."""
+        original_n = self.cfg.n_samples
+        self.cfg = dataclasses.replace(self.cfg, n_samples=1)
+        log.info("DRY RUN: overriding n_samples from %d to 1", original_n)
+
+        samples: list[SampleSpec] = self.step_generate_lhs()
+        self.cfg.samples_file.parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.samples_file.write_text(json.dumps({"samples": samples}, indent=2))
+        parameterized: SampleDict = self.step_apply_parameters(samples)
+        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
+        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+        t1 = time.time()
+
+        self._finalize_samples()
+        self.trace.finalize()
+        self.trace.write(self.cfg.outdir / "run.json")
+
+        n_ok = sum(1 for s in self.trace.per_sample if s.status == "ok")
+        n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+        log_mlflow_metrics(t1 - t0, n_ok, n_failed)
+
+        sample_elapsed = t1 - t0
+        est_total_s = sample_elapsed * original_n
+
+        print("\n" + "=" * 60)
+        print("DRY RUN COMPLETE")
+        print("=" * 60)
+        print(f"  1/{original_n} samples processed in {sample_elapsed:.1f}s")
+        print(f"  Status: {n_ok} succeeded, {n_failed} failed")
+        print(f"  Output: {self.cfg.work_dir}")
+        if kpi_files:
+            print(f"  KPI file: {kpi_files[0]}")
+        print()
+        print("Full campaign estimate:")
+        print(
+            f"  {original_n} samples x {sample_elapsed:.1f}s = ~{est_total_s:.0f}s (~{est_total_s / 60:.1f} min)"
+        )
+        print()
+        print("Next steps:")
+        print(f"  1. Review output in {self.cfg.work_dir}")
+        print("  2. If correct, re-run without --dry-run for full campaign")
+        print("=" * 60)
+
+        return {
+            "samples": samples,
+            "kpis": kpi_files,
+            "aggregated": {"csv": None, "failed": None},
+            "plots": [],
+            "elapsed_s": t1 - t0,
+            "run_json": self.cfg.outdir / "run.json",
+        }
+
+    def _run_single_sample(self, t0: float) -> dict[str, object]:
+        """Single-sample mode: run only sample N through steps 2-4."""
+        sample_idx = self.cfg.sample
+        assert sample_idx is not None
+        samples_file = self.cfg.samples_file
+        if not samples_file.exists():
+            raise FileNotFoundError(
+                f"samples.json not found at {samples_file}. "
+                "Run a full campaign (or --dry-run) first to generate samples."
+            )
+        all_samples = cast_samples(json.loads(samples_file.read_text())["samples"])
+        if sample_idx < 0 or sample_idx >= len(all_samples):
+            raise IndexError(
+                f"Sample index {sample_idx} out of range [0, {len(all_samples) - 1}]. "
+                f"Total samples available: {len(all_samples)}"
+            )
+        target = all_samples[sample_idx]
+        log.info("SINGLE SAMPLE: running sample %d (id=%s)", sample_idx, target["sample_id"])
+
+        parameterized: SampleDict = self.step_apply_parameters([target])
+        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
+        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+        t1 = time.time()
+
+        self._finalize_samples()
+        self.trace.finalize()
+        self.trace.write(self.cfg.outdir / "run.json")
+
+        log.info("=" * 60)
+        log.info("SINGLE SAMPLE COMPLETE: sample %d in %.1fs", sample_idx, t1 - t0)
+        log.info("=" * 60)
+
+        return {
+            "samples": [target],
+            "kpis": kpi_files,
+            "aggregated": {"csv": None, "failed": None},
+            "plots": [],
+            "elapsed_s": t1 - t0,
+            "run_json": self.cfg.outdir / "run.json",
+        }
+
+    def _run_full_campaign(self, t0: float) -> dict[str, object]:
+        """Standard full campaign: all 6 steps, all samples."""
+        samples: list[SampleSpec] = self.step_generate_lhs()
+        samples_link = self.cfg.samples_file
+        samples_link.parent.mkdir(parents=True, exist_ok=True)
+        samples_link.write_text(json.dumps({"samples": samples}, indent=2))
+        parameterized: SampleDict = self.step_apply_parameters(samples)
+        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
+        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+        aggregated: dict[str, Path] = self.step_aggregate_results(
+            kpi_files, simulated, baseline_sample_id=self._baseline_sample_id()
+        )
+        plots: list[Path] = self.step_generate_plots(
+            aggregated, baseline_sample_id=self._baseline_sample_id()
+        )
+        t1 = time.time()
+
+        self._compute_baseline_comparison(kpi_files)
+
+        if self.cfg.archive_intermediates:
+            inputs_archive = self.cfg.outdir / "archive" / "inputs"
+            inputs_archive.mkdir(parents=True, exist_ok=True)
+            pkg_dst = inputs_archive / self.cfg.template_sim_package.name
+            if pkg_dst.exists():
+                shutil.rmtree(pkg_dst)
+            shutil.copytree(self.cfg.template_sim_package, pkg_dst)
+            log.info("archived template_sim_package -> %s", pkg_dst)
+            shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
+            log.info(
+                "archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name
+            )
+
+        self._finalize_samples()
+        self.trace.finalize()
+        self.trace.write(self.cfg.outdir / "run.json")
+
+        n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
+        n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+        log_mlflow_metrics(t1 - t0, n_succeeded, n_failed)
+        log_mlflow_artifacts(
+            aggregated["csv"],
+            aggregated["failed"],
+            self.cfg.outdir / "run.json",
+        )
 
         log.info("=" * 60)
         log.info("OSimFlow campaign complete in %.1fs", t1 - t0)

@@ -166,6 +166,8 @@ The 6-step DAG that the `Campaign` class drives:
 - `--openstudio_version`, `--archive_intermediates`
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
+- `--dry-run` (dry-run mode: force LocalExecutor, 1 sample, steps 1-4 only)
+- `--sample` (single-sample mode: re-run sample N from existing samples.json)
 - `--log_level`
 
 ### Developer workflow targets (Makefile)

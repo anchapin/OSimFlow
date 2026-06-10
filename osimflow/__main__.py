@@ -31,6 +31,8 @@ from osimflow import (
 from osimflow.byos import load_user_function
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 
+log = logging.getLogger("osimflow.__main__")
+
 
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:
     if args.executor == "local":
@@ -152,6 +154,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "that holds .epw files. Default: weather."
         ),
     )
+    run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Run a single sample in local mode to validate setup before "
+            "full campaign. Forces n_samples=1, local executor, steps 1-4 only."
+        ),
+    )
+    run.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help=(
+            "Run only sample N (0-indexed) through steps 2-4. "
+            "Skips GENERATE_LHS_SAMPLES; reuses existing samples.json. "
+            "Useful for debugging a specific failed sample."
+        ),
+    )
     imp = sub.add_parser(
         "import-osa",
         help="Import an OpenStudio Analysis (.osa / analysis.json) file",
@@ -193,7 +213,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))
-    executor = _build_executor(args)
+    executor: BaseExecutor
+    if cfg.dry_run:
+        executor = LocalExecutor(max_workers=1)
+        log.info("DRY RUN: forcing LocalExecutor with 1 worker")
+    else:
+        executor = _build_executor(args)
     apply_fn = (
         load_user_function(Path(args.custom_apply_script)) if args.custom_apply_script else None
     )
