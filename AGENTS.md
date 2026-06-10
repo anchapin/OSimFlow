@@ -4,6 +4,74 @@
 
 ---
 
+## 0. Precedence and project-type boundaries
+
+> This section resolves the conflicts between the generic AI agent
+> role prompt and this project's `AGENTS.md` (see issue #29). Read
+> this section before applying any rule from the role prompt.
+
+### 0.1 Precedence rule
+
+**Project-specific `AGENTS.md` overrides the generic role prompt for
+project-scoped decisions**: test commands, file paths, project
+architecture, project-specific conventions, and the location of
+project documentation.
+
+**The generic role prompt overrides `AGENTS.md` for cross-project
+decisions**: process (where to write result files), tool family
+defaults, and security defaults (e.g. "no `.env*` files committed").
+
+When the two sources disagree, this precedence rule wins; when they
+agree, follow the more specific guidance.
+
+### 0.2 Project type
+
+OSimFlow is a **CLI + library** hybrid. The project wraps the
+OpenStudio CLI to run parametric building-energy simulation
+campaigns. It runs locally on a developer machine or on HPC/cloud
+via per-job IAM roles — it is **not** a web service.
+
+### 0.3 Architecture pattern (this project)
+
+The actual layered structure is:
+
+```
+Orchestrator → Executor → Work function
+```
+
+- **Orchestrator** — `osimflow/campaign.py` (the `Campaign` class)
+  drives the 6-step DAG.
+- **Executor** — `osimflow/executors/__init__.py` provides
+  `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, and
+  `AWSBatchExecutor` implementations.
+- **Work function** — `osimflow/work.py` (per-step logic) and
+  `bin/*.py` (CLI scripts invoked by the work layer) implement the
+  actual step work.
+
+**Do not** apply a generic web-service pattern (Router → Service →
+Repository → Models) to this project. There are no HTTP routes, no
+DDD Repositories, and no Models in the ORM sense.
+
+### 0.4 What this project does NOT have
+
+Be aware of these absences so you don't waste cycles searching for
+code that doesn't exist:
+
+- **No authentication layer.** There are no user accounts, no
+  passwords, and no JWT/bcrypt code. The role prompt's auth rule
+  (when present) does not apply here.
+- **No SQL injection surface in user-facing code.** OSimFlow uses
+  SQLite in exactly one place (`osimflow/cache.py:SQLiteCache`) with
+  parameterized queries throughout. Do not add a "scan for SQL
+  injection" task to your workflow unless you are touching that
+  one file.
+- **No `.env*` / IAM access keys / bind-mounted secrets** —
+  credentials are sourced from the IAM role on the compute
+  environment (AWS Batch) or from per-job env vars (Slurm /
+  Singularity). See §10.
+
+---
+
 ## 1. Project summary
 
 **OSimFlow** is a community-driven open-source **Python** framework that wraps the **OpenStudio CLI** to run large-scale, reproducible, parametric building-energy simulation campaigns. It targets **OpenStudio users** — energy modelers, researchers, and design-optimization practitioners — who need to launch hundreds to thousands of `openstudio.cli run` invocations across cloud (**AWS Batch**) or on-premise HPC (**Slurm**) without writing bespoke orchestration glue for each campaign.
@@ -369,6 +437,27 @@ Use these patterns to decide where to make a change.
 | Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different Campaign semantics (retry, cache, monitoring). |
 | Add a new cache invalidation rule | `osimflow/campaign.py:step_*` (the cache key construction) **and** a test in `tests/integration/test_cache_invalidation.py`. |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
+
+### 9.1 Tool selection decision tree
+
+When the same task can be done several ways — and the opencode session
+exposes both the standard tool family (Read/Write/Edit/Bash/Grep/Glob)
+and the context-mode (`ctx_*`) and codebase-memory-mcp
+(`codebase-memory-mcp_*`) tool families — reach for the **smallest
+tool that gets the job done**. The decision tree below is the
+project-specific tie-breaker (see §0.1 — this list wins over the
+generic role prompt's tool guidance when they disagree).
+
+| Task | Tool |
+|---|---|
+| Read a small file you intend to edit | `Read` |
+| Read / transform a large file without showing full contents | `ctx_execute_file` |
+| Find a function / class / route definition by name | `codebase-memory-mcp_search_graph` |
+| Trace callers / callees of a function (impact analysis) | `codebase-memory-mcp_trace_path` |
+| Search for a string literal in a known path | `Grep` |
+| Run a shell command whose output is short and fixed | `Bash` |
+| Run a shell command with large / unpredictable output | `ctx_execute` |
+| Read documentation from a URL (lib docs, RFCs) | `ctx_fetch_and_index` |
 
 ---
 
