@@ -153,7 +153,6 @@ jobs:
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
-          uv pip install --python .venv/bin/python "pip-audit>=2.7"
 
       - name: Audit dependencies
         # pip-audit scans the *installed* package set and looks each one
@@ -161,14 +160,18 @@ jobs:
         # venv (excluding the local `osimflow` editable install, which
         # has no PyPI metadata to audit) and audit that requirement
         # set. `--strict` exits non-zero on any confirmed vulnerability,
-        # failing the job. If a transitive dep gets flagged, fix it by
-        # bumping the bound in pyproject.toml.
+        # failing the job. We run pip-audit via `uvx` (uv-managed tool
+        # install) because pip-audit internally creates a sub-venv
+        # whose `ensurepip` step fails against uv-managed Python
+        # interpreters; `uvx` runs the tool in a uv-managed venv that
+        # has no such constraint. If a transitive dep gets flagged,
+        # fix it by bumping the bound in pyproject.toml.
         run: |
           .venv/bin/pip freeze --exclude-editable > /tmp/requirements.txt
           echo "::group::Audited dependency set:"
           cat /tmp/requirements.txt
           echo "::endgroup::"
-          .venv/bin/pip-audit -r /tmp/requirements.txt --strict
+          uvx "pip-audit>=2.7" -r /tmp/requirements.txt --strict
           echo "::notice::pip-audit found no known vulnerabilities."
 
   test:
