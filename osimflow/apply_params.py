@@ -11,6 +11,31 @@ The BYOS (Bring Your Own Script) contract lives here: a user-supplied
 interface as the default logic, and the Campaign can substitute it via
 the `--custom_apply_script` flag.
 
+BYOS contract (in detail)
+-------------------------
+When ``custom_apply_script`` is supplied, the framework:
+
+1. Cleans and re-creates the per-sample output directory
+   ``out_dir`` (see ``_copy_template_artifacts``).
+2. Pre-copies the template contents into ``out_dir`` (the same way
+   it does for the default path). The user script does NOT need to
+   copy the template itself.
+3. Calls the user-provided ``apply(ctx)`` with::
+
+       ctx = {
+           "template_dir": <Path to original template dir, or parent of a single file>,
+           "template_path": <Path to the .osw (preferred) or .osm the framework will mutate>,
+           "parameters": <dict of LHS values>,
+           "sample_id": <str>,
+           "openstudio": <the openstudio module, or None if not installed>,
+           "out_dir": <Path to the per-sample output dir, pre-populated>,
+       }
+
+   The user script is responsible for modifying ``out_dir`` in place
+   (mutating the copied ``model.osm`` / ``workflow.osw`` and / or
+   writing additional files). It does not return anything the
+   framework uses.
+
 Template conventions
 -------------------
 The .osw (OpenStudio Workflow) file format is JSON. Parsing it requires
@@ -43,6 +68,20 @@ from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("osimflow.apply_params")
+
+
+# ---------------------------------------------------------------------------
+# Exception hierarchy
+# ---------------------------------------------------------------------------
+class OpenStudioBindingsMissingError(RuntimeError):
+    """Raised when an operation requires the OpenStudio Python bindings
+    but they are not installed on this host.
+
+    Distinct from :class:`NotImplementedError`: that one signals a code
+    path that has not been written yet even on hosts WITH the bindings
+    (e.g. the production .osm attribute index). The CLI surfaces each
+    with a different log message so the user can act accordingly.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +130,49 @@ def detect_template_type(template: Path) -> str:
     raise ValueError(f"Unsupported template type: {suffix!r} (expected .osm or .osw)")
 
 
+def _resolve_dir_template(template: Path) -> tuple[Path | None, Path | None]:
+    """Single source of truth for "which files are in this template directory?".
+
+    Returns a ``(osw, osm)`` tuple where each element is the resolved
+    file path or ``None`` if the corresponding file is absent. Callers
+    decide what to do with the result (raise, ignore the missing one,
+    use both, etc.).
+
+    The .osw (workflow) takes precedence over the .osm (model) because
+    the .osw references the model + measures, so it is the more
+    complete entry point. This is the canonical precedence; every
+    other template-resolution helper defers to this one.
+    """
+    if not template.is_dir():
+        raise ValueError(f"_resolve_dir_template requires a directory, got {template}")
+    osw_path = template / "workflow.osw"
+    osm_path = template / "model.osm"
+    return (
+        osw_path if osw_path.is_file() else None,
+        osm_path if osm_path.is_file() else None,
+    )
+
+
+def _require_dir_template_files(template: Path) -> tuple[Path | None, Path | None]:
+    """Return the (osw, osm) paths for a directory, raising if neither exists.
+
+    A directory is considered a valid template only if it contains at
+    least one of ``workflow.osw`` or ``model.osm``. Missing both is a
+    configuration error and must surface as a clear ``ValueError`` so
+    pre-flight does not silently produce an empty mapping.
+
+    Each returned element is the resolved file path or ``None`` if
+    that specific file is absent (but at least one will be non-None,
+    per the check above).
+    """
+    osw_path, osm_path = _resolve_dir_template(template)
+    if osw_path is None and osm_path is None:
+        raise ValueError(
+            f"Template directory {template} contains neither workflow.osw nor model.osm"
+        )
+    return osw_path, osm_path
+
+
 def resolve_template_file(template: Path) -> Path:
     """Resolve a template argument to a single .osm or .osw file.
 
@@ -104,17 +186,14 @@ def resolve_template_file(template: Path) -> Path:
     complete entry point. A directory that contains neither is an
     error.
     """
-    if template.is_dir():
-        osw = template / "workflow.osw"
-        if osw.is_file():
-            return osw
-        osm = template / "model.osm"
-        if osm.is_file():
-            return osm
-        raise ValueError(
-            f"Template directory {template} contains neither workflow.osw nor model.osm"
-        )
-    return template
+    if not template.is_dir():
+        return template
+    osw_path, osm_path = _resolve_dir_template(template)
+    if osw_path is not None:
+        return osw_path
+    if osm_path is not None:
+        return osm_path
+    raise ValueError(f"Template directory {template} contains neither workflow.osw nor model.osm")
 
 
 def _build_mappings(template: Path) -> dict[str, MappedParameter]:
@@ -122,19 +201,18 @@ def _build_mappings(template: Path) -> dict[str, MappedParameter]:
 
     For a single file: returns the mappings from that file alone.
     For a directory: returns the union of mappings from BOTH
-    ``model.osm`` and ``workflow.osw`` if present. This is the
-    most useful semantic: every LHS variable must map to *something*
-    in the template package, and we want to discover all options.
+    ``model.osm`` and ``workflow.osw`` if present. A directory
+    containing NEITHER raises ``ValueError`` so the pre-flight check
+    is not silently bypassed by an empty mapping.
     """
     if template.is_dir():
+        osw_path, osm_path = _require_dir_template_files(template)
         mappings: dict[str, MappedParameter] = {}
         # .osw first so measure_arguments are preferred on name collision.
-        osw = template / "workflow.osw"
-        if osw.is_file():
-            mappings.update(parse_osw_arguments(osw))
-        osm = template / "model.osm"
-        if osm.is_file():
-            mappings.update(parse_osm_attributes(osm))
+        if osw_path is not None:
+            mappings.update(parse_osw_arguments(osw_path))
+        if osm_path is not None:
+            mappings.update(parse_osm_attributes(osm_path))
         return mappings
     template_type = detect_template_type(template)
     if template_type == "osm":
@@ -152,12 +230,11 @@ def _select_template_file(template: Path) -> Path:
     """
     if not template.is_dir():
         return template
-    osw = template / "workflow.osw"
-    if osw.is_file():
-        return osw
-    osm = template / "model.osm"
-    if osm.is_file():
-        return osm
+    osw_path, osm_path = _resolve_dir_template(template)
+    if osw_path is not None:
+        return osw_path
+    if osm_path is not None:
+        return osm_path
     raise ValueError(f"Template directory {template} contains neither workflow.osw nor model.osm")
 
 
@@ -192,7 +269,7 @@ def parse_osm_attributes(template: Path) -> dict[str, MappedParameter]:
     # without a top-level `import openstudio` statement (which ruff
     # would flag as unused inside the function).
     if importlib.util.find_spec("openstudio") is None:
-        raise RuntimeError(
+        raise OpenStudioBindingsMissingError(
             "Cannot parse a binary .osm without the OpenStudio Python "
             "bindings. Either install `openstudio` or use the test-mode "
             "JSON convention (file content must start with '{')."
@@ -264,13 +341,31 @@ def preflight_check(
 # Default logic: copy template to out/<sample_id>/, mutate in place
 # ---------------------------------------------------------------------------
 def _copy_template_artifacts(template: Path, out: Path) -> list[Path]:
-    """Copy all template artifacts into the per-sample output directory.
+    """Copy all template artifacts into a clean per-sample output directory.
 
-    If `template` is a single .osm/.osw file, copy just that file into
-    `out/<template.name>`. If it is a directory, recursively copy the
-    whole directory contents (without the dir itself) into `out/`.
+    If ``template`` is a single .osm/.osw file, copy just that file
+    into ``out/<template.name>``. If it is a directory, recursively
+    copy the whole directory contents (without the dir itself) into
+    ``out/``.
+
+    The ``out`` directory is ALWAYS cleaned before copying. This
+    avoids a subtle failure mode where a previous run left stale or
+    partial artifacts in ``out`` that the next run (or a BYOS user
+    script) would silently consume. If ``out`` exists as a
+    non-directory, this function raises ``ValueError``.
+
     Returns the list of destination paths actually created.
     """
+    # Ensure `out` is a clean directory so we don't leave stale artifacts
+    if out.exists():
+        if out.is_dir():
+            for child in out.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+        else:
+            raise ValueError(f"Output path {out} exists and is not a directory")
     out.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     if template.is_dir():
@@ -293,15 +388,34 @@ def _mutate_osm(
     parameters: dict[str, Any],
     mappings: dict[str, MappedParameter],
 ) -> None:
-    """Mutate a JSON-mode .osm file in place."""
+    """Mutate a JSON-mode .osm file in place.
+
+    Raises:
+        OpenStudioBindingsMissingError: the file is a binary/XML .osm
+            and the OpenStudio Python bindings are not installed on
+            this host. Install them to enable the production path.
+        NotImplementedError: the bindings ARE installed but the
+            production .osm mutation code path is not implemented yet
+            (it requires a full OpenStudio model walk; tracked
+            separately). The CLI surfaces each error with a distinct
+            log message.
+    """
     text = osm_path.read_text()
     if not text.lstrip().startswith("{"):
-        # Real OpenStudio XML .osm: the CLI must have wired the bindings.
-        # We refuse rather than corrupt the model silently.
+        # Real OpenStudio XML .osm: distinguish "bindings missing" from
+        # "feature not implemented" so the CLI can give an actionable
+        # error message.
+        if importlib.util.find_spec("openstudio") is None:
+            raise OpenStudioBindingsMissingError(
+                "Cannot mutate a binary .osm without the OpenStudio "
+                "Python bindings. Install `openstudio` on the executor "
+                "host, or use the test-mode JSON convention (file "
+                "content must start with '{')."
+            )
         raise NotImplementedError(
-            "Production .osm mutation requires the OpenStudio Python "
-            "bindings; this code path is reached only on hosts without "
-            "them. The CLI entry point must gate this."
+            "Production .osm mutation requires a full OpenStudio model "
+            "walk; tracked separately. The test-mode JSON convention is "
+            "fully supported."
         )
     data = json.loads(text)
     for name, value in parameters.items():
@@ -379,8 +493,13 @@ def apply_parameters(
         UnmappedParameterError: at least one LHS variable does not map
             to a real template attribute or measure argument. This is
             enforced *before* any writes happen.
-        NotImplementedError: the template type is supported for parsing
-            but not for mutation (production .osm XML path).
+        OpenStudioBindingsMissingError: a binary/XML .osm was provided
+            and the OpenStudio Python bindings are not installed on
+            this host. The CLI surfaces this with an actionable message
+            ("install openstudio or use the JSON convention").
+        NotImplementedError: the bindings ARE installed but the
+            production .osm mutation code path is not implemented yet.
+            This is a different failure mode from bindings-missing.
     """
     original_template = template
     # Build the union of mappings from BOTH files (if directory).
@@ -410,11 +529,12 @@ def apply_parameters(
             import openstudio as _os  # noqa: PLC0415
 
             openstudio_mod = _os
-        # Copy the template artifacts so the BYOS user can write into
-        # `out_dir` (the per-sample directory) without us putting anything
-        # else there. The user is expected to manage the full file layout.
-        if not out.exists():
-            _copy_template_artifacts(original_template, out)
+        # Per the BYOS contract documented at the top of this module,
+        # the framework pre-copies the template into `out_dir` (a
+        # clean, freshly-populated directory). The user script is
+        # responsible for mutating those files in place or writing
+        # additional files; it does NOT need to copy the template.
+        _copy_template_artifacts(original_template, out)
         ctx = {
             "template_dir": original_template
             if original_template.is_dir()

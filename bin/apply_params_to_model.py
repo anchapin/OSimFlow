@@ -8,7 +8,7 @@ The importable core lives in `osimflow.apply_params`. This CLI module is
 a thin wrapper that:
 
   1. Parses CLI args.
-  2. Reads the parameter set JSON.
+  2. Reads the parameter set JSON (must be a JSON object: dict).
   3. Delegates to `osimflow.apply_params.apply_parameters`, which:
        a. Detects the template type (.osm or .osw).
        b. Builds the name→mapping index.
@@ -25,6 +25,17 @@ script is runnable on hosts that do not have the heavy C++ stack
 installed (per AGENTS.md §6). When the bindings are unavailable, the
 script falls back to a JSON-mode representation of .osm (file content
 must start with ``{``) for testability.
+
+Exit codes
+----------
+  0  success
+  1  pre-flight check failed (one or more LHS variables unmapped)
+  2  failed to read or parse the parameter set JSON
+  3  OpenStudio Python bindings are not installed (required for
+     binary/XML .osm)
+  4  parameter set is valid JSON but is not a dict (e.g. a list or
+     scalar was supplied)
+  5  feature not implemented (e.g. production .osm mutation path)
 """
 
 from __future__ import annotations
@@ -48,18 +59,32 @@ def main() -> int:
     parser.add_argument("--custom_apply_script", type=Path, default=None)
     args = parser.parse_args()
 
-    # Lazy import so the OpenStudio binding dependency is optional at
-    # import time. AGENTS.md §6 mandates this isolation.
-    from osimflow.apply_params import (  # noqa: PLC0415
-        UnmappedParameterError,
-        apply_parameters,
-    )
-
     try:
         parameters = json.loads(args.parameter_set.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         log.error("Failed to read parameter set %s: %s", args.parameter_set, exc)
         return 2
+
+    if not isinstance(parameters, dict):
+        log.error(
+            "Invalid parameter set %s: expected a JSON object mapping "
+            "variable names to values, got %s.",
+            args.parameter_set,
+            type(parameters).__name__,
+        )
+        print(
+            f"ERROR: parameter set must be a JSON object (got {type(parameters).__name__})",
+            file=sys.stderr,
+        )
+        return 4
+
+    # Lazy import so the OpenStudio binding dependency is optional at
+    # import time. AGENTS.md §6 mandates this isolation.
+    from osimflow.apply_params import (  # noqa: PLC0415
+        OpenStudioBindingsMissingError,
+        UnmappedParameterError,
+        apply_parameters,
+    )
 
     try:
         apply_parameters(
@@ -75,17 +100,29 @@ def main() -> int:
         log.error("Pre-flight check failed for sample_id=%s: %s", args.sample_id, exc)
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    except NotImplementedError as exc:
+    except OpenStudioBindingsMissingError as exc:
         log.error(
-            "apply_params_to_model.py: %s "
-            "(sample_id=%s). This usually means the production .osm path "
-            "requires the OpenStudio Python bindings, which are not "
-            "installed on this host.",
-            exc,
+            "OpenStudio Python bindings not installed on this host "
+            "(sample_id=%s): %s. Install `openstudio` on the executor "
+            "host, or use the test-mode JSON .osm convention.",
             args.sample_id,
+            exc,
         )
         print(f"ERROR: {exc}", file=sys.stderr)
         return 3
+    except NotImplementedError as exc:
+        # Bindings are installed (or this is not an .osm path); the
+        # code path is simply not implemented yet. This is a separate
+        # failure mode from "bindings missing".
+        log.error(
+            "apply_params_to_model.py: feature not implemented for "
+            "sample_id=%s: %s. This is a known gap; see the issue "
+            "tracker.",
+            args.sample_id,
+            exc,
+        )
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 5
 
     log.info(
         "apply_params_to_model.py: wrote per-sample dir for sample_id=%s -> %s",

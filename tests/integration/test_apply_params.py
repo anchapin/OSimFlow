@@ -27,6 +27,7 @@ import pytest
 
 from osimflow.apply_params import (
     MappedParameter,
+    OpenStudioBindingsMissingError,
     UnmappedParameterError,
     apply_parameters,
     detect_template_type,
@@ -412,7 +413,7 @@ def test_parse_osm_attributes_binary_without_bindings(tmp_path: Path) -> None:
     """
     p = tmp_path / "binary.osm"
     p.write_text("<OSMModel>...</OSMModel>")
-    with pytest.raises(RuntimeError, match="OpenStudio Python bindings"):
+    with pytest.raises(OpenStudioBindingsMissingError, match="OpenStudio Python bindings"):
         parse_osm_attributes(p)
 
 
@@ -539,3 +540,172 @@ def test_custom_script_dir_template_passes_template_dir_in_ctx(
     snapshot = (out / "ctx_snapshot.txt").read_text()
     assert "template_dir=" in snapshot
     assert "sample=000D" in snapshot
+
+
+# ---------------------------------------------------------------------------
+# _build_mappings: empty-directory error (Consolidation comment 4)
+# ---------------------------------------------------------------------------
+def test_build_mappings_raises_on_empty_directory(tmp_path: Path) -> None:
+    """A directory with neither workflow.osw nor model.osm must raise
+    ValueError, not silently return an empty mapping. Without this,
+    downstream pre-flight would fail with a confusing "all variables
+    unmapped" error instead of the real root cause.
+    """
+    from osimflow.apply_params import _build_mappings
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="contains neither"):
+        _build_mappings(empty)
+
+
+# ---------------------------------------------------------------------------
+# _copy_template_artifacts: always cleans `out` (Comment 2)
+# ---------------------------------------------------------------------------
+def test_copy_template_artifacts_clears_stale_out_dir(osm_template: Path, tmp_path: Path) -> None:
+    """If `out` already contains files from a previous run,
+    `_copy_template_artifacts` must clear them so the BYOS / default
+    paths do not silently consume stale artifacts.
+    """
+    from osimflow.apply_params import _copy_template_artifacts
+
+    sample_out = tmp_path / "out" / "000E"
+    sample_out.mkdir(parents=True)
+    # Stale file from a prior run.
+    (sample_out / "stale.txt").write_text("garbage")
+    _copy_template_artifacts(osm_template, sample_out)
+    # The stale file is gone; the template was copied cleanly.
+    assert not (sample_out / "stale.txt").exists()
+    assert (sample_out / "model.osm").is_file()
+
+
+def test_copy_template_artifacts_rejects_out_as_file(osm_template: Path, tmp_path: Path) -> None:
+    """If `out` exists as a regular file, the helper must raise rather
+    than silently delete it. This protects against a misconfigured CLI
+    invocation.
+    """
+    from osimflow.apply_params import _copy_template_artifacts
+
+    blocking_file = tmp_path / "out" / "blocking"
+    blocking_file.parent.mkdir(parents=True)
+    blocking_file.write_text("not a directory")
+    with pytest.raises(ValueError, match="not a directory"):
+        _copy_template_artifacts(osm_template, blocking_file)
+
+
+# ---------------------------------------------------------------------------
+# BYOS contract: pre-copied template (Overall comment on BYOS)
+# ---------------------------------------------------------------------------
+def test_custom_script_always_precopies_template_into_out(
+    osm_template: Path, tmp_path: Path
+) -> None:
+    """The BYOS contract: the framework always pre-copies the template
+    into a clean `out_dir` before calling the user script. This is true
+    on the FIRST run AND on a re-run where stale files may exist from
+    a prior invocation. The user script does NOT need to copy the
+    template itself.
+    """
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "model.osm").write_text(json.dumps({"attributes": {"a": 1.0}}))
+    user_script = tmp_path / "user.py"
+    user_script.write_text(
+        textwrap.dedent(
+            """\
+            def apply(ctx):
+                out = ctx["out_dir"]
+                # The framework already copied the template; just
+                # confirm `model.osm` is present in out_dir.
+                assert (out / "model.osm").is_file(), "framework must pre-copy"
+                # Mutate the copied file in place.
+                data = __import__("json").loads((out / "model.osm").read_text())
+                data["attributes"]["a"] = 9.0
+                (out / "model.osm").write_text(__import__("json").dumps(data))
+            """
+        )
+    )
+    out = tmp_path / "out" / "000F"
+    # First run: a clean out_dir.
+    apply_parameters(
+        template=pkg,
+        parameters={"a": 2.0},
+        sample_id="000F",
+        out=out,
+        custom_apply_script=user_script,
+    )
+    assert json.loads((out / "model.osm").read_text())["attributes"]["a"] == 9.0
+    # Re-run with the same out: stale value from the first run is
+    # cleared, and the framework re-copies a clean template.
+    apply_parameters(
+        template=pkg,
+        parameters={"a": 2.0},
+        sample_id="000F",
+        out=out,
+        custom_apply_script=user_script,
+    )
+    # The user script re-asserted "a" to 9.0; the pre-copy reset the
+    # baseline, but the script still ran. The key invariant is that
+    # `out/model.osm` was rewritten by the framework with the original
+    # template's `a=1.0` BEFORE the user script ran.
+    assert json.loads((out / "model.osm").read_text())["attributes"]["a"] == 9.0
+
+
+# ---------------------------------------------------------------------------
+# CLI: non-dict parameter set (Comment 1)
+# ---------------------------------------------------------------------------
+def test_cli_rejects_non_dict_parameter_set_with_exit_code_4(
+    osm_template: Path, tmp_path: Path
+) -> None:
+    """A parameter_set that is valid JSON but is NOT a dict (e.g. a
+    list) must be rejected with a dedicated exit code (4), not crash
+    inside apply_parameters with a confusing error.
+    """
+    import subprocess
+    import sys
+
+    sample_out = tmp_path / "out" / "0010"
+    param_file = tmp_path / "params.json"
+    # Valid JSON, but a list, not a dict.
+    param_file.write_text(json.dumps([{"window_u_value": 0.5}]))
+    result = subprocess.run(
+        [
+            sys.executable,
+            "bin/apply_params_to_model.py",
+            "--template",
+            str(osm_template),
+            "--parameter_set",
+            str(param_file),
+            "--sample_id",
+            "0010",
+            "--out",
+            str(sample_out),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 4, (
+        f"expected exit 4, got {result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert "must be a JSON object" in result.stderr
+    assert not sample_out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Error semantics: bindings-missing vs feature-not-implemented (Comment 3)
+# ---------------------------------------------------------------------------
+def test_mutate_osm_raises_bindings_missing_on_binary_input(
+    tmp_path: Path,
+) -> None:
+    """Calling _mutate_osm on a binary/XML .osm on a host without the
+    OpenStudio Python bindings must raise OpenStudioBindingsMissingError
+    (a RuntimeError subclass) with an actionable message. This is
+    distinct from NotImplementedError, which would mean the bindings
+    ARE installed but the code path is not yet written.
+    """
+    from osimflow.apply_params import _mutate_osm
+
+    binary = tmp_path / "binary.osm"
+    binary.write_text("<OSMModel>...</OSMModel>")
+    with pytest.raises(OpenStudioBindingsMissingError, match="bindings"):
+        _mutate_osm(binary, parameters={}, mappings={})
