@@ -39,6 +39,7 @@ PATH_SKIP_SUBSTRINGS = (
     "openstudio_cli_image",  # container tag, not a local path
     "scientific_python_image",
     "nrel/openstudio",  # container image name, not a local path
+    "openstudio.cli",  # external CLI binary, not a local file
     "ghcr.io",  # container registry, not a local file
     "docker.io",  # container registry, not a local file
     "scipy.stats",  # module path, not a file
