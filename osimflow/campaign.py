@@ -551,6 +551,7 @@ class Campaign:
     def _run_single_sample(self, t0: float) -> dict[str, object]:
         """Single-sample mode: run only sample N through steps 2-4."""
         sample_idx = self.cfg.sample
+        assert sample_idx is not None
         samples_file = self.cfg.samples_file
         if not samples_file.exists():
             raise FileNotFoundError(

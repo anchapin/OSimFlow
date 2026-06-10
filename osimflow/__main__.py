@@ -213,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))
+    executor: BaseExecutor
     if cfg.dry_run:
         executor = LocalExecutor(max_workers=1)
         log.info("DRY RUN: forcing LocalExecutor with 1 worker")
