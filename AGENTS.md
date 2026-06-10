@@ -56,8 +56,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `bin/aggregate_results.py` | Result aggregation + error-summary extraction. |
 | `bin/generate_plots.py` | Matplotlib/seaborn plot generator. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
+| `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
+| `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
 | `docs/OSimFlow.md` | The PRD — the source of truth for scope and architecture. |
+| `docs/benchmarks.md` | How to interpret the `benchmarks.json` artifact (issue #10). |
 | `docs/CONTRIBUTING.md` | Contributor onboarding (stub for Phase 3). |
 | `docs/GOVERNANCE.md` | Community governance model (stub for Phase 3). |
 | `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
@@ -263,6 +266,11 @@ A green check on the `ci` job is the gate to merge. Lint-only fast
 feedback lives in [`.github/workflows/lint.yml`](.github/workflows/lint.yml);
 the AGENTS.md / docs drift gate lives in
 [`.github/workflows/agents-contract.yml`](.github/workflows/agents-contract.yml).
+The performance-benchmark job (issue #10) lives in
+[`.github/workflows/bench.yml`](.github/workflows/bench.yml) — it runs
+the cold/warm 3-sample benchmark and uploads `benchmarks.json` as a
+per-Python-version artifact (interpreted in
+[`docs/benchmarks.md`](docs/benchmarks.md)).
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for the full set of jobs
 and the `make act` local mirror.
 
