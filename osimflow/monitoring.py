@@ -66,11 +66,11 @@ class SampleTrace:
     extract_exit_code: int = 0
     eplusout_sql: str | None = None  # path if produced
     error_summary: str | None = None
-    # Per-sample log file paths (issue #6). Always populated for samples
-    # that ran RUN_OPENSTUDIO_SIM; both files are created (possibly empty)
-    # by the Campaign before the executor runs the work function.
     stdout_log: str | None = None
     stderr_log: str | None = None
+    quality_valid: bool | None = None
+    quality_warnings: int | None = None
+    quality_failures: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
@@ -139,6 +139,14 @@ class RunTrace:
     def to_dict(self) -> dict[str, object]:
         n_succeeded = sum(1 for s in self.per_sample if s.status == "ok")
         n_failed = sum(1 for s in self.per_sample if s.status == "failed")
+        n_quality_failures = sum(1 for s in self.per_sample if s.quality_valid is False)
+        n_quality_warnings = sum(
+            1
+            for s in self.per_sample
+            if s.quality_warnings is not None
+            and s.quality_warnings > 0
+            and s.quality_valid is not False
+        )
         d: dict[str, object] = {
             "schema_version": self.SCHEMA_VERSION,
             "campaign_id": self.campaign_id,
@@ -150,6 +158,11 @@ class RunTrace:
                 "n_samples": len(self.per_sample),
                 "n_succeeded": n_succeeded,
                 "n_failed": n_failed,
+            },
+            "quality_summary": {
+                "n_quality_failures": n_quality_failures,
+                "n_quality_warnings": n_quality_warnings,
+                "n_quality_ok": n_succeeded - n_quality_failures - n_quality_warnings,
             },
             "steps": [s.to_dict() for s in self.steps],
             "per_sample": [s.to_dict() for s in self.per_sample],

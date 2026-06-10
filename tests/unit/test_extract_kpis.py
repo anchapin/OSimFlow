@@ -370,6 +370,143 @@ class TestSimulationSummary:
         assert result == {}
 
 
+class TestValidateKpis:
+    """Tests for validate_kpis() — simulation convergence and quality checks."""
+
+    def _normal_kpis(self) -> dict:
+        return {
+            "eui_kwh_per_m2": 120.0,
+            "eui_kbtu_per_ft2": 38.0,
+            "total_site_energy_kwh": 12000.0,
+            "net_eui_kwh_per_m2": 110.0,
+            "floor_area_m2": 100.0,
+            "end_uses": {
+                "heating_electricity_kwh": 3000.0,
+                "cooling_electricity_kwh": 4000.0,
+                "interior_lighting_electricity_kwh": 2500.0,
+                "interior_equipment_electricity_kwh": 2500.0,
+                "total_electricity_kwh": 12000.0,
+            },
+            "unmet_hours_heating": 50.0,
+            "unmet_hours_cooling": 80.0,
+        }
+
+    def test_valid_kpis(self) -> None:
+        result = ek.validate_kpis(self._normal_kpis())
+        assert result["valid"] is True
+        assert result["failures"] == []
+        assert result["warnings"] == []
+
+    def test_eui_below_minimum(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["eui_kwh_per_m2"] = 5.0
+        result = ek.validate_kpis(kpis)
+        assert result["valid"] is False
+        assert any("below minimum" in f for f in result["failures"])
+
+    def test_eui_above_maximum(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["eui_kwh_per_m2"] = 1500.0
+        result = ek.validate_kpis(kpis)
+        assert result["valid"] is False
+        assert any("exceeds maximum" in f for f in result["failures"])
+
+    def test_zero_energy_total(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["total_site_energy_kwh"] = 0.0
+        result = ek.validate_kpis(kpis)
+        assert result["valid"] is False
+        assert any("zero or near-zero" in f for f in result["failures"])
+
+    def test_zero_energy_end_uses(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["end_uses"] = {
+            "heating_electricity_kwh": 0.0,
+            "cooling_electricity_kwh": 0.0,
+            "total_electricity_kwh": 0.0,
+        }
+        result = ek.validate_kpis(kpis)
+        assert result["valid"] is False
+        assert any("All end-use" in f for f in result["failures"])
+
+    def test_extreme_value_detection(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["end_uses"]["heating_electricity_kwh"] = 50000.0
+        result = ek.validate_kpis(kpis)
+        assert any("exceeds" in w and "median" in w for w in result["warnings"])
+
+    def test_unmet_hours_exceed_threshold(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["unmet_hours_heating"] = 350.0
+        result = ek.validate_kpis(kpis)
+        assert any("heating hours" in w and "ASHRAE" in w for w in result["warnings"])
+
+    def test_unmet_hours_exceed_8760(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["unmet_hours_heating"] = 5000.0
+        kpis["unmet_hours_cooling"] = 5000.0
+        result = ek.validate_kpis(kpis)
+        assert result["valid"] is False
+        assert any("exceed 8760" in f for f in result["failures"])
+
+    def test_negative_total_energy(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["total_site_energy_kwh"] = -500.0
+        result = ek.validate_kpis(kpis)
+        assert any("negative" in w for w in result["warnings"])
+
+    def test_negative_end_use(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["end_uses"]["cooling_electricity_kwh"] = -100.0
+        result = ek.validate_kpis(kpis)
+        assert any("negative" in w and "cooling" in w for w in result["warnings"])
+
+    def test_missing_critical_kpis(self) -> None:
+        result = ek.validate_kpis({})
+        assert result["valid"] is False
+        assert any("eui_kwh_per_m2" in f for f in result["failures"])
+        assert any("total_site_energy_kwh" in f for f in result["failures"])
+
+    def test_custom_thresholds_override(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["eui_kwh_per_m2"] = 50.0
+        result_default = ek.validate_kpis(kpis)
+        assert result_default["valid"] is True
+
+        result_strict = ek.validate_kpis(kpis, thresholds={"eui_min_kwh_per_m2": 100.0})
+        assert result_strict["valid"] is False
+        assert any("below minimum" in f for f in result_strict["failures"])
+
+    def test_custom_unmet_hours_threshold(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["unmet_hours_cooling"] = 200.0
+        result = ek.validate_kpis(kpis, thresholds={"unmet_hours_max": 150.0})
+        assert any("cooling hours" in w for w in result["warnings"])
+
+    def test_none_thresholds_uses_defaults(self) -> None:
+        result = ek.validate_kpis(self._normal_kpis(), thresholds=None)
+        assert result["valid"] is True
+
+    def test_warnings_do_not_affect_validity(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["total_site_energy_kwh"] = -10.0
+        result = ek.validate_kpis(kpis)
+        assert len(result["warnings"]) > 0
+        assert result["valid"] is True
+
+    def test_empty_end_uses_no_crash(self) -> None:
+        kpis = self._normal_kpis()
+        kpis["end_uses"] = {}
+        result = ek.validate_kpis(kpis)
+        assert result["valid"] is True
+
+    def test_no_end_uses_key_no_crash(self) -> None:
+        kpis = self._normal_kpis()
+        del kpis["end_uses"]
+        result = ek.validate_kpis(kpis)
+        assert result["valid"] is True
+
+
 class TestCliMain:
     def test_cli_writes_json(self, full_sql: Path, tmp_path: Path) -> None:
         sim_dir = full_sql.parent
@@ -396,6 +533,10 @@ class TestCliMain:
         assert "kpis" in data
         kpis = data["kpis"]
         assert "eui_kwh_per_m2" in kpis
+        assert "quality" in data
+        assert "valid" in data["quality"]
+        assert "warnings" in data["quality"]
+        assert "failures" in data["quality"]
 
     def test_cli_missing_sql(self, tmp_path: Path) -> None:
         sim_dir = tmp_path / "empty_sim"
