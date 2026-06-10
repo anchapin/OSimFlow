@@ -50,7 +50,7 @@ def default_apply_parameters(
     param_file = out / f"{sample_id}.params.json"
     param_file.write_text(json.dumps(parameters, sort_keys=True))
     try:
-        subprocess.run(  # sourcery skip: suspicious-subprocess-call
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable, str(BIN / "apply_params_to_model.py"),
                 "--template", str(template),
@@ -125,7 +125,7 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     samples_json = out / "samples.json"
     try:
-        subprocess.run(  # sourcery skip: suspicious-subprocess-call
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable, str(BIN / "generate_lhs.py"),
                 "--variables_yml", str(variables_yml),
@@ -144,7 +144,7 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     kpi_path = out / f"kpi_{sample_id}.json"
     try:
-        subprocess.run(  # sourcery skip: suspicious-subprocess-call
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable, str(BIN / "extract_kpis.py"),
                 "--simulation_dir", str(simulation_dir),
@@ -169,7 +169,7 @@ def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) ->
     failed_path = out / "failed_simulations.csv"
     parquet_path = out / "aggregated_results.parquet"
     try:
-        subprocess.run(  # sourcery skip: suspicious-subprocess-call
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable, str(BIN / "aggregate_results.py"),
                 "--kpis", *(str(p) for p in kpi_files),
@@ -194,7 +194,7 @@ def generate_plots(csv_path: Path, failed_path: Path, out: Path) -> list[Path]:
     """Render summary plots from the aggregated CSV. Returns list of plot files."""
     out.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(  # sourcery skip: suspicious-subprocess-call
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable, str(BIN / "generate_plots.py"),
                 "--results_csv", str(csv_path),
