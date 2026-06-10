@@ -34,7 +34,7 @@ from typing import TypedDict
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import BaseExecutor
-from .monitoring import RunTrace, SampleTrace
+from .monitoring import RunTrace, SampleTrace, sample_log_paths
 from .work import (
     aggregate_results,
     default_apply_parameters,
@@ -144,6 +144,14 @@ class Campaign:
             eplusout_sql = None if eplusout_sql_obj is None else str(eplusout_sql_obj)
             error_summary_obj = state.get("error_summary")
             error_summary = None if error_summary_obj is None else str(error_summary_obj)
+            # Per-sample log paths (issue #6). Optional because the
+            # fields are only populated by RUN_OPENSTUDIO_SIM; samples
+            # that errored out in APPLY_PARAMETERS never reach that
+            # step and have no associated log files.
+            stdout_log_obj = state.get("stdout_log")
+            stdout_log = None if stdout_log_obj is None else str(stdout_log_obj)
+            stderr_log_obj = state.get("stderr_log")
+            stderr_log = None if stderr_log_obj is None else str(stderr_log_obj)
             self.trace.sample_done(
                 SampleTrace(
                     sample_id=sid,
@@ -154,6 +162,8 @@ class Campaign:
                     extract_exit_code=int(str(state.get("extract_exit_code", 0))),
                     eplusout_sql=eplusout_sql,
                     error_summary=error_summary,
+                    stdout_log=stdout_log,
+                    stderr_log=stderr_log,
                 )
             )
 
@@ -329,10 +339,15 @@ class Campaign:
     def step_run_openstudio_sim(self, parameterized: SampleDict) -> SampleDict:
         """Fan-out (heavy): for each sample, run the OpenStudio simulation.
 
-        Per-sample stdout/stderr would be written to
-        `${outdir}/work/sim/<sample_id>/stdout.log` and `stderr.log` once a real
-        OpenStudio subprocess is wired in. For now the LocalExecutor
-        runs the stub function in a thread.
+        For each sample, this step computes the per-sample stdout/stderr
+        log paths via `osimflow.monitoring.sample_log_paths()` (issue #6)
+        and passes them as keyword arguments to `executor.submit()`. The
+        LocalExecutor's work function uses these to redirect the
+        underlying `openstudio.cli` subprocess output to disk, so the
+        user can `cat` the per-sample log files to debug a failed run.
+
+        The paths are also recorded on the per-sample state so the
+        SampleTrace row in `run.json` references them.
         """
         t0 = time.time()
         out: SampleDict = {}
@@ -340,11 +355,23 @@ class Campaign:
         n = len(parameterized)
         self.trace.step_started("RUN_OPENSTUDIO_SIM", total=n)
         for sid, mod_pkg in parameterized.items():
+            # Per-sample log file paths (issue #6). Computed here so the
+            # work function receives them as kwargs. The
+            # `sample_log_paths` helper creates the directory and is
+            # idempotent, so it is safe to call before submit(). The
+            # helper takes the user-facing `outdir` (not `work_dir`)
+            # and appends `work/sim/<sid>` per `.agents/results/monitoring-decision.md`.
+            stdout_log, stderr_log = sample_log_paths(self.cfg.outdir, sid)
             inputs_hash = sha256_of_dict(
                 {
                     "template": str(self.cfg.template_sim_package),
                     "sid": sid,
                     "os_version": os_version,
+                    # Hash the log paths into the cache key so a user
+                    # who moves the outdir gets a fresh run (paths
+                    # change → cache miss → re-run).
+                    "stdout_log": str(stdout_log),
+                    "stderr_log": str(stderr_log),
                 }
             )
             key = CacheKey(
@@ -356,6 +383,11 @@ class Campaign:
                 container_digest=CONTAINER_OS.format(version=os_version),
             )
             state = self._sample_state.setdefault(sid, {})
+            # Always populate the log path fields so consumers of the
+            # run.json trace know where to look, even on a cache hit
+            # (the previous run's log files are still on disk).
+            state["stdout_log"] = str(stdout_log)
+            state["stderr_log"] = str(stderr_log)
             cached = self.cache.lookup(key)
             if cached:
                 out[sid] = cached
@@ -364,7 +396,7 @@ class Campaign:
                 state["eplusout_sql"] = str(cached / "eplusout.sql")
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="cached")
                 continue
-            out_dir = self.cfg.work_dir / "sim" / sid
+            out_dir = self.cfg.work_dir / "sim"
             out_dir.mkdir(parents=True, exist_ok=True)
             handle = self.executor.submit(
                 run_openstudio_sim,
@@ -378,10 +410,15 @@ class Campaign:
                 time_min=240,
                 container=CONTAINER_OS.format(version=os_version),
                 openstudio_version=os_version,
+                stdout_path=stdout_log,
+                stderr_path=stderr_log,
             )
             try:
                 result_path = handle.result(timeout=600)
-                # Intermediate-file optimization (PRD §1.4): drop empty .err
+                # Intermediate-file optimization (PRD §1.4): drop empty
+                # `.err` (the eplusout.err from the OpenStudio run). The
+                # per-sample `stderr.log` is the *replacement* and is
+                # preserved regardless of size.
                 err = result_path / "eplusout.err"
                 if err.exists() and err.stat().st_size == 0:
                     err.unlink()

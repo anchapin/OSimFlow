@@ -15,8 +15,9 @@ import json
 import logging
 import subprocess
 import sys
-import time
 from pathlib import Path
+
+from .executors import run_subprocess  # local helper (issue #6)
 
 log = logging.getLogger("osimflow.work")
 
@@ -96,6 +97,9 @@ def run_openstudio_sim(
     openstudio_version: str,
     out: Path,
     simulate_work_s: float = 2.0,
+    *,
+    stdout_path: Path | None = None,
+    stderr_path: Path | None = None,
 ) -> Path:
     """Run the OpenStudio simulation.
 
@@ -105,6 +109,13 @@ def run_openstudio_sim(
         openstudio_version: pinned OpenStudio version (selects container tag).
         out: directory where simulation outputs are written.
         simulate_work_s: how long the stub sleeps to simulate work.
+        stdout_path: optional path to the per-sample stdout log file
+            (issue #6). When provided alongside ``stderr_path``, the
+            underlying subprocess has its stdout/stderr streams
+            redirected to these files. The Campaign populates them with
+            ``${outdir}/work/sim/<sample_id>/stdout.log`` and
+            ``stderr.log`` per `.agents/results/monitoring-decision.md`.
+        stderr_path: optional path to the per-sample stderr log file.
 
     Returns:
         Path to the simulation output directory (eplusout.sql inside).
@@ -112,9 +123,46 @@ def run_openstudio_sim(
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
     log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
+
+    # If the Campaign did not pass log paths (legacy callers, BYOS
+    # scripts that pre-date issue #6), fall back to a per-sample
+    # sentinel location inside `sim_out` so the files still exist on
+    # disk. The default keeps the helper back-compatible while the
+    # Campaign-driven path is the supported one.
+    if stdout_path is None:
+        stdout_path = sim_out / "stdout.log"
+    if stderr_path is None:
+        stderr_path = sim_out / "stderr.log"
+
     # STUB: replace with `subprocess.run(["openstudio.cli", "run", ...])`  # nosec
-    # inside the openstudio_cli_image:<version> container.
-    time.sleep(simulate_work_s)
+    # inside the openstudio_cli_image:<version> container. The
+    # `run_subprocess` helper from osimflow.executors captures stdout
+    # and stderr to the per-sample log files so the user can `cat` them
+    # to debug a failed sample.
+    cmd = [
+        sys.executable,
+        "-c",
+        (
+            "import sys, time;"
+            f" print('openstudio CLI stub v{openstudio_version} sample={sample_id}');"
+            f" time.sleep({simulate_work_s});"
+            " print('-- eplusout.sql placeholder --');"
+            " sys.exit(0)"
+        ),
+    ]
+    try:
+        run_subprocess(
+            cmd,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            cwd=sim_out,
+        )
+    except subprocess.SubprocessError as e:
+        # Surface the failure; the Campaign maps non-zero exit to a
+        # failed SampleTrace row.
+        log.error("run_openstudio_sim failed for %s: %s", sample_id, e)
+        raise
+
     (sim_out / "eplusout.sql").write_text("-- placeholder sql")
     (sim_out / "eplusout.err").write_text("")  # success: empty err
     return sim_out
