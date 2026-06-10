@@ -65,6 +65,14 @@ class CampaignConfig:
     # AlgorithmRegistry.get(). Defaults to "lhs" for backward
     # compatibility. Future options: "sobol", "morris", etc.
     algorithm: str = "lhs"
+    # Pre/post campaign shell hooks (issue #108).
+    # --init-script: runs before the first campaign step. Must exit 0
+    # or the campaign aborts. Useful for S3 sync, Slack notifications.
+    init_script: Path | None = None
+    # --finalize-script: runs after the last campaign step. Best-effort:
+    # a non-zero exit code is logged but does NOT fail the campaign.
+    # Useful for cleanup, upload, notification, DynamoDB writes.
+    finalize_script: Path | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -139,4 +147,8 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         dry_run=bool(args.get("dry_run", False)),
         sample=int(str(args["sample"])) if args.get("sample") is not None else None,
         algorithm=str(args["algorithm"]) if args.get("algorithm") else "lhs",
+        init_script=(Path(str(args["init_script"])).resolve() if args.get("init_script") else None),
+        finalize_script=(
+            Path(str(args["finalize_script"])).resolve() if args.get("finalize_script") else None
+        ),
     )

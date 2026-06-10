@@ -34,7 +34,9 @@ import dataclasses
 import inspect
 import json
 import logging
+import os
 import shutil
+import subprocess
 import time
 import warnings
 from collections.abc import Callable
@@ -468,6 +470,93 @@ class Campaign:
         return resolved
 
     # ------------------------------------------------------------------
+    # Shell hooks (issue #108)
+    # ------------------------------------------------------------------
+    def _run_init_script(self) -> None:
+        """Run the init script before the first campaign step.
+
+        Raises ``subprocess.CalledProcessError`` if the script exits
+        non-zero, which aborts the campaign.
+        """
+        script = self.cfg.init_script
+        if script is None:
+            return
+        if not script.is_file():
+            raise FileNotFoundError(f"init script not found: {script}")
+        env = self._hook_env()
+        log.info("running init script: %s", script)
+        t0 = time.time()
+        result = subprocess.run(  # noqa: S603
+            [str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        elapsed = time.time() - t0
+        self.trace.init_script_duration_s = elapsed
+        if result.stdout:
+            for line in result.stdout.splitlines():
+                log.info("init-script stdout: %s", line)
+        if result.stderr:
+            for line in result.stderr.splitlines():
+                log.info("init-script stderr: %s", line)
+        log.info("init script completed in %.2fs", elapsed)
+
+    def _run_finalize_script(self, status: str, duration_s: float) -> None:
+        """Run the finalize script after the last campaign step.
+
+        Best-effort: a non-zero exit code is logged but does NOT raise.
+        """
+        script = self.cfg.finalize_script
+        if script is None:
+            return
+        if not script.is_file():
+            log.warning("finalize script not found: %s — skipping", script)
+            return
+        env = self._hook_env()
+        env["OSIMFLOW_STATUS"] = status
+        env["OSIMFLOW_DURATION_S"] = f"{duration_s:.2f}"
+        log.info("running finalize script: %s", script)
+        t0 = time.time()
+        try:
+            result = subprocess.run(  # noqa: S603
+                [str(script)],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            elapsed = time.time() - t0
+            self.trace.finalize_script_duration_s = elapsed
+            if result.stdout:
+                for line in result.stdout.splitlines():
+                    log.info("finalize-script stdout: %s", line)
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    log.info("finalize-script stderr: %s", line)
+            if result.returncode != 0:
+                log.warning(
+                    "finalize script exited %d (best-effort — continuing)",
+                    result.returncode,
+                )
+            else:
+                log.info("finalize script completed in %.2fs", elapsed)
+        except Exception as exc:
+            elapsed = time.time() - t0
+            self.trace.finalize_script_duration_s = elapsed
+            log.warning("finalize script error: %s (best-effort — continuing)", exc)
+
+    def _hook_env(self) -> dict[str, str]:
+        """Build the environment dict for hook scripts."""
+        base = dict(os.environ)
+        base["OSIMFLOW_OUTDIR"] = str(self.cfg.outdir)
+        base["OSIMFLOW_N_SAMPLES"] = str(self.cfg.n_samples)
+        base["OSIMFLOW_EXECUTOR"] = self.executor.name
+        base["OSIMFLOW_ALGORITHM"] = self.cfg.algorithm
+        return base
+
+    # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
     def run(self) -> dict[str, object]:
@@ -489,13 +578,29 @@ class Campaign:
             log_mlflow_params(_make_mlflow_param_view(self.cfg, self.executor.name))
 
         t0 = time.time()
+        campaign_status = "failure"
         try:
+            # Init hook (issue #108): runs before the first campaign step.
+            # Must succeed (exit 0) or the campaign aborts.
+            self._run_init_script()
+
             if self.cfg.dry_run:
-                return self._run_dry_run(t0)
-            if self.cfg.sample is not None:
-                return self._run_single_sample(t0)
-            return self._run_full_campaign(t0)
+                result = self._run_dry_run(t0)
+            elif self.cfg.sample is not None:
+                result = self._run_single_sample(t0)
+            else:
+                result = self._run_full_campaign(t0)
+            campaign_status = "success"
+            return result
         finally:
+            # Finalize hook (issue #108): best-effort after all steps.
+            # Runs even if init script failed, so the user gets a
+            # notification that the campaign aborted.
+            duration = time.time() - t0
+            self._run_finalize_script(campaign_status, duration)
+            # Re-write run.json to include finalize hook timing
+            if (self.cfg.outdir / "run.json").exists():
+                self.trace.write(self.cfg.outdir / "run.json")
             maybe_end_mlflow_run()
 
     def _run_dry_run(self, t0: float) -> dict[str, object]:

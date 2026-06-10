@@ -181,6 +181,30 @@ def _build_parser() -> argparse.ArgumentParser:
             "Useful for debugging a specific failed sample."
         ),
     )
+    # Pre/post campaign shell hooks (issue #108).
+    run.add_argument(
+        "--init-script",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a shell script to run before the campaign starts. "
+            "Must exit 0 or the campaign aborts. Environment variables "
+            "OSIMFLOW_OUTDIR, OSIMFLOW_N_SAMPLES, OSIMFLOW_EXECUTOR, "
+            "and OSIMFLOW_ALGORITHM are set."
+        ),
+    )
+    run.add_argument(
+        "--finalize-script",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a shell script to run after the campaign completes. "
+            "Best-effort: a non-zero exit is logged but does NOT fail "
+            "the campaign. Receives the same env vars as --init-script "
+            "plus OSIMFLOW_STATUS (success/failure) and "
+            "OSIMFLOW_DURATION_S."
+        ),
+    )
     imp = sub.add_parser(
         "import-osa",
         help="Import an OpenStudio Analysis (.osa / analysis.json) file",

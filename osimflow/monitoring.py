@@ -92,6 +92,9 @@ class RunTrace:
         # EXTRACT_KPIS when cfg.baseline is defined. Contains keys
         # like baseline_eui, min_improvement_pct, max_improvement_pct.
         self.baseline_comparison: dict[str, object] | None = None
+        # Pre/post campaign hook timing (issue #108).
+        self.init_script_duration_s: float | None = None
+        self.finalize_script_duration_s: float | None = None
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -169,6 +172,10 @@ class RunTrace:
         }
         if self.baseline_comparison is not None:
             d["baseline_comparison"] = self.baseline_comparison
+        if self.init_script_duration_s is not None:
+            d["init_script_duration_s"] = self.init_script_duration_s
+        if self.finalize_script_duration_s is not None:
+            d["finalize_script_duration_s"] = self.finalize_script_duration_s
         return d
 
     def write(self, path: Path) -> None:
