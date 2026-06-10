@@ -251,6 +251,21 @@ When implementing the real `bin/*.py` logic, add:
 - **Pre-flight parameter check tests** — the LHS variable name must map to a real measure argument / `.osm` attribute.
 - **Performance Benchmarking** smoke test (PRD §5.2) that records wall-clock + memory for a 3-sample run.
 
+### CI workflow
+
+Every push to a PR branch and every merge to `main` runs the workflow in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) (issues #8, #15).
+That job is the green/red signal contributors see on a PR; it is a thin
+mirror of `make test-cov` + `make contract` + `make typecheck`, running
+`ruff check`, `ruff format --check`, `mypy osimflow`, and `pytest
+--cov=osimflow --cov-fail-under=85` on a Python 3.11 and 3.12 matrix.
+A green check on the `ci` job is the gate to merge. Lint-only fast
+feedback lives in [`.github/workflows/lint.yml`](.github/workflows/lint.yml);
+the AGENTS.md / docs drift gate lives in
+[`.github/workflows/agents-contract.yml`](.github/workflows/agents-contract.yml).
+See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for the full set of jobs
+and the `make act` local mirror.
+
 ---
 
 ## 6. Code style
