@@ -136,6 +136,12 @@ act -j ci
   upstream `nrel/openstudio` tag set on Docker Hub. See
   [`docs/openstudio-image-distribution.md`](openstudio-image-distribution.md).
 
+**Using Podman instead of Docker Desktop.** Docker Desktop requires a
+paid license for organizations with 250+ employees. Podman is a free,
+OCI-compatible drop-in replacement. See
+[`docs/podman-guide.md`](podman-guide.md) for installation instructions
+and platform-specific configuration.
+
 ---
 
 ## 5. Troubleshooting
