@@ -58,6 +58,7 @@ from .mlflow_hook import (
     maybe_start_mlflow_run,
 )
 from .monitoring import RunTrace, SampleTrace, sample_log_paths
+from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .work import (
     aggregate_results,
     default_apply_parameters,
@@ -321,36 +322,95 @@ class Campaign:
             return []
         return variables
 
+    @staticmethod
+    def _collect_epw_mappings(
+        variable_defs: list[dict[str, Any]],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Collect (variable_name, mapping_dict) for all epw_file targets."""
+        result: list[tuple[str, dict[str, Any]]] = []
+        for var in variable_defs:
+            if var.get("target") != "epw_file":
+                continue
+            mapping = var.get("mapping")
+            if mapping and isinstance(mapping, dict):
+                result.append((var["name"], mapping))
+        return result
+
     def _preflight_validate_epw_files(self, variable_defs: list[dict[str, Any]]) -> None:
-        """Pre-flight check: verify all mapped .epw files exist.
+        """Pre-flight check: verify all mapped .epw files exist and are valid.
 
         For every variable with ``target: epw_file`` and a ``mapping``
         dict, verify each mapped value is a file that exists inside
         the ``template_sim_package`` directory.  Fail fast with a
         clear error message listing every missing file.
 
+        Additionally, validates the EPW format of each referenced file
+        (header line starts with ``LOCATION``) so that malformed weather
+        files are caught before any simulations start (issue #63).
+
+        After validating the explicitly-referenced files, also validates
+        all ``.epw`` files found in the ``weather/`` subdirectory of the
+        template package (configurable via ``cfg.weather_dir``).
+
         Raises:
             FileNotFoundError: one or more mapped .epw files are missing.
+            EPWValidationError: one or more .epw files fail format validation.
         """
         template_dir = self.cfg.template_sim_package
+        epw_mappings = self._collect_epw_mappings(variable_defs)
+
+        # Phase 1: check existence of all mapped .epw files.
+        self._check_epw_existence(epw_mappings, template_dir)
+
+        # Phase 2: validate EPW format for all referenced + discovered files.
+        self._check_epw_format(epw_mappings, template_dir)
+
+    @staticmethod
+    def _check_epw_existence(
+        epw_mappings: list[tuple[str, dict[str, Any]]],
+        template_dir: Path,
+    ) -> None:
+        """Raise FileNotFoundError if any mapped .epw file is missing."""
         missing: list[str] = []
-        for var in variable_defs:
-            if var.get("target") != "epw_file":
-                continue
-            mapping = var.get("mapping")
-            if not mapping or not isinstance(mapping, dict):
-                continue
+        for var_name, mapping in epw_mappings:
             for cat_value, epw_rel_path in mapping.items():
                 epw_abs = template_dir / str(epw_rel_path)
                 if not epw_abs.is_file():
                     missing.append(
-                        f"  variable={var['name']!r} value={cat_value!r} -> {epw_abs} (missing)"
+                        f"  variable={var_name!r} value={cat_value!r} -> {epw_abs} (missing)"
                     )
         if missing:
             raise FileNotFoundError(
                 "PRE-FLIGHT EPW VALIDATION FAILED: the following mapped "
                 ".epw files were not found in template_sim_package="
                 f"{template_dir}:\n" + "\n".join(missing)
+            )
+
+    def _check_epw_format(
+        self,
+        epw_mappings: list[tuple[str, dict[str, Any]]],
+        template_dir: Path,
+    ) -> None:
+        """Raise EPWValidationError if any .epw file has invalid format."""
+        format_errors: list[str] = []
+        for _var_name, mapping in epw_mappings:
+            for _cat_value, epw_rel_path in mapping.items():
+                epw_abs = template_dir / str(epw_rel_path)
+                try:
+                    validate_epw(epw_abs)
+                except EPWValidationError as exc:
+                    format_errors.append(f"  {exc}")
+
+        # Also validate all EPW files in the weather subdirectory (issue #63).
+        try:
+            validate_all_epw_files(template_dir, self.cfg.weather_dir)
+        except EPWValidationError as exc:
+            format_errors.append(f"  {exc}")
+
+        if format_errors:
+            raise EPWValidationError(
+                "PRE-FLIGHT EPW FORMAT VALIDATION FAILED: the following "
+                ".epw files have invalid format:\n" + "\n".join(format_errors)
             )
 
     def _resolve_epw_targets(

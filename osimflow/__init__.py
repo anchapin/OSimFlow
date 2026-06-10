@@ -17,6 +17,15 @@ from .executors import (
     SlurmExecutor,
 )
 from .monitoring import RunTrace, StepTrace
+from .weather import (
+    EPWDownloadError,
+    EPWValidationError,
+    discover_epw_files,
+    download_epw,
+    validate_all_epw_files,
+    validate_epw,
+    validate_epw_header,
+)
 
 __all__ = [
     "CacheKey",
@@ -31,4 +40,11 @@ __all__ = [
     "NomadExecutor",
     "RunTrace",
     "StepTrace",
+    "EPWValidationError",
+    "EPWDownloadError",
+    "discover_epw_files",
+    "download_epw",
+    "validate_all_epw_files",
+    "validate_epw",
+    "validate_epw_header",
 ]

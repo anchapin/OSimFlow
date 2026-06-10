@@ -34,12 +34,15 @@ def tmp_template_dir(tmp_path: Path) -> Path:
     template = tmp_path / "template_pkg"
     template.mkdir()
 
-    # Create weather directory with .epw files
+    # Create weather directory with .epw files (valid LOCATION header)
     weather_dir = template / "weather"
     weather_dir.mkdir()
-    (weather_dir / "USA_CA_Los.Angeles.epw").write_text("# stub epw LA")
-    (weather_dir / "USA_NY_New.York.epw").write_text("# stub epw NY")
-    (weather_dir / "USA_IL_Chicago.epw").write_text("# stub epw Chicago")
+    epw_header = "LOCATION,Los Angeles,CA,USA,722950,33.94,-118.41,-8.0,21.0\nDATA PERIODS,1,1,Data,Sunday, 1/ 1,12/31,8760,\n"
+    (weather_dir / "USA_CA_Los.Angeles.epw").write_text(epw_header)
+    epw_header_ny = "LOCATION,New York,NY,USA,725030,40.71,-74.01,-5.0,10.0\nDATA PERIODS,1,1,Data,Sunday, 1/ 1,12/31,8760,\n"
+    (weather_dir / "USA_NY_New.York.epw").write_text(epw_header_ny)
+    epw_header_chi = "LOCATION,Chicago,IL,USA,725300,41.78,-87.75,-6.0,190.0\nDATA PERIODS,1,1,Data,Sunday, 1/ 1,12/31,8760,\n"
+    (weather_dir / "USA_IL_Chicago.epw").write_text(epw_header_chi)
 
     # Create a minimal workflow.osw
     osw = {
