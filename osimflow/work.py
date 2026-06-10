@@ -13,6 +13,8 @@ CLI surface to maintain.
 
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -91,6 +93,49 @@ def default_apply_parameters(
 # Campaign.
 
 
+# ---------------------------------------------------------------------------
+# Helpers for real OpenStudio CLI invocation (issue #31)
+# ---------------------------------------------------------------------------
+
+
+def _find_workflow_osw(modified_sim_package: Path) -> Path | None:
+    """Locate the workflow.osw in the modified simulation package.
+
+    Searches the package root first, then recursively. Returns the first
+    ``.osw`` found, preferring the root-level file over nested copies.
+    Returns ``None`` when no ``.osw`` exists in the package.
+    """
+    root_osw = modified_sim_package / "workflow.osw"
+    if root_osw.is_file():
+        return root_osw
+    # Fallback: search recursively for any .osw file.
+    for osw in modified_sim_package.rglob("*.osw"):
+        return osw
+    return None
+
+
+def _is_openstudio_available() -> bool:
+    """Check whether ``openstudio.cli`` is on PATH.
+
+    Uses ``shutil.which`` so the check works both on bare metal and
+    inside the ``nrel/openstudio`` container where the CLI is at
+    ``/usr/local/bin/openstudio.cli``.
+    """
+    return shutil.which("openstudio.cli") is not None
+
+
+def _is_stub_mode() -> bool:
+    """Check whether the user has explicitly opted into stub mode.
+
+    When ``OSIMFLOW_STUB_SIM=1`` is set in the environment, the work
+    function uses the placeholder stub regardless of whether
+    ``openstudio.cli`` is on PATH. This is the testing / development
+    escape hatch so existing integration tests continue to work without
+    a real OpenStudio installation.
+    """
+    return os.environ.get("OSIMFLOW_STUB_SIM") == "1"
+
+
 def run_openstudio_sim(
     modified_sim_package: Path,
     sample_id: str,
@@ -103,12 +148,29 @@ def run_openstudio_sim(
 ) -> Path:
     """Run the OpenStudio simulation.
 
+    When ``openstudio.cli`` is available on PATH and the environment
+    variable ``OSIMFLOW_STUB_SIM`` is not set to ``1``, this function
+    invokes the real OpenStudio CLI::
+
+        openstudio.cli run -w <workflow.osw>
+
+    The CLI produces ``eplusout.sql``, ``eplusout.err``, and other
+    artifacts in the per-sample work directory. The framework does **not**
+    write placeholder files when using the real CLI.
+
+    When ``openstudio.cli`` is not available (or ``OSIMFLOW_STUB_SIM=1``
+    is set), the function falls back to the stub behavior that sleeps
+    for ``simulate_work_s`` seconds and writes placeholder output files.
+    This fallback ensures existing integration tests pass without a real
+    OpenStudio installation.
+
     Args:
         modified_sim_package: per-sample modified package from APPLY_PARAMETERS.
         sample_id: the sample's identifier (e.g. "0001").
         openstudio_version: pinned OpenStudio version (selects container tag).
         out: directory where simulation outputs are written.
-        simulate_work_s: how long the stub sleeps to simulate work.
+        simulate_work_s: how long the stub sleeps to simulate work
+            (only used in stub mode).
         stdout_path: optional path to the per-sample stdout log file
             (issue #6). When provided alongside ``stderr_path``, the
             underlying subprocess has its stdout/stderr streams
@@ -119,6 +181,12 @@ def run_openstudio_sim(
 
     Returns:
         Path to the simulation output directory (eplusout.sql inside).
+
+    Raises:
+        RuntimeError: when ``openstudio.cli`` is available but no
+            ``workflow.osw`` is found in the modified package.
+        subprocess.CalledProcessError: when ``openstudio.cli`` exits
+            with a non-zero code.
     """
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
@@ -134,11 +202,23 @@ def run_openstudio_sim(
     if stderr_path is None:
         stderr_path = sim_out / "stderr.log"
 
-    # STUB: replace with `subprocess.run(["openstudio.cli", "run", ...])`  # nosec
-    # inside the openstudio_cli_image:<version> container. The
-    # `run_subprocess` helper from osimflow.executors captures stdout
-    # and stderr to the per-sample log files so the user can `cat` them
-    # to debug a failed sample.
+    # ------------------------------------------------------------------
+    # Decision: real CLI or stub?
+    # ------------------------------------------------------------------
+    use_real_cli = _is_openstudio_available() and not _is_stub_mode()
+
+    if use_real_cli:
+        return _run_real_openstudio(
+            modified_sim_package=modified_sim_package,
+            sample_id=sample_id,
+            sim_out=sim_out,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+
+    # ------------------------------------------------------------------
+    # Stub path (original behavior)
+    # ------------------------------------------------------------------
     cmd = [
         sys.executable,
         "-c",
@@ -165,6 +245,65 @@ def run_openstudio_sim(
 
     (sim_out / "eplusout.sql").write_text("-- placeholder sql")
     (sim_out / "eplusout.err").write_text("")  # success: empty err
+    return sim_out
+
+
+def _run_real_openstudio(
+    *,
+    modified_sim_package: Path,
+    sample_id: str,
+    sim_out: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> Path:
+    """Invoke ``openstudio.cli run -w <workflow.osw>`` (issue #31).
+
+    This is the production code path that runs inside the
+    ``nrel/openstudio:<version>`` container (or on bare metal when
+    the CLI is on PATH). The real CLI produces ``eplusout.sql``,
+    ``eplusout.err``, and other EnergyPlus output files in the
+    per-sample work directory (``sim_out``). The framework does **not**
+    write placeholder files — the CLI owns the output.
+
+    Raises:
+        RuntimeError: when no ``workflow.osw`` is found in the package.
+        subprocess.CalledProcessError: when the CLI exits non-zero.
+    """
+    workflow_path = _find_workflow_osw(modified_sim_package)
+    if workflow_path is None:
+        raise RuntimeError(
+            f"No workflow.osw found in modified_sim_package="
+            f"{modified_sim_package} for sample={sample_id}. "
+            f"The real OpenStudio CLI requires a workflow file."
+        )
+
+    cmd: list[str] = [
+        "openstudio.cli",
+        "run",
+        "-w",
+        str(workflow_path),
+    ]
+    log.info(
+        "openstudio.cli real invocation sample=%s workflow=%s cwd=%s",
+        sample_id,
+        workflow_path,
+        sim_out,
+    )
+    try:
+        run_subprocess(
+            cmd,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            cwd=sim_out,
+        )
+    except subprocess.SubprocessError as e:
+        log.error(
+            "openstudio.cli failed for sample=%s: %s",
+            sample_id,
+            e,
+        )
+        raise
+
     return sim_out
 
 
