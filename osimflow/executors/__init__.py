@@ -166,6 +166,54 @@ class LocalExecutor(BaseExecutor):
         self._pool.shutdown(wait=True)
 
 
+def _apply_slurm_params(
+    auto_executor: Any,
+    *,
+    partition: str,
+    account: str | None,
+    cpus_per_task: int,
+    mem_gb: int,
+    time_min: int,
+    qos: str | None = None,
+    constraint: str | None = None,
+    gres: str | None = None,
+) -> None:
+    """Apply Slurm parameters to a submitit AutoExecutor with cross-version
+    kwarg compatibility.
+
+    submitit 1.5+ renamed `partition` -> `slurm_partition`, `time` ->
+    `slurm_time`, and added `slurm_qos` / `slurm_constraint` /
+    `slurm_gres`. This helper tries the new spelling first; on
+    `TypeError` (older submitit) it retries with the legacy kwarg
+    names. `slurm_qos` / `slurm_constraint` / `slurm_gres` are silently
+    dropped on legacy submitit (callers on old submitit cannot use the
+    advanced flags). `None` values are filtered out so submitit does
+    not receive explicit-None assignments for unset directives.
+    """
+    new_kwargs: dict[str, Any] = {
+        "slurm_partition": partition,
+        "slurm_account": account,
+        "slurm_cpus_per_task": cpus_per_task,
+        "slurm_mem_gb": mem_gb,
+        "slurm_time": time_min,
+        "slurm_qos": qos,
+        "slurm_constraint": constraint,
+        "slurm_gres": gres,
+    }
+    new_kwargs = {k: v for k, v in new_kwargs.items() if v is not None}
+    legacy_kwargs: dict[str, Any] = {
+        "partition": partition,
+        "account": account,
+        "cpus_per_task": cpus_per_task,
+        "mem_gb": mem_gb,
+        "time": time_min,
+    }
+    try:
+        auto_executor.update_parameters(**new_kwargs)
+    except TypeError:
+        auto_executor.update_parameters(**legacy_kwargs)
+
+
 class SlurmExecutor(BaseExecutor):
     """Slurm executor wrapping `submitit.AutoExecutor`.
 
@@ -176,6 +224,19 @@ class SlurmExecutor(BaseExecutor):
 
     In production, set `debug=False` and the same code path submits to
     the configured Slurm partition. Zero application changes.
+
+    Per-submit resource directives (`cpus`, `memory_mb`, `time_min`) are
+    honored by constructing a fresh `AutoExecutor` per submission with
+    the desired overrides — submitit 1.5+ does not propagate per-call
+    kwargs to its inner `update_parameters`. The result is that the
+    per-sample cpus/mem/time show up in the actual sbatch header (when
+    `debug=False` runs against a real cluster) or in the dry-run
+    debug-logged script (when `debug=True`).
+
+    Advanced directives (`qos`, `constraint`, `gres`) are forwarded to
+    the executor-level sbatch header for advanced workloads (e.g. GPU
+    jobs). All are optional; the corresponding `#SBATCH` line is omitted
+    when unset. Requires submitit >= 1.5.
     """
 
     name = "slurm"
@@ -188,6 +249,9 @@ class SlurmExecutor(BaseExecutor):
         mem_gb: int = 4,
         time_h: int = 2,
         debug: bool = True,
+        qos: str | None = None,
+        constraint: str | None = None,
+        gres: str | None = None,
     ):
         # Lazy import so users who only ever run the local executor do
         # not pay the submitit import cost.
@@ -201,36 +265,31 @@ class SlurmExecutor(BaseExecutor):
         self.mem_gb = mem_gb
         self.time_h = time_h
         self.debug = debug
+        self.qos = qos
+        self.constraint = constraint
+        self.gres = gres
 
         ex = submitit.AutoExecutor(
             folder=os.environ.get("OSIMFLOW_SLURM_LOGS", "/tmp/osimflow-slurm-logs"),
             slurm_pty=False,
         )
-        # submitit 1.5+ renamed `partition` -> `slurm_partition` and
-        # `time` -> `slurm_time`. Detect at runtime and use whichever
-        # spelling submitit accepts. New names take priority.
-        try:
-            ex.update_parameters(
-                slurm_partition=partition,
-                slurm_account=account,
-                slurm_cpus_per_task=cpus_per_task,
-                slurm_mem_gb=mem_gb,
-                slurm_time=int(time_h * 60),
-            )
-        except TypeError:
-            # Older submitit with the legacy kwarg names.
-            ex.update_parameters(
-                partition=partition,
-                account=account,
-                cpus_per_task=cpus_per_task,
-                mem_gb=mem_gb,
-                time=int(time_h * 60),
-            )
+        _apply_slurm_params(
+            ex,
+            partition=partition,
+            account=account,
+            cpus_per_task=cpus_per_task,
+            mem_gb=mem_gb,
+            time_min=int(time_h * 60),
+            qos=qos,
+            constraint=constraint,
+            gres=gres,
+        )
         if debug:
             log.warning(
                 "SlurmExecutor running in DEBUG mode — jobs run locally; "
                 "the exact `sbatch` script that would have been submitted is "
-                "logged at INFO level. Set debug=False for real Slurm."
+                "logged at INFO level under the `submitit` logger. "
+                "Set debug=False for real Slurm."
             )
         self._ex = ex
 
@@ -245,21 +304,61 @@ class SlurmExecutor(BaseExecutor):
         container: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        # submitit does not let us override per-submit cpus/mem easily
-        # because the executor-level config is what controls the sbatch
-        # header. Per-submit cpus/mem would be plumbed via a closure in
-        # production. For now we emit the resource directive into the
-        # task's log line so it appears in run.json / external logs.
+        # Issue #4: per-submit resource directives. submitit 1.5+ does
+        # NOT propagate per-submit kwargs to its inner update_parameters
+        # — `ex.submit(fn, **kwargs)` passes the kwargs to `fn` itself.
+        # The submitit-recommended pattern for per-call overrides is to
+        # build a fresh `AutoExecutor` per submission with the desired
+        # parameters, then call `.submit()` on it. We do that here so
+        # per-sample resources (different memory ceilings for a heavy
+        # sample, etc.) are honored in the resulting sbatch header, not
+        # just logged.
         if container:
             log.info(
-                "slurm submit name=%s cpus=%d mem=%dMB container=%s",
+                "slurm submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
                 name,
                 cpus,
                 memory_mb,
+                time_min,
                 container,
             )
         else:
-            log.info("slurm submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
+            log.info(
+                "slurm submit name=%s cpus=%d mem=%dMB time_min=%d",
+                name,
+                cpus,
+                memory_mb,
+                time_min,
+            )
+
+        # Convert MB -> GB (rounded up so we never under-allocate).
+        # submitit speaks integer GB on `slurm_mem_gb`; fractional
+        # values are accepted on some versions but integer is the
+        # safe cross-version path.
+        mem_gb_override = max(1, (memory_mb + 1023) // 1024)
+
+        # Build a fresh AutoExecutor for this submission so the
+        # per-call resource directives flow into the rendered sbatch
+        # header. The folder is shared (so log files cluster per
+        # campaign), and the `slurm_pty=False` matches the init-time
+        # config. debug=True uses submitit.DebugExecutor (local) which
+        # also honors the per-submit overrides (they appear in the
+        # debug-logged sbatch script).
+        call_ex = self._submitit.AutoExecutor(
+            folder=self._ex.folder,
+            slurm_pty=False,
+        )
+        _apply_slurm_params(
+            call_ex,
+            partition=self.partition,
+            account=self.account,
+            cpus_per_task=cpus,
+            mem_gb=mem_gb_override,
+            time_min=time_min,
+            qos=self.qos,
+            constraint=self.constraint,
+            gres=self.gres,
+        )
 
         def _wrapped() -> Any:
             # Resource directive also becomes an env var so the task can
@@ -269,7 +368,7 @@ class SlurmExecutor(BaseExecutor):
                 os.environ["OSIMFLOW_CONTAINER"] = container
             return fn(*args)
 
-        fut: Any = self._ex.submit(_wrapped)
+        fut: Any = call_ex.submit(_wrapped)
         return Handle(job_id=str(fut.job_id), _future=fut)
 
     def shutdown(self) -> None:

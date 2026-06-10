@@ -28,6 +28,12 @@ class CampaignConfig:
     # When set, the Campaign begins an MLflow run at start and ends it at
     # completion, logging params / metrics / artifacts.
     mlflow_tracking_uri: str | None = None
+    # Optional Slurm advanced directives (issue #4). Forwarded to
+    # `SlurmExecutor` when `--executor slurm` is selected. All default
+    # to `None`; submitit omits unset directives from the sbatch header.
+    slurm_qos: str | None = None
+    slurm_constraint: str | None = None
+    slurm_gres: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -73,4 +79,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         mlflow_tracking_uri=(
             str(args["mlflow_tracking_uri"]) if args.get("mlflow_tracking_uri") else None
         ),
+        slurm_qos=str(args["slurm_qos"]) if args.get("slurm_qos") else None,
+        slurm_constraint=(str(args["slurm_constraint"]) if args.get("slurm_constraint") else None),
+        slurm_gres=str(args["slurm_gres"]) if args.get("slurm_gres") else None,
     )

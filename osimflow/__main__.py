@@ -68,6 +68,9 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             mem_gb=4,
             time_h=2,
             debug=not args.slurm_real,  # debug unless --slurm_real
+            qos=args.slurm_qos,
+            constraint=args.slurm_constraint,
+            gres=args.slurm_gres,
         )
     if args.executor == "aws_batch":
         return AWSBatchExecutor(
@@ -92,6 +95,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--slurm-real",
         action="store_true",
         help="Submit to real Slurm (default: submitit DebugExecutor)",
+    )
+    # Advanced Slurm directives (issue #4). All optional; submitit
+    # omits unset directives from the sbatch header.
+    run.add_argument(
+        "--slurm-qos",
+        default=None,
+        help="Slurm QoS (e.g. 'high'). Requires submitit >= 1.5.",
+    )
+    run.add_argument(
+        "--slurm-constraint",
+        default=None,
+        help="Slurm constraint feature (e.g. 'gpu'). Requires submitit >= 1.5.",
+    )
+    run.add_argument(
+        "--slurm-gres",
+        default=None,
+        help="Slurm generic resources (e.g. 'gpu:1'). Requires submitit >= 1.5.",
     )
     run.add_argument("--aws-batch-queue", default="osimflow-batch-queue")
     run.add_argument("--aws-batch-job-definition", default=None)

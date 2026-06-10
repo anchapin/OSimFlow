@@ -87,6 +87,7 @@ The 6-step DAG that the `Campaign` class drives:
 - `--executor` (local / slurm / aws_batch)
 - `--max-workers` (local executor parallelism)
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
+- `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
 - `--aws-batch-queue`, `--aws-batch-job-definition`
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--openstudio_version`, `--archive_intermediates`
@@ -147,6 +148,19 @@ osimflow run \
   --openstudio_version 3.4.0 \
   --input_variables variables.yml \
   --n_samples 500
+
+# HPC run with advanced Slurm directives (GPU jobs, QoS, etc.)
+# Requires submitit >= 1.5.
+osimflow run \
+  --executor slurm \
+  --slurm-real \
+  --slurm_partition gpu \
+  --slurm_qos high \
+  --slurm_constraint gpu \
+  --slurm_gres gpu:1 \
+  --openstudio_version 3.5.0 \
+  --input_variables variables.yml \
+  --n_samples 200
 
 # Cloud run on AWS Batch
 osimflow run \
