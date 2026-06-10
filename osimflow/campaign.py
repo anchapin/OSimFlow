@@ -38,9 +38,12 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TypedDict
+from typing import Any, TypedDict
+
+import yaml
 
 from .apply_params import (
+    EPW_FILE_KEY,
     _build_mappings,
     preflight_check,
 )
@@ -224,6 +227,103 @@ class Campaign:
                     log.debug("archived %s -> %s", f, dst / f.name)
 
     # ------------------------------------------------------------------
+    # EPW file helpers (issue #55)
+    # ------------------------------------------------------------------
+    def _load_variable_defs(self) -> list[dict[str, Any]]:
+        """Load variable definitions from ``cfg.input_variables`` (variables.yml).
+
+        Returns the raw ``variables`` list so the Campaign can inspect
+        ``target`` and ``mapping`` metadata that the LHS generator does
+        not propagate to the sample dicts.
+        """
+        try:
+            raw: Any = yaml.safe_load(self.cfg.input_variables.read_text())
+        except Exception as exc:
+            log.error("Failed to load variables.yml: %s", exc)
+            raise
+        if not isinstance(raw, dict):
+            return []
+        variables: Any = raw.get("variables", [])
+        if not isinstance(variables, list):
+            return []
+        return variables
+
+    def _preflight_validate_epw_files(self, variable_defs: list[dict[str, Any]]) -> None:
+        """Pre-flight check: verify all mapped .epw files exist.
+
+        For every variable with ``target: epw_file`` and a ``mapping``
+        dict, verify each mapped value is a file that exists inside
+        the ``template_sim_package`` directory.  Fail fast with a
+        clear error message listing every missing file.
+
+        Raises:
+            FileNotFoundError: one or more mapped .epw files are missing.
+        """
+        template_dir = self.cfg.template_sim_package
+        missing: list[str] = []
+        for var in variable_defs:
+            if var.get("target") != "epw_file":
+                continue
+            mapping = var.get("mapping")
+            if not mapping or not isinstance(mapping, dict):
+                continue
+            for cat_value, epw_rel_path in mapping.items():
+                epw_abs = template_dir / str(epw_rel_path)
+                if not epw_abs.is_file():
+                    missing.append(
+                        f"  variable={var['name']!r} value={cat_value!r} -> {epw_abs} (missing)"
+                    )
+        if missing:
+            raise FileNotFoundError(
+                "PRE-FLIGHT EPW VALIDATION FAILED: the following mapped "
+                ".epw files were not found in template_sim_package="
+                f"{template_dir}:\n" + "\n".join(missing)
+            )
+
+    def _resolve_epw_targets(
+        self,
+        params: dict[str, object],
+        variable_defs: list[dict[str, Any]],
+    ) -> dict[str, object]:
+        """Resolve ``epw_file`` targets in a sample's parameter dict.
+
+        For each variable with ``target: epw_file``, look up the
+        parameter value in the variable's ``mapping`` dict and inject
+        the resolved .epw path under :data:`EPW_FILE_KEY`
+        (``"__epw_file__"``) into a copy of *params*.
+
+        If no ``epw_file`` targets exist, returns *params* unchanged.
+
+        Raises:
+            ValueError: a parameter value is not in the variable's mapping.
+        """
+        epw_vars = [v for v in variable_defs if v.get("target") == "epw_file"]
+        if not epw_vars:
+            return params
+        resolved = dict(params)
+        for var in epw_vars:
+            name = var["name"]
+            mapping = var.get("mapping", {})
+            value = params.get(name)
+            if value is None:
+                continue
+            epw_path = mapping.get(value)
+            if epw_path is None:
+                raise ValueError(
+                    f"Parameter {name!r} has value {value!r} which is "
+                    f"not in the epw_file mapping. Available keys: "
+                    f"{sorted(mapping.keys())}"
+                )
+            resolved[EPW_FILE_KEY] = str(epw_path)
+            log.debug(
+                "resolved epw_file: %s=%s -> %s",
+                name,
+                value,
+                epw_path,
+            )
+        return resolved
+
+    # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
     def run(self) -> dict[str, object]:
@@ -392,6 +492,11 @@ class Campaign:
         attributes. This ensures a typo in ``variables.yml`` fails fast
         *before* any simulations start.
 
+        Additionally, for variables with ``target: epw_file`` (issue
+        #55), verifies that all mapped ``.epw`` files exist in the
+        ``template_sim_package`` directory and resolves each sample's
+        categorical value to the corresponding weather file path.
+
         Raises:
             UnmappedParameterError: a parameter name does not map to any
                 template attribute or measure argument. The error message
@@ -399,8 +504,19 @@ class Campaign:
             AmbiguousParameterError: a plain argument name appears in
                 multiple measure steps and must be disambiguated via the
                 dotted ``MeasureName.argument_name`` form.
+            FileNotFoundError: an ``epw_file`` target references a
+                ``.epw`` file that does not exist in the template
+                simulation package.
         """
         t0 = time.time()
+
+        # Load variable definitions from variables.yml for epw_file
+        # target resolution and pre-flight validation (issue #55).
+        variable_defs: list[dict[str, Any]] = self._load_variable_defs()
+
+        # Pre-flight EPW validation: verify all mapped .epw files exist
+        # in the template_sim_package directory.
+        self._preflight_validate_epw_files(variable_defs)
 
         # Pre-flight validation (PRD §1.4): validate ALL parameter names
         # against the template before submitting any work. Collect the
@@ -424,7 +540,12 @@ class Campaign:
         for s in samples:
             sid = str(s["sample_id"])
             params = s["values"]
-            inputs_hash = sha256_of_dict({"params": params, "sid": sid})
+            # Resolve epw_file targets: inject __epw_file__ with the
+            # mapped .epw path (issue #55). The apply function extracts
+            # this reserved key and uses it to mutate the .osw
+            # weather_file field.
+            resolved_params = self._resolve_epw_targets(params, variable_defs)
+            inputs_hash = sha256_of_dict({"params": resolved_params, "sid": sid})
             key = CacheKey(
                 step="APPLY_PARAMETERS",
                 sample_id=sid,
@@ -446,7 +567,7 @@ class Campaign:
             handle = self.executor.submit(
                 self.apply_fn,
                 self.cfg.template_sim_package,
-                params,
+                resolved_params,
                 sid,
                 out_dir,
                 name=f"apply_{sid}",

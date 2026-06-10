@@ -30,6 +30,7 @@ SUPPORTED_DISTRIBUTIONS = (
     "beta",
     "gamma",
     "exponential",
+    "categorical",
 )
 
 
@@ -101,6 +102,13 @@ def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float:
     if dist == "exponential":
         rate = params["rate"]
         return float(scipy.stats.expon.ppf(u, scale=rate))
+
+    if dist == "categorical":
+        values = params["values"]
+        if not values:
+            raise ValueError("categorical distribution requires a non-empty 'values' list")
+        idx = min(int(u * len(values)), len(values) - 1)
+        return values[idx]
 
     raise ValueError(
         f"unsupported distribution {dist!r}; choose from {', '.join(SUPPORTED_DISTRIBUTIONS)}"
