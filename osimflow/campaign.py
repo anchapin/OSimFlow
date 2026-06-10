@@ -36,6 +36,7 @@ import json
 import logging
 import shutil
 import time
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,6 +44,7 @@ from typing import Any, TypedDict
 
 import yaml
 
+from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
     EPW_FILE_KEY,
     _build_mappings,
@@ -64,7 +66,6 @@ from .work import (
     aggregate_results,
     default_apply_parameters,
     extract_kpis,
-    generate_lhs,
     generate_plots,
     run_openstudio_sim,
 )
@@ -503,7 +504,8 @@ class Campaign:
         self.cfg = dataclasses.replace(self.cfg, n_samples=1)
         log.info("DRY RUN: overriding n_samples from %d to 1", original_n)
 
-        samples: list[SampleSpec] = self.step_generate_lhs()
+        algo = AlgorithmRegistry.get(self.cfg.algorithm)
+        samples: list[SampleSpec] = self.step_generate_samples(algo)
         self.cfg.samples_file.parent.mkdir(parents=True, exist_ok=True)
         self.cfg.samples_file.write_text(json.dumps({"samples": samples}, indent=2))
         parameterized: SampleDict = self.step_apply_parameters(samples)
@@ -593,7 +595,8 @@ class Campaign:
 
     def _run_full_campaign(self, t0: float) -> dict[str, object]:
         """Standard full campaign: all 6 steps, all samples."""
-        samples: list[SampleSpec] = self.step_generate_lhs()
+        algo = AlgorithmRegistry.get(self.cfg.algorithm)
+        samples: list[SampleSpec] = self.step_generate_samples(algo)
         samples_link = self.cfg.samples_file
         samples_link.parent.mkdir(parents=True, exist_ok=True)
         samples_link.write_text(json.dumps({"samples": samples}, indent=2))
@@ -656,15 +659,32 @@ class Campaign:
     # ------------------------------------------------------------------
     # Steps
     # ------------------------------------------------------------------
-    def step_generate_lhs(self) -> list[SampleSpec]:
-        """Single-shot: read variables.yml, produce N parameter sets.
+    def step_generate_samples(self, algo: BaseAlgorithm) -> list[SampleSpec]:
+        """Generate samples via the pluggable algorithm framework.
 
-        Calls `bin/generate_lhs.py` via the executor.
+        Dispatches to ``algo.generate_samples()`` with the campaign's
+        variables and sample count.  The result is cached under a key
+        that includes the algorithm name so switching algorithms
+        invalidates the cache.
+
+        This is the preferred entry point.  ``step_generate_lhs()`` is
+        kept as a deprecated convenience wrapper.
         """
         t0 = time.time()
+        algo_name = algo.name().upper()
+        step_label = f"GENERATE_{algo_name}_SAMPLES"
+
+        # Read variables.yml once for the algorithm.
+        variables: dict[str, Any] = {}
+        if self.cfg.input_variables.exists():
+            with self.cfg.input_variables.open() as fh:
+                raw = yaml.safe_load(fh)
+                if isinstance(raw, dict):
+                    variables = raw
+
         inputs_hash = sha256_of_files([self.cfg.input_variables])
         key = CacheKey(
-            step="GENERATE_LHS_SAMPLES",
+            step=step_label,
             sample_id="ALL",
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
@@ -676,37 +696,31 @@ class Campaign:
             samples_obj: object = json.loads(cached.read_text())["samples"]
             samples_from_cache = cast_samples(samples_obj)
             self.trace.step_finished(
-                "GENERATE_LHS_SAMPLES",
+                step_label,
                 cache="HIT",
                 elapsed_s=time.time() - t0,
                 exit_code=0,
             )
             return samples_from_cache
 
-        out_dir = self.cfg.work_dir / "lhs"
-        handle = self.executor.submit(
-            generate_lhs,
-            self.cfg.input_variables,
-            self.cfg.n_samples,
-            out_dir,
-            name="generate_lhs",
-            cpus=1,
-            memory_mb=1024,
-            time_min=5,
-            container=CONTAINER_PY,
+        out_dir = self.cfg.work_dir / algo.name()
+        result_path = algo.generate_samples(
+            variables=variables,
+            n_samples=self.cfg.n_samples,
+            seed=None,
+            outdir=out_dir,
         )
         try:
-            result_path = handle.result(timeout=120)
             self.cache.store(key, Path(result_path), exit_code=0)
             run_samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
             samples = cast_samples(run_samples_obj)
 
             # Inject baseline sample (issue #64): when cfg.baseline is
-            # defined, prepend a fixed-parameter sample to the LHS set.
+            # defined, prepend a fixed-parameter sample to the sample set.
             baseline_sid = self._baseline_sample_id()
             if baseline_sid is not None and self.cfg.baseline is not None:
                 baseline_params = self.cfg.baseline.get("parameters", {})
-                # Only inject if not already present in the LHS set.
+                # Only inject if not already present in the sample set.
                 existing_ids = {s["sample_id"] for s in samples}
                 if baseline_sid not in existing_ids:
                     params_dict: dict[str, object] = (
@@ -729,21 +743,37 @@ class Campaign:
                     )
 
             self.trace.step_finished(
-                "GENERATE_LHS_SAMPLES",
+                step_label,
                 cache="MISS",
                 elapsed_s=time.time() - t0,
                 exit_code=0,
             )
             return samples
         except Exception as e:
-            log.error("GENERATE_LHS_SAMPLES failed: %s", e)
+            log.error("%s failed: %s", step_label, e)
             self.trace.step_finished(
-                "GENERATE_LHS_SAMPLES",
+                step_label,
                 cache="MISS",
                 elapsed_s=time.time() - t0,
                 exit_code=1,
             )
             raise
+
+    def step_generate_lhs(self) -> list[SampleSpec]:
+        """Single-shot: read variables.yml, produce N parameter sets.
+
+        .. deprecated::
+            Use ``step_generate_samples(algo)`` instead.  This method
+            is retained for backward compatibility and calls
+            ``step_generate_samples`` with ``LHSAlgorithm``.
+        """
+        warnings.warn(
+            "step_generate_lhs() is deprecated; use step_generate_samples(algo) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        algo = AlgorithmRegistry.get("lhs")
+        return self.step_generate_samples(algo)
 
     def step_apply_parameters(self, samples: list[SampleSpec]) -> SampleDict:
         """Fan-out: for each sample, produce a modified sim package.

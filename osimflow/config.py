@@ -61,6 +61,10 @@ class CampaignConfig:
     # N through steps 2-4. Skips GENERATE_LHS_SAMPLES (reuses existing
     # samples.json). Useful for debugging a specific failed sample.
     sample: int | None = None
+    # Sampling algorithm name (issue #121). Dispatched through
+    # AlgorithmRegistry.get(). Defaults to "lhs" for backward
+    # compatibility. Future options: "sobol", "morris", etc.
+    algorithm: str = "lhs"
 
     @property
     def work_dir(self) -> Path:
@@ -134,4 +138,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         weather_dir=str(args["weather_dir"]) if args.get("weather_dir") else "weather",
         dry_run=bool(args.get("dry_run", False)),
         sample=int(str(args["sample"])) if args.get("sample") is not None else None,
+        algorithm=str(args["algorithm"]) if args.get("algorithm") else "lhs",
     )

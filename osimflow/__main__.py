@@ -130,6 +130,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a .py file defining extract_kpis(...) (BYOS)",
     )
     run.add_argument("--log_level", default="INFO")
+    # Sampling algorithm (issue #121). Dispatched through AlgorithmRegistry.
+    run.add_argument(
+        "--algorithm",
+        default="lhs",
+        help=(
+            "Sampling algorithm to use (default: lhs). "
+            "Available algorithms are registered in AlgorithmRegistry."
+        ),
+    )
     # Optional MLflow integration (issue #7). When set, the campaign
     # logs params / metrics / artifacts to the configured tracking
     # server. When absent, the campaign runs without any mlflow import.

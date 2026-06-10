@@ -361,11 +361,13 @@ def test_mlflow_end_run_called_even_when_step_raises(
 
     # Patch one of the steps to raise mid-run. Campaign.run() must
     # propagate the exception AND still call end_run (via try/finally).
-    def _boom() -> None:
+    # The algorithm framework calls step_generate_samples, not
+    # step_generate_lhs, so patch the new method.
+    def _boom(*_: object, **__: object) -> None:
         raise RuntimeError("simulated LHS failure")
 
     monkeypatch_ = pytest.MonkeyPatch()
-    monkeypatch_.setattr(campaign, "step_generate_lhs", _boom)
+    monkeypatch_.setattr(campaign, "step_generate_samples", _boom)
     try:
         with pytest.raises(RuntimeError, match="simulated LHS failure"):
             campaign.run()
