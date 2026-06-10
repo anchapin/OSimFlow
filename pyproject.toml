@@ -18,7 +18,7 @@ keywords = [
     "building-energy",
     "parametric",
     "workflow",
-    "nextflow-alternative",
+    "scientific-campaigns",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

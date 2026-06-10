@@ -12,7 +12,7 @@ The framework foundation (a custom Python driver built on `submitit` for Slurm, 
 - [AI assistant guide (AGENTS.md)](AGENTS.md)
 - [Architecture decision record](.agents/results/architecture/0001-workflow-framework.md)
 - [Decision verdict (spike results)](.agents/results/decision-verdict.md)
-- [Monitoring decision (BYO vs Tower)](.agents/results/monitoring-decision.md)
+- [Monitoring decision (BYO `run.json`)](.agents/results/monitoring-decision.md)
 - [Contributing](docs/CONTRIBUTING.md) — *to be written*
 - [Governance](docs/GOVERNANCE.md) — *to be written*
 

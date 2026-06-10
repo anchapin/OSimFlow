@@ -5,7 +5,7 @@
 ### 1.1. Project Goal
 The **primary goal** of the OSimFlow MVP is to **generate a comprehensive and actionable plan for developing a Minimum Viable Product (MVP) that integrates OpenStudio CLI with a scalable, Python-native orchestration framework**. This integration aims to **enable scalable batch simulations across diverse computing environments (cloud and on-premise)**, incorporating essential pre-processing (e.g., Latin Hypercube Sampling) and post-processing functionalities for OpenStudio users.
 
-> **Note on the implementation language.** The PRD was originally written when the project intended to use Nextflow. After an architecture spike (see `.agents/results/decision-verdict.md` and `.agents/results/architecture/0001-workflow-framework.md`), the project switched to a custom Python driver. The product vision, target audience, and MVP scope in this PRD are unchanged; the architecture (§4) and technology stack (§4.3) sections have been updated to reflect the new foundation.
+> **Note on the implementation language.** The PRD was originally written when the project evaluated several workflow frameworks. After an architecture spike (see `.agents/results/decision-verdict.md` and `.agents/results/architecture/0001-workflow-framework.md`), the project settled on a custom Python driver. The product vision, target audience, and MVP scope in this PRD are unchanged; the architecture (§4) and technology stack (§4.3) sections have been updated to reflect the new foundation.
 
 > **Note on the OpenStudio CLI image source (ADR-0002, 2026-06-09).** §1.4, §3.2, and §5.2 below describe a project-owned `ghcr.io/osimflow/openstudio_cli_image:<version>` built by an in-repo CI/CD pipeline. In practice, NREL already publishes exactly that artifact on Docker Hub as `nrel/openstudio` (192+ tags, including every stable release 3.6.1 → 3.11.0). Per ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`), OSimFlow consumes the upstream image directly and owns no build pipeline. The product contract is unchanged — users still pin versions with `--openstudio_version` — but the implementation is now `docker.io/nrel/openstudio:<version>`. See `docs/openstudio-image-distribution.md` for the full rationale, supported version matrix, and break-glass plan.
 
@@ -18,10 +18,10 @@ OSimFlow addresses a **critical need within the OpenStudio user base**: enabling
 ### 1.4. Key Differentiators & Novelty (for MVP)
 OSimFlow is designed as a **foundational, community-driven open-source Python framework explicitly tailored for the building simulation domain**. Its novelty lies in its dedicated application, sophisticated integration, and domain-specific feature set. Key novel aspects for the MVP include:
 *   **User-Configurable OpenStudio CLI Versioning with Automated CI/CD**: Allows users to **specify the exact OpenStudio/EnergyPlus CLI version** for their simulations via a CLI parameter (`--openstudio_version`), supported by an **automated CI/CD pipeline building and tagging dedicated container images (`ghcr.io/osimflow/openstudio_cli_image:<version>`)**. This directly addresses a critical need for precise version control and reproducibility in building energy simulations.
-*   **Enhanced Failure Analysis and Domain-Specific Debugging**: Beyond generic Nextflow error handling, OSimFlow introduces a novel layer of domain-specific robustness. It will **generate a `failed_simulations.csv` that includes concise error summaries extracted from OpenStudio/EnergyPlus simulation logs** (e.g., "Severe Error: No solution found," "EnergyPlus crash") to provide actionable, context-aware debugging information.
+*   **Enhanced Failure Analysis and Domain-Specific Debugging**: OSimFlow introduces a novel layer of domain-specific robustness beyond generic workflow error handling. It will **generate a `failed_simulations.csv` that includes concise error summaries extracted from OpenStudio/EnergyPlus simulation logs** (e.g., "Severe Error: No solution found," "EnergyPlus crash") to provide actionable, context-aware debugging information.
 *   **Pre-flight Parameter Applicability Validation**: Beyond basic schema validation, the MVP includes a "pre-flight check" that validates if parameters specified in `variables.yml` are **actually applicable to the target `template_sim_package`** (e.g., ensuring a measure argument exists) before simulations begin. This **prevents invalid simulations from even starting**, saving significant compute time and frustration.
 *   **Enhanced Reproducibility Archiving of Critical Domain-Specific Data**: An optional `--archive_intermediates` flag will enable the publishing of **all campaign inputs** (`template_sim_package`, `variables.yml`) and **critical per-sample outputs** (modified `.osw/.osm` and `eplusout.sql` for debugging) to dedicated subdirectories. This provides **deep provenance** and explicit archiving of domain-specific critical files.
-*   **Intelligent Intermediate File Optimization**: Strategies implemented within processes to **minimize the data footprint of intermediate files** in the Nextflow work directory (e.g., deleting large `eplusout.err` if successful).
+*   **Intelligent Intermediate File Optimization**: Strategies implemented within processes to **minimize the data footprint of intermediate files** in the campaign work directory (e.g., deleting large `eplusout.err` if successful).
 
 ## 2. Target Audience
 
@@ -59,7 +59,7 @@ The Minimum Viable Product (MVP) for OSimFlow will **focus on delivering a robus
 ### 3.2. Out-of-Scope (Future Enhancements)
 
 *   Custom interactive dashboards or highly sophisticated, custom-explorable data visualization tools built *directly into OSimFlow*.
-*   Custom web-based UI for workflow submission or monitoring (beyond Nextflow Tower).
+*   Custom web-based UI for workflow submission or monitoring.
 *   Integration with advanced optimization algorithms (beyond sampling).
 *   First-class support for *all* esoteric OpenStudio CLI commands; the initial focus is on `openstudio.cli run`.
 *   Deep, first-class support for Azure Batch or PBS Pro (prioritized for future phases and community contribution; new executors can be added by subclassing `BaseExecutor` in `osimflow/executors/`).
@@ -69,7 +69,7 @@ The Minimum Viable Product (MVP) for OSimFlow will **focus on delivering a robus
 
 OSimFlow's architecture is a **custom Python driver** (`osimflow/campaign.py`) that owns a 6-step DAG of independent steps. Each step submits its work to a `BaseExecutor` (`osimflow/executors/`), which can target local threads, Slurm, AWS Batch, or any future substrate that conforms to the same `submit()` → `Handle` interface. Caching is explicit and SQLite-backed (`osimflow/cache.py`), with content-hashed keys covering inputs, code, and container digest.
 
-> **Why a custom driver, not Nextflow?** The architecture decision record at `.agents/results/architecture/0001-workflow-framework.md` documents the rationale. The empirical spike results in `.agents/results/decision-verdict.md` confirm the chosen path satisfies the §5.2 MVP acceptance criteria. The PRD scope, target audience, and MVP deliverables are unchanged by the framework choice.
+> **Why a custom driver?** The architecture decision record at `.agents/results/architecture/0001-workflow-framework.md` documents the rationale. The empirical spike results in `.agents/results/decision-verdict.md` confirm the chosen path satisfies the §5.2 MVP acceptance criteria. The PRD scope, target audience, and MVP deliverables are unchanged by the framework choice.
 
 ### 4.1. Core Workflow (`osimflow/campaign.py`)
 The `Campaign` class owns the 6-step DAG. Its `run()` method is the public entry point:
@@ -175,7 +175,7 @@ The completion of the MVP will be marked by **Phase 3: Multi-Environment Orchest
 ## 6. Potential Challenges & Considerations
 
 *   **Learning Curve**: The **potential steep learning curve for users unfamiliar with CLI tools** (especially those accustomed to GUIs) is a concern.
-    *   **Mitigation**: Comprehensive documentation strategy (User Guide, Developer Guides) and clear interfaces with example BYOS scripts. The custom Python driver removes the Nextflow DSL layer (which is the steepest part of the original learning curve) but does not eliminate the need for a User Guide.
+    *   **Mitigation**: Comprehensive documentation strategy (User Guide, Developer Guides) and clear interfaces with example BYOS scripts. The custom Python driver removes the DSL layer (which is the steepest part of competing workflow frameworks) but does not eliminate the need for a User Guide.
 *   **Community Engagement Uncertainty**: The inherent **uncertainty of community engagement** for a new open-source project is acknowledged.
     *   **Mitigation**: **GitHub-centric development** with **`CONTRIBUTING.md` and `GOVERNANCE.md`** defining the community engagement model will be established early.
 *   **Resource Allocation Guidance**: Strategy for defining per-step `cpus`, `memory_mb`, `time_min` and how these map to Slurm `submitit` parameters and Boto3 `containerOverrides` for AWS Batch needs to be expanded.

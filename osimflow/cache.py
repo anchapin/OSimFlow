@@ -1,8 +1,8 @@
 """SQLite-backed cache for OSimFlow campaign runs.
 
-The cache is the explicit equivalent of Nextflow's `-resume` / Snakemake's
-content-hash cache. It is ~120 lines on purpose: every invalidation rule
-must be reviewable, testable, and correct.
+The cache is an explicit, content-hash-based resume layer: every invalidation
+rule must be reviewable, testable, and correct. It is intentionally small
+(~120 lines) for that reason.
 
 Cache key shape (PRIMARY KEY):
     (step, sample_id, openstudio_version, inputs_sha256, code_sha256,

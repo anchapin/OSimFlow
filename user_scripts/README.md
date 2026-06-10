@@ -31,7 +31,7 @@ def apply(ctx: dict) -> dict:
             "osm_path":  Path,            # modified .osm file
             "osw_path":  Path,            # modified .osw file
             "extra":     list[Path],      # any additional files to bundle
-            "warnings":  list[str],       # non-fatal issues to surface in Tower
+            "warnings":  list[str],       # non-fatal issues to surface in run.json
         }
     """
 ```
