@@ -53,22 +53,13 @@ jobs:
       - name: Setup Python
         run: uv python install 3.12
 
-      - name: Cache ruff
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            ruff-${{ runner.os }}-
-
-      - name: Install ruff
-        run: uv pip install --system "ruff>=0.6"
-
       - name: ruff check
-        run: ruff check .
+        # uvx runs the tool in an isolated venv, so the system
+        # Python's PEP 668 "externally managed" marker is not an issue.
+        run: uvx "ruff>=0.6" check .
 
       - name: ruff format --check
-        run: ruff format --check .
+        run: uvx "ruff>=0.6" format --check .
 
   typecheck:
     name: typecheck (mypy --strict)
@@ -165,13 +156,19 @@ jobs:
           uv pip install --python .venv/bin/python "pip-audit>=2.7"
 
       - name: Audit dependencies
-        # pip-audit scans the *installed* package set in .venv and looks
-        # each one up against the OSV / PyPA advisory database. `--strict`
-        # exits non-zero on any confirmed vulnerability, failing the job.
-        # If a transitive dep gets flagged, fix it by bumping the bound
-        # in pyproject.toml or pinning the dep in the lockfile.
+        # pip-audit scans the *installed* package set and looks each one
+        # up against the OSV / PyPA advisory database. We freeze the
+        # venv (excluding the local `osimflow` editable install, which
+        # has no PyPI metadata to audit) and audit that requirement
+        # set. `--strict` exits non-zero on any confirmed vulnerability,
+        # failing the job. If a transitive dep gets flagged, fix it by
+        # bumping the bound in pyproject.toml.
         run: |
-          .venv/bin/pip-audit --strict
+          .venv/bin/pip freeze --exclude-editable > /tmp/requirements.txt
+          echo "::group::Audited dependency set:"
+          cat /tmp/requirements.txt
+          echo "::endgroup::"
+          .venv/bin/pip-audit -r /tmp/requirements.txt --strict
           echo "::notice::pip-audit found no known vulnerabilities."
 
   test:
