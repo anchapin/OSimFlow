@@ -40,6 +40,9 @@ def main() -> int:
         config = yaml.safe_load(f)
     variables = config.get("variables", [])
     if not variables:
+        for i in range(args.n_samples):
+            param_file = args.out.parent / f"{i+1:04d}.params.json"
+            param_file.write_text(json.dumps({}, indent=2))
         args.out.write_text(json.dumps({"n_samples": args.n_samples, "variables": [], "samples": [{"sample_id": f"{i+1:04d}", "values": {}} for i in range(args.n_samples)]}, indent=2))
         return 0
 

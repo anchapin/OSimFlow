@@ -91,6 +91,7 @@ def main() -> int:
                 kpis.update(custom_kpis)
             else:
                 log.error(f"Custom extractor returned {type(custom_kpis)}, expected dict.")
+                return 1
         except Exception as e:
             log.error(f"Custom extractor failed: {e}", exc_info=True)
             return 1
