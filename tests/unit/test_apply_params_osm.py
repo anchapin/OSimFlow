@@ -593,9 +593,7 @@ class TestApplyOsmMutation:
 # ---------------------------------------------------------------------------
 
 _HAS_OPENSTUDIO = os.environ.get("OSIMFLOW_HAS_OPENSTUDIO", "0") == "1"
-_skip_reason = (
-    "Set OSIMFLOW_HAS_OPENSTUDIO=1 and install openstudio bindings to run"
-)
+_skip_reason = "Set OSIMFLOW_HAS_OPENSTUDIO=1 and install openstudio bindings to run"
 
 
 @pytest.mark.skipif(not _HAS_OPENSTUDIO, reason=_skip_reason)
