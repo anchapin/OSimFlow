@@ -162,8 +162,9 @@ The completion of the MVP will be marked by **Phase 3: Multi-Environment Orchest
 **Enable robust execution on prioritized cloud/on-premise platforms, support OpenStudio version selection, and refine overall robustness and documentation**.
 
 ### 5.2. Phase 3 Deliverables
-*   **Comprehensive executor adapters** (`osimflow/executors/`): `LocalExecutor` (done), `SlurmExecutor` (real-Slurm wiring, not just debug), `AWSBatchExecutor` (boto3 wiring).
-*   **Detailed deployment guides for AWS and Slurm** (setup of S3, AWS Batch CE/Queue, ECR, Slurm partition, `submitit` job logs).
+*   **Comprehensive executor adapters** (`osimflow/executors/`): `LocalExecutor` (done), `SlurmExecutor` (real-Slurm wiring, not just debug), `AWSBatchExecutor` (boto3 wiring), `NomadExecutor` (HashiCorp Nomad batch scheduler, stdlib HTTP — issue #27).
+*   **Detailed deployment guides for AWS, Slurm, and Nomad** (setup of S3, AWS Batch CE/Queue, ECR, Slurm partition, `submitit` job logs, Nomad cluster with Docker task driver and shared storage).
+*   **Nomad cluster requirements**: A Nomad cluster running v1.3+ with the Docker task driver enabled on all client nodes. Shared storage (NFS, MinIO, or similar) is recommended for passing seed models and collecting per-sample artifacts (`eplusout.sql`, KPI JSONs). The `NOMAD_ADDR` environment variable must point to an active Nomad server; `NOMAD_TOKEN` is used for ACL authentication. No additional Python dependencies are required beyond the standard library.
 *   **Automated CI/CD for at least two pre-built OpenStudio CLI image versions** (currently 3.7.0, 3.8.0, 3.9.0, 3.10.0, 3.11.0) available via `nrel/openstudio` on Docker Hub. Resolved per `docs/openstudio-image-distribution.md`; OSimFlow owns no image-build pipeline.
 *   **Implementation of `--openstudio_version` CLI parameter functionality** to dynamically select the container image tag in `step_run_openstudio_sim` (already done in the foundation — verify under real container).
 *   **Comprehensive end-to-end integration tests** for execution across local, docker, aws_batch, and slurm profiles, verifying output integrity.

@@ -53,6 +53,7 @@ dev = [
 aws = [
     "boto3>=1.28",
 ]
+nomad = []  # stdlib-only HTTP; empty marker for requirements.txt documentation
 slurm = [
     "submitit>=1.5",
 ]
