@@ -5,37 +5,72 @@
 > onboarding, governance entry point, and PR-review checklist.
 
 OSimFlow welcomes contributions from OpenStudio users, energy modelers,
-researchers, and the broader Python+building-energy community. This
-document covers how to propose, develop, and review a change.
+researchers, and the broader Python+building-energy community. Whether
+you are fixing a typo, adding a new executor, or proposing a new
+simulation workflow, we are glad to have you.
+
+**Project philosophy.** OSimFlow is a community-driven framework. We
+prioritise reproducibility, transparent orchestration, and a clean
+separation between the campaign driver and the per-sample work. Every
+change should make it easier for the next person to run a parametric
+study without writing bespoke glue code.
 
 ---
 
-## 1. Development environment
+## 1. Prerequisites
+
+| Requirement | Minimum version | Notes |
+|---|---|---|
+| Python | 3.12+ | The package uses 3.12-only syntax. |
+| git | 2.x | For version control and worktree-based workflows. |
+| Docker | optional | Needed only if you want to test against the real `openstudio.cli` inside the `nrel/openstudio` container. Most development uses the built-in stub mode. |
+| make | GNU or BSD | The `Makefile` is the canonical developer entry point. |
+
+---
+
+## 2. Development environment
 
 Quick setup (5 min):
 
 ```bash
-git clone https://github.com/anchapin/OSimFlow.git
+# Fork the repo on GitHub, then:
+git clone https://github.com/<your-username>/OSimFlow.git
 cd OSimFlow
 python -m pip install -e ".[dev,aws,slurm]"
 pre-commit install
+```
+
+For the minimal install (local executor only, no Slurm/Boto3):
+
+```bash
+pip install -e .
+```
+
+For optional MLflow integration:
+
+```bash
+pip install -e ".[mlflow]"
 ```
 
 Detailed commands and the day-to-day workflow live in
 [`DEVELOPMENT.md`](DEVELOPMENT.md). The TL;DR:
 
 ```bash
+make help       # list all targets
+make install    # pip install -e ".[dev,aws,slurm]"
 make lint       # ruff check
-make format     # ruff format + black
+make format     # ruff format
 make typecheck  # mypy --strict osimflow/
 make test       # full pytest suite
+make test-cov   # pytest with 85% coverage gate
+make test-fast  # contract + unit only (pre-commit mirror)
 make contract   # tools/check_agents_contract.py + tools/check_docs_sync.py
 make precommit  # the pre-push safety net
 ```
 
 ---
 
-## 2. Coding standards
+## 3. Coding standards
 
 Mirror the rules in [`../AGENTS.md`](../AGENTS.md) §6. Highlights:
 
@@ -51,7 +86,7 @@ runs the same checks on every commit.
 
 ---
 
-## 3. Branch & commit conventions
+## 4. Branch & commit conventions
 
 ### Branch naming
 
@@ -100,7 +135,7 @@ re-run the step.
 
 ---
 
-## 4. Pull request process
+## 5. Pull request process
 
 ### Before opening
 
@@ -146,7 +181,7 @@ If a docs change is intentionally deferred, write `// docs: skip —
 
 ---
 
-## 5. Adding a new OpenStudio CLI version
+## 6. Adding a new OpenStudio CLI version
 
 When a new OpenStudio CLI version is released upstream on Docker Hub
 (`nrel/openstudio`), advertise it in OSimFlow. This is a docs +
@@ -168,7 +203,45 @@ No image build is required: OSimFlow consumes the upstream
 
 ---
 
-## 6. Community channels
+## 7. Reporting issues
+
+Found a bug? Have a question?
+
+1. **Search existing issues** to avoid duplicates.
+2. **Open a new issue** at <https://github.com/anchapin/OSimFlow/issues/new>.
+3. Use the appropriate template:
+   - **Bug report** — include OS, Python version, `osimflow --version`,
+     a minimal repro, and the full traceback.
+   - **Question / support** — describe what you are trying to do, what
+     you expected, and what happened instead.
+
+Good bug reports include the exact CLI invocation, the contents of
+`run.json` (if a campaign ran partially), and the relevant
+`stdout.log` / `stderr.log` from the failed sample.
+
+---
+
+## 8. Proposing features
+
+Feature ideas are welcome. To propose one:
+
+1. **Open a Discussion** on GitHub (preferred for early-stage ideas) or
+   an issue with the `enhancement` label.
+2. Describe the **use case** — what building-energy workflow does this
+   enable?
+3. Outline the **proposed interface** — new CLI flag? New `bin/*.py`
+   script? New executor class? See [`../AGENTS.md`](../AGENTS.md) §9
+   for the task-routing table.
+4. A maintainer will respond within ~5 working days to discuss scope
+   and next steps.
+
+For large changes (new executor, new DAG step, breaking API change),
+the maintainer may request an RFC-style write-up. See
+[`GOVERNANCE.md`](GOVERNANCE.md) for the decision-making process.
+
+---
+
+## 9. Community channels
 
 - **GitHub Issues** — bugs, feature requests, design proposals.
 - **GitHub Discussions** — questions, ideas, show-and-tell.
@@ -177,7 +250,7 @@ No image build is required: OSimFlow consumes the upstream
 
 ---
 
-## 7. License
+## 10. License
 
 By contributing, you agree that your contributions will be licensed
 under the [MIT License](../LICENSE).
