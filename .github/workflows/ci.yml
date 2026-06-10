@@ -175,9 +175,11 @@ jobs:
         # by bumping the bound in pyproject.toml.
         run: |
           uv pip freeze --python .venv/bin/python > /tmp/requirements.txt
-          # Filter out the local `osimflow` editable entry (it's a
-          # 0.1.0.dev0 that has no PyPI metadata to audit).
-          grep -v "^osimflow==" /tmp/requirements.txt > /tmp/requirements-filtered.txt || true
+          # Filter out the local `osimflow` editable entry. `uv pip freeze`
+          # renders editable installs as `-e file:///path/to/repo`, and
+          # `pip freeze` renders them as `-e git+https://...#egg=osimflow`.
+          # Both are local; neither has PyPI metadata to audit.
+          grep -vE '^(osimflow==|-e .*(#egg=osimflow|/OSimFlow)(\s|$))' /tmp/requirements.txt > /tmp/requirements-filtered.txt || true
           echo "::group::Audited dependency set:"
           cat /tmp/requirements-filtered.txt
           echo "::endgroup::"
