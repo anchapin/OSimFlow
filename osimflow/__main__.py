@@ -16,9 +16,7 @@ After `pip install -e .`, also available as:
 import argparse
 import logging
 import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
 
 from osimflow import (
     AWSBatchExecutor,
@@ -30,32 +28,7 @@ from osimflow import (
     SlurmExecutor,
     load_config,
 )
-
-
-def _load_user_function(path: Path) -> Callable[..., Any]:
-    """BYOS loader: import a user .py file and return its `apply_parameters`
-    or `extract_kpis` function.
-
-    The function signature is the entire contract — no separate CLI
-    surface to maintain. `inspect.signature` is the validator.
-    """
-    # Lazy import: only the BYOS path pays the importlib.util cost.
-    import importlib.util  # noqa: PLC0415
-
-    spec = importlib.util.spec_from_file_location(f"user_{path.stem}", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    for candidate in ("apply_parameters", "extract_kpis"):
-        candidate_obj = getattr(mod, candidate, None)
-        if callable(candidate_obj):
-            # Cast: get_type_hints() at call site, but for the loader we
-            # trust the BYOS contract; mypy can't prove the module's attr.
-            return cast(Callable[..., Any], candidate_obj)
-    raise AttributeError(
-        f"User script {path} must define `apply_parameters(...)` or `extract_kpis(...)`."
-    )
+from osimflow.byos import load_user_function
 
 
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:
@@ -180,10 +153,10 @@ def main(argv: list[str] | None = None) -> int:
     cfg: CampaignConfig = load_config(vars(args))
     executor = _build_executor(args)
     apply_fn = (
-        _load_user_function(Path(args.custom_apply_script)) if args.custom_apply_script else None
+        load_user_function(Path(args.custom_apply_script)) if args.custom_apply_script else None
     )
     extract_fn = (
-        _load_user_function(Path(args.custom_kpi_extractor)) if args.custom_kpi_extractor else None
+        load_user_function(Path(args.custom_kpi_extractor)) if args.custom_kpi_extractor else None
     )
     campaign = Campaign(cfg, executor, apply_fn=apply_fn, extract_fn=extract_fn)
     try:

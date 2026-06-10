@@ -9,48 +9,47 @@ default OSimFlow behavior. A script here is selected via a CLI flag such as
 > (PRD §5.2 / §3.1 *User-Provided Custom Post-Processing Scripts*). This file
 > is a placeholder for the final spec.
 
+## Function-name convention
+
+BYOS scripts must define a function named **`apply_parameters`** (for
+parameter-application overrides) or **`extract_kpis`** (for KPI extraction
+overrides). The function-name `apply` (legacy) is accepted but emits a
+`DeprecationWarning`.
+
+The canonical loader is `osimflow.byos.load_user_function`.
+
 ## Planned interface (sketch)
 
 ### `apply_params_to_model` override
 
 ```python
-def apply(ctx: dict) -> dict:
-    """Modify a copy of the template model according to `ctx['parameters']`.
+def apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path) -> Path:
+    """Modify a copy of the template model according to `parameters`.
 
     Args:
-        ctx: {
-            "template_dir": Path,         # template_sim_package contents
-            "parameters":   dict,         # {var_name: sampled_value, ...}
-            "sample_id":    str,          # e.g. "0001"
-            "openstudio":   module,       # imported `openstudio` Python bindings
-        }
+        template:  Path to the template_sim_package (.osm, .osw, or directory).
+        parameters: dict mapping variable names to sampled values.
+        sample_id:  the sample's identifier, e.g. "0001".
+        out:        per-sample output directory.
 
     Returns:
-        A dict describing what to write into the per-sample directory, e.g.:
-        {
-            "osm_path":  Path,            # modified .osm file
-            "osw_path":  Path,            # modified .osw file
-            "extra":     list[Path],      # any additional files to bundle
-            "warnings":  list[str],       # non-fatal issues to surface in run.json
-        }
+        The per-sample output directory (``out``).
     """
 ```
 
 ### `extract_kpis` override
 
 ```python
-def extract(ctx: dict) -> dict:
+def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     """Compute KPIs from one sample's simulation output.
 
     Args:
-        ctx: {
-            "sample_id":     str,
-            "simulation_dir": Path,       # contains eplusout.sql, report.csv, etc.
-            "openstudio":    module,      # openstudio Python bindings (if available)
-        }
+        simulation_dir: contains eplusout.sql, report.csv, etc.
+        sample_id:      the sample's identifier, e.g. "0001".
+        out:            output directory for the KPI JSON file.
 
     Returns:
-        A flat dict of {kpi_name: value, ...}. Values must be JSON-serializable.
+        Path to the written KPI JSON file.
     """
 ```
 
