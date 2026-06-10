@@ -67,6 +67,11 @@ class SampleTrace:
     extract_exit_code: int = 0
     eplusout_sql: str | None = None  # path if produced
     error_summary: str | None = None
+    # Per-sample log file paths (issue #6). Always populated for samples
+    # that ran RUN_OPENSTUDIO_SIM; both files are created (possibly empty)
+    # by the Campaign before the executor runs the work function.
+    stdout_log: str | None = None
+    stderr_log: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
