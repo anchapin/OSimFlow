@@ -4,8 +4,7 @@ Three always-on pieces (per `.agents/results/monitoring-decision.md`):
 
   1. `RunTrace` collects per-step + per-sample metrics and writes a single
      `run.json` to `${outdir}/run.json` at the end of the campaign.
-     Schema is documented in `docs/monitoring-schema.md` (to be written
-     alongside the first MVP release).
+     Schema is documented in `docs/monitoring-schema.md`.
 
   2. `tqdm` progress bar for terminal users. Soft-dependency: if tqdm
      is not installed, the progress hook degrades to a logger.info
