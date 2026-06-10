@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +17,190 @@ import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("aggregate_results")
+
+
+# ---------------------------------------------------------------------------
+# Error classification patterns (issue #56)
+# ---------------------------------------------------------------------------
+# Each entry maps an EnergyPlus error category to a list of regex patterns.
+# The first matching category wins. Order matters: more specific patterns
+# should come before more general ones.
+
+FAILURE_PATTERNS: list[tuple[str, list[re.Pattern[str]]]] = [
+    (
+        "convergence",
+        [
+            re.compile(r"did not converge", re.IGNORECASE),
+            re.compile(r"exceeded max iterations", re.IGNORECASE),
+            re.compile(r"not converged", re.IGNORECASE),
+            re.compile(r"iteration.?limit", re.IGNORECASE),
+        ],
+    ),
+    (
+        "surface_geometry",
+        [
+            re.compile(r"surface.*(?:intersection|non.convex)", re.IGNORECASE),
+            re.compile(r"non.convex\s*surface", re.IGNORECASE),
+            re.compile(r"zero.area\s*surface", re.IGNORECASE),
+            re.compile(r"surfaceless\s*zone", re.IGNORECASE),
+            re.compile(r"detected.*zero.area", re.IGNORECASE),
+        ],
+    ),
+    (
+        "hvac_sizing",
+        [
+            re.compile(r"autosize.*(?:failed|out.of.range)", re.IGNORECASE),
+            re.compile(r"plant\s*loop.*(?:not.converged|no.demand|no.load)", re.IGNORECASE),
+            re.compile(r"no\s*load\s*on\s*plant\s*loop", re.IGNORECASE),
+            re.compile(r"sizing.*(?:failed|error)", re.IGNORECASE),
+        ],
+    ),
+    (
+        "schedule",
+        [
+            re.compile(r"schedule.*(?:not.found|invalid|does not exist)", re.IGNORECASE),
+            re.compile(r"(?:missing|unknown)\s*schedule", re.IGNORECASE),
+        ],
+    ),
+    (
+        "material_construction",
+        [
+            re.compile(r"material.*(?:not.found|does not exist)", re.IGNORECASE),
+            re.compile(r"construction.*(?:not.found|does not exist|invalid)", re.IGNORECASE),
+            re.compile(r"(?:missing|unknown)\s*(?:material|construction)", re.IGNORECASE),
+        ],
+    ),
+    (
+        "weather_file",
+        [
+            re.compile(r"weather\s*file.*(?:error|not.found|invalid|missing)", re.IGNORECASE),
+            re.compile(r"cannot\s*(?:open|find|read).*\.epw", re.IGNORECASE),
+        ],
+    ),
+    (
+        "memory_timeout",
+        [
+            re.compile(r"(?:allocation|memory).*error", re.IGNORECASE),
+            re.compile(r"timeout", re.IGNORECASE),
+            re.compile(r"out\s*of\s*memory", re.IGNORECASE),
+        ],
+    ),
+    (
+        "timestep_instability",
+        [
+            re.compile(r"temperatures?\s*out\s*of\s*bounds?", re.IGNORECASE),
+            re.compile(r"node.*temperature\s*out\s*of\s*range", re.IGNORECASE),
+            re.compile(r"facsimile.*failed", re.IGNORECASE),
+            re.compile(r"timestep.*(?:unstable|error)", re.IGNORECASE),
+        ],
+    ),
+]
+
+CATEGORY_SUGGESTIONS: dict[str, str] = {
+    "convergence": "Consider increasing iteration limits or relaxing convergence tolerances in the HVAC controller settings.",
+    "surface_geometry": "Simplify geometry or fix non-convex surfaces. Check for coincident/overlapping surfaces.",
+    "hvac_sizing": "Review autosizing parameters or provide manual sizing values. Verify design-day definitions.",
+    "schedule": "Check schedule names in the model match those referenced by objects (e.g., thermostat, lights).",
+    "material_construction": "Verify all materials and constructions are defined and referenced correctly in the model.",
+    "weather_file": "Verify the EPW weather file exists, is readable, and has the expected format.",
+    "memory_timeout": "Reduce model complexity or increase available compute resources (memory/timestep count).",
+    "timestep_instability": "Reduce the simulation timestep (e.g., from 60 to 10 minutes) or relax convergence criteria.",
+    "generic_severe": "Review the full eplusout.err for additional context around this error.",
+}
+
+
+def _count_severe_errors(err_path: Path) -> int:
+    """Count total severe error lines in an EnergyPlus error file."""
+    count = 0
+    try:
+        with err_path.open() as f:
+            for line in f:
+                if "  * Severe" in line or "** Severe" in line:
+                    count += 1
+    except (OSError, UnicodeDecodeError):
+        log.warning("Could not read error file for counting: %s", err_path)
+    return count
+
+
+def _find_root_cause_line(err_path: Path) -> str:
+    """Find the earliest root-cause line from an EnergyPlus error file.
+
+    Scans the .err file for the first line matching a known failure pattern.
+    Falls back to the first Severe Error line if no pattern matches.
+
+    Returns:
+        The stripped root-cause line, or empty string if not found.
+    """
+    first_severe = ""
+    try:
+        with err_path.open() as f:
+            for line in f:
+                stripped = line.strip()
+                if not first_severe and ("  * Severe" in line or "** Severe" in line):
+                    first_severe = stripped
+                for _cat, patterns in FAILURE_PATTERNS:
+                    for pat in patterns:
+                        if pat.search(stripped):
+                            return stripped
+    except (OSError, UnicodeDecodeError):
+        log.warning("Could not read error file for root cause: %s", err_path)
+    return first_severe
+
+
+def _classify_line(line: str) -> str:
+    """Classify an error line into a failure category.
+
+    Args:
+        line: The error line text (typically the first Severe Error).
+
+    Returns:
+        Category string (e.g., "convergence", "generic_severe").
+    """
+    for category, patterns in FAILURE_PATTERNS:
+        for pat in patterns:
+            if pat.search(line):
+                return category
+    return "generic_severe"
+
+
+def diagnose_error(error_line: str, err_file_path: Path) -> dict:
+    """Diagnose an EnergyPlus error with domain-aware categorization.
+
+    Takes the severe error line and the full .err file path, categorizes
+    the error, and returns actionable guidance.
+
+    Args:
+        error_line: The first severe error line from eplusout.err.
+        err_file_path: Path to the eplusout.err file for additional context.
+
+    Returns:
+        Dict with keys: category, summary, suggestion, severity,
+        total_severe_errors, root_cause_line.
+    """
+    try:
+        category = _classify_line(error_line)
+        total_severe = _count_severe_errors(err_file_path)
+        root_cause = _find_root_cause_line(err_file_path)
+        suggestion = CATEGORY_SUGGESTIONS.get(category, CATEGORY_SUGGESTIONS["generic_severe"])
+
+        return {
+            "category": category,
+            "summary": error_line[:500],
+            "suggestion": suggestion,
+            "severity": "critical" if total_severe > 10 else "high",
+            "total_severe_errors": total_severe,
+            "root_cause_line": root_cause[:500] if root_cause else error_line[:500],
+        }
+    except Exception:
+        log.warning("Error diagnosis failed for %s", err_file_path, exc_info=True)
+        return {
+            "category": "generic_severe",
+            "summary": error_line[:500],
+            "suggestion": CATEGORY_SUGGESTIONS["generic_severe"],
+            "severity": "high",
+            "total_severe_errors": 0,
+            "root_cause_line": error_line[:500],
+        }
 
 
 def parse_kpi_json(kpi_path: Path) -> dict:
@@ -31,27 +216,41 @@ def parse_kpi_json(kpi_path: Path) -> dict:
 
 
 def extract_failure(sim_dir: Path) -> dict | None:
-    # First look at eplusout.err
     err_path = sim_dir / "eplusout.err"
     err_summary = None
     if err_path.exists() and err_path.stat().st_size > 0:
-        with err_path.open() as f:
-            for line in f:
-                if "  * Severe" in line or "** Severe" in line:
-                    err_summary = line.strip()
-                    break
+        try:
+            with err_path.open() as f:
+                for line in f:
+                    if "  * Severe" in line or "** Severe" in line:
+                        err_summary = line.strip()
+                        break
+        except (OSError, UnicodeDecodeError):
+            log.warning("Could not read error file: %s", err_path)
 
-    # We cannot reliably get exit_code from inside this script because
-    # it's the executor/work.py that ran the openstudio.cli
-    # But if there's an error summary or no sql file, we consider it failed
     sql_path = sim_dir / "eplusout.sql"
     if err_summary or not sql_path.exists():
-        return {
+        diagnosis: dict | None = None
+        if err_summary and err_path.exists():
+            diagnosis = diagnose_error(err_summary, err_path)
+
+        result = {
             "sample_id": sim_dir.name,
             "error_summary": err_summary or "eplusout.sql missing",
             "exit_code": 1 if err_summary or not sql_path.exists() else 0,
             "log_path": str(err_path) if err_path.exists() else "",
         }
+        if diagnosis:
+            result["failure_category"] = diagnosis["category"]
+            result["root_cause_line"] = diagnosis["root_cause_line"]
+            result["total_severe_errors"] = diagnosis["total_severe_errors"]
+            result["diagnosis_suggestion"] = diagnosis["suggestion"]
+        else:
+            result["failure_category"] = ""
+            result["root_cause_line"] = ""
+            result["total_severe_errors"] = 0
+            result["diagnosis_suggestion"] = ""
+        return result
     return None
 
 
@@ -89,7 +288,6 @@ def main() -> int:
                 baseline_val = baseline_row[col]
                 if pd.notna(baseline_val) and baseline_val != 0:
                     improvement_col = f"{col}_pct_improvement"
-                    # Negative improvement = better than baseline (lower EUI = better)
                     df[improvement_col] = ((baseline_val - df[col]) / baseline_val * 100.0).round(2)
             log.info(
                 "computed baseline comparison columns against sample_id=%s",
@@ -100,7 +298,6 @@ def main() -> int:
         if args.out_parquet:
             df.to_parquet(args.out_parquet, index=False)
     else:
-        # Empty DataFrame fallback
         df = pd.DataFrame(columns=["sample_id"])
         df.to_csv(args.out_csv, index=False)
         if args.out_parquet:
@@ -116,15 +313,26 @@ def main() -> int:
 
     if failures:
         fail_df = pd.DataFrame(failures)
-        # Ensure column order
-        cols = ["sample_id", "error_summary", "exit_code", "log_path"]
+        cols = [
+            "sample_id",
+            "failure_category",
+            "root_cause_line",
+            "total_severe_errors",
+            "error_summary",
+            "exit_code",
+            "log_path",
+            "diagnosis_suggestion",
+        ]
         for c in cols:
             if c not in fail_df.columns:
                 fail_df[c] = None
         fail_df = fail_df[cols]
         fail_df.to_csv(args.out_failed, index=False)
     else:
-        args.out_failed.write_text("sample_id,error_summary,exit_code,log_path\n")
+        args.out_failed.write_text(
+            "sample_id,failure_category,root_cause_line,total_severe_errors,"
+            "error_summary,exit_code,log_path,diagnosis_suggestion\n"
+        )
 
     return 0
 
