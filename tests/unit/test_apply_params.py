@@ -533,7 +533,10 @@ class TestPreflightFuzzyMatch:
         """Fuzzy matching can suggest dotted names from the available keys."""
         mappings = {
             "SetEnvelopePerformance.wwr": MappedParameter(
-                name="wwr", kind="measure_argument", step_index=0, measure_name="SetEnvelopePerformance"
+                name="wwr",
+                kind="measure_argument",
+                step_index=0,
+                measure_name="SetEnvelopePerformance",
             ),
         }
         with pytest.raises(UnmappedParameterError, match="Did you mean") as exc_info:
@@ -543,9 +546,7 @@ class TestPreflightFuzzyMatch:
     def test_error_message_starts_with_banner(self) -> None:
         """Error message starts with the banner for clear visibility."""
         mappings = {
-            "x": MappedParameter(
-                name="x", kind="measure_argument", step_index=0, measure_name="M"
-            )
+            "x": MappedParameter(name="x", kind="measure_argument", step_index=0, measure_name="M")
         }
         with pytest.raises(UnmappedParameterError) as exc_info:
             preflight_check({"bad_name": 1.0}, mappings)

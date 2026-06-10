@@ -594,8 +594,7 @@ def preflight_check(
                     )
             lines.append("")
         lines.append(
-            "Fix the variable names in variables.yml or extend the "
-            "template to expose them."
+            "Fix the variable names in variables.yml or extend the template to expose them."
         )
         raise UnmappedParameterError("\n".join(lines))
     # Detect ambiguous plain names.
