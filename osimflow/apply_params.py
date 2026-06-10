@@ -96,7 +96,11 @@ class MappedParameter:
         kind: "attribute" (from .osm) or "measure_argument" (from .osw).
         default: the value present in the template, if any.
         step_index: for .osw arguments, which step they live in (0-based).
-            ``None`` for .osm attributes.
+            Resolved by matching the ``measure_dir_name`` field in the
+            .osw step object. ``None`` for .osm attributes.
+        measure_name: for .osw arguments, the ``measure_dir_name`` of
+            the step this argument belongs to.  ``None`` for .osm
+            attributes.
         object_type: for .osm attributes that use dotted notation
             (e.g. ``SpaceType_Office.lighting_power_density``), the
             OpenStudio object type (e.g. ``"SpaceType"``).
@@ -110,6 +114,7 @@ class MappedParameter:
     kind: str  # "attribute" | "measure_argument"
     default: Any = None
     step_index: int | None = None
+    measure_name: str | None = None
     object_type: str | None = None
     object_name: str | None = None
 
@@ -119,6 +124,14 @@ class UnmappedParameterError(ValueError):
 
     The error message lists every unmapped name so the user can fix
     variables.yml in one pass.
+    """
+
+
+class AmbiguousParameterError(ValueError):
+    """Raised when a plain argument name matches multiple measures.
+
+    The error message lists which measures share the argument name and
+    suggests the dotted ``MeasureName.argument_name`` form.
     """
 
 
@@ -520,7 +533,17 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
     """Parse an .osw file and return a name→MappedParameter map for all
     measure arguments across all steps.
 
-    The .osw format is JSON: ``{"steps": [{"arguments": {name: value}}]}``.
+    The .osw format is JSON: ``{"steps": [{"measure_dir_name": "...",
+    "arguments": {name: value}}]}``.
+
+    Two key behaviours:
+
+    1. **Dotted-name keys** — for each argument we also register the
+       qualified form ``MeasureName.argument_name`` so that users can
+       disambiguate via ``variables.yml``.
+    2. **First-match for plain names** — if two steps expose the same
+       argument name, the *first* step wins in the plain-key entry.
+       Use the dotted form to target a specific measure.
     """
     try:
         data = json.loads(template.read_text())
@@ -529,15 +552,25 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
     result: dict[str, MappedParameter] = {}
     for step_idx, step in enumerate(data.get("steps", [])):
         arguments = step.get("arguments", {})
-        for name, default in arguments.items():
-            # Last-wins on name collision across steps; the user can
-            # disambiguate via a future step_name.name convention.
-            result[str(name)] = MappedParameter(
-                name=str(name),
+        # Resolve the measure name from measure_dir_name or name field.
+        measure_name = step.get("measure_dir_name") or step.get("name") or ""
+        for arg_name, default in arguments.items():
+            param = MappedParameter(
+                name=str(arg_name),
                 kind="measure_argument",
                 default=default,
                 step_index=step_idx,
+                measure_name=str(measure_name) if measure_name else None,
             )
+            # Plain name: first-match wins.
+            plain_key = str(arg_name)
+            if plain_key not in result:
+                result[plain_key] = param
+            # Dotted name: always registered (no collision possible;
+            # each measure+arg pair is unique).
+            if measure_name:
+                dotted_key = f"{measure_name}.{arg_name}"
+                result[dotted_key] = param
     return result
 
 
@@ -548,10 +581,19 @@ def preflight_check(
     parameters: dict[str, Any],
     mappings: dict[str, MappedParameter],
 ) -> None:
-    """Raise UnmappedParameterError if any LHS variable is not in mappings.
+    """Raise if any LHS variable is not in mappings or is ambiguous.
 
-    The error message lists every unmapped name so the user can fix
-    variables.yml in one pass.
+    Two checks run in sequence:
+
+    1. **Unmapped** — every key in *parameters* must appear in
+       *mappings* (either as a plain name or a dotted name).
+    2. **Ambiguous** — a plain argument name that maps to a measure
+       argument but the .osw contains *multiple* measures that expose
+       the same argument name is rejected.  The user must use the
+       dotted ``MeasureName.argument_name`` form instead.
+
+    The error message lists every problematic name so the user can fix
+    ``variables.yml`` in one pass.
     """
     unmapped = sorted(name for name in parameters if name not in mappings)
     if unmapped:
@@ -561,6 +603,63 @@ def preflight_check(
             + ", ".join(unmapped)
             + ". Fix the variable names in variables.yml or extend the "
             "template to expose them."
+        )
+    # Detect ambiguous plain names.
+    # An ambiguous name is a *plain* (non-dotted) parameter key whose
+    # mapping is a measure_argument AND whose argument name appears in
+    # more than one step's arguments in the same .osw. The caller must
+    # disambiguate by switching to the dotted form.
+    _check_ambiguous_parameters(parameters, mappings)
+
+
+def _check_ambiguous_parameters(
+    parameters: dict[str, Any],
+    mappings: dict[str, MappedParameter],
+) -> None:
+    """Detect plain argument names that are ambiguous across measures.
+
+    Builds a reverse index from *all* dotted keys in mappings to discover
+    which plain argument names appear in multiple measures. A plain
+    argument name is ambiguous if it has dotted keys pointing to >1
+    distinct measure_name.
+
+    Only checks keys that appear in *parameters* — we don't warn about
+    names the user isn't actually varying.
+    """
+    # Collect which measure_names carry each plain argument name.
+    # We scan ALL dotted keys (not plain keys) because plain keys were
+    # first-match-wins — only dotted keys expose every (measure, arg) pair.
+    arg_to_measures: dict[str, set[str]] = {}
+    for key, mapping in mappings.items():
+        if mapping.kind != "measure_argument":
+            continue
+        if mapping.measure_name is None:
+            continue
+        # Only consider dotted keys — they carry the full (measure, arg)
+        # pair. Plain keys are first-match-wins and don't reveal the
+        # collision.
+        if "." not in key:
+            continue
+        # Extract the plain argument name from "MeasureName.arg"
+        _, _, plain_arg = key.rpartition(".")
+        if plain_arg:
+            arg_to_measures.setdefault(plain_arg, set()).add(mapping.measure_name)
+
+    ambiguous: list[str] = []
+    for name in parameters:
+        if "." in name:
+            continue  # dotted form is already disambiguated
+        measures = arg_to_measures.get(name)
+        if measures is not None and len(measures) > 1:
+            ambiguous.append(f"  {name} — shared by: {', '.join(sorted(measures))}")
+
+    if ambiguous:
+        raise AmbiguousParameterError(
+            "Pre-flight check failed: the following argument names are "
+            "ambiguous (they appear in multiple measures). Use the dotted "
+            "form 'MeasureName.argument_name' in variables.yml to "
+            "disambiguate:\n"
+            + "\n".join(ambiguous)
         )
 
 
@@ -941,17 +1040,27 @@ def _mutate_osw(
     parameters: dict[str, Any],
     mappings: dict[str, MappedParameter],
 ) -> None:
-    """Mutate an .osw file in place."""
+    """Mutate an .osw file in place.
+
+    For each parameter, looks up the mapping to find which step and
+    which argument name to write. The mapping's ``step_index`` was
+    resolved during parsing by matching the ``measure_dir_name``
+    field in the .osw step object, so reordering steps does not
+    break the mutation. The mapping's ``name`` field holds the
+    *plain* argument name (the key inside ``step["arguments"]``).
+    """
     data = json.loads(osw_path.read_text())
     steps = data.setdefault("steps", [])
-    for name, value in parameters.items():
-        mapping = mappings.get(name)
+    for param_key, value in parameters.items():
+        mapping = mappings.get(param_key)
         if mapping is None or mapping.kind != "measure_argument":
             continue
         step_index = mapping.step_index
         if step_index is None or step_index >= len(steps):
             continue
-        steps[step_index].setdefault("arguments", {})[name] = value
+        # mapping.name is the plain argument name inside the step's
+        # arguments dict (never dotted).
+        steps[step_index].setdefault("arguments", {})[mapping.name] = value
     osw_path.write_text(json.dumps(data, indent=2, sort_keys=True))
 
 

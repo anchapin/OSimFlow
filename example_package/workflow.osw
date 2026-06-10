@@ -1,1 +1,20 @@
-{"name": "stub-workflow", "steps": []}
+{
+  "name": "example-parametric-workflow",
+  "steps": [
+    {
+      "measure_dir_name": "SetThermostatSchedule",
+      "arguments": {
+        "heating_setpoint": 20.0,
+        "cooling_setpoint": 25.0
+      }
+    },
+    {
+      "measure_dir_name": "SetEnvelopePerformance",
+      "arguments": {
+        "heating_setpoint": 18.0,
+        "wwr": 0.4,
+        "wall_r_value": 3.5
+      }
+    }
+  ]
+}
