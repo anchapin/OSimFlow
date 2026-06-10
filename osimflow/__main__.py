@@ -29,6 +29,7 @@ from osimflow import (
     load_config,
 )
 from osimflow.byos import load_user_function
+from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 
 
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:
@@ -151,17 +152,46 @@ def _build_parser() -> argparse.ArgumentParser:
             "that holds .epw files. Default: weather."
         ),
     )
+    imp = sub.add_parser(
+        "import-osa",
+        help="Import an OpenStudio Analysis (.osa / analysis.json) file",
+    )
+    imp.add_argument(
+        "input",
+        type=Path,
+        help="Path to the .osa or analysis.json file to import",
+    )
+    imp.add_argument(
+        "--output",
+        type=Path,
+        default=Path("variables.yml"),
+        help="Output path for the converted variables.yml (default: variables.yml)",
+    )
+    imp.add_argument("--log_level", default="INFO")
     return p
+
+
+def _run_import_osa(args: argparse.Namespace) -> int:
+    try:
+        osa_data = parse_osa(args.input)
+        osa_to_variables_yml(osa_data, args.output)
+    except (FileNotFoundError, OSAImportError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Converted {args.input} -> {args.output}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    if args.command != "run":
-        return 1
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    if args.command == "import-osa":
+        return _run_import_osa(args)
+    if args.command != "run":
+        return 1
     cfg: CampaignConfig = load_config(vars(args))
     executor = _build_executor(args)
     apply_fn = (
