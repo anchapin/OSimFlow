@@ -2,39 +2,53 @@
 """extract_kpis.py — Parse one sample's simulation outputs into a KPI JSON.
 
 See docs/OSimFlow.md §4.2 (PROCESS_EXTRACT_KPIS) for the contract.
-
-This is a SKELETON. Implementation TODO:
-
-  1. Open the simulation_dir containing eplusout.sql (+ optional report.csv,
-     eplusout.err).
-  2. Run user-defined KPI queries against the SQLite database. Use the
-     openstudio_reporting_api where possible, otherwise raw sqlite3.
-  3. Support `--custom_kpi_extractor` (BYOS): if provided, import the user
-     function and call it with a structured `ctx` dict.
-  4. Output a single JSON file per sample with the shape:
-        {
-          "sample_id": "0001",
-          "openstudio_version": "3.4.0",
-          "kpis": {
-            "eui_kwh_m2_yr": 142.7,
-            "total_site_energy_gj": 18.4,
-            ...
-          }
-        }
-
-Run with `--help` once implemented.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("extract_kpis")
+
+
+def get_eui_kwh_m2_yr(sql_path: Path) -> float | None:
+    if not sql_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(sql_path)
+        cur = conn.cursor()
+
+        # EnergyPlus canonical EUI query
+        cur.execute("""
+            SELECT Value FROM TabularDataWithStrings
+            WHERE ReportName = 'InitializationSummary'
+              AND ReportForString = 'Entire Facility'
+              AND TableName = 'Site and Source Energy'
+              AND RowName = 'Total Site Energy'
+              AND ColumnName = 'Energy Per Total Building Area'
+              AND Units = 'MJ/m2'
+        """)
+        row = cur.fetchone()
+        if row is not None:
+            mj_m2_yr = float(row[0])
+            # MJ to kWh conversion factor is 1/3.6
+            return mj_m2_yr / 3.6
+
+        # Fallback if TableName is slightly different in older versions
+        return None
+    except Exception as e:
+        log.warning(f"Failed to read EUI from {sql_path}: {e}")
+        return None
+    finally:
+        if "conn" in locals():
+            conn.close()
 
 
 def main() -> int:
@@ -45,10 +59,56 @@ def main() -> int:
     parser.add_argument("--custom_kpi_extractor", type=Path, default=None)
     args = parser.parse_args()
 
-    log.warning("extract_kpis.py is a stub — emitting empty KPIs")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    sql_path = args.simulation_dir / "eplusout.sql"
+
+    kpis = {}
+
+    if args.custom_kpi_extractor:
+        if not args.custom_kpi_extractor.exists():
+            log.error(f"Custom KPI extractor {args.custom_kpi_extractor} does not exist.")
+            return 1
+        spec = importlib.util.spec_from_file_location("custom_extractor", args.custom_kpi_extractor)
+        if spec is None or spec.loader is None:
+            log.error(f"Failed to load custom extractor from {args.custom_kpi_extractor}.")
+            return 1
+
+        custom_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(custom_mod)
+
+        if not hasattr(custom_mod, "extract_kpis"):
+            log.error(
+                f"Custom extractor {args.custom_kpi_extractor} must define `extract_kpis(ctx)`."
+            )
+            return 1
+
+        ctx = {
+            "simulation_dir": args.simulation_dir,
+            "sample_id": args.sample_id,
+        }
+
+        try:
+            custom_kpis = custom_mod.extract_kpis(ctx)
+            if isinstance(custom_kpis, dict):
+                kpis.update(custom_kpis)
+            else:
+                log.error(f"Custom extractor returned {type(custom_kpis)}, expected dict.")
+                return 1
+        except Exception as e:
+            log.error(f"Custom extractor failed: {e}", exc_info=True)
+            return 1
+    else:
+        eui = get_eui_kwh_m2_yr(sql_path)
+        if eui is not None:
+            kpis["eui_kwh_m2_yr"] = eui
+
     args.out.write_text(
         json.dumps(
-            {"sample_id": args.sample_id, "openstudio_version": None, "kpis": {}},
+            {
+                "sample_id": args.sample_id,
+                "openstudio_version": None,  # Not readily available without os bindings
+                "kpis": kpis,
+            },
             indent=2,
         )
     )

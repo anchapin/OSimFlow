@@ -48,26 +48,27 @@ def default_apply_parameters(
     out_dir.mkdir(parents=True, exist_ok=True)
     param_file = out / f"{sample_id}.params.json"
     param_file.write_text(json.dumps(parameters, sort_keys=True))
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(BIN / "apply_params_to_model.py"),
-            "--template",
-            str(template),
-            "--parameter_set",
-            str(param_file),
-            "--sample_id",
-            sample_id,
-            "--out",
-            str(out_dir),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        log.error("apply_params failed for %s: %s", sample_id, result.stderr)
-        raise RuntimeError(f"apply_params failed for {sample_id}")
+    try:
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
+            [
+                sys.executable,
+                str(BIN / "apply_params_to_model.py"),
+                "--template",
+                str(template),
+                "--parameter_set",
+                str(param_file),
+                "--sample_id",
+                sample_id,
+                "--out",
+                str(out_dir),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log.error("apply_params failed for %s: %s", sample_id, e.stderr)
+        raise RuntimeError(f"apply_params failed for {sample_id}") from e
     return out_dir
 
 
@@ -84,7 +85,7 @@ def default_apply_parameters(
 # The stub simulates work with a short sleep and writes placeholder
 # eplusout.sql / eplusout.err so the downstream extract step has
 # something to consume in tests. When wired to a real container, the
-# body becomes `subprocess.run(["openstudio.cli", "run", ...])` with
+# body becomes `subprocess.run(["openstudio.cli", "run", ...])` with  # nosec
 # logging redirected to the per-sample log files written by the
 # Campaign.
 
@@ -111,8 +112,8 @@ def run_openstudio_sim(
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
     log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
-    # STUB: replace with `subprocess.run(["openstudio.cli", "run", ...])`
-    # inside the nrel/openstudio:<version> container.
+    # STUB: replace with `subprocess.run(["openstudio.cli", "run", ...])`  # nosec
+    # inside the openstudio_cli_image:<version> container.
     time.sleep(simulate_work_s)
     (sim_out / "eplusout.sql").write_text("-- placeholder sql")
     (sim_out / "eplusout.err").write_text("")  # success: empty err
@@ -122,28 +123,57 @@ def run_openstudio_sim(
 # ---------------------------------------------------------------------------
 # KPI extraction: parses eplusout.sql into a JSON.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# LHS Generation
+# ---------------------------------------------------------------------------
+def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
+    out.mkdir(parents=True, exist_ok=True)
+    samples_json = out / "samples.json"
+    try:
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
+            [
+                sys.executable,
+                str(BIN / "generate_lhs.py"),
+                "--variables_yml",
+                str(variables_yml),
+                "--n_samples",
+                str(n_samples),
+                "--out",
+                str(samples_json),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log.error("generate_lhs failed: %s", e.stderr)
+        raise RuntimeError("generate_lhs failed") from e
+    return samples_json
+
+
 def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     """Run the default KPI extractor. Returns path to the kpi JSON file."""
     out.mkdir(parents=True, exist_ok=True)
     kpi_path = out / f"kpi_{sample_id}.json"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(BIN / "extract_kpis.py"),
-            "--simulation_dir",
-            str(simulation_dir),
-            "--sample_id",
-            sample_id,
-            "--out",
-            str(kpi_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        log.error("extract_kpis failed for %s: %s", sample_id, result.stderr)
-        raise RuntimeError(f"extract_kpis failed for {sample_id}")
+    try:
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
+            [
+                sys.executable,
+                str(BIN / "extract_kpis.py"),
+                "--simulation_dir",
+                str(simulation_dir),
+                "--sample_id",
+                sample_id,
+                "--out",
+                str(kpi_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
+        raise RuntimeError(f"extract_kpis failed for {sample_id}") from e
     return kpi_path
 
 
@@ -156,28 +186,29 @@ def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) ->
     csv_path = out / "aggregated_results.csv"
     failed_path = out / "failed_simulations.csv"
     parquet_path = out / "aggregated_results.parquet"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(BIN / "aggregate_results.py"),
-            "--kpis",
-            *(str(p) for p in kpi_files),
-            "--simulation_dirs",
-            *(str(p) for p in sim_dirs),
-            "--out_csv",
-            str(csv_path),
-            "--out_parquet",
-            str(parquet_path),
-            "--out_failed",
-            str(failed_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        log.error("aggregate_results failed: %s", result.stderr)
-        raise RuntimeError("aggregate_results failed")
+    try:
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
+            [
+                sys.executable,
+                str(BIN / "aggregate_results.py"),
+                "--kpis",
+                *(str(p) for p in kpi_files),
+                "--simulation_dirs",
+                *(str(p) for p in sim_dirs),
+                "--out_csv",
+                str(csv_path),
+                "--out_parquet",
+                str(parquet_path),
+                "--out_failed",
+                str(failed_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log.error("aggregate_results failed: %s", e.stderr)
+        raise RuntimeError("aggregate_results failed") from e
     return {
         "csv": csv_path,
         "parquet": parquet_path,
@@ -188,22 +219,23 @@ def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) ->
 def generate_plots(csv_path: Path, failed_path: Path, out: Path) -> list[Path]:
     """Render summary plots from the aggregated CSV. Returns list of plot files."""
     out.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(BIN / "generate_plots.py"),
-            "--results_csv",
-            str(csv_path),
-            "--failed_csv",
-            str(failed_path),
-            "--outdir",
-            str(out),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        log.error("generate_plots failed: %s", result.stderr)
-        raise RuntimeError("generate_plots failed")
+    try:
+        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
+            [
+                sys.executable,
+                str(BIN / "generate_plots.py"),
+                "--results_csv",
+                str(csv_path),
+                "--failed_csv",
+                str(failed_path),
+                "--outdir",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        log.error("generate_plots failed: %s", e.stderr)
+        raise RuntimeError("generate_plots failed") from e
     return sorted(out.glob("*.png")) + sorted(out.glob("*.pdf"))

@@ -3,38 +3,6 @@
 
 Reads `variables.yml` and emits N parameter sets as JSON. See docs/OSimFlow.md
 §4.2 (PROCESS_GENERATE_LHS_SAMPLES) for the contract.
-
-This is a SKELETON. Implementation TODO:
-
-  1. Parse variables.yml schema. Expected shape (illustrative):
-        variables:
-          - name: window_u_value
-            distribution: uniform
-            min: 1.0
-            max: 5.0
-          - name: infiltration_rate
-            distribution: lognormal
-            mean: 0.5
-            sigma: 0.2
-          - name: hvac_setpoint
-            distribution: uniform
-            min: 20.0
-            max: 24.0
-  2. Use scipy.stats.qmc.LatinHypercube to draw N samples in [0, 1]^d.
-  3. Map [0, 1] -> the requested distribution per variable.
-  4. Write JSON with shape:
-        {
-          "n_samples": N,
-          "variables": [...],
-          "samples": [
-            {"sample_id": "0001", "values": {...}},
-            ...
-          ]
-        }
-  5. ALSO write per-sample parameter files (one per sample) so the
-     downstream APPLY_PARAMETERS step can pick each one up.
-
-Run with `--help` once implemented.
 """
 
 from __future__ import annotations
@@ -42,8 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 from pathlib import Path
+
+import scipy.stats
+import scipy.stats.qmc
+import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_lhs")
@@ -56,11 +29,79 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
-    # TODO(impl): wire up scipy.stats.qmc.LatinHypercube + distribution mapping.
-    log.warning("generate_lhs.py is a stub — emitting empty sample set")
-
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"n_samples": 0, "variables": [], "samples": []}, indent=2))
+
+    if args.n_samples == 0:
+        args.out.write_text(json.dumps({"n_samples": 0, "variables": [], "samples": []}, indent=2))
+        return 0
+
+    with args.variables_yml.open() as f:
+        config = yaml.safe_load(f)
+    variables = config.get("variables", [])
+    if not variables:
+        for i in range(args.n_samples):
+            param_file = args.out.parent / f"{i + 1:04d}.params.json"
+            param_file.write_text(json.dumps({}, indent=2))
+        args.out.write_text(
+            json.dumps(
+                {
+                    "n_samples": args.n_samples,
+                    "variables": [],
+                    "samples": [
+                        {"sample_id": f"{i + 1:04d}", "values": {}} for i in range(args.n_samples)
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    d = len(variables)
+    sampler = scipy.stats.qmc.LatinHypercube(d=d, seed=0)
+    lhs_samples = sampler.random(n=args.n_samples)
+
+    samples = []
+    for i in range(args.n_samples):
+        values = {}
+        for j, v in enumerate(variables):
+            u = lhs_samples[i, j]
+            dist = v.get("distribution")
+            name = v["name"]
+
+            if dist == "uniform":
+                min_val = v["min"]
+                max_val = v["max"]
+                values[name] = float(min_val + u * (max_val - min_val))
+            elif dist == "lognormal":
+                mean = v["mean"]
+                sigma = v["sigma"]
+                # PPF (percent point function) of lognormal distribution
+                # which maps from [0,1] to lognormal values.
+                # Since scipy.stats.lognorm expects shape, loc, scale
+                # The normal lognorm parametarization corresponding to mu and sigma of the underlying normal
+                # is s=sigma, scale=exp(mu)
+                values[name] = float(scipy.stats.lognorm.ppf(u, s=sigma, scale=math.exp(mean)))
+            else:
+                raise NotImplementedError(f"distribution {dist!r} not in MVP yet")
+
+        samples.append({"sample_id": f"{i + 1:04d}", "values": values})
+
+        # ALSO write per-sample parameter files (one per sample) so the nextflow
+        # downstream process can tuple() them up.
+        param_file = args.out.parent / f"{i + 1:04d}.params.json"
+        param_file.write_text(json.dumps(values, indent=2))
+
+    args.out.write_text(
+        json.dumps(
+            {
+                "n_samples": args.n_samples,
+                "variables": variables,
+                "samples": samples,
+            },
+            indent=2,
+        )
+    )
+
     return 0
 
 

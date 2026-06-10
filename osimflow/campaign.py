@@ -26,14 +26,10 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 import inspect
 import json
 import logging
-import math
-import random
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
-
-import yaml
 
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
@@ -43,6 +39,7 @@ from .work import (
     aggregate_results,
     default_apply_parameters,
     extract_kpis,
+    generate_lhs,
     generate_plots,
     run_openstudio_sim,
 )
@@ -209,10 +206,7 @@ class Campaign:
     def step_generate_lhs(self) -> list[SampleSpec]:
         """Single-shot: read variables.yml, produce N parameter sets.
 
-        The MVP uses an in-process LHS implementation so the campaign
-        is self-contained. The LHS algorithm in `bin/generate_lhs.py`
-        will replace this in-process version once implemented; the
-        output schema is identical.
+        Calls `bin/generate_lhs.py` via the executor.
         """
         t0 = time.time()
         inputs_hash = sha256_of_files([self.cfg.input_variables])
@@ -236,50 +230,39 @@ class Campaign:
             )
             return samples_from_cache
 
-        with self.cfg.input_variables.open() as f:
-            variables_obj: object = yaml.safe_load(f)["variables"]
-        variables = cast_variables(variables_obj)
-        rng = random.Random(0)  # deterministic for cache stability
-        samples: list[SampleSpec] = []
-        for i in range(self.cfg.n_samples):
-            values: dict[str, object] = {}
-            for v in variables:
-                name = v["name"]
-                if v["distribution"] == "uniform":
-                    vmin = v["min"]
-                    vmax = v["max"]
-                    values[name] = vmin + rng.random() * (vmax - vmin)
-                elif v["distribution"] == "lognormal":
-                    # lognormal via Box-Muller
-                    u1 = max(rng.random(), 1e-9)
-                    u2 = rng.random()
-                    z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
-                    vmean = v["mean"]
-                    vsigma = v["sigma"]
-                    values[name] = math.exp(vmean + vsigma * z)
-                else:
-                    raise NotImplementedError(f"distribution {v['distribution']!r} not in MVP yet")
-            samples.append(SampleSpec(sample_id=f"{i + 1:04d}", values=values))
-        out_json = self.cfg.work_dir / "samples.json"
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        out_json.write_text(
-            json.dumps(
-                {
-                    "n_samples": len(samples),
-                    "variables": variables,
-                    "samples": samples,
-                },
-                indent=2,
+        out_dir = self.cfg.work_dir / "lhs"
+        handle = self.executor.submit(
+            generate_lhs,
+            self.cfg.input_variables,
+            self.cfg.n_samples,
+            out_dir,
+            name="generate_lhs",
+            cpus=1,
+            memory_mb=1024,
+            time_min=5,
+            container=CONTAINER_PY,
+        )
+        try:
+            result_path = handle.result(timeout=120)
+            self.cache.store(key, Path(result_path), exit_code=0)
+            run_samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
+            samples = cast_samples(run_samples_obj)
+            self.trace.step_finished(
+                "GENERATE_LHS_SAMPLES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=0,
             )
-        )
-        self.cache.store(key, out_json, exit_code=0)
-        self.trace.step_finished(
-            "GENERATE_LHS_SAMPLES",
-            cache="MISS",
-            elapsed_s=time.time() - t0,
-            exit_code=0,
-        )
-        return samples
+            return samples
+        except Exception as e:
+            log.error("GENERATE_LHS_SAMPLES failed: %s", e)
+            self.trace.step_finished(
+                "GENERATE_LHS_SAMPLES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
+            )
+            raise
 
     def step_apply_parameters(self, samples: list[SampleSpec]) -> SampleDict:
         """Fan-out: for each sample, produce a modified sim package."""
