@@ -315,7 +315,7 @@ class TestPreflightUnmapped:
         mappings = {
             "x": MappedParameter(name="x", kind="measure_argument", step_index=0, measure_name="M")
         }
-        with pytest.raises(UnmappedParameterError, match="do not map"):
+        with pytest.raises(UnmappedParameterError, match="not found"):
             preflight_check({"y": 1.0}, mappings)
 
     def test_all_mapped_passes(self) -> None:
@@ -478,3 +478,86 @@ class TestApplyParametersOsw:
                 sample_id="0003",
                 out=out,
             )
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight: fuzzy match suggestions
+# ---------------------------------------------------------------------------
+class TestPreflightFuzzyMatch:
+    """UnmappedParameterError includes fuzzy-match suggestions for typos."""
+
+    def test_typo_produces_suggestion(self) -> None:
+        """A close miss gets a 'Did you mean?' suggestion."""
+        mappings = {
+            "window_to_wall_ratio": MappedParameter(
+                name="window_to_wall_ratio", kind="measure_argument", step_index=0, measure_name="M"
+            )
+        }
+        with pytest.raises(UnmappedParameterError, match="Did you mean") as exc_info:
+            preflight_check({"windw_to_wall_ratio": 0.4}, mappings)
+        assert "window_to_wall_ratio" in str(exc_info.value)
+
+    def test_no_suggestion_when_nothing_close(self) -> None:
+        """Totally unrelated name: no suggestion, just unmapped error."""
+        mappings = {
+            "alpha": MappedParameter(
+                name="alpha", kind="measure_argument", step_index=0, measure_name="M"
+            )
+        }
+        with pytest.raises(UnmappedParameterError, match="not found") as exc_info:
+            preflight_check({"zzzzzzzzz": 1.0}, mappings)
+        # Should NOT contain "Did you mean"
+        assert "Did you mean" not in str(exc_info.value)
+
+    def test_multiple_unmapped_all_get_suggestions(self) -> None:
+        """Each unmapped name gets its own suggestion line."""
+        mappings = {
+            "window_to_wall_ratio": MappedParameter(
+                name="window_to_wall_ratio", kind="measure_argument", step_index=0, measure_name="M"
+            ),
+            "wall_r_value": MappedParameter(
+                name="wall_r_value", kind="measure_argument", step_index=0, measure_name="M"
+            ),
+        }
+        with pytest.raises(UnmappedParameterError) as exc_info:
+            preflight_check(
+                {"windw_to_wall_ratio": 0.4, "wall_r_valu": 3.0},
+                mappings,
+            )
+        msg = str(exc_info.value)
+        assert "windw_to_wall_ratio" in msg
+        assert "wall_r_valu" in msg
+        assert msg.count("Did you mean") >= 2
+
+    def test_suggests_dotted_name(self) -> None:
+        """Fuzzy matching can suggest dotted names from the available keys."""
+        mappings = {
+            "SetEnvelopePerformance.wwr": MappedParameter(
+                name="wwr",
+                kind="measure_argument",
+                step_index=0,
+                measure_name="SetEnvelopePerformance",
+            ),
+        }
+        with pytest.raises(UnmappedParameterError, match="Did you mean") as exc_info:
+            preflight_check({"SetEnvelopePerformance.ww": 0.4}, mappings)
+        assert "SetEnvelopePerformance.wwr" in str(exc_info.value)
+
+    def test_error_message_starts_with_banner(self) -> None:
+        """Error message starts with the banner for clear visibility."""
+        mappings = {
+            "x": MappedParameter(name="x", kind="measure_argument", step_index=0, measure_name="M")
+        }
+        with pytest.raises(UnmappedParameterError) as exc_info:
+            preflight_check({"bad_name": 1.0}, mappings)
+        assert str(exc_info.value).startswith("PRE-FLIGHT VALIDATION FAILED")
+
+    def test_osw_based_fuzzy_match(self, tmp_path: Path) -> None:
+        """Fuzzy matching works with real .osw parsed mappings."""
+        osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
+        mappings = parse_osw_arguments(osw)
+        # "wall_r_valu" is close to "wall_r_value" — should produce a suggestion
+        with pytest.raises(UnmappedParameterError, match="Did you mean") as exc_info:
+            preflight_check({"wall_r_valu": 3.0}, mappings)
+        msg = str(exc_info.value)
+        assert "wall_r_value" in msg
