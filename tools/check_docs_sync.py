@@ -47,6 +47,8 @@ PATH_SKIP_SUBSTRINGS = (
     "pathlib",  # module path, not a file
     "argparse",  # module path, not a file
     "sys.path",  # Python runtime attribute, not a file
+    "subprocess.run",  # stdlib API, not a file
+    "importlib.util",  # stdlib module, not a file
     "openstudio.cli",  # CLI binary shipped inside container, not a local path
     "containerOverride",  # AWS Batch API field, not a local path
     ".egg-info",

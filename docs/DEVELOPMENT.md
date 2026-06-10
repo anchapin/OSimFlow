@@ -278,11 +278,11 @@ against each executor substrate:
 
 | File | What it tests |
 |---|---|
-| `test_local_executor.py` | `LocalExecutor` happy path |
-| `test_slurm_executor_debug.py` | `SlurmExecutor(debug=True)` (no real cluster) |
-| `test_aws_batch_executor_stub.py` | `AWSBatchExecutor` with mocked boto3 |
-| `test_cache_resume.py` | Re-run same campaign; warm run must be 5x faster |
-| `test_cache_invalidation.py` | 8 cache-invalidation scenarios |
+| `tests/integration/test_local_executor.py` | `LocalExecutor` happy path |
+| `tests/integration/test_slurm_executor_debug.py` | `SlurmExecutor(debug=True)` (no real cluster) |
+| `tests/integration/test_aws_batch_executor_stub.py` | `AWSBatchExecutor` with mocked boto3 |
+| `tests/integration/test_cache_resume.py` | Re-run same campaign; warm run must be 5x faster |
+| `tests/integration/test_cache_invalidation.py` | 8 cache-invalidation scenarios |
 
 These all use the built-in stub mode (`OSIMFLOW_STUB_SIM` not needed;
 it's the default when `openstudio.cli` is not on PATH).
@@ -328,7 +328,7 @@ The rules are enforced by CI. Run `make precommit` before pushing.
 - `bin/*.py` — relaxed ruff rules (PL, SIM ignored). These are CLI
   scripts with top-level side effects.
 - `tests/` — relaxed ruff rules. Uses pytest patterns.
-- `__init__.py` — `F401` (unused import) ignored for re-exports.
+- `osimflow/__init__.py` — `F401` (unused import) ignored for re-exports.
 
 ---
 
@@ -414,8 +414,8 @@ Export the new executor class from the package's public API.
 
 ### Step 5: Write tests
 
-Add `tests/integration/test_my_new_executor.py`. Follow the pattern
-from `test_aws_batch_executor_stub.py` — mock the external service
+Add a file like `tests/integration/test_<executor_name>.py`. Follow the pattern
+from the existing stub tests — mock the external service
 and verify the Handle contract.
 
 ### Step 6: Update AGENTS.md
@@ -690,7 +690,7 @@ semantics. Re-running a campaign with the same inputs is nearly free.
 
 ### Cache key construction
 
-Each `step_*` method in `campaign.py` constructs a `CacheKey`:
+Each `step_*` method in `osimflow/campaign.py` constructs a `CacheKey`:
 
 ```python
 key = CacheKey(
