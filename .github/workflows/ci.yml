@@ -268,4 +268,8 @@ jobs:
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
 
       - name: pytest (AWS Batch mocked tests)
-        run: .venv/bin/pytest tests/integration/test_aws_batch_mocked.py -v
+        # --no-cov overrides the global --cov-fail-under=85 from pyproject.toml.
+        # This job runs a focused subset of tests (6 moto-based tests); the
+        # full-coverage gate belongs in the main "test" job which runs the
+        # complete suite.
+        run: .venv/bin/pytest tests/integration/test_aws_batch_mocked.py -v --no-cov
