@@ -1,5 +1,7 @@
 {
-  "name": "example-parametric-workflow",
+  "seed_file": "model.osm",
+  "weather_file": "",
+  "measure_paths": [],
   "steps": [
     {
       "measure_dir_name": "SetThermostatSchedule",
@@ -11,7 +13,6 @@
     {
       "measure_dir_name": "SetEnvelopePerformance",
       "arguments": {
-        "heating_setpoint": 18.0,
         "wwr": 0.4,
         "wall_r_value": 3.5
       }
