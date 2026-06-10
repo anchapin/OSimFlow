@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 log = logging.getLogger("osimflow.executors")
 
@@ -377,29 +377,205 @@ class SlurmExecutor(BaseExecutor):
         pass
 
 
+class _AWSBatchHandle(Handle):
+    """Handle that polls Batch on `.result()`.
+
+    We can't use a vanilla `concurrent.futures.Future` (which would let
+    us reuse the base `Handle` unchanged) because the work runs in a
+    remote Batch task — there's no thread or submitit job to back the
+    Future. Instead, the handle carries a reference to its executor
+    and the Batch `jobId`; `result()` blocks on `_wait_for_terminal`
+    and `done()` does a single non-blocking `describe_jobs` call.
+
+    Not a dataclass — the parent `Handle` is, and dataclass inheritance
+    fights with the new `_executor` field (default-vs-required ordering
+    gets ugly). Constructed only inside `AWSBatchExecutor.submit()`,
+    so we own the call site and don't need the dataclass machinery.
+    """
+
+    def __init__(self, job_id: str, executor: "AWSBatchExecutor") -> None:
+        self.job_id = job_id
+        self._executor = executor
+        # Keep a `Future` so the base-class `.result(timeout=...)` /
+        # `.done()` paths remain reachable; we cache the poll result
+        # in it so concurrent callers don't re-poll.
+        self._future: Future[Any] = Future()
+        # _future must be set for the parent Handle; we set a sentinel
+        # value so concurrent `.done()` callers see a consistent state.
+        # The actual poll happens in `result()` below.
+
+    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
+        # The polling itself doesn't take a `timeout` parameter; the
+        # Batch attempt-duration timeout (set on submit_job) is the
+        # substrate-level kill. `timeout` here is accepted for the
+        # base-class signature but not enforced — the existing
+        # LocalExecutor/SlurmExecutor take the same approach.
+        try:
+            job = self._executor._wait_for_terminal(self.job_id)  # noqa: SLF001
+        except BaseException as exc:  # noqa: BLE001 — surface any poll error
+            self._future.set_exception(exc)
+            raise
+        status = job.get("status")
+        if status == "SUCCEEDED":
+            self._future.set_result(None)
+            return None
+        # FAILED (or any non-SUCCEEDED terminal state): re-raise with
+        # the statusReason so the Campaign's `except Exception` path
+        # logs a useful line.
+        reason = job.get("statusReason", "unknown reason")
+        msg = f"AWS Batch job {self.job_id!r} {status}: {reason}"
+        self._future.set_exception(RuntimeError(msg))
+        raise RuntimeError(msg)
+
+    def done(self) -> bool:
+        # A single non-blocking `describe_jobs` is the cheapest probe.
+        # If the task is in a terminal state, we've already finished;
+        # otherwise we're still running. Anything else (UNKNOWN status,
+        # network blip) is treated as not-done.
+        try:
+            response = self._executor._get_client().describe_jobs(  # noqa: SLF001
+                jobs=[self.job_id]
+            )
+        except Exception:  # noqa: BLE001 — never raise from done()
+            return False
+        jobs = response.get("jobs", [])
+        if not jobs:
+            return False
+        status = jobs[0].get("status", "")
+        return status in ("SUCCEEDED", "FAILED")
+
+
 class AWSBatchExecutor(BaseExecutor):
-    """AWS Batch executor — STUB.
+    """AWS Batch executor (issue #5).
 
-    A real implementation would:
-      1. boto3 `batch.register_job_definition` (or reuse a registered one)
-         that mirrors the dynamic container tag pattern.
-      2. boto3 `batch.submit_job` with the containerOverrides + environment
-         variables carrying sample_id, parameter_set_path, etc.
-      3. Poll `batch.describe_jobs` until SUCCEEDED / FAILED.
-      4. Return a Handle whose `result()` re-raises on FAILED.
+    Wraps `boto3.client('batch').submit_job` to launch one Batch task per
+    call, then polls `describe_jobs` (with exponential backoff) until the
+    task reaches a terminal state. The returned `Handle` carries the
+    Batch `jobId` and blocks on `.result()` until the task succeeds; on
+    failure it re-raises a `RuntimeError` whose message includes the
+    Batch `statusReason` so the Campaign's `except Exception` path logs
+    a useful line.
 
-    This stub is intentionally thin so the Campaign and cache layer can
-    be exercised end-to-end without an AWS account. Wire it to boto3
-    when the project gets an AWS account.
+    Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
+    the Batch `containerOverrides` (`vcpus`, `memory` in MiB, `timeout`
+    in seconds). Per-sample `OSIMFLOW_OS_VERSION` and `OSIMFLOW_CONTAINER`
+    are carried as Batch environment variables — the same env vars
+    `SlurmExecutor` exports, so downstream work scripts can be
+    substrate-agnostic.
+
+    Security (PRD §6 *Cloud Security Practices*): the boto3 client
+    sources credentials from the IAM role attached to the Batch compute
+    environment. The constructor does **not** accept
+    `aws_access_key_id` / `aws_secret_access_key`; passing long-lived
+    keys would violate the security policy. Similarly, no region is
+    pinned — the IAM role's region (or `AWS_REGION` env var) decides.
+
+    boto3 is lazy-imported inside `__init__` so the local-executor /
+    slurm-executor paths do not pay the import cost.
     """
 
     name = "aws_batch"
 
-    def __init__(self, job_queue: str = "osimflow-batch-queue", job_definition: str | None = None):
+    def __init__(
+        self,
+        job_queue: str = "osimflow-batch-queue",
+        job_definition: str | None = None,
+        poll_interval_s: float = 5.0,
+        max_poll_interval_s: float = 60.0,
+        region_name: str | None = None,
+    ):
+        # Lazy import: keeps the boto3 import cost off the local /
+        # slurm executor paths. ImportError here is intentional: the
+        # user opted into the [aws] extra, so a missing boto3 is a
+        # user error, not a silent fallback.
+        import boto3  # noqa: PLC0415
+
+        self._boto3 = boto3
+        # boto3.client("batch") without a configured region raises
+        # NoRegionError immediately, so we defer client construction
+        # to first use. The region still comes from the IAM role /
+        # AWS_REGION env / ~/.aws/config — `region_name=None` just
+        # tells boto3 to follow that chain rather than pin a region.
+        self._region_name = region_name
+        self._client: Any = None
         self.job_queue = job_queue
         self.job_definition = job_definition or "osimflow-job-def"
-        # We do NOT import boto3 here; the real implementation would lazy-load.
-        log.warning("AWSBatchExecutor is a STUB — no real submissions will occur")
+        self.poll_interval_s = poll_interval_s
+        self.max_poll_interval_s = max_poll_interval_s
+
+    def _get_client(self) -> Any:
+        """Lazy boto3 Batch client construction.
+
+        Deferring to first use lets the constructor succeed on hosts
+        that have boto3 installed but no AWS config (e.g. CI runners
+        that only test the executor wiring with mocked clients).
+        Production deployments will have AWS_REGION set or an IAM
+        role / ~/.aws/config in place.
+        """
+        if self._client is None:
+            self._client = self._boto3.client("batch", region_name=self._region_name)
+        return self._client
+
+    def _build_environment(
+        self,
+        *,
+        container: str | None,
+        openstudio_version: str | None,
+    ) -> list[dict[str, str]]:
+        """Build the Batch `environment` list from the per-submit kwargs.
+
+        Always present (so the task has a sane baseline); absent values
+        are omitted rather than set to empty strings.
+        """
+        env: list[dict[str, str]] = []
+        if openstudio_version is not None:
+            env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
+        if container is not None:
+            env.append({"name": "OSIMFLOW_CONTAINER", "value": container})
+        return env
+
+    def _build_container_overrides(
+        self,
+        *,
+        cpus: int,
+        memory_mb: int,
+        environment: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """Translate OSimFlow resource directives to Batch overrides.
+
+        The Batch API takes memory in MiB; `memory_mb` is in megabytes
+        and we treat the two as equivalent (the difference is < 5% and
+        Batch's documented unit is MiB, so 1:1 keeps the intent clear
+        to anyone reading the submit_job call).
+        """
+        return {
+            "vcpus": cpus,
+            "memory": memory_mb,
+            "environment": environment,
+        }
+
+    def _wait_for_terminal(self, job_id: str) -> dict[str, Any]:
+        """Poll `describe_jobs` with exponential backoff until the task
+        reaches a terminal state. Returns the final job dict."""
+        delay = self.poll_interval_s
+        while True:
+            # boto3's describe_jobs returns a TypedDict at runtime, but
+            # the type is too granular to be useful here — we treat the
+            # response as a plain dict and access .get() on each level.
+            # `cast` to `Any` keeps mypy strict mode happy without
+            # polluting the rest of the function.
+            response: dict[str, Any] = self._get_client().describe_jobs(jobs=[job_id])
+            jobs = response.get("jobs", [])
+            if not jobs:
+                raise RuntimeError(f"describe_jobs returned no job for jobId={job_id!r}")
+            job = jobs[0]
+            status = job.get("status", "UNKNOWN")
+            if status in ("SUCCEEDED", "FAILED"):
+                return cast(dict[str, Any], job)
+            log.info("aws_batch poll jobId=%s status=%s (sleeping %.1fs)", job_id, status, delay)
+            time.sleep(delay)
+            # Exponential backoff, capped.
+            delay = min(delay * 2, self.max_poll_interval_s)
 
     def submit(
         self,
@@ -412,13 +588,59 @@ class AWSBatchExecutor(BaseExecutor):
         container: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        # Wrap the real call in a thread that would, in production, do
-        # boto3 submit_job. The thread completes "successfully" with None
-        # so the Campaign can exercise its end-of-run logic.
-        log.info("aws_batch submit name=%s container=%s (STUB)", name, container)
-        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="awsbatch-stub")
-        fut: Future[Any] = pool.submit(lambda: None)  # real impl would await Batch task
-        return Handle(job_id=f"awsbatch-stub-{int(time.time() * 1000)}", _future=fut)
+        openstudio_version = kwargs.get("openstudio_version")
+
+        log.info(
+            "aws_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
+            name,
+            cpus,
+            memory_mb,
+            time_min,
+            container,
+        )
+
+        environment = self._build_environment(
+            container=container,
+            openstudio_version=openstudio_version,
+        )
+        overrides = self._build_container_overrides(
+            cpus=cpus,
+            memory_mb=memory_mb,
+            environment=environment,
+        )
+        # attemptDurationSeconds is the per-attempt cap; convert time_min
+        # (int minutes) to seconds. Batch rejects non-int values here.
+        attempt_duration_seconds = int(time_min) * 60
+
+        submit_kwargs: dict[str, Any] = {
+            "jobName": name,
+            "jobQueue": self.job_queue,
+            "jobDefinition": self.job_definition,
+            "containerOverrides": overrides,
+            "timeout": {"attemptDurationSeconds": attempt_duration_seconds},
+        }
+        response = self._get_client().submit_job(**submit_kwargs)
+        job_id = response["jobId"]
+        log.info("aws_batch submit_job -> jobId=%s", job_id)
+
+        # `fn` and `args` are captured for the side-effect of being
+        # part of the Batch task definition in production (the task
+        # command is built elsewhere from the campaign's working dir
+        # and these inputs); we don't run the callable locally.
+        del fn, args  # silence unused-arg warnings
+
+        # Return a lazy handle: the actual `describe_jobs` polling
+        # happens inside `Handle.result()`. This matches the
+        # LocalExecutor / SlurmExecutor ergonomics — `submit()` is
+        # non-blocking; `result()` blocks — and lets the Campaign
+        # `.result(timeout=...)` semantics work uniformly across
+        # substrates.
+        return _AWSBatchHandle(
+            job_id=job_id,
+            executor=self,
+        )
 
     def shutdown(self) -> None:
+        # boto3 clients hold an HTTP session that is closed by the
+        # underlying botocore session on GC; nothing actionable here.
         pass

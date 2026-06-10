@@ -162,11 +162,35 @@ osimflow run \
   --input_variables variables.yml \
   --n_samples 200
 
-# Cloud run on AWS Batch
+# Cloud run on AWS Batch (issue #5).
+#
+# Prerequisites:
+#   * `pip install osimflow[aws]` (brings in boto3).
+#   * A registered Batch job definition whose container image matches
+#     `openstudio_cli_image:<openstudio_version>` (the dynamic tag the
+#     campaign passes via the `container` kwarg; see PRD §1.4). The
+#     executor forwards the tag in the `OSIMFLOW_CONTAINER` env var on
+#     every task so the work script can read it.
+#   * AWS credentials via the IAM role attached to the Batch compute
+#     environment (PRD §6 *Cloud Security Practices*). Long-lived
+#     `aws_access_key_id` / `aws_secret_access_key` are intentionally
+#     not accepted by the executor.
+#   * `AWS_REGION` set in the environment (or `~/.aws/config` /
+#     `AWS_DEFAULT_REGION`). The executor does NOT pin a region.
+#
+# Polling: the executor polls `batch.describe_jobs` with exponential
+# backoff (start 5s, cap 60s) until the task is SUCCEEDED. FAILED
+# tasks re-raise a `RuntimeError` whose message carries the Batch
+# `statusReason`, so the Campaign's `except Exception` branch logs it.
 osimflow run \
   --executor aws_batch \
   --aws-batch-queue osimflow-batch-queue \
+  --aws-batch-job-definition osimflow-openstudio-job-def \
   --openstudio_version 3.5.0 \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 1000 \
+  --outdir ./results \
   --archive_intermediates
 
 # User-provided custom KPI extractor
