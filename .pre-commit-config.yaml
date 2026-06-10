@@ -1,0 +1,77 @@
+# =============================================================================
+# .pre-commit-config.yaml — OSimFlow developer best-practices gate
+# =============================================================================
+# Local hooks run `make` targets. CI mirrors the same checks in
+# .github/workflows/{ci,lint,docs,agents-contract}.yml.
+#
+# Install:
+#   pip install pre-commit && pre-commit install
+# Run on demand (mirrors what CI does):
+#   pre-commit run --all-files
+#
+# See docs/DEVELOPMENT.md for the day-to-day workflow.
+# =============================================================================
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        exclude: ^mkdocs\.yml$
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+        # Spike artifacts are out of scope for the project.
+        exclude: ^\.agents/spike/
+      - id: trailing-whitespace
+        # Markdown line breaks in poetry quotes are meaningful; only strip in code.
+        types: [python, yaml, toml]
+        exclude: ^\.agents/spike/
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.16
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+        # ruff format replaces black for daily formatting. It produces
+        # output that black would also produce modulo line-continuation
+        # choices; we standardize on ruff format because it's faster and
+        # shares config with the linter.
+
+  - repo: local
+    hooks:
+      - id: mypy-osimflow
+        name: mypy --strict (osimflow/)
+        entry: .venv/bin/mypy osimflow
+        language: system
+        types: [python]
+        pass_filenames: false
+        exclude: ^\.agents/spike/
+
+      - id: pytest-fast
+        name: pytest (contract + fast integration)
+        entry: .venv/bin/pytest tests/contract -x -q
+        language: system
+        types: [python]
+        pass_filenames: false
+        # Integration tests stay in CI to keep pre-commit fast.
+
+      - id: agents-contract
+        name: AGENTS.md / code drift contract
+        entry: .venv/bin/python tools/check_agents_contract.py
+        language: system
+        pass_filenames: false
+
+      - id: docs-sync
+        name: docs/ path resolution
+        entry: .venv/bin/python tools/check_docs_sync.py
+        language: system
+        pass_filenames: false
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        # Secret scan — guards against accidentally committing .epw,
+        # eplusout.*, or AWS keys per AGENTS.md §10.

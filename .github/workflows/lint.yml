@@ -1,0 +1,40 @@
+# =============================================================================
+# .github/workflows/lint.yml — fast PR-only lint feedback
+# =============================================================================
+# Runs ruff + black only. ~30s. Provides a quick red signal on style.
+# The full `ci` job re-runs everything on merge to main.
+# =============================================================================
+name: lint
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ruff>=0.6"
+
+      - name: ruff check
+        run: python -m ruff check .
+
+      - name: ruff format --check
+        run: python -m ruff format --check .

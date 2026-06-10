@@ -1,0 +1,34 @@
+# =============================================================================
+# .github/workflows/agents-contract.yml — code/docs drift gate
+# =============================================================================
+# Runs on PRs. Fails the PR if AGENTS.md or docs/ drift from the code
+# without an explicit update.
+# =============================================================================
+name: agents-contract
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: agents & docs contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: AGENTS.md / code drift
+        run: python tools/check_agents_contract.py
+
+      - name: docs/ path resolution
+        run: python tools/check_docs_sync.py
