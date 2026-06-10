@@ -504,6 +504,8 @@ class Campaign:
         log.info("DRY RUN: overriding n_samples from %d to 1", original_n)
 
         samples: list[SampleSpec] = self.step_generate_lhs()
+        self.cfg.samples_file.parent.mkdir(parents=True, exist_ok=True)
+        self.cfg.samples_file.write_text(json.dumps({"samples": samples}, indent=2))
         parameterized: SampleDict = self.step_apply_parameters(samples)
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
         kpi_files: list[Path] = self.step_extract_kpis(simulated)
@@ -592,6 +594,9 @@ class Campaign:
     def _run_full_campaign(self, t0: float) -> dict[str, object]:
         """Standard full campaign: all 6 steps, all samples."""
         samples: list[SampleSpec] = self.step_generate_lhs()
+        samples_link = self.cfg.samples_file
+        samples_link.parent.mkdir(parents=True, exist_ok=True)
+        samples_link.write_text(json.dumps({"samples": samples}, indent=2))
         parameterized: SampleDict = self.step_apply_parameters(samples)
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
         kpi_files: list[Path] = self.step_extract_kpis(simulated)
