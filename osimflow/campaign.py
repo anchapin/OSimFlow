@@ -200,6 +200,13 @@ class Campaign:
             stdout_log = None if stdout_log_obj is None else str(stdout_log_obj)
             stderr_log_obj = state.get("stderr_log")
             stderr_log = None if stderr_log_obj is None else str(stderr_log_obj)
+            # Worker tracking (issue #105): extract from per-sample state.
+            worker_id_obj = state.get("worker_id")
+            worker_id = None if worker_id_obj is None else str(worker_id_obj)
+            worker_ip_obj = state.get("worker_ip")
+            worker_ip = None if worker_ip_obj is None else str(worker_ip_obj)
+            worker_region_obj = state.get("worker_region")
+            worker_region = None if worker_region_obj is None else str(worker_region_obj)
             self.trace.sample_done(
                 SampleTrace(
                     sample_id=sid,
@@ -212,6 +219,9 @@ class Campaign:
                     error_summary=error_summary,
                     stdout_log=stdout_log,
                     stderr_log=stderr_log,
+                    worker_id=worker_id,
+                    worker_ip=worker_ip,
+                    worker_region=worker_region,
                 )
             )
 
@@ -1093,6 +1103,10 @@ class Campaign:
                 state["sim_exit_code"] = 0
                 state["sim_status"] = "ok"
                 state["eplusout_sql"] = str(result_path / "eplusout.sql")
+                # Worker tracking (issue #105): capture from the sim handle.
+                state["worker_id"] = handle.worker_id
+                state["worker_ip"] = handle.worker_ip
+                state["worker_region"] = handle.worker_region
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                 # Archive eplusout.sql when flag is set
                 if self.cfg.archive_intermediates:
