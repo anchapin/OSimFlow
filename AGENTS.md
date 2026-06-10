@@ -495,7 +495,8 @@ generic role prompt's tool guidance when they disagree).
 - [ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md) — the decision record for adopting `nrel/openstudio` directly.
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
-- [CONTRIBUTING.md](docs/CONTRIBUTING.md) — *to be written*
-- [GOVERNANCE.md](docs/GOVERNANCE.md) — *to be written*
+- [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
+- [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding.
+- [GOVERNANCE.md](docs/GOVERNANCE.md) — community governance model.
 - [`submitit` documentation](https://github.com/facebookincubator/submitit) — the Slurm executor backend.
 - [OpenStudio CLI reference](https://openstudio.net/docs/cli/)
