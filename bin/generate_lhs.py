@@ -3,6 +3,11 @@
 
 Reads `variables.yml` and emits N parameter sets as JSON. See docs/OSimFlow.md
 §4.2 (PROCESS_GENERATE_LHS_SAMPLES) for the contract.
+
+Supports conditional/dependent sampling: variables whose distribution depends
+on the value of another variable (e.g. cooling efficiency constrained by HVAC
+system type). Conditional variables are resolved in dependency order after
+independent variables are sampled.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import json
 import logging
 import math
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +38,7 @@ SUPPORTED_DISTRIBUTIONS = (
     "exponential",
     "discrete",
     "categorical",
+    "conditional",
 )
 
 
@@ -135,6 +142,130 @@ def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float | 
     )
 
 
+def _resolve_label(value: Any) -> str:
+    """Extract the string label from a potentially structured categorical value.
+
+    If *value* is a ``dict`` with a ``"label"`` key (categorical output), return
+    the label. Otherwise stringify the value.
+    """
+    if isinstance(value, dict) and "label" in value:
+        return str(value["label"])
+    return str(value)
+
+
+def _validate_dependency_graph(variables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Validate the dependency graph and return variables in topological order.
+
+    Performs cycle detection via Kahn's algorithm and ensures every
+    ``depends_on`` reference points to a defined variable.
+
+    Parameters
+    ----------
+    variables : list[dict]
+        Variable definitions from ``variables.yml``.
+
+    Returns
+    -------
+    list[dict]
+        Variables sorted in dependency order. Independent variables come first,
+        followed by conditional variables whose parents have already been
+        resolved.
+
+    Raises
+    ------
+    ValueError
+        If a circular dependency is detected or a ``depends_on`` target is
+        missing.
+    """
+    var_by_name: dict[str, dict[str, Any]] = {v["name"]: v for v in variables}
+    all_names = set(var_by_name.keys())
+
+    in_degree: dict[str, int] = {name: 0 for name in all_names}
+    children: dict[str, list[str]] = {name: [] for name in all_names}
+
+    for v in variables:
+        if v.get("distribution") == "conditional":
+            parent = v.get("depends_on")
+            if not parent:
+                raise ValueError(
+                    f"variable '{v['name']}' has distribution='conditional' but no 'depends_on' key"
+                )
+            if parent not in all_names:
+                raise ValueError(
+                    f"variable '{v['name']}' depends_on '{parent}', "
+                    f"which is not defined in variables"
+                )
+            in_degree[v["name"]] += 1
+            children[parent].append(v["name"])
+
+    queue: deque[str] = deque(n for n, deg in in_degree.items() if deg == 0)
+    ordered: list[str] = []
+
+    while queue:
+        name = queue.popleft()
+        ordered.append(name)
+        for child in children[name]:
+            in_degree[child] -= 1
+            if in_degree[child] == 0:
+                queue.append(child)
+
+    if len(ordered) != len(variables):
+        remaining = all_names - set(ordered)
+        raise ValueError(f"circular dependency detected among variables: {sorted(remaining)}")
+
+    return [var_by_name[name] for name in ordered]
+
+
+def _resolve_conditional(
+    u: float,
+    var: dict[str, Any],
+    resolved: dict[str, Any],
+) -> Any:
+    """Resolve a conditional variable given the already-sampled *resolved* dict.
+
+    Parameters
+    ----------
+    u : float
+        Uniform sample in [0, 1] for this variable's LHS dimension.
+    var : dict
+        The conditional variable definition (must have ``depends_on`` and
+        ``conditions``).
+    resolved : dict
+        Already-resolved variable values (parents must be present).
+
+    Returns
+    -------
+    Any
+        The sampled value from the matching conditional distribution.
+
+    Raises
+    ------
+    ValueError
+        If the parent value does not match any condition key.
+    """
+    parent_name = var["depends_on"]
+    parent_value = resolved[parent_name]
+    parent_key = _resolve_label(parent_value)
+
+    conditions = var.get("conditions")
+    if not conditions or not isinstance(conditions, dict):
+        raise ValueError(
+            f"conditional variable '{var['name']}' requires a non-empty "
+            f"'conditions' dict mapping parent values to distributions"
+        )
+
+    if parent_key not in conditions:
+        raise ValueError(
+            f"conditional variable '{var['name']}': parent "
+            f"'{parent_name}' value '{parent_key}' has no matching "
+            f"condition key. Available keys: {sorted(conditions.keys())}"
+        )
+
+    sub_dist_spec = conditions[parent_key]
+    sub_dist = sub_dist_spec["distribution"]
+    return _apply_distribution(u, sub_dist, sub_dist_spec)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variables_yml", required=True, type=Path)
@@ -170,18 +301,25 @@ def main() -> int:
         return 0
 
     d = len(variables)
+    ordered = _validate_dependency_graph(variables)
+    var_index: dict[str, int] = {v["name"]: i for i, v in enumerate(variables)}
+
     sampler = scipy.stats.qmc.LatinHypercube(d=d, seed=0)
     lhs_samples = sampler.random(n=args.n_samples)
 
     samples = []
     for i in range(args.n_samples):
         values: dict[str, Any] = {}
-        for j, v in enumerate(variables):
+        for v in ordered:
+            name = v["name"]
+            j = var_index[name]
             u = lhs_samples[i, j]
             dist = v.get("distribution")
-            name = v["name"]
 
-            values[name] = _apply_distribution(u, dist, v)
+            if dist == "conditional":
+                values[name] = _resolve_conditional(u, v, values)
+            else:
+                values[name] = _apply_distribution(u, dist, v)
 
         samples.append({"sample_id": f"{i + 1:04d}", "values": values})
 
