@@ -784,6 +784,60 @@ class _NomadClient:
     def get_allocation(self, alloc_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/allocation/{alloc_id}")
 
+    def get_eval_allocations(self, eval_id: str) -> list[dict[str, Any]]:
+        """Return the allocations created by an evaluation.
+
+        ``GET /v1/evaluation/{eval_id}/allocations`` returns a list of
+        allocation stubs. Each stub carries ``ID``, ``JobID``,
+        ``ClientStatus``, etc.
+        """
+        result = self._request("GET", f"/v1/evaluation/{eval_id}/allocations")
+        # The API returns a list, but ``_request`` casts to dict. When
+        # the response is a JSON array we need to unwrap it.
+        if isinstance(result, dict) and not result:
+            return []
+        if isinstance(result, list):
+            return result
+        return []
+
+    def get_job_allocations(self, job_id: str) -> list[dict[str, Any]]:
+        """Return all allocations for a job.
+
+        ``GET /v1/job/{job_id}/allocations`` returns a list of
+        allocation stubs.
+        """
+        result = self._request("GET", f"/v1/job/{job_id}/allocations")
+        if isinstance(result, list):
+            return result
+        return []
+
+    def resolve_allocation(self, eval_id: str, job_id: str) -> str:
+        """Resolve a submitted job's evaluation to its allocation ID.
+
+        Nomad's ``POST /v1/jobs`` returns an ``EvalID`` but not the
+        allocation ID directly. We resolve it by:
+
+          1. Looking up allocations from the evaluation.
+          2. Falling back to looking up allocations from the job.
+
+        Returns the first allocation ID found, or raises ``RuntimeError``
+        if no allocation is created within the polling window.
+        """
+        deadline = time.monotonic() + 30.0
+        poll_delay = 0.5
+        while time.monotonic() < deadline:
+            # Try eval-based lookup first (fast path).
+            allocs = self.get_eval_allocations(eval_id)
+            if allocs:
+                return str(allocs[0].get("ID", ""))
+            # Fall back to job-based lookup.
+            allocs = self.get_job_allocations(job_id)
+            if allocs:
+                return str(allocs[0].get("ID", ""))
+            time.sleep(poll_delay)
+            poll_delay = min(poll_delay * 1.5, 5.0)
+        raise RuntimeError(f"No allocation created for eval={eval_id!r} job={job_id!r} within 30s")
+
 
 class _NomadHandle(Handle):
     """Handle that polls Nomad on ``.result()``.
@@ -801,11 +855,26 @@ class _NomadHandle(Handle):
     through the cached Future.
     """
 
-    def __init__(self, job_id: str, allocation_id: str, executor: "NomadExecutor") -> None:
+    def __init__(self, job_id: str, eval_id: str, executor: "NomadExecutor") -> None:
         self.job_id = job_id
-        self._allocation_id = allocation_id
+        self._eval_id = eval_id
+        self._allocation_id: str | None = None
         self._executor = executor
         self._future: Future[Any] = Future()
+
+    def _ensure_allocation_id(self) -> str:
+        """Lazily resolve the eval/job to a concrete allocation ID.
+
+        The first call queries the Nomad API to resolve the evaluation
+        into an allocation. The result is cached so subsequent calls
+        return immediately.
+        """
+        if self._allocation_id is None:
+            self._allocation_id = self._executor._client.resolve_allocation(  # noqa: SLF001
+                eval_id=self._eval_id,
+                job_id=self.job_id,
+            )
+        return self._allocation_id
 
     def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
         # The polling itself doesn't take a `timeout` parameter; the
@@ -814,8 +883,9 @@ class _NomadHandle(Handle):
         # base-class signature but not enforced — the existing
         # LocalExecutor / SlurmExecutor / AWSBatchExecutor take the
         # same approach.
+        alloc_id = self._ensure_allocation_id()
         try:
-            alloc = self._executor._wait_for_terminal(self._allocation_id)  # noqa: SLF001
+            alloc = self._executor._wait_for_terminal(alloc_id)  # noqa: SLF001
         except BaseException as exc:  # noqa: BLE001 — surface any poll error
             self._future.set_exception(exc)
             raise
@@ -829,7 +899,7 @@ class _NomadHandle(Handle):
         # we can extract from the task events. The Campaign's
         # `except Exception` path needs a string it can log.
         description = self._extract_failure_description(task_states)
-        msg = f"Nomad allocation {self._allocation_id!r} {status}: {description}"
+        msg = f"Nomad allocation {alloc_id!r} {status}: {description}"
         self._future.set_exception(RuntimeError(msg))
         raise RuntimeError(msg)
 
@@ -840,10 +910,17 @@ class _NomadHandle(Handle):
         # contract — a cached terminal state is authoritative.
         if self._future.done():
             return True
-        # Otherwise do a single non-blocking allocation lookup. If
+        # Allocation not resolved yet — not done.
+        if self._allocation_id is None:
+            try:
+                self._ensure_allocation_id()
+            except Exception:  # noqa: BLE001
+                return False
+        # Do a single non-blocking allocation lookup. If
         # the task is in a terminal state, we've already finished;
         # otherwise we're still running. Any error here (network
         # blip, missing alloc) is treated as not-done.
+        assert self._allocation_id is not None  # guaranteed after _ensure
         try:
             alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
         except Exception:  # noqa: BLE001 — never raise from done()
@@ -1052,19 +1129,9 @@ class NomadExecutor(BaseExecutor):
         # inputs); we don't run the callable locally.
         del fn, args  # silence unused-arg warnings
 
-        # Nomad's job submit returns ``JobID`` and ``EvalID``; the
-        # ``Index`` field (0 for non-parameterized jobs) is used to
-        # derive a stable allocation id by looking up the first
-        # allocation for the job. We do that lazily inside
-        # ``Handle.result()`` (or via ``done()``) — the first
-        # allocation lookup happens on poll, not here, so the submit
-        # path stays fast. The allocation id is encoded in the
-        # EvalID response when the job is parameterized; for the
-        # simple batch spec we use the EvalID as a fallback key.
-        allocation_id = eval_id or job_id
-
-        # Return a lazy handle: the actual allocation polling happens
-        # inside ``Handle.result()``. This matches the
+        # Return a lazy handle: the allocation is resolved from the
+        # evaluation on first ``result()`` / ``done()`` call, so the
+        # submit path stays fast. This matches the
         # LocalExecutor / SlurmExecutor / AWSBatchExecutor
         # ergonomics — ``submit()`` is non-blocking; ``result()``
         # blocks — and lets the Campaign's
@@ -1072,7 +1139,7 @@ class NomadExecutor(BaseExecutor):
         # substrates.
         return _NomadHandle(
             job_id=job_id,
-            allocation_id=allocation_id,
+            eval_id=eval_id,
             executor=self,
         )
 

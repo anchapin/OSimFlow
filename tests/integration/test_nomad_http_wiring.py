@@ -232,16 +232,36 @@ def _fake_response(body: dict[str, Any] | list[Any]) -> MagicMock:
 def mocked_nomad_client(
     *,
     submit_response: dict[str, Any],
+    eval_alloc_response: list[dict[str, Any]] | None = None,
     alloc_responses: list[dict[str, Any]],
 ) -> Iterator[MagicMock]:
     """Context manager: patch urllib.request.urlopen so the first call
-    is the job submit (returning ``submit_response``) and subsequent
-    calls return the next entry of ``alloc_responses``.
+    is the job submit (returning ``submit_response``), then the next call
+    is the eval-based allocation lookup (returning
+    ``eval_alloc_response``), and subsequent calls return the next entry
+    of ``alloc_responses``.
 
     The mock records every urlopen call so the test can inspect the
     sequence of URLs the executor polled.
+
+    When ``eval_alloc_response`` is ``None``, the mock returns an empty
+    list so the executor falls through to the job-allocation lookup
+    (which also returns an empty list and triggers the direct allocation
+    lookup path).
     """
-    queue: list[Any] = [submit_response, *alloc_responses]
+    if eval_alloc_response is None:
+        eval_alloc_response = []
+    # Queue: submit_response, then eval allocs, then (if eval was empty)
+    # job allocs, then allocation poll responses.
+    if eval_alloc_response:
+        # Eval returns a real allocation → no job-allocs fallback needed.
+        queue: list[Any] = [submit_response, eval_alloc_response, *alloc_responses]
+    else:
+        # Eval returns empty → executor falls through to job-allocs
+        # (also empty here) and retries in the resolve loop. We provide
+        # enough empty-list responses so the loop eventually finds an
+        # allocation in the alloc_responses.
+        queue = [submit_response, [], [], *alloc_responses]
     calls: list[Any] = []
 
     def fake_urlopen(request: Any, *args: Any, **kwargs: Any) -> Any:
@@ -264,6 +284,7 @@ def test_nomad_result_returns_none_on_success() -> None:
     """
     with mocked_nomad_client(
         submit_response={"JobID": "osimflow/ok", "Index": 0, "EvalID": "e1"},
+        eval_alloc_response=[{"ID": "alloc-1", "ClientStatus": "pending"}],
         alloc_responses=[
             {"ID": "alloc-1", "ClientStatus": "complete", "JobID": "osimflow/ok"},
         ],
@@ -274,7 +295,8 @@ def test_nomad_result_returns_none_on_success() -> None:
 
     assert result is None
     assert handle.done() is True
-    # The mock recorded the submit and the allocation lookup.
+    # The mock recorded the submit, eval-based allocation resolution,
+    # and the allocation polling.
     methods = [c[0] for c in mock.calls]  # type: ignore[attr-defined]
     assert methods[0] == "POST"
     assert all(m == "GET" for m in methods[1:])
@@ -289,6 +311,7 @@ def test_nomad_failed_raises_with_status_description() -> None:
     """
     with mocked_nomad_client(
         submit_response={"JobID": "osimflow/fail", "Index": 0, "EvalID": "e2"},
+        eval_alloc_response=[{"ID": "alloc-2", "ClientStatus": "running"}],
         alloc_responses=[
             {
                 "ID": "alloc-2",
@@ -326,6 +349,7 @@ def test_nomad_polling_uses_exponential_backoff() -> None:
     """
     with mocked_nomad_client(
         submit_response={"JobID": "osimflow/poll", "Index": 0, "EvalID": "e3"},
+        eval_alloc_response=[{"ID": "alloc-poll", "ClientStatus": "pending"}],
         alloc_responses=[
             {"ID": "alloc-poll", "ClientStatus": "pending", "JobID": "osimflow/poll"},
             {"ID": "alloc-poll", "ClientStatus": "pending", "JobID": "osimflow/poll"},
