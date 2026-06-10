@@ -165,11 +165,21 @@ def test_slurm_executor_debug_submits_locally() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AWSBatchExecutor (stub)
+# AWSBatchExecutor (no real AWS — boto3.client is patched)
 # ---------------------------------------------------------------------------
-def test_aws_batch_executor_stub_submits() -> None:
-    ex = AWSBatchExecutor()
-    handle = ex.submit(lambda: None, name="t", cpus=1)
-    # Stub completes with None after the thread pool returns.
-    assert handle.result(timeout=10) is None
+def test_aws_batch_executor_submits() -> None:
+    """Smoke test: the executor accepts a boto3.client-patched environment
+    and returns a Handle. The real polling behavior is covered in
+    `test_awsbatch_boto3_wiring.py`."""
+    from unittest.mock import MagicMock, patch
+
+    fake_client = MagicMock()
+    fake_client.submit_job.return_value = {"jobId": "stub-job"}
+    fake_client.describe_jobs.return_value = {
+        "jobs": [{"jobId": "stub-job", "status": "SUCCEEDED", "statusReason": "OK"}]
+    }
+    with patch("boto3.client", return_value=fake_client):
+        ex = AWSBatchExecutor()
+        handle = ex.submit(lambda: None, name="t", cpus=1)
+        assert handle.result(timeout=5) is None
     ex.shutdown()
