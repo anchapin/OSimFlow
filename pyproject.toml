@@ -8,7 +8,7 @@ version = "0.1.0-dev"
 description = "Community-driven parametric OpenStudio simulation campaigns"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [
     {name = "OSimFlow maintainers"},
 ]
@@ -25,7 +25,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Hydrology",
 ]
@@ -45,6 +44,7 @@ dependencies = [
 dev = [
     "pytest>=7",
     "pytest-cov>=4",
+    "pytest-xdist>=3.5",
     "ruff>=0.6",
     "mypy>=1.10",
     "types-PyYAML",
@@ -113,7 +113,7 @@ exclude_lines = [
 # ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 src = ["osimflow", "bin", "user_scripts", "tests"]
 # Spike/ directory holds one-off scripts from the workflow-framework decision
 # spike. They are not shipped; lint them separately or not at all.
@@ -145,7 +145,7 @@ known-first-party = ["osimflow"]
 # user_scripts/ are user-supplied CLI scripts and get a relaxed config.
 # ---------------------------------------------------------------------------
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true

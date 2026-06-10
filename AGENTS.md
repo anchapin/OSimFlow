@@ -97,7 +97,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
 | Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
 | Statistical sampling | **`scipy.stats`** | Latin Hypercube Sampling (LHS) of design variables. |
-| Data processing | **Python 3.11+**, **`pandas`**, **`pyarrow`** (Parquet) | KPI extraction, aggregation, error parsing. |
+| Data processing | **Python 3.12+**, **`pandas`**, **`pyarrow`** (Parquet) | KPI extraction, aggregation, error parsing. |
 | Plotting | **`matplotlib`** + **`seaborn`** | 1–3 static summary plots (PNG/PDF). |
 | Container registry | **Docker Hub** (OpenStudio) + **`ghcr.io`** (scientific Python) | `docker.io/nrel/openstudio:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
 | Monitoring | **BYO: per-campaign `run.json` + tqdm** | See `.agents/results/monitoring-decision.md`. No external service. Optional MLflow add-on via `--mlflow_tracking_uri` (see `osimflow/mlflow_hook.py`). |
@@ -109,11 +109,12 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Path | Purpose |
 |---|---|
-| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, executors. |
+| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, executors, plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`). |
 | `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` — explicit, testable resume semantics. |
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
+| `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, plus `EPWValidationError` / `EPWDownloadError`. |
 | `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `NomadExecutor`. |
 | `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
@@ -343,14 +344,19 @@ unit tests.
 ### CI workflow
 
 Every push to a PR branch and every merge to `main` runs the workflow in
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) (issues #8, #15).
-That job is the green/red signal contributors see on a PR; it is a thin
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) (issues #8, #15, #76).
+That workflow is the green/red signal contributors see on a PR; it is a thin
 mirror of `make test-cov` + `make contract` + `make typecheck`, running
 `ruff check`, `ruff format --check`, `mypy osimflow`, and `pytest
---cov=osimflow --cov-fail-under=85` on a Python 3.11 and 3.12 matrix.
-A green check on the `ci` job is the gate to merge. Lint-only fast
-feedback lives in [`.github/workflows/lint.yml`](.github/workflows/lint.yml);
-the AGENTS.md / docs drift gate lives in
+--cov=osimflow --cov-fail-under=85` on a single Python 3.12 runner. The
+`ci` workflow is split into parallel `lint`, `typecheck`, `test`, `contract`,
+and `security` jobs (issue #76) so wall-clock time is dominated by the
+slowest single job, not the sum of all checks. A green check on every
+required job is the gate to merge. Lint-only fast feedback is the
+`lint` job inside the same `ci` workflow (the older separate
+`.github/workflows/lint.yml` was folded in by issue #76); the
+AGENTS.md / docs drift gate lives in the `contract` job of the same
+workflow, with a mirror in
 [`.github/workflows/agents-contract.yml`](.github/workflows/agents-contract.yml).
 The performance-benchmark job (issue #10) lives in
 [`.github/workflows/bench.yml`](.github/workflows/bench.yml) — it runs
@@ -368,7 +374,7 @@ and the `make act` local mirror.
 - **PEP 8** + **type hints** everywhere. Public functions must have full annotations.
 - Use `pathlib.Path` over `os.path`. Use `logging` (not `print`).
 - Exceptions: catch, log with `exc_info=True`, **re-raise**. Never swallow.
-- The package targets Python 3.11+. Do not add `from __future__ import annotations` (the syntax is supported natively).
+- The package targets Python 3.12+. Do not add `from __future__ import annotations` (the syntax is supported natively).
 - CLI entry points use `argparse` with subcommands (`osimflow run ...`).
 - For OpenStudio Python bindings, isolate all `import openstudio` calls behind a `try/except` and provide a clear error message if the bindings aren't installed (relevant in `scientific_python_image` builds that don't include the heavy C++ stack).
 - **BYOS contract**: a user-supplied function (in `user_scripts/`) is discovered by name. The Campaign validates the function signature with `inspect.signature`. Never define the same contract twice (once as a Python function, once as a CLI surface).

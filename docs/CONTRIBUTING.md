@@ -39,7 +39,7 @@ make precommit  # the pre-push safety net
 
 Mirror the rules in [`../AGENTS.md`](../AGENTS.md) §6. Highlights:
 
-- Python 3.11+; **type hints everywhere** on public functions.
+- Python 3.12+; **type hints everywhere** on public functions.
 - Use `pathlib.Path` over `os.path`. Use `logging`, not `print`.
 - Catch, log with `exc_info=True`, **re-raise**. Never swallow.
 - CLI entry points use `argparse` subcommands.

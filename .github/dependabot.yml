@@ -1,0 +1,57 @@
+# =============================================================================
+# .github/dependabot.yml — automated dependency updates (issue #76)
+# =============================================================================
+# Three update streams, all on a weekly cadence:
+#   - pip (pyproject.toml runtime + dev dependencies)
+#   - GitHub Actions (workflow action versions)
+#   - pre-commit (hook revs in .pre-commit-config.yaml)
+#
+# Limit: 5 open PRs per ecosystem (the default 10 creates review noise).
+# Group: patch + minor updates are batched into a single "deps" PR per
+# ecosystem per week so reviewers see one PR per ecosystem, not five.
+# =============================================================================
+version: 2
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      patch-and-minor:
+        update-types: ["minor", "patch"]
+      major:
+        update-types: ["major"]
+    labels:
+      - "dependencies"
+      - "automated"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
+    labels:
+      - "dependencies"
+      - "automated"
+      - "ci"
+
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      pre-commit-hooks:
+        patterns: ["*"]
+    labels:
+      - "dependencies"
+      - "automated"
+      - "ci"

@@ -86,6 +86,7 @@ def cfg_factory(workdir: Path, template_pkg: Path) -> object:
 # ---------------------------------------------------------------------------
 # Test: warm-cache resume is dramatically faster than a cold run
 # ---------------------------------------------------------------------------
+@pytest.mark.xdist_group(name="cache_resume_solo")
 def test_warm_cache_resume_is_faster_than_cold_run(cfg_factory: object, outdir: Path) -> None:
     """Run a 3-sample campaign twice against the same outdir. The
     second run must be at least 10x faster than the first (warm-cache
