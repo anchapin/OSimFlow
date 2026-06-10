@@ -370,6 +370,167 @@ def extract_kpis_from_sql(sql_path: Path) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Quality / convergence checks (issue #60)
+# ---------------------------------------------------------------------------
+
+DEFAULT_QUALITY_THRESHOLDS: dict[str, Any] = {
+    "eui_min_kwh_per_m2": 10.0,
+    "eui_max_kwh_per_m2": 1000.0,
+    "unmet_hours_max": 300.0,
+    "extreme_value_multiplier": 10.0,
+    "near_zero_tolerance": 0.01,
+}
+
+_CRITICAL_KPI_KEYS: list[str] = [
+    "eui_kwh_per_m2",
+    "total_site_energy_kwh",
+]
+
+
+def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run plausibility checks on extracted KPIs.
+
+    Parameters
+    ----------
+    kpis:
+        The flat KPI dict produced by :func:`extract_kpis_from_sql` (or a
+        custom extractor).
+    thresholds:
+        Optional override dict.  Recognised keys match
+        ``DEFAULT_QUALITY_THRESHOLDS``; any missing key falls back to the
+        default.  Thresholds can also be supplied via the
+        ``quality_thresholds`` section of ``variables.yml`` — the Campaign
+        forwards that section through the ``--quality_thresholds`` CLI flag.
+
+    Returns
+    -------
+    dict
+        ``{"valid": bool, "warnings": list[str], "failures": list[str]}``
+        — *valid* is ``True`` only when *failures* is empty.  Warnings are
+        informational and do not affect *valid*.
+    """
+    t = {**DEFAULT_QUALITY_THRESHOLDS, **(thresholds or {})}
+
+    warnings: list[str] = []
+    failures: list[str] = []
+
+    # --- 1. Missing critical KPIs -------------------------------------------
+    for key in _CRITICAL_KPI_KEYS:
+        if key not in kpis or kpis[key] is None:
+            failures.append(f"Missing critical KPI: {key}")
+
+    # --- 2. EUI range check --------------------------------------------------
+    eui = kpis.get("eui_kwh_per_m2")
+    if eui is not None:
+        if eui < t["eui_min_kwh_per_m2"]:
+            failures.append(
+                f"EUI ({eui:.1f} kWh/m²/yr) is below minimum threshold "
+                f"({t['eui_min_kwh_per_m2']:.1f}). Check plant loop connections."
+            )
+        if eui > t["eui_max_kwh_per_m2"]:
+            failures.append(
+                f"EUI ({eui:.1f} kWh/m²/yr) exceeds maximum threshold "
+                f"({t['eui_max_kwh_per_m2']:.1f}). Check for duplicate loads."
+            )
+
+    # --- 3. Zero-energy detection --------------------------------------------
+    total_energy = kpis.get("total_site_energy_kwh")
+    if total_energy is not None and abs(total_energy) < t["near_zero_tolerance"]:
+        failures.append(
+            "Total site energy is zero or near-zero. "
+            "Simulation may not have produced meaningful results."
+        )
+
+    end_uses = kpis.get("end_uses", {})
+    if isinstance(end_uses, dict):
+        energy_values = [
+            v for k, v in end_uses.items() if k.endswith("_kwh") and isinstance(v, (int, float))
+        ]
+        if energy_values and all(abs(v) < t["near_zero_tolerance"] for v in energy_values):
+            failures.append(
+                "All end-use energy values are zero or near-zero. "
+                "Check HVAC and internal load schedules."
+            )
+
+    # --- 4. Negative energy values -------------------------------------------
+    if total_energy is not None and total_energy < 0:
+        warnings.append(
+            f"Total site energy is negative ({total_energy:.1f} kWh). "
+            "This may indicate net generation or a modeling error."
+        )
+
+    if isinstance(end_uses, dict):
+        for key, value in end_uses.items():
+            if key.endswith("_kwh") and isinstance(value, (int, float)) and value < 0:
+                warnings.append(
+                    f"End-use '{key}' is negative ({value:.3f} kWh). "
+                    "Check for metering or loop-connection issues."
+                )
+
+    # --- 5. Extreme value detection (outlier relative to median) -------------
+    # This check is more meaningful at the aggregate level, but we flag
+    # individual samples where a single end-use dominates all others.
+    if isinstance(end_uses, dict) and len(end_uses) > 2:
+        eu_values = [
+            v
+            for k, v in end_uses.items()
+            if k.endswith("_kwh")
+            and k != "total_electricity_kwh"
+            and isinstance(v, (int, float))
+            and v > 0
+        ]
+        if len(eu_values) >= 2:
+            sorted_vals = sorted(eu_values)
+            mid = len(sorted_vals) // 2
+            median = (
+                sorted_vals[mid]
+                if len(sorted_vals) % 2
+                else ((sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0)
+            )
+            if median > 0:
+                for key, value in end_uses.items():
+                    if (
+                        key.endswith("_kwh")
+                        and key != "total_electricity_kwh"
+                        and isinstance(value, (int, float))
+                        and value > median * t["extreme_value_multiplier"]
+                    ):
+                        warnings.append(
+                            f"End-use '{key}' ({value:.1f} kWh) exceeds "
+                            f"{t['extreme_value_multiplier']:.0f}× the median "
+                            f"({median:.1f} kWh). Possible outlier."
+                        )
+
+    # --- 6. Unmet hours check (ASHRAE 90.1 §6 threshold) --------------------
+    # ASHRAE 90.1-2019 §6.4.2.1 limits unmet hours to 300 heating + 300 cooling.
+    heating_hours = kpis.get("unmet_hours_heating")
+    cooling_hours = kpis.get("unmet_hours_cooling")
+
+    if heating_hours is not None and heating_hours > t["unmet_hours_max"]:
+        warnings.append(
+            f"Unmet heating hours ({heating_hours:.0f}) exceed ASHRAE 90.1 §6 "
+            f"limit ({t['unmet_hours_max']:.0f} hrs). HVAC may be undersized."
+        )
+    if cooling_hours is not None and cooling_hours > t["unmet_hours_max"]:
+        warnings.append(
+            f"Unmet cooling hours ({cooling_hours:.0f}) exceed ASHRAE 90.1 §6 "
+            f"limit ({t['unmet_hours_max']:.0f} hrs). HVAC may be undersized."
+        )
+
+    # Combined unmet hours sanity: total > 8760 is physically impossible.
+    if heating_hours is not None and cooling_hours is not None:
+        total_unmet = heating_hours + cooling_hours
+        if total_unmet > 8760:
+            failures.append(
+                f"Total unmet hours ({total_unmet:.0f}) exceed 8760 (hours/year). "
+                "HVAC controller may be disconnected."
+            )
+
+    valid = len(failures) == 0
+    return {"valid": valid, "warnings": warnings, "failures": failures}
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -380,6 +541,13 @@ def main() -> int:
     parser.add_argument("--sample_id", required=True)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--custom_kpi_extractor", type=Path, default=None)
+    parser.add_argument(
+        "--quality_thresholds_json",
+        type=str,
+        default=None,
+        help="JSON string of quality threshold overrides "
+        "(forwarded from variables.yml `quality_thresholds` section).",
+    )
     args = parser.parse_args()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -424,14 +592,35 @@ def main() -> int:
         kpis = extract_kpis_from_sql(sql_path)
         kpis.update(_extract_simulation_summary(args.simulation_dir))
 
+    quality_thresholds: dict[str, Any] | None = None
+    if args.quality_thresholds_json:
+        try:
+            quality_thresholds = json.loads(args.quality_thresholds_json)
+        except json.JSONDecodeError:
+            log.warning("Could not parse --quality_thresholds_json; using defaults.")
+
+    quality = validate_kpis(kpis, thresholds=quality_thresholds)
+
+    for w in quality["warnings"]:
+        log.warning("Quality warning for sample %s: %s", args.sample_id, w)
+    for f in quality["failures"]:
+        log.error("Quality failure for sample %s: %s", args.sample_id, f)
+
     output = {
         "sample_id": args.sample_id,
         "openstudio_version": None,
         "kpis": kpis,
+        "quality": quality,
     }
 
     args.out.write_text(json.dumps(output, indent=2))
-    log.info("KPI extraction complete for sample=%s", args.sample_id)
+    log.info(
+        "KPI extraction complete for sample=%s quality_valid=%s warnings=%d failures=%d",
+        args.sample_id,
+        quality["valid"],
+        len(quality["warnings"]),
+        len(quality["failures"]),
+    )
     return 0
 
 
