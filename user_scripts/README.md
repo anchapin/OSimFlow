@@ -5,9 +5,9 @@ default OSimFlow behavior. A script here is selected via a CLI flag such as
 `--custom_apply_script user_scripts/my_apply.py` or
 `--custom_kpi_extractor user_scripts/my_kpis.py`.
 
-> **Status:** The exact interface spec is part of the Phase 3 deliverables
-> (PRD §5.2 / §3.1 *User-Provided Custom Post-Processing Scripts*). This file
-> is a placeholder for the final spec.
+> **Status:** The interface spec is stabilised.  See the **worked examples**
+> in [`examples/`](examples/) and the **templates** in [`templates/`](templates/)
+> for ready-to-copy starting points.
 
 ## Function-name convention
 
@@ -18,9 +18,27 @@ overrides). The function-name `apply` (legacy) is accepted but emits a
 
 The canonical loader is `osimflow.byos.load_user_function`.
 
-## Planned interface (sketch)
+## Worked examples and templates
 
-### `apply_params_to_model` override
+The [`examples/`](examples/) directory contains four complete, documented
+BYOS scripts covering the most common patterns:
+
+- **`custom_kpi_eui.py`** — extract EUI (kWh/m2/yr) from `eplusout.sql`.
+- **`custom_kpi_enduses.py`** — extract end-use energy breakdown.
+- **`custom_apply_wwr.py`** — modify window-to-wall ratio in `.osw` measure arguments.
+- **`custom_apply_epw_swap.py`** — swap `.epw` weather file for multi-climate studies.
+
+The [`templates/`](templates/) directory has commented skeletons with `TODO`
+markers for a quick start:
+
+- **`kpi_extractor_template.py`** — fill in your SQL queries.
+- **`apply_params_template.py`** — fill in your parameterisation logic.
+
+See [`examples/README.md`](examples/README.md) for a step-by-step walkthrough.
+
+## Interface reference
+
+### `apply_parameters` override
 
 ```python
 def apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path) -> Path:
