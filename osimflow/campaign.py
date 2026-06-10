@@ -141,6 +141,7 @@ class Campaign:
                 "custom_kpi_extractor": (
                     str(cfg.custom_kpi_extractor) if cfg.custom_kpi_extractor else None
                 ),
+                "baseline_sample_id": (str(cfg.baseline["sample_id"]) if cfg.baseline else None),
             },
         )
         # Per-sample accumulator. The three per-sample steps write here;
@@ -205,6 +206,72 @@ class Campaign:
                 )
             )
 
+    def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
+        """Compute baseline comparison metrics and store on the run trace.
+
+        Reads the baseline sample's KPIs and computes improvement statistics
+        across all parametric samples. Populates ``self.trace.baseline_comparison``
+        (issue #64).
+
+        When no baseline is configured, this is a no-op.
+        """
+        baseline_sid = self._baseline_sample_id()
+        if baseline_sid is None:
+            return
+
+        all_kpis = self._read_all_kpis(kpi_files)
+        if baseline_sid not in all_kpis:
+            log.warning(
+                "baseline sample_id=%s not found in KPI files; skipping baseline comparison",
+                baseline_sid,
+            )
+            return
+
+        baseline_kpis = all_kpis[baseline_sid]
+        comparison = self._compute_improvement_range(baseline_sid, baseline_kpis, all_kpis)
+        if comparison:
+            self.trace.baseline_comparison = comparison
+            log.info("baseline comparison: %s", comparison)
+
+    @staticmethod
+    def _read_all_kpis(kpi_files: list[Path]) -> dict[str, dict[str, float]]:
+        """Read KPI files into a {sample_id: {kpi_name: value}} mapping."""
+        all_kpis: dict[str, dict[str, float]] = {}
+        for kpi_path in kpi_files:
+            try:
+                data = json.loads(kpi_path.read_text())
+                sid = str(data.get("sample_id", kpi_path.stem.replace("kpi_", "")))
+                kpis = data.get("kpis", {})
+                numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
+                all_kpis[sid] = numeric_kpis
+            except Exception as exc:
+                log.warning("could not read KPI file %s for baseline comparison: %s", kpi_path, exc)
+        return all_kpis
+
+    @staticmethod
+    def _compute_improvement_range(
+        baseline_sid: str,
+        baseline_kpis: dict[str, float],
+        all_kpis: dict[str, dict[str, float]],
+    ) -> dict[str, object]:
+        """Compute pct improvement range for each KPI relative to baseline."""
+        comparison: dict[str, object] = {}
+        for kpi_name, baseline_val in baseline_kpis.items():
+            if baseline_val == 0:
+                continue
+            parametric_values = [
+                kpis[kpi_name]
+                for sid, kpis in all_kpis.items()
+                if sid != baseline_sid and kpi_name in kpis
+            ]
+            if not parametric_values:
+                continue
+            improvements = [(baseline_val - v) / baseline_val * 100.0 for v in parametric_values]
+            comparison[f"baseline_{kpi_name}"] = round(baseline_val, 2)
+            comparison[f"min_{kpi_name}_improvement_pct"] = round(min(improvements), 2)
+            comparison[f"max_{kpi_name}_improvement_pct"] = round(max(improvements), 2)
+        return comparison
+
     def _archive_sample_artifacts(self, src: Path, dst: Path, patterns: list[str]) -> None:
         """Copy files matching *patterns* from *src* into *dst*.
 
@@ -222,6 +289,12 @@ class Campaign:
                 if f.is_file():
                     shutil.copy2(f, dst / f.name)
                     log.debug("archived %s -> %s", f, dst / f.name)
+
+    def _baseline_sample_id(self) -> str | None:
+        """Return the baseline sample_id from config, or None."""
+        if self.cfg.baseline is None:
+            return None
+        return str(self.cfg.baseline.get("sample_id", "baseline"))
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -254,9 +327,17 @@ class Campaign:
             parameterized: SampleDict = self.step_apply_parameters(samples)
             simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
             kpi_files: list[Path] = self.step_extract_kpis(simulated)
-            aggregated: dict[str, Path] = self.step_aggregate_results(kpi_files, simulated)
-            plots: list[Path] = self.step_generate_plots(aggregated)
+            aggregated: dict[str, Path] = self.step_aggregate_results(
+                kpi_files, simulated, baseline_sample_id=self._baseline_sample_id()
+            )
+            plots: list[Path] = self.step_generate_plots(
+                aggregated, baseline_sample_id=self._baseline_sample_id()
+            )
             t1 = time.time()
+
+            # Baseline comparison metrics (issue #64). Compute after all
+            # steps have run so we have KPI data for the baseline sample.
+            self._compute_baseline_comparison(kpi_files)
 
             # Archive campaign inputs (template_sim_package + input_variables)
             # when --archive_intermediates is set.
@@ -366,6 +447,34 @@ class Campaign:
             self.cache.store(key, Path(result_path), exit_code=0)
             run_samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
             samples = cast_samples(run_samples_obj)
+
+            # Inject baseline sample (issue #64): when cfg.baseline is
+            # defined, prepend a fixed-parameter sample to the LHS set.
+            baseline_sid = self._baseline_sample_id()
+            if baseline_sid is not None and self.cfg.baseline is not None:
+                baseline_params = self.cfg.baseline.get("parameters", {})
+                # Only inject if not already present in the LHS set.
+                existing_ids = {s["sample_id"] for s in samples}
+                if baseline_sid not in existing_ids:
+                    params_dict: dict[str, object] = (
+                        dict(baseline_params) if isinstance(baseline_params, dict) else {}
+                    )
+                    baseline_sample: SampleSpec = SampleSpec(
+                        sample_id=baseline_sid,
+                        values=params_dict,
+                    )
+                    samples.insert(0, baseline_sample)
+                    log.info(
+                        "injected baseline sample_id=%s with %d parameters",
+                        baseline_sid,
+                        len(params_dict),
+                    )
+                else:
+                    log.info(
+                        "baseline sample_id=%s already in sample set; skipping injection",
+                        baseline_sid,
+                    )
+
             self.trace.step_finished(
                 "GENERATE_LHS_SAMPLES",
                 cache="MISS",
@@ -653,9 +762,19 @@ class Campaign:
         return sorted(out)
 
     def step_aggregate_results(
-        self, kpi_files: list[Path], simulated: SampleDict
+        self,
+        kpi_files: list[Path],
+        simulated: SampleDict,
+        baseline_sample_id: str | None = None,
     ) -> dict[str, Path]:
-        """Single-shot: aggregate all KPIs into a CSV + Parquet + failed CSV."""
+        """Single-shot: aggregate all KPIs into a CSV + Parquet + failed CSV.
+
+        Args:
+            kpi_files: per-sample KPI JSON files from step_extract_kpis.
+            simulated: mapping of sample_id to simulation output directory.
+            baseline_sample_id: optional baseline sample ID (issue #64).
+                When provided, the aggregator adds pct improvement columns.
+        """
         t0 = time.time()
         sim_dirs = list(simulated.values())
         inputs_hash = sha256_of_dict(
@@ -690,6 +809,7 @@ class Campaign:
             kpi_files,
             sim_dirs,
             self.cfg.outdir,
+            baseline_sample_id=baseline_sample_id,
             name="aggregate",
             cpus=2,
             memory_mb=4 * 1024,
@@ -707,9 +827,20 @@ class Campaign:
         )
         return result
 
-    def step_generate_plots(self, aggregated: dict[str, Path]) -> list[Path]:
+    def step_generate_plots(
+        self,
+        aggregated: dict[str, Path],
+        baseline_sample_id: str | None = None,
+    ) -> list[Path]:
         """Single-shot: render 1-3 summary plots. Not cached — plots are
-        cheap to regenerate and the user may want to tweak styling."""
+        cheap to regenerate and the user may want to tweak styling.
+
+        Args:
+            aggregated: dict with 'csv' and 'failed' paths from aggregation.
+            baseline_sample_id: optional baseline sample ID (issue #64).
+                When provided, the plot generator adds a vertical reference
+                line for the baseline EUI on the EUI histogram.
+        """
         t0 = time.time()
         plots_dir = self.cfg.outdir / "plots"
         handle = self.executor.submit(
@@ -717,6 +848,7 @@ class Campaign:
             aggregated["csv"],
             aggregated["failed"],
             plots_dir,
+            baseline_sample_id=baseline_sample_id,
             name="plots",
             cpus=1,
             memory_mb=1024,

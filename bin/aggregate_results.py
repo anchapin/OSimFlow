@@ -62,6 +62,11 @@ def main() -> int:
     parser.add_argument("--out_csv", required=True, type=Path)
     parser.add_argument("--out_parquet", type=Path, default=None)
     parser.add_argument("--out_failed", required=True, type=Path)
+    parser.add_argument(
+        "--baseline_sample_id",
+        default=None,
+        help="Sample ID of the baseline (for pct improvement columns).",
+    )
     args = parser.parse_args()
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -75,6 +80,22 @@ def main() -> int:
 
     if all_kpis:
         df = pd.DataFrame(all_kpis)
+
+        # Baseline comparison (issue #64): compute pct improvement columns
+        if args.baseline_sample_id and args.baseline_sample_id in df["sample_id"].values:
+            baseline_row = df[df["sample_id"] == args.baseline_sample_id].iloc[0]
+            numeric_cols = df.select_dtypes(include="number").columns
+            for col in numeric_cols:
+                baseline_val = baseline_row[col]
+                if pd.notna(baseline_val) and baseline_val != 0:
+                    improvement_col = f"{col}_pct_improvement"
+                    # Negative improvement = better than baseline (lower EUI = better)
+                    df[improvement_col] = ((baseline_val - df[col]) / baseline_val * 100.0).round(2)
+            log.info(
+                "computed baseline comparison columns against sample_id=%s",
+                args.baseline_sample_id,
+            )
+
         df.to_csv(args.out_csv, index=False)
         if args.out_parquet:
             df.to_parquet(args.out_parquet, index=False)
