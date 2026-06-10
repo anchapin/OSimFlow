@@ -40,6 +40,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TypedDict
 
+from .apply_params import (
+    _build_mappings,
+    preflight_check,
+)
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import BaseExecutor
@@ -380,8 +384,40 @@ class Campaign:
             raise
 
     def step_apply_parameters(self, samples: list[SampleSpec]) -> SampleDict:
-        """Fan-out: for each sample, produce a modified sim package."""
+        """Fan-out: for each sample, produce a modified sim package.
+
+        Before submitting any work, runs a pre-flight validation pass
+        (PRD §1.4) that checks every parameter name across all samples
+        against the template's available measure arguments and .osm
+        attributes. This ensures a typo in ``variables.yml`` fails fast
+        *before* any simulations start.
+
+        Raises:
+            UnmappedParameterError: a parameter name does not map to any
+                template attribute or measure argument. The error message
+                includes fuzzy-match suggestions for likely typos.
+            AmbiguousParameterError: a plain argument name appears in
+                multiple measure steps and must be disambiguated via the
+                dotted ``MeasureName.argument_name`` form.
+        """
         t0 = time.time()
+
+        # Pre-flight validation (PRD §1.4): validate ALL parameter names
+        # against the template before submitting any work. Collect the
+        # union of parameter names across all samples so a single bad
+        # variable in any sample blocks the entire step.
+        all_param_keys: dict[str, None] = {}
+        for s in samples:
+            all_param_keys.update(dict.fromkeys(s["values"].keys()))
+        if all_param_keys:
+            mappings = _build_mappings(self.cfg.template_sim_package)
+            preflight_check(all_param_keys, mappings)
+            log.info(
+                "pre-flight check passed: %d parameter(s) validated against %s",
+                len(all_param_keys),
+                self.cfg.template_sim_package,
+            )
+
         out: SampleDict = {}
         cache_label = "MISS×N" if samples else "SKIPPED"
         self.trace.step_started("APPLY_PARAMETERS", total=len(samples))

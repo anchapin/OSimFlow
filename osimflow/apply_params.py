@@ -35,6 +35,7 @@ PRD references
 
 from __future__ import annotations
 
+import difflib
 import importlib
 import importlib.util
 import json
@@ -564,6 +565,9 @@ def preflight_check(
 
     1. **Unmapped** — every key in *parameters* must appear in
        *mappings* (either as a plain name or a dotted name).
+       For unmapped names, fuzzy-match suggestions are generated using
+       :func:`difflib.get_close_matches` so the user can fix typos
+       in one pass.
     2. **Ambiguous** — a plain argument name that maps to a measure
        argument but the .osw contains *multiple* measures that expose
        the same argument name is rejected.  The user must use the
@@ -574,13 +578,26 @@ def preflight_check(
     """
     unmapped = sorted(name for name in parameters if name not in mappings)
     if unmapped:
-        raise UnmappedParameterError(
-            "Pre-flight check failed: the following LHS variables do not "
-            "map to any template attribute or measure argument: "
-            + ", ".join(unmapped)
-            + ". Fix the variable names in variables.yml or extend the "
+        available = list(mappings.keys())
+        lines: list[str] = [
+            "PRE-FLIGHT VALIDATION FAILED:",
+            "",
+        ]
+        for name in unmapped:
+            lines.append(f"  Parameter {name!r} not found in any measure step or .osm attribute.")
+            suggestions = difflib.get_close_matches(name, available, n=3, cutoff=0.6)
+            if suggestions:
+                lines.append(f"  Did you mean {suggestions[0]!r}?")
+                if len(suggestions) > 1:
+                    lines.append(
+                        f"  Other similar names: {', '.join(repr(s) for s in suggestions[1:])}"
+                    )
+            lines.append("")
+        lines.append(
+            "Fix the variable names in variables.yml or extend the "
             "template to expose them."
         )
+        raise UnmappedParameterError("\n".join(lines))
     # Detect ambiguous plain names.
     # An ambiguous name is a *plain* (non-dotted) parameter key whose
     # mapping is a measure_argument AND whose argument name appears in
