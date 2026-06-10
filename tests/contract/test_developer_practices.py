@@ -183,3 +183,38 @@ def test_docs_sync() -> None:
     assert res.returncode == 0, (
         f"docs sync check failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
+
+
+def test_agents_md_section_5_mentions_ci_workflow() -> None:
+    """Issue #8 acceptance criterion: AGENTS.md §5 (Testing) must mention
+    the CI workflow file so contributors know where the green/red signal
+    for `pytest` comes from.
+
+    We extract §5 by splitting on `## N. ` headings and assert the
+    section body contains a backticked `.github/workflows/` path. The
+    exact file referenced (`ci.yml` is the canonical one) is checked
+    separately so the test fails with a precise diagnostic.
+    """
+    import re
+
+    agents_md = (REPO_ROOT / "AGENTS.md").read_text()
+    # Split on `## ` headings and grab the slice whose header is "5. Testing".
+    sections = re.split(r"^## ", agents_md, flags=re.MULTILINE)
+    section_5: str | None = None
+    for chunk in sections:
+        if chunk.startswith("5. Testing"):
+            section_5 = chunk
+            break
+    assert section_5 is not None, "AGENTS.md is missing the `## 5. Testing` section"
+
+    # Acceptance criterion: the section references a `.github/workflows/`
+    # path. Pin to `ci.yml` (the canonical pytest+lint+typecheck job) so a
+    # contributor gets a precise failure if they reference a non-existent
+    # workflow file.
+    assert ".github/workflows/" in section_5, (
+        "AGENTS.md §5 (Testing) must mention a `.github/workflows/` path "
+        "so contributors can find the CI workflow (issue #8 acceptance "
+        "criterion)."
+    )
+    ci_path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+    assert ci_path.is_file(), f"{ci_path} referenced from AGENTS.md §5 does not exist on disk"
