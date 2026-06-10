@@ -58,7 +58,7 @@ def mypy_result() -> subprocess.CompletedProcess[str]:
 def pytest_cov_result() -> subprocess.CompletedProcess[str]:
     # Recursion guard: this test runs inside a pytest process, so the
     # inner pytest must NOT re-collect this directory. Restrict to the
-    # integration suite that exercises the osimflow/ package surface.
+    # integration and unit suites that exercise the osimflow/ package surface.
     return _run(
         [
             sys.executable,
@@ -72,6 +72,7 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
             "-q",
             "--no-cov",
             "tests/integration",
+            "tests/unit",
         ]
     )
 
