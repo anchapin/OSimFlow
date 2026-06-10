@@ -327,7 +327,9 @@ class TestPreflightUnmapped:
 
     def test_dotted_name_mapped_passes(self) -> None:
         mappings = {
-            "M.x": MappedParameter(name="x", kind="measure_argument", step_index=0, measure_name="M")
+            "M.x": MappedParameter(
+                name="x", kind="measure_argument", step_index=0, measure_name="M"
+            )
         }
         preflight_check({"M.x": 1.0}, mappings)
 

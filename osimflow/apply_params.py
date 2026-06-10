@@ -658,8 +658,7 @@ def _check_ambiguous_parameters(
             "Pre-flight check failed: the following argument names are "
             "ambiguous (they appear in multiple measures). Use the dotted "
             "form 'MeasureName.argument_name' in variables.yml to "
-            "disambiguate:\n"
-            + "\n".join(ambiguous)
+            "disambiguate:\n" + "\n".join(ambiguous)
         )
 
 
