@@ -45,6 +45,7 @@ PATH_SKIP_SUBSTRINGS = (
     "os.path",  # module path, not a file
     "pathlib",  # module path, not a file
     "argparse",  # module path, not a file
+    "openstudio.cli",  # CLI binary shipped inside container, not a local path
     ".egg-info",
 )
 # Extension classes that look like file refs but are documented file
