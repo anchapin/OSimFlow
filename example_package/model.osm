@@ -1,1 +1,1 @@
-{"attributes": {"window_u_value": 3.0, "infiltration_rate": 0.7, "hvac_setpoint": 22.0}}
+{"attributes": {"window_u_value": 3.0, "infiltration_rate": 0.7, "hvac_setpoint": 22.0, "lighting_power_density": 10.0, "thermal_conductivity": 0.5, "internal_gain": 5.0, "equipment_lifetime": 15.0}}
