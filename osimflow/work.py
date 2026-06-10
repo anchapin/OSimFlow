@@ -372,6 +372,7 @@ def aggregate_results(
     sim_dirs: list[Path],
     out: Path,
     baseline_sample_id: str | None = None,
+    ts_resolution: str = "monthly",
 ) -> dict[str, Path]:
     """Aggregate per-sample KPIs into CSV/Parquet/failed-CSV. Returns paths.
 
@@ -382,6 +383,10 @@ def aggregate_results(
         baseline_sample_id: optional baseline sample ID (issue #64). When
             provided, the aggregator computes percentage improvement columns
             for each numeric KPI relative to the baseline.
+        ts_resolution: time-series aggregation resolution (issue #40).
+            One of 'hourly', 'daily', 'monthly', 'annual'. Defaults to
+            'monthly'. Raw hourly data is preserved in per-sample .sql
+            files behind --archive_intermediates.
     """
     out.mkdir(parents=True, exist_ok=True)
     csv_path = out / "aggregated_results.csv"
@@ -400,6 +405,8 @@ def aggregate_results(
         str(parquet_path),
         "--out_failed",
         str(failed_path),
+        "--ts_resolution",
+        ts_resolution,
     ]
     if baseline_sample_id is not None:
         cmd.extend(["--baseline_sample_id", baseline_sample_id])
@@ -417,6 +424,7 @@ def aggregate_results(
         "csv": csv_path,
         "parquet": parquet_path,
         "failed": failed_path,
+        "timeseries": out / "timeseries_aggregated.csv",
     }
 
 

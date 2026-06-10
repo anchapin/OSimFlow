@@ -2,6 +2,13 @@
 """aggregate_results.py — Collect per-sample KPIs and identify failures.
 
 See docs/OSimFlow.md §4.2 (PROCESS_AGGREGATE_RESULTS) for the contract.
+
+Time-series aggregation (issue #40):
+    When ``--ts_resolution`` is set (default ``monthly``), the script
+    scans each per-sample ``eplusout.sql`` for EnergyPlus time-series
+    tables and aggregates them to the requested resolution using
+    SQL-based GROUP BY.  Raw hourly data stays in the per-sample
+    ``.sql`` files behind ``--archive_intermediates``.
 """
 
 from __future__ import annotations
@@ -10,6 +17,7 @@ import argparse
 import json
 import logging
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -107,6 +115,221 @@ CATEGORY_SUGGESTIONS: dict[str, str] = {
     "timestep_instability": "Reduce the simulation timestep (e.g., from 60 to 10 minutes) or relax convergence criteria.",
     "generic_severe": "Review the full eplusout.err for additional context around this error.",
 }
+
+
+# ---------------------------------------------------------------------------
+# Time-series aggregation (issue #40)
+# ---------------------------------------------------------------------------
+
+TS_RESOLUTIONS = ("hourly", "daily", "monthly", "annual")
+
+_ENERGYPLUS_TS_TABLES: list[str] = [
+    "ReportData",
+    "ReportDataDictionary",
+    "Time",
+    "ZoneSizing",
+    "ComponentSizing",
+]
+
+_MONTHLY_GROUP = """
+    SELECT
+        rd.DictionaryIndex,
+        ddd.IndexGroup,
+        ddd.Name,
+        ddd.ReportingFrequency,
+        SUM(rd.Value) AS sum_value,
+        AVG(rd.Value) AS avg_value,
+        MIN(rd.Value) AS min_value,
+        MAX(rd.Value) AS max_value,
+        COUNT(rd.Value) AS n_points
+    FROM ReportData rd
+    JOIN ReportDataDictionary ddd ON rd.DictionaryIndex = ddd.ReportDataDictionaryIndex
+    JOIN Time t ON rd.TimeIndex = t.TimeIndex
+    GROUP BY rd.DictionaryIndex, t.Month
+"""
+
+_DAILY_GROUP = """
+    SELECT
+        rd.DictionaryIndex,
+        ddd.IndexGroup,
+        ddd.Name,
+        ddd.ReportingFrequency,
+        SUM(rd.Value) AS sum_value,
+        AVG(rd.Value) AS avg_value,
+        MIN(rd.Value) AS min_value,
+        MAX(rd.Value) AS max_value,
+        COUNT(rd.Value) AS n_points
+    FROM ReportData rd
+    JOIN ReportDataDictionary ddd ON rd.DictionaryIndex = ddd.ReportDataDictionaryIndex
+    JOIN Time t ON rd.TimeIndex = t.TimeIndex
+    GROUP BY rd.DictionaryIndex, t.Month, t.Day
+"""
+
+_ANNUAL_GROUP = """
+    SELECT
+        rd.DictionaryIndex,
+        ddd.IndexGroup,
+        ddd.Name,
+        ddd.ReportingFrequency,
+        SUM(rd.Value) AS sum_value,
+        AVG(rd.Value) AS avg_value,
+        MIN(rd.Value) AS min_value,
+        MAX(rd.Value) AS max_value,
+        COUNT(rd.Value) AS n_points
+    FROM ReportData rd
+    JOIN ReportDataDictionary ddd ON rd.DictionaryIndex = ddd.ReportDataDictionaryIndex
+    GROUP BY rd.DictionaryIndex
+"""
+
+_HOURLY_GROUP = """
+    SELECT
+        rd.DictionaryIndex,
+        ddd.IndexGroup,
+        ddd.Name,
+        ddd.ReportingFrequency,
+        rd.Value,
+        t.Month,
+        t.Day,
+        t.Hour
+    FROM ReportData rd
+    JOIN ReportDataDictionary ddd ON rd.DictionaryIndex = ddd.ReportDataDictionaryIndex
+    JOIN Time t ON rd.TimeIndex = t.TimeIndex
+"""
+
+_TS_QUERIES: dict[str, str] = {
+    "monthly": _MONTHLY_GROUP,
+    "daily": _DAILY_GROUP,
+    "annual": _ANNUAL_GROUP,
+    "hourly": _HOURLY_GROUP,
+}
+
+
+def detect_timeseries_tables(sql_path: Path) -> list[str]:
+    """Return list of EnergyPlus time-series tables found in *sql_path*."""
+    if not sql_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(sql_path))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        conn.close()
+    except sqlite3.DatabaseError:
+        log.warning("Could not open %s for table detection", sql_path)
+        return []
+    return [t for t in _ENERGYPLUS_TS_TABLES if t in tables]
+
+
+def estimate_ts_size_bytes(
+    n_samples: int,
+    hours_per_year: int = 8760,
+    n_variables: int = 50,
+    bytes_per_value: int = 8,
+) -> int:
+    """Estimate raw (hourly) time-series data size in bytes.
+
+    Formula: ``n_samples * hours_per_year * n_variables * bytes_per_value``
+    """
+    return n_samples * hours_per_year * n_variables * bytes_per_value
+
+
+class TimeSeriesAggregator:
+    """Aggregate EnergyPlus time-series data from per-sample SQL files.
+
+    Parameters
+    ----------
+    resolution : str
+        Aggregation granularity: ``hourly``, ``daily``, ``monthly`` (default),
+        or ``annual``.
+    """
+
+    def __init__(self, resolution: str = "monthly") -> None:
+        if resolution not in TS_RESOLUTIONS:
+            raise ValueError(
+                f"Invalid ts_resolution '{resolution}'. Must be one of {TS_RESOLUTIONS}"
+            )
+        self.resolution = resolution
+
+    def aggregate_sql(self, sql_path: Path, sample_id: str) -> pd.DataFrame:
+        """Read and aggregate time-series data from a single eplusout.sql.
+
+        Returns an empty DataFrame when the SQL file lacks the required
+        EnergyPlus time-series tables (``ReportData``, ``ReportDataDictionary``,
+        ``Time``).
+        """
+        if not sql_path.exists():
+            return pd.DataFrame()
+
+        try:
+            conn = sqlite3.connect(str(sql_path))
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            required = {"ReportData", "ReportDataDictionary", "Time"}
+            if not required.issubset(tables):
+                conn.close()
+                return pd.DataFrame()
+
+            query = _TS_QUERIES[self.resolution]
+            df = pd.read_sql_query(query, conn)
+            conn.close()
+        except (sqlite3.DatabaseError, pd.io.sql.DatabaseError) as exc:
+            log.warning("Time-series aggregation failed for %s: %s", sql_path, exc)
+            return pd.DataFrame()
+
+        if df.empty:
+            return df
+
+        df["sample_id"] = sample_id
+        return df
+
+    def aggregate_campaign(self, simulation_dirs: list[Path]) -> pd.DataFrame:
+        """Aggregate time-series across all simulation directories.
+
+        Returns a combined DataFrame with a ``sample_id`` column.
+        """
+        frames: list[pd.DataFrame] = []
+        for sim_dir in simulation_dirs:
+            sql_path = sim_dir / "eplusout.sql"
+            if not sql_path.exists():
+                continue
+            sample_id = sim_dir.name
+            df = self.aggregate_sql(sql_path, sample_id)
+            if not df.empty:
+                frames.append(df)
+                log.info(
+                    "time-series aggregation: sample=%s resolution=%s rows=%d",
+                    sample_id,
+                    self.resolution,
+                    len(df),
+                )
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+
+def _write_ts_output(
+    ts_df: pd.DataFrame,
+    out_dir: Path,
+    parquet: bool = False,
+) -> None:
+    """Write the time-series DataFrame to CSV (and optionally Parquet)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts_csv = out_dir / "timeseries_aggregated.csv"
+    ts_df.to_csv(ts_csv, index=False)
+    log.info("Wrote time-series CSV: %s (%d rows)", ts_csv, len(ts_df))
+    if parquet:
+        ts_parquet = out_dir / "timeseries_aggregated.parquet"
+        ts_df.to_parquet(ts_parquet, index=False)
+        log.info("Wrote time-series Parquet: %s", ts_parquet)
+
+
+# ---------------------------------------------------------------------------
+# Error classification patterns (issue #56) — continued below
+# ---------------------------------------------------------------------------
 
 
 def _count_severe_errors(err_path: Path) -> int:
@@ -266,6 +489,25 @@ def main() -> int:
         default=None,
         help="Sample ID of the baseline (for pct improvement columns).",
     )
+    parser.add_argument(
+        "--ts_resolution",
+        default="monthly",
+        choices=TS_RESOLUTIONS,
+        help=(
+            "Time-series aggregation resolution. Default: 'monthly'. "
+            "Use 'hourly' only with --archive_intermediates to avoid "
+            "very large CSV output. See docs/time-series-management.md."
+        ),
+    )
+    parser.add_argument(
+        "--ts_outdir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory for aggregated time-series output. "
+            "Defaults to the same directory as --out_csv."
+        ),
+    )
     args = parser.parse_args()
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -333,6 +575,15 @@ def main() -> int:
             "sample_id,failure_category,root_cause_line,total_severe_errors,"
             "error_summary,exit_code,log_path,diagnosis_suggestion\n"
         )
+
+    # 3. Time-series aggregation (issue #40)
+    ts_agg = TimeSeriesAggregator(resolution=args.ts_resolution)
+    ts_df = ts_agg.aggregate_campaign(args.simulation_dirs)
+    if not ts_df.empty:
+        ts_outdir = args.ts_outdir or args.out_csv.parent
+        _write_ts_output(ts_df, ts_outdir, parquet=args.out_parquet is not None)
+    else:
+        log.info("No time-series data found in simulation directories.")
 
     return 0
 
