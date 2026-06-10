@@ -112,7 +112,9 @@ class TestMapDistribution:
         assert result == {"distribution": "lognormal", "mean": 1.0, "sigma": 0.5}
 
     def test_triangular_with_mode(self) -> None:
-        result = _map_distribution({"type": "triangular", "minimum": 0.0, "maximum": 1.0, "mode": 0.7})
+        result = _map_distribution(
+            {"type": "triangular", "minimum": 0.0, "maximum": 1.0, "mode": 0.7}
+        )
         assert result == {"distribution": "triangular", "min": 0.0, "max": 1.0, "mode": 0.7}
 
     def test_triangular_without_mode(self) -> None:
@@ -154,15 +156,19 @@ class TestMapDistribution:
 
 class TestResolveMeasureArgument:
     def test_normal_measure(self) -> None:
-        result = _resolve_measure_argument({
-            "measure": {"display_name": "SetRValue", "argument": "r_val"},
-        })
+        result = _resolve_measure_argument(
+            {
+                "measure": {"display_name": "SetRValue", "argument": "r_val"},
+            }
+        )
         assert result == "SetRValue.r_val"
 
     def test_with_name_instead_of_display_name(self) -> None:
-        result = _resolve_measure_argument({
-            "measure": {"name": "SetRValue", "argument_name": "r_val"},
-        })
+        result = _resolve_measure_argument(
+            {
+                "measure": {"name": "SetRValue", "argument_name": "r_val"},
+            }
+        )
         assert result == "SetRValue.r_val"
 
     def test_no_measure(self) -> None:
@@ -238,9 +244,7 @@ class TestParseAnalysisJson:
 
 class TestOsaToVariablesYml:
     def test_full_conversion(self, tmp_path: Path) -> None:
-        osa_data = parse_osa(
-            _write_json(tmp_path / "input.json", SAMPLE_ANALYSIS)
-        )
+        osa_data = parse_osa(_write_json(tmp_path / "input.json", SAMPLE_ANALYSIS))
         out = tmp_path / "variables.yml"
         osa_to_variables_yml(osa_data, out)
 
@@ -292,7 +296,10 @@ class TestOsaToVariablesYml:
             "problem": {
                 "variables": [
                     "not a dict",
-                    {"name": "good_var", "distribution": {"type": "uniform", "minimum": 0, "maximum": 1}},
+                    {
+                        "name": "good_var",
+                        "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+                    },
                     {"uuid": "bad_no_dist"},
                 ],
             },
@@ -339,9 +346,7 @@ class TestOsaToVariablesYml:
             osa_to_variables_yml({"problem": "garbage"}, out)
 
     def test_roundtrip_with_lhs_sampler(self, tmp_path: Path) -> None:
-        osa_data = parse_osa(
-            _write_json(tmp_path / "input.json", SAMPLE_ANALYSIS)
-        )
+        osa_data = parse_osa(_write_json(tmp_path / "input.json", SAMPLE_ANALYSIS))
         out = tmp_path / "variables.yml"
         osa_to_variables_yml(osa_data, out)
 

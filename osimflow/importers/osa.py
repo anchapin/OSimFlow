@@ -56,6 +56,7 @@ import logging
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -77,7 +78,7 @@ class OSAImportError(Exception):
     """Raised when an OSA file cannot be parsed or converted."""
 
 
-def _extract_analysis_data(raw: dict) -> dict:
+def _extract_analysis_data(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalise the OSA JSON into a flat analysis dict.
 
     Handles two common layouts:
@@ -94,18 +95,18 @@ def _extract_analysis_data(raw: dict) -> dict:
     )
 
 
-def _require_keys(osa_dist: dict, keys: list[str], label: str) -> None:
+def _require_keys(osa_dist: dict[str, Any], keys: list[str], label: str) -> None:
     for key in keys:
         if osa_dist.get(key) is None:
             raise OSAImportError(f"{label} distribution requires '{key}'")
 
 
-def _map_uniform(osa_dist: dict) -> dict:
+def _map_uniform(osa_dist: dict[str, Any]) -> dict[str, Any]:
     _require_keys(osa_dist, ["minimum", "maximum"], "Uniform")
     return {"min": float(osa_dist["minimum"]), "max": float(osa_dist["maximum"])}
 
 
-def _map_normal(osa_dist: dict) -> dict:
+def _map_normal(osa_dist: dict[str, Any]) -> dict[str, Any]:
     _require_keys(osa_dist, ["mean"], "Normal")
     sigma = osa_dist.get("stddev") or osa_dist.get("sigma")
     if sigma is None:
@@ -113,7 +114,7 @@ def _map_normal(osa_dist: dict) -> dict:
     return {"mean": float(osa_dist["mean"]), "sigma": float(sigma)}
 
 
-def _map_lognormal(osa_dist: dict) -> dict:
+def _map_lognormal(osa_dist: dict[str, Any]) -> dict[str, Any]:
     _require_keys(osa_dist, ["mean"], "Lognormal")
     sigma = osa_dist.get("stddev") or osa_dist.get("sigma")
     if sigma is None:
@@ -121,29 +122,27 @@ def _map_lognormal(osa_dist: dict) -> dict:
     return {"mean": float(osa_dist["mean"]), "sigma": float(sigma)}
 
 
-def _map_triangular(osa_dist: dict) -> dict:
+def _map_triangular(osa_dist: dict[str, Any]) -> dict[str, Any]:
     _require_keys(osa_dist, ["minimum", "maximum"], "Triangular")
-    result: dict = {"min": float(osa_dist["minimum"]), "max": float(osa_dist["maximum"])}
+    result: dict[str, Any] = {"min": float(osa_dist["minimum"]), "max": float(osa_dist["maximum"])}
     mode = osa_dist.get("mode") or osa_dist.get("peak")
     if mode is not None:
         result["mode"] = float(mode)
     return result
 
 
-def _map_discrete_or_categorical(osimflow_type: str, osa_dist: dict) -> dict:
+def _map_discrete_or_categorical(osimflow_type: str, osa_dist: dict[str, Any]) -> dict[str, Any]:
     values = osa_dist.get("values") or osa_dist.get("discrete_values")
     if not values or not isinstance(values, list):
-        raise OSAImportError(
-            f"{osimflow_type} distribution requires a non-empty 'values' list"
-        )
-    result: dict = {"values": values}
+        raise OSAImportError(f"{osimflow_type} distribution requires a non-empty 'values' list")
+    result: dict[str, Any] = {"values": values}
     mapping = osa_dist.get("mapping")
     if mapping and isinstance(mapping, dict):
         result["mapping"] = mapping
     return result
 
 
-_DISTRIBUTION_MAPPERS: dict[str, Callable[[dict], dict]] = {
+_DISTRIBUTION_MAPPERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "uniform": _map_uniform,
     "normal": _map_normal,
     "lognormal": _map_lognormal,
@@ -151,7 +150,7 @@ _DISTRIBUTION_MAPPERS: dict[str, Callable[[dict], dict]] = {
 }
 
 
-def _map_distribution(osa_dist: dict) -> dict:
+def _map_distribution(osa_dist: dict[str, Any]) -> dict[str, Any]:
     """Convert an OSA distribution block to an OSimFlow variable entry.
 
     Parameters
@@ -181,7 +180,7 @@ def _map_distribution(osa_dist: dict) -> dict:
             f"supported: {', '.join(sorted(OSA_DISTRIBUTION_MAP))}"
         )
 
-    result: dict = {"distribution": osimflow_type}
+    result: dict[str, Any] = {"distribution": osimflow_type}
 
     if osimflow_type in ("discrete", "categorical"):
         result.update(_map_discrete_or_categorical(osimflow_type, osa_dist))
@@ -193,7 +192,7 @@ def _map_distribution(osa_dist: dict) -> dict:
     return result
 
 
-def _convert_variable(osa_var: dict, index: int) -> tuple[dict, list[str]]:
+def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, Any], list[str]]:
     """Try to convert a single OSA variable; return (entry, warnings)."""
     warnings: list[str] = []
     if not isinstance(osa_var, dict):
@@ -212,7 +211,7 @@ def _convert_variable(osa_var: dict, index: int) -> tuple[dict, list[str]]:
     except OSAImportError as exc:
         return {}, [f"Variable {name!r}: {exc}"]
 
-    entry: dict = {"name": name}
+    entry: dict[str, Any] = {"name": name}
     entry.update(dist_entry)
 
     measure_ref = _resolve_measure_argument(osa_var)
@@ -226,7 +225,7 @@ def _convert_variable(osa_var: dict, index: int) -> tuple[dict, list[str]]:
     return entry, warnings
 
 
-def _warn_unsupported_algorithm(algorithm: dict) -> None:
+def _warn_unsupported_algorithm(algorithm: dict[str, Any]) -> None:
     algo_type = algorithm.get("type", "").lower()
     if algo_type not in ("lhs", "latin_hypercube", ""):
         log.warning(
@@ -236,7 +235,7 @@ def _warn_unsupported_algorithm(algorithm: dict) -> None:
         )
 
 
-def _resolve_measure_argument(osa_var: dict) -> str | None:
+def _resolve_measure_argument(osa_var: dict[str, Any]) -> str | None:
     """Build the ``measure_name.argument_name`` dotted reference.
 
     Returns ``None`` if the variable has no measure mapping (e.g. it is
@@ -252,7 +251,7 @@ def _resolve_measure_argument(osa_var: dict) -> str | None:
     return f"{measure_name}.{argument}"
 
 
-def parse_osa(osa_path: Path) -> dict:
+def parse_osa(osa_path: Path) -> dict[str, Any]:
     """Parse an ``.osa`` file and extract the analysis definition.
 
     An ``.osa`` file is a ZIP archive containing ``analysis.json`` (and
@@ -290,7 +289,7 @@ def parse_osa(osa_path: Path) -> dict:
         try:
             with zipfile.ZipFile(osa_path) as zf:
                 names = zf.namelist()
-                analysis_name = None
+                analysis_name: str | None = None
                 for candidate in ("analysis.json", "analysis/analysis.json"):
                     if candidate in names:
                         analysis_name = candidate
@@ -319,7 +318,7 @@ def parse_osa(osa_path: Path) -> dict:
     return _extract_analysis_data(raw)
 
 
-def parse_analysis_json(analysis_path: Path) -> dict:
+def parse_analysis_json(analysis_path: Path) -> dict[str, Any]:
     """Parse an OpenStudio ``analysis.json`` file directly.
 
     This is a convenience wrapper around :func:`parse_osa` for callers
@@ -338,7 +337,7 @@ def parse_analysis_json(analysis_path: Path) -> dict:
     return parse_osa(analysis_path)
 
 
-def osa_to_variables_yml(osa_data: dict, output_path: Path) -> None:
+def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
     """Convert parsed OSA data to an OSimFlow ``variables.yml`` file.
 
     Parameters
@@ -362,7 +361,7 @@ def osa_to_variables_yml(osa_data: dict, output_path: Path) -> None:
         raise OSAImportError("No variables found in OSA problem definition")
 
     warnings: list[str] = []
-    converted: list[dict] = []
+    converted: list[dict[str, Any]] = []
 
     for i, osa_var in enumerate(osa_variables):
         entry, var_warnings = _convert_variable(osa_var, i)
@@ -383,7 +382,7 @@ def osa_to_variables_yml(osa_data: dict, output_path: Path) -> None:
     if isinstance(algorithm, dict):
         _warn_unsupported_algorithm(algorithm)
 
-    variables_yml: dict = {"variables": converted}
+    variables_yml: dict[str, Any] = {"variables": converted}
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
