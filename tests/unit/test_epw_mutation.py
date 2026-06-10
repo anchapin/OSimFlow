@@ -287,6 +287,26 @@ class TestCampaignEpwResolution:
         assert resolved["climate_zone"] == "cz4a"
         assert resolved[EPW_FILE_KEY] == "weather/USA_NY_New.York.epw"
 
+    def test_resolve_epw_targets_structured_categorical(
+        self,
+        tmp_path: Path,
+        tmp_template_dir: Path,
+        variables_yml_epw: Path,
+    ) -> None:
+        """_resolve_epw_targets extracts label from structured categorical dict."""
+        campaign = self._make_campaign(tmp_path, tmp_template_dir, variables_yml_epw)
+        variable_defs = campaign._load_variable_defs()
+
+        # Simulate the structured dict output from categorical LHS sampling.
+        params = {
+            "wwr": 0.35,
+            "climate_zone": {"label": "cz4a", "index": 1},
+        }
+        resolved = campaign._resolve_epw_targets(params, variable_defs)
+
+        assert resolved["wwr"] == 0.35
+        assert resolved[EPW_FILE_KEY] == "weather/USA_NY_New.York.epw"
+
     def test_resolve_epw_targets_no_epw_vars(
         self,
         tmp_path: Path,
@@ -374,22 +394,24 @@ class TestCategoricalLHS:
     """Tests for the categorical distribution in generate_lhs.py."""
 
     def test_categorical_returns_valid_value(self) -> None:
-        """The categorical distribution should return a value from the list."""
+        """The categorical distribution should return structured output with a valid label."""
         from bin.generate_lhs import _apply_distribution
 
         values = ["cz3", "cz4a", "cz5a"]
         result = _apply_distribution(0.0, "categorical", {"values": values})
-        assert result in values
+        assert isinstance(result, dict)
+        assert result["label"] in values
 
     def test_categorical_covers_all_values(self) -> None:
-        """Different u values should cover all categorical values."""
+        """Different u values should cover all categorical labels."""
         from bin.generate_lhs import _apply_distribution
 
         values = ["a", "b", "c"]
         seen = set()
         for u in [0.0, 0.34, 0.67, 0.99]:
             result = _apply_distribution(u, "categorical", {"values": values})
-            seen.add(result)
+            assert isinstance(result, dict)
+            seen.add(result["label"])
         # Should cover at least 2 of the 3 values with 4 samples
         assert len(seen) >= 2
 

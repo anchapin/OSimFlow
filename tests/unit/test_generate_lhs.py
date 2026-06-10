@@ -232,3 +232,227 @@ class TestCLIEndToEnd:
         )
         assert data["n_samples"] == 0
         assert data["samples"] == []
+
+
+# ---------------------------------------------------------------------------
+# Discrete and categorical distribution tests (issue #54)
+# ---------------------------------------------------------------------------
+
+
+class TestDiscreteDistribution:
+    """Tests for the ``discrete`` distribution type."""
+
+    def test_apply_returns_value_from_list(self) -> None:
+        """Each u ∈ [0,1) maps to a value from the provided list."""
+        values = [10, 20, 30, 40]
+        for u in [0.0, 0.25, 0.5, 0.75, 0.99]:
+            result = _apply_distribution(u, "discrete", {"values": values})
+            assert result in values, f"u={u} produced {result!r}, expected one of {values}"
+
+    def test_apply_index_mapping(self) -> None:
+        """u values map to predictable indices: floor(u * len(values))."""
+        values = [100, 200, 300]
+        assert _apply_distribution(0.0, "discrete", {"values": values}) == 100
+        assert _apply_distribution(0.33, "discrete", {"values": values}) == 100
+        assert _apply_distribution(0.34, "discrete", {"values": values}) == 200
+        assert _apply_distribution(0.66, "discrete", {"values": values}) == 200
+        assert _apply_distribution(0.99, "discrete", {"values": values}) == 300
+
+    def test_apply_empty_values_raises(self) -> None:
+        """Empty values list raises ValueError."""
+        with pytest.raises(ValueError, match="non-empty 'values' list"):
+            _apply_distribution(0.5, "discrete", {"values": []})
+
+    def test_apply_missing_values_raises(self) -> None:
+        """Missing values key raises ValueError."""
+        with pytest.raises(ValueError, match="non-empty 'values' list"):
+            _apply_distribution(0.5, "discrete", {})
+
+    def test_all_values_appear_in_large_sample(self) -> None:
+        """With enough samples, every discrete value appears at least once."""
+        values = [0, 90, 180, 270]
+        data = _run_cli(
+            [{"name": "orientation", "distribution": "discrete", "values": values}],
+            200,
+        )
+        seen = set()
+        for sample in data["samples"]:
+            seen.add(sample["values"]["orientation"])
+        assert values == sorted(seen), f"Expected all of {values}, got {sorted(seen)}"
+
+    def test_cli_output_shape(self) -> None:
+        """CLI end-to-end produces correct shape for discrete variables."""
+        data = _run_cli(
+            [{"name": "orient", "distribution": "discrete", "values": [0, 90, 180, 270]}],
+            20,
+        )
+        assert data["n_samples"] == 20
+        assert len(data["samples"]) == 20
+        for sample in data["samples"]:
+            assert "orient" in sample["values"]
+            assert sample["values"]["orient"] in [0, 90, 180, 270]
+
+
+class TestCategoricalDistribution:
+    """Tests for the ``categorical`` distribution type."""
+
+    def test_apply_returns_structured_output(self) -> None:
+        """Categorical returns dict with label, index, and mapping."""
+        values = ["packaged_rooftop", "vav", "wshp", "gshp"]
+        mapping = {
+            "packaged_rooftop": {"type": "PackagedRooftop", "efficiency": 0.85},
+            "vav": {"type": "VAV", "efficiency": 0.90},
+            "wshp": {"type": "WSHP", "efficiency": 0.88},
+            "gshp": {"type": "GSHP", "efficiency": 0.95},
+        }
+        result = _apply_distribution(0.0, "categorical", {"values": values, "mapping": mapping})
+        assert isinstance(result, dict)
+        assert result["label"] == "packaged_rooftop"
+        assert result["index"] == 0
+        assert result["mapping"] == {"type": "PackagedRooftop", "efficiency": 0.85}
+
+    def test_apply_categorical_no_mapping(self) -> None:
+        """Categorical without mapping returns label + index only."""
+        values = ["a", "b", "c"]
+        result = _apply_distribution(0.5, "categorical", {"values": values})
+        assert isinstance(result, dict)
+        assert result["label"] == "b"
+        assert result["index"] == 1
+        assert "mapping" not in result
+
+    def test_apply_empty_values_raises(self) -> None:
+        """Empty values list raises ValueError."""
+        with pytest.raises(ValueError, match="non-empty 'values' list"):
+            _apply_distribution(0.5, "categorical", {"values": []})
+
+    def test_all_labels_appear_in_large_sample(self) -> None:
+        """With enough samples, every categorical label appears at least once."""
+        labels = ["packaged_rooftop", "vav", "wshp", "gshp"]
+        data = _run_cli(
+            [
+                {
+                    "name": "hvac_system",
+                    "distribution": "categorical",
+                    "values": labels,
+                    "mapping": {lbl: {"type": lbl} for lbl in labels},
+                }
+            ],
+            200,
+        )
+        seen_labels = set()
+        for sample in data["samples"]:
+            val = sample["values"]["hvac_system"]
+            assert isinstance(val, dict), f"Expected dict, got {type(val).__name__}"
+            assert "label" in val
+            assert "mapping" in val
+            seen_labels.add(val["label"])
+        assert set(labels) == seen_labels, f"Expected all of {labels}, got {seen_labels}"
+
+    def test_cli_output_includes_mapping(self) -> None:
+        """CLI output includes the resolved mapping for each sample."""
+        mapping = {
+            "packaged_rooftop": {"type": "PackagedRooftop", "efficiency": 0.85},
+            "vav": {"type": "VAV", "efficiency": 0.90},
+        }
+        data = _run_cli(
+            [
+                {
+                    "name": "hvac",
+                    "distribution": "categorical",
+                    "values": ["packaged_rooftop", "vav"],
+                    "mapping": mapping,
+                }
+            ],
+            20,
+        )
+        for sample in data["samples"]:
+            val = sample["values"]["hvac"]
+            assert val["label"] in ["packaged_rooftop", "vav"]
+            assert val["mapping"] is not None
+            assert "type" in val["mapping"]
+            assert "efficiency" in val["mapping"]
+
+    def test_per_sample_param_file_flattens_label(self) -> None:
+        """Per-sample .params.json files contain the label string, not the struct."""
+        import tempfile
+
+        mapping = {"a": {"type": "A"}, "b": {"type": "B"}}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            var_path = Path(tmpdir) / "variables.yml"
+            out_path = Path(tmpdir) / "lhs_samples.json"
+            var_path.write_text(
+                yaml.dump(
+                    {
+                        "variables": [
+                            {
+                                "name": "choice",
+                                "distribution": "categorical",
+                                "values": ["a", "b"],
+                                "mapping": mapping,
+                            }
+                        ]
+                    }
+                )
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parents[2] / "bin" / "generate_lhs.py"),
+                    "--variables_yml",
+                    str(var_path),
+                    "--n_samples",
+                    "10",
+                    "--out",
+                    str(out_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, f"stderr: {result.stderr}"
+            for i in range(1, 11):
+                param_file = out_path.parent / f"{i:04d}.params.json"
+                assert param_file.exists(), f"Missing param file {param_file}"
+                flat = json.loads(param_file.read_text())
+                assert flat["choice"] in ["a", "b"], f"Expected label, got {flat['choice']!r}"
+
+
+class TestMixedDistributionTypes:
+    """Tests that continuous + discrete + categorical variables coexist."""
+
+    def test_mixed_distributions(self) -> None:
+        """All three types produce correct output in a single run."""
+        variables = [
+            {"name": "wwr", "distribution": "uniform", "min": 0.2, "max": 0.6},
+            {"name": "orientation", "distribution": "discrete", "values": [0, 90, 180, 270]},
+            {
+                "name": "hvac",
+                "distribution": "categorical",
+                "values": ["rtu", "vav"],
+                "mapping": {"rtu": {"eff": 0.85}, "vav": {"eff": 0.90}},
+            },
+        ]
+        data = _run_cli(variables, 30)
+        assert data["n_samples"] == 30
+        for sample in data["samples"]:
+            vals = sample["values"]
+            # Continuous: float in range
+            assert isinstance(vals["wwr"], float)
+            assert 0.2 <= vals["wwr"] <= 0.6
+            # Discrete: exact value from list
+            assert vals["orientation"] in [0, 90, 180, 270]
+            # Categorical: structured dict
+            assert isinstance(vals["hvac"], dict)
+            assert vals["hvac"]["label"] in ["rtu", "vav"]
+            assert vals["hvac"]["mapping"] is not None
+
+    def test_backward_compatible_with_continuous_only(self) -> None:
+        """Pre-existing continuous-only configs still work identically."""
+        variables = [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+        ]
+        data = _run_cli(variables, 50)
+        assert data["n_samples"] == 50
+        for sample in data["samples"]:
+            assert isinstance(sample["values"]["x"], float)
+            assert isinstance(sample["values"]["y"], float)
