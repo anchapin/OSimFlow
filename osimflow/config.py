@@ -52,6 +52,15 @@ class CampaignConfig:
     # variables.yml exist under this directory and validates their
     # EPW format (header line starts with "LOCATION").
     weather_dir: str = "weather"
+    # Dry-run mode (issue #59): run exactly 1 sample locally to validate
+    # setup before committing to a full campaign. Forces n_samples=1 and
+    # LocalExecutor regardless of CLI flags. Runs steps 1-4 only (no
+    # aggregation or plots) and prints a summary.
+    dry_run: bool = False
+    # Single-sample mode (issue #59): run only the sample at 0-based index
+    # N through steps 2-4. Skips GENERATE_LHS_SAMPLES (reuses existing
+    # samples.json). Useful for debugging a specific failed sample.
+    sample: int | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -123,4 +132,6 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         slurm_gres=str(args["slurm_gres"]) if args.get("slurm_gres") else None,
         baseline=baseline,
         weather_dir=str(args["weather_dir"]) if args.get("weather_dir") else "weather",
+        dry_run=bool(args.get("dry_run", False)),
+        sample=int(str(args["sample"])) if args.get("sample") is not None else None,
     )
