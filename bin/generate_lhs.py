@@ -13,6 +13,7 @@ import logging
 import math
 import sys
 from pathlib import Path
+from typing import Any
 
 import scipy.stats
 import scipy.stats.qmc
@@ -20,6 +21,90 @@ import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_lhs")
+
+SUPPORTED_DISTRIBUTIONS = (
+    "uniform",
+    "lognormal",
+    "normal",
+    "triangular",
+    "beta",
+    "gamma",
+    "exponential",
+)
+
+
+def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float:
+    """Map a unit-sample value *u* ∈ [0, 1] through the named distribution PPF.
+
+    Parameters
+    ----------
+    u : float
+        Uniform sample in [0, 1] from the LHS engine.
+    dist : str
+        Distribution name (e.g. ``"uniform"``, ``"normal"``).
+    params : dict
+        Distribution-specific parameters read from ``variables.yml``.
+
+    Returns
+    -------
+    float
+        The transformed sample value.
+
+    Raises
+    ------
+    ValueError
+        If *dist* is not one of :data:`SUPPORTED_DISTRIBUTIONS`.
+    KeyError
+        If a required parameter is missing from *params*.
+    """
+    if dist == "uniform":
+        min_val = params["min"]
+        max_val = params["max"]
+        return float(min_val + u * (max_val - min_val))
+
+    if dist == "lognormal":
+        mean = params["mean"]
+        sigma = params["sigma"]
+        return float(scipy.stats.lognorm.ppf(u, s=sigma, scale=math.exp(mean)))
+
+    if dist == "normal":
+        mean = params["mean"]
+        sigma = params["sigma"]
+        return float(scipy.stats.norm.ppf(u, loc=mean, scale=sigma))
+
+    if dist == "triangular":
+        left = params["min"]
+        right = params["max"]
+        # scipy triang c-parameter is the normalised peak position.
+        # OSimFlow does not expose a peak/mode parameter, so we default
+        # to a symmetric triangle (c = 0.5).
+        mode = params.get("mode")
+        if mode is not None:
+            c = (mode - left) / (right - left)
+        else:
+            c = 0.5
+        return float(scipy.stats.triang.ppf(u, c, loc=left, scale=right - left))
+
+    if dist == "beta":
+        alpha = params["alpha"]
+        beta_val = params["beta"]
+        loc = params.get("loc", 0.0)
+        scale = params.get("scale", 1.0)
+        return float(scipy.stats.beta.ppf(u, a=alpha, b=beta_val, loc=loc, scale=scale))
+
+    if dist == "gamma":
+        alpha = params["alpha"]
+        loc = params.get("loc", 0.0)
+        scale = params.get("scale", 1.0)
+        return float(scipy.stats.gamma.ppf(u, a=alpha, loc=loc, scale=scale))
+
+    if dist == "exponential":
+        rate = params["rate"]
+        return float(scipy.stats.expon.ppf(u, scale=rate))
+
+    raise ValueError(
+        f"unsupported distribution {dist!r}; choose from {', '.join(SUPPORTED_DISTRIBUTIONS)}"
+    )
 
 
 def main() -> int:
@@ -68,21 +153,7 @@ def main() -> int:
             dist = v.get("distribution")
             name = v["name"]
 
-            if dist == "uniform":
-                min_val = v["min"]
-                max_val = v["max"]
-                values[name] = float(min_val + u * (max_val - min_val))
-            elif dist == "lognormal":
-                mean = v["mean"]
-                sigma = v["sigma"]
-                # PPF (percent point function) of lognormal distribution
-                # which maps from [0,1] to lognormal values.
-                # Since scipy.stats.lognorm expects shape, loc, scale
-                # The normal lognorm parametarization corresponding to mu and sigma of the underlying normal
-                # is s=sigma, scale=exp(mu)
-                values[name] = float(scipy.stats.lognorm.ppf(u, s=sigma, scale=math.exp(mean)))
-            else:
-                raise NotImplementedError(f"distribution {dist!r} not in MVP yet")
+            values[name] = _apply_distribution(u, dist, v)
 
         samples.append({"sample_id": f"{i + 1:04d}", "values": values})
 
