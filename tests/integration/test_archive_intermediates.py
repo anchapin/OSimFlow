@@ -50,9 +50,7 @@ def outdir(workdir: Path) -> Path:
     return od
 
 
-def _make_cfg(
-    workdir: Path, template_pkg: Path, outdir: Path, *, archive: bool
-) -> CampaignConfig:
+def _make_cfg(workdir: Path, template_pkg: Path, outdir: Path, *, archive: bool) -> CampaignConfig:
     return CampaignConfig(
         input_variables=workdir / "variables.yml",
         template_sim_package=template_pkg,

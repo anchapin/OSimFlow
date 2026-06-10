@@ -176,9 +176,7 @@ class Campaign:
                 )
             )
 
-    def _archive_sample_artifacts(
-        self, src: Path, dst: Path, patterns: list[str]
-    ) -> None:
+    def _archive_sample_artifacts(self, src: Path, dst: Path, patterns: list[str]) -> None:
         """Copy files matching *patterns* from *src* into *dst*.
 
         Creates *dst* (with parents) and copies each file whose name
@@ -243,8 +241,12 @@ class Campaign:
                 shutil.copytree(self.cfg.template_sim_package, pkg_dst)
                 log.info("archived template_sim_package -> %s", pkg_dst)
                 # Copy the input_variables file
-                shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
-                log.info("archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name)
+                shutil.copy2(
+                    self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name
+                )
+                log.info(
+                    "archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name
+                )
 
             # Finalize the trace + run.json so the MLflow artifact is
             # the canonical post-campaign trace. We do this inside the
@@ -515,9 +517,7 @@ class Campaign:
                 # Archive eplusout.sql when flag is set
                 if self.cfg.archive_intermediates:
                     archive_dst = self.cfg.outdir / "archive" / "sim" / sid
-                    self._archive_sample_artifacts(
-                        Path(result_path), archive_dst, ["eplusout.sql"]
-                    )
+                    self._archive_sample_artifacts(Path(result_path), archive_dst, ["eplusout.sql"])
             except Exception as e:
                 log.error("RUN_OPENSTUDIO_SIM %s failed: %s", sid, e)
                 self.cache.store(key, out_dir, exit_code=1)
