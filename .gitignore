@@ -40,6 +40,12 @@ venv/
 *.epw
 eplusout.*
 sqlite3.db
+# Whitelist the example_package fixtures: the bench workflow needs
+# `workflow.osw` and `model.osm` to exist on disk (they're the test-mode
+# JSON stubs the stub apply step reads). They're checked-in fixtures,
+# not user OS outputs.
+!example_package/model.osm
+!example_package/workflow.osw
 
 # Container build artifacts
 *.tar
