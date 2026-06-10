@@ -83,7 +83,7 @@ Every entry in the `variables` list must have at minimum a `name` and a
 | Key | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | Yes | The parameter identifier. Must map to a measure argument or `.osm` attribute in the template (see [Variable Name Mapping](#variable-name-mapping)). |
-| `distribution` | string | Yes | The probability distribution. One of: `uniform`, `lognormal`, `normal`, `triangular`, `beta`, `gamma`, `exponential`, `discrete`, `categorical`. |
+| `distribution` | string | Yes | The probability distribution. One of: `uniform`, `lognormal`, `normal`, `triangular`, `beta`, `gamma`, `exponential`, `discrete`, `categorical`, `conditional`. |
 | `target` | string | No | Special target type. Currently supports `epw_file` for weather file selection (see [Categorical / EPW Targets](#categorical--epw-targets)). |
 | `mapping` | dict | No | For `categorical` distributions with `target: epw_file`: maps each category label to a file path inside the template package. |
 
@@ -304,6 +304,91 @@ path. Pre-flight validation checks that every mapped `.epw` file exists
 inside the `template_sim_package` directory and has a valid EPW header
 (starting with `LOCATION`).
 
+### 10. `conditional` — Dependent / Conditional Variables
+
+Samples a variable from a distribution that depends on the value of another
+variable. The parent variable is sampled first (it may itself be a
+`conditional` variable), and then the conditional variable is sampled from
+the sub-distribution matching the parent's value.
+
+| Key | Type | Required | Description |
+|---|---|---|---|
+| `distribution` | string | Yes | Must be `"conditional"`. |
+| `depends_on` | string | Yes | Name of the parent variable whose value determines which sub-distribution to use. |
+| `conditions` | dict | Yes | Maps each possible parent value (as a string) to a sub-distribution definition. Each sub-distribution must have a `distribution` key plus the corresponding distribution parameters. |
+
+```yaml
+- name: hvac_system_type
+  distribution: categorical
+  values: [vav, cv, ptx]
+
+- name: cooling_efficiency
+  distribution: conditional
+  depends_on: hvac_system_type
+  conditions:
+    vav: {distribution: uniform, min: 3.0, max: 5.0}
+    cv: {distribution: uniform, min: 2.5, max: 4.0}
+    ptx: {distribution: uniform, min: 4.0, max: 8.0}
+```
+
+In this example, `cooling_efficiency` is sampled from a different uniform
+range depending on which HVAC system type was drawn for that sample.
+
+**Typical use:** HVAC efficiency constrained by system type, window
+properties constrained by construction type, ground-loop depth only
+applicable for ground-source heat pumps.
+
+#### How It Works
+
+1. The LHS engine generates one uniform [0, 1] sample per variable (including
+   conditional ones), maintaining the stratification property.
+2. Variables are resolved in **dependency order**: independent variables first,
+   then conditional variables whose parents have already been resolved.
+3. For each conditional variable, the parent's resolved value is looked up in
+   the `conditions` dict to select the appropriate sub-distribution.
+4. The variable's LHS sample is then transformed through the sub-distribution's
+   PPF.
+
+#### Nested Conditions
+
+Conditional variables can depend on other conditional variables, forming a
+chain. OSimFlow validates the dependency graph at sampling time and rejects
+circular dependencies:
+
+```yaml
+- name: hvac_system_type
+  distribution: categorical
+  values: [vav, wshp, ptx]
+
+- name: cooling_efficiency
+  distribution: conditional
+  depends_on: hvac_system_type
+  conditions:
+    vav: {distribution: uniform, min: 3.0, max: 5.0}
+    wshp: {distribution: uniform, min: 4.0, max: 8.0}
+    ptx: {distribution: uniform, min: 2.5, max: 4.0}
+
+- name: supply_air_temp_reset
+  distribution: conditional
+  depends_on: hvac_system_type
+  conditions:
+    vav: {distribution: uniform, min: 12.0, max: 18.0}
+    wshp: {distribution: discrete, values: [15.0]}
+    ptx: {distribution: discrete, values: [15.0]}
+```
+
+#### Error Cases
+
+- **Missing `depends_on`:** A variable with `distribution: conditional` but no
+  `depends_on` key raises a `ValueError`.
+- **Missing parent:** If `depends_on` references a variable name not in the
+  `variables` list, raises a `ValueError`.
+- **Circular dependency:** If A depends on B and B depends on A (directly or
+  transitively), raises a `ValueError`.
+- **Unmatched condition:** If the parent's sampled value has no matching key
+  in `conditions`, raises a `ValueError`. Ensure every possible parent value
+  has a corresponding condition entry.
+
 ---
 
 ## Variable Name Mapping
@@ -509,6 +594,46 @@ Use `categorical` with `target: epw_file` to sweep across climate zones:
   target: epw_file
 ```
 
+### HVAC Efficiency by System Type
+
+A common BEM pattern: cooling efficiency (COP) ranges depend on the HVAC
+system type. Use `conditional` to enforce physically realistic constraints:
+
+```yaml
+variables:
+  - name: hvac_system_type
+    distribution: categorical
+    values: [packaged_rooftop, vav_reheat, wshp, gshp]
+
+  - name: cooling_cop
+    distribution: conditional
+    depends_on: hvac_system_type
+    conditions:
+      packaged_rooftop: {distribution: uniform, min: 2.5, max: 4.0}
+      vav_reheat: {distribution: uniform, min: 3.0, max: 5.0}
+      wshp: {distribution: uniform, min: 3.5, max: 6.0}
+      gshp: {distribution: uniform, min: 4.0, max: 8.0}
+```
+
+### Window Performance by Construction Type
+
+Window U-value and SHGC ranges depend on the glazing type:
+
+```yaml
+variables:
+  - name: glazing_type
+    distribution: categorical
+    values: [single_clear, double_low_e, triple_low_e]
+
+  - name: window_u_value
+    distribution: conditional
+    depends_on: glazing_type
+    conditions:
+      single_clear: {distribution: discrete, values: [5.8]}
+      double_low_e: {distribution: uniform, min: 1.1, max: 2.0}
+      triple_low_e: {distribution: uniform, min: 0.5, max: 1.2}
+```
+
 ### Baseline Comparison
 
 Define a `baseline` section to include a fixed ASHRAE 90.1 baseline
@@ -647,3 +772,4 @@ baseline:
 | `exponential` | `rate` | [0, +∞) | Equipment lifetime |
 | `discrete` | `values` | listed values | Floor count, R-value tiers |
 | `categorical` | `values`, `mapping`, `target` | listed labels | Climate zone, HVAC type |
+| `conditional` | `depends_on`, `conditions` | varies | Efficiency by system type |
