@@ -12,6 +12,7 @@ installation) and verify:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -585,3 +586,83 @@ class TestApplyOsmMutation:
         )
         with pytest.raises(OSMAttributeError, match="Cannot resolve"):
             _apply_osm_mutation(mock_model, mock_openstudio, mapping, 10.0)
+
+
+# ---------------------------------------------------------------------------
+# Integration test gated by OSIMFLOW_HAS_OPENSTUDIO
+# ---------------------------------------------------------------------------
+
+_HAS_OPENSTUDIO = os.environ.get("OSIMFLOW_HAS_OPENSTUDIO", "0") == "1"
+_skip_reason = "Set OSIMFLOW_HAS_OPENSTUDIO=1 and install openstudio bindings to run"
+
+
+@pytest.mark.skipif(not _HAS_OPENSTUDIO, reason=_skip_reason)
+class TestProductionOpenStudioBindings:
+    """Integration tests that require real OpenStudio Python bindings.
+
+    These tests are only executed when the environment variable
+    ``OSIMFLOW_HAS_OPENSTUDIO=1`` is set **and** the ``openstudio`` package
+    is importable. They exercise the real production code-path end-to-end
+    with a minimal OpenStudio model, confirming that:
+
+    * ``parse_osm_attributes`` can walk a real model and return a non-empty
+      mapping.
+    * ``_mutate_osm`` can write a modified .osm file via the bindings.
+    * JSON-mode stubs continue to work unchanged (no regression).
+    """
+
+    @staticmethod
+    def _create_minimal_osm(tmp_path: Path) -> Path:
+        """Create a minimal valid .osm file using the OpenStudio SDK.
+
+        The model contains a single ``SpaceType`` named "Office" so that
+        ``parse_osm_attributes`` has something to discover.
+        """
+        import openstudio  # noqa: PLC0415
+
+        model = openstudio.openstudiomodelcore.Model()
+        st = openstudio.openstudiomodelcore.SpaceType(model)
+        st.setName("Office")
+        osm_path = tmp_path / "model.osm"
+        model.save(str(osm_path), overwrite=True)
+        return osm_path
+
+    def test_parse_osm_attributes_returns_mapping(self, tmp_path: Path) -> None:
+        """parse_osm_attributes discovers attributes from a real .osm."""
+        osm_path = self._create_minimal_osm(tmp_path)
+        mappings = parse_osm_attributes(osm_path)
+        assert isinstance(mappings, dict)
+        # At minimum, we expect SpaceType-related attributes.
+        assert len(mappings) > 0
+
+    def test_mutate_osm_production_writes_file(self, tmp_path: Path) -> None:
+        """_mutate_osm writes a modified .osm for production files."""
+        osm_path = self._create_minimal_osm(tmp_path)
+
+        # Discover what's available
+        mappings = parse_osm_attributes(osm_path)
+
+        # Pick the first attribute mapping to mutate
+        first_name = next(iter(mappings))
+        params = {first_name: mappings[first_name].default}
+
+        _mutate_osm(osm_path, params, mappings)
+
+        mutated_text = osm_path.read_text()
+        # The file should still be valid (non-empty) and may differ
+        assert len(mutated_text) > 0
+        # The file must be a real .osm (XML/text), not JSON
+        assert not mutated_text.lstrip().startswith("{")
+
+    def test_json_stub_still_works(self, tmp_path: Path) -> None:
+        """JSON-mode stub files work without the production path."""
+        stub = tmp_path / "stub.osm"
+        stub.write_text(json.dumps({"attributes": {"lpd": 10.0}}))
+
+        mappings = parse_osm_attributes(stub)
+        assert "lpd" in mappings
+
+        _mutate_osm(stub, {"lpd": 15.0}, mappings)
+
+        data = json.loads(stub.read_text())
+        assert data["attributes"]["lpd"] == 15.0
