@@ -367,28 +367,45 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
 # ---------------------------------------------------------------------------
 # Aggregation & plotting
 # ---------------------------------------------------------------------------
-def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) -> dict[str, Path]:
-    """Aggregate per-sample KPIs into CSV/Parquet/failed-CSV. Returns paths."""
+def aggregate_results(
+    kpi_files: list[Path],
+    sim_dirs: list[Path],
+    out: Path,
+    baseline_sample_id: str | None = None,
+) -> dict[str, Path]:
+    """Aggregate per-sample KPIs into CSV/Parquet/failed-CSV. Returns paths.
+
+    Args:
+        kpi_files: list of per-sample KPI JSON paths.
+        sim_dirs: list of per-sample simulation output directories.
+        out: output directory for aggregated results.
+        baseline_sample_id: optional baseline sample ID (issue #64). When
+            provided, the aggregator computes percentage improvement columns
+            for each numeric KPI relative to the baseline.
+    """
     out.mkdir(parents=True, exist_ok=True)
     csv_path = out / "aggregated_results.csv"
     failed_path = out / "failed_simulations.csv"
     parquet_path = out / "aggregated_results.parquet"
+    cmd: list[str] = [
+        sys.executable,
+        str(BIN / "aggregate_results.py"),
+        "--kpis",
+        *(str(p) for p in kpi_files),
+        "--simulation_dirs",
+        *(str(p) for p in sim_dirs),
+        "--out_csv",
+        str(csv_path),
+        "--out_parquet",
+        str(parquet_path),
+        "--out_failed",
+        str(failed_path),
+    ]
+    if baseline_sample_id is not None:
+        cmd.extend(["--baseline_sample_id", baseline_sample_id])
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
-            [
-                sys.executable,
-                str(BIN / "aggregate_results.py"),
-                "--kpis",
-                *(str(p) for p in kpi_files),
-                "--simulation_dirs",
-                *(str(p) for p in sim_dirs),
-                "--out_csv",
-                str(csv_path),
-                "--out_parquet",
-                str(parquet_path),
-                "--out_failed",
-                str(failed_path),
-            ],
+            cmd,
             check=True,
             capture_output=True,
             text=True,
@@ -403,21 +420,38 @@ def aggregate_results(kpi_files: list[Path], sim_dirs: list[Path], out: Path) ->
     }
 
 
-def generate_plots(csv_path: Path, failed_path: Path, out: Path) -> list[Path]:
-    """Render summary plots from the aggregated CSV. Returns list of plot files."""
+def generate_plots(
+    csv_path: Path,
+    failed_path: Path,
+    out: Path,
+    baseline_sample_id: str | None = None,
+) -> list[Path]:
+    """Render summary plots from the aggregated CSV. Returns list of plot files.
+
+    Args:
+        csv_path: path to aggregated_results.csv.
+        failed_path: path to failed_simulations.csv.
+        out: output directory for plot files.
+        baseline_sample_id: optional baseline sample ID (issue #64). When
+            provided, the plot generator adds a vertical reference line for
+            the baseline EUI on the EUI histogram.
+    """
     out.mkdir(parents=True, exist_ok=True)
+    cmd: list[str] = [
+        sys.executable,
+        str(BIN / "generate_plots.py"),
+        "--results_csv",
+        str(csv_path),
+        "--failed_csv",
+        str(failed_path),
+        "--outdir",
+        str(out),
+    ]
+    if baseline_sample_id is not None:
+        cmd.extend(["--baseline_sample_id", baseline_sample_id])
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
-            [
-                sys.executable,
-                str(BIN / "generate_plots.py"),
-                "--results_csv",
-                str(csv_path),
-                "--failed_csv",
-                str(failed_path),
-                "--outdir",
-                str(out),
-            ],
+            cmd,
             check=True,
             capture_output=True,
             text=True,

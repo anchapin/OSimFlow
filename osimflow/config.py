@@ -10,6 +10,8 @@ import dataclasses
 import logging
 from pathlib import Path
 
+import yaml
+
 log = logging.getLogger("osimflow.config")
 
 
@@ -34,6 +36,15 @@ class CampaignConfig:
     slurm_qos: str | None = None
     slurm_constraint: str | None = None
     slurm_gres: str | None = None
+    # Optional ASHRAE 90.1 baseline comparison mode (issue #64).
+    # When a `baseline` section is defined in variables.yml, the
+    # campaign injects a fixed-parameter baseline sample alongside
+    # the LHS parametric samples, computes percentage improvement
+    # for each KPI, and adds baseline reference data to outputs.
+    # The dict has keys: "sample_id" (str) and "parameters" (dict).
+    # When None, baseline comparison is disabled and behaviour is
+    # unchanged.
+    baseline: dict[str, object] | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -67,6 +78,27 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
 
     custom_apply = args.get("custom_apply_script")
     custom_kpi = args.get("custom_kpi_extractor")
+
+    # Parse the optional baseline section from variables.yml (issue #64).
+    baseline: dict[str, object] | None = None
+    try:
+        with variables_yml.open() as f:
+            yml_data = yaml.safe_load(f)
+        if isinstance(yml_data, dict) and "baseline" in yml_data:
+            raw_baseline = yml_data["baseline"]
+            if isinstance(raw_baseline, dict):
+                baseline = {
+                    "sample_id": str(raw_baseline.get("sample_id", "baseline")),
+                    "parameters": dict(raw_baseline.get("parameters", {})),
+                }
+                log.info(
+                    "baseline comparison enabled: sample_id=%s, %d parameters",
+                    baseline["sample_id"],
+                    len(baseline["parameters"]),  # type: ignore[arg-type]
+                )
+    except Exception as exc:
+        log.warning("could not parse baseline section from %s: %s", variables_yml, exc)
+
     return CampaignConfig(
         input_variables=variables_yml,
         template_sim_package=template,
@@ -82,4 +114,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         slurm_qos=str(args["slurm_qos"]) if args.get("slurm_qos") else None,
         slurm_constraint=(str(args["slurm_constraint"]) if args.get("slurm_constraint") else None),
         slurm_gres=str(args["slurm_gres"]) if args.get("slurm_gres") else None,
+        baseline=baseline,
     )

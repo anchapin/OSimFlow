@@ -24,6 +24,11 @@ def main() -> int:
     parser.add_argument("--results_csv", required=True, type=Path)
     parser.add_argument("--failed_csv", required=True, type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
+    parser.add_argument(
+        "--baseline_sample_id",
+        default=None,
+        help="Sample ID of the baseline (for reference line on EUI histogram).",
+    )
     args = parser.parse_args()
 
     args.outdir.mkdir(parents=True, exist_ok=True)
@@ -43,10 +48,32 @@ def main() -> int:
 
     sns.set_theme(style="whitegrid", palette="colorblind")
 
+    # Resolve baseline EUI for the reference line (issue #64).
+    baseline_eui: float | None = None
+    if (
+        args.baseline_sample_id
+        and not results.empty
+        and "sample_id" in results.columns
+        and "eui_kwh_m2_yr" in results.columns
+    ):
+        baseline_rows = results[results["sample_id"] == args.baseline_sample_id]
+        if not baseline_rows.empty:
+            baseline_eui = float(baseline_rows.iloc[0]["eui_kwh_m2_yr"])
+
     # 1. EUI Histogram
     if "eui_kwh_m2_yr" in results.columns and not results["eui_kwh_m2_yr"].isna().all():
         plt.figure(figsize=(8, 5))
         sns.histplot(results["eui_kwh_m2_yr"].dropna(), kde=True)
+        # Add baseline reference line when available (issue #64).
+        if baseline_eui is not None and pd.notna(baseline_eui):
+            plt.axvline(
+                baseline_eui,
+                color="red",
+                linestyle="--",
+                linewidth=1.5,
+                label=f"Baseline EUI ({baseline_eui:.1f})",
+            )
+            plt.legend()
         plt.title("Distribution of EUI (kWh/m²/yr)")
         plt.xlabel("EUI (kWh/m²/yr)")
         plt.ylabel("Count")

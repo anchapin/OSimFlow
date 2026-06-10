@@ -88,6 +88,10 @@ class RunTrace:
         self.config_summary = config_summary
         self.steps: list[StepTrace] = []
         self.per_sample: list[SampleTrace] = []
+        # Baseline comparison data (issue #64). Populated after
+        # EXTRACT_KPIS when cfg.baseline is defined. Contains keys
+        # like baseline_eui, min_improvement_pct, max_improvement_pct.
+        self.baseline_comparison: dict[str, object] | None = None
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -135,7 +139,7 @@ class RunTrace:
     def to_dict(self) -> dict[str, object]:
         n_succeeded = sum(1 for s in self.per_sample if s.status == "ok")
         n_failed = sum(1 for s in self.per_sample if s.status == "failed")
-        return {
+        d: dict[str, object] = {
             "schema_version": self.SCHEMA_VERSION,
             "campaign_id": self.campaign_id,
             "started_at": self.started_at,
@@ -150,6 +154,9 @@ class RunTrace:
             "steps": [s.to_dict() for s in self.steps],
             "per_sample": [s.to_dict() for s in self.per_sample],
         }
+        if self.baseline_comparison is not None:
+            d["baseline_comparison"] = self.baseline_comparison
+        return d
 
     def write(self, path: Path) -> None:
         """Write the run.json trace to disk. Idempotent."""
