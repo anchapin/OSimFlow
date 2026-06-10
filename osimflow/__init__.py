@@ -6,6 +6,7 @@ in `.agents/results/decision-verdict.md`. This is the canonical public
 API; everything else is an implementation detail.
 """
 
+from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
 from .config import CampaignConfig, load_config
@@ -28,6 +29,9 @@ from .weather import (
 )
 
 __all__ = [
+    "AlgorithmRegistry",
+    "BaseAlgorithm",
+    "LHSAlgorithm",
     "CacheKey",
     "SQLiteCache",
     "Campaign",

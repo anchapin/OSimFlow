@@ -332,8 +332,10 @@ def test_three_sample_campaign_via_aws_batch_stub_produces_artifacts(
     kpi_submissions = [n for n in job_names if n.startswith("kpi_")]
     assert len(apply_submissions) == 3
     assert len(kpi_submissions) == 3
-    # Plus the 3 single-shot steps (LHS, aggregate, plots).
-    for expected_single_shot in ("generate_lhs", "aggregate", "plots"):
+    # Plus the 2 single-shot steps (aggregate, plots).  Sample
+    # generation is now done inline via the algorithm framework —
+    # there is no executor submission for it.
+    for expected_single_shot in ("aggregate", "plots"):
         assert expected_single_shot in job_names, (
             f"expected single-shot task {expected_single_shot!r} in submit_job "
             f"calls, got {job_names}"
