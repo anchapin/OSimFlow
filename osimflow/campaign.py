@@ -26,6 +26,7 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 import inspect
 import json
 import logging
+import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -175,6 +176,26 @@ class Campaign:
                 )
             )
 
+    def _archive_sample_artifacts(
+        self, src: Path, dst: Path, patterns: list[str]
+    ) -> None:
+        """Copy files matching *patterns* from *src* into *dst*.
+
+        Creates *dst* (with parents) and copies each file whose name
+        matches one of the glob *patterns*.  Uses ``shutil.copy2`` so
+        timestamps are preserved (cross-substrate robustness: works on
+        local, NFS, and any substrate that exposes a POSIX filesystem).
+
+        This is a private DRY helper called from the archive-aware step
+        methods when ``cfg.archive_intermediates`` is ``True``.
+        """
+        dst.mkdir(parents=True, exist_ok=True)
+        for pattern in patterns:
+            for f in src.glob(pattern):
+                if f.is_file():
+                    shutil.copy2(f, dst / f.name)
+                    log.debug("archived %s -> %s", f, dst / f.name)
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -209,6 +230,21 @@ class Campaign:
             aggregated: dict[str, Path] = self.step_aggregate_results(kpi_files, simulated)
             plots: list[Path] = self.step_generate_plots(aggregated)
             t1 = time.time()
+
+            # Archive campaign inputs (template_sim_package + input_variables)
+            # when --archive_intermediates is set.
+            if self.cfg.archive_intermediates:
+                inputs_archive = self.cfg.outdir / "archive" / "inputs"
+                inputs_archive.mkdir(parents=True, exist_ok=True)
+                # Copy the entire template_sim_package directory
+                pkg_dst = inputs_archive / self.cfg.template_sim_package.name
+                if pkg_dst.exists():
+                    shutil.rmtree(pkg_dst)
+                shutil.copytree(self.cfg.template_sim_package, pkg_dst)
+                log.info("archived template_sim_package -> %s", pkg_dst)
+                # Copy the input_variables file
+                shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
+                log.info("archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name)
 
             # Finalize the trace + run.json so the MLflow artifact is
             # the canonical post-campaign trace. We do this inside the
@@ -363,6 +399,12 @@ class Campaign:
                 state["apply_exit_code"] = 0
                 state["apply_status"] = "ok"
                 self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
+                # Archive modified .osw/.osm when flag is set
+                if self.cfg.archive_intermediates:
+                    archive_dst = self.cfg.outdir / "archive" / "apply" / sid
+                    self._archive_sample_artifacts(
+                        Path(result_path), archive_dst, ["*.osw", "*.osm"]
+                    )
             except Exception as e:
                 log.error("APPLY_PARAMETERS %s failed: %s", sid, e)
                 self.cache.store(key, out_dir, exit_code=1)
@@ -470,6 +512,12 @@ class Campaign:
                 state["sim_status"] = "ok"
                 state["eplusout_sql"] = str(result_path / "eplusout.sql")
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
+                # Archive eplusout.sql when flag is set
+                if self.cfg.archive_intermediates:
+                    archive_dst = self.cfg.outdir / "archive" / "sim" / sid
+                    self._archive_sample_artifacts(
+                        Path(result_path), archive_dst, ["eplusout.sql"]
+                    )
             except Exception as e:
                 log.error("RUN_OPENSTUDIO_SIM %s failed: %s", sid, e)
                 self.cache.store(key, out_dir, exit_code=1)
