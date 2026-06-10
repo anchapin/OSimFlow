@@ -32,6 +32,37 @@ log = logging.getLogger("osimflow.executors")
 
 
 # ---------------------------------------------------------------------------
+# Per-step resource defaults (issue #39)
+# ---------------------------------------------------------------------------
+# Sensible defaults for each DAG step. Used by BaseExecutor.submit() when
+# no explicit overrides are passed. See docs/resource-allocation.md for
+# the rationale and tuning guidance.
+#
+# Keys match the step names used in osimflow/campaign.py.
+# Values are dicts with {cpus, memory_mb, time_min}.
+DEFAULT_STEP_RESOURCES: dict[str, dict[str, int]] = {
+    "GENERATE_LHS_SAMPLES": {"cpus": 1, "memory_mb": 2048, "time_min": 5},
+    "APPLY_PARAMETERS": {"cpus": 1, "memory_mb": 512, "time_min": 10},
+    "RUN_OPENSTUDIO_SIM": {"cpus": 4, "memory_mb": 8192, "time_min": 240},
+    "EXTRACT_KPIS": {"cpus": 1, "memory_mb": 2048, "time_min": 10},
+    "AGGREGATE_RESULTS": {"cpus": 2, "memory_mb": 4096, "time_min": 15},
+    "GENERATE_BASIC_PLOTS": {"cpus": 1, "memory_mb": 2048, "time_min": 10},
+}
+
+
+def get_step_resources(step_name: str) -> dict[str, int]:
+    """Return resource defaults for a DAG step.
+
+    Falls back to ``{"cpus": 1, "memory_mb": 1024, "time_min": 60}``
+    when *step_name* is not in :data:`DEFAULT_STEP_RESOURCES`.
+    """
+    return DEFAULT_STEP_RESOURCES.get(
+        step_name,
+        {"cpus": 1, "memory_mb": 1024, "time_min": 60},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-sample log capture (issue #6)
 # ---------------------------------------------------------------------------
 def run_subprocess(
