@@ -17,6 +17,13 @@ slurm_logs/
 # Keep .agents/spike/work/fixtures/ (the variable.yml and template
 # fixture the spike scripts depend on) — not ignored above.
 
+# Per-issue agent result write-ups (e.g. result-backend-issue-11.md).
+# These are local agent deliverables, not repo content. The top-level
+# ADRs (decision-verdict.md, monitoring-decision.md, result-architecture.md)
+# and files under .agents/results/architecture/ stay tracked — only
+# the per-issue `result-*.md` write-ups are excluded.
+/.agents/results/result-*.md
+
 # Snakemake runtime caches (anywhere in the tree)
 **/.snakemake/
 **/.snakemake_timestamp
