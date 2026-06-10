@@ -365,6 +365,10 @@ class Campaign:
         the resolved .epw path under :data:`EPW_FILE_KEY`
         (``"__epw_file__"``) into a copy of *params*.
 
+        Categorical variables produce structured dicts (``{"label": ...,
+        "index": ...}``); this method extracts the ``label`` for
+        mapping lookups so the downstream resolution works transparently.
+
         If no ``epw_file`` targets exist, returns *params* unchanged.
 
         Raises:
@@ -377,9 +381,14 @@ class Campaign:
         for var in epw_vars:
             name = var["name"]
             mapping = var.get("mapping", {})
-            value = params.get(name)
-            if value is None:
+            raw_value = params.get(name)
+            if raw_value is None:
                 continue
+            # Categorical variables produce structured dicts; extract the label.
+            if isinstance(raw_value, dict) and "label" in raw_value:
+                value = raw_value["label"]
+            else:
+                value = raw_value
             epw_path = mapping.get(value)
             if epw_path is None:
                 raise ValueError(
