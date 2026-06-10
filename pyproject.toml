@@ -49,6 +49,7 @@ dev = [
     "mypy>=1.10",
     "types-PyYAML",
     "pre-commit>=3.7",
+    "moto[batch]>=5",
 ]
 aws = [
     "boto3>=1.28",

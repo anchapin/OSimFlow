@@ -231,3 +231,45 @@ jobs:
         with:
           name: coverage-xml
           path: coverage.xml
+
+  # ---------------------------------------------------------------------------
+  # G16a: AWS Batch mocked integration tests (issue #149)
+  # ---------------------------------------------------------------------------
+  # Runs moto-based tests that exercise the real boto3 wire format against
+  # a local mock AWS server — no AWS credentials needed.  Parallel with
+  # the main test job; moto is pulled in via the [dev] extras group.
+  # ---------------------------------------------------------------------------
+  aws-batch-mock:
+    name: aws-batch-mock (moto)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev + aws extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+
+      - name: pytest (AWS Batch mocked tests)
+        # --no-cov overrides the global --cov-fail-under=85 from pyproject.toml.
+        # This job runs a focused subset of tests (6 moto-based tests); the
+        # full-coverage gate belongs in the main "test" job which runs the
+        # complete suite.
+        run: .venv/bin/pytest tests/integration/test_aws_batch_mocked.py -v --no-cov
