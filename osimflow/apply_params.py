@@ -47,6 +47,13 @@ from typing import Any
 
 log = logging.getLogger("osimflow.apply_params")
 
+# Reserved key injected by the Campaign when a parameter targets
+# ``target: epw_file``.  The apply logic extracts this key before the
+# pre-flight check (because it does not correspond to a measure argument
+# or .osm attribute) and applies it as a top-level ``weather_file``
+# mutation on the .osw after all normal mutations are complete.
+EPW_FILE_KEY = "__epw_file__"
+
 
 # ---------------------------------------------------------------------------
 # Exception hierarchy
@@ -1027,6 +1034,33 @@ def _set_schedule_constant(
         zone.setHeatingSetpointTemperatureSchedule(schedule)
 
 
+def mutate_osw_weather_file(osw_path: Path, epw_path: str) -> None:
+    """Update the ``weather_file`` field in an .osw JSON file.
+
+    This is the core mutation for the ``target: epw_file`` feature
+    (issue #55).  The ``weather_file`` field is a top-level string in
+    the .osw format that points to the ``.epw`` file the simulation
+    should use.
+
+    Args:
+        osw_path: path to the ``.osw`` file to mutate (in place).
+        epw_path: the weather file path to write.  This is a
+            *relative* path resolved against the template simulation
+            package directory (not an absolute path), consistent with
+            how OpenStudio resolves ``weather_file``.
+
+    Raises:
+        ValueError: if the .osw file cannot be parsed as JSON.
+    """
+    try:
+        data = json.loads(osw_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid .osw JSON in {osw_path}: {exc}") from exc
+    data["weather_file"] = epw_path
+    osw_path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    log.info("mutated .osw weather_file -> %s in %s", epw_path, osw_path)
+
+
 def _mutate_osw(
     osw_path: Path,
     parameters: dict[str, Any],
@@ -1102,6 +1136,13 @@ def apply_parameters(
     Args:
         template: the template_sim_package file (.osm or .osw).
         parameters: the LHS dict for this sample, e.g. ``{"wwr": 0.4}``.
+            May contain the reserved key :data:`EPW_FILE_KEY`
+            (``"__epw_file__"``) when the Campaign has resolved an
+            ``epw_file`` target.  This key is extracted before the
+            pre-flight check (because it does not correspond to a
+            measure argument or .osm attribute) and applied as a
+            top-level ``weather_file`` mutation on the .osw after all
+            normal mutations are complete.
         sample_id: the sample's identifier, e.g. ``"0001"``.
         out: the per-sample output directory. Created if missing.
 
@@ -1121,6 +1162,10 @@ def apply_parameters(
             model. Raised during pre-flight path validation.
     """
     original_template = template
+    # Extract the epw_file reserved key BEFORE the pre-flight check.
+    # This key is not a measure argument or .osm attribute — it is
+    # a top-level .osw field handled by mutate_osw_weather_file.
+    epw_file_value: str | None = parameters.pop(EPW_FILE_KEY, None)
     # Build the union of mappings from BOTH files (if directory).
     mappings = _build_mappings(template)
     # The file we will mutate (or that the user_ctx references).
@@ -1150,4 +1195,22 @@ def apply_parameters(
             _mutate_osm(target_in_out, parameters, mappings)
         else:
             _mutate_osw(target_in_out, parameters, mappings)
+
+    # Apply .epw weather file mutation AFTER normal mutations.
+    # This updates the top-level ``weather_file`` field in the .osw.
+    if epw_file_value is not None:
+        osw_target: Path | None = None
+        if original_template.is_dir():
+            osw_target = out / "workflow.osw"
+        elif template_type == "osw":
+            osw_target = out / target_file.name
+        if osw_target is not None and osw_target.is_file():
+            mutate_osw_weather_file(osw_target, epw_file_value)
+        else:
+            log.warning(
+                "epw_file target specified but no .osw found to mutate "
+                "for sample_id=%s; skipping weather_file update",
+                sample_id,
+            )
+
     return out
