@@ -18,6 +18,13 @@ BYOS extension is exposed at the `apply_fn=` / `extract_fn=` constructor
 parameters — the user supplies a Python file with a function of the right
 signature and we discover + call it via `inspect.signature`.
 
+When `apply_fn` / `extract_fn` are not passed explicitly, the Campaign
+falls back to loading them from `cfg.custom_apply_script` /
+`cfg.custom_kpi_extractor` via the canonical ``osimflow.byos`` loader.
+This ensures `CampaignConfig.custom_apply_script` is always consumed,
+even when the Campaign is constructed programmatically (without the CLI
+doing the pre-load).
+
 Per `.agents/results/monitoring-decision.md`, the campaign writes a
 single `run.json` trace to `${outdir}/run.json` at completion. The trace
 includes per-step timing, per-sample status, and cache hit/miss counts.
@@ -91,8 +98,26 @@ class Campaign:
     ):
         self.cfg = cfg
         self.executor = executor
-        self.apply_fn = apply_fn or default_apply_parameters
-        self.extract_fn = extract_fn or extract_kpis
+        # Resolve apply_fn: explicit param > cfg.custom_apply_script > default.
+        if apply_fn is not None:
+            self.apply_fn = apply_fn
+        elif cfg.custom_apply_script is not None:
+            from .byos import load_user_function  # noqa: PLC0415
+
+            log.info("loading BYOS apply_fn from %s", cfg.custom_apply_script)
+            self.apply_fn = load_user_function(cfg.custom_apply_script)
+        else:
+            self.apply_fn = default_apply_parameters
+        # Resolve extract_fn: explicit param > cfg.custom_kpi_extractor > default.
+        if extract_fn is not None:
+            self.extract_fn = extract_fn
+        elif cfg.custom_kpi_extractor is not None:
+            from .byos import load_user_function  # noqa: PLC0415
+
+            log.info("loading BYOS extract_fn from %s", cfg.custom_kpi_extractor)
+            self.extract_fn = load_user_function(cfg.custom_kpi_extractor)
+        else:
+            self.extract_fn = extract_kpis
         self.cache = SQLiteCache(cfg.cache_db)
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the

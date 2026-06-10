@@ -10,14 +10,16 @@ a thin wrapper that:
   1. Parses CLI args.
   2. Reads the parameter set JSON (must be a JSON object: dict).
   3. Delegates to `osimflow.apply_params.apply_parameters`, which:
-       a. Detects the template type (.osm or .osw).
-       b. Builds the name→mapping index.
-       c. Runs the pre-flight check (fail fast on unmapped variables).
-       d. If --custom_apply_script is set, dispatches to the user's
-          `apply(ctx)` function (BYOS contract; see
-          user_scripts/README.md).
-       e. Otherwise, copies the template into the per-sample dir and
-          mutates the parameters in place.
+        a. Detects the template type (.osm or .osw).
+        b. Builds the name→mapping index.
+        c. Runs the pre-flight check (fail fast on unmapped variables).
+        d. Copies the template into the per-sample dir and mutates the
+           parameters in place.
+
+BYOS (Bring Your Own Script) is handled at the Campaign level via
+``CampaignConfig.custom_apply_script`` and ``osimflow.byos.load_user_function``.
+The ``--custom_apply_script`` CLI flag is no longer consumed here; it is
+handled upstream by the campaign orchestrator (issue #36).
 
 The OpenStudio Python bindings (`import openstudio`) are imported
 lazily inside `osimflow.apply_params.parse_osm_attributes` so that this
@@ -56,7 +58,6 @@ def main() -> int:
     parser.add_argument("--parameter_set", required=True, type=Path)
     parser.add_argument("--sample_id", required=True)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--custom_apply_script", type=Path, default=None)
     args = parser.parse_args()
 
     try:
@@ -92,7 +93,6 @@ def main() -> int:
             parameters=parameters,
             sample_id=args.sample_id,
             out=args.out,
-            custom_apply_script=args.custom_apply_script,
         )
     except UnmappedParameterError as exc:
         # Pre-flight failure: print the error to stderr and exit non-zero

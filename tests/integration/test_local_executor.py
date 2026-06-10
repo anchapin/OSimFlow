@@ -215,3 +215,65 @@ def test_three_sample_campaign_via_local_executor_produces_all_artifacts(
     assert result["run_json"] == run_json
     assert isinstance(result["elapsed_s"], float)
     assert result["elapsed_s"] > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test: BYOS end-to-end via CampaignConfig.custom_apply_script (issue #36)
+# ---------------------------------------------------------------------------
+def test_byos_apply_script_consumed_by_campaign(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """CampaignConfig.custom_apply_script must be consumed by the Campaign
+    when no explicit apply_fn is passed. The BYOS script writes a sentinel
+    file so we can verify it was actually called.
+
+    This test verifies the single-canonical-path fix from issue #36:
+    there is exactly one BYOS loader (osimflow.byos.load_user_function),
+    and the Campaign falls back to it when apply_fn is None.
+    """
+    # Write a BYOS script with the canonical function name.
+    byos_script = workdir / "custom_apply.py"
+    byos_script.write_text(
+        """\
+import json
+from pathlib import Path
+
+def apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path) -> Path:
+    out_dir = out / sample_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Write a sentinel so the test can verify we ran.
+    (out_dir / "byos_ran.txt").write_text(f"sid={sample_id} params={parameters}")
+    # Also write a minimal model.osm for the sim stub.
+    (out_dir / "model.osm").write_text(json.dumps({"attributes": {}}))
+    return out_dir
+"""
+    )
+
+    cfg = CampaignConfig(
+        input_variables=workdir / "variables.yml",
+        template_sim_package=template_pkg,
+        n_samples=3,
+        outdir=outdir,
+        openstudio_version="3.4.0",
+        archive_intermediates=False,
+        custom_apply_script=byos_script,
+    )
+    # Campaign constructed WITHOUT apply_fn — it must load from cfg.
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3))
+    campaign.run()
+
+    # The sentinel must exist in every sample's apply output.
+    for sample_dir in outdir.glob("work/apply/*/*"):
+        sentinel = sample_dir / "byos_ran.txt"
+        assert sentinel.is_file(), f"BYOS sentinel missing in {sample_dir}"
+        text = sentinel.read_text()
+        assert "sid=" in text
+        assert "params=" in text
+
+    # The campaign still produces all expected artifacts.
+    assert (outdir / "aggregated_results.csv").is_file()
+    assert (outdir / "failed_simulations.csv").is_file()
+    assert (outdir / "run.json").is_file()
+    trace = json.loads((outdir / "run.json").read_text())
+    # custom_apply_script should appear in the trace config summary.
+    assert trace["config"]["custom_apply_script"] == str(byos_script)

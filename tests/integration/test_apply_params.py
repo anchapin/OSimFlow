@@ -258,63 +258,68 @@ def test_apply_parameters_does_not_mutate_input_template(
 
 
 # ---------------------------------------------------------------------------
-# BYOS contract: custom_apply_script override
+# BYOS contract: canonical loader (osimflow.byos.load_user_function)
 # ---------------------------------------------------------------------------
-def test_apply_parameters_with_custom_script_uses_user_function(
-    osm_template: Path, tmp_path: Path
-) -> None:
-    """When a custom script is provided, the framework calls it via the
-    documented interface. The user function receives a `ctx` dict and
-    returns a result dict (per user_scripts/README.md)."""
+def test_load_user_function_discovers_apply_parameters(tmp_path: Path) -> None:
+    """The canonical BYOS loader discovers an ``apply_parameters`` function."""
+    from osimflow.byos import load_user_function
+
     user_script = tmp_path / "user_apply.py"
     user_script.write_text(
         textwrap.dedent(
             """\
-            def apply(ctx):
-                # Custom user logic — write a sentinel file.
-                out = ctx["out_dir"]
+            def apply_parameters(template, parameters, sample_id, out):
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "user_was_here.txt").write_text(
-                    f"sample_id={ctx['sample_id']} w={ctx['parameters']['window_u_value']}"
+                    f"sample_id={sample_id} w={parameters['window_u_value']}"
                 )
-                return {
-                    "osm_path": None,
-                    "osw_path": None,
-                    "extra": [out / "user_was_here.txt"],
-                    "warnings": [],
-                }
             """
         )
     )
+    fn = load_user_function(user_script)
+    assert callable(fn)
     sample_out = tmp_path / "out" / "0005"
-    apply_parameters(
-        template=osm_template,
-        parameters={"window_u_value": 0.42},
-        sample_id="0005",
-        out=sample_out,
-        custom_apply_script=user_script,
-    )
+    fn(template=tmp_path, parameters={"window_u_value": 0.42}, sample_id="0005", out=sample_out)
     sentinel = sample_out / "user_was_here.txt"
     assert sentinel.is_file()
     assert "sample_id=0005" in sentinel.read_text()
     assert "w=0.42" in sentinel.read_text()
 
 
-def test_apply_parameters_custom_script_missing_apply_function_raises(
-    osm_template: Path, tmp_path: Path
-) -> None:
-    """A user script without an `apply(ctx)` function must fail clearly,
-    not silently fall through to the default logic."""
+def test_load_user_function_raises_on_missing_function(tmp_path: Path) -> None:
+    """A user script without a recognised function name must fail clearly."""
+    from osimflow.byos import load_user_function
+
     bad = tmp_path / "bad.py"
     bad.write_text("def not_apply():\n    pass\n")
-    with pytest.raises(ValueError, match="apply"):
-        apply_parameters(
-            template=osm_template,
-            parameters={"window_u_value": 0.5},
-            sample_id="0006",
-            out=tmp_path / "out" / "0006",
-            custom_apply_script=bad,
+    with pytest.raises(AttributeError, match="apply_parameters"):
+        load_user_function(bad)
+
+
+def test_load_user_function_legacy_apply_name_emits_deprecation(tmp_path: Path) -> None:
+    """A script that defines ``apply`` (legacy name) still loads but emits
+    a DeprecationWarning."""
+    import warnings
+
+    from osimflow.byos import load_user_function
+
+    user_script = tmp_path / "legacy.py"
+    user_script.write_text(
+        textwrap.dedent(
+            """\
+            def apply(ctx):
+                pass
+            """
         )
+    )
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        fn = load_user_function(user_script)
+    assert callable(fn)
+    deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+    assert len(deprecation_warnings) == 1
+    assert "apply" in str(deprecation_warnings[0].message)
+    assert "apply_parameters" in str(deprecation_warnings[0].message)
 
 
 # ---------------------------------------------------------------------------
@@ -507,11 +512,11 @@ def test_apply_parameters_with_directory_template_unmapped_param_fails(
     assert not out.exists()
 
 
-def test_custom_script_dir_template_passes_template_dir_in_ctx(
+def test_custom_script_dir_template_resolved_via_byos(
     tmp_path: Path,
 ) -> None:
-    """When the template is a directory AND a custom script is provided,
-    the ctx dict's template_dir must point to the original directory."""
+    """When the template is a directory, a BYOS apply_parameters function
+    receives the correct template path."""
     pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "model.osm").write_text(json.dumps({"attributes": {"x": 1.0}}))
@@ -519,26 +524,23 @@ def test_custom_script_dir_template_passes_template_dir_in_ctx(
     user_script.write_text(
         textwrap.dedent(
             """\
-            def apply(ctx):
-                out = ctx["out_dir"]
+            import json
+            def apply_parameters(template, parameters, sample_id, out):
                 out.mkdir(parents=True, exist_ok=True)
-                (out / "ctx_snapshot.txt").write_text(
-                    f"template_dir={ctx['template_dir']} sample={ctx['sample_id']}"
+                (out / "snapshot.txt").write_text(
+                    f"template={template} sample={sample_id}"
                 )
             """
         )
     )
     out = tmp_path / "out" / "000D"
-    apply_parameters(
-        template=pkg,
-        parameters={"x": 1.5},
-        sample_id="000D",
-        out=out,
-        custom_apply_script=user_script,
-    )
-    assert (out / "ctx_snapshot.txt").is_file()
-    snapshot = (out / "ctx_snapshot.txt").read_text()
-    assert "template_dir=" in snapshot
+    from osimflow.byos import load_user_function
+
+    fn = load_user_function(user_script)
+    fn(template=pkg, parameters={"x": 1.5}, sample_id="000D", out=out)
+    assert (out / "snapshot.txt").is_file()
+    snapshot = (out / "snapshot.txt").read_text()
+    assert "template=" in snapshot
     assert "sample=000D" in snapshot
 
 
@@ -596,15 +598,10 @@ def test_copy_template_artifacts_rejects_out_as_file(osm_template: Path, tmp_pat
 # ---------------------------------------------------------------------------
 # BYOS contract: pre-copied template (Overall comment on BYOS)
 # ---------------------------------------------------------------------------
-def test_custom_script_always_precopies_template_into_out(
-    osm_template: Path, tmp_path: Path
-) -> None:
-    """The BYOS contract: the framework always pre-copies the template
-    into a clean `out_dir` before calling the user script. This is true
-    on the FIRST run AND on a re-run where stale files may exist from
-    a prior invocation. The user script does NOT need to copy the
-    template itself.
-    """
+def test_byos_function_can_mutate_copied_template(osm_template: Path, tmp_path: Path) -> None:
+    """A BYOS apply_parameters function can copy the template and mutate
+    it in place. The function receives the template path and out directory
+    and can use osimflow.apply_params._copy_template_artifacts if needed."""
     pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "model.osm").write_text(json.dumps({"attributes": {"a": 1.0}}))
@@ -612,41 +609,26 @@ def test_custom_script_always_precopies_template_into_out(
     user_script.write_text(
         textwrap.dedent(
             """\
-            def apply(ctx):
-                out = ctx["out_dir"]
-                # The framework already copied the template; just
-                # confirm `model.osm` is present in out_dir.
+            import json
+            from osimflow.apply_params import _copy_template_artifacts
+            def apply_parameters(template, parameters, sample_id, out):
+                # Copy the template into a clean out dir
+                _copy_template_artifacts(template, out)
+                # Confirm `model.osm` is present after copy.
                 assert (out / "model.osm").is_file(), "framework must pre-copy"
                 # Mutate the copied file in place.
-                data = __import__("json").loads((out / "model.osm").read_text())
+                data = json.loads((out / "model.osm").read_text())
                 data["attributes"]["a"] = 9.0
-                (out / "model.osm").write_text(__import__("json").dumps(data))
+                (out / "model.osm").write_text(json.dumps(data))
             """
         )
     )
+    from osimflow.byos import load_user_function
+
+    fn = load_user_function(user_script)
     out = tmp_path / "out" / "000F"
-    # First run: a clean out_dir.
-    apply_parameters(
-        template=pkg,
-        parameters={"a": 2.0},
-        sample_id="000F",
-        out=out,
-        custom_apply_script=user_script,
-    )
-    assert json.loads((out / "model.osm").read_text())["attributes"]["a"] == 9.0
-    # Re-run with the same out: stale value from the first run is
-    # cleared, and the framework re-copies a clean template.
-    apply_parameters(
-        template=pkg,
-        parameters={"a": 2.0},
-        sample_id="000F",
-        out=out,
-        custom_apply_script=user_script,
-    )
-    # The user script re-asserted "a" to 9.0; the pre-copy reset the
-    # baseline, but the script still ran. The key invariant is that
-    # `out/model.osm` was rewritten by the framework with the original
-    # template's `a=1.0` BEFORE the user script ran.
+    # First run: a clean out dir.
+    fn(template=pkg, parameters={"a": 2.0}, sample_id="000F", out=out)
     assert json.loads((out / "model.osm").read_text())["attributes"]["a"] == 9.0
 
 

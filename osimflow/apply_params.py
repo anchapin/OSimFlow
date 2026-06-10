@@ -6,35 +6,12 @@ try/except (per AGENTS.md §6), but the logic itself is import-safe so it
 can be unit-tested on hosts that do NOT have the OpenStudio Python
 bindings installed.
 
-The BYOS (Bring Your Own Script) contract lives here: a user-supplied
-`apply(ctx)` function in `user_scripts/my_apply.py` has the same
-interface as the default logic, and the Campaign can substitute it via
-the `--custom_apply_script` flag.
-
-BYOS contract (in detail)
--------------------------
-When ``custom_apply_script`` is supplied, the framework:
-
-1. Cleans and re-creates the per-sample output directory
-   ``out_dir`` (see ``_copy_template_artifacts``).
-2. Pre-copies the template contents into ``out_dir`` (the same way
-   it does for the default path). The user script does NOT need to
-   copy the template itself.
-3. Calls the user-provided ``apply(ctx)`` with::
-
-       ctx = {
-           "template_dir": <Path to original template dir, or parent of a single file>,
-           "template_path": <Path to the .osw (preferred) or .osm the framework will mutate>,
-           "parameters": <dict of LHS values>,
-           "sample_id": <str>,
-           "openstudio": <the openstudio module, or None if not installed>,
-           "out_dir": <Path to the per-sample output dir, pre-populated>,
-       }
-
-   The user script is responsible for modifying ``out_dir`` in place
-   (mutating the copied ``model.osm`` / ``workflow.osw`` and / or
-   writing additional files). It does not return anything the
-   framework uses.
+The BYOS (Bring Your Own Script) contract is handled by
+``osimflow.byos.load_user_function``, which is the single canonical
+loader. Users supply a ``.py`` file with an ``apply_parameters``
+function (the convention from ``__main__.py``). The Campaign consumes
+``CampaignConfig.custom_apply_script`` when no explicit ``apply_fn``
+is passed to the constructor. See issue #36 for the unification rationale.
 
 Template conventions
 -------------------
@@ -956,27 +933,35 @@ def _mutate_osw(
 
 
 # ---------------------------------------------------------------------------
-# BYOS: custom_apply_script override
+# BYOS: deprecated shim (issue #36). Use osimflow.byos.load_user_function
+# or pass --custom_apply_script on the CLI. The Campaign now consumes
+# CampaignConfig.custom_apply_script directly; there is no second loader
+# in this module.
 # ---------------------------------------------------------------------------
-def _load_custom_apply(script_path: Path) -> Any:
-    """Load a user script and return its `apply(ctx)` callable.
+def _load_custom_apply(script_path: Path) -> Any:  # noqa: ARG001
+    """Deprecated. Use ``osimflow.byos.load_user_function`` instead.
 
-    The contract is defined in `user_scripts/README.md`:
-    ``apply(ctx) -> dict`` with ``ctx = {"template_dir", "parameters",
-    "sample_id", "openstudio", "out_dir"}``.
+    This function exists solely so that any code that was importing it
+    directly gets a clear deprecation path instead of an ``ImportError``.
+    It always raises ``DeprecationWarning`` + ``RuntimeError``.
+
+    .. deprecated:: 0.2.0
+        Removed in the fix for issue #36. The canonical BYOS loader is
+        ``osimflow.byos.load_user_function``.
     """
-    spec = importlib.util.spec_from_file_location("user_apply", str(script_path))
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Cannot load custom_apply_script {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    apply_fn = getattr(module, "apply", None)
-    if apply_fn is None or not callable(apply_fn):
-        raise ValueError(
-            f"custom_apply_script {script_path} must define an "
-            f"`apply(ctx) -> dict` function (see user_scripts/README.md)."
-        )
-    return apply_fn
+    import warnings  # noqa: PLC0415
+
+    warnings.warn(
+        "_load_custom_apply is deprecated and no longer functional. "
+        "Use osimflow.byos.load_user_function or pass "
+        "--custom_apply_script on the CLI. "
+        "See issue #36 for details.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    raise RuntimeError(
+        "_load_custom_apply has been removed. Use osimflow.byos.load_user_function instead."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -987,7 +972,6 @@ def apply_parameters(
     parameters: dict[str, Any],
     sample_id: str,
     out: Path,
-    custom_apply_script: Path | None = None,
 ) -> Path:
     """Apply a parameter set to a template and write the per-sample output.
 
@@ -996,7 +980,6 @@ def apply_parameters(
         parameters: the LHS dict for this sample, e.g. ``{"wwr": 0.4}``.
         sample_id: the sample's identifier, e.g. ``"0001"``.
         out: the per-sample output directory. Created if missing.
-        custom_apply_script: optional user-supplied override (BYOS).
 
     Returns:
         The per-sample output directory (``out``).
@@ -1020,45 +1003,8 @@ def apply_parameters(
     target_file = _select_template_file(template)
     template_type = detect_template_type(target_file)
 
-    # Pre-flight (PRD §1.4). We do this BEFORE custom-script dispatch so
-    # the user always gets the canonical pre-flight check, regardless of
-    # whether they supplied a BYOS override.
+    # Pre-flight (PRD §1.4).
     preflight_check(parameters, mappings)
-
-    if custom_apply_script is not None:
-        log.info(
-            "apply_parameters: dispatching to custom_apply_script %s for sample_id=%s",
-            custom_apply_script,
-            sample_id,
-        )
-        user_apply = _load_custom_apply(custom_apply_script)
-        # BYOS contract: ctx contains all the inputs the user needs.
-        # We pass the openstudio module only if it is importable —
-        # never raise here, the user script is responsible for
-        # handling the missing-bindings case.
-        openstudio_mod = None
-        if importlib.util.find_spec("openstudio") is not None:
-            import openstudio as _os  # noqa: PLC0415
-
-            openstudio_mod = _os
-        # Per the BYOS contract documented at the top of this module,
-        # the framework pre-copies the template into `out_dir` (a
-        # clean, freshly-populated directory). The user script is
-        # responsible for mutating those files in place or writing
-        # additional files; it does NOT need to copy the template.
-        _copy_template_artifacts(original_template, out)
-        ctx = {
-            "template_dir": original_template
-            if original_template.is_dir()
-            else original_template.parent,
-            "template_path": target_file,
-            "parameters": parameters,
-            "sample_id": sample_id,
-            "openstudio": openstudio_mod,
-            "out_dir": out,
-        }
-        user_apply(ctx)
-        return out
 
     # Default path: copy all template artifacts into the per-sample
     # output, then mutate BOTH files (when applicable) so every
