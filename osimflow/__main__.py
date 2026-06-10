@@ -139,6 +139,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "Requires `pip install osimflow[mlflow]`."
         ),
     )
+    # Weather file subdirectory (issue #63). Defaults to "weather"
+    # relative to template_sim_package. The pre-flight validation pass
+    # checks that all .epw files referenced in variables.yml exist
+    # under this directory and validates their EPW format.
+    run.add_argument(
+        "--weather_dir",
+        default="weather",
+        help=(
+            "Name of the weather subdirectory inside template_sim_package "
+            "that holds .epw files. Default: weather."
+        ),
+    )
     return p
 
 

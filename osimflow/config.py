@@ -45,6 +45,13 @@ class CampaignConfig:
     # When None, baseline comparison is disabled and behaviour is
     # unchanged.
     baseline: dict[str, object] | None = None
+    # Weather file subdirectory convention (issue #63).
+    # Name of the subdirectory inside template_sim_package that holds
+    # .epw weather files. Defaults to "weather". The pre-flight
+    # validation pass checks that all .epw files referenced in
+    # variables.yml exist under this directory and validates their
+    # EPW format (header line starts with "LOCATION").
+    weather_dir: str = "weather"
 
     @property
     def work_dir(self) -> Path:
@@ -115,4 +122,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         slurm_constraint=(str(args["slurm_constraint"]) if args.get("slurm_constraint") else None),
         slurm_gres=str(args["slurm_gres"]) if args.get("slurm_gres") else None,
         baseline=baseline,
+        weather_dir=str(args["weather_dir"]) if args.get("weather_dir") else "weather",
     )
