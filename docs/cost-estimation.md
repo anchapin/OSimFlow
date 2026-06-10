@@ -219,7 +219,7 @@ total_sim_cost  = N_samples × $0.058
 OSimFlow's `SQLiteCache` makes re-runs essentially free. The cache key includes:
 
 - Input hash (variables.yml, parameter values)
-- Code hash (all `bin/*.py` + `work.py`)
+- Code hash (all `bin/*.py` + `osimflow/work.py`)
 - OpenStudio version
 - Container image digest
 
