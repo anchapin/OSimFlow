@@ -46,9 +46,7 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
 
     kpis = _extract(simulation_dir)
 
-    kpi_path.write_text(
-        json.dumps({"sample_id": sample_id, "kpis": kpis}, indent=2)
-    )
+    kpi_path.write_text(json.dumps({"sample_id": sample_id, "kpis": kpis}, indent=2))
     log.info("wrote KPIs for sample %s -> %s", sample_id, kpi_path)
     return kpi_path
 
