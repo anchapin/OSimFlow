@@ -1,0 +1,24 @@
+# =============================================================================
+# Docker Compose: single-node Nomad cluster for integration testing (issue #133)
+# =============================================================================
+# Starts a single Nomad server+client in dev mode. Dev mode is a single-node
+# cluster suitable for testing — no Raft consensus, no TLS, no ACLs.
+#
+# Usage:
+#   docker compose -f docker-compose.single.yml up -d
+#   # Wait for http://localhost:4646/v1/status/leader to return 200
+#   docker compose -f docker-compose.single.yml down
+#
+# The `privileged` flag is required for Nomad's dev mode to manage cgroups
+# and mount filesystems inside task containers.
+# =============================================================================
+services:
+  nomad:
+    image: hashicorp/nomad:1.8
+    container_name: nomad-single
+    command: agent -dev -bind 0.0.0.0 -client
+    ports:
+      - "4646:4646"  # HTTP API
+    environment:
+      - NOMAD_ADDR=http://0.0.0.0:4646
+    privileged: true  # Required for Nomad dev mode

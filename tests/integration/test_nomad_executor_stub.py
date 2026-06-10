@@ -120,6 +120,27 @@ def mocked_nomad_transport() -> Iterator[MagicMock]:
             resp.__exit__ = lambda s, *a: None
             return resp
 
+        if method == "GET" and "/v1/evaluation/" in url and "/allocations" in url:
+            # Eval-based allocation lookup: return a stub allocation.
+            idx = call_counter
+            alloc_calls.append({"method": method, "url": url})
+            result = [{"ID": f"alloc-eval-{idx}", "ClientStatus": "complete"}]
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(result).encode("utf-8")
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda s, *a: None
+            return resp
+
+        if method == "GET" and "/v1/job/" in url and "/allocations" in url:
+            # Job-based allocation lookup: return a stub allocation.
+            alloc_calls.append({"method": method, "url": url})
+            result = [{"ID": "alloc-job-stub", "ClientStatus": "complete"}]
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(result).encode("utf-8")
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda s, *a: None
+            return resp
+
         if method == "GET" and "/v1/allocation/" in url:
             # Allocation lookup: always return ``complete``.
             alloc_calls.append({"method": method, "url": url})

@@ -195,21 +195,31 @@ def test_nomad_executor_submits() -> None:
     import json
     from unittest.mock import MagicMock, patch
 
-    submit_response = MagicMock()
-    submit_response.read.return_value = json.dumps(
-        {"JobID": "stub-job", "EvalID": "eval-1", "Index": 0}
-    ).encode("utf-8")
-    submit_response.__enter__ = lambda s: s
-    submit_response.__exit__ = lambda s, *a: None
+    def _mock_response(data: dict[str, Any]) -> MagicMock:
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(data).encode("utf-8")
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = lambda s, *a: None
+        return resp
 
-    alloc_response = MagicMock()
-    alloc_response.read.return_value = json.dumps(
+    # The NomadExecutor.submit() -> handle.result() call chain is:
+    #   1. submit_job()         -> POST /v1/jobs
+    #   2. resolve_allocation() -> GET /v1/evaluation/{eval}/allocations
+    #      (returns list with alloc stub → extracts ID)
+    #   3. _wait_for_terminal() -> GET /v1/allocation/{alloc_id}
+    # Each needs a separate mock response.
+    submit_resp = _mock_response({"JobID": "stub-job", "EvalID": "eval-1", "Index": 0})
+    eval_allocs_resp = _mock_response(
+        [{"ID": "alloc-1", "ClientStatus": "running", "JobID": "stub-job"}]
+    )
+    terminal_alloc_resp = _mock_response(
         {"ID": "alloc-1", "ClientStatus": "complete", "JobID": "stub-job"}
-    ).encode("utf-8")
-    alloc_response.__enter__ = lambda s: s
-    alloc_response.__exit__ = lambda s, *a: None
+    )
 
-    with patch("urllib.request.urlopen", side_effect=[submit_response, alloc_response]):
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[submit_resp, eval_allocs_resp, terminal_alloc_resp],
+    ):
         ex = NomadExecutor()
         handle = ex.submit(lambda: None, name="t", cpus=1)
         assert handle.result(timeout=5) is None
