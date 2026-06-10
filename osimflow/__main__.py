@@ -112,6 +112,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a .py file defining extract_kpis(...) (BYOS)",
     )
     run.add_argument("--log_level", default="INFO")
+    # Optional MLflow integration (issue #7). When set, the campaign
+    # logs params / metrics / artifacts to the configured tracking
+    # server. When absent, the campaign runs without any mlflow import.
+    run.add_argument(
+        "--mlflow_tracking_uri",
+        default=None,
+        help=(
+            "MLflow tracking server URI (e.g. http://localhost:5000). "
+            "When set, the campaign logs params/metrics/artifacts to MLflow. "
+            "Requires `pip install osimflow[mlflow]`."
+        ),
+    )
     return p
 
 

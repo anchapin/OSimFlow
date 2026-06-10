@@ -23,6 +23,11 @@ class CampaignConfig:
     archive_intermediates: bool = False
     custom_apply_script: Path | None = None
     custom_kpi_extractor: Path | None = None
+    # Optional MLflow tracking server (issue #7). When None, the campaign
+    # runs without any MLflow integration (no mlflow import, no logging).
+    # When set, the Campaign begins an MLflow run at start and ends it at
+    # completion, logging params / metrics / artifacts.
+    mlflow_tracking_uri: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -65,4 +70,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,
         custom_kpi_extractor=Path(str(custom_kpi)).resolve() if custom_kpi else None,
+        mlflow_tracking_uri=(
+            str(args["mlflow_tracking_uri"]) if args.get("mlflow_tracking_uri") else None
+        ),
     )

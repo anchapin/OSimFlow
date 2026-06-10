@@ -29,11 +29,19 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypedDict
 
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import BaseExecutor
+from .mlflow_hook import (
+    log_mlflow_artifacts,
+    log_mlflow_metrics,
+    log_mlflow_params,
+    maybe_end_mlflow_run,
+    maybe_start_mlflow_run,
+)
 from .monitoring import RunTrace, SampleTrace, sample_log_paths
 from .work import (
     aggregate_results,
@@ -180,18 +188,52 @@ class Campaign:
         log.info("  work_dir:      %s", self.cfg.work_dir)
         log.info("=" * 60)
 
-        t0 = time.time()
-        samples: list[SampleSpec] = self.step_generate_lhs()
-        parameterized: SampleDict = self.step_apply_parameters(samples)
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated)
-        aggregated: dict[str, Path] = self.step_aggregate_results(kpi_files, simulated)
-        plots: list[Path] = self.step_generate_plots(aggregated)
-        t1 = time.time()
+        # Optional MLflow tracking (issue #7). Lazy-imports mlflow only
+        # when a tracking URI is configured; the no-tracking-URI path is
+        # mlflow-free. Cleanup runs in `finally` so a step that raises
+        # mid-campaign still closes the MLflow run cleanly (the MLflow
+        # UI never shows a stuck RUNNING entry).
+        run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
+        if run_name is not None:
+            # Build a small view object the hook can read via getattr;
+            # the hook is duck-typed to avoid a circular import on
+            # `osimflow.config`.
+            log_mlflow_params(_make_mlflow_param_view(self.cfg, self.executor.name))
 
-        self._finalize_samples()
-        self.trace.finalize()
-        self.trace.write(self.cfg.outdir / "run.json")
+        t0 = time.time()
+        try:
+            samples: list[SampleSpec] = self.step_generate_lhs()
+            parameterized: SampleDict = self.step_apply_parameters(samples)
+            simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
+            kpi_files: list[Path] = self.step_extract_kpis(simulated)
+            aggregated: dict[str, Path] = self.step_aggregate_results(kpi_files, simulated)
+            plots: list[Path] = self.step_generate_plots(aggregated)
+            t1 = time.time()
+
+            # Finalize the trace + run.json so the MLflow artifact is
+            # the canonical post-campaign trace. We do this inside the
+            # try block (before the finally cleanup) so the run.json
+            # file exists at the moment `log_mlflow_artifacts` reads it.
+            self._finalize_samples()
+            self.trace.finalize()
+            self.trace.write(self.cfg.outdir / "run.json")
+
+            # Log metrics + artifacts to MLflow before the run ends.
+            # The hooks are no-ops when no run is active, so this is
+            # safe to call unconditionally.
+            n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
+            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+            log_mlflow_metrics(t1 - t0, n_succeeded, n_failed)
+            log_mlflow_artifacts(
+                aggregated["csv"],
+                aggregated["failed"],
+                self.cfg.outdir / "run.json",
+            )
+        finally:
+            # End the MLflow run even if any step raised. The hook is
+            # itself exception-safe so a transient MLflow error cannot
+            # mask the original failure.
+            maybe_end_mlflow_run()
 
         log.info("=" * 60)
         log.info("OSimFlow campaign complete in %.1fs", t1 - t0)
@@ -581,6 +623,25 @@ class Campaign:
             exit_code=0,
         )
         return result
+
+
+# ---------------------------------------------------------------------------
+# MLflow param view (issue #7)
+# ---------------------------------------------------------------------------
+def _make_mlflow_param_view(cfg: CampaignConfig, executor_name: str) -> SimpleNamespace:
+    """Build a small adapter for `log_mlflow_params`.
+
+    The hook reads attributes via `getattr`, so a `SimpleNamespace` is
+    sufficient. The adapter is built from a `CampaignConfig` + the
+    executor's `name` so the hook does not import `osimflow.config`
+    (avoiding a circular import).
+    """
+    return SimpleNamespace(
+        executor=executor_name,
+        openstudio_version=cfg.openstudio_version,
+        n_samples=cfg.n_samples,
+        archive_intermediates=cfg.archive_intermediates,
+    )
 
 
 # ---------------------------------------------------------------------------

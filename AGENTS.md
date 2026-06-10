@@ -32,7 +32,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Data processing | **Python 3.11+**, **`pandas`**, **`pyarrow`** (Parquet) | KPI extraction, aggregation, error parsing. |
 | Plotting | **`matplotlib`** + **`seaborn`** | 1–3 static summary plots (PNG/PDF). |
 | Container registry | **Docker Hub** (OpenStudio) + **`ghcr.io`** (scientific Python) | `docker.io/nrel/openstudio:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
-| Monitoring | **BYO: per-campaign `run.json` + tqdm** | See `.agents/results/monitoring-decision.md`. No external service. |
+| Monitoring | **BYO: per-campaign `run.json` + tqdm** | See `.agents/results/monitoring-decision.md`. No external service. Optional MLflow add-on via `--mlflow_tracking_uri` (see `osimflow/mlflow_hook.py`). |
 | CI/CD | **GitHub Actions** | (workflow to be added post-MVP) |
 
 ---
@@ -46,6 +46,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` — explicit, testable resume semantics. |
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
+| `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor`. |
 | `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
@@ -90,6 +91,7 @@ The 6-step DAG that the `Campaign` class drives:
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--openstudio_version`, `--archive_intermediates`
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
+- `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--log_level`
 
 ### Developer workflow targets (Makefile)
@@ -119,6 +121,10 @@ pip install -e ".[dev,aws,slurm]"
 
 # Minimal install (no slurm/boto3 — local executor only)
 pip install -e .
+
+# Optional MLflow add-on (issue #7). Brings in the `mlflow` package;
+# only needed if you pass `--mlflow_tracking_uri` on the CLI.
+pip install -e ".[mlflow]"
 ```
 
 ### Run a campaign
@@ -156,6 +162,15 @@ osimflow run \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 10 \
+  --outdir ./results
+
+# MLflow tracking (optional add-on). Requires `pip install osimflow[mlflow]`.
+osimflow run \
+  --executor local \
+  --mlflow_tracking_uri http://localhost:5000 \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 5 \
   --outdir ./results
 ```
 
