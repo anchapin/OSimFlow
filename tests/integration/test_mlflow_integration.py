@@ -236,6 +236,7 @@ def test_log_mlflow_artifacts_calls_log_artifact_per_path(
 # end_run on cleanup
 # ---------------------------------------------------------------------------
 def test_maybe_end_mlflow_run_calls_end_run(fake_mlflow: _FakeMlflowRecorder) -> None:
+    maybe_start_mlflow_run("http://localhost:5000", "test-campaign")
     maybe_end_mlflow_run()
     assert any(c[0] == "end_run" for c in fake_mlflow.calls)
 

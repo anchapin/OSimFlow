@@ -46,9 +46,17 @@ PATH_SKIP_SUBSTRINGS = (
     "os.path",  # module path, not a file
     "pathlib",  # module path, not a file
     "argparse",  # module path, not a file
+    "sys.path",  # Python runtime attribute, not a file
     "openstudio.cli",  # CLI binary shipped inside container, not a local path
     "containerOverride",  # AWS Batch API field, not a local path
     ".egg-info",
+    "measure.rb",  # OpenStudio measure pattern (example in docs)
+    "measure.py",  # OpenStudio measure pattern (example in docs)
+    "measure.xml",  # OpenStudio measure pattern (example in docs)
+    "Gemfile",  # Ruby bundler file (example in docs, not in repo)
+    "requirements.txt",  # Python deps file (example in docs, not in repo)
+    "/Users/",  # example absolute path in docs
+    "vendor/",  # bundled deps dir (example in docs)
 )
 # Extension classes that look like file refs but are documented file
 # *patterns*, not real on-disk files we can resolve.
