@@ -254,6 +254,23 @@ When implementing the real `bin/*.py` logic, add:
 - **Pre-flight parameter check tests** — the LHS variable name must map to a real measure argument / `.osm` attribute.
 - **Performance Benchmarking** smoke test (PRD §5.2) that records wall-clock + memory for a 3-sample run.
 
+### Executor integration tests (issue #11)
+
+The four files in `tests/integration/` named after the executor profiles are
+end-to-end smoke tests of the Campaign running against each substrate
+(PRD §5.2 *Comprehensive end-to-end integration tests*). They run a
+3-sample campaign through the `example_package/` and assert all four
+output artifacts plus the per-campaign `run.json` are produced:
+
+- `tests/integration/test_local_executor.py` — `LocalExecutor` happy path.
+- `tests/integration/test_slurm_executor_debug.py` — `SlurmExecutor(debug=True)` (uses `submitit.DebugExecutor`; no real cluster needed in CI).
+- `tests/integration/test_aws_batch_executor_stub.py` — `AWSBatchExecutor` with a mocked `boto3` client; a real-Batch E2E test is deferred to a separate ticket.
+- `tests/integration/test_cache_resume.py` — runs the same campaign twice against the same `outdir`; the warm run must be at least 5x faster than the cold run (the issue quotes ~280x for 5 samples on the spike).
+
+The full executor suite runs in well under 60s on a single core. The CI
+workflow runs them on every PR via the same `pytest` invocation as the
+unit tests.
+
 ### CI workflow
 
 Every push to a PR branch and every merge to `main` runs the workflow in
