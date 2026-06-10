@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from osimflow.config import CampaignConfig, load_config
-from osimflow.executors import AWSBatchExecutor, LocalExecutor, SlurmExecutor
+from osimflow.executors import AWSBatchExecutor, LocalExecutor, NomadExecutor, SlurmExecutor
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +180,37 @@ def test_aws_batch_executor_submits() -> None:
     }
     with patch("boto3.client", return_value=fake_client):
         ex = AWSBatchExecutor()
+        handle = ex.submit(lambda: None, name="t", cpus=1)
+        assert handle.result(timeout=5) is None
+    ex.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# NomadExecutor (no real Nomad — urllib.request.urlopen is patched)
+# ---------------------------------------------------------------------------
+def test_nomad_executor_submits() -> None:
+    """Smoke test: the executor accepts a urlopen-patched environment
+    and returns a Handle. The real polling behavior is covered in
+    `test_nomad_http_wiring.py`."""
+    import json
+    from unittest.mock import MagicMock, patch
+
+    submit_response = MagicMock()
+    submit_response.read.return_value = json.dumps(
+        {"JobID": "stub-job", "EvalID": "eval-1", "Index": 0}
+    ).encode("utf-8")
+    submit_response.__enter__ = lambda s: s
+    submit_response.__exit__ = lambda s, *a: None
+
+    alloc_response = MagicMock()
+    alloc_response.read.return_value = json.dumps(
+        {"ID": "alloc-1", "ClientStatus": "complete", "JobID": "stub-job"}
+    ).encode("utf-8")
+    alloc_response.__enter__ = lambda s: s
+    alloc_response.__exit__ = lambda s, *a: None
+
+    with patch("urllib.request.urlopen", side_effect=[submit_response, alloc_response]):
+        ex = NomadExecutor()
         handle = ex.submit(lambda: None, name="t", cpus=1)
         assert handle.result(timeout=5) is None
     ex.shutdown()

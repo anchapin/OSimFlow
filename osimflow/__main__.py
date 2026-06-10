@@ -26,6 +26,7 @@ from osimflow import (
     Campaign,
     CampaignConfig,
     LocalExecutor,
+    NomadExecutor,
     SlurmExecutor,
     load_config,
 )
@@ -77,6 +78,11 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             job_queue=args.aws_batch_queue,
             job_definition=args.aws_batch_job_definition,
         )
+    if args.executor == "nomad":
+        return NomadExecutor(
+            address=args.nomad_address,
+            datacentre=args.nomad_datacentre,
+        )
     raise ValueError(f"unknown executor: {args.executor}")
 
 
@@ -87,7 +93,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="Run a campaign")
-    run.add_argument("--executor", choices=["local", "slurm", "aws_batch"], default="local")
+    run.add_argument(
+        "--executor", choices=["local", "slurm", "aws_batch", "nomad"], default="local"
+    )
     run.add_argument("--max-workers", type=int, default=4, help="Local executor parallelism")
     run.add_argument("--slurm-partition", default="short")
     run.add_argument("--slurm-account", default=None)
@@ -115,6 +123,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--aws-batch-queue", default="osimflow-batch-queue")
     run.add_argument("--aws-batch-job-definition", default=None)
+    # Nomad executor flags (issue #27).
+    run.add_argument(
+        "--nomad-address",
+        default=None,
+        help=(
+            "Nomad cluster HTTP address (e.g. http://nomad.local:4646). "
+            "Defaults to the NOMAD_ADDR env var or http://127.0.0.1:4646."
+        ),
+    )
+    run.add_argument(
+        "--nomad-datacentre",
+        default="dc1",
+        help="Nomad datacentre to target (default: dc1).",
+    )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)

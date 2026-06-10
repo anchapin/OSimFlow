@@ -13,6 +13,7 @@ from .executors import (
     AWSBatchExecutor,
     BaseExecutor,
     LocalExecutor,
+    NomadExecutor,
     SlurmExecutor,
 )
 from .monitoring import RunTrace, StepTrace
@@ -27,6 +28,7 @@ __all__ = [
     "LocalExecutor",
     "SlurmExecutor",
     "AWSBatchExecutor",
+    "NomadExecutor",
     "RunTrace",
     "StepTrace",
 ]

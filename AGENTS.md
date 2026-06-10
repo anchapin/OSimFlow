@@ -42,8 +42,8 @@ Orchestrator → Executor → Work function
 - **Orchestrator** — `osimflow/campaign.py` (the `Campaign` class)
   drives the 6-step DAG.
 - **Executor** — `osimflow/executors/__init__.py` provides
-  `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, and
-  `AWSBatchExecutor` implementations.
+  `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`,
+  `AWSBatchExecutor`, and `NomadExecutor` implementations.
 - **Work function** — `osimflow/work.py` (per-step logic) and
   `bin/*.py` (CLI scripts invoked by the work layer) implement the
   actual step work.
@@ -91,7 +91,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Layer | Technology | Notes |
 |---|---|---|
 | Workflow orchestration | **Custom Python driver** (`osimflow/`) | ~300 LoC `Campaign` class; subcommand CLI `osimflow run`. |
-| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor` | All conform to the same `submit()` → `Handle` interface. |
+| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `NomadExecutor` | All conform to the same `submit()` → `Handle` interface. |
 | Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
 | AWS Batch backend | **`boto3`** (future) | Stub today; `AWSBatchExecutor.submit()` is a placeholder. |
 | Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
@@ -115,7 +115,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
 | `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
-| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor`. |
+| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `NomadExecutor`. |
 | `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats). |
@@ -155,11 +155,12 @@ The 6-step DAG that the `Campaign` class drives:
 
 ### CLI flags (referenced from `osimflow/__main__.py`)
 
-- `--executor` (local / slurm / aws_batch)
+- `--executor` (local / slurm / aws_batch / nomad)
 - `--max-workers` (local executor parallelism)
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
 - `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
 - `--aws-batch-queue`, `--aws-batch-job-definition`
+- `--nomad-address`, `--nomad-datacentre`
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--openstudio_version`, `--archive_intermediates`
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)

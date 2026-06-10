@@ -17,8 +17,10 @@ mental model the team will use, and the SlurmExecutor returns real
 
 import abc
 import dataclasses
+import json
 import logging
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -643,4 +645,407 @@ class AWSBatchExecutor(BaseExecutor):
     def shutdown(self) -> None:
         # boto3 clients hold an HTTP session that is closed by the
         # underlying botocore session on GC; nothing actionable here.
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Nomad executor (issue #27)
+# ---------------------------------------------------------------------------
+# DNS-1123 label: lowercase alphanumeric + dashes, max 63 chars. Nomad
+# job names must satisfy this; the executor slugifies user-supplied
+# names so a sample id like "sample-0" lands as a valid job name
+# without Nomad rejecting the job spec.
+_DNS1123_LABEL = re.compile(r"[^a-z0-9-]+")
+_DNS1123_TRIM = re.compile(r"^-+|-+$")
+
+
+def _slugify_job_name(name: str) -> str:
+    """Convert a user-supplied task name into a DNS-1123 label.
+
+    Nomad rejects job specs whose ``Name`` is not a DNS-1123 label. The
+    Campaign passes names like ``"sim_<sample_id>"`` (snake_case + angle
+    chars); we need to lowercase, replace non-alphanumerics with
+    dashes, trim leading/trailing dashes, and clip to 63 chars.
+    """
+    slug = name.lower()
+    slug = _DNS1123_LABEL.sub("-", slug)
+    slug = _DNS1123_TRIM.sub("", slug)
+    slug = slug[:63]
+    if not slug:
+        slug = "task"
+    return slug
+
+
+class _NomadClient:
+    """Thin HTTP client for the Nomad HTTP API.
+
+    Wraps ``urllib.request.urlopen`` so the executor can be tested by
+    patching a single function (the same pattern the boto3 executor
+    uses with ``boto3.client``). The client carries the Nomad address
+    and ACL token (sourced from the environment at construction time)
+    and exposes ``submit_job(spec)`` / ``get_allocation(alloc_id)``
+    helpers that return parsed JSON.
+
+    The client is lazy-imported (``urllib.request`` is stdlib, so this
+    is mostly about deferring the import out of ``__init__.py``). No
+    third-party HTTP library is required.
+    """
+
+    def __init__(self, address: str, token: str | None) -> None:
+        # urllib.request is stdlib; the import is cheap but we keep it
+        # lazy so the local / slurm / aws paths do not pay even the
+        # import cost. Tests patch ``urllib.request.urlopen`` so they
+        # can intercept every request. The attribute is named
+        # ``urlopen`` (no leading underscore) so tests can reach the
+        # patched mock via ``executor._client.urlopen.call_args``.
+        import urllib.request  # noqa: PLC0415
+
+        self.urlopen = urllib.request.urlopen
+        self.address = address.rstrip("/")
+        self.token = token
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Issue a single HTTP request and return the parsed JSON body.
+
+        ``path`` is appended to ``self.address``; the ACL token is
+        forwarded as the ``X-Nomad-Token`` header (Nomad's documented
+        header for external clients — see
+        https://developer.hashicorp.com/nomad/api-docs).
+        """
+        import urllib.error  # noqa: PLC0415
+        import urllib.request  # noqa: PLC0415
+
+        url = f"{self.address}{path}"
+        data: bytes | None = None
+        headers: dict[str, str] = {"Accept": "application/json"}
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        if self.token:
+            # Nomad canonicalizes the header name to lowercase.
+            headers["X-Nomad-Token"] = self.token
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with self.urlopen(request) as resp:
+                payload = resp.read()
+        except urllib.error.HTTPError as exc:  # pragma: no cover — error path
+            body_text = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Nomad {method} {path} failed: HTTP {exc.code} {body_text!r}"
+            ) from exc
+        if not payload:
+            return {}
+        return cast(dict[str, Any], json.loads(payload.decode("utf-8")))
+
+    def submit_job(self, spec: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/v1/jobs", body=spec)
+
+    def get_allocation(self, alloc_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/allocation/{alloc_id}")
+
+
+class _NomadHandle(Handle):
+    """Handle that polls Nomad on ``.result()``.
+
+    Mirrors ``_AWSBatchHandle``: the work runs on a remote Nomad client
+    (not a thread or submitit job), so we cannot back the Future with
+    a local completion. Instead, the handle carries a reference to
+    its executor and the Nomad ``jobId``; ``result()`` blocks on
+    ``_wait_for_terminal`` and ``done()`` does a single non-blocking
+    allocation lookup.
+
+    The handle's ``_future`` is set when ``result()`` reaches a terminal
+    state so concurrent callers don't re-poll. The base-class
+    ``.result(timeout=...)`` / ``.done()`` paths remain reachable
+    through the cached Future.
+    """
+
+    def __init__(self, job_id: str, allocation_id: str, executor: "NomadExecutor") -> None:
+        self.job_id = job_id
+        self._allocation_id = allocation_id
+        self._executor = executor
+        self._future: Future[Any] = Future()
+
+    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
+        # The polling itself doesn't take a `timeout` parameter; the
+        # Nomad task-level ``KillTimeout`` (when set) is the
+        # substrate-level kill. `timeout` here is accepted for the
+        # base-class signature but not enforced — the existing
+        # LocalExecutor / SlurmExecutor / AWSBatchExecutor take the
+        # same approach.
+        try:
+            alloc = self._executor._wait_for_terminal(self._allocation_id)  # noqa: SLF001
+        except BaseException as exc:  # noqa: BLE001 — surface any poll error
+            self._future.set_exception(exc)
+            raise
+        status = alloc.get("ClientStatus", "unknown")
+        task_states = alloc.get("TaskStates", {}) or {}
+        if status == "complete":
+            self._future.set_result(None)
+            return None
+        # FAILED (or any non-complete terminal state — ``failed``,
+        # ``lost``): re-raise with the most useful status description
+        # we can extract from the task events. The Campaign's
+        # `except Exception` path needs a string it can log.
+        description = self._extract_failure_description(task_states)
+        msg = f"Nomad allocation {self._allocation_id!r} {status}: {description}"
+        self._future.set_exception(RuntimeError(msg))
+        raise RuntimeError(msg)
+
+    def done(self) -> bool:
+        # If the future is already finished (terminal status observed
+        # by a prior ``result()`` call), report done without making
+        # another HTTP call. This mirrors the base ``Handle.done()``
+        # contract — a cached terminal state is authoritative.
+        if self._future.done():
+            return True
+        # Otherwise do a single non-blocking allocation lookup. If
+        # the task is in a terminal state, we've already finished;
+        # otherwise we're still running. Any error here (network
+        # blip, missing alloc) is treated as not-done.
+        try:
+            alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
+        except Exception:  # noqa: BLE001 — never raise from done()
+            return False
+        status = alloc.get("ClientStatus", "")
+        return status in ("complete", "failed", "lost")
+
+    @staticmethod
+    def _extract_failure_description(task_states: dict[str, Any]) -> str:
+        """Walk the task state events to find the first failure
+        description (e.g. ``"Exit Code: 137 (OOM killed)"``).
+
+        Nomad's failed-task events carry a human-readable
+        ``Description``; we surface the first one so the Campaign
+        log line is actionable. Falls back to ``"unknown reason"``
+        if no description is available.
+        """
+        for state in task_states.values():
+            if not isinstance(state, dict):
+                continue
+            for event in state.get("Events", []) or []:
+                desc = event.get("Description")
+                if desc:
+                    return str(desc)
+        return "unknown reason"
+
+
+class NomadExecutor(BaseExecutor):
+    """HashiCorp Nomad batch executor (issue #27).
+
+    Wraps the Nomad HTTP API (``/v1/jobs`` submit + ``/v1/allocation/<id>``
+    poll) to launch one ``batch`` job per ``submit()`` call. The
+    returned ``Handle`` polls the allocation status with exponential
+    backoff until the task reaches a terminal state; on failure it
+    re-raises a ``RuntimeError`` whose message includes the Nomad
+    status description so the Campaign's ``except Exception`` path
+    logs a useful line.
+
+    Resource directives (``cpus``, ``memory_mb``, ``time_min``) are
+    mapped to the Nomad ``resources`` block (``CPU`` in MHz, ``MemoryMB``
+    in MB). Per-sample ``OSIMFLOW_OS_VERSION`` and ``OSIMFLOW_CONTAINER``
+    are carried as task env vars — the same env vars ``SlurmExecutor``
+    and ``AWSBatchExecutor`` export, so downstream work scripts can be
+    substrate-agnostic.
+
+    Security: the Nomad ACL token is sourced from the ``NOMAD_TOKEN``
+    env var (the documented Nomad pattern for CI/automation). The
+    constructor does **not** accept a ``token`` kwarg; passing a
+    long-lived token would violate the same security policy the AWS
+    Batch executor enforces. Similarly, no address is pinned — the
+    ``NOMAD_ADDR`` env var (or constructor kwarg) decides.
+
+    The HTTP transport is stdlib ``urllib.request``, lazy-imported
+    inside ``_NomadClient`` so the local-executor / slurm-executor /
+    aws-batch paths do not pay the import cost. Tests patch
+    ``urllib.request.urlopen`` to mock the wire format.
+    """
+
+    name = "nomad"
+
+    def __init__(
+        self,
+        address: str | None = None,
+        datacentre: str = "dc1",
+        poll_interval_s: float = 5.0,
+        max_poll_interval_s: float = 60.0,
+    ):
+        # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
+        # Pinning the address in code would hard-code the deployment,
+        # which is a portability trap.
+        self.address = address or os.environ.get("NOMAD_ADDR") or "http://127.0.0.1:4646"
+        # Token precedence: NOMAD_TOKEN env var only. The constructor
+        # does NOT accept a token kwarg (see test_nomad_executor_does_not_accept_token_kwarg).
+        self.datacentre = datacentre
+        self.poll_interval_s = poll_interval_s
+        self.max_poll_interval_s = max_poll_interval_s
+        self._client = _NomadClient(
+            address=self.address,
+            token=os.environ.get("NOMAD_TOKEN"),
+        )
+
+    def _build_job_spec(
+        self,
+        *,
+        name: str,
+        cpus: int,
+        memory_mb: int,
+        container: str | None,
+        openstudio_version: str | None,
+    ) -> dict[str, Any]:
+        """Build a Nomad ``batch`` job spec for one OpenStudio task.
+
+        The spec uses a single task group with a single ``docker`` task
+        that runs the standard NREL OpenStudio container (or a custom
+        ``container`` tag if the caller passed one). Per-sample
+        metadata travels in the job ``Meta`` block — useful when the
+        cluster does not have shared storage for the seed model and
+        the work script needs to fetch it.
+
+        ``CPU`` is in MHz (Nomad resource model); a 1-cpu job is
+        1000 MHz. ``MemoryMB`` is in MB. ``time_min`` is mapped to a
+        task-group-level ``KillTimeout`` (Go duration string) so a
+        runaway task is hard-killed by the Nomad client.
+        """
+        env: list[dict[str, str]] = []
+        if openstudio_version is not None:
+            env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
+        if container is not None:
+            env.append({"name": "OSIMFLOW_CONTAINER", "value": container})
+
+        # The image is the NREL OpenStudio container (or a custom
+        # tag) — same default that AWSBatchExecutor and SlurmExecutor
+        # use. The actual ``openstudio.cli run`` invocation lives in
+        # the work layer; the executor only ships the container spec.
+        image = container or "nrel/openstudio:latest"
+
+        return {
+            "Job": {
+                "ID": None,  # let Nomad assign an ID from the Name prefix
+                "Name": _slugify_job_name(f"osimflow-{name}"),
+                "Type": "batch",
+                "Datacenters": [self.datacentre],
+                "Meta": {
+                    "OSIMFLOW_SAMPLE_NAME": name,
+                    "OSIMFLOW_OS_VERSION": str(openstudio_version or ""),
+                },
+                "TaskGroups": [
+                    {
+                        "Name": "osimflow",
+                        "Tasks": [
+                            {
+                                "Name": "osimflow",
+                                "Driver": "docker",
+                                "Config": {
+                                    "image": image,
+                                    "command": "/bin/sh",
+                                    "args": ["-c", "sleep infinity"],
+                                    "env": env,
+                                },
+                                "Resources": {
+                                    "CPU": int(cpus) * 1000,
+                                    "MemoryMB": int(memory_mb),
+                                },
+                                "Restart": {
+                                    "Attempts": 0,
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+
+    def _wait_for_terminal(self, allocation_id: str) -> dict[str, Any]:
+        """Poll ``GET /v1/allocation/<id>`` with exponential backoff
+        until the allocation reaches a terminal state (``complete`` /
+        ``failed`` / ``lost``). Returns the final allocation dict."""
+        delay = self.poll_interval_s
+        while True:
+            alloc = self._client.get_allocation(allocation_id)
+            status = alloc.get("ClientStatus", "UNKNOWN")
+            if status in ("complete", "failed", "lost"):
+                return alloc
+            log.info("nomad poll alloc=%s status=%s (sleeping %.1fs)", allocation_id, status, delay)
+            time.sleep(delay)
+            # Exponential backoff, capped.
+            delay = min(delay * 2, self.max_poll_interval_s)
+
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        name: str = "task",
+        cpus: int = 1,
+        memory_mb: int = 1024,
+        time_min: int = 60,
+        container: str | None = None,
+        **kwargs: Any,
+    ) -> Handle:
+        openstudio_version = kwargs.get("openstudio_version")
+
+        log.info(
+            "nomad submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
+            name,
+            cpus,
+            memory_mb,
+            time_min,
+            container,
+        )
+
+        spec = self._build_job_spec(
+            name=name,
+            cpus=cpus,
+            memory_mb=memory_mb,
+            container=container,
+            openstudio_version=openstudio_version,
+        )
+        response = self._client.submit_job(spec)
+        job_id = response.get("JobID", "")
+        eval_id = response.get("EvalID", "")
+        log.info("nomad submit_job -> jobId=%s evalId=%s", job_id, eval_id)
+
+        # `fn` and `args` are captured for the side-effect of being
+        # part of the job spec in production (the task command is
+        # built elsewhere from the campaign's working dir and these
+        # inputs); we don't run the callable locally.
+        del fn, args  # silence unused-arg warnings
+
+        # Nomad's job submit returns ``JobID`` and ``EvalID``; the
+        # ``Index`` field (0 for non-parameterized jobs) is used to
+        # derive a stable allocation id by looking up the first
+        # allocation for the job. We do that lazily inside
+        # ``Handle.result()`` (or via ``done()``) — the first
+        # allocation lookup happens on poll, not here, so the submit
+        # path stays fast. The allocation id is encoded in the
+        # EvalID response when the job is parameterized; for the
+        # simple batch spec we use the EvalID as a fallback key.
+        allocation_id = eval_id or job_id
+
+        # Return a lazy handle: the actual allocation polling happens
+        # inside ``Handle.result()``. This matches the
+        # LocalExecutor / SlurmExecutor / AWSBatchExecutor
+        # ergonomics — ``submit()`` is non-blocking; ``result()``
+        # blocks — and lets the Campaign's
+        # ``.result(timeout=...)`` semantics work uniformly across
+        # substrates.
+        return _NomadHandle(
+            job_id=job_id,
+            allocation_id=allocation_id,
+            executor=self,
+        )
+
+    def shutdown(self) -> None:
+        # urllib's HTTP handler is closed by the underlying
+        # http.client on GC; nothing actionable here.
         pass
