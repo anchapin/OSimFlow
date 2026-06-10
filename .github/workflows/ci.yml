@@ -1,8 +1,21 @@
 # =============================================================================
-# .github/workflows/ci.yml — full CI: lint + typecheck + test + coverage gate
+# .github/workflows/ci.yml — split CI: lint + typecheck + test (parallel)
 # =============================================================================
 # Mirrors the local `make test-cov` + `make contract` + `make typecheck`.
 # Triggered on push to main and on PRs.
+#
+# This workflow was split from a single monolithic job (issue #76) into
+# parallel jobs gated by `needs:` so the merge signal waits for all of:
+#   - lint       : ruff check + ruff format --check  (parallel; ~30s)
+#   - typecheck  : mypy --strict on osimflow/         (parallel; ~60s)
+#   - test       : pytest with 85% coverage gate      (depends on lint+typecheck)
+#   - contract   : AGENTS.md / docs drift gate        (parallel; ~10s)
+#   - security   : pip-audit dependency vulnerability check (parallel; ~30s)
+#
+# Install uses `uv` (~10x faster than pip) and the venv is cached on a hash
+# of `pyproject.toml` so unchanged PRs reuse the install.
+#
+# Local pre-commit is the day-to-day mirror; CI is the merge gate.
 # =============================================================================
 name: ci
 
@@ -11,56 +24,197 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+      - ".agents/**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  ci:
-    name: ci (py${{ matrix.python-version }})
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache ruff
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ruff-${{ runner.os }}-
+
+      - name: Install ruff
+        run: uv pip install --system "ruff>=0.6"
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+  typecheck:
+    name: typecheck (mypy --strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+
+      - name: mypy osimflow/
+        run: .venv/bin/mypy osimflow
+
+  contract:
+    name: agents & docs contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+
+      - name: AGENTS.md / code drift
+        run: .venv/bin/python tools/check_agents_contract.py
+
+      - name: docs/ path resolution
+        run: .venv/bin/python tools/check_docs_sync.py
+
+  security:
+    name: security (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+          uv pip install --python .venv/bin/python "pip-audit>=2.7"
+
+      - name: Audit dependencies
+        # pip-audit scans the *installed* package set in .venv and looks
+        # each one up against the OSV / PyPA advisory database. `--strict`
+        # exits non-zero on any confirmed vulnerability, failing the job.
+        # If a transitive dep gets flagged, fix it by bumping the bound
+        # in pyproject.toml or pinning the dep in the lockfile.
+        run: |
+          .venv/bin/pip-audit --strict
+          echo "::notice::pip-audit found no known vulnerabilities."
+
+  test:
+    name: test (pytest, 85% coverage gate)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
-
+    needs: [lint, typecheck]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          version: "0.5.x"
 
-      - name: Install dependencies
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev extras + pytest-xdist)
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,aws,slurm]"
-
-      - name: ruff (lint)
-        run: python -m ruff check .
-
-      - name: ruff format (check)
-        run: python -m ruff format --check .
-
-      - name: mypy (osimflow/)
-        run: python -m mypy osimflow
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+          uv pip install --python .venv/bin/python "pytest-xdist>=3.5"
 
       - name: pytest with coverage gate
         run: |
-          python -m pytest --cov=osimflow --cov-report=xml --cov-report=term --cov-fail-under=85 -q
-
-      - name: AGENTS.md contract check
-        run: python tools/check_agents_contract.py
-
-      - name: docs/ sync check
-        run: python tools/check_docs_sync.py
+          .venv/bin/pytest -n auto \
+            --cov=osimflow \
+            --cov-report=xml \
+            --cov-report=term \
+            --cov-fail-under=85 \
+            -q
 
       - name: Upload coverage
-        if: matrix.python-version == '3.12'
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml

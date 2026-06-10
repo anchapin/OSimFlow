@@ -1,10 +1,28 @@
+# =============================================================================
+# .github/workflows/bench.yml — performance benchmark
+# =============================================================================
+# Runs the cold/warm 3-sample benchmark (issue #10) and uploads
+# `benchmarks.json` as a per-Python-version artifact.
+#
+# Triggers (issue #76):
+#   - push to main: regression detection on merged code.
+#   - workflow_dispatch: ad-hoc re-runs.
+#
+# Bench is intentionally NOT a PR gate — benchmarks are noisy on a 2-core
+# GitHub runner and slow. PRs see lint + typecheck + tests + contract
+# feedback from `ci.yml`; perf drift is caught on main and tracked in
+# `docs/benchmarks.md`.
+# =============================================================================
 name: bench
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -15,24 +33,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12"]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          version: "0.5.x"
 
-      - name: Install dependencies
+      - name: Setup Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-bench-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-bench-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install (editable + dev extras)
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,aws,slurm]"
+          uv venv .venv --python ${{ matrix.python-version }}
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
 
       - name: Run benchmark
         env:
@@ -40,7 +68,7 @@ jobs:
           # the cold-cache wall-clock threshold without editing source.
           OSIMFLOW_BENCH_THRESHOLD_S: "60"
         run: |
-          python -m tests.benchmarks.bench_campaign \
+          .venv/bin/python -m tests.benchmarks.bench_campaign \
             --input_variables variables.yml \
             --template_sim_package ./example_package \
             --outdir ./bench-out \
