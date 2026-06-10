@@ -419,6 +419,8 @@ These are *known traps* the PRD explicitly calls out. When you write code, check
 8. **Large time-series data** — hourly outputs for thousands of samples get huge fast. Default to daily/monthly aggregates in `aggregated_results.csv`; keep hourly data only in per-sample `.sql` files behind `--archive_intermediates`.
 9. **Cache invalidation on `bin/*.py` edits** — the cache key includes a SHA-256 of every `bin/*.py` file (`code_hashes["bin"]`), so editing a script invalidates the cache for the affected step. **Do not** introduce a step that bypasses this hashing.
 10. **SlurmExecutor `debug=True` by default** — without `--slurm-real`, jobs run locally. This is the documented `submitit` pattern. Always pass `--slurm_real` in production.
+11. **Real vs stub OpenStudio CLI** — `run_openstudio_sim` invokes `openstudio.cli run -w workflow.osw` when the CLI is on PATH (detected via `shutil.which`). When the CLI is not available, it falls back to the stub (sleep + placeholder output). Set `OSIMFLOW_STUB_SIM=1` to force stub mode even when the CLI is installed (the escape hatch for testing). Existing integration tests use the stub; set `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` to run the real E2E test.
+12. **Missing workflow.osw in real CLI mode** — when `openstudio.cli` is available but no `workflow.osw` exists in the `modified_sim_package`, the work function raises `RuntimeError` before invoking the CLI. The `template_sim_package` must always contain a `workflow.osw`.
 
 ---
 
