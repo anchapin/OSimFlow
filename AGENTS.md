@@ -101,7 +101,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Plotting | **`matplotlib`** + **`seaborn`** | 1–3 static summary plots (PNG/PDF). |
 | Container registry | **Docker Hub** (OpenStudio) + **`ghcr.io`** (scientific Python) | `docker.io/nrel/openstudio:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
 | Monitoring | **BYO: per-campaign `run.json` + tqdm** | See `.agents/results/monitoring-decision.md`. No external service. Optional MLflow add-on via `--mlflow_tracking_uri` (see `osimflow/mlflow_hook.py`). |
-| CI/CD | **GitHub Actions** | (workflow to be added post-MVP) |
+| CI/CD | **GitHub Actions** | Terraform validate in CI for `infra/` changes (issue #148). |
 
 ---
 
@@ -142,6 +142,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/CONTRIBUTING.md` | Contributor onboarding (stub for Phase 3). |
 | `docs/GOVERNANCE.md` | Community governance model (stub for Phase 3). |
 | `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
+| `infra/aws/terraform/` | Terraform module for AWS Batch infrastructure (issue #148): VPC, S3 bucket, IAM roles, Batch compute environment, job queue, and job definition using `nrel/openstudio` container image. CI runs `terraform validate` on `infra/` changes. |
 | `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit). |
 | `LICENSE` | MIT. |
 | `README.md` | One-paragraph project pitch + status. |
@@ -467,6 +468,7 @@ Use these patterns to decide where to make a change.
 | Add a new cache invalidation rule | `osimflow/campaign.py:step_*` (the cache key construction) **and** a test in `tests/integration/test_cache_invalidation.py`. |
 | Add an export format | New module in `osimflow/exporters/` (e.g. `osa.py` for PAT) **and** add the `--target` choice to `osimflow/__main__.py` export subcommand. |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
+| Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/` — modify the Terraform module. Run `terraform validate` to check. CI validates on `infra/` path changes. |
 
 ### 9.1 Tool selection decision tree
 

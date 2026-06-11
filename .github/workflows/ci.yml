@@ -309,3 +309,37 @@ jobs:
       - name: Run Nomad E2E tests
         run: |
           .venv/bin/pytest tests/integration/nomad_e2e/ -v -m nomad_e2e --no-cov
+
+  # ---------------------------------------------------------------------------
+  # G18a: Terraform validate (issue #148)
+  # ---------------------------------------------------------------------------
+  # Runs terraform init + validate when files under infra/ change.
+  # No AWS credentials needed — uses -backend=false (local-only validation).
+  # ---------------------------------------------------------------------------
+  terraform:
+    name: terraform validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check for infra/ changes
+        id: changed
+        uses: tj-actions/changed-files@v46
+        with:
+          files: |
+            infra/**
+
+      - name: Setup Terraform
+        if: steps.changed.outputs.any_changed == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform init
+        if: steps.changed.outputs.any_changed == 'true'
+        run: terraform -chdir=infra/aws/terraform init -backend=false
+
+      - name: terraform validate
+        if: steps.changed.outputs.any_changed == 'true'
+        run: terraform -chdir=infra/aws/terraform validate
