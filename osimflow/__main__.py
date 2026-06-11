@@ -29,6 +29,7 @@ from osimflow import (
     load_config,
 )
 from osimflow.byos import load_user_function
+from osimflow.exporters.osa import OSAExporter
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 
 log = logging.getLogger("osimflow.__main__")
@@ -231,6 +232,45 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output path for the converted variables.yml (default: variables.yml)",
     )
     imp.add_argument("--log_level", default="INFO")
+    exp = sub.add_parser(
+        "export",
+        help="Export campaign state to an external format",
+    )
+    exp.add_argument(
+        "--target",
+        choices=["pat"],
+        required=True,
+        help="Export format (currently only 'pat' for PAT-compatible analysis.json)",
+    )
+    exp.add_argument(
+        "--variables",
+        type=Path,
+        required=True,
+        help="Path to variables.yml to export",
+    )
+    exp.add_argument(
+        "--outdir",
+        type=Path,
+        default=Path("."),
+        help="Output directory for exported files (default: current directory)",
+    )
+    exp.add_argument(
+        "--n_samples",
+        type=int,
+        default=10,
+        help="Number of samples to record in the analysis (default: 10)",
+    )
+    exp.add_argument(
+        "--algorithm",
+        default="lhs",
+        help="Sampling algorithm name to export (default: lhs)",
+    )
+    exp.add_argument(
+        "--openstudio_version",
+        default="3.5.0",
+        help="OpenStudio CLI version (default: 3.5.0)",
+    )
+    exp.add_argument("--log_level", default="INFO")
     return p
 
 
@@ -245,6 +285,30 @@ def _run_import_osa(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_export(args: argparse.Namespace) -> int:
+    variables_path = Path(args.variables).resolve()
+    if not variables_path.exists():
+        print(f"error: variables file not found: {variables_path}", file=sys.stderr)
+        return 1
+
+    outdir = Path(args.outdir).resolve()
+    # Build a minimal CampaignConfig for the exporter.
+    # The export subcommand only needs a subset of fields.
+    cfg = CampaignConfig(
+        input_variables=variables_path,
+        template_sim_package=outdir,  # placeholder — not used by export
+        n_samples=args.n_samples,
+        outdir=outdir,
+        openstudio_version=args.openstudio_version,
+        algorithm=args.algorithm,
+    )
+
+    exporter = OSAExporter()
+    path = exporter.export(cfg, outdir)
+    print(f"Exported {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -253,6 +317,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.command == "import-osa":
         return _run_import_osa(args)
+    if args.command == "export":
+        return _run_export(args)
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))

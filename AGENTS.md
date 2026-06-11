@@ -120,6 +120,10 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
 | `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `NomadExecutor`. |
+| `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
+| `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
+| `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
+| `osimflow/exporters/osa.py` | `OSAExporter` — export campaign config to PAT-compatible analysis.json (issue #142). Reverse of `importers/osa.py`. |
 | `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats). |
@@ -454,6 +458,7 @@ Use these patterns to decide where to make a change.
 | Change KPI output schema | `bin/extract_kpis.py` (output dict shape) **and** `bin/aggregate_results.py` (column ordering) **and** update the `variables.yml` example in `docs/`. |
 | Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different Campaign semantics (retry, cache, monitoring). |
 | Add a new cache invalidation rule | `osimflow/campaign.py:step_*` (the cache key construction) **and** a test in `tests/integration/test_cache_invalidation.py`. |
+| Add an export format | New module in `osimflow/exporters/` (e.g. `osa.py` for PAT) **and** add the `--target` choice to `osimflow/__main__.py` export subcommand. |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
 
 ### 9.1 Tool selection decision tree
