@@ -96,6 +96,15 @@ class BaseAlgorithm(abc.ABC):
     def is_iterative(self) -> bool:
         """Return ``True`` for iterative / optimization algorithms."""
 
+    def is_multi_objective(self) -> bool:
+        """Return ``True`` for multi-objective algorithms (e.g. NSGA-II).
+
+        The default is ``False``.  Algorithms that produce a Pareto front
+        should override this to return ``True`` so the Campaign persists
+        per-generation Pareto data (issue #141).
+        """
+        return False
+
 
 # ======================================================================
 # Registry
