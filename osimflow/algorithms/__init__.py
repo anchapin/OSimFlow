@@ -3,7 +3,8 @@
 Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
-``MorrisAlgorithm``, and ``FAST99Algorithm`` implementations.
+``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
+and ``DualAnnealingAlgorithm`` implementations.
 
 Adding a new algorithm (NSGA-II, Bayesian optimisation, …) requires only:
 
@@ -429,6 +430,12 @@ from osimflow.algorithms.sobol import SobolAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("sobol", SobolAlgorithm)
 AlgorithmRegistry.register("halton", HaltonAlgorithm)
+
+from osimflow.algorithms.da import DualAnnealingAlgorithm  # noqa: E402
+from osimflow.algorithms.de import DifferentialEvolutionAlgorithm  # noqa: E402
+
+AlgorithmRegistry.register("de", DifferentialEvolutionAlgorithm)
+AlgorithmRegistry.register("dual_annealing", DualAnnealingAlgorithm)
 
 try:
     from osimflow.algorithms.fast99 import FAST99Algorithm  # noqa: E402
