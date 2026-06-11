@@ -198,6 +198,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--aws-batch-max-spot-price-usd` (Spot price ceiling in USD/vCPU-hour. Issue #131)
 - `--aws-batch-fallback-to-on-demand` (fall back to on-demand when Spot exceeds ceiling or retries exhausted. Issue #131)
 - `--aws-batch-max-retries` (max Spot interruption retries; default 3. Issue #131)
+- `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
 - `--nomad-address`, `--nomad-datacentre`
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
