@@ -196,7 +196,7 @@ jobs:
   test:
     name: test (pytest, 85% coverage gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     needs: [lint, typecheck]
     steps:
       - uses: actions/checkout@v6
@@ -221,7 +221,7 @@ jobs:
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
-          uv pip install --python .venv/bin/python "pytest-xdist>=3.5"
+          uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3"
 
       - name: pytest with coverage gate
         run: |
@@ -230,6 +230,8 @@ jobs:
             --cov-report=xml \
             --cov-report=term \
             --cov-fail-under=85 \
+            -n 4 \
+            --dist loadgroup \
             -q
 
       - name: Upload coverage

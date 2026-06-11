@@ -16,6 +16,9 @@ from pathlib import Path
 
 import pytest
 
+from osimflow import Campaign, CampaignConfig
+from osimflow.executors import LocalExecutor
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
 EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
@@ -46,6 +49,36 @@ def _session_variables_yml(tmp_path_factory: pytest.TempPathFactory) -> Path:
     dest = tmp_path_factory.mktemp("session_vars") / "variables.yml"
     shutil.copy2(EXAMPLE_VARS_YML, dest)
     return dest
+
+
+@pytest.fixture(scope="session")
+def _session_preseeded_outdir(
+    tmp_path_factory: pytest.TempPathFactory,
+    _session_example_package: Path,
+    _session_variables_yml: Path,
+) -> Path:
+    """Run a 3-sample campaign once per session to seed ``samples.json``.
+
+    Individual tests that need a pre-seeded outdir should use the
+    ``preseeded_outdir`` per-test fixture below, which copies this
+    session-scoped directory.  This avoids re-running the 3-sample
+    campaign for every test.
+    """
+    wd = tmp_path_factory.mktemp("preseed_wd")
+    (wd / "variables.yml").write_text(_session_variables_yml.read_text())
+    out = tmp_path_factory.mktemp("preseed_out") / "out"
+    out.mkdir(parents=True)
+
+    cfg = CampaignConfig(
+        input_variables=wd / "variables.yml",
+        template_sim_package=_session_example_package,
+        n_samples=3,
+        outdir=out,
+        openstudio_version="3.11.0",
+    )
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3))
+    campaign.run()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +121,19 @@ def workdir(tmp_path: Path, _session_variables_yml: Path) -> Path:
     wd.mkdir()
     (wd / "variables.yml").write_text(_session_variables_yml.read_text())
     return wd
+
+
+@pytest.fixture
+def preseeded_outdir(tmp_path: Path, _session_preseeded_outdir: Path) -> Path:
+    """Writable copy of the session-scoped pre-seeded campaign output.
+
+    Contains ``work/samples.json`` with 3 samples from a completed
+    campaign.  Uses ``shutil.copytree`` from the session cache to
+    avoid re-running the campaign for every test.
+    """
+    dest = tmp_path / "preseed_out"
+    shutil.copytree(_session_preseeded_outdir, dest)
+    return dest
 
 
 # ---------------------------------------------------------------------------
