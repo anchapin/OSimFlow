@@ -76,7 +76,6 @@ jobs:
             --n_samples 3
 
       - name: Upload benchmark artifact
-        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: benchmarks-${{ matrix.python-version }}
