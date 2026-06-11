@@ -64,6 +64,7 @@ from .mlflow_hook import (
     maybe_start_mlflow_run,
 )
 from .monitoring import RunTrace, SampleTrace, sample_log_paths
+from .pareto import ParetoFront, ParetoSolution
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .work import (
     SevereEnergyPlusError,
@@ -801,7 +802,98 @@ class Campaign:
         parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
+
+        # Per-generation Pareto front persistence for multi-objective
+        # algorithms (issue #141).  When the algorithm reports
+        # is_multi_objective(), build ParetoSolution objects from the
+        # extracted KPIs and persist the front to outdir/pareto/gen_N.json.
+        if algo.is_multi_objective() and kpi_files:
+            self._persist_pareto_front(algo, samples, kpi_files, generation)
+
         return samples, kpi_files, simulated
+
+    def _persist_pareto_front(
+        self,
+        algo: BaseAlgorithm,
+        samples: list[SampleSpec],
+        kpi_files: list[Path],
+        generation: int,
+    ) -> None:
+        """Build/update the Pareto front and persist per-generation JSON.
+
+        Parameters
+        ----------
+        algo
+            The algorithm instance (must report ``is_multi_objective()``).
+        samples
+            The sample specs for this generation.
+        kpi_files
+            Extracted KPI JSON files (one per sample).
+        generation
+            0-based generation index — used in the output filename.
+        """
+        # Load existing front (if any) from the previous generation.
+        pareto_dir = self.cfg.outdir / "pareto"
+        pareto_path = pareto_dir / f"gen_{generation}.json"
+        front: ParetoFront | None = None
+
+        # Try to load from previous generation's file to carry forward
+        # non-dominated solutions.
+        if generation > 0:
+            prev_path = pareto_dir / f"gen_{generation - 1}.json"
+            if prev_path.exists():
+                try:
+                    front = ParetoFront.load(prev_path)
+                except Exception as exc:
+                    log.warning("could not load previous Pareto front: %s", exc)
+
+        # Determine objective names from the first KPI file that has data.
+        objective_names: list[str] = []
+        for kpi_path in kpi_files:
+            try:
+                kpi_data = json.loads(kpi_path.read_text())
+                kpis = kpi_data.get("kpis", {})
+                objective_names = sorted(k for k, v in kpis.items() if isinstance(v, (int, float)))
+                if objective_names:
+                    break
+            except Exception:
+                continue
+
+        if not objective_names:
+            log.warning("no objective KPIs found; skipping Pareto front")
+            return
+
+        if front is None:
+            front = ParetoFront(objective_names=objective_names)
+
+        # Build ParetoSolution objects from samples + KPIs.
+        # Match by index (samples[i] -> kpi_files[i]) — this is the
+        # same correspondence the Campaign uses throughout.
+        new_solutions: list[ParetoSolution] = []
+        for i, sample in enumerate(samples):
+            if i >= len(kpi_files):
+                break
+            try:
+                kpi_data = json.loads(kpi_files[i].read_text())
+                kpis = kpi_data.get("kpis", {})
+                objectives = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
+                parameters = {
+                    k: float(v) for k, v in sample["values"].items() if isinstance(v, (int, float))
+                }
+                new_solutions.append(
+                    ParetoSolution(
+                        sample_id=str(sample["sample_id"]),
+                        objectives=objectives,
+                        parameters=parameters,
+                        generation=generation,
+                    )
+                )
+            except Exception as exc:
+                log.warning("could not build ParetoSolution for sample %s: %s", sample.get("sample_id"), exc)
+
+        if new_solutions:
+            front.add_generation(new_solutions)
+            front.save(pareto_path)
 
     def _finalize_full_campaign(
         self,

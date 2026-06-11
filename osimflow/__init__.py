@@ -20,6 +20,7 @@ from .executors import (
     SlurmExecutor,
 )
 from .monitoring import RunTrace, StepTrace
+from .pareto import ParetoFront, ParetoSolution
 from .weather import (
     EPWDownloadError,
     EPWValidationError,
@@ -49,6 +50,8 @@ __all__ = [
     "NomadExecutor",
     "RunTrace",
     "StepTrace",
+    "ParetoFront",
+    "ParetoSolution",
     "SevereEnergyPlusError",
     "EPWValidationError",
     "EPWDownloadError",
