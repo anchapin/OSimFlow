@@ -225,7 +225,7 @@ class TestSQLiteCache:
 
     def test_creates_db(self, tmp_path: Path) -> None:
         db_path = tmp_path / "subdir" / "cache.sqlite"
-        cache = SQLiteCache(db_path)
+        SQLiteCache(db_path)
         assert db_path.exists()
 
     def test_store_and_lookup(self, cache: SQLiteCache, tmp_path: Path) -> None:

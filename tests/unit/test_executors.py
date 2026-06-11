@@ -461,7 +461,7 @@ class TestAWSBatchSubmit:
         ex._client.describe_jobs.return_value = {
             "jobs": [{"jobId": "j-spec", "status": "SUCCEEDED"}]
         }
-        handle = ex.submit(lambda: None, name="spec-test", cpus=2, memory_mb=4096, time_min=30)
+        ex.submit(lambda: None, name="spec-test", cpus=2, memory_mb=4096, time_min=30)
         call_kwargs = ex._client.submit_job.call_args[1]
         assert call_kwargs["containerOverrides"]["vcpus"] == 2
         assert call_kwargs["containerOverrides"]["memory"] == 4096
@@ -994,7 +994,7 @@ class TestRunSubprocess:
     def test_cwd_forwarded(self, tmp_path: Path) -> None:
         stdout_path = tmp_path / "out.log"
         stderr_path = tmp_path / "err.log"
-        result = run_subprocess(
+        run_subprocess(
             ["pwd"],
             stdout_path=stdout_path,
             stderr_path=stderr_path,
@@ -1006,7 +1006,7 @@ class TestRunSubprocess:
         stdout_path = tmp_path / "out.log"
         stderr_path = tmp_path / "err.log"
         env = {**os.environ, "MY_TEST_VAR": "testval"}
-        result = run_subprocess(
+        run_subprocess(
             ["printenv", "MY_TEST_VAR"],
             stdout_path=stdout_path,
             stderr_path=stderr_path,
