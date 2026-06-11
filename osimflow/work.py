@@ -125,13 +125,14 @@ def _find_workflow_osw(modified_sim_package: Path) -> Path | None:
 
 
 def _is_openstudio_available() -> bool:
-    """Check whether ``openstudio.cli`` is on PATH.
+    """Check whether the OpenStudio CLI is on PATH.
 
     Uses ``shutil.which`` so the check works both on bare metal and
-    inside the ``nrel/openstudio`` container where the CLI is at
-    ``/usr/local/bin/openstudio.cli``.
+    inside the ``nrel/openstudio`` container.  Some images ship the
+    binary as ``openstudio.cli`` (older tags) and others as just
+    ``openstudio`` (3.11.0+), so we check both names.
     """
-    return shutil.which("openstudio.cli") is not None
+    return shutil.which("openstudio.cli") is not None or shutil.which("openstudio") is not None
 
 
 def _is_stub_mode() -> bool:
@@ -144,6 +145,19 @@ def _is_stub_mode() -> bool:
     a real OpenStudio installation.
     """
     return os.environ.get("OSIMFLOW_STUB_SIM") == "1"
+
+
+def _resolve_openstudio_cli() -> str:
+    """Return the OpenStudio CLI binary name found on PATH.
+
+    Prefers ``openstudio.cli`` (used by older NREL images) and falls
+    back to ``openstudio`` (used by 3.11.0+ images).
+    """
+    if shutil.which("openstudio.cli") is not None:
+        return "openstudio.cli"
+    if shutil.which("openstudio") is not None:
+        return "openstudio"
+    return "openstudio.cli"
 
 
 def run_openstudio_sim(
@@ -287,14 +301,15 @@ def _run_real_openstudio(
             f"The real OpenStudio CLI requires a workflow file."
         )
 
+    cli = _resolve_openstudio_cli()
     cmd: list[str] = [
-        "openstudio.cli",
+        cli,
         "run",
         "-w",
         str(workflow_path),
     ]
     log.info(
-        "openstudio.cli real invocation sample=%s workflow=%s cwd=%s",
+        "openstudio real invocation sample=%s workflow=%s cwd=%s",
         sample_id,
         workflow_path,
         sim_out,
@@ -534,13 +549,14 @@ def preflight_run_model(
                     f"{template_sim_package}. The preflight run requires "
                     f"a workflow file."
                 )
+            cli = _resolve_openstudio_cli()
             cmd: list[str] = [
-                "openstudio.cli",
+                cli,
                 "run",
                 "-w",
                 str(workflow_path),
             ]
-            log.info("preflight: invoking openstudio.cli with %s", cmd)
+            log.info("preflight: invoking openstudio with %s", cmd)
             result = subprocess.run(  # noqa: S603
                 cmd,
                 cwd=tmp_pkg,

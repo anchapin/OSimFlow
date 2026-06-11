@@ -18,13 +18,11 @@ import yaml
 
 from osimflow.config import CampaignConfig
 from osimflow.exporters.osa import (
-    OSAExporter,
     _LOSSY_DISTRIBUTIONS,
     _OSIMFLOW_ALGO_TO_OSA,
-    _OSIMFLOW_TO_OSA,
+    OSAExporter,
 )
 from osimflow.importers.osa import osa_to_variables_yml, parse_osa
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -76,13 +74,17 @@ def exporter() -> OSAExporter:
 class TestExportBasic:
     """Basic export functionality."""
 
-    def test_export_creates_file(self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path) -> None:
+    def test_export_creates_file(
+        self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path
+    ) -> None:
         outdir = tmp_path / "export_out"
         result = exporter.export(tmp_config, outdir)
         assert result.exists()
         assert result.name == "analysis.json"
 
-    def test_export_is_valid_json(self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path) -> None:
+    def test_export_is_valid_json(
+        self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path
+    ) -> None:
         outdir = tmp_path / "export_out"
         result = exporter.export(tmp_config, outdir)
         data = json.loads(result.read_text(encoding="utf-8"))
@@ -148,7 +150,9 @@ class TestExportBasic:
         data = json.loads(result.read_text(encoding="utf-8"))
         assert data["server"]["base_oscli_version"] == "3.5.0"
 
-    def test_export_creates_outdir(self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path) -> None:
+    def test_export_creates_outdir(
+        self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path
+    ) -> None:
         outdir = tmp_path / "nested" / "deep" / "dir"
         result = exporter.export(tmp_config, outdir)
         assert outdir.exists()
@@ -540,7 +544,9 @@ class TestLossyDistributions:
 class TestJsonValidity:
     """Ensure exported files are well-formed JSON."""
 
-    def test_parseable_json(self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path) -> None:
+    def test_parseable_json(
+        self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path
+    ) -> None:
         outdir = tmp_path / "export"
         result = exporter.export(tmp_config, outdir)
         text = result.read_text(encoding="utf-8")

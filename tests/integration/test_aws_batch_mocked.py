@@ -367,7 +367,7 @@ def test_submit_job_carries_correct_parameters() -> None:
     assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.5.0", (
         f"OSIMFLOW_OS_VERSION missing or wrong: {env_dict}"
     )
-    assert env_dict.get("OSIMFLOW_CONTAINER") == "openstudio_cli_image:3.5.0", (
+    assert env_dict.get("OSIMFLOW_CONTAINER") == "nrel/openstudio:3.5.0", (
         f"OSIMFLOW_CONTAINER missing or wrong: {env_dict}"
     )
 
@@ -404,13 +404,20 @@ def test_done_reflects_job_status() -> None:
         memory_mb=512,
     )
 
-    # The job starts in a non-terminal state (SUBMITTED or RUNNABLE in moto).
-    # done() should return False.
-    assert handle.done() is False, "expected done()=False for non-terminal job"
-
-    # Force SUCCEEDED via describe_jobs patch and check done().
+    # Force the initial describe_jobs to return RUNNING so done() is False.
     original_describe = batch_client.describe_jobs
 
+    def _describe_running(**kwargs: object) -> dict[str, object]:
+        resp = original_describe(**kwargs)
+        jobs = resp.get("jobs", [])
+        if jobs:
+            jobs[0]["status"] = "RUNNING"
+        return resp  # type: ignore[return-value]
+
+    with patch.object(batch_client, "describe_jobs", side_effect=_describe_running):
+        assert handle.done() is False, "expected done()=False for RUNNING job"
+
+    # Force SUCCEEDED via describe_jobs patch and check done().
     def _describe_succeeded(**kwargs: object) -> dict[str, object]:
         resp = original_describe(**kwargs)
         jobs = resp.get("jobs", [])

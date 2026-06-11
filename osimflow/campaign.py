@@ -889,7 +889,9 @@ class Campaign:
                     )
                 )
             except Exception as exc:
-                log.warning("could not build ParetoSolution for sample %s: %s", sample.get("sample_id"), exc)
+                log.warning(
+                    "could not build ParetoSolution for sample %s: %s", sample.get("sample_id"), exc
+                )
 
         if new_solutions:
             front.add_generation(new_solutions)

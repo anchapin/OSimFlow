@@ -192,16 +192,22 @@ def _generate_pareto_plots(pareto_dir: Path, outdir: Path) -> list[Path]:
         gen_numbers: list[int] = []
         # Simple hypervolume: product of (reference_point - objective_value)
         # per non-dominated solution, summed.
-        ref_x = max(
-            s.get("objectives", {}).get(obj_names[0], 0)
-            for _, sols in all_gen_data
-            for s in sols
-        ) * 1.1
-        ref_y = max(
-            s.get("objectives", {}).get(obj_names[1], 0)
-            for _, sols in all_gen_data
-            for s in sols
-        ) * 1.1
+        ref_x = (
+            max(
+                s.get("objectives", {}).get(obj_names[0], 0)
+                for _, sols in all_gen_data
+                for s in sols
+            )
+            * 1.1
+        )
+        ref_y = (
+            max(
+                s.get("objectives", {}).get(obj_names[1], 0)
+                for _, sols in all_gen_data
+                for s in sols
+            )
+            * 1.1
+        )
 
         for gen_num, solutions in all_gen_data:
             hv = 0.0

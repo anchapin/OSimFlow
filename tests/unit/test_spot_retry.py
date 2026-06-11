@@ -19,6 +19,7 @@ from osimflow.executors import AWSBatchExecutor
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_executor(
     *,
     max_spot_price_usd: float | None = None,

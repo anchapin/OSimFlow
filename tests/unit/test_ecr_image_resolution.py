@@ -17,6 +17,7 @@ def _mock_boto3(monkeypatch: pytest.MonkeyPatch) -> None:
     sys.modules["boto3"] = mock_boto3
     # Reimport to pick up mock
     import osimflow.executors as exec_mod
+
     importlib.reload(exec_mod)
 
 
@@ -58,7 +59,10 @@ class TestECRImageResolution:
 
         executor = AWSBatchExecutor.__new__(AWSBatchExecutor)
         executor.ecr_repository = "acct.dkr.ecr.us-west-2.amazonaws.com/os/os"
-        assert executor._resolve_container_image(None) == "acct.dkr.ecr.us-west-2.amazonaws.com/os/os:latest"
+        assert (
+            executor._resolve_container_image(None)
+            == "acct.dkr.ecr.us-west-2.amazonaws.com/os/os:latest"
+        )
 
     def test_environment_includes_resolved_ecr_image(self, _mock_boto3: None) -> None:
         from osimflow.executors import AWSBatchExecutor
@@ -68,7 +72,10 @@ class TestECRImageResolution:
         env = executor._build_environment(container=None, openstudio_version="3.5.0")
         container_env = [e for e in env if e["name"] == "OSIMFLOW_CONTAINER"]
         assert len(container_env) == 1
-        assert container_env[0]["value"] == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.5.0"
+        assert (
+            container_env[0]["value"]
+            == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.5.0"
+        )
 
     def test_environment_default_without_ecr(self, _mock_boto3: None) -> None:
         from osimflow.executors import AWSBatchExecutor

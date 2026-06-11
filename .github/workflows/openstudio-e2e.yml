@@ -1,0 +1,103 @@
+name: OpenStudio Real CLI E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'osimflow/**'
+      - 'bin/**'
+      - '.github/workflows/**'
+      - 'example_package/**'
+      - 'tests/integration/**'
+      - 'pyproject.toml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'osimflow/**'
+      - 'bin/**'
+      - '.github/workflows/**'
+      - 'example_package/**'
+      - 'tests/integration/**'
+      - 'pyproject.toml'
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  openstudio-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        openstudio_version: ["3.11.0"]
+
+    container:
+      image: nrel/openstudio:${{ matrix.openstudio_version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap pip
+        run: |
+          python3 -m ensurepip --upgrade 2>/dev/null || (
+            curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py &&
+            python3 /tmp/get-pip.py --break-system-packages
+          )
+          pip --version
+
+      - name: Install Python dependencies
+        run: |
+          pip install --break-system-packages --upgrade pip
+          pip install --break-system-packages -e ".[dev]"
+          pip install --break-system-packages pytest-timeout
+
+      - name: Verify OpenStudio CLI
+        run: |
+          # Locate the OpenStudio CLI binary — NREL images install to
+          # /usr/local/openstudio-<ver>/bin/ but the exact layout varies.
+          CLI=$(find /usr -name 'openstudio' -o -name 'openstudio.cli' 2>/dev/null | head -1) || true
+          if [ -z "$CLI" ]; then
+            CLI=$(find /opt -name 'openstudio' -o -name 'openstudio.cli' 2>/dev/null | head -1) || true
+          fi
+          if [ -n "$CLI" ]; then
+            CLI_DIR=$(dirname "$CLI")
+            echo "Found OpenStudio at $CLI — adding $CLI_DIR to PATH"
+            echo "$CLI_DIR" >> "$GITHUB_PATH"
+            "$CLI" --version || "$CLI" openstudio_version || true
+          else
+            echo "::error::openstudio CLI binary not found in /usr or /opt"
+            find / -name 'openstudio*' -type f 2>/dev/null | head -20
+            exit 1
+          fi
+
+      - name: Download weather file
+        run: |
+          mkdir -p weather
+          python3 -c "
+          import urllib.request, os
+          url = 'https://energyplus-weather.s3.amazonaws.com/north_and_central_america_wmo_region_4/USA/IL/USA_IL_Chicago-OHare.Intl.AP.725300_TMY3/USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw'
+          dest = 'weather/chicago.epw'
+          print(f'Downloading {url} -> {dest}')
+          urllib.request.urlretrieve(url, dest)
+          size = os.path.getsize(dest)
+          print(f'Downloaded {size:,} bytes')
+          "
+
+      - name: Run real CLI E2E test
+        env:
+          OSIMFLOW_RUN_REAL_OPENSTUDIO: "1"
+          OSIMFLOW_E2E_EPW_PATH: "${{ github.workspace }}/weather/chicago.epw"
+        run: |
+          pytest tests/integration/test_real_openstudio_cli.py -v --timeout=600 --no-cov
+
+      - name: Upload test outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-outputs-os-${{ matrix.openstudio_version }}
+          path: |
+            **/out/run.json
+            **/out/aggregated_results.csv
+            **/out/failed_simulations.csv
+          if-no-files-found: warn
