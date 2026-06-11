@@ -23,6 +23,7 @@ from osimflow.observability import PrometheusBackend
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _fake_prometheus_client() -> ModuleType:
     """Build a fake ``prometheus_client`` module with the three symbols we use."""
     fake = ModuleType("prometheus_client")

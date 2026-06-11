@@ -94,7 +94,9 @@ class CampaignConfig:
     aws_batch_max_spot_price_usd: float | None = None
     aws_batch_fallback_to_on_demand: bool = False
     aws_batch_max_retries: int = 3
-    ecr_repository: str | None = None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
+    ecr_repository: str | None = (
+        None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
+    )
 
     @property
     def work_dir(self) -> Path:

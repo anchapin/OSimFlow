@@ -51,10 +51,7 @@ SCRIPTS_DIR = REPO_ROOT / "osimflow" / "_scripts"
 
 
 def _real_cli_enabled() -> bool:
-    return (
-        _is_openstudio_available()
-        and os.environ.get("OSIMFLOW_RUN_REAL_OPENSTUDIO") == "1"
-    )
+    return _is_openstudio_available() and os.environ.get("OSIMFLOW_RUN_REAL_OPENSTUDIO") == "1"
 
 
 skip_unless_real_cli = pytest.mark.skipif(
@@ -108,21 +105,26 @@ def real_example_pkg(tmp_path: Path) -> Path:
     _generate_real_model(pkg / "real_model.osm")
 
     # JSON-mode model.osm for parameter mapping.
-    (pkg / "model.osm").write_text(json.dumps({
-        "attributes": {
-            "window_u_value": 3.0,
-            "infiltration_rate": 0.7,
-            "hvac_setpoint": 22.0,
-            "lighting_power_density": 10.0,
-            "thermal_conductivity": 0.5,
-            "internal_gain": 5.0,
-            "equipment_lifetime": 15.0,
-        },
-        "metadata": {
-            "building_type": "Office",
-            "model_format": "test-mode JSON for parameter mapping",
-        },
-    }, indent=2))
+    (pkg / "model.osm").write_text(
+        json.dumps(
+            {
+                "attributes": {
+                    "window_u_value": 3.0,
+                    "infiltration_rate": 0.7,
+                    "hvac_setpoint": 22.0,
+                    "lighting_power_density": 10.0,
+                    "thermal_conductivity": 0.5,
+                    "internal_gain": 5.0,
+                    "equipment_lifetime": 15.0,
+                },
+                "metadata": {
+                    "building_type": "Office",
+                    "model_format": "test-mode JSON for parameter mapping",
+                },
+            },
+            indent=2,
+        )
+    )
 
     epw_env = os.environ.get("OSIMFLOW_E2E_EPW_PATH", "")
     weather_file = ""
@@ -218,9 +220,8 @@ def test_real_openstudio_cli_three_sample_campaign(
         if err_file.exists():
             err_text = err_file.read_text(errors="replace")
             severe = [line for line in err_text.splitlines() if "Severe" in line]
-            assert not severe, (
-                f"Severe EnergyPlus errors in {sample_dir}:\n"
-                + "\n".join(severe[:5])
+            assert not severe, f"Severe EnergyPlus errors in {sample_dir}:\n" + "\n".join(
+                severe[:5]
             )
 
     assert (real_outdir / "plots").is_dir()

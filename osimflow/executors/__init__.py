@@ -656,10 +656,7 @@ class AWSBatchExecutor(BaseExecutor):
         current_price = self._get_spot_price()
         if current_price <= self.max_spot_price_usd:
             return
-        msg = (
-            f"Spot price ${current_price:.4f} exceeds ceiling "
-            f"${self.max_spot_price_usd:.4f}"
-        )
+        msg = f"Spot price ${current_price:.4f} exceeds ceiling ${self.max_spot_price_usd:.4f}"
         if self.fallback_to_on_demand:
             log.warning("%s — falling back to on-demand", msg)
             return
@@ -886,9 +883,7 @@ class AWSBatchExecutor(BaseExecutor):
                         job_id=on_demand_id,
                         executor=self,
                     )
-                raise RuntimeError(
-                    f"Spot retries exhausted ({effective_max_retries}): {reason}"
-                )
+                raise RuntimeError(f"Spot retries exhausted ({effective_max_retries}): {reason}")
 
             # Non-spot failure — don't retry, raise immediately.
             msg = f"AWS Batch job {job_id!r} {status}: {reason}"

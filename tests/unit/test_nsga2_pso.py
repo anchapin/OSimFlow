@@ -351,4 +351,6 @@ class TestPyprojectOptimizationExtra:
         extras = data["project"]["optional-dependencies"]
         assert "optimization" in extras, f"'optimization' not in extras: {list(extras)}"
         opt_deps = extras["optimization"]
-        assert any("pymoo" in dep for dep in opt_deps), f"pymoo not in optimization deps: {opt_deps}"
+        assert any("pymoo" in dep for dep in opt_deps), (
+            f"pymoo not in optimization deps: {opt_deps}"
+        )

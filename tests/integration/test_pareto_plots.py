@@ -37,13 +37,21 @@ class TestParetoFrontPlots:
     ) -> None:
         csv_path, failed_path, outdir = _campaign_csvs
         pareto_dir = tmp_path / "pareto"
-        _write_pareto_gen(pareto_dir, 0, [
-            {"sample_id": "s001", "objectives": {"eui": 100, "cost": 50}, "parameters": {}},
-            {"sample_id": "s002", "objectives": {"eui": 120, "cost": 30}, "parameters": {}},
-        ])
-        _write_pareto_gen(pareto_dir, 1, [
-            {"sample_id": "s003", "objectives": {"eui": 95, "cost": 45}, "parameters": {}},
-        ])
+        _write_pareto_gen(
+            pareto_dir,
+            0,
+            [
+                {"sample_id": "s001", "objectives": {"eui": 100, "cost": 50}, "parameters": {}},
+                {"sample_id": "s002", "objectives": {"eui": 120, "cost": 30}, "parameters": {}},
+            ],
+        )
+        _write_pareto_gen(
+            pareto_dir,
+            1,
+            [
+                {"sample_id": "s003", "objectives": {"eui": 95, "cost": 45}, "parameters": {}},
+            ],
+        )
         plots = generate_plots(csv_path, failed_path, outdir, pareto_dir=pareto_dir)
         assert (outdir / "pareto_front.png").exists()
         assert (outdir / "pareto_front.png") in plots
@@ -54,9 +62,17 @@ class TestParetoFrontPlots:
         csv_path, failed_path, outdir = _campaign_csvs
         pareto_dir = tmp_path / "pareto"
         for gen in range(3):
-            _write_pareto_gen(pareto_dir, gen, [
-                {"sample_id": f"s{gen}", "objectives": {"eui": 100 - gen * 5, "cost": 50 - gen}, "parameters": {}},
-            ])
+            _write_pareto_gen(
+                pareto_dir,
+                gen,
+                [
+                    {
+                        "sample_id": f"s{gen}",
+                        "objectives": {"eui": 100 - gen * 5, "cost": 50 - gen},
+                        "parameters": {},
+                    },
+                ],
+            )
         generate_plots(csv_path, failed_path, outdir, pareto_dir=pareto_dir)
         assert (outdir / "pareto_convergence.png").exists()
 
@@ -65,9 +81,13 @@ class TestParetoFrontPlots:
     ) -> None:
         csv_path, failed_path, outdir = _campaign_csvs
         pareto_dir = tmp_path / "pareto"
-        _write_pareto_gen(pareto_dir, 0, [
-            {"sample_id": "s001", "objectives": {"eui": 100, "cost": 50}, "parameters": {}},
-        ])
+        _write_pareto_gen(
+            pareto_dir,
+            0,
+            [
+                {"sample_id": "s001", "objectives": {"eui": 100, "cost": 50}, "parameters": {}},
+            ],
+        )
         generate_plots(csv_path, failed_path, outdir, pareto_dir=pareto_dir)
         assert (outdir / "pareto_front.png").exists()
         assert not (outdir / "pareto_convergence.png").exists()
@@ -78,9 +98,13 @@ class TestParetoFrontPlots:
         """Single-objective campaign produces no Pareto plots."""
         csv_path, failed_path, outdir = _campaign_csvs
         pareto_dir = tmp_path / "pareto"
-        _write_pareto_gen(pareto_dir, 0, [
-            {"sample_id": "s001", "objectives": {"eui": 100}, "parameters": {}},
-        ])
+        _write_pareto_gen(
+            pareto_dir,
+            0,
+            [
+                {"sample_id": "s001", "objectives": {"eui": 100}, "parameters": {}},
+            ],
+        )
         generate_plots(csv_path, failed_path, outdir, pareto_dir=pareto_dir)
         assert not (outdir / "pareto_front.png").exists()
         assert not (outdir / "pareto_convergence.png").exists()

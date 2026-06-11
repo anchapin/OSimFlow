@@ -368,8 +368,8 @@ def test_submit_job_carries_correct_parameters() -> None:
         f"OSIMFLOW_OS_VERSION missing or wrong: {env_dict}"
     )
     assert env_dict.get("OSIMFLOW_CONTAINER") == "nrel/openstudio:3.5.0", (
-            f"OSIMFLOW_CONTAINER missing or wrong: {env_dict}"
-        )
+        f"OSIMFLOW_CONTAINER missing or wrong: {env_dict}"
+    )
 
     # Timeout should be time_min * 60 seconds.
     timeout = job.get("timeout", {})

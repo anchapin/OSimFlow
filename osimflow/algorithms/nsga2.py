@@ -105,8 +105,7 @@ def _read_multi_kpi_values(
                         kpi_data = json.loads(kpi_path.read_text())
                         kpis = kpi_data.get("kpis", {})
                         obj_values = [
-                            float(kpis.get(kpi_name, float("inf")))
-                            for kpi_name in objective_kpis
+                            float(kpis.get(kpi_name, float("inf"))) for kpi_name in objective_kpis
                         ]
                         params = list(sample.get("values", {}).values())
                         results.append((params, obj_values))
@@ -221,9 +220,7 @@ class NSGA2Algorithm(BaseAlgorithm):
         """Convert an (N, dim) array to a list of sample dicts."""
         samples: list[dict[str, Any]] = []
         for i in range(X.shape[0]):
-            values: dict[str, Any] = {
-                name: float(X[i, j]) for j, name in enumerate(var_names)
-            }
+            values: dict[str, Any] = {name: float(X[i, j]) for j, name in enumerate(var_names)}
             samples.append({"sample_id": f"{i + 1:04d}", "values": values})
         return samples
 

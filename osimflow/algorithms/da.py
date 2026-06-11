@@ -209,6 +209,7 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
         results: list[tuple[list[float], float]],
     ) -> npt.NDArray[np.float64] | None:
         """Run one step of dual annealing and return the best point, or None."""
+
         def _objective(x: npt.NDArray[np.float64]) -> float:
             best_dist = float("inf")
             best_val = self._best_value

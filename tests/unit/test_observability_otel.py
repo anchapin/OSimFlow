@@ -24,6 +24,7 @@ from osimflow.observability import OpenTelemetryBackend
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _fake_otel_api() -> ModuleType:
     """Build a fake ``opentelemetry.metrics`` module."""
     mod = ModuleType("opentelemetry.metrics")
@@ -73,9 +74,9 @@ def _inject_otel_fakes() -> dict[str, MagicMock]:
     fake_meter = MagicMock(name="meter")
     fake_gauge = MagicMock(name="gauge_instrument")
     fake_meter.create_gauge.return_value = fake_gauge
-    fakes["opentelemetry.sdk.metrics"].MeterProvider.return_value.get_meter.return_value = (
-        fake_meter
-    )
+    fakes[
+        "opentelemetry.sdk.metrics"
+    ].MeterProvider.return_value.get_meter.return_value = fake_meter
     return fakes, fake_meter, fake_gauge
 
 
@@ -218,15 +219,16 @@ class TestOTelLazyImport:
 
     def test_endpoint_forwarded_to_exporter(self) -> None:
         """The endpoint is passed to the OTLPMetricExporter."""
-        backend = OpenTelemetryBackend(
-            endpoint="http://collector:4317", service_name="test_svc"
-        )
+        backend = OpenTelemetryBackend(endpoint="http://collector:4317", service_name="test_svc")
         fakes, _, _ = _inject_otel_fakes()
 
         with patch.dict("sys.modules", fakes):
             backend.record_campaign_duration(1.0)
             backend.flush()
 
-        fakes["opentelemetry.exporter.otlp.proto.grpc.metric_exporter"].OTLPMetricExporter.assert_called_once_with(
-            endpoint="http://collector:4317", insecure=True,
+        fakes[
+            "opentelemetry.exporter.otlp.proto.grpc.metric_exporter"
+        ].OTLPMetricExporter.assert_called_once_with(
+            endpoint="http://collector:4317",
+            insecure=True,
         )

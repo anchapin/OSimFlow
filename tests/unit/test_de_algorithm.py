@@ -260,7 +260,9 @@ class TestDEConvergence:
             samples = new_samples
 
         # Verify convergence happened and best is reasonable.
-        assert algo._best_value < 1.0, f"DE best_value {algo._best_value} should be < 1.0 after 10 gens"
+        assert algo._best_value < 1.0, (
+            f"DE best_value {algo._best_value} should be < 1.0 after 10 gens"
+        )
         # Best params should be near the optimum (5.0, 0.5).
         best_wall_r = float(algo._best_params[0])
         best_shgc = float(algo._best_params[1])
