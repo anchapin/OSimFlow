@@ -89,7 +89,7 @@ jobs:
           OSIMFLOW_RUN_REAL_OPENSTUDIO: "1"
           OSIMFLOW_E2E_EPW_PATH: "${{ github.workspace }}/weather/chicago.epw"
         run: |
-          pytest tests/integration/test_real_openstudio_cli.py -v --timeout=600
+          pytest tests/integration/test_real_openstudio_cli.py -v --timeout=600 --no-cov
 
       - name: Upload test outputs
         if: always()
