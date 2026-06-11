@@ -56,7 +56,7 @@ def tmp_config(tmp_path: Path) -> CampaignConfig:
         template_sim_package=tmp_path / "template",
         n_samples=50,
         outdir=tmp_path / "results",
-        openstudio_version="3.5.0",
+        openstudio_version="3.11.0",
         algorithm="lhs",
     )
 
@@ -131,10 +131,10 @@ class TestExportBasic:
         outdir = tmp_path / "export_out"
         result = exporter.export(tmp_config, outdir)
         data = json.loads(result.read_text(encoding="utf-8"))
-        assert data["server"]["base_oscli_version"] == "3.5.0"
+        assert data["server"]["base_oscli_version"] == "3.11.0"
 
     def test_export_server_default_version(self, tmp_path: Path) -> None:
-        """When openstudio_version is empty, defaults to 3.5.0."""
+        """When openstudio_version is empty, defaults to 3.11.0."""
         variables_yml = tmp_path / "variables.yml"
         variables_yml.write_text("variables: []\n", encoding="utf-8")
         cfg = CampaignConfig(
@@ -148,7 +148,7 @@ class TestExportBasic:
         outdir = tmp_path / "export_out"
         result = exporter.export(cfg, outdir)
         data = json.loads(result.read_text(encoding="utf-8"))
-        assert data["server"]["base_oscli_version"] == "3.5.0"
+        assert data["server"]["base_oscli_version"] == "3.11.0"
 
     def test_export_creates_outdir(
         self, exporter: OSAExporter, tmp_config: CampaignConfig, tmp_path: Path
@@ -216,7 +216,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -247,7 +247,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -275,7 +275,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -304,7 +304,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -332,7 +332,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -361,7 +361,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -389,7 +389,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -425,7 +425,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -443,7 +443,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -458,7 +458,7 @@ class TestVariableSerialization:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -493,7 +493,7 @@ class TestLossyDistributions:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -523,7 +523,7 @@ class TestLossyDistributions:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -602,7 +602,7 @@ class TestEdgeCases:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -630,7 +630,7 @@ class TestEdgeCases:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -647,7 +647,7 @@ class TestEdgeCases:
             template_sim_package=tmp_path,
             n_samples=5,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         exporter = OSAExporter()
         outdir = tmp_path / "export"
@@ -684,7 +684,7 @@ class TestRoundTrip:
             template_sim_package=tmp_path,
             n_samples=20,
             outdir=tmp_path / "out",
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
             algorithm="lhs",
         )
 

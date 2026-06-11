@@ -78,7 +78,7 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
 
@@ -161,7 +161,7 @@ def test_work_run_openstudio_sim_writes_logs_when_paths_given(tmp_path: Path) ->
     result = run_openstudio_sim(
         modified_sim_package=tmp_path,
         sample_id="0042",
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         out=out_dir,
         simulate_work_s=0.0,
         stdout_path=stdout_path,
@@ -186,7 +186,7 @@ def test_work_run_openstudio_sim_fallback_paths_inside_sim_out(tmp_path: Path) -
     result = run_openstudio_sim(
         modified_sim_package=tmp_path,
         sample_id="0007",
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         out=out_dir,
         simulate_work_s=0.0,
     )

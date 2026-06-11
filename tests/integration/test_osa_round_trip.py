@@ -99,7 +99,7 @@ def _make_config(
         template_sim_package=template,
         n_samples=n_samples,
         outdir=tmp_path / "results",
-        openstudio_version="3.5.0",
+        openstudio_version="3.11.0",
         algorithm=algorithm,
     )
 

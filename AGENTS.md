@@ -263,14 +263,14 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./results \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 
 # HPC run via Slurm — pined OpenStudio version, real Slurm (not debug)
 osimflow run \
   --executor slurm \
   --slurm-real \
   --slurm_partition short \
-  --openstudio_version 3.4.0 \
+  --openstudio_version 3.11.0 \
   --input_variables variables.yml \
   --n_samples 500
 
@@ -283,7 +283,7 @@ osimflow run \
   --slurm_qos high \
   --slurm_constraint gpu \
   --slurm_gres gpu:1 \
-  --openstudio_version 3.5.0 \
+  --openstudio_version 3.11.0 \
   --input_variables variables.yml \
   --n_samples 200
 
@@ -311,7 +311,7 @@ osimflow run \
   --executor aws_batch \
   --aws-batch-queue osimflow-batch-queue \
   --aws-batch-job-definition osimflow-openstudio-job-def \
-  --openstudio_version 3.5.0 \
+  --openstudio_version 3.11.0 \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 1000 \

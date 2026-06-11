@@ -268,7 +268,7 @@ class TestCampaignEpwResolution:
             template_sim_package=template_dir,
             n_samples=3,
             outdir=outdir,
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         executor = LocalExecutor(max_workers=1)
         return Campaign(cfg=cfg, executor=executor)

@@ -19,12 +19,12 @@ OSimFlow's AWS Batch jobs run inside the `nrel/openstudio` container image publi
 ```bash
 # Single region
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
-  --version 3.5.0 \
+  --version 3.11.0 \
   --region us-east-1
 
 # Multi-region replication
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
-  --version 3.5.0 \
+  --version 3.11.0 \
   --region us-east-1 \
   --regions us-east-1,us-west-2,eu-west-1
 ```

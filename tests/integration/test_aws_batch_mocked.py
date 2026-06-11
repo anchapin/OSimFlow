@@ -149,8 +149,8 @@ def test_submit_poll_succeeded() -> None:
         cpus=2,
         memory_mb=1024,
         time_min=10,
-        container="openstudio_cli_image:3.5.0",
-        openstudio_version="3.5.0",
+        container="openstudio_cli_image:3.11.0",
+        openstudio_version="3.11.0",
     )
 
     # The handle should report done (moto submits the job and it can be
@@ -334,8 +334,8 @@ def test_submit_job_carries_correct_parameters() -> None:
         cpus=4,
         memory_mb=8192,
         time_min=240,
-        container="openstudio_cli_image:3.5.0",
-        openstudio_version="3.5.0",
+        container="openstudio_cli_image:3.11.0",
+        openstudio_version="3.11.0",
     )
 
     # Now inspect the submitted job via describe_jobs to verify the
@@ -364,10 +364,10 @@ def test_submit_job_carries_correct_parameters() -> None:
     # The environment should carry OSIMFLOW_OS_VERSION and OSIMFLOW_CONTAINER.
     env_list = container.get("environment", [])
     env_dict = {e["name"]: e["value"] for e in env_list}
-    assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.5.0", (
+    assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.11.0", (
         f"OSIMFLOW_OS_VERSION missing or wrong: {env_dict}"
     )
-    assert env_dict.get("OSIMFLOW_CONTAINER") == "nrel/openstudio:3.5.0", (
+    assert env_dict.get("OSIMFLOW_CONTAINER") == "nrel/openstudio:3.11.0", (
         f"OSIMFLOW_CONTAINER missing or wrong: {env_dict}"
     )
 

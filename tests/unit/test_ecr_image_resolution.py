@@ -29,22 +29,22 @@ class TestECRImageResolution:
 
         executor = AWSBatchExecutor.__new__(AWSBatchExecutor)
         executor.ecr_repository = None
-        assert executor._resolve_container_image("3.5.0") == "nrel/openstudio:3.5.0"
+        assert executor._resolve_container_image("3.11.0") == "nrel/openstudio:3.11.0"
 
     def test_ecr_overrides_docker_hub(self, _mock_boto3: None) -> None:
         from osimflow.executors import AWSBatchExecutor
 
         executor = AWSBatchExecutor.__new__(AWSBatchExecutor)
         executor.ecr_repository = "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
-        result = executor._resolve_container_image("3.5.0")
-        assert result == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.5.0"
+        result = executor._resolve_container_image("3.11.0")
+        assert result == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.11.0"
 
     def test_ecr_uri_includes_version_tag(self, _mock_boto3: None) -> None:
         from osimflow.executors import AWSBatchExecutor
 
         executor = AWSBatchExecutor.__new__(AWSBatchExecutor)
         executor.ecr_repository = "acct.dkr.ecr.eu-west-1.amazonaws.com/osim/openstudio"
-        assert executor._resolve_container_image("3.4.0").endswith(":3.4.0")
+        assert executor._resolve_container_image("3.11.0").endswith(":3.11.0")
         assert executor._resolve_container_image("3.6.0").endswith(":3.6.0")
 
     def test_none_version_uses_latest(self, _mock_boto3: None) -> None:
@@ -69,20 +69,17 @@ class TestECRImageResolution:
 
         executor = AWSBatchExecutor.__new__(AWSBatchExecutor)
         executor.ecr_repository = "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
-        env = executor._build_environment(container=None, openstudio_version="3.5.0")
+        env = executor._build_environment(container=None, openstudio_version="3.11.0")
         container_env = [e for e in env if e["name"] == "OSIMFLOW_CONTAINER"]
         assert len(container_env) == 1
-        assert (
-            container_env[0]["value"]
-            == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.5.0"
-        )
+        assert container_env[0]["value"] == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.11.0"
 
     def test_environment_default_without_ecr(self, _mock_boto3: None) -> None:
         from osimflow.executors import AWSBatchExecutor
 
         executor = AWSBatchExecutor.__new__(AWSBatchExecutor)
         executor.ecr_repository = None
-        env = executor._build_environment(container=None, openstudio_version="3.5.0")
+        env = executor._build_environment(container=None, openstudio_version="3.11.0")
         container_env = [e for e in env if e["name"] == "OSIMFLOW_CONTAINER"]
         assert len(container_env) == 1
-        assert container_env[0]["value"] == "nrel/openstudio:3.5.0"
+        assert container_env[0]["value"] == "nrel/openstudio:3.11.0"

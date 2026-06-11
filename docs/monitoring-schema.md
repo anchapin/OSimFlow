@@ -34,7 +34,7 @@ Key-value pairs captured from `CampaignConfig` at construction time.
 | Key | Type | Description |
 |---|---|---|
 | `executor` | `str` | Executor backend name (`local`, `slurm`, `aws_batch`, `nomad`). |
-| `openstudio_version` | `str` | OpenStudio CLI version tag (e.g. `"3.4.0"`). |
+| `openstudio_version` | `str` | OpenStudio CLI version tag (e.g. `"3.11.0"`). |
 | `n_samples` | `int` | Number of LHS samples requested. |
 | `archive_intermediates` | `bool` | Whether `--archive_intermediates` was set. |
 | `custom_apply_script` | `str \| null` | Path to the BYOS apply script, or `null`. |
@@ -137,7 +137,7 @@ campaign. All values match the types produced by `RunTrace.to_dict()`.
   "elapsed_s": 55.3,
   "config": {
     "executor": "local",
-    "openstudio_version": "3.4.0",
+    "openstudio_version": "3.11.0",
     "n_samples": 3,
     "archive_intermediates": false,
     "custom_apply_script": null,

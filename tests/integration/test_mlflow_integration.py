@@ -110,7 +110,7 @@ def test_campaign_config_mlflow_tracking_uri_defaults_to_none() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/o"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     assert cfg.mlflow_tracking_uri is None
 
@@ -121,7 +121,7 @@ def test_campaign_config_mlflow_tracking_uri_stores_uri() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/o"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         mlflow_tracking_uri="http://localhost:5000",
     )
     assert cfg.mlflow_tracking_uri == "http://localhost:5000"
@@ -137,7 +137,7 @@ def test_load_config_passes_mlflow_tracking_uri(tmp_path: Path) -> None:
         "template_sim_package": str(template),
         "n_samples": "1",
         "outdir": str(tmp_path / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
         "mlflow_tracking_uri": "http://mlflow.local:5000",
     }
     cfg = load_config(args)
@@ -192,7 +192,7 @@ def test_maybe_start_mlflow_run_calls_set_tracking_uri_and_start_run(
 def test_log_mlflow_params_logs_expected_keys(fake_mlflow: _FakeMlflowRecorder) -> None:
     cfg = SimpleNamespace(
         executor="local",
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         n_samples=5,
         archive_intermediates=True,
     )
@@ -285,7 +285,7 @@ def test_campaign_run_logs_to_mlflow_when_tracking_uri_set(
         template_sim_package=template,
         n_samples=2,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
         mlflow_tracking_uri="http://localhost:5000",
     )
@@ -329,7 +329,7 @@ def test_campaign_run_does_not_touch_mlflow_when_no_tracking_uri(
         template_sim_package=template,
         n_samples=2,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
         mlflow_tracking_uri=None,
     )
@@ -353,7 +353,7 @@ def test_mlflow_end_run_called_even_when_step_raises(
         template_sim_package=template,
         n_samples=2,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
         mlflow_tracking_uri="http://localhost:5000",
     )

@@ -95,7 +95,7 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         template_sim_package=template_pkg,
         n_samples=2,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
 
@@ -135,7 +135,7 @@ def test_run_writes_run_json_with_expected_schema(campaign: Campaign, outdir: Pa
     assert data["elapsed_s"] >= 0.0
     assert "config" in data
     assert data["config"]["executor"] == "local"
-    assert data["config"]["openstudio_version"] == "3.4.0"
+    assert data["config"]["openstudio_version"] == "3.11.0"
     assert data["config"]["n_samples"] == 2
     steps = {s["step"] for s in data["steps"]}
     assert "GENERATE_LHS_SAMPLES" in steps

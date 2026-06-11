@@ -77,7 +77,7 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
 
@@ -303,7 +303,7 @@ def test_three_sample_campaign_via_nomad_stub_produces_artifacts(
         f"expected executor name 'nomad' in run.json, got {trace['config']['executor']!r}"
     )
     assert trace["config"]["n_samples"] == 3
-    assert trace["config"]["openstudio_version"] == "3.4.0"
+    assert trace["config"]["openstudio_version"] == "3.11.0"
 
     step_names = {s["step"] for s in trace["steps"]}
     for required in (
@@ -346,13 +346,13 @@ def test_three_sample_campaign_via_nomad_stub_produces_artifacts(
     assert job["Type"] == "batch"
     # The container image must carry the OS version tag.
     task = job["TaskGroups"][0]["Tasks"][0]
-    assert "3.4.0" in task["Config"]["image"], (
+    assert "3.11.0" in task["Config"]["image"], (
         f"OpenStudio version not in container image: {task['Config']['image']!r}"
     )
     # Env vars must carry the OSIMFLOW_OS_VERSION.
     env = task["Config"]["env"]
     env_dict = {e["name"]: e["value"] for e in env}
-    assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.4.0", (
+    assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.11.0", (
         f"OSIMFLOW_OS_VERSION not in task env: {env_dict}"
     )
 

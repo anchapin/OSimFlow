@@ -297,7 +297,7 @@ class TestCampaignConfigWeatherDir:
             template_sim_package=tmp_path / "template",
             n_samples=5,
             outdir=outdir,
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
         )
         assert cfg.weather_dir == "weather"
 
@@ -313,7 +313,7 @@ class TestCampaignConfigWeatherDir:
             template_sim_package=tmp_path / "template",
             n_samples=5,
             outdir=outdir,
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
             weather_dir="climate_data",
         )
         assert cfg.weather_dir == "climate_data"
@@ -340,7 +340,7 @@ class TestCampaignEpwFormatValidation:
             template_sim_package=template_dir,
             n_samples=3,
             outdir=outdir,
-            openstudio_version="3.5.0",
+            openstudio_version="3.11.0",
             weather_dir=weather_dir,
         )
         executor = LocalExecutor(max_workers=1)

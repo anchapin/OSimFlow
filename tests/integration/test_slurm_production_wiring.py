@@ -316,7 +316,7 @@ def test_load_config_plumbs_slurm_advanced_flags(tmp_path: Path) -> None:
         "template_sim_package": str(template),
         "n_samples": "1",
         "outdir": str(tmp_path / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
         "slurm_qos": "high",
         "slurm_constraint": "gpu",
         "slurm_gres": "gpu:1",
@@ -337,7 +337,7 @@ def test_load_config_slurm_advanced_flags_default_none(tmp_path: Path) -> None:
         "template_sim_package": str(template),
         "n_samples": "1",
         "outdir": str(tmp_path / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
     }
     cfg = load_config(args)
     assert cfg.slurm_qos is None
@@ -354,7 +354,7 @@ def test_campaign_config_has_slurm_advanced_fields() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/o"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     assert hasattr(cfg, "slurm_qos")
     assert hasattr(cfg, "slurm_constraint")

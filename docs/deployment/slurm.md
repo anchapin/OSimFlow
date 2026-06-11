@@ -87,19 +87,19 @@ Most HPC clusters use Singularity (or its successor Apptainer) for containerized
 
 ```bash
 # Pull the NREL OpenStudio Docker image and convert to Singularity
-singularity pull docker://nrel/openstudio:3.5.0 \
-  --name openstudio-3.5.0.sif
+singularity pull docker://nrel/openstudio:3.11.0 \
+  --name openstudio-3.11.0.sif
 
 # Or with Apptainer (the successor to Singularity)
-apptainer pull docker://nrel/openstudio:3.5.0 \
-  --name openstudio-3.5.0.sif
+apptainer pull docker://nrel/openstudio:3.11.0 \
+  --name openstudio-3.11.0.sif
 ```
 
 Place the `.sif` file on shared storage accessible to compute nodes:
 
 ```bash
 mkdir -p /scratch/$USER/singularity-images
-mv openstudio-3.5.0.sif /scratch/$USER/singularity-images/
+mv openstudio-3.11.0.sif /scratch/$USER/singularity-images/
 ```
 
 See [OpenStudio Image Distribution](../openstudio-image-distribution.md) for available versions and image details.
@@ -129,7 +129,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./results \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 The debug executor logs the exact `sbatch` script it *would have* submitted — check the `submitit` logger output.
@@ -147,7 +147,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 100 \
   --outdir ./results \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 ### With Account and Partition
@@ -162,7 +162,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 500 \
   --outdir ./results \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 ### Advanced: GPU Partition
@@ -182,7 +182,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 200 \
   --outdir ./results \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 This generates `#SBATCH` directives:
@@ -248,14 +248,14 @@ When running containerized OpenStudio on Slurm, the container image must be avai
 
 ```bash
 # On the submit host (or a login node with internet access)
-singularity pull docker://nrel/openstudio:3.5.0 \
-  --name /scratch/$USER/singularity-images/openstudio-3.5.0.sif
+singularity pull docker://nrel/openstudio:3.11.0 \
+  --name /scratch/$USER/singularity-images/openstudio-3.11.0.sif
 ```
 
 The work script (or BYOS override) executes the container:
 
 ```bash
-singularity exec /scratch/$USER/singularity-images/openstudio-3.5.0.sif \
+singularity exec /scratch/$USER/singularity-images/openstudio-3.11.0.sif \
   openstudio.cli run -w workflow.osw
 ```
 
@@ -264,7 +264,7 @@ singularity exec /scratch/$USER/singularity-images/openstudio-3.5.0.sif \
 Some clusters allow compute nodes to pull directly from Docker Hub:
 
 ```bash
-singularity exec docker://nrel/openstudio:3.5.0 \
+singularity exec docker://nrel/openstudio:3.11.0 \
   openstudio.cli run -w workflow.osw
 ```
 
@@ -275,7 +275,7 @@ This downloads the image layers on first use. Subsequent runs use the cached SIF
 Some Slurm clusters (e.g., AWS ParallelCluster with Docker support) can run Docker containers natively:
 
 ```bash
-docker run --rm nrel/openstudio:3.5.0 openstudio.cli run -w workflow.osw
+docker run --rm nrel/openstudio:3.11.0 openstudio.cli run -w workflow.osw
 ```
 
 ---
@@ -379,7 +379,7 @@ Verify the SIF path is accessible from compute nodes:
 ```bash
 # On a compute node (e.g., via srun)
 srun --partition=short --pty bash
-ls /scratch/$USER/singularity-images/openstudio-3.5.0.sif
+ls /scratch/$USER/singularity-images/openstudio-3.11.0.sif
 ```
 
 If the file is not visible, the shared filesystem may not be mounted on compute nodes. Contact your HPC admin, or copy the SIF to local scratch on each node.
@@ -422,7 +422,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 3 \
   --outdir ./results-pilot \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 After the pilot completes, check wall-times:
@@ -445,7 +445,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 1000 \
   --outdir ./results-production \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 ### With Custom KPI Extractor (BYOS)
@@ -460,7 +460,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 100 \
   --outdir ./results-custom-kpis \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 ### Re-run After Interruption (Cache Hit)
@@ -475,7 +475,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 100 \
   --outdir ./results-production \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 Only interrupted or failed samples will re-execute. The warm run should be at least 5x faster than the cold run (verified in `tests/integration/test_cache_resume.py`).
@@ -497,7 +497,7 @@ osimflow run \
   --template_sim_package ./large_model_package \
   --n_samples 50 \
   --outdir ./results-large \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 ---

@@ -50,7 +50,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 3 \
   --outdir ./smoke_results \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 ```
 
 > **Why `make install`?** The Makefile hard-codes `.venv/bin/python`,

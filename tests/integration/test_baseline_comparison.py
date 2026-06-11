@@ -97,7 +97,7 @@ def test_config_parses_baseline_section(workdir_with_baseline: Path) -> None:
         "template_sim_package": str(workdir_with_baseline),
         "n_samples": 3,
         "outdir": str(workdir_with_baseline / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
         "archive_intermediates": False,
         "custom_apply_script": None,
         "custom_kpi_extractor": None,
@@ -125,7 +125,7 @@ def test_config_baseline_none_when_absent(workdir_no_baseline: Path) -> None:
         "template_sim_package": str(workdir_no_baseline),
         "n_samples": 2,
         "outdir": str(workdir_no_baseline / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
         "archive_intermediates": False,
         "custom_apply_script": None,
         "custom_kpi_extractor": None,
@@ -151,7 +151,7 @@ def test_baseline_sample_injected_into_samples(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         baseline={"sample_id": "baseline", "parameters": {"u1": 0.5, "u2": 15.0}},
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=2))
@@ -173,7 +173,7 @@ def test_no_baseline_no_injection(
         template_sim_package=template_pkg,
         n_samples=2,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=2))
     samples = campaign.step_generate_lhs()
@@ -191,7 +191,7 @@ def test_baseline_campaign_run_produces_all_artifacts(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         baseline={"sample_id": "baseline", "parameters": {"u1": 0.5, "u2": 15.0}},
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=4))
@@ -227,7 +227,7 @@ def test_backward_compat_no_baseline(
         template_sim_package=template_pkg,
         n_samples=2,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=2))
     result = campaign.run()

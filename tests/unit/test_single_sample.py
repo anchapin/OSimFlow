@@ -52,7 +52,7 @@ def preseeded_outdir(workdir: Path, template_pkg: Path, outdir: Path) -> Path:
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3))
     campaign.run()
@@ -67,7 +67,7 @@ def test_sample_raises_when_no_samples_json(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         sample=0,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -83,7 +83,7 @@ def test_sample_raises_on_out_of_range_index(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=preseeded_outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         sample=99,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -99,7 +99,7 @@ def test_sample_0_produces_one_kpi(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=preseeded_outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         sample=0,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -124,7 +124,7 @@ def test_sample_selects_correct_sample(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=preseeded_outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         sample=1,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -141,7 +141,7 @@ def test_sample_negative_index_raises(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=preseeded_outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         sample=-1,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))

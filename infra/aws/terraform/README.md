@@ -64,7 +64,7 @@ terraform init && terraform apply
 | `project_name` | `osimflow` | Resource name prefix |
 | `environment` | `dev` | Environment label |
 | `instance_types` | `["optimal"]` | EC2 instance types |
-| `openstudio_version` | `3.5.0` | OpenStudio container tag |
+| `openstudio_version` | `3.11.0` | OpenStudio container tag |
 | `use_spot` | `true` | Use Spot instances |
 | `max_vcpus` | `256` | Max vCPUs for compute env |
 | `min_vcpus` | `0` | Min vCPUs (idle capacity) |

@@ -33,7 +33,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./results \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 ```
 
 See [AGENTS.md §4](AGENTS.md) for the full set of build/run commands.

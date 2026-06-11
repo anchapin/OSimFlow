@@ -4,7 +4,7 @@
 # STUB — Phase 3 deliverable per PRD §5.2.
 #
 # Goal: build and publish ghcr.io/anchapin/openstudio_cli_image:<version>
-#       for at least two OpenStudio CLI versions (e.g. 3.4.0 and a newer one).
+#       for at least two OpenStudio CLI versions (e.g. 3.11.0 and a newer one).
 #
 # This file currently only documents the *trigger shape* and the steps that
 # will live here. The actual `docker build` invocation is not implemented
@@ -32,9 +32,9 @@ on:
   workflow_dispatch:
     inputs:
       openstudio_version:
-        description: 'OpenStudio CLI version (e.g. 3.4.0)'
+        description: 'OpenStudio CLI version (e.g. 3.11.0)'
         required: true
-        default: '3.4.0'
+        default: '3.11.0'
 
 permissions:
   contents: read

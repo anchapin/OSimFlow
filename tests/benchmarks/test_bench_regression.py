@@ -101,7 +101,7 @@ def shared_metrics(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
         template_sim_package=workspace / "template",
         n_samples=3,
         outdir=workspace / "out",
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
     return bench_campaign.run_benchmark(cfg, executor=LocalExecutor(max_workers=2))
@@ -144,7 +144,7 @@ def test_bench_writes_benchmarks_json(shared_metrics: dict[str, Any]) -> None:
             template_sim_package=workspace / "template",
             n_samples=3,
             outdir=workspace / "out",
-            openstudio_version="3.4.0",
+            openstudio_version="3.11.0",
             archive_intermediates=False,
         )
         bench_campaign.run_benchmark(cfg, executor=LocalExecutor(max_workers=2))
@@ -155,7 +155,7 @@ def test_bench_writes_benchmarks_json(shared_metrics: dict[str, Any]) -> None:
         assert data["schema_version"] == 1
         assert data["n_samples"] == 3
         assert data["executor"] == "local"
-        assert data["openstudio_version"] == "3.4.0"
+        assert data["openstudio_version"] == "3.11.0"
         # Per-step dicts map step name -> elapsed_s (float).
         for step_name in (
             "GENERATE_LHS_SAMPLES",
@@ -249,7 +249,7 @@ def test_bench_cleans_up_executor(bench_workspace: Path) -> None:
         template_sim_package=bench_workspace / "template",
         n_samples=3,
         outdir=bench_workspace / "out",
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
     executor = LocalExecutor(max_workers=2)

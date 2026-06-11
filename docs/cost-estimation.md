@@ -252,7 +252,7 @@ The `--archive_intermediates` flag archives per-sample `.osw`, `.osm`, and `eplu
 
 ### 5. OpenStudio Version Selection
 
-Newer OpenStudio versions may include EnergyPlus performance improvements. Check the [NREL OpenStudio changelog](https://github.com/NREL/OpenStudio/wiki) for performance notes. Switching from 3.4.0 to 3.5.0 (or newer) might reduce per-sample wall-time by 10–20% at no additional cost.
+Newer OpenStudio versions may include EnergyPlus performance improvements. Check the [NREL OpenStudio changelog](https://github.com/NREL/OpenStudio/wiki) for performance notes. Switching from 3.11.0 to 3.11.0 (or newer) might reduce per-sample wall-time by 10–20% at no additional cost.
 
 ### 6. Batch Concurrency Optimization
 

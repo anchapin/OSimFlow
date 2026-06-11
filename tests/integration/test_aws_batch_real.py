@@ -78,7 +78,7 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.5.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
 

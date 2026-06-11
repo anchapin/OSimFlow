@@ -85,7 +85,7 @@ section makes that concrete.
   "finished_at": "2026-06-09T15:50:50Z",
   "elapsed_s": 50.49,
   "executor": "local",
-  "openstudio_version": "3.4.0",
+  "openstudio_version": "3.11.0",
   "n_samples": 5,
   "n_succeeded": 5,
   "n_failed": 0,
@@ -114,7 +114,7 @@ import mlflow
 mlflow.set_tracking_uri("http://mlflow.local:5000")
 with mlflow.start_run(run_name=campaign_id):
     mlflow.log_param("executor", "slurm")
-    mlflow.log_param("openstudio_version", "3.4.0")
+    mlflow.log_param("openstudio_version", "3.11.0")
     mlflow.log_param("n_samples", 500)
     mlflow.log_metric("elapsed_s", 1234.5)
     mlflow.log_artifact("results/aggregated_results.csv")

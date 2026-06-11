@@ -104,7 +104,7 @@ def run_custom_python(n_samples: int = 5) -> dict:
         "--template_sim_package", str(TEMPLATE),
         "--n_samples", str(n_samples),
         "--outdir", str(outdir),
-        "--openstudio_version", "3.4.0",
+        "--openstudio_version", "3.11.0",
         "--log_level", "WARNING",
     ]
     env = os.environ.copy()
@@ -132,7 +132,7 @@ def run_snakemake(n_samples: int = 5) -> dict:
         "template_sim_package": str(TEMPLATE),
         "n_samples": n_samples,
         "outdir": str(outdir),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
         "archive_intermediates": False,
     }
     import yaml

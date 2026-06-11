@@ -47,8 +47,8 @@ If you want to run real simulations (not stubs), install
 OpenStudio image for the version you need:
 
 ```bash
-docker pull nrel/openstudio:3.4.0
-docker run --rm nrel/openstudio:3.4.0 openstudio.cli --version
+docker pull nrel/openstudio:3.11.0
+docker run --rm nrel/openstudio:3.11.0 openstudio.cli --version
 ```
 
 > **No Docker?** OSimFlow detects whether `openstudio.cli` is available. When
@@ -176,7 +176,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./my_first_campaign \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 ```
 
 What this does:
@@ -298,7 +298,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./my_first_campaign \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 ```
 
 The second run completes in under a second because every step is a cache
@@ -315,7 +315,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 50 \
   --outdir ./my_first_campaign_50 \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 ```
 
 A 50-sample run fills in the EUI distribution more completely and reveals
@@ -342,7 +342,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 20 \
   --outdir ./my_second_campaign \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 ```
 
 ### 5.4 Use a different OpenStudio version
@@ -374,7 +374,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 200 \
   --outdir ./hpc_campaign \
-  --openstudio_version 3.4.0
+  --openstudio_version 3.11.0
 ```
 
 Without `--slurm-real`, jobs run locally via `submitit.DebugExecutor` —
@@ -391,7 +391,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 1000 \
   --outdir ./cloud_campaign \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 AWS Batch requires: `pip install osimflow[aws]`, a registered job
