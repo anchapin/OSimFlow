@@ -402,12 +402,12 @@ def test_done_reflects_job_status() -> None:
     # job_id in SUBMITTED/RUNNABLE state so we can test done()=False.
     resp = batch_client.submit_job(
         jobName="test-done-raw",
-        jobQueue=batch_client.describe_job_queues(
-            jobQueues=[_QUEUE_NAME]
-        )["jobQueues"][0]["jobQueueArn"],
-        jobDefinition=batch_client.describe_job_definitions(
-            jobDefinitions=[_JOB_DEF_NAME]
-        )["jobDefinitions"][0]["jobDefinitionArn"],
+        jobQueue=batch_client.describe_job_queues(jobQueues=[_QUEUE_NAME])["jobQueues"][0][
+            "jobQueueArn"
+        ],
+        jobDefinition=batch_client.describe_job_definitions(jobDefinitions=[_JOB_DEF_NAME])[
+            "jobDefinitions"
+        ][0]["jobDefinitionArn"],
     )
     job_id = resp["jobId"]
 
