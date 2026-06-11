@@ -152,6 +152,9 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `infra/aws/terraform/job-definition.tf` | Batch job definition (issue #130): parameterised vCPU, memory, timeout, execution role. |
 | `infra/aws/terraform/examples/basic/` | Minimal on-demand example config (documentation only). |
 | `infra/aws/terraform/examples/spot/` | Spot instance example config with cost tags (documentation only). |
+| `infra/aws/scripts/sync-openstudio-to-ecr.sh` | ECR mirror script (issue #129): pulls `nrel/openstudio` from Docker Hub with exponential-backoff retry, pushes to ECR in one or more regions. Avoids Docker Hub rate limits for production Batch jobs. |
+| `infra/aws/terraform/ecr.tf` | ECR repository + lifecycle policy for mirrored OpenStudio images (issue #129). Keeps last 5 tagged `3.*` images. |
+| `docs/container-image-strategy.md` | Container image strategy: why we mirror to ECR, how to use the sync script, lifecycle policy, multi-region replication, and cost considerations (issue #129). |
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
 | `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit). |
 | `LICENSE` | MIT. |
