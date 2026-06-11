@@ -225,7 +225,7 @@ jobs:
 
       - name: pytest with coverage gate
         run: |
-          .venv/bin/pytest -n auto --dist loadgroup \
+          .venv/bin/pytest -n auto \
             --cov=osimflow \
             --cov-report=xml \
             --cov-report=term \
