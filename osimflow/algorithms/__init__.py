@@ -2,14 +2,15 @@
 
 Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
-built-in ``LHSAlgorithm`` that wraps the existing LHS generation logic.
+built-in ``LHSAlgorithm``, ``SobolAlgorithm``, and ``HaltonAlgorithm``
+implementations.
 
-Adding a new algorithm (Sobol, Morris, NSGA-II, …) requires only:
+Adding a new algorithm (Morris, NSGA-II, …) requires only:
 
 1.  Subclass ``BaseAlgorithm``.
 2.  Call ``AlgorithmRegistry.register("name", MyAlgorithm)`` at import
     time (typically at the bottom of this module or in a separate plugin
-    module).
+    module under ``osimflow/algorithms/``).
 
 The ``Campaign`` class dispatches through the registry via
 ``AlgorithmRegistry.get(config.algorithm)`` so the orchestration layer
@@ -227,16 +228,38 @@ def _partition_variables(
     return independent, conditional
 
 
-def _sample_independent(
+def _sample_with_engine(
+    engine_cls: type,
     independent_vars: list[dict[str, Any]],
     n_samples: int,
     seed: int | None,
+    **engine_kwargs: Any,
 ) -> list[dict[str, Any]]:
-    """Run LHS over *independent_vars* and return sample dicts."""
+    """Generate samples using any ``scipy.stats.qmc`` engine class.
+
+    Parameters
+    ----------
+    engine_cls
+        A ``scipy.stats.qmc.QMCEngine`` subclass (e.g.
+        ``LatinHypercube``, ``Sobol``, ``Halton``).
+    independent_vars
+        Variable definitions to sample.
+    n_samples
+        Number of sample points.
+    seed
+        Optional RNG seed for reproducibility.
+    **engine_kwargs
+        Additional keyword arguments forwarded to the engine constructor.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        List of ``{"sample_id": ..., "values": {...}}`` dicts.
+    """
     dim = len(independent_vars)
     if dim == 0:
         return []
-    rng = scipy.stats.qmc.LatinHypercube(d=dim, seed=seed)
+    rng = engine_cls(d=dim, seed=seed, **engine_kwargs)
     unit_samples = rng.random(n=n_samples)
     samples: list[dict[str, Any]] = []
     for i in range(n_samples):
@@ -248,6 +271,20 @@ def _sample_independent(
             values[var_name] = _apply_distribution(unit_samples[i, j], dist_name, params)
         samples.append({"sample_id": f"{i + 1:04d}", "values": values})
     return samples
+
+
+def _sample_independent(
+    independent_vars: list[dict[str, Any]],
+    n_samples: int,
+    seed: int | None,
+) -> list[dict[str, Any]]:
+    """Run LHS over *independent_vars* and return sample dicts."""
+    return _sample_with_engine(
+        scipy.stats.qmc.LatinHypercube,
+        independent_vars,
+        n_samples,
+        seed,
+    )
 
 
 def _resolve_conditional(
@@ -386,3 +423,9 @@ class LHSAlgorithm(BaseAlgorithm):
 # ======================================================================
 
 AlgorithmRegistry.register("lhs", LHSAlgorithm)
+
+from osimflow.algorithms.halton import HaltonAlgorithm  # noqa: E402
+from osimflow.algorithms.sobol import SobolAlgorithm  # noqa: E402
+
+AlgorithmRegistry.register("sobol", SobolAlgorithm)
+AlgorithmRegistry.register("halton", HaltonAlgorithm)

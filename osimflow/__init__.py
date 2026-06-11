@@ -7,6 +7,8 @@ API; everything else is an implementation detail.
 """
 
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
+from .algorithms.halton import HaltonAlgorithm
+from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
 from .config import CampaignConfig, load_config
@@ -32,6 +34,8 @@ __all__ = [
     "AlgorithmRegistry",
     "BaseAlgorithm",
     "LHSAlgorithm",
+    "SobolAlgorithm",
+    "HaltonAlgorithm",
     "CacheKey",
     "SQLiteCache",
     "Campaign",

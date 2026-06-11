@@ -116,7 +116,9 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
 | `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, plus `EPWValidationError` / `EPWDownloadError`. |
 | `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
-| `osimflow/algorithms.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`. Subclass and register to add new sampling strategies (Sobol, Morris, NSGA-II, …). |
+| `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. |
+| `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
+| `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `NomadExecutor`. |
 | `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
@@ -442,7 +444,7 @@ Use these patterns to decide where to make a change.
 | If the user asks to… | Edit |
 |---|---|
 | Add a new KPI | `bin/extract_kpis.py` (and the schema doc in `osimflow/monitoring.py:SampleTrace`). |
-| Add a new sampling distribution | `osimflow/algorithms.py` (subclass `BaseAlgorithm`, register via `AlgorithmRegistry.register`) **and** update the `variables.yml` example in `docs/`. |
+| Add a new sampling distribution | `osimflow/algorithms/` package (subclass `BaseAlgorithm` in a new module, register via `AlgorithmRegistry.register` in `__init__.py`) **and** update the `variables.yml` example in `docs/`. |
 | Add a new execution platform | New class in `osimflow/executors/__init__.py` (subclass `BaseExecutor`) **and** add the executor choice to `osimflow/__main__.py:_build_executor`. |
 | Add a new step to the DAG | A new method on `Campaign` in `osimflow/campaign.py` **and** call it from `Campaign.run` **and** emit `StepTrace` hooks. Update the directory map in this file. |
 | Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py`. |
