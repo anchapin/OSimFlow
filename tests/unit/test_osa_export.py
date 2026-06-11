@@ -18,13 +18,11 @@ import yaml
 
 from osimflow.config import CampaignConfig
 from osimflow.exporters.osa import (
-    OSAExporter,
     _LOSSY_DISTRIBUTIONS,
     _OSIMFLOW_ALGO_TO_OSA,
-    _OSIMFLOW_TO_OSA,
+    OSAExporter,
 )
 from osimflow.importers.osa import osa_to_variables_yml, parse_osa
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

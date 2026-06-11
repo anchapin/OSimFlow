@@ -51,8 +51,8 @@ The cluster runs with ACL enabled (deny-by-default). Three token types:
 | Token type | Policy | Use case |
 |---|---|---|
 | **Management** | Full access (generated at bootstrap) | Initial setup, policy management. Rotate after setup. |
-| **Worker** (`osimflow-worker`) | `worker.hcl` — submit/read/dispatch jobs in `default` namespace | Used by `NomadExecutor` to submit OpenStudio simulation jobs. Expires after 720h. |
-| **Agent** (optional) | `agent.hcl` — read-only agent/node metadata | Monitoring dashboards, health checks. No job submission. |
+| **Worker** (`osimflow-worker`) | `infra/nomad/acl/policies/worker.hcl` — submit/read/dispatch jobs in `default` namespace | Used by `NomadExecutor` to submit OpenStudio simulation jobs. Expires after 720h. |
+| **Agent** (optional) | `infra/nomad/acl/policies/agent.hcl` — read-only agent/node metadata | Monitoring dashboards, health checks. No job submission. |
 
 ### Anonymous access
 
@@ -101,7 +101,7 @@ credentials come from the environment, not from code.
 
 ## Production TLS (out of scope for this recipe)
 
-For real deployments, add to each `server*.hcl` and `client.hcl`:
+For real deployments, add to each `server*.hcl` and `infra/nomad/examples/ha/client.hcl`:
 
 ```hcl
 tls {
