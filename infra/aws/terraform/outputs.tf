@@ -43,6 +43,11 @@ output "task_role_arn" {
   value       = aws_iam_role.task.arn
 }
 
+output "task_execution_role_arn" {
+  description = "ARN of the ECS task-execution role (ECR pull + CWL)"
+  value       = aws_iam_role.task_execution.arn
+}
+
 output "container_image" {
   description = "Full container image URI used by the job definition"
   value       = local.container_image

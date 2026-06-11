@@ -1,8 +1,11 @@
 # =============================================================================
 # OSimFlow AWS Batch Infrastructure
 # =============================================================================
-# Creates: VPC, S3 bucket, IAM roles, Batch compute environment,
-# job queue, and job definition for running OpenStudio simulations.
+# Creates: VPC, S3 bucket, Batch compute environment, and job queue.
+#
+# IAM roles and job definition live in separate files:
+#   iam.tf             — least-privilege IAM roles
+#   job-definition.tf  — Batch job definition (nrel/openstudio container)
 # =============================================================================
 
 provider "aws" {
@@ -126,105 +129,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 }
 
 # =============================================================================
-# IAM — least-privilege roles for Batch
-# =============================================================================
-
-# --- ECS instance role (for the EC2 instances in the compute env) ---
-
-data "aws_iam_policy_document" "instance_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "instance" {
-  name               = "${local.name_prefix}-batch-instance-role"
-  assume_role_policy = data.aws_iam_policy_document.instance_assume_role.json
-}
-
-resource "aws_iam_role_policy_attachment" "instance_ecs" {
-  role       = aws_iam_role.instance.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
-}
-
-resource "aws_iam_instance_profile" "batch" {
-  name = "${local.name_prefix}-batch-instance-profile"
-  role = aws_iam_role.instance.name
-}
-
-# --- ECS task role (what the container itself assumes) ---
-
-data "aws_iam_policy_document" "task_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "task" {
-  name               = "${local.name_prefix}-batch-task-role"
-  assume_role_policy = data.aws_iam_policy_document.task_assume_role.json
-}
-
-# Task permissions: S3 read/write for campaign artifacts only.
-data "aws_iam_policy_document" "task_s3" {
-  statement {
-    effect = "Allow"
-    actions = [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:ListBucket",
-      "s3:DeleteObject",
-    ]
-    resources = [
-      aws_s3_bucket.artifacts.arn,
-      "${aws_s3_bucket.artifacts.arn}/*",
-    ]
-  }
-}
-
-resource "aws_iam_role_policy" "task_s3" {
-  name   = "${local.name_prefix}-task-s3-access"
-  role   = aws_iam_role.task.id
-  policy = data.aws_iam_policy_document.task_s3.json
-}
-
-# --- Batch service role ---
-
-data "aws_iam_policy_document" "batch_assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["batch.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "batch_service" {
-  name               = "${local.name_prefix}-batch-service-role"
-  assume_role_policy = data.aws_iam_policy_document.batch_assume_role.json
-}
-
-resource "aws_iam_role_policy_attachment" "batch_service" {
-  role       = aws_iam_role.batch_service.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole"
-}
-
-# =============================================================================
 # AWS Batch — compute environment
 # =============================================================================
 
@@ -234,11 +138,11 @@ resource "aws_batch_compute_environment" "osimflow" {
   type = "MANAGED"
 
   compute_resources {
-    type           = var.use_spot ? "SPOT" : "EC2"
+    type                = var.use_spot ? "SPOT" : "EC2"
     allocation_strategy = var.use_spot ? "SPOT_CAPACITY_OPTIMIZED" : "BEST_FIT"
-    min_vcpus      = var.min_vcpus
-    max_vcpus      = var.max_vcpus
-    desired_vcpus  = var.desired_vcpus
+    min_vcpus           = var.min_vcpus
+    max_vcpus           = var.max_vcpus
+    desired_vcpus       = var.desired_vcpus
 
     instance_type = var.instance_types
     instance_role = aws_iam_instance_profile.batch.arn
@@ -274,50 +178,4 @@ resource "aws_batch_job_queue" "osimflow" {
   compute_environments = [
     aws_batch_compute_environment.osimflow.arn,
   ]
-}
-
-# =============================================================================
-# AWS Batch — job definition (nrel/openstudio container)
-# =============================================================================
-
-resource "aws_batch_job_definition" "osimflow" {
-  name = "${local.name_prefix}-openstudio-job"
-  type = "container"
-
-  retry_strategy {
-    attempts = var.batch_job_retry_attempts
-  }
-
-  timeout {
-    attempt_duration_seconds = 14400 # 4 hours max per sim
-  }
-
-  container_properties = jsonencode({
-    image      = local.container_image
-    vcpus      = 2
-    memory     = 4096
-    privileged = false
-
-    jobRoleArn = aws_iam_role.task.arn
-
-    environment = [
-      { name = "OSIMFLOW_CONTAINER", value = local.container_image },
-    ]
-
-    mountPoints = []
-    volumes     = []
-
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = "/aws/batch/${local.name_prefix}"
-        "awslogs-region"        = var.region
-        "awslogs-stream-prefix" = "osimflow"
-      }
-    }
-  })
-
-  tags = {
-    Name = "${local.name_prefix}-openstudio-job-def"
-  }
 }
