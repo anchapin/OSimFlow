@@ -50,6 +50,7 @@ jobs:
         run: |
           pip install --break-system-packages --upgrade pip
           pip install --break-system-packages -e ".[dev]"
+          pip install --break-system-packages pytest-timeout
 
       - name: Verify OpenStudio CLI
         run: |
