@@ -21,8 +21,6 @@ from osimflow.executors import (
     Handle,
     LocalExecutor,
     NomadExecutor,
-    _AWSBatchHandle,
-    _NomadHandle,
 )
 from osimflow.monitoring import SampleTrace
 
@@ -248,7 +246,10 @@ class TestAWSBatchExecutorWorkerTracking:
         executor._client = batch_client  # noqa: SLF001
 
         handle = executor.submit(lambda: None, name="test-worker-id")
-        assert isinstance(handle, _AWSBatchHandle)
+        # Check duck-typing instead of isinstance to avoid class-identity
+        # issues when tests reload/mock sys.modules.
+        assert hasattr(handle, "result")
+        assert hasattr(handle, "job_id")
         # worker_id should be the Batch jobId
         assert handle.worker_id is not None
         assert handle.worker_id == handle.job_id
@@ -333,7 +334,10 @@ class TestNomadExecutorWorkerTracking:
         with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
             ex = NomadExecutor(address="http://127.0.0.1:4646", datacentre="dc1")
             handle = ex.submit(lambda: None, name="test")
-        assert isinstance(handle, _NomadHandle)
+        # Check duck-typing instead of isinstance to avoid class-identity
+        # issues when tests reload/mock sys.modules.
+        assert hasattr(handle, "result")
+        assert hasattr(handle, "job_id")
         assert handle.worker_id == "nomad-job-wt"
 
         ex.shutdown()

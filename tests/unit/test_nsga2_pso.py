@@ -337,6 +337,486 @@ class TestPSO:
 # ---------------------------------------------------------------------------
 
 
+class TestNSGA2ExtractBounds:
+    """Tests for _extract_bounds in nsga2 module."""
+
+    def test_uniform_bounds(self) -> None:
+        from osimflow.algorithms.nsga2 import _extract_bounds
+
+        var_list = [{"name": "x", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        assert _extract_bounds(var_list) == [(1.0, 10.0)]
+
+    def test_normal_bounds(self) -> None:
+        from osimflow.algorithms.nsga2 import _extract_bounds
+
+        var_list = [{"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0}]
+        bounds = _extract_bounds(var_list)
+        assert bounds == [(2.0, 8.0)]
+
+    def test_lognormal_bounds(self) -> None:
+        from osimflow.algorithms.nsga2 import _extract_bounds
+
+        var_list = [{"name": "x", "distribution": "lognormal", "mean": 2.0, "sigma": 0.5}]
+        bounds = _extract_bounds(var_list)
+        assert len(bounds) == 1
+        lo, hi = bounds[0]
+        assert lo > 0
+        assert hi > lo
+
+    def test_triangular_bounds(self) -> None:
+        from osimflow.algorithms.nsga2 import _extract_bounds
+
+        var_list = [
+            {"name": "x", "distribution": "triangular", "min": 1.0, "max": 5.0, "mode": 3.0}
+        ]
+        assert _extract_bounds(var_list) == [(1.0, 5.0)]
+
+    def test_unknown_distribution_fallback(self) -> None:
+        from osimflow.algorithms.nsga2 import _extract_bounds
+
+        var_list = [{"name": "x", "distribution": "beta", "alpha": 2.0}]
+        assert _extract_bounds(var_list) == [(0.0, 1.0)]
+
+
+class TestNSGA2ReadMultiKPIValues:
+    """Tests for _read_multi_kpi_values in nsga2 module."""
+
+    def test_reads_multiple_kpis(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.nsga2 import _read_multi_kpi_values
+
+        kpi_path = _make_kpi_file(tmp_outdir, "0001", {"f1": 0.5, "f2": 0.3})
+        history = [
+            {
+                "samples": [{"sample_id": "0001", "values": {"x": 5.0}}],
+                "kpi_files": [str(kpi_path)],
+            }
+        ]
+        results = _read_multi_kpi_values(history, ["f1", "f2"])
+        assert len(results) == 1
+        assert results[0][1] == [0.5, 0.3]
+
+    def test_missing_kpi_file(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.nsga2 import _read_multi_kpi_values
+
+        history = [
+            {
+                "samples": [{"sample_id": "0001", "values": {"x": 5.0}}],
+                "kpi_files": [str(tmp_outdir / "nonexistent.json")],
+            }
+        ]
+        results = _read_multi_kpi_values(history, ["f1"])
+        assert results == []
+
+    def test_invalid_json(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.nsga2 import _read_multi_kpi_values
+
+        bad_path = tmp_outdir / "bad.json"
+        bad_path.write_text("not json{{{")
+        history = [
+            {
+                "samples": [{"sample_id": "0001", "values": {"x": 5.0}}],
+                "kpi_files": [str(bad_path)],
+            }
+        ]
+        results = _read_multi_kpi_values(history, ["f1"])
+        assert results == []
+
+    def test_missing_kpi_key_returns_inf(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.nsga2 import _read_multi_kpi_values
+
+        kpi_path = _make_kpi_file(tmp_outdir, "0001", {"other": 42.0})
+        history = [
+            {
+                "samples": [{"sample_id": "0001", "values": {"x": 5.0}}],
+                "kpi_files": [str(kpi_path)],
+            }
+        ]
+        results = _read_multi_kpi_values(history, ["f1"])
+        assert len(results) == 1
+        assert results[0][1] == [float("inf")]
+
+    def test_empty_history(self) -> None:
+        from osimflow.algorithms.nsga2 import _read_multi_kpi_values
+
+        assert _read_multi_kpi_values([], ["f1"]) == []
+
+
+class TestNSGA2ArrayToSamples:
+    """Tests for _array_to_samples."""
+
+    def test_converts_array(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        X = np.array([[1.0, 2.0], [3.0, 4.0]])
+        result = algo._array_to_samples(X, ["a", "b"])
+        assert len(result) == 2
+        assert result[0]["values"]["a"] == 1.0
+        assert result[1]["values"]["b"] == 4.0
+
+
+class TestNSGA2SignObjectives:
+    """Tests for _sign_objectives."""
+
+    def test_flip_maximize(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(maximize=[False, True])
+        F = np.array([[1.0, 5.0], [2.0, 3.0]])
+        F_signed = algo._sign_objectives(F)
+        assert F_signed[0, 0] == 1.0
+        assert F_signed[0, 1] == -5.0
+
+    def test_no_flip_all_minimize(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(maximize=[False, False])
+        F = np.array([[1.0, 5.0]])
+        F_signed = algo._sign_objectives(F)
+        np.testing.assert_array_equal(F_signed, F)
+
+
+class TestNSGA2EdgeCases:
+    """Edge case tests for NSGA2Algorithm."""
+
+    def test_empty_variables(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        result = algo.generate_samples({"variables": []}, 5, seed=42, outdir=tmp_outdir)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_no_independent_vars(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        result = algo.generate_samples(variables, 5, seed=42, outdir=tmp_outdir)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_observe_empty_history(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_no_independent_vars(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        assert algo.observe([{"samples": [], "kpi_files": []}]) == []
+
+    def test_observe_no_kpi_files(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"])
+        algo._independent_vars = [{"name": "x", "distribution": "uniform", "min": 0, "max": 1}]
+        result = algo.observe(
+            [
+                {
+                    "samples": [{"sample_id": "0001", "values": {"x": 0.5}}],
+                    "kpi_files": [str(tmp_outdir / "nonexistent.json")],
+                }
+            ]
+        )
+        assert result == []
+
+    def test_is_converged_zero_prev_hv(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        algo._hv_history = [0.0, 0.0]
+        assert algo.is_converged([]) is True
+
+    def test_is_converged_zero_prev_nonzero_curr(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        algo._hv_history = [0.0, 1.0]
+        assert algo.is_converged([]) is False
+
+    def test_is_converged_stable_hv(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(hv_tol=0.01)
+        algo._hv_history = [100.0, 100.001]
+        assert algo.is_converged([]) is True
+
+    def test_is_converged_changing_hv(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(hv_tol=0.01)
+        algo._hv_history = [100.0, 110.0]
+        assert algo.is_converged([]) is False
+
+    def test_update_hypervolume_empty_F(self) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        algo._update_hypervolume(np.array([]).reshape(0, 2))
+        assert algo._hv_history == [0.0]
+
+    def test_generate_samples_with_population(
+        self, simple_variables: dict[str, Any], tmp_outdir: Path
+    ) -> None:
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm()
+        algo.generate_samples(simple_variables, 5, seed=42, outdir=tmp_outdir)
+        algo._population_X = np.array([[5.0, 0.5], [3.0, 0.3]])
+        gen1_dir = tmp_outdir / "gen1"
+        result = algo.generate_samples(simple_variables, 5, seed=42, outdir=gen1_dir)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 2
+
+
+class TestPSOExtractBounds:
+    """Tests for _extract_bounds in pso module."""
+
+    def test_normal_bounds(self) -> None:
+        from osimflow.algorithms.pso import _extract_bounds
+
+        var_list = [{"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0}]
+        assert _extract_bounds(var_list) == [(2.0, 8.0)]
+
+    def test_lognormal_bounds(self) -> None:
+        from osimflow.algorithms.pso import _extract_bounds
+
+        var_list = [{"name": "x", "distribution": "lognormal", "mean": 2.0, "sigma": 0.5}]
+        bounds = _extract_bounds(var_list)
+        assert bounds[0][0] > 0
+
+    def test_triangular_bounds(self) -> None:
+        from osimflow.algorithms.pso import _extract_bounds
+
+        var_list = [
+            {"name": "x", "distribution": "triangular", "min": 1.0, "max": 5.0, "mode": 3.0}
+        ]
+        assert _extract_bounds(var_list) == [(1.0, 5.0)]
+
+    def test_unknown_distribution_fallback(self) -> None:
+        from osimflow.algorithms.pso import _extract_bounds
+
+        var_list = [{"name": "x", "distribution": "beta"}]
+        assert _extract_bounds(var_list) == [(0.0, 1.0)]
+
+
+class TestPSOReadKPIValues:
+    """Tests for _read_kpi_values in pso module."""
+
+    def test_reads_kpis(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.pso import _read_kpi_values
+
+        kpi_path = _make_kpi_file(tmp_outdir, "0001", {"eui": 100.0})
+        history = [
+            {
+                "samples": [{"sample_id": "0001", "values": {"x": 5.0}}],
+                "kpi_files": [str(kpi_path)],
+            }
+        ]
+        results = _read_kpi_values(history, "eui")
+        assert len(results) == 1
+        assert results[0][1] == 100.0
+
+    def test_missing_kpi_file(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.pso import _read_kpi_values
+
+        history = [
+            {
+                "samples": [{"sample_id": "0001", "values": {"x": 5.0}}],
+                "kpi_files": [str(tmp_outdir / "nonexistent.json")],
+            }
+        ]
+        assert _read_kpi_values(history, "eui") == []
+
+    def test_invalid_json(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.pso import _read_kpi_values
+
+        bad_path = tmp_outdir / "bad.json"
+        bad_path.write_text("not json{{{")
+        history = [
+            {
+                "samples": [{"sample_id": "0001", "values": {"x": 5.0}}],
+                "kpi_files": [str(bad_path)],
+            }
+        ]
+        assert _read_kpi_values(history, "eui") == []
+
+
+class TestPSOEdgeCases:
+    """Edge case tests for PSOAlgorithm."""
+
+    def test_empty_variables(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        result = algo.generate_samples({"variables": []}, 5, seed=42, outdir=tmp_outdir)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_no_independent_vars(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        result = algo.generate_samples(variables, 5, seed=42, outdir=tmp_outdir)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_observe_empty_history(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_no_results(self, tmp_outdir: Path) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        algo._independent_vars = [{"name": "x", "distribution": "uniform", "min": 0, "max": 1}]
+        result = algo.observe(
+            [
+                {
+                    "samples": [{"sample_id": "0001", "values": {"x": 0.5}}],
+                    "kpi_files": [str(tmp_outdir / "nonexistent.json")],
+                }
+            ]
+        )
+        assert result == []
+
+    def test_maximize_mode(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm(maximize=True)
+        assert algo._maximize is True
+
+    def test_clip_to_bounds(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        algo._bounds = [(0.0, 1.0), (0.0, 10.0)]
+        X = np.array([[-1.0, 15.0], [0.5, 5.0]])
+        clipped = algo._clip_to_bounds(X)
+        assert clipped[0, 0] == 0.0
+        assert clipped[0, 1] == 10.0
+        assert clipped[1, 0] == 0.5
+        assert clipped[1, 1] == 5.0
+
+    def test_is_converged_not_initialized(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        assert algo.is_converged([]) is False
+
+    def test_is_converged_inf_values(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        algo._initialized = True
+        algo._prev_global_best = float("inf")
+        algo._global_best_val = float("inf")
+        assert algo.is_converged([]) is False
+
+    def test_is_converged_zero_best(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        algo._initialized = True
+        algo._global_best_val = 1e-13
+        algo._prev_global_best = 1.0
+        assert algo.is_converged([]) is True
+
+    def test_is_converged_prev_zero_curr_zero(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        algo._initialized = True
+        algo._prev_global_best = 0.0
+        algo._global_best_val = 0.0
+        assert algo.is_converged([]) is True
+
+    def test_is_converged_prev_zero_curr_nonzero(self) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        algo._initialized = True
+        algo._prev_global_best = 0.0
+        algo._global_best_val = 1.0
+        assert algo.is_converged([]) is False
+
+    def test_generate_samples_initialized(
+        self, simple_variables: dict[str, Any], tmp_outdir: Path
+    ) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm()
+        algo.generate_samples(simple_variables, 5, seed=42, outdir=tmp_outdir)
+        algo._initialized = True
+        algo._positions = np.array([[5.0, 0.5], [3.0, 0.3]])
+        gen1_dir = tmp_outdir / "gen1"
+        result = algo.generate_samples(simple_variables, 5, seed=42, outdir=gen1_dir)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 2
+
+    def test_observe_maximize(self, simple_variables: dict[str, Any], tmp_outdir: Path) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm(objective_kpi="eui", maximize=True)
+        samples_path = algo.generate_samples(
+            simple_variables, n_samples=5, seed=42, outdir=tmp_outdir
+        )
+        samples = json.loads(samples_path.read_text())["samples"]
+        kpi_files: list[str] = []
+        for s in samples:
+            kpi_path = _make_kpi_file(tmp_outdir, s["sample_id"], {"eui": 100.0})
+            kpi_files.append(str(kpi_path))
+        history_entry: dict[str, Any] = {"samples": samples, "kpi_files": kpi_files}
+        new_samples = algo.observe([history_entry])
+        assert len(new_samples) > 0
+        assert algo._initialized is True
+
+    def test_observe_second_generation(
+        self, simple_variables: dict[str, Any], tmp_outdir: Path
+    ) -> None:
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm(objective_kpi="eui")
+        samples_path = algo.generate_samples(
+            simple_variables, n_samples=5, seed=42, outdir=tmp_outdir
+        )
+        samples = json.loads(samples_path.read_text())["samples"]
+
+        kpi_files: list[str] = []
+        for s in samples:
+            obj = (s["values"]["wall_r"] - 5.0) ** 2 + (s["values"]["window_shgc"] - 0.5) ** 2
+            kpi_path = _make_kpi_file(tmp_outdir, s["sample_id"], {"eui": obj})
+            kpi_files.append(str(kpi_path))
+
+        history_entry: dict[str, Any] = {"samples": samples, "kpi_files": kpi_files}
+        new_samples = algo.observe([history_entry])
+        assert algo._initialized is True
+
+        gen2_kpi_files: list[str] = []
+        for s in new_samples:
+            obj = (s["values"]["wall_r"] - 5.0) ** 2 + (s["values"]["window_shgc"] - 0.5) ** 2
+            kpi_path = _make_kpi_file(tmp_outdir, s["sample_id"] + "_g2", {"eui": obj})
+            gen2_kpi_files.append(str(kpi_path))
+
+        history_entry2: dict[str, Any] = {"samples": new_samples, "kpi_files": gen2_kpi_files}
+        new_samples2 = algo.observe([history_entry2])
+        assert len(new_samples2) > 0
+
+
 class TestPyprojectOptimizationExtra:
     """Verify that pyproject.toml declares the [optimization] extra."""
 

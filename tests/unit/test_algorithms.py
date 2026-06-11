@@ -7,14 +7,39 @@ Covers:
 - LHSAlgorithm.is_converged([]) returns True
 - LHSAlgorithm.name() returns "lhs"
 - AlgorithmRegistry.list_available() includes "lhs"
+- BaseAlgorithm ABC enforcement
+- _apply_distribution for all distribution types
+- _normalise_var_list for list and dict formats
+- _partition_variables for independent vs conditional
+- _sample_with_engine shared helper
+- _resolve_conditional for dependent variables
+- _generate_lhs_inline
+- LHSAlgorithm error wrapping
 """
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+import scipy.stats
 
-from osimflow.algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
+from osimflow.algorithms import (
+    AlgorithmRegistry,
+    BaseAlgorithm,
+    LHSAlgorithm,
+    _apply_distribution,
+    _generate_lhs_inline,
+    _normalise_var_list,
+    _partition_variables,
+    _resolve_conditional,
+    _sample_independent,
+    _sample_with_engine,
+    _write_empty_samples,
+)
+
+# AlgorithmRegistry-mutating tests must run on the same xdist worker.
+pytestmark = pytest.mark.xdist_group("algorithm_registry")
 
 
 class TestAlgorithmRegistry:
@@ -71,8 +96,385 @@ class TestAlgorithmRegistry:
             assert isinstance(algo, StubAlgo)
             assert algo.name() == "stub"
         finally:
-            # Clean up so other tests are not affected.
             AlgorithmRegistry._registry.pop("stub_test", None)
+
+    def test_duplicate_registration_overwrites(self) -> None:
+        """Re-registering overwrites the previous class."""
+
+        class StubA(BaseAlgorithm):
+            def generate_samples(
+                self, variables: dict, n_samples: int, seed: int | None, outdir: Path
+            ) -> Path:
+                return Path("a")
+
+            def observe(self, history: list[dict]) -> list[dict]:
+                return []
+
+            def is_converged(self, history: list[dict]) -> bool:
+                return True
+
+            def name(self) -> str:
+                return "a"
+
+            def is_iterative(self) -> bool:
+                return False
+
+        class StubB(BaseAlgorithm):
+            def generate_samples(
+                self, variables: dict, n_samples: int, seed: int | None, outdir: Path
+            ) -> Path:
+                return Path("b")
+
+            def observe(self, history: list[dict]) -> list[dict]:
+                return []
+
+            def is_converged(self, history: list[dict]) -> bool:
+                return True
+
+            def name(self) -> str:
+                return "b"
+
+            def is_iterative(self) -> bool:
+                return False
+
+        AlgorithmRegistry.register("dup_test", StubA)
+        AlgorithmRegistry.register("dup_test", StubB)
+        try:
+            algo = AlgorithmRegistry.get("dup_test")
+            assert isinstance(algo, StubB)
+        finally:
+            AlgorithmRegistry._registry.pop("dup_test", None)
+
+    def test_list_available_empty_message(self) -> None:
+        """When registry is empty, ValueError message shows (none)."""
+        saved = AlgorithmRegistry._registry.copy()
+        try:
+            AlgorithmRegistry._registry.clear()
+            with pytest.raises(ValueError, match=r"Available algorithms: \(none\)"):
+                AlgorithmRegistry.get("anything")
+        finally:
+            AlgorithmRegistry._registry.update(saved)
+
+    def test_get_creates_new_instance_each_time(self) -> None:
+        a1 = AlgorithmRegistry.get("lhs")
+        a2 = AlgorithmRegistry.get("lhs")
+        assert a1 is not a2
+
+
+class TestBaseAlgorithmABC:
+    """BaseAlgorithm cannot be instantiated without implementing abstract methods."""
+
+    def test_cannot_instantiate_directly(self) -> None:
+        with pytest.raises(TypeError):
+            BaseAlgorithm()  # type: ignore[abstract]
+
+    def test_is_multi_objective_default_false(self) -> None:
+        class MinimalAlgo(BaseAlgorithm):
+            def generate_samples(
+                self, variables: dict, n_samples: int, seed: int | None, outdir: Path
+            ) -> Path:
+                return Path()
+
+            def observe(self, history: list[dict]) -> list[dict]:
+                return []
+
+            def is_converged(self, history: list[dict]) -> bool:
+                return True
+
+            def name(self) -> str:
+                return "minimal"
+
+            def is_iterative(self) -> bool:
+                return False
+
+        algo = MinimalAlgo()
+        assert algo.is_multi_objective() is False
+
+
+class TestApplyDistribution:
+    """Tests for _apply_distribution covering all distribution types."""
+
+    def test_uniform(self) -> None:
+        result = _apply_distribution(0.5, "uniform", {"min": 0.0, "max": 10.0})
+        assert result == 5.0
+
+    def test_uniform_boundaries(self) -> None:
+        assert _apply_distribution(0.0, "uniform", {"min": 2.0, "max": 8.0}) == 2.0
+        assert _apply_distribution(1.0, "uniform", {"min": 2.0, "max": 8.0}) == 8.0
+
+    def test_normal(self) -> None:
+        result = _apply_distribution(0.5, "normal", {"mean": 0.0, "sigma": 1.0})
+        assert abs(result) < 0.01
+
+    def test_lognormal(self) -> None:
+        result = _apply_distribution(0.5, "lognormal", {"mean": 0.0, "sigma": 1.0})
+        assert isinstance(result, float)
+        assert result > 0
+
+    def test_triangular(self) -> None:
+        result = _apply_distribution(0.5, "triangular", {"min": 0.0, "max": 10.0, "mode": 5.0})
+        assert isinstance(result, float)
+        assert 0.0 <= result <= 10.0
+
+    def test_triangular_no_mode(self) -> None:
+        result = _apply_distribution(0.5, "triangular", {"min": 0.0, "max": 10.0})
+        assert isinstance(result, float)
+
+    def test_discrete(self) -> None:
+        values = [10, 20, 30, 40, 50]
+        result = _apply_distribution(0.0, "discrete", {"values": values})
+        assert result == 10
+        result = _apply_distribution(1.0, "discrete", {"values": values})
+        assert result == 50
+
+    def test_categorical(self) -> None:
+        values = ["a", "b", "c"]
+        result = _apply_distribution(0.5, "categorical", {"values": values})
+        assert result in values
+
+    def test_conditional_raises(self) -> None:
+        with pytest.raises(NotImplementedError, match="conditional"):
+            _apply_distribution(0.5, "conditional", {})
+
+    def test_beta(self) -> None:
+        result = _apply_distribution(0.5, "beta", {"alpha": 2.0, "beta": 5.0})
+        assert isinstance(result, float)
+        assert 0.0 < result < 1.0
+
+    def test_beta_with_loc_scale(self) -> None:
+        result = _apply_distribution(
+            0.5, "beta", {"alpha": 2.0, "beta": 2.0, "loc": 5.0, "scale": 10.0}
+        )
+        assert isinstance(result, float)
+
+    def test_gamma(self) -> None:
+        result = _apply_distribution(0.5, "gamma", {"alpha": 2.0})
+        assert isinstance(result, float)
+
+    def test_gamma_with_loc_scale(self) -> None:
+        result = _apply_distribution(0.5, "gamma", {"alpha": 2.0, "loc": 1.0, "scale": 2.0})
+        assert isinstance(result, float)
+
+    def test_exponential(self) -> None:
+        result = _apply_distribution(0.5, "exponential", {"rate": 1.0})
+        assert isinstance(result, float)
+
+    def test_unsupported_distribution(self) -> None:
+        with pytest.raises(NotImplementedError, match="unsupported distribution"):
+            _apply_distribution(0.5, "unknown_dist", {})
+
+
+class TestNormaliseVarList:
+    """Tests for _normalise_var_list."""
+
+    def test_list_format(self) -> None:
+        raw = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]
+        result = _normalise_var_list(raw)
+        assert len(result) == 1
+        assert result[0]["name"] == "x"
+
+    def test_dict_format(self) -> None:
+        raw = {"x": {"distribution": "uniform", "min": 0.0, "max": 1.0}}
+        result = _normalise_var_list(raw)
+        assert len(result) == 1
+        assert result[0]["name"] == "x"
+        assert result[0]["distribution"] == "uniform"
+
+    def test_empty_list(self) -> None:
+        assert _normalise_var_list([]) == []
+
+    def test_empty_dict(self) -> None:
+        assert _normalise_var_list({}) == []
+
+    def test_none(self) -> None:
+        assert _normalise_var_list(None) == []
+
+    def test_string(self) -> None:
+        assert _normalise_var_list("not_a_list") == []
+
+
+class TestPartitionVariables:
+    """Tests for _partition_variables."""
+
+    def test_all_independent(self) -> None:
+        var_list = [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+        ]
+        indep, cond = _partition_variables(var_list)
+        assert len(indep) == 2
+        assert len(cond) == 0
+
+    def test_mixed(self) -> None:
+        var_list = [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "conditional", "depends_on": {"variable": "x"}},
+        ]
+        indep, cond = _partition_variables(var_list)
+        assert len(indep) == 1
+        assert len(cond) == 1
+        assert indep[0]["name"] == "x"
+        assert cond[0]["name"] == "y"
+
+    def test_empty(self) -> None:
+        indep, cond = _partition_variables([])
+        assert indep == []
+        assert cond == []
+
+
+class TestSampleWithEngine:
+    """Tests for _sample_with_engine."""
+
+    def test_basic_lhs(self) -> None:
+        var_list = [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+        ]
+        result = _sample_with_engine(scipy.stats.qmc.LatinHypercube, var_list, n_samples=5, seed=42)
+        assert len(result) == 5
+        assert all("sample_id" in s and "values" in s for s in result)
+
+    def test_empty_vars_returns_empty(self) -> None:
+        result = _sample_with_engine(scipy.stats.qmc.LatinHypercube, [], n_samples=5, seed=42)
+        assert result == []
+
+    def test_multiple_vars(self) -> None:
+        var_list = [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
+            {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0},
+        ]
+        result = _sample_with_engine(
+            scipy.stats.qmc.LatinHypercube, var_list, n_samples=10, seed=42
+        )
+        assert len(result) == 10
+        for s in result:
+            assert "x" in s["values"]
+            assert "y" in s["values"]
+            assert 0.0 <= s["values"]["x"] <= 10.0
+            assert -5.0 <= s["values"]["y"] <= 5.0
+
+    def test_sample_ids_sequential(self) -> None:
+        var_list = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]
+        result = _sample_with_engine(scipy.stats.qmc.LatinHypercube, var_list, n_samples=3, seed=42)
+        assert [s["sample_id"] for s in result] == ["0001", "0002", "0003"]
+
+    def test_seed_reproducibility(self) -> None:
+        var_list = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]
+        r1 = _sample_with_engine(scipy.stats.qmc.LatinHypercube, var_list, n_samples=5, seed=99)
+        r2 = _sample_with_engine(scipy.stats.qmc.LatinHypercube, var_list, n_samples=5, seed=99)
+        assert r1 == r2
+
+    def test_different_seeds_different_results(self) -> None:
+        var_list = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]
+        r1 = _sample_with_engine(scipy.stats.qmc.LatinHypercube, var_list, n_samples=5, seed=1)
+        r2 = _sample_with_engine(scipy.stats.qmc.LatinHypercube, var_list, n_samples=5, seed=2)
+        assert r1 != r2
+
+
+class TestSampleIndependent:
+    """Tests for _sample_independent."""
+
+    def test_basic(self) -> None:
+        var_list = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]
+        result = _sample_independent(var_list, n_samples=3, seed=42)
+        assert len(result) == 3
+
+
+class TestResolveConditional:
+    """Tests for _resolve_conditional."""
+
+    def test_resolves_conditional_variable(self) -> None:
+        samples: list[dict[str, Any]] = [
+            {"sample_id": "0001", "values": {"x": 5.0}},
+            {"sample_id": "0002", "values": {"x": 10.0}},
+        ]
+        conditional_vars = [
+            {
+                "name": "y",
+                "distribution": "conditional",
+                "depends_on": {"variable": "x", "match": "True"},
+                "conditions": [
+                    {"distribution": "uniform", "min": 0.0, "max": 1.0},
+                ],
+            }
+        ]
+        _resolve_conditional(samples, conditional_vars, n_samples=2)
+        for s in samples:
+            assert "y" in s["values"]
+
+
+class TestWriteEmptySamples:
+    """Tests for _write_empty_samples."""
+
+    def test_writes_empty_json(self, tmp_path: Path) -> None:
+        path = tmp_path / "samples.json"
+        result = _write_empty_samples(path)
+        assert result == path
+        data = json.loads(path.read_text())
+        assert data == {"samples": []}
+
+
+class TestGenerateLHSInline:
+    """Tests for _generate_lhs_inline."""
+
+    _VARIABLES: dict[str, Any] = {
+        "variables": [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+        ]
+    }
+
+    def test_basic_generation(self, tmp_path: Path) -> None:
+        result = _generate_lhs_inline(self._VARIABLES, n_samples=5, seed=42, outdir=tmp_path)
+        assert result.exists()
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 5
+
+    def test_empty_variables(self, tmp_path: Path) -> None:
+        result = _generate_lhs_inline({"variables": []}, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_dict_format_variables(self, tmp_path: Path) -> None:
+        variables: dict[str, Any] = {
+            "variables": {"x": {"distribution": "uniform", "min": 0.0, "max": 1.0}}
+        }
+        result = _generate_lhs_inline(variables, n_samples=3, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 3
+
+    def test_no_independent_vars(self, tmp_path: Path) -> None:
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        result = _generate_lhs_inline(variables, n_samples=3, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_creates_outdir(self, tmp_path: Path) -> None:
+        nested = tmp_path / "deep" / "nested"
+        _generate_lhs_inline(self._VARIABLES, n_samples=2, seed=42, outdir=nested)
+        assert nested.is_dir()
+
+    def test_conditional_resolution(self, tmp_path: Path) -> None:
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+                {
+                    "name": "y",
+                    "distribution": "conditional",
+                    "depends_on": {"variable": "x", "match": "True"},
+                    "conditions": [
+                        {"distribution": "uniform", "min": 10.0, "max": 20.0},
+                    ],
+                },
+            ]
+        }
+        result = _generate_lhs_inline(variables, n_samples=3, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        for s in data["samples"]:
+            assert "y" in s["values"]
 
 
 class TestLHSAlgorithm:
@@ -161,3 +563,49 @@ class TestLHSAlgorithm:
         d1 = json.loads(r1.read_text())
         d2 = json.loads(r2.read_text())
         assert d1 == d2
+
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = LHSAlgorithm()
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_generate_samples_wraps_not_implemented_error(self, tmp_path: Path) -> None:
+        algo = LHSAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "unsupported_dist_xyz"},
+            ]
+        }
+        with pytest.raises(RuntimeError, match="generate_lhs failed"):
+            algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
+
+    def test_generate_samples_normal_distribution(self, tmp_path: Path) -> None:
+        algo = LHSAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=10, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 10
+        values = [s["values"]["x"] for s in data["samples"]]
+        assert all(isinstance(v, float) for v in values)
+
+    def test_generate_samples_mixed_distributions(self, tmp_path: Path) -> None:
+        algo = LHSAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "u", "distribution": "uniform", "min": 0.0, "max": 1.0},
+                {"name": "n", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+                {"name": "ln", "distribution": "lognormal", "mean": 0.0, "sigma": 0.5},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 5
+        for s in data["samples"]:
+            assert "u" in s["values"]
+            assert "n" in s["values"]
+            assert "ln" in s["values"]

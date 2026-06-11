@@ -371,6 +371,325 @@ class TestOsaToVariablesYml:
                 assert "values" in v and isinstance(v["values"], list)
 
 
+# ---------------------------------------------------------------------------
+# Test: _extract_analysis_data edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAnalysisData:
+    def test_analysis_key_present(self) -> None:
+        from osimflow.importers.osa import _extract_analysis_data
+
+        raw = {"analysis": {"problem": {"variables": []}}}
+        result = _extract_analysis_data(raw)
+        assert "problem" in result
+
+    def test_top_level_problem(self) -> None:
+        from osimflow.importers.osa import _extract_analysis_data
+
+        raw = {"problem": {"variables": []}}
+        result = _extract_analysis_data(raw)
+        assert "problem" in result
+
+    def test_unrecognised_raises(self) -> None:
+        from osimflow.importers.osa import _extract_analysis_data
+
+        with pytest.raises(OSAImportError, match="Unrecognised OSA structure"):
+            _extract_analysis_data({"random_key": "value"})
+
+
+# ---------------------------------------------------------------------------
+# Test: _resolve_algorithm
+# ---------------------------------------------------------------------------
+
+
+class TestResolveAlgorithm:
+    def test_lhs_algorithm(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        algo = _resolve_algorithm({"type": "lhs"})
+        assert algo.name() == "lhs"
+
+    def test_latin_hypercube_maps_to_lhs(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        algo = _resolve_algorithm({"type": "latin_hypercube"})
+        assert algo.name() == "lhs"
+
+    def test_sobol_algorithm(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        algo = _resolve_algorithm({"type": "sobol"})
+        assert algo.name() == "sobol"
+
+    def test_doe_maps_to_lhs(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        algo = _resolve_algorithm({"type": "doe"})
+        assert algo.name() == "lhs"
+
+    def test_unknown_algorithm_raises(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        with pytest.raises(OSAImportError, match="Unknown algorithm"):
+            _resolve_algorithm({"type": "nonexistent"})
+
+    def test_empty_type_raises(self) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        with pytest.raises(OSAImportError, match="Unknown algorithm"):
+            _resolve_algorithm({"type": ""})
+
+    def test_unavailable_algorithm_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from osimflow.importers.osa import _resolve_algorithm
+
+        def _raise(name: str) -> None:
+            raise ValueError(f"unknown algorithm '{name}'")
+
+        monkeypatch.setattr(
+            "osimflow.algorithms.AlgorithmRegistry.get",
+            lambda name: (_ for _ in ()).throw(ValueError(f"unknown algorithm '{name}'")),
+        )
+        with pytest.raises(OSAImportError, match="maps to OSimFlow.*not available"):
+            _resolve_algorithm({"type": "lhs"})
+
+
+# ---------------------------------------------------------------------------
+# Test: _map_distribution additional edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestMapDistributionAdditional:
+    def test_lognormal_missing_stddev(self) -> None:
+        with pytest.raises(OSAImportError, match="Lognormal.*stddev"):
+            _map_distribution({"type": "lognormal", "mean": 1.0})
+
+    def test_lognormal_with_stddev_key(self) -> None:
+        result = _map_distribution({"type": "lognormal", "mean": 2.0, "stddev": 0.3})
+        assert result == {"distribution": "lognormal", "mean": 2.0, "sigma": 0.3}
+
+    def test_triangular_with_peak_alias(self) -> None:
+        result = _map_distribution(
+            {"type": "triangular", "minimum": 0.0, "maximum": 1.0, "peak": 0.3}
+        )
+        assert result["mode"] == 0.3
+
+    def test_categorical_with_mapping(self) -> None:
+        result = _map_distribution(
+            {"type": "categorical", "values": ["a", "b"], "mapping": {"a": 1, "b": 2}}
+        )
+        assert result["mapping"] == {"a": 1, "b": 2}
+
+    def test_discrete_with_discrete_values_alias(self) -> None:
+        result = _map_distribution({"type": "discrete", "discrete_values": [10, 20, 30]})
+        assert result["values"] == [10, 20, 30]
+
+    def test_triangular_missing_minimum(self) -> None:
+        with pytest.raises(OSAImportError, match="Triangular.*'minimum'"):
+            _map_distribution({"type": "triangular", "maximum": 1.0})
+
+
+# ---------------------------------------------------------------------------
+# Test: _convert_variable edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestConvertVariable:
+    def test_non_dict_entry(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        entry, warnings = _convert_variable("not a dict", 0)
+        assert entry == {}
+        assert len(warnings) == 1
+
+    def test_no_name_uses_uuid(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        osa_var = {
+            "uuid": "var-uuid-123",
+            "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+        }
+        entry, _ = _convert_variable(osa_var, 0)
+        assert entry["name"] == "var-uuid-123"
+
+    def test_no_name_no_uuid_skipped(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        entry, warnings = _convert_variable(
+            {"distribution": {"type": "uniform", "minimum": 0, "maximum": 1}}, 0
+        )
+        assert entry == {}
+        assert "no name" in warnings[0]
+
+    def test_no_distribution_skipped(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        entry, warnings = _convert_variable({"name": "x"}, 0)
+        assert entry == {}
+        assert "no distribution" in warnings[0]
+
+    def test_bad_distribution_skipped(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        entry, warnings = _convert_variable({"name": "x", "distribution": {"type": "weibull"}}, 0)
+        assert entry == {}
+
+    def test_display_name_same_as_name_not_carried(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        entry, _ = _convert_variable(
+            {
+                "name": "x",
+                "display_name": "x",
+                "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+            },
+            0,
+        )
+        assert "display_name" not in entry
+
+    def test_display_name_different_carried(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        entry, _ = _convert_variable(
+            {
+                "name": "x",
+                "display_name": "X Variable",
+                "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+            },
+            0,
+        )
+        assert entry["display_name"] == "X Variable"
+
+    def test_uses_display_name_as_fallback_name(self) -> None:
+        from osimflow.importers.osa import _convert_variable
+
+        entry, _ = _convert_variable(
+            {
+                "display_name": "MyVar",
+                "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+            },
+            0,
+        )
+        assert entry["name"] == "MyVar"
+
+
+# ---------------------------------------------------------------------------
+# Test: parse_osa additional edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestParseOsaAdditional:
+    def test_zip_with_deep_analysis_json(self, tmp_path: Path) -> None:
+        osa = tmp_path / "study.osa"
+        with zipfile.ZipFile(osa, "w") as zf:
+            zf.writestr("subdir/analysis.json", json.dumps(SAMPLE_ANALYSIS))
+        result = parse_osa(osa)
+        assert "problem" in result
+
+    def test_bad_zip_file(self, tmp_path: Path) -> None:
+        bad_osa = tmp_path / "bad.osa"
+        bad_osa.write_bytes(b"not a zip file content")
+        with pytest.raises(OSAImportError, match="Not a valid ZIP|Invalid JSON"):
+            parse_osa(bad_osa)
+
+    def test_zip_with_invalid_json(self, tmp_path: Path) -> None:
+        osa = tmp_path / "bad_content.osa"
+        with zipfile.ZipFile(osa, "w") as zf:
+            zf.writestr("analysis.json", "not valid json {{{")
+        with pytest.raises(OSAImportError, match="Invalid JSON"):
+            parse_osa(osa)
+
+
+# ---------------------------------------------------------------------------
+# Test: osa_to_variables_yml additional edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestOsaToVariablesYmlAdditional:
+    def test_algorithm_resolution_sobol(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "algorithm": {"type": "sobol", "number_of_samples": 50},
+                "variables": [
+                    {"name": "x", "distribution": {"type": "uniform", "minimum": 0, "maximum": 1}},
+                ],
+            },
+        }
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        with out.open() as f:
+            yml = yaml.safe_load(f)
+        assert yml["algorithm"] == "sobol"
+
+    def test_no_algorithm_defaults_to_lhs(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "variables": [
+                    {"name": "x", "distribution": {"type": "uniform", "minimum": 0, "maximum": 1}},
+                ],
+            },
+        }
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        with out.open() as f:
+            yml = yaml.safe_load(f)
+        assert yml["algorithm"] == "lhs"
+
+    def test_all_valid_but_no_convertible_variables(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "variables": [
+                    {"name": "bad_var", "distribution": {"type": "weibull"}},
+                ],
+            },
+        }
+        out = tmp_path / "variables.yml"
+        with pytest.raises(OSAImportError, match="No variables could be converted"):
+            osa_to_variables_yml(data, out)
+
+    def test_mixed_good_and_bad_variables(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "algorithm": {"type": "lhs"},
+                "variables": [
+                    {"name": "bad", "distribution": {"type": "weibull"}},
+                    {
+                        "name": "good",
+                        "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+                    },
+                ],
+            },
+        }
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        with out.open() as f:
+            yml = yaml.safe_load(f)
+        assert len(yml["variables"]) == 1
+        assert yml["variables"][0]["name"] == "good"
+
+
+# ---------------------------------------------------------------------------
+# Test: importers __init__ re-exports
+# ---------------------------------------------------------------------------
+
+
+class TestImportersPublicAPI:
+    def test_re_exports(self) -> None:
+        from osimflow.importers import osa_to_variables_yml, parse_analysis_json, parse_osa
+
+        assert callable(parse_osa)
+        assert callable(parse_analysis_json)
+        assert callable(osa_to_variables_yml)
+
+    def test_parse_analysis_json_delegates(self, tmp_path: Path) -> None:
+        from osimflow.importers import parse_analysis_json as paj
+
+        p = tmp_path / "analysis.json"
+        p.write_text(json.dumps(SAMPLE_ANALYSIS))
+        result = paj(p)
+        assert "problem" in result
+
+
 def _write_json(path: Path, data: dict) -> Path:
     path.write_text(json.dumps(data))
     return path
