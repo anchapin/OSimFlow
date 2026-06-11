@@ -143,6 +143,7 @@ class Campaign:
                 "openstudio_version": cfg.openstudio_version,
                 "n_samples": cfg.n_samples,
                 "archive_intermediates": cfg.archive_intermediates,
+                "algorithm": cfg.algorithm,
                 "custom_apply_script": (
                     str(cfg.custom_apply_script) if cfg.custom_apply_script else None
                 ),
