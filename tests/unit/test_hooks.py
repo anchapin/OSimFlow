@@ -151,9 +151,7 @@ def test_finalize_script_failure_does_not_abort_campaign(
     assert (outdir / "run.json").exists()
 
 
-def test_hook_env_vars_are_set(
-    workdir: Path, template_pkg: Path, outdir: Path
-) -> None:
+def test_hook_env_vars_are_set(workdir: Path, template_pkg: Path, outdir: Path) -> None:
     """Hook scripts receive the correct environment variables."""
     env_log = outdir / "env.log"
     init_script = _write_hook(
@@ -188,9 +186,7 @@ def test_hook_env_vars_are_set(
     assert "OSIMFLOW_DURATION_S=" in fin_text
 
 
-def test_no_hooks_by_default(
-    workdir: Path, template_pkg: Path, outdir: Path
-) -> None:
+def test_no_hooks_by_default(workdir: Path, template_pkg: Path, outdir: Path) -> None:
     """Campaign runs normally when no hooks are configured."""
     cfg = _make_cfg(workdir, template_pkg, outdir)
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -204,9 +200,7 @@ def test_no_hooks_by_default(
     assert "finalize_script_duration_s" not in trace_data
 
 
-def test_hook_timing_recorded_in_trace(
-    workdir: Path, template_pkg: Path, outdir: Path
-) -> None:
+def test_hook_timing_recorded_in_trace(workdir: Path, template_pkg: Path, outdir: Path) -> None:
     """Init/finalize durations are recorded in RunTrace."""
     init_script = _write_hook(
         workdir / "init_timing.sh",
@@ -233,9 +227,7 @@ def test_hook_timing_recorded_in_trace(
     assert trace_data["finalize_script_duration_s"] >= 0
 
 
-def test_init_script_missing_raises(
-    workdir: Path, template_pkg: Path, outdir: Path
-) -> None:
+def test_init_script_missing_raises(workdir: Path, template_pkg: Path, outdir: Path) -> None:
     """Init script path that does not exist raises FileNotFoundError."""
     missing = workdir / "nonexistent.sh"
     cfg = _make_cfg(workdir, template_pkg, outdir, init_script=missing)

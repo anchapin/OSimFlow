@@ -125,10 +125,18 @@ class Handle:
     The Handle abstracts over both `concurrent.futures.Future` (local)
     and `submitit.Future` (Slurm), whose `.result()` and `.done()`
     signatures differ slightly. We unify them here.
+
+    Worker tracking fields (issue #105) are populated by each executor
+    at submit time so the Campaign can attribute every sample to the
+    worker that processed it — essential for cost attribution and
+    debugging large campaigns.
     """
 
     job_id: str
     _future: Future[Any]
+    worker_id: str | None = None
+    worker_ip: str | None = None
+    worker_region: str | None = None
 
     def result(self, timeout: float | None = None) -> Any:
         # submitit.Future.result() does not accept `timeout`; ignore the
@@ -191,9 +199,17 @@ class LocalExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         # Resource directives are advisory on the local executor.
+        import socket  # noqa: PLC0415
+
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
         fut: Future[Any] = self._pool.submit(fn, *args)
-        return Handle(job_id=f"local-{id(fut)}", _future=fut)
+        return Handle(
+            job_id=f"local-{id(fut)}",
+            _future=fut,
+            worker_id="local",
+            worker_ip=socket.gethostname(),
+            worker_region=None,
+        )
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=True)
@@ -402,7 +418,13 @@ class SlurmExecutor(BaseExecutor):
             return fn(*args)
 
         fut: Any = call_ex.submit(_wrapped)
-        return Handle(job_id=str(fut.job_id), _future=fut)
+        return Handle(
+            job_id=str(fut.job_id),
+            _future=fut,
+            worker_id=str(fut.job_id),
+            worker_ip=None,
+            worker_region=None,
+        )
 
     def shutdown(self) -> None:
         # submitit.AutoExecutor has no explicit shutdown; the underlying
@@ -436,6 +458,10 @@ class _AWSBatchHandle(Handle):
         # _future must be set for the parent Handle; we set a sentinel
         # value so concurrent `.done()` callers see a consistent state.
         # The actual poll happens in `result()` below.
+        # Worker tracking (issue #105): populate at submit time.
+        self.worker_id: str | None = job_id
+        self.worker_ip: str | None = None
+        self.worker_region: str | None = os.environ.get("AWS_REGION")
 
     def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
         # The polling itself doesn't take a `timeout` parameter; the
@@ -861,6 +887,12 @@ class _NomadHandle(Handle):
         self._allocation_id: str | None = None
         self._executor = executor
         self._future: Future[Any] = Future()
+        # Worker tracking (issue #105): populate at submit time.
+        # allocation_id is not yet resolved; worker_id uses the job ID
+        # and is updated to the allocation ID when available.
+        self.worker_id: str | None = job_id
+        self.worker_ip: str | None = None
+        self.worker_region: str | None = executor.datacentre
 
     def _ensure_allocation_id(self) -> str:
         """Lazily resolve the eval/job to a concrete allocation ID.

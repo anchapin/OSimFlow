@@ -225,6 +225,12 @@ class _StubNomadExecutor(NomadExecutor):
             def __init__(self, fut: object) -> None:
                 self._fut = fut
                 self.job_id = real_handle.job_id
+                # Worker tracking fields (issue #105): the Campaign
+                # reads these from every handle, so the stub must
+                # expose them too.
+                self.worker_id: str | None = real_handle.job_id
+                self.worker_ip: str | None = None
+                self.worker_region: str | None = None
 
             def result(self, timeout: float | None = None) -> object:  # noqa: ARG002
                 return self._fut.result(timeout=timeout)  # type: ignore[attr-defined]
