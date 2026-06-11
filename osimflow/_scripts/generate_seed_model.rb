@@ -80,18 +80,21 @@ ext_wall_layers = OpenStudio::Model::MaterialVector.new
 ext_wall_layers << gypsum
 ext_wall_layers << insulation
 ext_wall_layers << concrete
-ext_wall = OpenStudio::Model::Construction.new(ext_wall_layers)
+ext_wall = OpenStudio::Model::Construction.new(model)
+ext_wall.setLayers(ext_wall_layers)
 ext_wall.setName("Ext Wall")
 
 roof_layers = OpenStudio::Model::MaterialVector.new
 roof_layers << insulation
 roof_layers << concrete
-roof = OpenStudio::Model::Construction.new(roof_layers)
+roof = OpenStudio::Model::Construction.new(model)
+roof.setLayers(roof_layers)
 roof.setName("Roof")
 
 floor_layers = OpenStudio::Model::MaterialVector.new
 floor_layers << concrete
-floor_constr = OpenStudio::Model::Construction.new(floor_layers)
+floor_constr = OpenStudio::Model::Construction.new(model)
+floor_constr.setLayers(floor_layers)
 floor_constr.setName("Floor Slab")
 
 # Simple glazing for window
