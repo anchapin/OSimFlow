@@ -106,33 +106,62 @@ class TestResolveAlgorithm:
 
     def test_unregistered_mapping_raises_osa_import_error(self) -> None:
         """If an OSA type maps to an algorithm not in the registry, raise OSAImportError."""
-        # "nsga_nrel" maps to "nsga2" which is not registered by default
-        # (only "lhs" is built-in). This should raise OSAImportError with
-        # install instructions.
-        with pytest.raises(OSAImportError, match="not available"):
-            _resolve_algorithm({"type": "nsga_nrel"})
+        saved = dict(AlgorithmRegistry._registry)
+        AlgorithmRegistry._registry.clear()
+        AlgorithmRegistry.register("lhs", LHSAlgorithm)
+        try:
+            with pytest.raises(OSAImportError, match="not available"):
+                _resolve_algorithm({"type": "nsga_nrel"})
+        finally:
+            AlgorithmRegistry._registry.update(saved)
 
     def test_unregistered_mapping_includes_install_hint(self) -> None:
         """The error for a missing registry algorithm should suggest installing deps."""
-        with pytest.raises(OSAImportError, match="pip install"):
-            _resolve_algorithm({"type": "nsga_nrel"})
+        saved = dict(AlgorithmRegistry._registry)
+        AlgorithmRegistry._registry.clear()
+        AlgorithmRegistry.register("lhs", LHSAlgorithm)
+        try:
+            with pytest.raises(OSAImportError, match="pip install"):
+                _resolve_algorithm({"type": "nsga_nrel"})
+        finally:
+            AlgorithmRegistry._registry.update(saved)
 
     def test_sobol_raises_when_not_registered(self) -> None:
-        """sobol maps to 'sobol' in the registry, but is not registered by default."""
-        with pytest.raises(OSAImportError, match="not available"):
-            _resolve_algorithm({"type": "sobol"})
+        """sobol resolves if registered; verify error when stripped from registry."""
+        saved = dict(AlgorithmRegistry._registry)
+        AlgorithmRegistry._registry.pop("sobol", None)
+        try:
+            with pytest.raises(OSAImportError, match="not available"):
+                _resolve_algorithm({"type": "sobol"})
+        finally:
+            AlgorithmRegistry._registry.update(saved)
 
     def test_morris_raises_when_not_registered(self) -> None:
-        with pytest.raises(OSAImportError, match="not available"):
-            _resolve_algorithm({"type": "morris"})
+        saved = dict(AlgorithmRegistry._registry)
+        AlgorithmRegistry._registry.pop("morris", None)
+        try:
+            with pytest.raises(OSAImportError, match="not available"):
+                _resolve_algorithm({"type": "morris"})
+        finally:
+            AlgorithmRegistry._registry.update(saved)
 
     def test_pso_raises_when_not_registered(self) -> None:
-        with pytest.raises(OSAImportError, match="not available"):
-            _resolve_algorithm({"type": "pso"})
+        saved = dict(AlgorithmRegistry._registry)
+        AlgorithmRegistry._registry.pop("pso", None)
+        try:
+            with pytest.raises(OSAImportError, match="not available"):
+                _resolve_algorithm({"type": "pso"})
+        finally:
+            AlgorithmRegistry._registry.update(saved)
 
     def test_ga_raises_when_not_registered(self) -> None:
-        with pytest.raises(OSAImportError, match="not available"):
-            _resolve_algorithm({"type": "ga"})
+        saved = dict(AlgorithmRegistry._registry)
+        AlgorithmRegistry._registry.pop("de", None)
+        try:
+            with pytest.raises(OSAImportError, match="not available"):
+                _resolve_algorithm({"type": "ga"})
+        finally:
+            AlgorithmRegistry._registry.update(saved)
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +262,7 @@ class TestOsaToVariablesYmlAlgorithm:
             osa_to_variables_yml(osa_data, out)
 
     def test_unregistered_algorithm_raises_during_conversion(self, tmp_path: Path) -> None:
-        """nsga_nrel maps to nsga2 which is not in the default registry."""
+        """nsga_nrel maps to nsga2; verify error when stripped from registry."""
         data = {
             "analysis": {
                 "problem": {
@@ -247,10 +276,15 @@ class TestOsaToVariablesYmlAlgorithm:
                 },
             }
         }
-        osa_data = parse_osa(_write_json(tmp_path / "input.json", data))
-        out = tmp_path / "variables.yml"
-        with pytest.raises(OSAImportError, match="not available"):
-            osa_to_variables_yml(osa_data, out)
+        saved = dict(AlgorithmRegistry._registry)
+        AlgorithmRegistry._registry.pop("nsga2", None)
+        try:
+            osa_data = parse_osa(_write_json(tmp_path / "input.json", data))
+            out = tmp_path / "variables.yml"
+            with pytest.raises(OSAImportError, match="not available"):
+                osa_to_variables_yml(osa_data, out)
+        finally:
+            AlgorithmRegistry._registry.update(saved)
 
     def test_resolved_algorithm_logged(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
