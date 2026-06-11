@@ -1,7 +1,5 @@
 """FastAPI application for OSimFlow campaign monitoring."""
 
-from __future__ import annotations
-
 import json
 import logging
 from pathlib import Path
@@ -35,13 +33,14 @@ def create_app(outdir: Path | None = None, read_only: bool = True) -> FastAPI:
         """Load and return run.json from outdir."""
         if app.state.outdir is None:
             raise HTTPException(status_code=503, detail="No output directory configured")
-        run_json_path = app.state.outdir / "run.json"
+        run_json_path: Path = app.state.outdir / "run.json"
         if not run_json_path.exists():
             raise HTTPException(
                 status_code=404,
                 detail="run.json not found — campaign may not have started",
             )
-        return json.loads(run_json_path.read_text())
+        raw: Any = json.loads(run_json_path.read_text())
+        return raw  # type: ignore[no-any-return]
 
     @app.get("/health")
     async def health() -> dict[str, str]:
