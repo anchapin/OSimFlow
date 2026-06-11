@@ -1,0 +1,52 @@
+# =============================================================================
+# .github/workflows/aws-batch-e2e.yml — Real AWS Batch E2E (nightly)
+# =============================================================================
+# Runs a 3-sample campaign against a real AWS Batch compute environment
+# every night at 06:00 UTC and on manual trigger (workflow_dispatch).
+#
+# Prerequisites (GitHub secrets / variables):
+#   secrets.AWS_ROLE_ARN  — IAM role ARN with Batch submit/describe permissions
+#   vars.AWS_REGION       — AWS region (e.g. us-east-1)
+#   vars.AWS_BATCH_QUEUE  — Batch job queue name
+#   vars.AWS_BATCH_JOB_DEFINITION — Batch job definition name
+#
+# Uses OIDC (aws-actions/configure-aws-credentials) — no long-lived keys.
+# The test file uses pytest.mark.skipif so it is inert in normal CI.
+# =============================================================================
+name: AWS Batch E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at 6am UTC
+  workflow_dispatch: # Manual trigger
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  aws-batch-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev + aws extras
+        run: pip install -e ".[dev,aws]"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run real AWS Batch E2E
+        env:
+          OSIMFLOW_AWS_BATCH_E2E: 1
+          OSIMFLOW_AWS_BATCH_QUEUE: ${{ vars.AWS_BATCH_QUEUE }}
+          OSIMFLOW_AWS_BATCH_JOB_DEFINITION: ${{ vars.AWS_BATCH_JOB_DEFINITION }}
+          OSIMFLOW_AWS_REGION: ${{ vars.AWS_REGION }}
+        run: .venv/bin/pytest tests/integration/test_aws_batch_real.py -v --timeout=1800
