@@ -125,7 +125,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
 | `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
-| `osimflow/exporters/osa.py` | `OSAExporter` — export campaign config to PAT-compatible analysis.json (issue #142). Reverse of `importers/osa.py`. |
+| `osimflow/exporters/osa.py` | `OSAExporter` — export campaign config to PAT-compatible analysis.json (issue #142) and ``.osa`` ZIP archives (issue #134). ``pack_osa()`` bundles analysis.json + seed model + measures + weather into a portable ``.osa`` file. Reverse of `importers/osa.py`. |
 | `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats). |
@@ -356,6 +356,7 @@ output artifacts plus the per-campaign `run.json` are produced:
 - `tests/integration/test_slurm_executor_debug.py` — `SlurmExecutor(debug=True)` (uses `submitit.DebugExecutor`; no real cluster needed in CI).
 - `tests/integration/test_aws_batch_executor_stub.py` — `AWSBatchExecutor` with a mocked `boto3` client; a real-Batch E2E test is deferred to a separate ticket.
 - `tests/integration/test_cache_resume.py` — runs the same campaign twice against the same `outdir`; the warm run must be at least 5x faster than the cold run (the issue quotes ~280x for 5 samples on the spike).
+- `tests/integration/test_osa_round_trip.py` — OSA round-trip integration test (issue #134). Verifies that `OSAExporter.pack_osa()` produces a valid `.osa` ZIP and that export → pack → unpack → import preserves algorithm type, variable names, distributions, measure arguments, and template package files.
 
 The full executor suite runs in well under 60s on a single core. The CI
 workflow runs them on every PR via the same `pytest` invocation as the
