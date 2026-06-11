@@ -60,6 +60,8 @@ from typing import Any
 
 import yaml
 
+from osimflow.algorithms import AlgorithmRegistry, BaseAlgorithm
+
 log = logging.getLogger("osimflow.importers.osa")
 
 OSA_DISTRIBUTION_MAP: dict[str, str] = {
@@ -225,14 +227,64 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     return entry, warnings
 
 
-def _warn_unsupported_algorithm(algorithm: dict[str, Any]) -> None:
-    algo_type = algorithm.get("type", "").lower()
-    if algo_type not in ("lhs", "latin_hypercube", ""):
-        log.warning(
-            "OSA algorithm settings not supported by OSimFlow LHS sampler: %r. "
-            "These will be ignored; use --n_samples on the command line.",
-            algo_type,
+# Translation table: OSA algorithm type → OSimFlow registry name.
+# See https://github.com/NREL/openstudio-analysis-gem for the canonical
+# OSA algorithm types.
+_OSA_ALGORITHM_MAP: dict[str, str] = {
+    "lhs": "lhs",
+    "latin_hypercube": "lhs",
+    "nsga_nrel": "nsga2",
+    "pso": "pso",
+    "ga": "de",
+    "optim": "de",
+    "sobol": "sobol",
+    "morris": "morris",
+    "fast99": "fast99",
+    "doe": "lhs",
+}
+
+
+def _resolve_algorithm(osa_algo: dict[str, Any]) -> BaseAlgorithm:
+    """Resolve an OSA algorithm dict to an OSimFlow :class:`BaseAlgorithm`.
+
+    Parameters
+    ----------
+    osa_algo
+        The ``algorithm`` sub-object from an OSA problem definition.
+        Must contain a ``type`` key.
+
+    Returns
+    -------
+    BaseAlgorithm
+        An instantiated algorithm from the OSimFlow registry.
+
+    Raises
+    ------
+    OSAImportError
+        If the algorithm type is unknown or the OSimFlow registry does
+        not contain the mapped algorithm (e.g. pymoo not installed for
+        ``nsga2``).
+    """
+    algo_type = osa_algo.get("type", "").lower()
+    osimflow_name = _OSA_ALGORITHM_MAP.get(algo_type)
+    if osimflow_name is None:
+        supported_osa = ", ".join(sorted(_OSA_ALGORITHM_MAP))
+        supported_osimflow = ", ".join(AlgorithmRegistry.list_available())
+        raise OSAImportError(
+            f"Unknown algorithm '{algo_type}'. "
+            f"Supported OSA types: {supported_osa}. "
+            f"Registered OSimFlow algorithms: {supported_osimflow}"
         )
+    try:
+        return AlgorithmRegistry.get(osimflow_name)
+    except ValueError as exc:
+        raise OSAImportError(
+            f"OSA algorithm '{algo_type}' maps to OSimFlow algorithm "
+            f"'{osimflow_name}', but it is not available. "
+            f"Original error: {exc}. "
+            f"Install the required optional dependency (e.g. "
+            f"pip install osimflow[pymoo]) and retry."
+        ) from exc
 
 
 def _resolve_measure_argument(osa_var: dict[str, Any]) -> str | None:
@@ -379,10 +431,20 @@ def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
         log.warning(w)
 
     algorithm = problem.get("algorithm", {})
-    if isinstance(algorithm, dict):
-        _warn_unsupported_algorithm(algorithm)
+    algorithm_name: str = "lhs"
+    if isinstance(algorithm, dict) and algorithm:
+        resolved = _resolve_algorithm(algorithm)
+        algorithm_name = resolved.name()
+        log.info(
+            "OSA algorithm %r resolved to OSimFlow algorithm %r",
+            algorithm.get("type", ""),
+            algorithm_name,
+        )
 
-    variables_yml: dict[str, Any] = {"variables": converted}
+    variables_yml: dict[str, Any] = {
+        "algorithm": algorithm_name,
+        "variables": converted,
+    }
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
