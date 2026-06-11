@@ -119,6 +119,8 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. |
 | `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
 | `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
+| `osimflow/algorithms/de.py` | `DifferentialEvolutionAlgorithm` — Differential evolution optimizer using `scipy.optimize.differential_evolution` (issue #125). Iterative. |
+| `osimflow/algorithms/da.py` | `DualAnnealingAlgorithm` — Dual annealing optimizer using `scipy.optimize.dual_annealing` (issue #125). Iterative. |
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `NomadExecutor`. |
