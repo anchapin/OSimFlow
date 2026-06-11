@@ -2,10 +2,10 @@
 
 Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
-built-in ``LHSAlgorithm``, ``SobolAlgorithm``, and ``HaltonAlgorithm``
-implementations.
+built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
+``MorrisAlgorithm``, and ``FAST99Algorithm`` implementations.
 
-Adding a new algorithm (Morris, NSGA-II, …) requires only:
+Adding a new algorithm (NSGA-II, Bayesian optimisation, …) requires only:
 
 1.  Subclass ``BaseAlgorithm``.
 2.  Call ``AlgorithmRegistry.register("name", MyAlgorithm)`` at import
@@ -429,3 +429,14 @@ from osimflow.algorithms.sobol import SobolAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("sobol", SobolAlgorithm)
 AlgorithmRegistry.register("halton", HaltonAlgorithm)
+
+try:
+    from osimflow.algorithms.fast99 import FAST99Algorithm  # noqa: E402
+    from osimflow.algorithms.morris import MorrisAlgorithm  # noqa: E402
+
+    AlgorithmRegistry.register("morris", MorrisAlgorithm)
+    AlgorithmRegistry.register("fast99", FAST99Algorithm)
+except ImportError:
+    # SALib is an optional dependency — Morris and FAST99 are only
+    # available when the [sensitivity] extra is installed.
+    pass

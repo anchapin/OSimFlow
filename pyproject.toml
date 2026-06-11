@@ -61,6 +61,9 @@ slurm = [
 mlflow = [
     "mlflow>=2",
 ]
+sensitivity = [
+    "SALib>=1.4",
+]
 
 [project.scripts]
 osimflow = "osimflow.__main__:main"
