@@ -153,7 +153,16 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `infra/aws/terraform/examples/basic/` | Minimal on-demand example config (documentation only). |
 | `infra/aws/terraform/examples/spot/` | Spot instance example config with cost tags (documentation only). |
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
-| `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit). |
+| `infra/nomad/examples/ha/` | Docker Compose HA cluster for Nomad (3 server + 2 client) with ACL bootstrap (issue #123). |
+| `infra/nomad/examples/ha/docker-compose.yml` | 3-server + 2-client Docker Compose with named volumes and bridge networking. |
+| `infra/nomad/examples/ha/server*.hcl` | Per-server HCL configs with `bootstrap_expect=3` and `retry_join`. |
+| `infra/nomad/examples/ha/client.hcl` | Client HCL config with Docker task driver and server join. |
+| `infra/nomad/examples/ha/bootstrap.sh` | ACL bootstrap script: generates management + worker tokens, registers policies. |
+| `infra/nomad/acl/policies/agent.hcl` | Read-only agent/node ACL policy for operators. |
+| `infra/nomad/acl/policies/worker.hcl` | Least-privilege job submission ACL policy for the NomadExecutor. |
+| `infra/nomad/acl/tokens/` | Generated ACL tokens (git-ignored). Never commit. |
+| `docs/nomad-production.md` | Nomad production deployment guide: HA topology, ACL model, security checklist, TLS notes (issue #123). |
+| `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit) + Nomad token secrets. |
 | `LICENSE` | MIT. |
 | `README.md` | One-paragraph project pitch + status. |
 

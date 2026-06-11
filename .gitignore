@@ -65,6 +65,9 @@ docker-image-*
 **/terraform.tfstate*
 **/.tfstate*
 
+# Nomad — generated ACL tokens (never commit secrets)
+infra/nomad/acl/tokens/*.json
+
 # IDE / OS noise
 .vscode/
 .idea/
