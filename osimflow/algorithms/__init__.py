@@ -4,9 +4,10 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
-and ``DualAnnealingAlgorithm`` implementations.
+``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, and ``PSOAlgorithm``
+implementations.
 
-Adding a new algorithm (NSGA-II, Bayesian optimisation, …) requires only:
+Adding a new algorithm (Bayesian optimisation, …) requires only:
 
 1.  Subclass ``BaseAlgorithm``.
 2.  Call ``AlgorithmRegistry.register("name", MyAlgorithm)`` at import
@@ -446,4 +447,15 @@ try:
 except ImportError:
     # SALib is an optional dependency — Morris and FAST99 are only
     # available when the [sensitivity] extra is installed.
+    pass
+
+try:
+    from osimflow.algorithms.nsga2 import NSGA2Algorithm  # noqa: E402
+    from osimflow.algorithms.pso import PSOAlgorithm  # noqa: E402
+
+    AlgorithmRegistry.register("nsga2", NSGA2Algorithm)
+    AlgorithmRegistry.register("pso", PSOAlgorithm)
+except ImportError:
+    # pymoo is an optional dependency — NSGA-II and PSO are only
+    # available when the [optimization] extra is installed.
     pass
