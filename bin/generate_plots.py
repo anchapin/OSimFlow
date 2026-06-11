@@ -7,9 +7,11 @@ See docs/OSimFlow.md §4.2 (PROCESS_GENERATE_BASIC_PLOTS) for the contract.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -28,6 +30,12 @@ def main() -> int:
         "--baseline_sample_id",
         default=None,
         help="Sample ID of the baseline (for reference line on EUI histogram).",
+    )
+    parser.add_argument(
+        "--pareto_dir",
+        default=None,
+        type=Path,
+        help="Directory containing per-generation Pareto JSON files (gen_N.json).",
     )
     args = parser.parse_args()
 
@@ -116,7 +124,106 @@ def main() -> int:
             plt.savefig(args.outdir / "failure_summary.pdf")
             plt.close()
 
+    # 4. Pareto front plots (issue #124)
+    pareto_dir = args.pareto_dir or (args.outdir / "pareto")
+    _generate_pareto_plots(pareto_dir, args.outdir)
+
     return 0
+
+
+def _generate_pareto_plots(pareto_dir: Path, outdir: Path) -> list[Path]:
+    """Generate Pareto front scatter and hypervolume convergence plots.
+
+    Returns list of generated plot file paths.
+    """
+    plots: list[Path] = []
+    if not pareto_dir.is_dir():
+        return plots
+
+    gen_files = sorted(pareto_dir.glob("gen_*.json"))
+    if not gen_files:
+        return plots
+
+    # Load all generation data
+    all_gen_data: list[tuple[int, list[dict[str, Any]]]] = []
+    for gf in gen_files:
+        try:
+            data = json.loads(gf.read_text())
+            gen_num = data.get("generation", 0)
+            solutions = data.get("solutions", [])
+            if solutions:
+                all_gen_data.append((gen_num, solutions))
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"Failed to read Pareto gen file {gf}: {e}")
+
+    if not all_gen_data:
+        return plots
+
+    # Determine objective names from first solution
+    first_objs = all_gen_data[0][1][0].get("objectives", {})
+    obj_names = list(first_objs.keys())
+    if len(obj_names) < 2:
+        log.info("Pareto data has <2 objectives; skipping Pareto plots.")
+        return plots
+
+    # 4a. Pareto front scatter plot (colored by generation)
+    fig, ax = plt.subplots(figsize=(10, 8))
+    cmap = plt.get_cmap("viridis")
+    n_gens = len(all_gen_data)
+    for idx, (gen_num, solutions) in enumerate(all_gen_data):
+        x = [s.get("objectives", {}).get(obj_names[0], 0) for s in solutions]
+        y = [s.get("objectives", {}).get(obj_names[1], 0) for s in solutions]
+        color = cmap(idx / max(n_gens - 1, 1))
+        ax.scatter(x, y, label=f"Gen {gen_num}", alpha=0.7, color=color)
+
+    ax.set_xlabel(obj_names[0])
+    ax.set_ylabel(obj_names[1])
+    ax.set_title("Pareto Front")
+    ax.legend()
+    path = outdir / "pareto_front.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    plots.append(path)
+    log.info(f"Generated Pareto front scatter: {path}")
+
+    # 4b. Convergence plot (hypervolume approximation per generation)
+    if n_gens > 1:
+        hv_values: list[float] = []
+        gen_numbers: list[int] = []
+        # Simple hypervolume: product of (reference_point - objective_value)
+        # per non-dominated solution, summed.
+        ref_x = max(
+            s.get("objectives", {}).get(obj_names[0], 0)
+            for _, sols in all_gen_data
+            for s in sols
+        ) * 1.1
+        ref_y = max(
+            s.get("objectives", {}).get(obj_names[1], 0)
+            for _, sols in all_gen_data
+            for s in sols
+        ) * 1.1
+
+        for gen_num, solutions in all_gen_data:
+            hv = 0.0
+            for s in solutions:
+                ox = ref_x - s.get("objectives", {}).get(obj_names[0], ref_x)
+                oy = ref_y - s.get("objectives", {}).get(obj_names[1], ref_y)
+                hv += max(0, ox) * max(0, oy)
+            hv_values.append(hv)
+            gen_numbers.append(gen_num)
+
+        fig2, ax2 = plt.subplots(figsize=(8, 5))
+        ax2.plot(gen_numbers, hv_values, "o-", color="steelblue")
+        ax2.set_xlabel("Generation")
+        ax2.set_ylabel("Hypervolume Indicator")
+        ax2.set_title("Pareto Front Convergence")
+        path2 = outdir / "pareto_convergence.png"
+        fig2.savefig(path2, dpi=150, bbox_inches="tight")
+        plt.close(fig2)
+        plots.append(path2)
+        log.info(f"Generated Pareto convergence plot: {path2}")
+
+    return plots
 
 
 if __name__ == "__main__":
