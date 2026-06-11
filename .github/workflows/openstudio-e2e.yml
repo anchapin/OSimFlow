@@ -52,7 +52,23 @@ jobs:
           pip install --break-system-packages -e ".[dev]"
 
       - name: Verify OpenStudio CLI
-        run: openstudio.cli --version
+        run: |
+          # Locate the OpenStudio CLI binary — NREL images install to
+          # /usr/local/openstudio-<ver>/bin/ but the exact layout varies.
+          CLI=$(find /usr -name 'openstudio' -o -name 'openstudio.cli' 2>/dev/null | head -1) || true
+          if [ -z "$CLI" ]; then
+            CLI=$(find /opt -name 'openstudio' -o -name 'openstudio.cli' 2>/dev/null | head -1) || true
+          fi
+          if [ -n "$CLI" ]; then
+            CLI_DIR=$(dirname "$CLI")
+            echo "Found OpenStudio at $CLI — adding $CLI_DIR to PATH"
+            echo "$CLI_DIR" >> "$GITHUB_PATH"
+            "$CLI" --version || "$CLI" openstudio_version || true
+          else
+            echo "::error::openstudio CLI binary not found in /usr or /opt"
+            find / -name 'openstudio*' -type f 2>/dev/null | head -20
+            exit 1
+          fi
 
       - name: Download weather file
         run: |
