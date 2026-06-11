@@ -58,7 +58,7 @@ def _make_cfg(
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
         algorithm=algorithm,
     )
@@ -83,7 +83,7 @@ def test_algorithm_lhs_matches_default(workdir: Path, template_pkg: Path, tmp_pa
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=out_default,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
     campaign_default = Campaign(cfg=cfg_default, executor=LocalExecutor(max_workers=3))
@@ -185,7 +185,7 @@ def test_campaign_config_algorithm_default() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/out"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     assert cfg.algorithm == "lhs"
 
@@ -197,7 +197,7 @@ def test_campaign_config_algorithm_explicit() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/out"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         algorithm="lhs",
     )
     assert cfg.algorithm == "lhs"

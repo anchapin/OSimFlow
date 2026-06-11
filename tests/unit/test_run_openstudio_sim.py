@@ -150,7 +150,7 @@ def test_stub_mode_writes_placeholder_sql(
         result = run_openstudio_sim(
             modified_sim_package=sim_package,
             sample_id="0001",
-            openstudio_version="3.4.0",
+            openstudio_version="3.11.0",
             out=out_dir,
             simulate_work_s=0.0,
             stdout_path=stdout_path,
@@ -175,7 +175,7 @@ def test_no_cli_falls_back_to_stub(
         result = run_openstudio_sim(
             modified_sim_package=sim_package,
             sample_id="0001",
-            openstudio_version="3.4.0",
+            openstudio_version="3.11.0",
             out=out_dir,
             simulate_work_s=0.0,
             stdout_path=stdout_path,
@@ -213,7 +213,7 @@ def test_real_cli_invoked_when_available(
         run_openstudio_sim(
             modified_sim_package=sim_package,
             sample_id="0001",
-            openstudio_version="3.4.0",
+            openstudio_version="3.11.0",
             out=out_dir,
             simulate_work_s=0.0,
             stdout_path=stdout_path,
@@ -254,7 +254,7 @@ def test_real_cli_does_not_write_placeholder_sql(
         sim_result = run_openstudio_sim(
             modified_sim_package=sim_package,
             sample_id="0001",
-            openstudio_version="3.4.0",
+            openstudio_version="3.11.0",
             out=out_dir,
             simulate_work_s=0.0,
             stdout_path=stdout_path,
@@ -291,7 +291,7 @@ def test_real_cli_raises_on_missing_workflow_osw(
             run_openstudio_sim(
                 modified_sim_package=pkg,
                 sample_id="0001",
-                openstudio_version="3.4.0",
+                openstudio_version="3.11.0",
                 out=out_dir,
                 simulate_work_s=0.0,
                 stdout_path=stdout_path,
@@ -321,7 +321,7 @@ def test_real_cli_propagates_subprocess_error(
             run_openstudio_sim(
                 modified_sim_package=sim_package,
                 sample_id="0001",
-                openstudio_version="3.4.0",
+                openstudio_version="3.11.0",
                 out=out_dir,
                 simulate_work_s=0.0,
                 stdout_path=stdout_path,
@@ -378,7 +378,7 @@ class TestRealOpenStudioE2E:
         result = run_openstudio_sim(
             modified_sim_package=pkg,
             sample_id="0001",
-            openstudio_version="3.4.0",
+            openstudio_version="3.11.0",
             out=out_dir,
             stdout_path=stdout_path,
             stderr_path=stderr_path,

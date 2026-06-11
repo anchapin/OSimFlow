@@ -79,7 +79,7 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
 
@@ -322,7 +322,7 @@ def test_3_sample_campaign(
         f"expected executor name 'nomad' in run.json, got {trace['config']['executor']!r}"
     )
     assert trace["config"]["n_samples"] == 3
-    assert trace["config"]["openstudio_version"] == "3.4.0"
+    assert trace["config"]["openstudio_version"] == "3.11.0"
 
     step_names = {s["step"] for s in trace["steps"]}
     for required in (

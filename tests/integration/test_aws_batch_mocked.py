@@ -27,7 +27,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from osimflow.executors import AWSBatchExecutor
+from osimflow.executors import AWSBatchExecutor, _AWSBatchHandle
 
 # ---------------------------------------------------------------------------
 # Helpers: set up the Batch mock infrastructure (VPC, compute env, job queue,
@@ -149,8 +149,8 @@ def test_submit_poll_succeeded() -> None:
         cpus=2,
         memory_mb=1024,
         time_min=10,
-        container="openstudio_cli_image:3.5.0",
-        openstudio_version="3.5.0",
+        container="openstudio_cli_image:3.11.0",
+        openstudio_version="3.11.0",
     )
 
     # The handle should report done (moto submits the job and it can be
@@ -334,8 +334,8 @@ def test_submit_job_carries_correct_parameters() -> None:
         cpus=4,
         memory_mb=8192,
         time_min=240,
-        container="openstudio_cli_image:3.5.0",
-        openstudio_version="3.5.0",
+        container="openstudio_cli_image:3.11.0",
+        openstudio_version="3.11.0",
     )
 
     # Now inspect the submitted job via describe_jobs to verify the
@@ -364,10 +364,10 @@ def test_submit_job_carries_correct_parameters() -> None:
     # The environment should carry OSIMFLOW_OS_VERSION and OSIMFLOW_CONTAINER.
     env_list = container.get("environment", [])
     env_dict = {e["name"]: e["value"] for e in env_list}
-    assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.5.0", (
+    assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.11.0", (
         f"OSIMFLOW_OS_VERSION missing or wrong: {env_dict}"
     )
-    assert env_dict.get("OSIMFLOW_CONTAINER") == "nrel/openstudio:3.5.0", (
+    assert env_dict.get("OSIMFLOW_CONTAINER") == "nrel/openstudio:3.11.0", (
         f"OSIMFLOW_CONTAINER missing or wrong: {env_dict}"
     )
 
@@ -397,12 +397,23 @@ def test_done_reflects_job_status() -> None:
     )
     executor._client = batch_client  # noqa: SLF001
 
-    handle = executor.submit(
-        lambda: None,
-        name="test-done",
-        cpus=1,
-        memory_mb=512,
+    # Submit the job via the Batch API directly (not through
+    # executor.submit, which blocks until terminal).  This gives us a
+    # job_id in SUBMITTED/RUNNABLE state so we can test done()=False.
+    resp = batch_client.submit_job(
+        jobName="test-done-raw",
+        jobQueue=batch_client.describe_job_queues(jobQueues=[_QUEUE_NAME])["jobQueues"][0][
+            "jobQueueArn"
+        ],
+        jobDefinition=batch_client.describe_job_definitions(jobDefinitions=[_JOB_DEF_NAME])[
+            "jobDefinitions"
+        ][0]["jobDefinitionArn"],
     )
+    job_id = resp["jobId"]
+
+    # Construct a handle directly to test done() without the blocking
+    # submit() call (which calls _wait_for_terminal).
+    handle = _AWSBatchHandle(job_id=job_id, executor=executor)
 
     original_describe = batch_client.describe_jobs
 

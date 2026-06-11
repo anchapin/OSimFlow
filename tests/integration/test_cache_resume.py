@@ -76,7 +76,7 @@ def cfg_factory(workdir: Path, template_pkg: Path) -> object:
             template_sim_package=template_pkg,
             n_samples=3,
             outdir=outdir,
-            openstudio_version="3.4.0",
+            openstudio_version="3.11.0",
             archive_intermediates=False,
         )
 

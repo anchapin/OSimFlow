@@ -99,8 +99,8 @@ def test_nomad_submit_builds_batch_job_spec() -> None:
             cpus=4,
             memory_mb=2048,
             time_min=30,
-            container="openstudio_cli_image:3.4.0",
-            openstudio_version="3.4.0",
+            container="openstudio_cli_image:3.11.0",
+            openstudio_version="3.11.0",
         )
 
     # First call must be POST /v1/jobs.
@@ -126,16 +126,16 @@ def test_nomad_submit_builds_batch_job_spec() -> None:
     # without a shared filesystem in the trivial case.
     assert "Meta" in job
     assert job["Meta"]["OSIMFLOW_SAMPLE_NAME"] == "sample-0"
-    assert job["Meta"]["OSIMFLOW_OS_VERSION"] == "3.4.0"
+    assert job["Meta"]["OSIMFLOW_OS_VERSION"] == "3.11.0"
 
     # Container task: NREL OpenStudio image, env vars, resource block.
     task = job["TaskGroups"][0]["Tasks"][0]
     assert task["Name"] == "osimflow"
-    assert task["Config"]["image"] == "openstudio_cli_image:3.4.0"
+    assert task["Config"]["image"] == "openstudio_cli_image:3.11.0"
     env = task["Config"]["env"]
     env_dict = {e["name"]: e["value"] for e in env}
-    assert env_dict["OSIMFLOW_OS_VERSION"] == "3.4.0"
-    assert env_dict["OSIMFLOW_CONTAINER"] == "openstudio_cli_image:3.4.0"
+    assert env_dict["OSIMFLOW_OS_VERSION"] == "3.11.0"
+    assert env_dict["OSIMFLOW_CONTAINER"] == "openstudio_cli_image:3.11.0"
 
     # Resources: cpus -> CPU compute, memory_mb -> MemoryMB.
     resources = task["Resources"]

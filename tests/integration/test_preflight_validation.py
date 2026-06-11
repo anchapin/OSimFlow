@@ -81,7 +81,7 @@ def _make_campaign(
         template_sim_package=template_pkg,
         n_samples=n_samples,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     return Campaign(cfg=cfg, executor=LocalExecutor(max_workers=2))
 

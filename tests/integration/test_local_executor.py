@@ -85,7 +85,7 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
     )
 
@@ -165,7 +165,7 @@ def test_three_sample_campaign_via_local_executor_produces_all_artifacts(
     assert trace["schema_version"] == 1
     assert trace["config"]["executor"] == "local"
     assert trace["config"]["n_samples"] == 3
-    assert trace["config"]["openstudio_version"] == "3.4.0"
+    assert trace["config"]["openstudio_version"] == "3.11.0"
     # `summary` is the high-level result. Some Campaign versions emit
     # a structured summary; we accept either shape (the structural
     # fields are what we depend on).
@@ -254,7 +254,7 @@ def apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path
         template_sim_package=template_pkg,
         n_samples=3,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         archive_intermediates=False,
         custom_apply_script=byos_script,
     )

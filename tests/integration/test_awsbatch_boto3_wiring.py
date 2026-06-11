@@ -62,8 +62,8 @@ def test_aws_batch_submit_builds_container_overrides() -> None:
             cpus=4,
             memory_mb=2048,
             time_min=30,
-            container="openstudio_cli_image:3.4.0",
-            openstudio_version="3.4.0",
+            container="openstudio_cli_image:3.11.0",
+            openstudio_version="3.11.0",
         )
 
     # boto3.client must be called with 'batch' and a `region_name`
@@ -93,8 +93,8 @@ def test_aws_batch_submit_builds_container_overrides() -> None:
     # Environment must carry the OS version and the container tag.
     env = overrides["environment"]
     env_dict = {e["name"]: e["value"] for e in env}
-    assert env_dict["OSIMFLOW_OS_VERSION"] == "3.4.0"
-    assert env_dict["OSIMFLOW_CONTAINER"] == "openstudio_cli_image:3.4.0"
+    assert env_dict["OSIMFLOW_OS_VERSION"] == "3.11.0"
+    assert env_dict["OSIMFLOW_CONTAINER"] == "openstudio_cli_image:3.11.0"
     # Handle exposes the Batch jobId.
     assert handle.job_id == "abc-123"
     ex.shutdown()

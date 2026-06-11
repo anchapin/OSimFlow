@@ -225,7 +225,7 @@ class OSAExporter:
                 },
             },
             "server": {
-                "base_oscli_version": config.openstudio_version or "3.5.0",
+                "base_oscli_version": config.openstudio_version or "3.11.0",
             },
         }
 

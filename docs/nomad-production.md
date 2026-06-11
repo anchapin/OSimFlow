@@ -101,7 +101,7 @@ credentials come from the environment, not from code.
 
 ## Production TLS (out of scope for this recipe)
 
-For real deployments, add to each `server*.hcl` and `infra/nomad/examples/ha/client.hcl`:
+For real deployments, add to each `server*.hcl` and `infra/nomad/examples/ha/client.hcl`: <!-- docs-skip -->
 
 ```hcl
 tls {

@@ -35,7 +35,7 @@ def _run(outdir: Path, cold: bool) -> tuple[float, int]:
         "--template_sim_package", str(TEMPLATE),
         "--n_samples", "5",
         "--outdir", str(outdir),
-        "--openstudio_version", "3.4.0",
+        "--openstudio_version", "3.11.0",
         "--log_level", "WARNING",
     ]
     env = os.environ.copy()

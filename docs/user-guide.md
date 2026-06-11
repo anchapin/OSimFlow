@@ -210,7 +210,7 @@ All flags are passed to the `osimflow run` subcommand.
 | `--template_sim_package` | path | **required** | Path to the template simulation package directory. |
 | `--n_samples` | int | **required** | Number of LHS samples to generate. |
 | `--outdir` | path | **required** | Output directory for campaign results. |
-| `--openstudio_version` | string | `3.4.0` | OpenStudio version. Determines the container image tag. |
+| `--openstudio_version` | string | `3.11.0` | OpenStudio version. Determines the container image tag. |
 | `--archive_intermediates` | flag | off | Archive per-sample `.osw`/`.osm`/`eplusout.sql` files. |
 
 #### Executor selection
@@ -815,7 +815,7 @@ image is used. The version maps directly to the Docker Hub tag:
 Changing the version invalidates the cache for the simulation step.
 
 **When to float:** During development, you may omit the flag (defaults to
-`3.4.0`) or update it to test compatibility with a new OpenStudio release.
+`3.11.0`) or update it to test compatibility with a new OpenStudio release.
 
 For supported versions and availability checking, see
 [openstudio-image-distribution.md](openstudio-image-distribution.md).
@@ -954,7 +954,7 @@ Nomad:
   --nomad-datacentre STRING      Target datacentre (default: dc1)
 
 Campaign:
-  --openstudio_version STRING    OpenStudio version (default: 3.4.0)
+  --openstudio_version STRING    OpenStudio version (default: 3.11.0)
   --archive_intermediates        Archive per-sample intermediates
   --weather_dir STRING           Weather subdirectory name (default: weather)
   --dry-run                      Validate setup with 1 sample

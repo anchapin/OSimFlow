@@ -34,7 +34,7 @@ python -m tests.benchmarks.bench_campaign \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --outdir ./bench-out \
-  --openstudio_version 3.4.0 \
+  --openstudio_version 3.11.0 \
   --n_samples 3
 ```
 

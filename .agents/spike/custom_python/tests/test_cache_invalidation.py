@@ -94,12 +94,12 @@ def test_openstudio_version_change_invalidates_only_sim_step(
     RUN_OPENSTUDIO_SIM but NOT the LHS / apply / extract steps."""
     out = tmp_path / "out.txt"
     out.write_text("kpis")
-    # Store entries across all steps for os_version=3.4.0
+    # Store entries across all steps for os_version=3.11.0
     for step, sid in [("GENERATE_LHS_SAMPLES", "ALL"),
                        ("APPLY_PARAMETERS", "S1"),
                        ("RUN_OPENSTUDIO_SIM", "S1"),
                        ("EXTRACT_KPIS", "S1")]:
-        k = CacheKey(step, sid, "3.4.0", "h", "h", "img")
+        k = CacheKey(step, sid, "3.11.0", "h", "h", "img")
         tmp_cache.store(k, out, exit_code=0)
     assert tmp_cache.stats()["total"] == 4
 
@@ -123,12 +123,12 @@ def test_template_sim_package_change_invalidates_apply_and_run(
     for step, sid in [("APPLY_PARAMETERS", "S1"),
                        ("RUN_OPENSTUDIO_SIM", "S1"),
                        ("EXTRACT_KPIS", "S1")]:
-        k = CacheKey(step, sid, "3.4.0", "old-template-h", "h", "img")
+        k = CacheKey(step, sid, "3.11.0", "old-template-h", "h", "img")
         tmp_cache.store(k, out, exit_code=0)
     # The Campaign recomputes inputs_sha256 from the template content, so
     # an edit naturally produces a different key. Verify the equivalence:
     # bumping the template hash means a miss.
-    new_key = CacheKey("APPLY_PARAMETERS", "S1", "3.4.0", "new-template-h", "h", "img")
+    new_key = CacheKey("APPLY_PARAMETERS", "S1", "3.11.0", "new-template-h", "h", "img")
     assert tmp_cache.lookup(new_key) is None
 
 

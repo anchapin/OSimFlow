@@ -192,8 +192,8 @@ def _generate_pareto_plots(pareto_dir: Path, outdir: Path) -> list[Path]:
     if n_gens >= 1:
         hv_values: list[float] = []
         gen_numbers: list[int] = []
-        # Determine reference point: 1.1x worst observed across all gens
-        # (for minimisation; uses simple product-of-deltas for 2D).
+        # Simple hypervolume: product of (reference_point - objective_value)
+        # per non-dominated solution, summed.
         ref_x = (
             max(
                 s.get("objectives", {}).get(obj_names[0], 0)

@@ -25,7 +25,7 @@ def test_work_dir_is_outdir_work() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/o"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     assert cfg.work_dir == Path("/tmp/o/work")
 
@@ -36,7 +36,7 @@ def test_samples_file_and_cache_db_paths() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/o"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     assert cfg.samples_file == Path("/tmp/o/work/samples.json")
     assert cfg.cache_db == Path("/tmp/o/work/cache.sqlite")
@@ -48,7 +48,7 @@ def test_archive_and_custom_script_defaults() -> None:
         template_sim_package=Path("/tmp/pkg"),
         n_samples=1,
         outdir=Path("/tmp/o"),
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
     )
     assert cfg.archive_intermediates is False
     assert cfg.custom_apply_script is None
@@ -68,12 +68,12 @@ def test_load_config_happy_path(tmp_path: Path) -> None:
         "template_sim_package": str(template),
         "n_samples": "5",
         "outdir": str(tmp_path / "out"),
-        "openstudio_version": "3.5.0",
+        "openstudio_version": "3.11.0",
         "archive_intermediates": True,
     }
     cfg = load_config(args)
     assert cfg.n_samples == 5
-    assert cfg.openstudio_version == "3.5.0"
+    assert cfg.openstudio_version == "3.11.0"
     assert cfg.archive_intermediates is True
     assert cfg.input_variables == variables_yml.resolve()
     assert cfg.template_sim_package == template.resolve()
@@ -88,7 +88,7 @@ def test_load_config_raises_on_missing_variables_yml(tmp_path: Path) -> None:
         "template_sim_package": str(template),
         "n_samples": "1",
         "outdir": str(tmp_path / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
     }
     with pytest.raises(FileNotFoundError, match="variables_yml not found"):
         load_config(args)
@@ -102,7 +102,7 @@ def test_load_config_raises_on_missing_template(tmp_path: Path) -> None:
         "template_sim_package": str(tmp_path / "no-template"),
         "n_samples": "1",
         "outdir": str(tmp_path / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
     }
     with pytest.raises(FileNotFoundError, match="template_sim_package not found"):
         load_config(args)
@@ -122,7 +122,7 @@ def test_load_config_resolves_custom_scripts(tmp_path: Path) -> None:
         "template_sim_package": str(template),
         "n_samples": "1",
         "outdir": str(tmp_path / "out"),
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
         "custom_apply_script": str(apply_script),
         "custom_kpi_extractor": str(kpi_script),
     }

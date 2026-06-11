@@ -50,7 +50,7 @@ def test_dry_run_forces_n_samples_to_1(workdir: Path, template_pkg: Path, outdir
         template_sim_package=template_pkg,
         n_samples=5000,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         dry_run=True,
     )
     executor = LocalExecutor(max_workers=1)
@@ -68,7 +68,7 @@ def test_dry_run_processes_exactly_one_sample(
         template_sim_package=template_pkg,
         n_samples=100,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         dry_run=True,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -88,7 +88,7 @@ def test_dry_run_does_not_produce_aggregated_csv(
         template_sim_package=template_pkg,
         n_samples=10,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         dry_run=True,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -104,7 +104,7 @@ def test_dry_run_writes_run_json(workdir: Path, template_pkg: Path, outdir: Path
         template_sim_package=template_pkg,
         n_samples=10,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         dry_run=True,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
@@ -123,7 +123,7 @@ def test_dry_run_returns_elapsed_time(workdir: Path, template_pkg: Path, outdir:
         template_sim_package=template_pkg,
         n_samples=10,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         dry_run=True,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))

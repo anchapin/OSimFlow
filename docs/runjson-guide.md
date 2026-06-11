@@ -74,7 +74,7 @@ Captured at construction time so you can reproduce the run:
 ```json
 {
   "executor": "local",
-  "openstudio_version": "3.4.0",
+  "openstudio_version": "3.11.0",
   "n_samples": 500,
   "archive_intermediates": false,
   "custom_apply_script": null,
@@ -455,7 +455,7 @@ Sample output:
 ```
 Campaign: 2026-06-10T14-30-00
 Executor: local
-OpenStudio: 3.4.0
+OpenStudio: 3.11.0
 Wall-clock: 55.3s
 
 Samples: 500 total, 497 succeeded, 3 failed
@@ -513,7 +513,7 @@ mlflow runs list --experiment-name osimflow --filter "tags.mlflow.runName = '$CA
 ## 6. Full example: complete `run.json`
 
 Below is a synthetic but schema-accurate `run.json` from a 5-sample
-campaign with 1 failure, run locally with OpenStudio 3.5.0:
+campaign with 1 failure, run locally with OpenStudio 3.11.0:
 
 ```json
 {
@@ -524,7 +524,7 @@ campaign with 1 failure, run locally with OpenStudio 3.5.0:
   "elapsed_s": 55.3,
   "config": {
     "executor": "local",
-    "openstudio_version": "3.5.0",
+    "openstudio_version": "3.11.0",
     "n_samples": 5,
     "archive_intermediates": false,
     "custom_apply_script": null,

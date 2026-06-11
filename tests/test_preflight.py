@@ -56,7 +56,7 @@ def _make_cfg(
         template_sim_package=template,
         n_samples=n_samples,
         outdir=tmp_path / "results",
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         skip_preflight=skip_preflight,
     )
 
@@ -71,12 +71,12 @@ class TestPreflightStubPasses:
         """In stub mode (no openstudio.cli), preflight should succeed."""
         with mock.patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}):
             # Should not raise
-            preflight_run_model(template_package, "3.4.0")
+            preflight_run_model(template_package, "3.11.0")
 
     def test_stub_creates_no_leftover_files(self, template_package: Path) -> None:
         """The temp directory should be cleaned up after success."""
         with mock.patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}):
-            preflight_run_model(template_package, "3.4.0")
+            preflight_run_model(template_package, "3.11.0")
         # No preflight_package left in the template dir
         assert not (template_package / "preflight_package").exists()
 
@@ -99,7 +99,7 @@ class TestPreflightFailure:
             ),
         ):
             with pytest.raises(SevereEnergyPlusError, match="Preflight simulation FAILED"):
-                preflight_run_model(template_package, "3.4.0")
+                preflight_run_model(template_package, "3.11.0")
 
     def test_error_message_contains_severe_line(self, template_package: Path) -> None:
         """The exception message includes the first severe error line."""
@@ -113,7 +113,7 @@ class TestPreflightFailure:
             ),
         ):
             with pytest.raises(SevereEnergyPlusError, match="Missing weather file"):
-                preflight_run_model(template_package, "3.4.0")
+                preflight_run_model(template_package, "3.11.0")
 
     def test_real_cli_no_workflow_raises_runtime_error(self, template_package: Path) -> None:
         """When no workflow.osw is found, raise RuntimeError."""
@@ -126,7 +126,7 @@ class TestPreflightFailure:
             mock.patch("osimflow.work._is_stub_mode", return_value=False),
         ):
             with pytest.raises(RuntimeError, match="No workflow.osw found"):
-                preflight_run_model(empty_pkg, "3.4.0")
+                preflight_run_model(empty_pkg, "3.11.0")
 
 
 class TestSkipPreflight:

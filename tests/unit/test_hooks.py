@@ -65,7 +65,7 @@ def _make_cfg(
         template_sim_package=template_pkg,
         n_samples=2,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         dry_run=True,
         init_script=init_script,
         finalize_script=finalize_script,

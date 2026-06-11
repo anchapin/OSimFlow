@@ -121,7 +121,7 @@ def run_benchmark(
         "schema_version": 1,
         "campaign_id": "<timestamp>",
         "executor": "local",
-        "openstudio_version": "3.4.0",
+        "openstudio_version": "3.11.0",
         "n_samples": 3,
         "cold_wall_s": 12.34,
         "warm_wall_s": 0.10,
@@ -189,7 +189,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--template_sim_package", required=True, type=Path)
     p.add_argument("--n_samples", type=int, default=DEFAULT_N_SAMPLES)
     p.add_argument("--outdir", required=True, type=Path)
-    p.add_argument("--openstudio_version", default="3.4.0")
+    p.add_argument("--openstudio_version", default="3.11.0")
     p.add_argument(
         "--threshold_cold_s",
         type=float,

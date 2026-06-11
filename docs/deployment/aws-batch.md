@@ -16,7 +16,7 @@ This guide walks you through deploying OSimFlow on AWS Batch. By the end you wil
 | AWS CLI | Installed and configured (`aws configure`) or IAM role-based auth |
 | Docker | Installed locally (only needed if building a custom image) |
 | OSimFlow | `pip install -e ".[aws]"` (brings in `boto3`) |
-| OpenStudio version | Decide which `--openstudio_version` to target (e.g. `3.4.0`, `3.5.0`) |
+| OpenStudio version | Decide which `--openstudio_version` to target (e.g. `3.11.0`, `3.11.0`) |
 
 ---
 
@@ -318,7 +318,7 @@ aws batch register-job-definition \
   --job-definition-name osimflow-openstudio-job-def \
   --type container \
   --container-properties '{
-    "image": "nrel/openstudio:3.5.0",
+    "image": "nrel/openstudio:3.11.0",
     "vcpus": 4,
     "memory": 8192,
     "jobRoleArn": "arn:aws:iam::'"$ACCOUNT_ID"':role/osimflow-taskRole",
@@ -332,8 +332,8 @@ aws batch register-job-definition \
       }
     },
     "environment": [
-      {"name": "OSIMFLOW_CONTAINER", "value": "nrel/openstudio:3.5.0"},
-      {"name": "OSIMFLOW_OS_VERSION", "value": "3.5.0"}
+      {"name": "OSIMFLOW_CONTAINER", "value": "nrel/openstudio:3.11.0"},
+      {"name": "OSIMFLOW_OS_VERSION", "value": "3.11.0"}
     ]
   }'
 ```
@@ -353,7 +353,7 @@ aws logs create-log-group --log-group-name /aws/batch/osimflow
 Once the infrastructure is set up, run campaigns from your local machine (or any host with `boto3` and AWS credentials):
 
 ```bash
-# Basic: 100 samples, Spot, OpenStudio 3.5.0
+# Basic: 100 samples, Spot, OpenStudio 3.11.0
 osimflow run \
   --executor aws_batch \
   --aws-batch-queue osimflow-batch-queue \
@@ -362,7 +362,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 100 \
   --outdir ./results \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 
 # With MLflow tracking
 osimflow run \
@@ -374,7 +374,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 500 \
   --outdir ./results \
-  --openstudio_version 3.5.0
+  --openstudio_version 3.11.0
 ```
 
 ### How OSimFlow Interacts with Batch
@@ -391,8 +391,8 @@ The executor injects these environment variables into each Batch task:
 
 | Variable | Source | Example |
 |---|---|---|
-| `OSIMFLOW_CONTAINER` | Dynamic from `--openstudio_version` | `nrel/openstudio:3.5.0` |
-| `OSIMFLOW_OS_VERSION` | `--openstudio_version` | `3.5.0` |
+| `OSIMFLOW_CONTAINER` | Dynamic from `--openstudio_version` | `nrel/openstudio:3.11.0` |
+| `OSIMFLOW_OS_VERSION` | `--openstudio_version` | `3.11.0` |
 
 Your work scripts (in `bin/` or BYOS) can read these to select the correct OpenStudio binary or container.
 
@@ -536,13 +536,13 @@ Docker Hub limits anonymous pulls to 100 per 6 hours. For large campaigns (>100 
 aws ecr create-repository --repository-name nrel/openstudio
 ECR_URI=$(aws ecr describe-repositories --repository-names nrel/openstudio --query 'repositories[0].repositoryUri' --output text)
 
-docker pull nrel/openstudio:3.5.0
-docker tag nrel/openstudio:3.5.0 $ECR_URI:3.5.0
+docker pull nrel/openstudio:3.11.0
+docker tag nrel/openstudio:3.11.0 $ECR_URI:3.11.0
 aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_URI
-docker push $ECR_URI:3.5.0
+docker push $ECR_URI:3.11.0
 ```
 
-Then update the job definition to use `$ECR_URI:3.5.0` instead of `nrel/openstudio:3.5.0`.
+Then update the job definition to use `$ECR_URI:3.11.0` instead of `nrel/openstudio:3.11.0`.
 
 ### Spot Interruption
 

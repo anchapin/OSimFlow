@@ -8,7 +8,7 @@ Usage:
         --template_sim_package <path> \\
         --n_samples 5 \\
         --outdir <path> \\
-        --openstudio_version 3.4.0
+        --openstudio_version 3.11.0
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--template_sim_package", required=True)
     p.add_argument("--n_samples", type=int, required=True)
     p.add_argument("--outdir", required=True)
-    p.add_argument("--openstudio_version", default="3.4.0")
+    p.add_argument("--openstudio_version", default="3.11.0")
     p.add_argument("--archive_intermediates", action="store_true")
     p.add_argument("--custom_apply_script", default=None)
     p.add_argument("--custom_kpi_extractor", default=None)

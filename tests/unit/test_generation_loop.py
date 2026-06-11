@@ -73,7 +73,7 @@ def _make_cfg(
         template_sim_package=template,
         n_samples=n_samples,
         outdir=outdir,
-        openstudio_version="3.4.0",
+        openstudio_version="3.11.0",
         skip_preflight=True,
         max_generations=max_generations,
         algorithm=algorithm,

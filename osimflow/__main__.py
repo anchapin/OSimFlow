@@ -7,7 +7,7 @@ Usage:
         --template_sim_package ./example_package \\
         --n_samples 10 \\
         --outdir ./results \\
-        --openstudio_version 3.4.0
+        --openstudio_version 3.11.0
 
 After `pip install -e .`, also available as:
     osimflow run --executor local ...
@@ -166,7 +166,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)
     run.add_argument("--outdir", required=True)
-    run.add_argument("--openstudio_version", default="3.4.0")
+    run.add_argument("--openstudio_version", default="3.11.0")
     run.add_argument("--archive_intermediates", action="store_true")
     run.add_argument(
         "--custom_apply_script",
@@ -326,8 +326,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     exp.add_argument(
         "--openstudio_version",
-        default="3.5.0",
-        help="OpenStudio CLI version (default: 3.5.0)",
+        default="3.11.0",
+        help="OpenStudio CLI version (default: 3.11.0)",
     )
     exp.add_argument("--log_level", default="INFO")
     return p
