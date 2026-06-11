@@ -109,7 +109,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Path | Purpose |
 |---|---|
-| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`). |
+| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, `SevereEnergyPlusError`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`). |
 | `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` — explicit, testable resume semantics. |
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
