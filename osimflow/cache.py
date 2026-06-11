@@ -43,11 +43,12 @@ CREATE TABLE IF NOT EXISTS cache_entries (
     inputs_sha256     TEXT NOT NULL,
     code_sha256       TEXT NOT NULL,
     container_digest  TEXT NOT NULL,
+    generation        INTEGER NOT NULL DEFAULT 0,
     output_path       TEXT NOT NULL,
     started_at        REAL NOT NULL,
     finished_at       REAL NOT NULL,
     exit_code         INTEGER NOT NULL,
-    PRIMARY KEY (step, sample_id, openstudio_version, inputs_sha256, code_sha256, container_digest)
+    PRIMARY KEY (step, sample_id, openstudio_version, inputs_sha256, code_sha256, container_digest, generation)
 );
 CREATE INDEX IF NOT EXISTS ix_cache_step ON cache_entries(step);
 """
@@ -63,6 +64,7 @@ class CacheKey:
     inputs_sha256: str
     code_sha256: str
     container_digest: str
+    generation: int = 0
 
 
 def sha256_of_files(paths: Iterable[Path]) -> str:
@@ -110,7 +112,8 @@ class SQLiteCache:
             row = c.execute(
                 """SELECT output_path, exit_code FROM cache_entries
                    WHERE step=? AND sample_id=? AND openstudio_version=?
-                     AND inputs_sha256=? AND code_sha256=? AND container_digest=?""",
+                     AND inputs_sha256=? AND code_sha256=? AND container_digest=?
+                     AND generation=?""",
                 (
                     key.step,
                     key.sample_id,
@@ -118,6 +121,7 @@ class SQLiteCache:
                     key.inputs_sha256,
                     key.code_sha256,
                     key.container_digest,
+                    key.generation,
                 ),
             ).fetchone()
         if row is None:
@@ -137,9 +141,9 @@ class SQLiteCache:
             c.execute(
                 """INSERT OR REPLACE INTO cache_entries
                    (step, sample_id, openstudio_version, inputs_sha256,
-                    code_sha256, container_digest, output_path,
+                    code_sha256, container_digest, generation, output_path,
                     started_at, finished_at, exit_code)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     key.step,
                     key.sample_id,
@@ -147,6 +151,7 @@ class SQLiteCache:
                     key.inputs_sha256,
                     key.code_sha256,
                     key.container_digest,
+                    key.generation,
                     str(output_path),
                     time.time(),
                     time.time(),

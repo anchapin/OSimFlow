@@ -216,6 +216,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "known-good or when iterating on downstream steps."
         ),
     )
+    # Generation loop (issue #122).
+    run.add_argument(
+        "--max-generations",
+        type=int,
+        default=1,
+        help=(
+            "Maximum number of DAG generations to run (default: 1). "
+            "Iterative algorithms (NSGA-II, DE) loop the fan-out steps "
+            "for multiple generations. LHS is single-generation."
+        ),
+    )
     imp = sub.add_parser(
         "import-osa",
         help="Import an OpenStudio Analysis (.osa / analysis.json) file",

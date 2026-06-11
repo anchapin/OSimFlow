@@ -78,6 +78,11 @@ class CampaignConfig:
     # proceed without validating the seed model first. Useful when the
     # model is known-good or when iterating on downstream steps.
     skip_preflight: bool = False
+    # Generation loop (issue #122). Iterative/optimization algorithms
+    # (NSGA-II, Bayesian optimisation) loop the fan-out steps multiple
+    # times.  Default 1 = single-generation (backward compatible with
+    # LHS).  Set >1 to run the fan-out DAG for that many generations.
+    max_generations: int = 1
 
     @property
     def work_dir(self) -> Path:
@@ -157,4 +162,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             Path(str(args["finalize_script"])).resolve() if args.get("finalize_script") else None
         ),
         skip_preflight=bool(args.get("skip_preflight", False)),
+        max_generations=int(str(args.get("max_generations", 1))),
     )

@@ -713,41 +713,114 @@ class Campaign:
         }
 
     def _run_full_campaign(self, t0: float) -> dict[str, object]:
-        """Standard full campaign: all steps, all samples."""
+        """Standard full campaign: all steps, all samples.
+
+        For iterative algorithms (``max_generations > 1``), the fan-out
+        steps (APPLY_PARAMETERS → RUN_OPENSTUDIO_SIM → EXTRACT_KPIS)
+        loop for up to ``cfg.max_generations`` iterations.  Each
+        iteration is a "generation" tracked in the cache key.  LHS with
+        ``max_generations=1`` is backward-compatible.
+        """
+        if self.cfg.max_generations < 1:
+            raise ValueError(f"max_generations must be >= 1, got {self.cfg.max_generations}")
+
         algo = AlgorithmRegistry.get(self.cfg.algorithm)
-        samples: list[SampleSpec] = self.step_generate_samples(algo)
+
+        # History accumulator: one dict per generation.
+        history: list[dict[str, Any]] = []
+
+        all_kpi_files: list[Path] = []
+        last_simulated: SampleDict = {}
+        last_samples: list[SampleSpec] = []
+
+        for generation in range(self.cfg.max_generations):
+            log.info(
+                "--- generation %d/%d ---",
+                generation + 1,
+                self.cfg.max_generations,
+            )
+            result = self._run_one_generation(algo, history, generation)
+            if result is None:
+                # Algorithm converged; stop the loop.
+                break
+            samples, kpi_files, simulated = result
+            last_samples = samples
+            last_simulated = simulated
+            all_kpi_files.extend(kpi_files)
+            history.append(
+                {
+                    "generation": generation,
+                    "samples": samples,
+                    "kpi_files": [str(p) for p in kpi_files],
+                }
+            )
+            # Single-shot algorithms never iterate.
+            if not algo.is_iterative():
+                break
+
+        return self._finalize_full_campaign(t0, all_kpi_files, last_simulated, last_samples)
+
+    def _run_one_generation(
+        self,
+        algo: BaseAlgorithm,
+        history: list[dict[str, Any]],
+        generation: int,
+    ) -> tuple[list[SampleSpec], list[Path], SampleDict] | None:
+        """Run one generation of the fan-out DAG.
+
+        Returns (samples, kpi_files, simulated_dirs), or ``None`` if
+        the algorithm has converged and the loop should stop.
+        """
+        # Convergence check: after the first generation, ask the
+        # algorithm whether we should continue.
+        if generation > 0:
+            if algo.is_converged(history):
+                log.info(
+                    "algorithm %s converged at generation %d; stopping loop",
+                    algo.name(),
+                    generation,
+                )
+                return None
+            new_samples = algo.observe(history)
+            if new_samples:
+                cast_samples(new_samples)
+            else:
+                log.warning(
+                    "observe() returned empty samples at generation %d; reusing previous",
+                    generation,
+                )
+
+        samples = self.step_generate_samples(algo, generation=generation)
         samples_link = self.cfg.samples_file
         samples_link.parent.mkdir(parents=True, exist_ok=True)
         samples_link.write_text(json.dumps({"samples": samples}, indent=2))
-        # Preflight model validation (issue #107): run a throwaway sim
-        # on the seed model before spending cloud budget. Skipped when
-        # --skip-preflight is set.
-        self.step_preflight_run_model()
-        parameterized: SampleDict = self.step_apply_parameters(samples)
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+
+        if generation == 0:
+            self.step_preflight_run_model()
+
+        parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
+        simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
+        kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
+        return samples, kpi_files, simulated
+
+    def _finalize_full_campaign(
+        self,
+        t0: float,
+        all_kpi_files: list[Path],
+        last_simulated: SampleDict,
+        last_samples: list[SampleSpec],
+    ) -> dict[str, object]:
+        """Aggregate, plot, archive, and write the run trace."""
         aggregated: dict[str, Path] = self.step_aggregate_results(
-            kpi_files, simulated, baseline_sample_id=self._baseline_sample_id()
+            all_kpi_files, last_simulated, baseline_sample_id=self._baseline_sample_id()
         )
         plots: list[Path] = self.step_generate_plots(
             aggregated, baseline_sample_id=self._baseline_sample_id()
         )
         t1 = time.time()
 
-        self._compute_baseline_comparison(kpi_files)
-
-        if self.cfg.archive_intermediates:
-            inputs_archive = self.cfg.outdir / "archive" / "inputs"
-            inputs_archive.mkdir(parents=True, exist_ok=True)
-            pkg_dst = inputs_archive / self.cfg.template_sim_package.name
-            if pkg_dst.exists():
-                shutil.rmtree(pkg_dst)
-            shutil.copytree(self.cfg.template_sim_package, pkg_dst)
-            log.info("archived template_sim_package -> %s", pkg_dst)
-            shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
-            log.info(
-                "archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name
-            )
+        self._compute_baseline_comparison(all_kpi_files)
+        self._maybe_archive_inputs()
 
         self._finalize_samples()
         self.trace.finalize()
@@ -771,24 +844,42 @@ class Campaign:
         log.info("  run trace:     %s", self.cfg.outdir / "run.json")
         log.info("=" * 60)
         return {
-            "samples": samples,
-            "kpis": kpi_files,
+            "samples": last_samples,
+            "kpis": all_kpi_files,
             "aggregated": aggregated,
             "plots": plots,
             "elapsed_s": t1 - t0,
             "run_json": self.cfg.outdir / "run.json",
         }
 
+    def _maybe_archive_inputs(self) -> None:
+        """Archive campaign inputs when ``cfg.archive_intermediates`` is set."""
+        if not self.cfg.archive_intermediates:
+            return
+        inputs_archive = self.cfg.outdir / "archive" / "inputs"
+        inputs_archive.mkdir(parents=True, exist_ok=True)
+        pkg_dst = inputs_archive / self.cfg.template_sim_package.name
+        if pkg_dst.exists():
+            shutil.rmtree(pkg_dst)
+        shutil.copytree(self.cfg.template_sim_package, pkg_dst)
+        log.info("archived template_sim_package -> %s", pkg_dst)
+        shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
+        log.info("archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name)
+
     # ------------------------------------------------------------------
     # Steps
     # ------------------------------------------------------------------
-    def step_generate_samples(self, algo: BaseAlgorithm) -> list[SampleSpec]:
+    def step_generate_samples(
+        self,
+        algo: BaseAlgorithm,
+        generation: int = 0,
+    ) -> list[SampleSpec]:
         """Generate samples via the pluggable algorithm framework.
 
         Dispatches to ``algo.generate_samples()`` with the campaign's
         variables and sample count.  The result is cached under a key
-        that includes the algorithm name so switching algorithms
-        invalidates the cache.
+        that includes the algorithm name *and* the generation number so
+        each generation's samples are independently cacheable.
 
         This is the preferred entry point.  ``step_generate_lhs()`` is
         kept as a deprecated convenience wrapper.
@@ -813,6 +904,7 @@ class Campaign:
             inputs_sha256=inputs_hash,
             code_sha256=self.code_hashes["bin"],
             container_digest=CONTAINER_PY,
+            generation=generation,
         )
         cached = self.cache.lookup(key)
         if cached:
@@ -978,8 +1070,21 @@ class Campaign:
             exit_code=0,
         )
 
-    def step_apply_parameters(self, samples: list[SampleSpec]) -> SampleDict:
+    def step_apply_parameters(
+        self,
+        samples: list[SampleSpec],
+        generation: int = 0,
+    ) -> SampleDict:
         """Fan-out: for each sample, produce a modified sim package.
+
+        Parameters
+        ----------
+        samples
+            The sample specifications to parameterise.
+        generation
+            The generation number (0-based).  Included in the cache key
+            so that the same sample in different generations gets
+            independently cached entries.
 
         Before submitting any work, runs a pre-flight validation pass
         (PRD §1.4) that checks every parameter name across all samples
@@ -1048,6 +1153,7 @@ class Campaign:
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=CONTAINER_PY,
+                generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
             cached = self.cache.lookup(key)
@@ -1099,7 +1205,11 @@ class Campaign:
         )
         return out
 
-    def step_run_openstudio_sim(self, parameterized: SampleDict) -> SampleDict:
+    def step_run_openstudio_sim(
+        self,
+        parameterized: SampleDict,
+        generation: int = 0,
+    ) -> SampleDict:
         """Fan-out (heavy): for each sample, run the OpenStudio simulation.
 
         For each sample, this step computes the per-sample stdout/stderr
@@ -1144,6 +1254,7 @@ class Campaign:
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=CONTAINER_OS.format(version=os_version),
+                generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
             # Always populate the log path fields so consumers of the
@@ -1214,7 +1325,11 @@ class Campaign:
         )
         return out
 
-    def step_extract_kpis(self, simulated: SampleDict) -> list[Path]:
+    def step_extract_kpis(
+        self,
+        simulated: SampleDict,
+        generation: int = 0,
+    ) -> list[Path]:
         """Fan-out: for each simulated sample, extract KPIs."""
         t0 = time.time()
         out: list[Path] = []
@@ -1229,6 +1344,7 @@ class Campaign:
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=CONTAINER_PY,
+                generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
             cached = self.cache.lookup(key)
