@@ -330,7 +330,36 @@ def _build_parser() -> argparse.ArgumentParser:
         help="OpenStudio CLI version (default: 3.11.0)",
     )
     exp.add_argument("--log_level", default="INFO")
+    serve = sub.add_parser("serve", help="Start REST API server")
+    serve.add_argument("--outdir", type=Path, required=True, help="Campaign output directory")
+    serve.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    serve.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    serve.add_argument(
+        "--read-only",
+        action="store_true",
+        default=True,
+        help="Read-only mode (default)",
+    )
+    serve.set_defaults(func=_cmd_serve)
     return p
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Start the REST API server."""
+    try:
+        import uvicorn
+    except ImportError:
+        print(
+            "Error: osimflow[api] extra required. Install with: pip install osimflow[api]",
+            file=sys.stderr,
+        )
+        return 1
+
+    from osimflow.api import create_app
+
+    app = create_app(outdir=args.outdir, read_only=args.read_only)
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
 
 
 def _run_import_osa(args: argparse.Namespace) -> int:
@@ -378,6 +407,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_import_osa(args)
     if args.command == "export":
         return _run_export(args)
+    if args.command == "serve":
+        return _cmd_serve(args)
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))
