@@ -63,6 +63,24 @@ variable "batch_job_retry_attempts" {
   default     = 1
 }
 
+variable "job_vcpus" {
+  description = "Number of vCPUs allocated to each Batch job container"
+  type        = number
+  default     = 2
+}
+
+variable "job_memory_mb" {
+  description = "Memory (MiB) allocated to each Batch job container"
+  type        = number
+  default     = 4096
+}
+
+variable "job_timeout_seconds" {
+  description = "Maximum wall-clock time per Batch job attempt (seconds)"
+  type        = number
+  default     = 14400 # 4 hours
+}
+
 variable "s3_force_destroy" {
   description = "Force destroy S3 bucket even if non-empty (dev only)"
   type        = bool

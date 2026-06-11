@@ -59,6 +59,12 @@ sqlite3.db
 *.tar.gz
 docker-image-*
 
+# Terraform — local state, plugins, and lock file (use remote backend in prod)
+**/.terraform/
+**/.terraform.lock.hcl
+**/terraform.tfstate*
+**/.tfstate*
+
 # IDE / OS noise
 .vscode/
 .idea/

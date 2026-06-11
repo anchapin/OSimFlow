@@ -148,6 +148,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/GOVERNANCE.md` | Community governance model (stub for Phase 3). |
 | `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
 | `infra/aws/terraform/` | Terraform module for AWS Batch infrastructure (issue #148): VPC, S3 bucket, IAM roles, Batch compute environment, job queue, and job definition using `nrel/openstudio` container image. CI runs `terraform validate` on `infra/` changes. |
+| `infra/aws/terraform/iam.tf` | Least-privilege IAM roles (issue #130): ECS instance profile, task role (S3 + CWL), task-execution role (ECR pull), Batch service role. |
+| `infra/aws/terraform/job-definition.tf` | Batch job definition (issue #130): parameterised vCPU, memory, timeout, execution role. |
+| `infra/aws/terraform/examples/basic/` | Minimal on-demand example config (documentation only). |
+| `infra/aws/terraform/examples/spot/` | Spot instance example config with cost tags (documentation only). |
+| `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
 | `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit). |
 | `LICENSE` | MIT. |
 | `README.md` | One-paragraph project pitch + status. |
@@ -487,7 +492,7 @@ Use these patterns to decide where to make a change.
 | Add a new cache invalidation rule | `osimflow/campaign.py:step_*` (the cache key construction) **and** a test in `tests/integration/test_cache_invalidation.py`. |
 | Add an export format | New module in `osimflow/exporters/` (e.g. `osa.py` for PAT) **and** add the `--target` choice to `osimflow/__main__.py` export subcommand. |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
-| Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/` — modify the Terraform module. Run `terraform validate` to check. CI validates on `infra/` path changes. |
+| Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/` — modify the Terraform module. IAM roles are in `iam.tf`, job definition in `job-definition.tf`. Run `terraform validate` to check. CI validates on `infra/` path changes. |
 
 ### 9.1 Tool selection decision tree
 
@@ -516,7 +521,7 @@ generic role prompt's tool guidance when they disagree).
 
 - **Never commit** `.osm`, `.osw`, `.idf`, `.epw`, `eplusout.*` files. The `.gitignore` already excludes them; double-check before staging.
 - For very large inputs that *must* be tracked, use **`git-lfs`** — don't bypass the gitignore.
-- **AWS**: IAM roles for EC2 compute environment only. No long-lived AWS access keys in the repo or in any config file. The `AWSBatchExecutor` must source credentials from the IAM role on the compute environment.
+- **AWS**: IAM roles for EC2 compute environment only. No long-lived AWS access keys in the repo or in any config file. The `AWSBatchExecutor` must source credentials from the IAM role on the compute environment. The Terraform module (`infra/aws/terraform/iam.tf`) provisions least-privilege roles: a task role scoped to the campaign S3 bucket and CloudWatch Logs, a task-execution role for ECR image pulls, and a Batch service role.
 - **Singularity on shared HPC**: never bind-mount secrets; pass via env vars or submitit's `ex.update_parameters(setup=...)`, not as container mounts.
 - **BYOS user scripts**: when a user supplies a script, treat it as untrusted. The Campaign loads it via `importlib.util` and validates the function signature with `inspect.signature`. The default `LocalExecutor` runs in a thread pool with no resource limits — when wiring `SlurmExecutor` to production, set a per-job timeout (`time_min`) to bound blast radius.
 
@@ -535,6 +540,7 @@ generic role prompt's tool guidance when they disagree).
 - [ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md) — the decision record for adopting `nrel/openstudio` directly.
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
+- [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
 - [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding.
 - [GOVERNANCE.md](docs/GOVERNANCE.md) — community governance model.
