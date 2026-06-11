@@ -195,6 +195,9 @@ The 7-step DAG that the `Campaign` class drives:
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
 - `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
 - `--aws-batch-queue`, `--aws-batch-job-definition`
+- `--aws-batch-max-spot-price-usd` (Spot price ceiling in USD/vCPU-hour. Issue #131)
+- `--aws-batch-fallback-to-on-demand` (fall back to on-demand when Spot exceeds ceiling or retries exhausted. Issue #131)
+- `--aws-batch-max-retries` (max Spot interruption retries; default 3. Issue #131)
 - `--nomad-address`, `--nomad-datacentre`
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)

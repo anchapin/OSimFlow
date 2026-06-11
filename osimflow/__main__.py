@@ -54,6 +54,13 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
         return AWSBatchExecutor(
             job_queue=args.aws_batch_queue,
             job_definition=args.aws_batch_job_definition,
+            max_spot_price_usd=(
+                args.aws_batch_max_spot_price_usd
+                if args.aws_batch_max_spot_price_usd is not None
+                else None
+            ),
+            fallback_to_on_demand=args.aws_batch_fallback_to_on_demand,
+            max_retries=args.aws_batch_max_retries,
         )
     if args.executor == "nomad":
         return NomadExecutor(
@@ -100,6 +107,38 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--aws-batch-queue", default="osimflow-batch-queue")
     run.add_argument("--aws-batch-job-definition", default=None)
+    # Spot instance retry + price ceiling for AWS Batch (issue #131).
+    run.add_argument(
+        "--aws-batch-max-spot-price-usd",
+        type=float,
+        default=None,
+        help=(
+            "Maximum Spot price ceiling in USD per vCPU-hour. "
+            "When set, the executor checks the current Spot price before "
+            "submitting and rejects jobs that would exceed the ceiling "
+            "(unless --aws-batch-fallback-to-on-demand is also set)."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-fallback-to-on-demand",
+        action="store_true",
+        help=(
+            "When the Spot price exceeds the ceiling or max retries are "
+            "exhausted, fall back to the on-demand job queue instead of "
+            "failing. Requires --aws-batch-max-spot-price-usd or spot "
+            "interruption retries."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-max-retries",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of retries on Spot interruption (default: 3). "
+            "Each retry uses exponential backoff. After exhausting retries, "
+            "the job fails unless --aws-batch-fallback-to-on-demand is set."
+        ),
+    )
     # Nomad executor flags (issue #27).
     run.add_argument(
         "--nomad-address",

@@ -83,6 +83,17 @@ class CampaignConfig:
     # times.  Default 1 = single-generation (backward compatible with
     # LHS).  Set >1 to run the fan-out DAG for that many generations.
     max_generations: int = 1
+    # Spot instance retry + price ceiling for AWS Batch (issue #131).
+    # When aws_batch_max_spot_price_usd is set, the executor queries the
+    # current Spot price before submitting and rejects jobs that would
+    # exceed the ceiling (unless fallback to on-demand is enabled).
+    # aws_batch_fallback_to_on_demand switches to the on-demand queue
+    # after spot price rejection or max retries exhausted.
+    # aws_batch_max_retries controls how many times a spot-interrupted
+    # job is retried before falling back or failing.
+    aws_batch_max_spot_price_usd: float | None = None
+    aws_batch_fallback_to_on_demand: bool = False
+    aws_batch_max_retries: int = 3
 
     @property
     def work_dir(self) -> Path:
@@ -163,4 +174,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         ),
         skip_preflight=bool(args.get("skip_preflight", False)),
         max_generations=int(str(args.get("max_generations", 1))),
+        aws_batch_max_spot_price_usd=(
+            float(str(args["aws_batch_max_spot_price_usd"]))
+            if args.get("aws_batch_max_spot_price_usd") is not None
+            else None
+        ),
+        aws_batch_fallback_to_on_demand=bool(args.get("aws_batch_fallback_to_on_demand", False)),
+        aws_batch_max_retries=int(str(args.get("aws_batch_max_retries", 3))),
     )
