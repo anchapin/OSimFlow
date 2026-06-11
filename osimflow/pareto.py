@@ -21,7 +21,10 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import numpy as np
 
 log = logging.getLogger("osimflow.pareto")
 
@@ -140,6 +143,111 @@ class ParetoFront:
 
     def __len__(self) -> int:
         return len(self._solutions)
+
+    # ------------------------------------------------------------------
+    # Hypervolume indicator (issue #106)
+    # ------------------------------------------------------------------
+
+    def hypervolume(self, ref_point: list[float]) -> float:
+        """Compute hypervolume indicator relative to *ref_point*.
+
+        Uses a pure-NumPy 2D algorithm for bi-objective fronts.
+        For 3+ objectives, requires ``pymoo`` (optional
+        ``[optimization]`` extra).
+
+        Parameters
+        ----------
+        ref_point
+            Reference point.  Length must equal the number of objectives.
+            For minimisation objectives the reference should be *worse*
+            (larger) than all front points; for maximisation objectives
+            it should be *worse* (smaller).
+
+        Returns
+        -------
+        float
+            The hypervolume indicator value.
+
+        Raises
+        ------
+        ValueError
+            Fewer than 2 objectives, or ``ref_point`` length mismatch.
+        ImportError
+            3+ objectives and ``pymoo`` is not installed.
+        """
+        if len(self._objective_names) < 2:
+            raise ValueError("Hypervolume requires at least 2 objectives")
+        if len(ref_point) != len(self._objective_names):
+            raise ValueError(
+                f"ref_point length ({len(ref_point)}) must match "
+                f"objective count ({len(self._objective_names)})"
+            )
+
+        solutions = self.get_nondominated()
+        if not solutions:
+            return 0.0
+
+        import numpy as np  # noqa: PLC0415
+
+        points = np.array(
+            [[s.objectives[name] for name in self._objective_names] for s in solutions]
+        )
+        ref = np.array(ref_point)
+
+        if len(self._objective_names) == 2:
+            return self._hypervolume_2d(points, ref, self._maximize)
+
+        try:
+            from pymoo.indicators.hv import HV  # noqa: PLC0415
+
+            indicator = HV(ref_point=ref_point)
+            return float(indicator(points))
+        except ImportError as exc:
+            raise ImportError(
+                "Hypervolume for 3+ objectives requires pymoo. "
+                "Install with: pip install osimflow[optimization]"
+            ) from exc
+
+    @staticmethod
+    def _hypervolume_2d(
+        points: "np.ndarray",
+        ref_point: "np.ndarray",
+        maximize: list[bool],
+    ) -> float:
+        """2D hypervolume (area) with mixed minimise / maximise support.
+
+        The algorithm normalises all objectives so that *lower is better*
+        (flipping maximisation axes), then computes the dominated area
+        between the front and the reference point.
+        """
+        import numpy as np  # noqa: PLC0415
+
+        pts = points.copy().astype(float)
+        ref = ref_point.copy().astype(float)
+
+        # Flip maximisation axes so *lower is better* uniformly.
+        for j, should_max in enumerate(maximize):
+            if should_max:
+                pts[:, j] = -pts[:, j]
+                ref[j] = -ref[j]
+
+        # Discard points that are worse than the reference on any axis.
+        mask = np.all(pts <= ref, axis=1)
+        if not mask.any():
+            return 0.0
+        pts = pts[mask]
+
+        # Sort by first objective ascending.
+        order = np.argsort(pts[:, 0])
+        pts = pts[order]
+
+        # Sweep: each point contributes a rectangle.
+        hv = 0.0
+        for i in range(len(pts)):
+            dx = (pts[i + 1, 0] if i + 1 < len(pts) else ref[0]) - pts[i, 0]
+            dy = ref[1] - pts[i, 1]
+            hv += max(0.0, dx) * max(0.0, dy)
+        return float(hv)
 
     # ------------------------------------------------------------------
     # Serialization

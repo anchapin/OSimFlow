@@ -71,6 +71,7 @@ class SampleTrace:
     quality_valid: bool | None = None
     quality_warnings: int | None = None
     quality_failures: int | None = None
+    generation: int | None = None  # generation index for iterative algorithms (issue #106)
     # Per-data-point worker tracking (issue #105).
     worker_id: str | None = None  # Batch job ID / Slurm job ID / Nomad alloc ID / "local"
     worker_ip: str | None = None  # IP address or hostname of the worker

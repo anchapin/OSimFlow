@@ -404,20 +404,19 @@ def test_done_reflects_job_status() -> None:
         memory_mb=512,
     )
 
-    # Force the initial describe_jobs to return RUNNING so done() is False.
     original_describe = batch_client.describe_jobs
 
-    def _describe_running(**kwargs: object) -> dict[str, object]:
+    def _describe_submitted(**kwargs: object) -> dict[str, object]:
         resp = original_describe(**kwargs)
         jobs = resp.get("jobs", [])
         if jobs:
-            jobs[0]["status"] = "RUNNING"
+            jobs[0]["status"] = "SUBMITTED"
+            jobs[0]["statusReason"] = "Pending"
         return resp  # type: ignore[return-value]
 
-    with patch.object(batch_client, "describe_jobs", side_effect=_describe_running):
-        assert handle.done() is False, "expected done()=False for RUNNING job"
+    with patch.object(batch_client, "describe_jobs", side_effect=_describe_submitted):
+        assert handle.done() is False, "expected done()=False for SUBMITTED job"
 
-    # Force SUCCEEDED via describe_jobs patch and check done().
     def _describe_succeeded(**kwargs: object) -> dict[str, object]:
         resp = original_describe(**kwargs)
         jobs = resp.get("jobs", [])

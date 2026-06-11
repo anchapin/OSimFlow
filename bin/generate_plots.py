@@ -7,6 +7,7 @@ See docs/OSimFlow.md §4.2 (PROCESS_GENERATE_BASIC_PLOTS) for the contract.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import sys
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 
@@ -186,12 +188,12 @@ def _generate_pareto_plots(pareto_dir: Path, outdir: Path) -> list[Path]:
     plots.append(path)
     log.info(f"Generated Pareto front scatter: {path}")
 
-    # 4b. Convergence plot (hypervolume approximation per generation)
-    if n_gens > 1:
+    # 4b. Convergence plot (hypervolume per generation) + CSV output
+    if n_gens >= 1:
         hv_values: list[float] = []
         gen_numbers: list[int] = []
-        # Simple hypervolume: product of (reference_point - objective_value)
-        # per non-dominated solution, summed.
+        # Determine reference point: 1.1x worst observed across all gens
+        # (for minimisation; uses simple product-of-deltas for 2D).
         ref_x = (
             max(
                 s.get("objectives", {}).get(obj_names[0], 0)
@@ -208,28 +210,80 @@ def _generate_pareto_plots(pareto_dir: Path, outdir: Path) -> list[Path]:
             )
             * 1.1
         )
+        ref_point = [ref_x, ref_y]
 
         for gen_num, solutions in all_gen_data:
-            hv = 0.0
-            for s in solutions:
-                ox = ref_x - s.get("objectives", {}).get(obj_names[0], ref_x)
-                oy = ref_y - s.get("objectives", {}).get(obj_names[1], ref_y)
-                hv += max(0, ox) * max(0, oy)
+            if len(obj_names) == 2:
+                pts = np.array(
+                    [
+                        [
+                            s.get("objectives", {}).get(obj_names[0], ref_x),
+                            s.get("objectives", {}).get(obj_names[1], ref_y),
+                        ]
+                        for s in solutions
+                    ]
+                )
+                hv = _hypervolume_2d_simple(pts, np.array(ref_point))
+            else:
+                hv = 0.0
+                for s in solutions:
+                    vol = 1.0
+                    for k, name in enumerate(obj_names):
+                        ref_val = ref_point[k] if k < len(ref_point) else 0.0
+                        delta = ref_val - s.get("objectives", {}).get(name, ref_val)
+                        vol *= max(0.0, delta)
+                    hv += vol
             hv_values.append(hv)
             gen_numbers.append(gen_num)
 
-        fig2, ax2 = plt.subplots(figsize=(8, 5))
-        ax2.plot(gen_numbers, hv_values, "o-", color="steelblue")
-        ax2.set_xlabel("Generation")
-        ax2.set_ylabel("Hypervolume Indicator")
-        ax2.set_title("Pareto Front Convergence")
-        path2 = outdir / "pareto_convergence.png"
-        fig2.savefig(path2, dpi=150, bbox_inches="tight")
-        plt.close(fig2)
-        plots.append(path2)
-        log.info(f"Generated Pareto convergence plot: {path2}")
+        # Write hypervolume_per_gen.csv (issue #106).
+        pareto_out = outdir / "pareto"
+        pareto_out.mkdir(parents=True, exist_ok=True)
+        hv_csv = pareto_out / "hypervolume_per_gen.csv"
+        with open(hv_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["generation", "hypervolume"])
+            for g, h in zip(gen_numbers, hv_values, strict=True):
+                writer.writerow([g, h])
+        log.info(f"Wrote hypervolume CSV: {hv_csv}")
+
+        # Plot convergence when multiple generations.
+        if n_gens > 1:
+            fig2, ax2 = plt.subplots(figsize=(8, 5))
+            ax2.plot(gen_numbers, hv_values, "o-", color="steelblue")
+            ax2.set_xlabel("Generation")
+            ax2.set_ylabel("Hypervolume Indicator")
+            ax2.set_title("Pareto Front Convergence")
+            path2 = outdir / "pareto_convergence.png"
+            fig2.savefig(path2, dpi=150, bbox_inches="tight")
+            plt.close(fig2)
+            plots.append(path2)
+            log.info(f"Generated Pareto convergence plot: {path2}")
 
     return plots
+
+
+def _hypervolume_2d_simple(points: np.ndarray, ref_point: np.ndarray) -> float:
+    """Simple 2D hypervolume (area) for minimisation objectives.
+
+    Sweeps points sorted by first objective, accumulating dominated area.
+    """
+    if len(points) == 0:
+        return 0.0
+    pts = points.copy().astype(float)
+    ref = ref_point.copy().astype(float)
+    mask = np.all(pts <= ref, axis=1)
+    if not mask.any():
+        return 0.0
+    pts = pts[mask]
+    order = np.argsort(pts[:, 0])
+    pts = pts[order]
+    hv = 0.0
+    for i in range(len(pts)):
+        dx = (pts[i + 1, 0] if i + 1 < len(pts) else ref[0]) - pts[i, 0]
+        dy = ref[1] - pts[i, 1]
+        hv += max(0.0, dx) * max(0.0, dy)
+    return hv
 
 
 if __name__ == "__main__":
