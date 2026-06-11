@@ -1,0 +1,2 @@
+# This directory holds generated ACL tokens.
+# It is git-ignored — tokens are never committed to the repository.
