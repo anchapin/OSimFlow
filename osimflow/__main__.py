@@ -205,6 +205,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "OSIMFLOW_DURATION_S."
         ),
     )
+    # Skip preflight model validation (issue #107).
+    run.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help=(
+            "Skip the PREFLIGHT_RUN_MODEL step that validates the seed "
+            "model before the full campaign. Useful when the model is "
+            "known-good or when iterating on downstream steps."
+        ),
+    )
     imp = sub.add_parser(
         "import-osa",
         help="Import an OpenStudio Analysis (.osa / analysis.json) file",

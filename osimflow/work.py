@@ -14,14 +14,24 @@ CLI surface to maintain.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from .executors import run_subprocess  # local helper (issue #6)
 
 log = logging.getLogger("osimflow.work")
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+class SevereEnergyPlusError(RuntimeError):
+    """Raised when a preflight simulation encounters severe errors."""
+
 
 # Resolve the project root from the package location so the work layer
 # does not hardcode a developer's local path. The convention is:
@@ -468,3 +478,103 @@ def generate_plots(
         log.error("generate_plots failed: %s", e.stderr)
         raise RuntimeError("generate_plots failed") from e
     return sorted(out.glob("*.png")) + sorted(out.glob("*.pdf"))
+
+
+# ---------------------------------------------------------------------------
+# Preflight run model (issue #107)
+# ---------------------------------------------------------------------------
+def preflight_run_model(
+    template_sim_package: Path,
+    openstudio_version: str,
+) -> None:
+    """Run a throwaway simulation of the seed model to catch errors early.
+
+    Makes a temporary copy of the ``template_sim_package``, runs
+    ``openstudio.cli run -w workflow.osw`` (or the stub if the CLI is
+    not available), and inspects the result.  If the run produces severe
+    errors, raises :class:`SevereEnergyPlusError` so the campaign aborts
+    before spending cloud budget on a broken model.
+
+    On success, the temporary copy is cleaned up and the function
+    returns ``None``.
+
+    Args:
+        template_sim_package: path to the user's seed model package.
+        openstudio_version: pinned OpenStudio version (for logging).
+
+    Raises:
+        SevereEnergyPlusError: the preflight simulation encountered
+            severe EnergyPlus errors.
+        RuntimeError: ``openstudio.cli`` is available but no
+            ``workflow.osw`` is found in the template package.
+    """
+    log.info(
+        "PREFLIGHT_RUN_MODEL: running throwaway sim on %s (version=%s)",
+        template_sim_package,
+        openstudio_version,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="osimflow_preflight_") as tmp_dir:
+        tmp_pkg = Path(tmp_dir) / "preflight_package"
+        shutil.copytree(template_sim_package, tmp_pkg)
+
+        use_real_cli = _is_openstudio_available() and not _is_stub_mode()
+
+        if use_real_cli:
+            workflow_path = _find_workflow_osw(tmp_pkg)
+            if workflow_path is None:
+                raise RuntimeError(
+                    f"No workflow.osw found in template_sim_package="
+                    f"{template_sim_package}. The preflight run requires "
+                    f"a workflow file."
+                )
+            cmd: list[str] = [
+                "openstudio.cli",
+                "run",
+                "-w",
+                str(workflow_path),
+            ]
+            log.info("preflight: invoking openstudio.cli with %s", cmd)
+            result = subprocess.run(  # noqa: S603
+                cmd,
+                cwd=tmp_pkg,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                # Extract the first severe error line from stderr or stdout
+                error_output = result.stderr or result.stdout or ""
+                severe_line = _extract_severe_error(error_output)
+                msg = (
+                    f"Preflight simulation FAILED (exit code {result.returncode}). "
+                    f"The seed model has errors that would waste cloud budget. "
+                    f"Fix the model before running the full campaign."
+                )
+                if severe_line:
+                    msg += f"\n  First severe error: {severe_line}"
+                raise SevereEnergyPlusError(msg)
+            log.info("preflight: openstudio.cli succeeded — seed model is valid")
+        else:
+            # Stub mode: simulate a quick pass. The stub writes a
+            # placeholder eplusout.err that is empty (success).
+            sim_out = tmp_pkg / "preflight_output"
+            sim_out.mkdir(parents=True, exist_ok=True)
+            (sim_out / "eplusout.sql").write_text("-- placeholder sql")
+            (sim_out / "eplusout.err").write_text("")
+            log.info("preflight: stub simulation passed")
+
+    log.info("PREFLIGHT_RUN_MODEL: complete — seed model validated")
+
+
+def _extract_severe_error(output: str) -> str:
+    """Extract the first severe error line from EnergyPlus output.
+
+    Searches for lines matching the pattern ``'<N> * Severe'`` which
+    EnergyPlus uses for severe-level diagnostics.  Returns the first
+    match, or an empty string if none found.
+    """
+    for line in output.splitlines():
+        if re.search(r"^\s*\d+\s+\*+\s*Severe", line, re.IGNORECASE):
+            return line.strip()
+    return ""
