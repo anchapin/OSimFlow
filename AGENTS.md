@@ -148,6 +148,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/CONTRIBUTING.md` | Contributor onboarding (stub for Phase 3). |
 | `docs/GOVERNANCE.md` | Community governance model (stub for Phase 3). |
 | `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
+| `osimflow-deploy/` | Cloud deployment recipes sub-monorepo (issue #164). Contains platform-specific README guides (AWS, Nomad, Docker), an independent CHANGELOG (`osimflow-deploy-v` tag prefix), and a CODEOWNERS file for IaC review. Links back to the actual IaC in `infra/`. Does **not** duplicate or move `infra/` files. |
 | `infra/aws/terraform/` | Terraform module for AWS Batch infrastructure (issue #148): VPC, S3 bucket, IAM roles, Batch compute environment, job queue, and job definition using `nrel/openstudio` container image. CI runs `terraform validate` on `infra/` changes. |
 | `infra/aws/terraform/iam.tf` | Least-privilege IAM roles (issue #130): ECS instance profile, task role (S3 + CWL), task-execution role (ECR pull), Batch service role. |
 | `infra/aws/terraform/job-definition.tf` | Batch job definition (issue #130): parameterised vCPU, memory, timeout, execution role. |
