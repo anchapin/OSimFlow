@@ -27,7 +27,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from osimflow.executors import AWSBatchExecutor
+from osimflow.executors import AWSBatchExecutor, _AWSBatchHandle
 
 # ---------------------------------------------------------------------------
 # Helpers: set up the Batch mock infrastructure (VPC, compute env, job queue,
@@ -397,12 +397,23 @@ def test_done_reflects_job_status() -> None:
     )
     executor._client = batch_client  # noqa: SLF001
 
-    handle = executor.submit(
-        lambda: None,
-        name="test-done",
-        cpus=1,
-        memory_mb=512,
+    # Submit the job via the Batch API directly (not through
+    # executor.submit, which blocks until terminal).  This gives us a
+    # job_id in SUBMITTED/RUNNABLE state so we can test done()=False.
+    resp = batch_client.submit_job(
+        jobName="test-done-raw",
+        jobQueue=batch_client.describe_job_queues(
+            jobQueues=[_QUEUE_NAME]
+        )["jobQueues"][0]["jobQueueArn"],
+        jobDefinition=batch_client.describe_job_definitions(
+            jobDefinitions=[_JOB_DEF_NAME]
+        )["jobDefinitions"][0]["jobDefinitionArn"],
     )
+    job_id = resp["jobId"]
+
+    # Construct a handle directly to test done() without the blocking
+    # submit() call (which calls _wait_for_terminal).
+    handle = _AWSBatchHandle(job_id=job_id, executor=executor)
 
     original_describe = batch_client.describe_jobs
 
