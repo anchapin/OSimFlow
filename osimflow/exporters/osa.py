@@ -32,6 +32,7 @@ should use the round-trip ``variables.yml`` directly.
 
 import json
 import logging
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -75,14 +76,29 @@ _PARAM_MAPS: dict[str, dict[str, str]] = {
 }
 
 
+# Placeholder note embedded in analysis.json when no seed .osm is found.
+_SEED_MISSING_NOTE = (
+    "NOTE: No seed model (.osm) was found in template_sim_package. "
+    "Add a seed.osm to the .osa archive before importing into PAT."
+)
+
+
 class OSAExporter:
     """Export campaign state to PAT-compatible analysis.json format.
+
+    Supports two workflows:
+
+    1. :meth:`export` — write ``analysis.json`` only.
+    2. :meth:`pack_osa` — produce a complete ``.osa`` ZIP archive
+       containing ``analysis.json``, seed model, measures, and weather
+       files.
 
     Usage::
 
         exporter = OSAExporter()
         path = exporter.export(config, outdir)
-        print(f"Wrote {path}")
+        # — or —
+        osa_path = exporter.pack_osa(config, outdir)
     """
 
     def export(self, config: CampaignConfig, outdir: Path) -> Path:
@@ -107,6 +123,86 @@ class OSAExporter:
         outpath.write_text(json.dumps(analysis, indent=2) + "\n", encoding="utf-8")
         log.info("Exported analysis.json to %s", outpath)
         return outpath
+
+    def pack_osa(self, config: CampaignConfig, outdir: Path) -> Path:
+        """Package campaign into a ``.osa`` ZIP archive.
+
+        The archive layout matches the openstudio-analysis-gem structure:
+
+        - ``analysis.json`` (always present)
+        - ``seed.osm`` (if a ``.osm`` file exists in
+          ``template_sim_package``)
+        - ``measures/`` (contents of ``template_sim_package/measures/``)
+        - ``weather/`` (contents of ``template_sim_package/weather/``)
+
+        If no ``.osm`` file is found, a ``_seed_missing_note`` key is
+        added to the ``analysis.json`` inside the archive.  The export
+        never fails for missing files.
+
+        Parameters
+        ----------
+        config
+            The campaign configuration to package.
+        outdir
+            Directory where the ``.osa`` file will be written.
+
+        Returns
+        -------
+        Path
+            Absolute path to the ``.osa`` ZIP archive.
+        """
+        outdir = Path(outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        # Step 1: export analysis.json to a temporary location.
+        analysis_path = self.export(config, outdir / "_osa_staging")
+        analysis_data = json.loads(analysis_path.read_text(encoding="utf-8"))
+
+        # Step 2: check for a seed .osm in template_sim_package.
+        has_seed = False
+        seed_path: Path | None = None
+        tsp = config.template_sim_package
+        if tsp and tsp.is_dir():
+            for candidate in sorted(tsp.rglob("*.osm")):
+                if candidate.is_file():
+                    has_seed = True
+                    seed_path = candidate
+                    break
+
+        if not has_seed:
+            log.warning(
+                "No seed model (.osm) found in %s; "
+                "the .osa archive will lack a seed model. "
+                "Add one before importing into PAT.",
+                tsp,
+            )
+            analysis_data["_seed_missing_note"] = _SEED_MISSING_NOTE
+
+        # Step 3: build the .osa ZIP.
+        osa_path = outdir / f"{config.outdir.name}.osa"
+        with zipfile.ZipFile(osa_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Always write analysis.json.
+            zf.writestr("analysis.json", json.dumps(analysis_data, indent=2) + "\n")
+
+            # Include seed model.
+            if has_seed and seed_path is not None:
+                zf.write(seed_path, "seed.osm")
+                log.info("Packed seed model: %s → seed.osm", seed_path.name)
+
+            # Include template_sim_package contents (measures/, weather/, etc.)
+            if tsp and tsp.is_dir():
+                for f in tsp.rglob("*"):
+                    if not f.is_file():
+                        continue
+                    # Skip .osm (already handled as seed.osm).
+                    if f.suffix.lower() == ".osm":
+                        continue
+                    arcname = str(f.relative_to(tsp))
+                    zf.write(f, arcname)
+                    log.debug("Packed %s → %s", f, arcname)
+
+        log.info("Packed .osa archive: %s", osa_path)
+        return osa_path
 
     def _build_analysis(self, config: CampaignConfig) -> dict[str, Any]:
         """Build the full analysis.json structure."""
@@ -258,8 +354,7 @@ class OSAExporter:
         # Handle lossy conversions (beta, gamma, exponential → uniform).
         if dist_name in _LOSSY_DISTRIBUTIONS:
             log.warning(
-                "Distribution %r has no direct OSA equivalent; exporting as uniform. "
-                "Variable: %s",
+                "Distribution %r has no direct OSA equivalent; exporting as uniform. Variable: %s",
                 dist_name,
                 var.get("name", "<unknown>"),
             )
