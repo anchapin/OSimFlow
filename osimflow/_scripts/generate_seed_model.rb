@@ -205,12 +205,12 @@ ideal.addToThermalZone(zone)
 # People
 people_def = OpenStudio::Model::PeopleDefinition.new(model)
 people_def.setName("People Def")
-people_def.setNumberofPeopleCalculationMethod("People")
-people_def.setNumberofPeople(2)
+people_def.setNumberOfPeopleCalculationMethod("People")
+people_def.setNumberOfPeople(2)
 people = OpenStudio::Model::People.new(people_def)
 people.setName("People")
 people.setSpace(space)
-people.setNumberofPeopleSchedule(always_on)
+people.setNumberOfPeopleSchedule(always_on)
 
 # Lights
 lights_def = OpenStudio::Model::LightsDefinition.new(model)
