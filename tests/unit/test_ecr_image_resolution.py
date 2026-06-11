@@ -72,7 +72,10 @@ class TestECRImageResolution:
         env = executor._build_environment(container=None, openstudio_version="3.11.0")
         container_env = [e for e in env if e["name"] == "OSIMFLOW_CONTAINER"]
         assert len(container_env) == 1
-        assert container_env[0]["value"] == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.11.0"
+        assert (
+            container_env[0]["value"]
+            == "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio:3.11.0"
+        )
 
     def test_environment_default_without_ecr(self, _mock_boto3: None) -> None:
         from osimflow.executors import AWSBatchExecutor
