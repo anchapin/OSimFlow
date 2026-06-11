@@ -1,14 +1,15 @@
 """Campaign orchestrator.
 
-This is the ~300-line class that drives the six-step campaign DAG.
+This is the ~300-line class that drives the campaign DAG.
 The shape is:
 
     1. GENERATE_LHS_SAMPLES — one shot, no fan-out.
-    2. APPLY_PARAMETERS     — fan out over N samples.
-    3. RUN_OPENSTUDIO_SIM   — fan out over N samples (heavy).
-    4. EXTRACT_KPIS         — fan out over N samples.
-    5. AGGREGATE_RESULTS    — one shot after all KPIs.
-    6. GENERATE_BASIC_PLOTS — one shot after aggregation.
+    2. PREFLIGHT_RUN_MODEL  — one shot, validates seed model (issue #107).
+    3. APPLY_PARAMETERS     — fan out over N samples.
+    4. RUN_OPENSTUDIO_SIM   — fan out over N samples (heavy).
+    5. EXTRACT_KPIS         — fan out over N samples.
+    6. AGGREGATE_RESULTS    — one shot after all KPIs.
+    7. GENERATE_BASIC_PLOTS — one shot after aggregation.
 
 Each step is cached via `SQLiteCache`. Each per-sample step submits to
 the configured `BaseExecutor`. Fan-out is bounded by the executor's
@@ -65,10 +66,12 @@ from .mlflow_hook import (
 from .monitoring import RunTrace, SampleTrace, sample_log_paths
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .work import (
+    SevereEnergyPlusError,
     aggregate_results,
     default_apply_parameters,
     extract_kpis,
     generate_plots,
+    preflight_run_model,
     run_openstudio_sim,
 )
 
@@ -710,12 +713,16 @@ class Campaign:
         }
 
     def _run_full_campaign(self, t0: float) -> dict[str, object]:
-        """Standard full campaign: all 6 steps, all samples."""
+        """Standard full campaign: all steps, all samples."""
         algo = AlgorithmRegistry.get(self.cfg.algorithm)
         samples: list[SampleSpec] = self.step_generate_samples(algo)
         samples_link = self.cfg.samples_file
         samples_link.parent.mkdir(parents=True, exist_ok=True)
         samples_link.write_text(json.dumps({"samples": samples}, indent=2))
+        # Preflight model validation (issue #107): run a throwaway sim
+        # on the seed model before spending cloud budget. Skipped when
+        # --skip-preflight is set.
+        self.step_preflight_run_model()
         parameterized: SampleDict = self.step_apply_parameters(samples)
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
         kpi_files: list[Path] = self.step_extract_kpis(simulated)
@@ -890,6 +897,86 @@ class Campaign:
         )
         algo = AlgorithmRegistry.get("lhs")
         return self.step_generate_samples(algo)
+
+    def step_preflight_run_model(self) -> None:
+        """Single-shot: run a throwaway simulation of the seed model.
+
+        Makes a temporary copy of the ``template_sim_package`` and runs
+        ``openstudio.cli run -w workflow.osw`` (or the stub when the CLI
+        is not available).  If the run encounters severe errors, raises
+        :class:`SevereEnergyPlusError` to abort the campaign before
+        spending cloud budget.
+
+        This step is cached: a successful preflight result is stored in
+        the cache so a re-run with the same template and version does not
+        re-execute the simulation.  The cache key includes the template
+        package hash and the OpenStudio version.
+
+        Skipped when ``cfg.skip_preflight`` is ``True`` (the
+        ``--skip-preflight`` CLI flag).
+
+        Raises:
+            SevereEnergyPlusError: the seed model has errors that would
+                cause every sample to fail.
+        """
+        if self.cfg.skip_preflight:
+            log.info("PREFLIGHT_RUN_MODEL: skipped (--skip-preflight)")
+            self.trace.step_finished(
+                "PREFLIGHT_RUN_MODEL",
+                cache="SKIPPED",
+                elapsed_s=0.0,
+                exit_code=0,
+            )
+            return
+
+        t0 = time.time()
+        os_version = self.cfg.openstudio_version
+        inputs_hash = sha256_of_files(sorted(self.cfg.template_sim_package.rglob("*")))
+        key = CacheKey(
+            step="PREFLIGHT_RUN_MODEL",
+            sample_id="ALL",
+            openstudio_version=os_version,
+            inputs_sha256=inputs_hash,
+            code_sha256=self.code_hashes["work"],
+            container_digest=CONTAINER_OS.format(version=os_version),
+        )
+        cached = self.cache.lookup(key)
+        if cached:
+            log.info("PREFLIGHT_RUN_MODEL: cache HIT")
+            self.trace.step_finished(
+                "PREFLIGHT_RUN_MODEL",
+                cache="HIT",
+                elapsed_s=time.time() - t0,
+                exit_code=0,
+            )
+            return
+
+        try:
+            preflight_run_model(
+                self.cfg.template_sim_package,
+                os_version,
+            )
+        except SevereEnergyPlusError:
+            log.error("PREFLIGHT_RUN_MODEL: seed model has severe errors")
+            self.trace.step_finished(
+                "PREFLIGHT_RUN_MODEL",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
+            )
+            raise
+
+        # Store a marker file so the cache has a path to record.
+        preflight_marker = self.cfg.work_dir / "preflight_OK"
+        preflight_marker.parent.mkdir(parents=True, exist_ok=True)
+        preflight_marker.write_text(f"preflight passed at {time.strftime('%Y-%m-%dT%H:%M:%S')}")
+        self.cache.store(key, preflight_marker, exit_code=0)
+        self.trace.step_finished(
+            "PREFLIGHT_RUN_MODEL",
+            cache="MISS",
+            elapsed_s=time.time() - t0,
+            exit_code=0,
+        )
 
     def step_apply_parameters(self, samples: list[SampleSpec]) -> SampleDict:
         """Fan-out: for each sample, produce a modified sim package.

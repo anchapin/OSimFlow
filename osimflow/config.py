@@ -73,6 +73,11 @@ class CampaignConfig:
     # a non-zero exit code is logged but does NOT fail the campaign.
     # Useful for cleanup, upload, notification, DynamoDB writes.
     finalize_script: Path | None = None
+    # Skip preflight model run (issue #107). When True, the
+    # PREFLIGHT_RUN_MODEL step is skipped, allowing the campaign to
+    # proceed without validating the seed model first. Useful when the
+    # model is known-good or when iterating on downstream steps.
+    skip_preflight: bool = False
 
     @property
     def work_dir(self) -> Path:
@@ -151,4 +156,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         finalize_script=(
             Path(str(args["finalize_script"])).resolve() if args.get("finalize_script") else None
         ),
+        skip_preflight=bool(args.get("skip_preflight", False)),
     )

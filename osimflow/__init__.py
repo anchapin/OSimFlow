@@ -29,6 +29,7 @@ from .weather import (
     validate_epw,
     validate_epw_header,
 )
+from .work import SevereEnergyPlusError
 
 __all__ = [
     "AlgorithmRegistry",
@@ -48,6 +49,7 @@ __all__ = [
     "NomadExecutor",
     "RunTrace",
     "StepTrace",
+    "SevereEnergyPlusError",
     "EPWValidationError",
     "EPWDownloadError",
     "discover_epw_files",

@@ -148,9 +148,10 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 ### DAG step names (referenced from `osimflow/campaign.py`)
 
-The 6-step DAG that the `Campaign` class drives:
+The 7-step DAG that the `Campaign` class drives:
 
 - `GENERATE_LHS_SAMPLES` — single-shot, no fan-out.
+- `PREFLIGHT_RUN_MODEL` — single-shot, validates seed model before cloud spend (issue #107).
 - `APPLY_PARAMETERS` — fan-out over N samples.
 - `RUN_OPENSTUDIO_SIM` — fan-out over N samples (heavy).
 - `EXTRACT_KPIS` — fan-out over N samples.
@@ -173,6 +174,7 @@ The 6-step DAG that the `Campaign` class drives:
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--dry-run` (dry-run mode: force LocalExecutor, 1 sample, steps 1-4 only)
 - `--sample` (single-sample mode: re-run sample N from existing samples.json)
+- `--skip-preflight` (skip the PREFLIGHT_RUN_MODEL step that validates the seed model; issue #107)
 - `--log_level`
 
 ### Developer workflow targets (Makefile)
