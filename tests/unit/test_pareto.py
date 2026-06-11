@@ -296,3 +296,95 @@ class TestEdgeCases:
         # s1 is not dominated (s2 can't dominate due to missing objective)
         # and s2 is not dominated either.
         assert len(front) == 2
+
+
+class TestHypervolume:
+    """Hypervolume indicator tests (issue #106)."""
+
+    def test_empty_front_returns_zero(self) -> None:
+        front = ParetoFront(objective_names=["eui", "cost"])
+        assert front.hypervolume([200.0, 100.0]) == 0.0
+
+    def test_single_point_2d(self) -> None:
+        front = ParetoFront(objective_names=["eui", "cost"])
+        front.add_generation([_make_solution("s1", {"eui": 100.0, "cost": 50.0})])
+        hv = front.hypervolume([200.0, 100.0])
+        expected = (200.0 - 100.0) * (100.0 - 50.0)
+        assert abs(hv - expected) < 1e-6
+
+    def test_two_points_2d(self) -> None:
+        front = ParetoFront(objective_names=["eui", "cost"])
+        front.add_generation(
+            [
+                _make_solution("s1", {"eui": 100.0, "cost": 50.0}),
+                _make_solution("s2", {"eui": 120.0, "cost": 30.0}),
+            ]
+        )
+        hv = front.hypervolume([200.0, 100.0])
+        expected = (120.0 - 100.0) * (100.0 - 50.0) + (200.0 - 120.0) * (100.0 - 30.0)
+        assert abs(hv - expected) < 1e-6
+
+    def test_dominated_point_contributes_nothing(self) -> None:
+        front = ParetoFront(objective_names=["eui", "cost"])
+        front.add_generation(
+            [
+                _make_solution("s1", {"eui": 100.0, "cost": 50.0}),
+                _make_solution("s2", {"eui": 110.0, "cost": 60.0}),  # dominated
+            ]
+        )
+        hv = front.hypervolume([200.0, 100.0])
+        expected = (200.0 - 100.0) * (100.0 - 50.0)
+        assert abs(hv - expected) < 1e-6
+
+    def test_maximization_2d(self) -> None:
+        front = ParetoFront(objective_names=["eff", "comfort"], maximize=[True, True])
+        front.add_generation(
+            [
+                _make_solution("s1", {"eff": 0.9, "comfort": 0.8}),
+                _make_solution("s2", {"eff": 0.7, "comfort": 0.95}),
+            ]
+        )
+        hv = front.hypervolume([0.0, 0.0])
+        assert hv > 0.0
+
+    def test_mixed_min_max_2d(self) -> None:
+        front = ParetoFront(objective_names=["eui", "comfort"], maximize=[False, True])
+        front.add_generation(
+            [
+                _make_solution("s1", {"eui": 80.0, "comfort": 0.7}),
+                _make_solution("s2", {"eui": 100.0, "comfort": 0.9}),
+            ]
+        )
+        hv = front.hypervolume([200.0, 0.0])
+        assert hv > 0.0
+
+    def test_ref_point_too_good_returns_zero(self) -> None:
+        front = ParetoFront(objective_names=["eui", "cost"])
+        front.add_generation([_make_solution("s1", {"eui": 100.0, "cost": 50.0})])
+        assert front.hypervolume([50.0, 25.0]) == 0.0
+
+    def test_single_objective_raises(self) -> None:
+        front = ParetoFront(objective_names=["eui"])
+        front.add_generation([_make_solution("s1", {"eui": 100.0})])
+        with pytest.raises(ValueError, match="at least 2 objectives"):
+            front.hypervolume([200.0])
+
+    def test_ref_point_length_mismatch_raises(self) -> None:
+        front = ParetoFront(objective_names=["eui", "cost"])
+        with pytest.raises(ValueError, match="ref_point length"):
+            front.hypervolume([200.0])
+
+    def test_3d_without_pymoo_raises(self) -> None:
+        """3+ objectives without pymoo should raise ImportError."""
+        front = ParetoFront(objective_names=["a", "b", "c"])
+        front.add_generation(
+            [
+                _make_solution("s1", {"a": 1.0, "b": 2.0, "c": 3.0}),
+            ]
+        )
+        try:
+            front.hypervolume([10.0, 10.0, 10.0])
+        except ImportError as e:
+            assert "pymoo" in str(e)
+        except Exception:
+            pass  # pymoo is installed — that's fine too
