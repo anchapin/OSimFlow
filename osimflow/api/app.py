@@ -42,12 +42,12 @@ def create_app(outdir: Path | None = None, read_only: bool = True) -> FastAPI:
         raw: Any = json.loads(run_json_path.read_text())
         return raw  # type: ignore[no-any-return]
 
-    @app.get("/health")  # type: ignore[misc]
+    @app.get("/health")  # type: ignore[untyped-decorator]
     async def health() -> dict[str, str]:
         """Liveness probe."""
         return {"status": "alive"}
 
-    @app.get("/ready")  # type: ignore[misc]
+    @app.get("/ready")  # type: ignore[untyped-decorator]
     async def ready() -> dict[str, Any]:
         """Readiness probe — checks if run.json is accessible."""
         try:
@@ -56,7 +56,7 @@ def create_app(outdir: Path | None = None, read_only: bool = True) -> FastAPI:
         except HTTPException:
             return {"status": "not_ready", "reason": "run.json not available"}
 
-    @app.get("/api/v1/campaign")  # type: ignore[misc]
+    @app.get("/api/v1/campaign")  # type: ignore[untyped-decorator]
     async def get_campaign() -> dict[str, Any]:
         """Get campaign metadata from run.json."""
         data = _load_run_json()
@@ -68,7 +68,7 @@ def create_app(outdir: Path | None = None, read_only: bool = True) -> FastAPI:
             "baseline_comparison": data.get("baseline_comparison"),
         }
 
-    @app.get("/api/v1/steps")  # type: ignore[misc]
+    @app.get("/api/v1/steps")  # type: ignore[untyped-decorator]
     async def get_steps() -> dict[str, Any]:
         """Get step traces from run.json."""
         data = _load_run_json()
