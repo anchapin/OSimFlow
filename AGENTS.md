@@ -148,6 +148,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/GOVERNANCE.md` | Community governance model (stub for Phase 3). |
 | `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
 | `infra/aws/terraform/` | Terraform module for AWS Batch infrastructure (issue #148): VPC, S3 bucket, IAM roles, Batch compute environment, job queue, and job definition using `nrel/openstudio` container image. CI runs `terraform validate` on `infra/` changes. |
+| `infra/nomad/osimflow_worker.hcl` | Nomad parameterized job spec (issue #135). Defines the `osimflow-worker` batch job template with security constraints (no privileged, memory limited, fail-fast restart). Dispatched once per sample via ``POST /v1/job/osimflow-worker/dispatch``. |
 | `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit). |
 | `LICENSE` | MIT. |
 | `README.md` | One-paragraph project pitch + status. |
@@ -368,6 +369,7 @@ output artifacts plus the per-campaign `run.json` are produced:
 - `tests/integration/test_aws_batch_real.py` — Real AWS Batch E2E test (issue #146). Skipped unless `OSIMFLOW_AWS_BATCH_E2E=1`. Runs via the nightly `aws-batch-e2e` workflow against real Batch infrastructure with OIDC auth.
 - `tests/integration/test_cache_resume.py` — runs the same campaign twice against the same `outdir`; the warm run must be at least 5x faster than the cold run (the issue quotes ~280x for 5 samples on the spike).
 - `tests/integration/test_osa_round_trip.py` — OSA round-trip integration test (issue #134). Verifies that `OSAExporter.pack_osa()` produces a valid `.osa` ZIP and that export → pack → unpack → import preserves algorithm type, variable names, distributions, measure arguments, and template package files.
+- `tests/integration/test_nomad_dispatch.py` — Nomad parameterized dispatch tests (issue #135). Verifies HCL template structure, `_build_parameterized_spec()` output, `register_parameterized_job()` HTTP wiring, `dispatch_sample()` metadata propagation, and security constraints. All mocked (no real Nomad cluster needed).
 
 The full executor suite runs in well under 60s on a single core. The CI
 workflow runs them on every PR via the same `pytest` invocation as the

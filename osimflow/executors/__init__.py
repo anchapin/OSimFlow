@@ -807,6 +807,35 @@ class _NomadClient:
     def submit_job(self, spec: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/jobs", body=spec)
 
+    def dispatch_job(
+        self,
+        job_id: str,
+        *,
+        meta: dict[str, str],
+        payload: bytes | None = None,
+    ) -> dict[str, Any]:
+        """Dispatch a parameterized job with the given metadata.
+
+        ``POST /v1/job/{job_id}/dispatch`` creates a child job from a
+        parameterized job template. The ``meta`` dict is forwarded as
+        the dispatch payload's ``Meta`` field so the child job can
+        interpolate ``NOMAD_META_*`` environment variables in its task
+        config.
+
+        Returns the dispatch response (``EvalID``, ``JobID``, etc.).
+        """
+        body: dict[str, Any] = {"Meta": meta}
+        if payload is not None:
+            body["Payload"] = payload
+        return self._request("POST", f"/v1/job/{job_id}/dispatch", body=body)
+
+    def get_job(self, job_id: str) -> dict[str, Any]:
+        """Return the job details.
+
+        ``GET /v1/job/{job_id}`` returns the job spec and status.
+        """
+        return self._request("GET", f"/v1/job/{job_id}")
+
     def get_allocation(self, alloc_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/allocation/{alloc_id}")
 
@@ -981,7 +1010,7 @@ class _NomadHandle(Handle):
 
 
 class NomadExecutor(BaseExecutor):
-    """HashiCorp Nomad batch executor (issue #27).
+    """HashiCorp Nomad batch executor (issues #27, #135).
 
     Wraps the Nomad HTTP API (``/v1/jobs`` submit + ``/v1/allocation/<id>``
     poll) to launch one ``batch`` job per ``submit()`` call. The
@@ -990,6 +1019,16 @@ class NomadExecutor(BaseExecutor):
     re-raises a ``RuntimeError`` whose message includes the Nomad
     status description so the Campaign's ``except Exception`` path
     logs a useful line.
+
+    **Parameterized dispatch (issue #135):** In addition to per-sample
+    ``submit()`` (which builds a standalone batch job), the executor
+    supports registering a parameterized job template (HCL) and then
+    dispatching child jobs via ``POST /v1/job/<id>/dispatch``. This is
+    the recommended Nomad pattern for high-volume, structurally
+    identical workloads — the template is parsed once, and each dispatch
+    carries only the per-sample metadata (``SAMPLE_ID``, ``OUTDIR``,
+    ``OPENSTUDIO_VERSION``). The HCL template lives at
+    ``infra/nomad/osimflow_worker.hcl``.
 
     Resource directives (``cpus``, ``memory_mb``, ``time_min``) are
     mapped to the Nomad ``resources`` block (``CPU`` in MHz, ``MemoryMB``
@@ -1005,6 +1044,11 @@ class NomadExecutor(BaseExecutor):
     Batch executor enforces. Similarly, no address is pinned — the
     ``NOMAD_ADDR`` env var (or constructor kwarg) decides.
 
+    Security (HCL template): the parameterized job template enforces
+    ``privileged = false``, caps memory at 4096 MB, and limits CPU to
+    2000 MHz. These constraints are baked into the HCL and cannot be
+    overridden at dispatch time.
+
     The HTTP transport is stdlib ``urllib.request``, lazy-imported
     inside ``_NomadClient`` so the local-executor / slurm-executor /
     aws-batch paths do not pay the import cost. Tests patch
@@ -1012,6 +1056,10 @@ class NomadExecutor(BaseExecutor):
     """
 
     name = "nomad"
+
+    # Path to the parameterized HCL job template relative to the repo root.
+    # Used by ``_build_parameterized_spec()`` to load the JSON-ified spec.
+    HCL_TEMPLATE_PATH = Path("infra/nomad/osimflow_worker.hcl")
 
     def __init__(
         self,
@@ -1032,6 +1080,170 @@ class NomadExecutor(BaseExecutor):
         self._client = _NomadClient(
             address=self.address,
             token=os.environ.get("NOMAD_TOKEN"),
+        )
+        # Track whether the parameterized job template has been registered.
+        self._parameterized_job_registered = False
+
+    def _build_parameterized_spec(
+        self,
+        *,
+        datacentre: str,
+        cpus: int = 2000,
+        memory_mb: int = 4096,
+    ) -> dict[str, Any]:
+        """Build a Nomad parameterized job spec from the HCL template.
+
+        The spec is a JSON representation of the HCL template at
+        ``infra/nomad/osimflow_worker.hcl``. It uses Nomad's
+        ``parameterized`` block so the orchestrator can dispatch one
+        child job per sample with only the per-sample metadata
+        (``SAMPLE_ID``, ``OUTDIR``, ``OPENSTUDIO_VERSION``).
+
+        Security constraints are baked into the spec:
+
+        * ``privileged = false`` — containers never run as privileged.
+        * ``memory_mb`` capped at 4096 — prevents runaway memory use.
+        * ``cpu`` capped at 2000 MHz (2 cores) — prevents resource hogging.
+        * ``restart_policy mode = "fail"`` with ``attempts = 1`` — fail
+          fast so the Campaign can surface the error.
+
+        The caller registers this spec once via ``submit_job``, then
+        dispatches per-sample children via ``dispatch_job``.
+        """
+        return {
+            "Job": {
+                "ID": "osimflow-worker",
+                "Name": "osimflow-worker",
+                "Type": "batch",
+                "Region": "global",
+                "Datacenters": [datacentre],
+                "ParameterizedJob": {
+                    "Payload": "optional",
+                    "MetaRequired": ["SAMPLE_ID", "OUTDIR"],
+                    "MetaOptional": ["OPENSTUDIO_VERSION", "GENERATION"],
+                },
+                "TaskGroups": [
+                    {
+                        "Name": "sim",
+                        "Count": 1,
+                        "RestartPolicy": {
+                            "Attempts": 1,
+                            "Interval": 300000000000,  # 5m in nanoseconds
+                            "Delay": 10000000000,  # 10s in nanoseconds
+                            "Mode": "fail",
+                        },
+                        "Tasks": [
+                            {
+                                "Name": "openstudio",
+                                "Driver": "docker",
+                                "Config": {
+                                    "image": "nrel/openstudio:${OPENSTUDIO_VERSION}",
+                                    "command": "openstudio",
+                                    "args": ["cli", "run", "-w", "/local/workflow.osw"],
+                                    "privileged": False,
+                                    "volumes": ["local/input:/local/input:ro"],
+                                    "memory_mb": memory_mb,
+                                    "cpu": cpus,
+                                },
+                                "Meta": {
+                                    "SAMPLE_ID": "${NOMAD_META_SAMPLE_ID}",
+                                    "OUTDIR": "${NOMAD_META_OUTDIR}",
+                                },
+                                "Resources": {
+                                    "CPU": cpus,
+                                    "MemoryMB": memory_mb,
+                                },
+                                "LogConfig": {
+                                    "MaxFiles": 2,
+                                    "MaxFileSizeMB": 50,
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+
+    def register_parameterized_job(
+        self,
+        *,
+        cpus: int = 2000,
+        memory_mb: int = 4096,
+    ) -> str:
+        """Register the parameterized job template with the Nomad cluster.
+
+        This must be called once before ``dispatch_sample()`` can be used.
+        The spec is built from the HCL template parameters; ``cpus`` and
+        ``memory_mb`` set the per-task resource ceiling.
+
+        Returns the registered job ID (``"osimflow-worker"``).
+
+        Raises ``RuntimeError`` if the Nomad API rejects the spec.
+        """
+        spec = self._build_parameterized_spec(
+            datacentre=self.datacentre,
+            cpus=cpus,
+            memory_mb=memory_mb,
+        )
+        response = self._client.submit_job(spec)
+        job_id = response.get("JobID", "osimflow-worker")
+        self._parameterized_job_registered = True
+        log.info("nomad registered parameterized job template: job_id=%s", job_id)
+        return str(job_id)
+
+    def dispatch_sample(
+        self,
+        *,
+        sample_id: str,
+        outdir: str,
+        openstudio_version: str | None = None,
+        generation: int | None = None,
+    ) -> Handle:
+        """Dispatch a parameterized job for a single sample.
+
+        Requires that ``register_parameterized_job()`` has been called
+        first. The dispatch carries per-sample metadata (``SAMPLE_ID``,
+        ``OUTDIR``, and optionally ``OPENSTUDIO_VERSION`` and
+        ``GENERATION``) which the task can interpolate via
+        ``NOMAD_META_*`` environment variables.
+
+        Returns a ``Handle`` that polls the child job's allocation until
+        it reaches a terminal state.
+        """
+        if not self._parameterized_job_registered:
+            raise RuntimeError(
+                "Parameterized job template not registered. "
+                "Call register_parameterized_job() before dispatch_sample()."
+            )
+
+        meta: dict[str, str] = {
+            "SAMPLE_ID": sample_id,
+            "OUTDIR": outdir,
+        }
+        if openstudio_version is not None:
+            meta["OPENSTUDIO_VERSION"] = openstudio_version
+        if generation is not None:
+            meta["GENERATION"] = str(generation)
+
+        log.info(
+            "nomad dispatch sample_id=%s outdir=%s openstudio_version=%s",
+            sample_id,
+            outdir,
+            openstudio_version,
+        )
+
+        response = self._client.dispatch_job(
+            "osimflow-worker",
+            meta=meta,
+        )
+        job_id = response.get("JobID", "")
+        eval_id = response.get("EvalID", "")
+        log.info("nomad dispatch -> jobId=%s evalId=%s", job_id, eval_id)
+
+        return _NomadHandle(
+            job_id=job_id,
+            eval_id=eval_id,
+            executor=self,
         )
 
     def _build_job_spec(
