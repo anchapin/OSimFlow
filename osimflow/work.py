@@ -132,10 +132,7 @@ def _is_openstudio_available() -> bool:
     binary as ``openstudio.cli`` (older tags) and others as just
     ``openstudio`` (3.11.0+), so we check both names.
     """
-    return (
-        shutil.which("openstudio.cli") is not None
-        or shutil.which("openstudio") is not None
-    )
+    return shutil.which("openstudio.cli") is not None or shutil.which("openstudio") is not None
 
 
 def _is_stub_mode() -> bool:
