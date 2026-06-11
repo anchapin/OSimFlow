@@ -117,6 +117,8 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend`; plug-in metrics backends (issue #145, #127). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, plus `EPWValidationError` / `EPWDownloadError`. |
+| `osimflow/api/__init__.py` | REST API public surface: `create_app`. Optional `[api]` extra (issue #138). |
+| `osimflow/api/app.py` | FastAPI application factory with `/health`, `/ready`, `/api/v1/campaign`, `/api/v1/steps` endpoints (issue #138, G23a). |
 | `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
 | `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. |
 | `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
@@ -213,6 +215,8 @@ The 7-step DAG that the `Campaign` class drives:
 - `--max-generations` (maximum number of DAG generations; default 1 for single-shot LHS. Issue #122)
 - `--log_level`
 
+**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, and `--read-only` flags. Requires `pip install osimflow[api]`.
+
 ### Developer workflow targets (Makefile)
 
 The `Makefile` is the canonical day-to-day interface. Every CI job has a
@@ -252,6 +256,10 @@ pip install -e ".[sensitivity]"
 # Optional multi-objective optimization add-on (issue #140). Brings in
 # pymoo; required for NSGA-II and PSO sampling algorithms.
 pip install -e ".[optimization]"
+
+# Optional REST API add-on (issue #138). Brings in FastAPI + uvicorn;
+# required for the `osimflow serve` subcommand.
+pip install -e ".[api]"
 ```
 
 ### Run a campaign
@@ -336,6 +344,12 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./results
+
+# REST API server (optional add-on, issue #138). Requires `pip install osimflow[api]`.
+osimflow serve \
+  --outdir ./results \
+  --host 0.0.0.0 \
+  --port 8000
 ```
 
 The campaign writes `${outdir}/run.json` with per-step timing and per-sample status; this is the primary monitoring artifact (see `.agents/results/monitoring-decision.md`).
@@ -511,6 +525,7 @@ Use these patterns to decide where to make a change.
 | Add an export format | New module in `osimflow/exporters/` (e.g. `osa.py` for PAT) **and** add the `--target` choice to `osimflow/__main__.py` export subcommand. |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
 | Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/` — modify the Terraform module. IAM roles are in `iam.tf`, job definition in `job-definition.tf`. Run `terraform validate` to check. CI validates on `infra/` path changes. |
+| Add a REST API endpoint | New route in `osimflow/api/app.py` **and** a test in `tests/unit/test_api_core.py`. Requires `pip install osimflow[api]`. |
 
 ### 9.1 Tool selection decision tree
 

@@ -70,13 +70,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
     raise ValueError(f"unknown executor: {args.executor}")
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="osimflow",
-        description="OSimFlow — parametric OpenStudio simulation campaigns",
-    )
-    sub = p.add_subparsers(dest="command", required=True)
-    run = sub.add_parser("run", help="Run a campaign")
+def _add_run_args(run: argparse.ArgumentParser) -> None:
     run.add_argument(
         "--executor", choices=["local", "slurm", "aws_batch", "nomad"], default="local"
     )
@@ -88,8 +82,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Submit to real Slurm (default: submitit DebugExecutor)",
     )
-    # Advanced Slurm directives (issue #4). All optional; submitit
-    # omits unset directives from the sbatch header.
     run.add_argument(
         "--slurm-qos",
         default=None,
@@ -107,7 +99,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--aws-batch-queue", default="osimflow-batch-queue")
     run.add_argument("--aws-batch-job-definition", default=None)
-    # Spot instance retry + price ceiling for AWS Batch (issue #131).
     run.add_argument(
         "--aws-batch-max-spot-price-usd",
         type=float,
@@ -148,7 +139,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "When set, the Batch executor pulls from ECR instead of Docker Hub."
         ),
     )
-    # Nomad executor flags (issue #27).
     run.add_argument(
         "--nomad-address",
         default=None,
@@ -179,7 +169,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a .py file defining extract_kpis(...) (BYOS)",
     )
     run.add_argument("--log_level", default="INFO")
-    # Sampling algorithm (issue #121). Dispatched through AlgorithmRegistry.
     run.add_argument(
         "--algorithm",
         default="lhs",
@@ -188,9 +177,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "Available algorithms are registered in AlgorithmRegistry."
         ),
     )
-    # Optional MLflow integration (issue #7). When set, the campaign
-    # logs params / metrics / artifacts to the configured tracking
-    # server. When absent, the campaign runs without any mlflow import.
     run.add_argument(
         "--mlflow_tracking_uri",
         default=None,
@@ -200,10 +186,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "Requires `pip install osimflow[mlflow]`."
         ),
     )
-    # Weather file subdirectory (issue #63). Defaults to "weather"
-    # relative to template_sim_package. The pre-flight validation pass
-    # checks that all .epw files referenced in variables.yml exist
-    # under this directory and validates their EPW format.
     run.add_argument(
         "--weather_dir",
         default="weather",
@@ -230,7 +212,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "Useful for debugging a specific failed sample."
         ),
     )
-    # Pre/post campaign shell hooks (issue #108).
     run.add_argument(
         "--init-script",
         default=None,
@@ -254,7 +235,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "OSIMFLOW_DURATION_S."
         ),
     )
-    # Skip preflight model validation (issue #107).
     run.add_argument(
         "--skip-preflight",
         action="store_true",
@@ -264,7 +244,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "known-good or when iterating on downstream steps."
         ),
     )
-    # Generation loop (issue #122).
     run.add_argument(
         "--max-generations",
         type=int,
@@ -275,10 +254,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "for multiple generations. LHS is single-generation."
         ),
     )
-    imp = sub.add_parser(
-        "import-osa",
-        help="Import an OpenStudio Analysis (.osa / analysis.json) file",
-    )
+
+
+def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
     imp.add_argument(
         "input",
         type=Path,
@@ -291,10 +269,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output path for the converted variables.yml (default: variables.yml)",
     )
     imp.add_argument("--log_level", default="INFO")
-    exp = sub.add_parser(
-        "export",
-        help="Export campaign state to an external format",
-    )
+
+
+def _add_export_args(exp: argparse.ArgumentParser) -> None:
     exp.add_argument(
         "--target",
         choices=["pat"],
@@ -330,7 +307,60 @@ def _build_parser() -> argparse.ArgumentParser:
         help="OpenStudio CLI version (default: 3.11.0)",
     )
     exp.add_argument("--log_level", default="INFO")
+
+
+def _add_serve_args(serve: argparse.ArgumentParser) -> None:
+    serve.add_argument("--outdir", type=Path, required=True, help="Campaign output directory")
+    serve.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    serve.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    serve.add_argument(
+        "--read-only",
+        action="store_true",
+        default=True,
+        help="Read-only mode (default)",
+    )
+    serve.set_defaults(func=_cmd_serve)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="osimflow",
+        description="OSimFlow — parametric OpenStudio simulation campaigns",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+    run = sub.add_parser("run", help="Run a campaign")
+    _add_run_args(run)
+    imp = sub.add_parser(
+        "import-osa",
+        help="Import an OpenStudio Analysis (.osa / analysis.json) file",
+    )
+    _add_import_osa_args(imp)
+    exp = sub.add_parser(
+        "export",
+        help="Export campaign state to an external format",
+    )
+    _add_export_args(exp)
+    serve = sub.add_parser("serve", help="Start REST API server")
+    _add_serve_args(serve)
     return p
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Start the REST API server."""
+    try:
+        import uvicorn  # noqa: PLC0415
+    except ImportError:
+        print(
+            "Error: osimflow[api] extra required. Install with: pip install osimflow[api]",
+            file=sys.stderr,
+        )
+        return 1
+
+    from osimflow.api import create_app  # noqa: PLC0415
+
+    app = create_app(outdir=args.outdir, read_only=args.read_only)
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
 
 
 def _run_import_osa(args: argparse.Namespace) -> int:
@@ -378,6 +408,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_import_osa(args)
     if args.command == "export":
         return _run_export(args)
+    if args.command == "serve":
+        return _cmd_serve(args)
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))
