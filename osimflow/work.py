@@ -443,6 +443,7 @@ def generate_plots(
     failed_path: Path,
     out: Path,
     baseline_sample_id: str | None = None,
+    pareto_dir: Path | None = None,
 ) -> list[Path]:
     """Render summary plots from the aggregated CSV. Returns list of plot files.
 
@@ -453,6 +454,9 @@ def generate_plots(
         baseline_sample_id: optional baseline sample ID (issue #64). When
             provided, the plot generator adds a vertical reference line for
             the baseline EUI on the EUI histogram.
+        pareto_dir: optional directory containing per-generation Pareto JSON
+            files (gen_N.json). When provided, generates Pareto front scatter
+            and convergence plots (issue #124).
     """
     out.mkdir(parents=True, exist_ok=True)
     cmd: list[str] = [
@@ -467,6 +471,8 @@ def generate_plots(
     ]
     if baseline_sample_id is not None:
         cmd.extend(["--baseline_sample_id", baseline_sample_id])
+    if pareto_dir is not None:
+        cmd.extend(["--pareto_dir", str(pareto_dir)])
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             cmd,
