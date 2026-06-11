@@ -564,6 +564,7 @@ class AWSBatchExecutor(BaseExecutor):
         max_spot_price_usd: float | None = None,
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
+        ecr_repository: str | None = None,
     ):
         # Lazy import: keeps the boto3 import cost off the local /
         # slurm executor paths. ImportError here is intentional: the
@@ -587,6 +588,18 @@ class AWSBatchExecutor(BaseExecutor):
         self.max_spot_price_usd = max_spot_price_usd
         self.fallback_to_on_demand = fallback_to_on_demand
         self.max_retries = max_retries
+        self.ecr_repository = ecr_repository
+
+    def _resolve_container_image(self, version: str | None) -> str:
+        """Resolve the container image URI.
+
+        When ``ecr_repository`` is set, returns ``<ecr_repo>:<version>``.
+        Otherwise falls back to Docker Hub ``nrel/openstudio:<version>``.
+        """
+        tag = version or "latest"
+        if self.ecr_repository:
+            return f"{self.ecr_repository}:{tag}"
+        return f"nrel/openstudio:{tag}"
 
     def _get_client(self) -> Any:
         """Lazy boto3 Batch client construction.
@@ -666,8 +679,8 @@ class AWSBatchExecutor(BaseExecutor):
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
-        if container is not None:
-            env.append({"name": "OSIMFLOW_CONTAINER", "value": container})
+        resolved = self._resolve_container_image(openstudio_version)
+        env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         return env
 
     def _build_container_overrides(

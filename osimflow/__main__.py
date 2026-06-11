@@ -139,6 +139,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "the job fails unless --aws-batch-fallback-to-on-demand is set."
         ),
     )
+    run.add_argument(
+        "--ecr-repository",
+        default=None,
+        help=(
+            "ECR repository URI for OpenStudio container images "
+            "(e.g. 123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio). "
+            "When set, the Batch executor pulls from ECR instead of Docker Hub."
+        ),
+    )
     # Nomad executor flags (issue #27).
     run.add_argument(
         "--nomad-address",
