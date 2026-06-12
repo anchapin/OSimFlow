@@ -1,0 +1,40 @@
+# ===========================================================================
+# OSimFlow Dev — Dockerfile for local development with docker-compose.dev.yml
+#
+# Provides a development environment with hot-reload and all service clients.
+#
+# Build (from repo root):
+#   docker build -f docker/osimflow-cli/Dockerfile.dev -t anchapin/osimflow:dev .
+#
+# Run via docker-compose:
+#   docker compose -f docker-compose.dev.yml up osimflow-dev
+# ===========================================================================
+
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ git curl postgresql-client redis-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install osimflow with all extras for development
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir -e ".[dev,aws,slurm,mlflow,api]"
+
+# Copy source code (volume mount will override in compose)
+COPY osimflow/ ./osimflow/
+COPY bin/ ./bin/
+COPY tests/ ./tests/
+COPY docs/ ./docs/
+COPY user_scripts/ ./user_scripts/
+COPY example_package/ ./example_package/
+COPY variables.yml ./
+
+# Set Python to reload modules on change
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Default command - sleep infinity to keep container running
+CMD ["sleep", "infinity"]

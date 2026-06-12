@@ -1,0 +1,88 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: osimflow-test-postgres
+    environment:
+      POSTGRES_DB: osimflow_test
+      POSTGRES_USER: osimflow_test
+      POSTGRES_PASSWORD: osimflow_test
+    ports:
+      - "5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    shm_size: 128mb
+    mem_limit: 512m
+    cpu_period: 100000
+    cpu_quota: 50000
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U osimflow_test -d osimflow_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - osimflow-test-net
+    stop_grace_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: osimflow-test-redis
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379"
+    volumes:
+      - redis_test_data:/data
+    shm_size: 64mb
+    mem_limit: 256m
+    cpu_period: 100000
+    cpu_quota: 25000
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - osimflow-test-net
+    stop_grace_period: 5s
+
+  localstack:
+    image: localstack/localstack:3.5
+    container_name: osimflow-test-localstack
+    environment:
+      DEBUG: "0"
+      SERVICES: batch,s3,secretsmanager,cloudwatch,logs
+      EDGE_PORT: "4566"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_HOST: localhost
+    ports:
+      - "4566"
+    volumes:
+      - localstack_test_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    shm_size: 128mb
+    mem_limit: 512m
+    cpu_period: 100000
+    cpu_quota: 50000
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:4566/_localstack/health | grep -q '\"running\":true'"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - osimflow-test-net
+    stop_grace_period: 10s
+
+volumes:
+  postgres_test_data:
+  redis_test_data:
+  localstack_test_data:
+
+networks:
+  osimflow-test-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
