@@ -79,6 +79,8 @@ class SampleTrace:
     # Per-sample cost tracking (issue #126).
     cost_usd: float | None = None  # estimated cost for this sample
     billed_duration_seconds: float | None = None  # wall time billed
+    # runner.registerValue outputs captured from OpenStudio CLI (issue #251).
+    register_values: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
