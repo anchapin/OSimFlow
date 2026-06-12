@@ -572,15 +572,17 @@ class Campaign:
                     for f in futures:
                         f.cancel()
                     break
-                # Error already logged inside _await_one; continue
-                # processing remaining samples.
                 # CancelledError is a BaseException (not Exception), so we must
-                # suppress it explicitly here — it is raised when a future was
+                # catch it explicitly here. It is raised when a future was
                 # cancelled via f.cancel() during a cancellation sweep.
-                with contextlib.suppress(Exception, concurrent.futures.CancelledError):
+                # We convert it to KeyboardInterrupt so the outer handler
+                # (which catches Exception) can set campaign_status="cancelled".
+                try:
                     future.result()
-            if self._cancel_requested:
-                raise KeyboardInterrupt("cancellation requested during fan-out")
+                except concurrent.futures.CancelledError:
+                    raise KeyboardInterrupt(
+                        f"cancellation requested during {step_name}"
+                    )
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
