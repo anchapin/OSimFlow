@@ -1,8 +1,8 @@
 """Pydantic response models for the OSimFlow REST API (issue #267).
 
-Provides type-safe response schemas for campaign CRUD and per-sample
-result endpoints.  Models are read-only projections of the data stored
-in ``run.json`` and on-disk artefacts.
+Provides type-safe response schemas for campaign CRUD, per-sample
+result, and file management endpoints.  Models are read-only projections
+of the data stored in ``run.json`` and on-disk artefacts.
 """
 
 from __future__ import annotations
@@ -142,3 +142,42 @@ class CampaignCancelResponse(BaseModel):
 
     campaign_id: str
     status: str = Field(description="stopping")
+
+
+# ---------------------------------------------------------------------------
+# File management (issue #273)
+# ---------------------------------------------------------------------------
+
+
+class FileInfo(BaseModel):
+    """Metadata for a single uploaded file."""
+
+    file_id: str = Field(description="Unique file identifier (UUID)")
+    filename: str = Field(description="Original filename")
+    category: str = Field(description="File category: seed_model | measure | weather | config")
+    size_bytes: int = Field(description="File size in bytes")
+    path: str = Field(description="Relative storage path under uploads/")
+
+
+class FileUploadResponse(BaseModel):
+    """Response for a successful file upload."""
+
+    file_id: str
+    filename: str
+    category: str
+    size_bytes: int
+    path: str
+
+
+class FileListResponse(BaseModel):
+    """Envelope for the file listing endpoint."""
+
+    files: list[FileInfo]
+    total: int
+
+
+class FileDeleteResponse(BaseModel):
+    """Response for file deletion."""
+
+    file_id: str
+    status: str = Field(description="deleted")
