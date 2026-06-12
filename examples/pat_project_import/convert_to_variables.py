@@ -16,8 +16,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
+import yaml
 
 DISTRIBUTION_MAP = {
     "uniform": "uniform",
@@ -42,19 +42,14 @@ def extract_distribution(attrs: list[dict]) -> tuple[str, dict]:
     elif "variable_type" in attr_map:
         # Infer from variable type
         var_type = attr_map["variable_type"]
-        if var_type == "string" or var_map.get("discrete_values"):
+        if var_type == "string" or attr_map.get("discrete_values"):
             dist_name = "discrete"
 
     # Extract distribution parameters
     if dist_name in ("uniform", "triangular"):
         # Parameters come from the main variable dict
         pass
-    elif dist_name == "normal":
-        if "mean" in attr_map:
-            dist_params["mean"] = attr_map["mean"]
-        if "std" in attr_map:
-            dist_params["std"] = attr_map["std"]
-    elif dist_name == "lognormal":
+    elif dist_name in {"normal", "lognormal"}:
         if "mean" in attr_map:
             dist_params["mean"] = attr_map["mean"]
         if "std" in attr_map:
@@ -82,7 +77,7 @@ def convert_analysis_to_variables(analysis: dict) -> dict:
 
     # Convert design variables
     for var in design_vars:
-        name = var.get("name", var.get("display_name", "unnamed"))
+        name = var.get("name") or var.get("display_name") or "unnamed"
         attrs = var.get("attributes", [])
 
         dist_name, dist_params = extract_distribution(attrs)
@@ -93,28 +88,23 @@ def convert_analysis_to_variables(analysis: dict) -> dict:
         }
 
         # Add range parameters
-        if "minimum" in var:
-            var_entry["min"] = var["minimum"]
-        if "maximum" in var:
-            var_entry["max"] = var["maximum"]
-        if "mean" in var:
-            var_entry["mean"] = var["mean"]
-        if "mode" in var:
-            var_entry["mode"] = var["mode"]
-        if "std" in var:
-            var_entry["std"] = var["std"]
+        for key, out_key in [
+            ("minimum", "min"),
+            ("maximum", "max"),
+            ("mean", "mean"),
+            ("mode", "mode"),
+            ("std", "std"),
+        ]:
+            if key in var:
+                var_entry[out_key] = var[key]
 
         # Add discrete values
         if dist_name == "discrete":
-            if "discrete_values" in var:
-                var_entry["values"] = var["discrete_values"]
-            elif "values" in var:
-                var_entry["values"] = var["values"]
+            var_entry["values"] = var.get("discrete_values") or var.get("values")
 
         # Add categorical values
-        if dist_name == "categorical":
-            if "categories" in var:
-                var_entry["categories"] = var["categories"]
+        if dist_name == "categorical" and "categories" in var:
+            var_entry["categories"] = var["categories"]
 
         # Add description
         if "display_name" in var:
@@ -149,7 +139,8 @@ def main():
         help="Path to PAT analysis.json file",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=Path,
         default=None,
         help="Output path (default: variables.yml in same directory)",
@@ -175,13 +166,9 @@ def main():
     variables = convert_analysis_to_variables(analysis)
 
     # Determine output path
-    if args.output:
-        output_path = args.output
-    else:
-        output_path = args.input.parent / "variables.yml"
+    output_path = args.output or args.input.parent / "variables.yml"
 
     # Write output
-    import yaml
     with open(output_path, "w") as f:
         yaml.dump(variables, f, default_flow_style=False, sort_keys=False)
 

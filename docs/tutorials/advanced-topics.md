@@ -1,4 +1,5 @@
 # Advanced Topics in OSimFlow
+<!-- docs-skip -->
 
 Advanced configuration, customization, and optimization techniques for experienced OSimFlow users.
 

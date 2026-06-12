@@ -1,4 +1,5 @@
 # Getting Started with OSimFlow
+<!-- docs-skip -->
 
 A practical guide to getting OSimFlow installed and running your first parametric building-energy simulation campaign.
 

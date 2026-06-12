@@ -1,4 +1,5 @@
 # Migration Guide: OpenStudio-Server to OSimFlow
+<!-- docs-skip -->
 
 Step-by-step guide for migrating your parametric building-energy simulation workflows from OpenStudio-Server (OSS) to OSimFlow.
 
