@@ -265,6 +265,193 @@ class TestMorrisIshigami:
 # ---------------------------------------------------------------------------
 
 
+class TestMorrisObserveEdgeCases:
+    """Edge case tests for Morris observe()."""
+
+    def test_observe_empty_history(self) -> None:
+        from osimflow.algorithms.morris import MorrisAlgorithm
+
+        algo = MorrisAlgorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_with_samples(self) -> None:
+        from osimflow.algorithms.morris import MorrisAlgorithm
+
+        algo = MorrisAlgorithm()
+        history = [
+            {"samples": [{"sample_id": "0001", "values": {"a": 0.5}}]},
+            {"samples": [{"sample_id": "0002", "values": {"a": 0.8}}]},
+        ]
+        result = algo.observe(history)
+        assert len(result) == 1
+        assert result[0]["sample_id"] == "0002"
+
+
+class TestMorrisConditionalVars:
+    """Tests for Morris with conditional variables."""
+
+    def test_conditional_vars_resolved(self, tmp_path: Path) -> None:
+        from osimflow.algorithms.morris import MorrisAlgorithm
+
+        variables: dict[str, object] = {
+            "variables": [
+                {"name": "a", "distribution": "uniform", "min": 0.0, "max": 1.0},
+                {
+                    "name": "b",
+                    "distribution": "conditional",
+                    "depends_on": {
+                        "variable": "a",
+                        "if": {"lt": 0.5},
+                        "then": {"min": 0.0, "max": 5.0},
+                        "else": {"min": 5.0, "max": 10.0},
+                    },
+                },
+            ],
+        }
+        algo = MorrisAlgorithm()
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) > 0
+        for s in data["samples"]:
+            assert "a" in s["values"]
+
+
+class TestMorrisBuildSalibProblem:
+    """Tests for _build_salib_problem with various distributions."""
+
+    def test_uniform_bounds(self) -> None:
+        from osimflow.algorithms.morris import _build_salib_problem
+
+        var_list = [{"name": "x", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        problem = _build_salib_problem(var_list)
+        assert problem["bounds"] == [(1.0, 10.0)]
+
+    def test_normal_bounds(self) -> None:
+        from osimflow.algorithms.morris import _build_salib_problem
+
+        var_list = [{"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0}]
+        problem = _build_salib_problem(var_list)
+        assert problem["bounds"] == [(2.0, 8.0)]
+
+    def test_lognormal_bounds(self) -> None:
+        from osimflow.algorithms.morris import _build_salib_problem
+
+        var_list = [{"name": "x", "distribution": "lognormal", "mean": 2.0, "sigma": 0.5}]
+        problem = _build_salib_problem(var_list)
+        lo, hi = problem["bounds"][0]
+        assert lo > 0
+        assert hi > lo
+
+    def test_triangular_bounds(self) -> None:
+        from osimflow.algorithms.morris import _build_salib_problem
+
+        var_list = [
+            {"name": "x", "distribution": "triangular", "min": 1.0, "max": 5.0, "mode": 3.0}
+        ]
+        problem = _build_salib_problem(var_list)
+        assert problem["bounds"] == [(1.0, 5.0)]
+
+    def test_unknown_distribution_fallback(self) -> None:
+        from osimflow.algorithms.morris import _build_salib_problem
+
+        var_list = [{"name": "x", "distribution": "beta", "alpha": 2.0}]
+        problem = _build_salib_problem(var_list)
+        assert problem["bounds"] == [(0.0, 1.0)]
+
+    def test_multiple_vars(self) -> None:
+        from osimflow.algorithms.morris import _build_salib_problem
+
+        var_list = [
+            {"name": "a", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "b", "distribution": "normal", "mean": 5.0, "sigma": 1.0},
+        ]
+        problem = _build_salib_problem(var_list)
+        assert problem["num_vars"] == 2
+        assert problem["names"] == ["a", "b"]
+        assert len(problem["bounds"]) == 2
+
+
+class TestMorrisNoIndependentVars:
+    """Test Morris with no independent variables."""
+
+    def test_all_conditional_vars(self, tmp_path: Path) -> None:
+        from osimflow.algorithms.morris import MorrisAlgorithm
+
+        variables: dict[str, object] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        algo = MorrisAlgorithm()
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+
+class TestFAST99ObserveEdgeCases:
+    """Edge case tests for FAST99 observe()."""
+
+    def test_observe_empty_history(self) -> None:
+        from osimflow.algorithms.fast99 import FAST99Algorithm
+
+        algo = FAST99Algorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_with_samples(self) -> None:
+        from osimflow.algorithms.fast99 import FAST99Algorithm
+
+        algo = FAST99Algorithm()
+        history = [
+            {"samples": [{"sample_id": "0001", "values": {"a": 0.5}}]},
+        ]
+        result = algo.observe(history)
+        assert len(result) == 1
+
+
+class TestFAST99ConditionalVars:
+    """Tests for FAST99 with conditional variables."""
+
+    def test_conditional_vars_resolved(self, tmp_path: Path) -> None:
+        from osimflow.algorithms.fast99 import FAST99Algorithm
+
+        variables: dict[str, object] = {
+            "variables": [
+                {"name": "a", "distribution": "uniform", "min": 0.0, "max": 1.0},
+                {
+                    "name": "b",
+                    "distribution": "conditional",
+                    "depends_on": {
+                        "variable": "a",
+                        "if": {"lt": 0.5},
+                        "then": {"min": 0.0, "max": 5.0},
+                        "else": {"min": 5.0, "max": 10.0},
+                    },
+                },
+            ],
+        }
+        algo = FAST99Algorithm()
+        result = algo.generate_samples(variables, n_samples=100, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) > 0
+
+
+class TestFAST99NoIndependentVars:
+    """Test FAST99 with no independent variables."""
+
+    def test_all_conditional_vars(self, tmp_path: Path) -> None:
+        from osimflow.algorithms.fast99 import FAST99Algorithm
+
+        variables: dict[str, object] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        algo = FAST99Algorithm()
+        result = algo.generate_samples(variables, n_samples=100, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+
 class TestPyprojectToml:
     """Verify the [sensitivity] extra is declared in pyproject.toml."""
 
@@ -278,6 +465,5 @@ class TestPyprojectToml:
             data = tomllib.load(f)
         extras = data["project"]["optional-dependencies"]
         assert "sensitivity" in extras, f"Missing [sensitivity] extra. Found: {list(extras)}"
-        # Check that SALib is listed
         salib_dep = [d for d in extras["sensitivity"] if "SALib" in d]
         assert salib_dep, f"No SALib dependency in [sensitivity]. Found: {extras['sensitivity']}"

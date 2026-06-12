@@ -22,6 +22,9 @@ from osimflow.campaign import Campaign
 from osimflow.config import CampaignConfig
 from osimflow.executors import LocalExecutor
 
+# AlgorithmRegistry-mutating tests must run on the same xdist worker.
+pytestmark = pytest.mark.xdist_group("algorithm_registry")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

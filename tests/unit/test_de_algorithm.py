@@ -293,7 +293,6 @@ class TestReadKPIValues:
         kpi_dir = tmp_path / "kpi"
         kpi_dir.mkdir()
         kpi_path = kpi_dir / "kpi_0001.json"
-        # Write KPI file without the expected key.
         kpi_path.write_text(json.dumps({"sample_id": "0001", "kpis": {"other_kpi": 42.0}}))
         entry: dict[str, Any] = {
             "generation": 0,
@@ -303,3 +302,174 @@ class TestReadKPIValues:
         results = _read_kpi_values([entry], "eui")
         assert len(results) == 1
         assert results[0][1] == float("inf")
+
+    def test_missing_kpi_file(self, tmp_path: Path) -> None:
+        """When KPI file doesn't exist, that sample is skipped."""
+        samples = [{"sample_id": "0001", "values": {"wall_r": 5.0}}]
+        entry: dict[str, Any] = {
+            "generation": 0,
+            "samples": samples,
+            "kpi_files": [str(tmp_path / "nonexistent.json")],
+        }
+        results = _read_kpi_values([entry], "eui")
+        assert results == []
+
+    def test_invalid_json(self, tmp_path: Path) -> None:
+        """When KPI file has invalid JSON, that sample is skipped."""
+        samples = [{"sample_id": "0001", "values": {"wall_r": 5.0}}]
+        kpi_dir = tmp_path / "kpi"
+        kpi_dir.mkdir()
+        kpi_path = kpi_dir / "kpi_0001.json"
+        kpi_path.write_text("not valid json{{{")
+        entry: dict[str, Any] = {
+            "generation": 0,
+            "samples": samples,
+            "kpi_files": [str(kpi_path)],
+        }
+        results = _read_kpi_values([entry], "eui")
+        assert results == []
+
+
+class TestExtractBoundsMoreDistributions:
+    """Additional bound extraction tests for DE."""
+
+    def test_lognormal_bounds(self) -> None:
+        from osimflow.algorithms.de import _extract_bounds as de_extract_bounds
+
+        var_list = [{"name": "x", "distribution": "lognormal", "mean": 2.0, "sigma": 0.5}]
+        bounds = de_extract_bounds(var_list)
+        assert len(bounds) == 1
+        lo, hi = bounds[0]
+        assert lo > 0
+        assert hi > lo
+
+    def test_triangular_bounds(self) -> None:
+        from osimflow.algorithms.de import _extract_bounds as de_extract_bounds
+
+        var_list = [
+            {"name": "x", "distribution": "triangular", "min": 1.0, "max": 5.0, "mode": 3.0}
+        ]
+        bounds = de_extract_bounds(var_list)
+        assert bounds == [(1.0, 5.0)]
+
+    def test_unknown_distribution_fallback(self) -> None:
+        from osimflow.algorithms.de import _extract_bounds as de_extract_bounds
+
+        var_list = [{"name": "x", "distribution": "beta", "alpha": 2.0, "beta": 5.0}]
+        bounds = de_extract_bounds(var_list)
+        assert bounds == [(0.0, 1.0)]
+
+
+class TestProposeSamplesAround:
+    """Tests for _propose_samples_around helper."""
+
+    def test_proposes_correct_count(self) -> None:
+        import numpy as np
+
+        from osimflow.algorithms.de import _propose_samples_around
+
+        center = np.array([5.0, 0.5])
+        bounds = [(1.0, 10.0), (0.1, 0.9)]
+        var_names = ["wall_r", "window_shgc"]
+        result = _propose_samples_around(center, 5, bounds, var_names)
+        assert len(result) == 5
+        for s in result:
+            assert "sample_id" in s
+            assert "wall_r" in s["values"]
+            assert "window_shgc" in s["values"]
+
+    def test_proposed_samples_clipped_to_bounds(self) -> None:
+        import numpy as np
+
+        from osimflow.algorithms.de import _propose_samples_around
+
+        center = np.array([1.0, 0.1])
+        bounds = [(1.0, 10.0), (0.1, 0.9)]
+        var_names = ["wall_r", "window_shgc"]
+        result = _propose_samples_around(center, 20, bounds, var_names, width=5.0)
+        for s in result:
+            assert 1.0 <= s["values"]["wall_r"] <= 10.0
+            assert 0.1 <= s["values"]["window_shgc"] <= 0.9
+
+
+class TestDEMaximize:
+    """Tests for DE in maximize mode."""
+
+    def test_maximize_mode(self, tmp_path: Path) -> None:
+        algo = DifferentialEvolutionAlgorithm(maximize=True)
+        assert algo._maximize is True
+
+    def test_observe_with_maximize(self, tmp_path: Path) -> None:
+        algo = DifferentialEvolutionAlgorithm(maximize=True)
+        samples_path = algo.generate_samples(
+            _VARIABLES_2D, n_samples=5, seed=42, outdir=tmp_path / "gen0"
+        )
+        samples = json.loads(samples_path.read_text())["samples"]
+
+        kpi_values = [100.0 - i * 10.0 for i in range(len(samples))]
+        history_entry = _make_history_with_kpis(tmp_path, samples, kpi_values, generation=0)
+
+        new_samples = algo.observe([history_entry])
+        assert len(new_samples) > 0
+
+
+class TestDEConvergenceEdgeCases:
+    """Edge case tests for DE convergence."""
+
+    def test_converged_when_prev_best_zero(self) -> None:
+        algo = DifferentialEvolutionAlgorithm()
+        algo._prev_best = 0.0
+        algo._best_value = 0.0
+        assert algo.is_converged([{"gen": 0}, {"gen": 1}]) is True
+
+    def test_not_converged_when_prev_best_zero_best_nonzero(self) -> None:
+        algo = DifferentialEvolutionAlgorithm()
+        algo._prev_best = 0.0
+        algo._best_value = 1.0
+        assert algo.is_converged([{"gen": 0}, {"gen": 1}]) is False
+
+    def test_not_converged_with_inf_values(self) -> None:
+        algo = DifferentialEvolutionAlgorithm()
+        algo._prev_best = float("inf")
+        algo._best_value = float("inf")
+        assert algo.is_converged([{"gen": 0}, {"gen": 1}]) is False
+
+    def test_observe_no_kpi_values(self, tmp_path: Path) -> None:
+        algo = DifferentialEvolutionAlgorithm()
+        algo.generate_samples(_VARIABLES_2D, n_samples=5, seed=42, outdir=tmp_path / "gen0")
+        history_entry: dict[str, Any] = {
+            "generation": 0,
+            "samples": [{"sample_id": "0001", "values": {"wall_r": 5.0}}],
+            "kpi_files": [str(tmp_path / "nonexistent.json")],
+        }
+        result = algo.observe([history_entry])
+        assert result == []
+
+    def test_observe_with_zero_new_samples(self, tmp_path: Path) -> None:
+        algo = DifferentialEvolutionAlgorithm()
+        algo._independent_vars = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]
+        algo._bounds = [(0.0, 1.0)]
+        history_entry: dict[str, Any] = {
+            "generation": 0,
+            "samples": [],
+            "kpi_files": [],
+        }
+        result = algo.observe([history_entry])
+        assert result == []
+
+    def test_empty_variables_returns_empty(self, tmp_path: Path) -> None:
+        algo = DifferentialEvolutionAlgorithm()
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=None, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_no_independent_vars(self, tmp_path: Path) -> None:
+        algo = DifferentialEvolutionAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []

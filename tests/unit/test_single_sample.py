@@ -9,7 +9,6 @@ Verifies that --sample:
 """
 
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -17,46 +16,10 @@ import pytest
 from osimflow import Campaign, CampaignConfig
 from osimflow.executors import LocalExecutor
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-EXAMPLE_PKG = REPO_ROOT / "example_package"
-EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
-
-
-@pytest.fixture
-def workdir(tmp_path: Path) -> Path:
-    wd = tmp_path / "work"
-    wd.mkdir()
-    (wd / "variables.yml").write_text(EXAMPLE_VARS_YML.read_text())
-    return wd
-
-
-@pytest.fixture
-def template_pkg(workdir: Path) -> Path:
-    pkg = workdir / "template"
-    shutil.copytree(EXAMPLE_PKG, pkg)
-    return pkg
-
-
-@pytest.fixture
-def outdir(workdir: Path) -> Path:
-    od = workdir / "out"
-    od.mkdir()
-    return od
-
-
-@pytest.fixture
-def preseeded_outdir(workdir: Path, template_pkg: Path, outdir: Path) -> Path:
-    """Run a 3-sample campaign first so samples.json exists."""
-    cfg = CampaignConfig(
-        input_variables=workdir / "variables.yml",
-        template_sim_package=template_pkg,
-        n_samples=3,
-        outdir=outdir,
-        openstudio_version="3.11.0",
-    )
-    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3))
-    campaign.run()
-    return outdir
+# workdir, template_pkg, outdir, and preseeded_outdir fixtures come from
+# conftest.py.  The preseeded_outdir fixture is session-scoped (runs a
+# 3-sample campaign once per xdist worker) to avoid ~36s of repeated
+# campaign setup.
 
 
 def test_sample_raises_when_no_samples_json(

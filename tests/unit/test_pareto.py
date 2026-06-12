@@ -376,15 +376,47 @@ class TestHypervolume:
 
     def test_3d_without_pymoo_raises(self) -> None:
         """3+ objectives without pymoo should raise ImportError."""
+        import sys
+        from unittest.mock import patch
+
         front = ParetoFront(objective_names=["a", "b", "c"])
         front.add_generation(
             [
                 _make_solution("s1", {"a": 1.0, "b": 2.0, "c": 3.0}),
             ]
         )
-        try:
-            front.hypervolume([10.0, 10.0, 10.0])
-        except ImportError as e:
-            assert "pymoo" in str(e)
-        except Exception:
-            pass  # pymoo is installed — that's fine too
+        with patch.dict(sys.modules, {"pymoo.indicators.hv": None}):
+            with pytest.raises(ImportError, match="pymoo"):
+                front.hypervolume([10.0, 10.0, 10.0])
+
+
+class TestDominatedSkip:
+    """Cover the inner-loop dominated-skip branch (line 114)."""
+
+    def test_dominated_solution_skipped_in_outer_loop(self) -> None:
+        """When solution i is already dominated, the outer loop skips it."""
+        front = ParetoFront(objective_names=["x", "y"])
+        solutions = [
+            _make_solution("s1", {"x": 1.0, "y": 5.0}),  # best x
+            _make_solution("s2", {"x": 5.0, "y": 5.0}),  # dominated by s1
+            _make_solution("s3", {"x": 3.0, "y": 5.0}),  # dominated by s1
+            _make_solution("s4", {"x": 10.0, "y": 1.0}),  # best y, non-dominated
+        ]
+        front.add_generation(solutions)
+        ids = {s.sample_id for s in front.get_nondominated()}
+        assert "s1" in ids
+        assert "s4" in ids
+        assert "s2" not in ids
+        assert "s3" not in ids
+
+    def test_many_dominated_solutions(self) -> None:
+        """Multiple dominated solutions should all be correctly pruned."""
+        front = ParetoFront(objective_names=["a", "b"])
+        solutions = [
+            _make_solution("s0", {"a": 1.0, "b": 1.0}),
+        ]
+        for i in range(2, 12):
+            solutions.append(_make_solution(f"s{i}", {"a": float(i), "b": float(i)}))
+        front.add_generation(solutions)
+        ids = {s.sample_id for s in front.get_nondominated()}
+        assert ids == {"s0"}

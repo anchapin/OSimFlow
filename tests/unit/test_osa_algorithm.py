@@ -24,6 +24,10 @@ from osimflow.importers.osa import (
     parse_osa,
 )
 
+# All tests in this module mutate AlgorithmRegistry._registry; they must
+# run on the same xdist worker to avoid clobbering each other.
+pytestmark = pytest.mark.xdist_group("algorithm_registry")
+
 # ---------------------------------------------------------------------------
 # Minimal OSA fixtures
 # ---------------------------------------------------------------------------
@@ -327,13 +331,17 @@ class TestHypotheticalRegisteredAlgorithm:
             def is_iterative(self) -> bool:
                 return True
 
+        saved_nsga2 = AlgorithmRegistry._registry.get("nsga2")
         AlgorithmRegistry.register("nsga2", StubNSGA2)
         try:
             algo = _resolve_algorithm({"type": "nsga_nrel"})
             assert algo.name() == "nsga2"
             assert algo.is_iterative() is True
         finally:
-            AlgorithmRegistry._registry.pop("nsga2", None)
+            if saved_nsga2 is not None:
+                AlgorithmRegistry._registry["nsga2"] = saved_nsga2
+            else:
+                AlgorithmRegistry._registry.pop("nsga2", None)
 
     def test_sobol_resolves_when_registered(self) -> None:
         from osimflow.algorithms import BaseAlgorithm
@@ -356,9 +364,13 @@ class TestHypotheticalRegisteredAlgorithm:
             def is_iterative(self) -> bool:
                 return False
 
+        saved_sobol = AlgorithmRegistry._registry.get("sobol")
         AlgorithmRegistry.register("sobol", StubSobol)
         try:
             algo = _resolve_algorithm({"type": "sobol"})
             assert algo.name() == "sobol"
         finally:
-            AlgorithmRegistry._registry.pop("sobol", None)
+            if saved_sobol is not None:
+                AlgorithmRegistry._registry["sobol"] = saved_sobol
+            else:
+                AlgorithmRegistry._registry.pop("sobol", None)

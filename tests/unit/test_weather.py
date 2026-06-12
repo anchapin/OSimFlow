@@ -534,3 +534,34 @@ class TestDownloadEpw:
         assert result.name == "USA_CA_Los.Angeles.epw"
         content = result.read_text()
         assert content.startswith("LOCATION")
+
+    @patch("osimflow.weather.urllib.request.urlopen")
+    def test_download_content_length_too_large(
+        self, mock_urlopen: MagicMock, tmp_path: Path
+    ) -> None:
+        """Content-Length header exceeding max should raise EPWDownloadError."""
+        from osimflow.weather import MAX_EPW_DOWNLOAD_BYTES
+
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Length": str(MAX_EPW_DOWNLOAD_BYTES + 1)}
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        with pytest.raises(EPWDownloadError, match="too large"):
+            download_epw("USA_CA_Los.Angeles", tmp_path / "dest")
+
+    @patch("osimflow.weather.urllib.request.urlopen")
+    def test_download_body_exceeds_limit(self, mock_urlopen: MagicMock, tmp_path: Path) -> None:
+        """Body larger than max (no Content-Length header) should raise EPWDownloadError."""
+        from osimflow.weather import MAX_EPW_DOWNLOAD_BYTES
+
+        mock_response = MagicMock()
+        mock_response.headers = {}
+        mock_response.read.return_value = b"x" * (MAX_EPW_DOWNLOAD_BYTES + 1)
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        with pytest.raises(EPWDownloadError, match="exceeded"):
+            download_epw("USA_CA_Los.Angeles", tmp_path / "dest")

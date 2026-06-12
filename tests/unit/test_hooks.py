@@ -16,7 +16,6 @@ the first step and after the last step in Campaign.run().
 """
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -27,29 +26,8 @@ from osimflow.executors import LocalExecutor
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
-EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
 
-
-@pytest.fixture
-def workdir(tmp_path: Path) -> Path:
-    wd = tmp_path / "work"
-    wd.mkdir()
-    (wd / "variables.yml").write_text(EXAMPLE_VARS_YML.read_text())
-    return wd
-
-
-@pytest.fixture
-def template_pkg(workdir: Path) -> Path:
-    pkg = workdir / "template"
-    shutil.copytree(EXAMPLE_PKG, pkg)
-    return pkg
-
-
-@pytest.fixture
-def outdir(workdir: Path) -> Path:
-    od = workdir / "out"
-    od.mkdir()
-    return od
+# workdir, template_pkg, and outdir fixtures come from conftest.py.
 
 
 def _make_cfg(

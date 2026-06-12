@@ -665,8 +665,6 @@ class TestRoundTrip:
     """Verify that export → import preserves the essential structure."""
 
     def test_round_trip_uniform(self, tmp_path: Path) -> None:
-        """Export a uniform variable, re-import it, check it survives."""
-        # Step 1: Create variables.yml
         variables_yml = tmp_path / "variables.yml"
         variables_yml.write_text(
             textwrap.dedent("""\
@@ -688,18 +686,15 @@ class TestRoundTrip:
             algorithm="lhs",
         )
 
-        # Step 2: Export to analysis.json
         exporter = OSAExporter()
         export_dir = tmp_path / "export"
         analysis_path = exporter.export(cfg, export_dir)
         assert analysis_path.exists()
 
-        # Step 3: Re-import
         osa_data = parse_osa(analysis_path)
         reimport_path = tmp_path / "roundtrip_variables.yml"
         osa_to_variables_yml(osa_data, reimport_path)
 
-        # Step 4: Verify the re-imported file
         with reimport_path.open(encoding="utf-8") as f:
             reimported = yaml.safe_load(f)
 
@@ -712,3 +707,402 @@ class TestRoundTrip:
         assert var["min"] == 5.0
         assert var["max"] == 30.0
         assert var["measure_argument"] == "SetInsulationRValue.r_value"
+
+
+# ---------------------------------------------------------------------------
+# Test: pack_osa (ZIP archive production)
+# ---------------------------------------------------------------------------
+
+
+class TestPackOsa:
+    """pack_osa() — .osa ZIP archive creation."""
+
+    def _make_config(
+        self,
+        tmp_path: Path,
+        *,
+        variables_text: str | None = None,
+        with_seed: bool = False,
+        extra_files: dict[str, str] | None = None,
+        algorithm: str = "lhs",
+        n_samples: int = 10,
+    ) -> CampaignConfig:
+        if variables_text is None:
+            variables_text = textwrap.dedent("""\
+                variables:
+                  - name: x
+                    distribution: uniform
+                    min: 0.0
+                    max: 1.0
+            """)
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(variables_text, encoding="utf-8")
+
+        template = tmp_path / "template"
+        template.mkdir(parents=True, exist_ok=True)
+
+        if with_seed:
+            (template / "seed.osm").write_text("OSM 3.0\n# seed\n", encoding="utf-8")
+
+        if extra_files:
+            for relpath, content in extra_files.items():
+                fpath = template / relpath
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.write_text(content, encoding="utf-8")
+
+        return CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=template,
+            n_samples=n_samples,
+            outdir=tmp_path / "results",
+            openstudio_version="3.11.0",
+            algorithm=algorithm,
+        )
+
+    def test_pack_creates_osa_file(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        assert osa_path.exists()
+        assert osa_path.suffix == ".osa"
+
+    def test_pack_is_valid_zip(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        assert zipfile.is_zipfile(osa_path)
+
+    def test_pack_contains_analysis_json(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            assert "analysis.json" in zf.namelist()
+
+    def test_pack_analysis_json_valid(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            data = json.loads(zf.read("analysis.json"))
+            assert "analysis" in data
+            assert "server" in data
+
+    def test_pack_seed_osm_included(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path, with_seed=True)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            assert "seed.osm" in zf.namelist()
+            content = zf.read("seed.osm").decode("utf-8")
+            assert "seed" in content
+
+    def test_pack_seed_missing_note(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path, with_seed=False)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            data = json.loads(zf.read("analysis.json"))
+            assert "_seed_missing_note" in data
+            assert "No seed model" in data["_seed_missing_note"]
+
+    def test_pack_no_seed_note_when_osm_present(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path, with_seed=True)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            data = json.loads(zf.read("analysis.json"))
+            assert "_seed_missing_note" not in data
+
+    def test_pack_measures_included(self, tmp_path: Path) -> None:
+        cfg = self._make_config(
+            tmp_path,
+            extra_files={
+                "measures/SetRValue/measure.rb": "# Ruby measure",
+                "measures/SetRValue/measure.xml": "<measure/>",
+            },
+        )
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            names = zf.namelist()
+            assert "measures/SetRValue/measure.rb" in names
+            assert "measures/SetRValue/measure.xml" in names
+
+    def test_pack_weather_included(self, tmp_path: Path) -> None:
+        cfg = self._make_config(
+            tmp_path,
+            extra_files={"weather/denver.epw": "LOCATION,DENVER"},
+        )
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            assert "weather/denver.epw" in zf.namelist()
+
+    def test_pack_empty_weather_ok(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path, extra_files=None)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            names = zf.namelist()
+            weather_files = [n for n in names if "weather" in n]
+            assert weather_files == []
+
+    def test_pack_osm_not_duplicated(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path, with_seed=True)
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        with zipfile.ZipFile(osa_path) as zf:
+            osm_names = [n for n in zf.namelist() if n.endswith(".osm")]
+            assert osm_names == ["seed.osm"]
+
+    def test_pack_creates_outdir(self, tmp_path: Path) -> None:
+        cfg = self._make_config(tmp_path)
+        deep_out = tmp_path / "nested" / "deep"
+        osa_path = OSAExporter().pack_osa(cfg, deep_out)
+        assert deep_out.exists()
+        assert osa_path.exists()
+
+    def test_pack_no_template_sim_package(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            "variables:\n  - name: x\n    distribution: uniform\n    min: 0\n    max: 1\n",
+            encoding="utf-8",
+        )
+        nonexistent = tmp_path / "nonexistent_template"
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=nonexistent,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        osa_path = OSAExporter().pack_osa(cfg, tmp_path / "pack_out")
+        import zipfile
+
+        assert osa_path.exists()
+        with zipfile.ZipFile(osa_path) as zf:
+            data = json.loads(zf.read("analysis.json"))
+            assert "_seed_missing_note" in data
+
+
+# ---------------------------------------------------------------------------
+# Test: additional edge cases for _convert_variable branches
+# ---------------------------------------------------------------------------
+
+
+class TestConvertVariableEdgeCases:
+    """Cover branches in _convert_variable and _convert_distribution."""
+
+    def test_variable_without_measure_argument(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            textwrap.dedent("""\
+                variables:
+                  - name: bare_var
+                    distribution: uniform
+                    min: 0.0
+                    max: 1.0
+            """),
+            encoding="utf-8",
+        )
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        var = data["analysis"]["problem"]["variables"][0]
+        assert "measure" not in var
+
+    def test_measure_argument_without_dot(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            textwrap.dedent("""\
+                variables:
+                  - name: var1
+                    distribution: uniform
+                    min: 0.0
+                    max: 1.0
+                    measure_argument: no_dot_value
+            """),
+            encoding="utf-8",
+        )
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        var = data["analysis"]["problem"]["variables"][0]
+        assert "measure" not in var
+
+    def test_measure_argument_non_string(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            textwrap.dedent("""\
+                variables:
+                  - name: var1
+                    distribution: uniform
+                    min: 0.0
+                    max: 1.0
+                    measure_argument: 42
+            """),
+            encoding="utf-8",
+        )
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        var = data["analysis"]["problem"]["variables"][0]
+        assert "measure" not in var
+
+    def test_unknown_distribution_maps_to_uniform(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            textwrap.dedent("""\
+                variables:
+                  - name: mystery
+                    distribution: unknown_dist
+                    min: 2.0
+                    max: 8.0
+            """),
+            encoding="utf-8",
+        )
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        var = data["analysis"]["problem"]["variables"][0]
+        assert var["distribution"]["type"] == "uniform"
+
+    def test_variables_not_list(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text("variables: not_a_list\n", encoding="utf-8")
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        assert data["analysis"]["problem"]["variables"] == []
+
+    def test_yaml_not_dict(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text("just_a_string\n", encoding="utf-8")
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        assert data["analysis"]["problem"]["variables"] == []
+
+    def test_variable_entry_not_dict(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            "variables:\n  - 'string_entry'\n  - name: ok\n    distribution: uniform\n    min: 0\n    max: 1\n",
+            encoding="utf-8",
+        )
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        variables = data["analysis"]["problem"]["variables"]
+        assert len(variables) == 1
+        assert variables[0]["name"] == "ok"
+
+    def test_no_display_name_omitted(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            textwrap.dedent("""\
+                variables:
+                  - name: x
+                    distribution: uniform
+                    min: 0.0
+                    max: 1.0
+            """),
+            encoding="utf-8",
+        )
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        var = data["analysis"]["problem"]["variables"][0]
+        assert "display_name" not in var
+
+    def test_exponential_lossy_no_min_max(self, tmp_path: Path) -> None:
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            textwrap.dedent("""\
+                variables:
+                  - name: exp_var
+                    distribution: exponential
+                    loc: 1.0
+                    scale: 3.0
+            """),
+            encoding="utf-8",
+        )
+        cfg = CampaignConfig(
+            input_variables=variables_yml,
+            template_sim_package=tmp_path,
+            n_samples=5,
+            outdir=tmp_path / "out",
+            openstudio_version="3.11.0",
+        )
+        exporter = OSAExporter()
+        result = exporter.export(cfg, tmp_path / "export")
+        data = json.loads(result.read_text(encoding="utf-8"))
+        var = data["analysis"]["problem"]["variables"][0]
+        assert var["distribution"]["type"] == "uniform"
+        assert var["distribution"]["minimum"] == 1.0
+        assert var["distribution"]["maximum"] == 1.0 + 3.0 * 4

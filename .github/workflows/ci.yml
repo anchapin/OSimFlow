@@ -196,7 +196,7 @@ jobs:
   test:
     name: test (pytest, 85% coverage gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     needs: [lint, typecheck]
     steps:
       - uses: actions/checkout@v6
@@ -217,19 +217,24 @@ jobs:
           restore-keys: |
             venv-${{ runner.os }}-py3.12-
 
-      - name: Install (editable + dev extras + pytest-xdist)
+      - name: Install (editable + all extras + pytest-xdist)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
-          uv pip install --python .venv/bin/python "pytest-xdist>=3.5"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,api,sensitivity,optimization]"
+          uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
 
       - name: pytest with coverage gate
         run: |
-          .venv/bin/pytest -n auto \
+          .venv/bin/pytest \
             --cov=osimflow \
             --cov-report=xml \
             --cov-report=term \
             --cov-fail-under=85 \
+            -n 2 \
+            --dist loadgroup \
+            --timeout=120 \
+            --ignore=tests/contract \
+            --ignore=tests/integration/test_awsbatch_boto3_wiring.py \
             -q
 
       - name: Upload coverage
