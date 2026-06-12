@@ -589,8 +589,7 @@ def _validate_model_geometry(template_sim_package: Path) -> None:
                     )
                 else:
                     log.warning(
-                        "preflight geometry: quick parse of %s returned "
-                        "exit code %d (non-fatal)",
+                        "preflight geometry: quick parse of %s returned exit code %d (non-fatal)",
                         osm_file.name,
                         result.returncode,
                     )
@@ -615,9 +614,7 @@ def _validate_measure_entry_points(template_sim_package: Path) -> None:
     """
     measures_dir = template_sim_package / "measures"
     if not measures_dir.is_dir():
-        log.info(
-            "preflight measures: no measures/ directory found — skipping check"
-        )
+        log.info("preflight measures: no measures/ directory found — skipping check")
         return
 
     measure_dirs = [d for d in measures_dir.iterdir() if d.is_dir()]
@@ -631,9 +628,7 @@ def _validate_measure_entry_points(template_sim_package: Path) -> None:
         has_py = (measure_dir / "measure.py").is_file()
         if has_rb or has_py:
             entry = "measure.rb" if has_rb else "measure.py"
-            log.info(
-                "preflight measures: %s has %s", measure_dir.name, entry
-            )
+            log.info("preflight measures: %s has %s", measure_dir.name, entry)
         else:
             missing_count += 1
             log.warning(
