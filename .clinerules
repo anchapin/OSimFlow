@@ -1,0 +1,22 @@
+# OSimFlow — Cline Rules
+# Auto-discovered by Cline. AGENTS.md is the canonical source.
+
+Read AGENTS.md before proposing or writing code.
+
+Project: CLI + library wrapping OpenStudio CLI for parametric building-energy
+simulations. NOT a web service — no HTTP routes, no ORM, no auth layer.
+
+Key rules:
+- Python 3.12+. Type hints on all public functions (mypy --strict).
+- Use pathlib.Path over os.path. Use logging, not print.
+- Tests via .venv/bin/pytest or `make test`, never bare `pytest`.
+- Never commit .osm, .osw, .idf, .epw, or eplusout.* files.
+- Exceptions: catch, log with exc_info=True, re-raise. Never swallow.
+
+Commands:
+  make install    # pip install -e ".[dev,aws,slurm]"
+  make test       # full pytest suite
+  make lint       # ruff check
+  make typecheck  # mypy --strict osimflow/
+  make contract   # AGENTS.md + docs drift checks
+  make precommit  # pre-push safety net
