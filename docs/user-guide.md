@@ -993,6 +993,7 @@ Logging:
 | [Development Guide](DEVELOPMENT.md) | Contributing to OSimFlow internals |
 | [Contributing Guide](CONTRIBUTING.md) | How to contribute |
 | [PRD (OSimFlow.md)](OSimFlow.md) | Product Requirements Document |
+| [Migration from openstudio-server](migration-openstudio-server.md) | Migrating from PAT and openstudio-server |
 | [user_scripts/README.md](../user_scripts/README.md) | BYOS script templates and examples |
 
 ### The Six-Step DAG
