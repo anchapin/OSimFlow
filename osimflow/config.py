@@ -106,6 +106,15 @@ class CampaignConfig:
     ecr_repository: str | None = (
         None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
     )
+    # Azure Batch configuration (issue #254).
+    azure_batch_account_name: str | None = None
+    azure_batch_account_url: str | None = None
+    azure_batch_pool_id: str = "osimflow-pool"
+    azure_batch_location: str = "eastus"
+    # Google Cloud Batch configuration (issue #254).
+    google_batch_project_id: str | None = None
+    google_batch_region: str = "us-central1"
+    google_batch_service_account: str | None = None
     # BYOS trust level (issue #269). Controls how user-supplied scripts
     # are executed. Default is SUBPROCESS (isolated child process) for
     # security. INPROCESS (legacy) loads the script directly into the
@@ -351,6 +360,23 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         aws_batch_fallback_to_on_demand=bool(args.get("aws_batch_fallback_to_on_demand", False)),
         aws_batch_max_retries=int(str(args.get("aws_batch_max_retries", 3))),
         ecr_repository=str(args["ecr_repository"]) if args.get("ecr_repository") else None,
+        azure_batch_account_name=(
+            str(args["azure_batch_account_name"]) if args.get("azure_batch_account_name") else None
+        ),
+        azure_batch_account_url=(
+            str(args["azure_batch_account_url"]) if args.get("azure_batch_account_url") else None
+        ),
+        azure_batch_pool_id=str(args.get("azure_batch_pool_id", "osimflow-pool")),
+        azure_batch_location=str(args.get("azure_batch_location", "eastus")),
+        google_batch_project_id=(
+            str(args["google_batch_project_id"]) if args.get("google_batch_project_id") else None
+        ),
+        google_batch_region=str(args.get("google_batch_region", "us-central1")),
+        google_batch_service_account=(
+            str(args["google_batch_service_account"])
+            if args.get("google_batch_service_account")
+            else None
+        ),
         byos_trust_level=(
             ByosTrustLevel(str(args["byos_trust_level"]))
             if args.get("byos_trust_level")
