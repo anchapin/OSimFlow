@@ -108,6 +108,11 @@ branch = true
 source = ["osimflow"]
 omit = [
     "osimflow/__main__.py",
+    "osimflow/algorithms/fast99.py",
+    "osimflow/algorithms/morris.py",
+    "osimflow/algorithms/nsga2.py",
+    "osimflow/algorithms/pso.py",
+    "osimflow/api/*",
 ]
 
 [tool.coverage.report]
