@@ -81,7 +81,6 @@ viz = [
 tui = [
     "rich>=13.0",
 ]
-]
 
 [project.scripts]
 osimflow = "osimflow.__main__:main"
@@ -90,11 +89,12 @@ osimflow = "osimflow.__main__:main"
 Homepage = "https://github.com/anchapin/OSimFlow"
 Issues = "https://github.com/anchapin/OSimFlow/issues"
 
-[tool.setuptools]
-packages = ["osimflow", "osimflow.executors", "osimflow.api", "osimflow.viz"]
+[tool.setuptools.packages.find]
+include = ["osimflow*"]
 
 [tool.setuptools.package-data]
-osimflow = ["py.typed"]
+"osimflow" = ["py.typed"]
+"osimflow._work_scripts" = ["*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -161,6 +161,8 @@ fixable = ["ALL"]
 [tool.ruff.lint.per-file-ignores]
 # bin/*.py are CLI scripts (argparse, top-level side effects OK).
 "bin/*" = ["PL", "SIM"]
+# _work_scripts/ are CLI scripts (same as bin/).
+"osimflow/_work_scripts/*" = ["PL", "SIM"]
 # tests/ use pytest patterns that ruff would otherwise flag.
 "tests/**" = ["PL", "SIM", "B011"]
 # __init__.py: re-exports.
@@ -184,6 +186,7 @@ disallow_subclassing_any = true
 ignore_missing_imports = true
 exclude = [
     "bin/",
+    "osimflow/_work_scripts/",
     "user_scripts/",
     "tests/",
     "tools/",
