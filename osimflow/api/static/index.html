@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSimFlow Dashboard</title>
+<style>
+/* ── Reset & Base ────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface-alt: #222633;
+  --border: #2e3345;
+  --text: #e2e4eb;
+  --text-muted: #8b8fa3;
+  --primary: #6c8cff;
+  --primary-dim: #4a67d6;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --cached: #a78bfa;
+  --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+}
+html { font-size: 15px; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* ── Layout ──────────────────────────────────────────────── */
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 220px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.sidebar-brand {
+  padding: 20px 16px 12px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--primary);
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-brand small { font-size: 0.7rem; color: var(--text-muted); font-weight: 400; }
+.sidebar-nav { flex: 1; padding: 8px; }
+.sidebar-nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: background 0.15s, color 0.15s;
+}
+.sidebar-nav a:hover { background: var(--surface-alt); color: var(--text); }
+.sidebar-nav a.active { background: var(--primary-dim); color: #fff; }
+.sidebar-nav a .icon { font-size: 1.1rem; width: 20px; text-align: center; }
+
+.main { flex: 1; overflow-y: auto; }
+.page { display: none; padding: 32px; max-width: 1200px; }
+.page.active { display: block; }
+
+/* ── API Key Banner ──────────────────────────────────────── */
+.api-key-bar {
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.82rem;
+}
+.api-key-bar label { color: var(--text-muted); font-weight: 500; }
+.api-key-bar input {
+  flex: 1;
+  max-width: 400px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.api-key-bar .status {
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+.status-ok { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+.status-err { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
+.status-pending { background: rgba(139, 143, 163, 0.15); color: var(--text-muted); }
+
+/* ── Headings ────────────────────────────────────────────── */
+h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
+h2 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 12px; }
+h3 { font-size: 1rem; font-weight: 600; margin: 16px 0 8px; color: var(--text-muted); }
+.subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px; }
+
+/* ── Cards ───────────────────────────────────────────────── */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+.card-label { font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+.card-value { font-size: 1.5rem; font-weight: 700; }
+.card-value.ok { color: var(--success); }
+.card-value.fail { color: var(--danger); }
+.card-value.cached { color: var(--cached); }
+.card-value.time { color: var(--primary); }
+
+/* ── Tables ──────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+th, td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+th {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky;
+  top: 0;
+}
+tr:hover td { background: var(--surface-alt); }
+
+/* ── Badges ──────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.badge-ok { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+.badge-fail { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
+.badge-cached { background: rgba(167, 139, 250, 0.15); color: var(--cached); }
+.badge-running { background: rgba(251, 191, 36, 0.15); color: var(--warning); }
+.badge-hit { background: rgba(74, 222, 128, 0.1); color: var(--success); }
+.badge-miss { background: rgba(248, 113, 113, 0.1); color: var(--danger); }
+
+/* ── Progress ────────────────────────────────────────────── */
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--surface-alt);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+  background: linear-gradient(90deg, var(--primary-dim), var(--primary));
+}
+
+/* ── Plots ───────────────────────────────────────────────── */
+.plots-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 20px; }
+.plot-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.plot-card img { width: 100%; display: block; background: #fff; }
+.plot-card .plot-label { padding: 10px 14px; font-size: 0.82rem; color: var(--text-muted); }
+
+/* ── SSE / Live Feed ─────────────────────────────────────── */
+.live-feed {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.8;
+}
+.live-feed .evt {
+  display: flex;
+  gap: 10px;
+  padding: 2px 0;
+}
+.live-feed .evt-time { color: var(--text-muted); min-width: 80px; }
+.live-feed .evt-type { font-weight: 600; min-width: 160px; }
+.live-feed .evt-type.sample-started { color: var(--warning); }
+.live-feed .evt-type.sample-completed { color: var(--success); }
+.live-feed .evt-type.step-completed { color: var(--primary); }
+.live-feed .evt-type.campaign-completed { color: var(--cached); }
+
+/* ── Pagination ──────────────────────────────────────────── */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+.pagination button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.pagination button:disabled { opacity: 0.4; cursor: default; }
+.pagination .page-info { color: var(--text-muted); font-size: 0.85rem; }
+
+/* ── Empty State ─────────────────────────────────────────── */
+.empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+.empty .icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app { flex-direction: column; }
+  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar-nav { display: flex; overflow-x: auto; padding: 4px; }
+  .sidebar-nav a { white-space: nowrap; }
+  .page { padding: 16px; }
+  .plots-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-brand">OSimFlow <small>v0.1</small></div>
+    <div class="sidebar-nav">
+      <a href="#" data-page="dashboard" class="active">
+        <span class="icon">&#9632;</span> Dashboard
+      </a>
+      <a href="#" data-page="steps">
+        <span class="icon">&#9654;</span> Pipeline
+      </a>
+      <a href="#" data-page="samples">
+        <span class="icon">&#9783;</span> Samples
+      </a>
+      <a href="#" data-page="results">
+        <span class="icon">&#9776;</span> Results
+      </a>
+      <a href="#" data-page="plots">
+        <span class="icon">&#9673;</span> Plots
+      </a>
+      <a href="#" data-page="live">
+        <span class="icon">&#9679;</span> Live
+      </a>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- API Key Bar -->
+    <div class="api-key-bar">
+      <label for="apiKey">API Key:</label>
+      <input type="password" id="apiKey" placeholder="(none — auth disabled)" autocomplete="off">
+      <span id="connStatus" class="status status-pending">connecting...</span>
+    </div>
+
+    <!-- ═══ Dashboard Page ═══ -->
+    <div id="page-dashboard" class="page active">
+      <h1>Campaign Dashboard</h1>
+      <p class="subtitle">Overview of the current campaign</p>
+      <div id="dash-cards" class="cards">
+        <div class="card"><div class="card-label">Campaign</div><div class="card-value" id="card-id">—</div></div>
+        <div class="card"><div class="card-label">Samples</div><div class="card-value" id="card-samples">—</div></div>
+        <div class="card"><div class="card-label">Succeeded</div><div class="card-value ok" id="card-ok">—</div></div>
+        <div class="card"><div class="card-label">Failed</div><div class="card-value fail" id="card-fail">—</div></div>
+        <div class="card"><div class="card-label">Elapsed</div><div class="card-value time" id="card-elapsed">—</div></div>
+        <div class="card"><div class="card-label">Status</div><div id="card-status">—</div></div>
+      </div>
+      <div id="dash-progress-wrap">
+        <h3>Progress</h3>
+        <div class="progress-bar"><div class="progress-bar-fill" id="dash-progress" style="width:0%"></div></div>
+        <div style="font-size:0.82rem;color:var(--text-muted)" id="dash-progress-label">0 / 0 samples completed</div>
+      </div>
+      <div id="dash-config" style="margin-top:20px">
+        <h3>Configuration</h3>
+        <table id="config-table"><tbody></tbody></table>
+      </div>
+    </div>
+
+    <!-- ═══ Pipeline Page ═══ -->
+    <div id="page-steps" class="page">
+      <h1>Pipeline Steps</h1>
+      <p class="subtitle">DAG step execution traces</p>
+      <div class="table-wrap">
+        <table id="steps-table">
+          <thead>
+            <tr><th>Step</th><th>Cache</th><th>Elapsed</th><th>Exit Code</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ Samples Page ═══ -->
+    <div id="page-samples" class="page">
+      <h1>Sample Browser</h1>
+      <p class="subtitle">Per-sample execution results</p>
+      <div class="table-wrap">
+        <table id="samples-table">
+          <thead>
+            <tr><th>Sample ID</th><th>Status</th><th>Elapsed</th><th>Apply</th><th>Sim</th><th>Extract</th><th>Error</th><th>Worker</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="samples-pagination">
+        <button id="prev-page" disabled>&larr; Prev</button>
+        <span class="page-info" id="page-info">Page 1</span>
+        <button id="next-page">Next &rarr;</button>
+      </div>
+    </div>
+
+    <!-- ═══ Results Page ═══ -->
+    <div id="page-results" class="page">
+      <h1>Aggregated Results</h1>
+      <p class="subtitle">Data from aggregated_results.csv</p>
+      <div class="table-wrap">
+        <table id="results-table">
+          <thead><tr></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="results-empty" class="empty" style="display:none">
+        <div class="icon">&#128196;</div>
+        <p>No results file found yet.</p>
+      </div>
+    </div>
+
+    <!-- ═══ Plots Page ═══ -->
+    <div id="page-plots" class="page">
+      <h1>Plots</h1>
+      <p class="subtitle">Generated visualization plots</p>
+      <div class="plots-grid" id="plots-grid"></div>
+      <div id="plots-empty" class="empty" style="display:none">
+        <div class="icon">&#128202;</div>
+        <p>No plots available yet.</p>
+      </div>
+    </div>
+
+    <!-- ═══ Live Page ═══ -->
+    <div id="page-live" class="page">
+      <h1>Live Monitoring</h1>
+      <p class="subtitle">Real-time SSE event stream from the campaign</p>
+      <div style="margin-bottom:12px">
+        <button id="btn-connect" style="background:var(--primary);color:#fff;border:none;padding:8px 20px;border-radius:var(--radius);cursor:pointer;font-size:0.88rem">Connect</button>
+        <button id="btn-disconnect" style="display:none;background:var(--danger);color:#fff;border:none;padding:8px 20px;border-radius:var(--radius);cursor:pointer;font-size:0.88rem">Disconnect</button>
+        <span id="sse-status" style="margin-left:12px;font-size:0.82rem;color:var(--text-muted)">disconnected</span>
+      </div>
+      <div class="live-feed" id="live-feed">
+        <div class="empty" style="padding:30px"><p>Click "Connect" to start receiving live events.</p></div>
+      </div>
+      <div id="live-readonly" style="margin-top:12px;color:var(--text-muted);font-size:0.82rem">
+        SSE events require read-write mode (<code>--read-write</code> or <code>--enable-writes</code>).
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   OSimFlow Dashboard — Vanilla JS SPA (Phase 1)
+   ═══════════════════════════════════════════════════════════ */
+
+// ── State ──────────────────────────────────────────────────
+const state = {
+  currentPage: 'dashboard',
+  campaignData: null,
+  samplesPage: 1,
+  samplesPerPage: 50,
+  samplesTotal: 0,
+  eventSource: null,
+};
+
+// ── API helpers ────────────────────────────────────────────
+function apiKey() { return document.getElementById('apiKey').value.trim() || null; }
+
+function apiHeaders() {
+  const key = apiKey();
+  return key ? { 'X-API-Key': key } : {};
+}
+
+function apiUrl(path) {
+  const key = apiKey();
+  const sep = path.includes('?') ? '&' : '?';
+  return key ? `${path}${sep}api_key=${encodeURIComponent(key)}` : path;
+}
+
+async function apiFetch(path, opts = {}) {
+  const resp = await fetch(apiUrl(path), { ...opts, headers: { ...apiHeaders(), ...(opts.headers || {}) } });
+  if (resp.status === 401) {
+    document.getElementById('connStatus').textContent = 'unauthorized';
+    document.getElementById('connStatus').className = 'status status-err';
+    throw new Error('Unauthorized — check API key');
+  }
+  return resp;
+}
+
+// ── Navigation ─────────────────────────────────────────────
+document.querySelectorAll('.sidebar-nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const page = a.dataset.page;
+    navigate(page);
+  });
+});
+
+function navigate(page) {
+  state.currentPage = page;
+  document.querySelectorAll('.sidebar-nav a').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `page-${page}`));
+  loadPage(page);
+}
+
+async function loadPage(page) {
+  try {
+    switch (page) {
+      case 'dashboard': await loadDashboard(); break;
+      case 'steps':     await loadSteps(); break;
+      case 'samples':   await loadSamples(); break;
+      case 'results':   await loadResults(); break;
+      case 'plots':     await loadPlots(); break;
+      case 'live':      break;  // SSE is manually started
+    }
+  } catch (err) {
+    console.error(`Error loading ${page}:`, err);
+  }
+}
+
+// ── Dashboard ──────────────────────────────────────────────
+async function loadDashboard() {
+  const resp = await apiFetch('/api/v1/campaign');
+  if (!resp.ok) { setConnError(); return; }
+  const data = await resp.json();
+  state.campaignData = data;
+
+  document.getElementById('card-id').textContent = data.campaign_id || '—';
+
+  setConnOk();
+
+  // Load full run.json summary via steps + samples endpoints
+  let totalSamples = 0, succeeded = 0, failed = 0, elapsed = '—';
+
+  // Steps for elapsed time
+  const stepsResp = await apiFetch('/api/v1/steps');
+  if (stepsResp.ok) {
+    const stepsData = await stepsResp.json();
+    const totalElapsed = stepsData.steps.reduce((s, st) => s + (st.elapsed_s || 0), 0);
+    elapsed = totalElapsed > 0 ? formatDuration(totalElapsed) : '—';
+  }
+
+  // Samples for counts
+  const samplesResp = await apiFetch(`/api/v1/samples?page=1&per_page=1`);
+  if (samplesResp.ok) {
+    const samplesData = await samplesResp.json();
+    state.samplesTotal = samplesData.total;
+    totalSamples = samplesData.total;
+
+    // Get all samples for counts (use large page)
+    if (totalSamples > 0) {
+      const allResp = await apiFetch(`/api/v1/samples?page=1&per_page=${Math.min(totalSamples, 500)}`);
+      if (allResp.ok) {
+        const allData = await allResp.json();
+        succeeded = allData.samples.filter(s => s.status === 'ok').length;
+        failed = allData.samples.filter(s => s.status === 'failed').length;
+      }
+    }
+  }
+
+  document.getElementById('card-samples').textContent = totalSamples;
+  document.getElementById('card-ok').textContent = succeeded;
+  document.getElementById('card-fail').textContent = failed;
+  document.getElementById('card-elapsed').textContent = elapsed;
+
+  // Status
+  const statusEl = document.getElementById('card-status');
+  if (data.finished_at) {
+    statusEl.innerHTML = '<span class="badge badge-ok">completed</span>';
+  } else if (totalSamples > 0) {
+    statusEl.innerHTML = '<span class="badge badge-running">running</span>';
+  } else {
+    statusEl.innerHTML = '<span class="badge badge-cached">pending</span>';
+  }
+
+  // Progress
+  const pct = totalSamples > 0 ? Math.round(((succeeded + failed) / totalSamples) * 100) : 0;
+  document.getElementById('dash-progress').style.width = pct + '%';
+  document.getElementById('dash-progress-label').textContent = `${succeeded + failed} / ${totalSamples} samples completed (${pct}%)`;
+
+  // Config table
+  const config = data.config_summary || {};
+  const tbody = document.querySelector('#config-table tbody');
+  tbody.innerHTML = '';
+  for (const [k, v] of Object.entries(config)) {
+    tbody.innerHTML += `<tr><td style="color:var(--text-muted)">${esc(k)}</td><td>${esc(String(v))}</td></tr>`;
+  }
+}
+
+// ── Pipeline Steps ─────────────────────────────────────────
+async function loadSteps() {
+  const resp = await apiFetch('/api/v1/steps');
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const tbody = document.querySelector('#steps-table tbody');
+  tbody.innerHTML = '';
+  for (const s of data.steps) {
+    const cacheClass = (s.cache || '').includes('HIT') ? 'badge-hit' : 'badge-miss';
+    tbody.innerHTML += `<tr>
+      <td style="font-family:var(--mono);font-size:0.82rem">${esc(s.step)}</td>
+      <td><span class="badge ${cacheClass}">${esc(s.cache || '—')}</span></td>
+      <td>${formatDuration(s.elapsed_s || 0)}</td>
+      <td>${s.exit_code === 0 ? '<span style="color:var(--success)">0</span>' : '<span style="color:var(--danger)">' + s.exit_code + '</span>'}</td>
+    </tr>`;
+  }
+}
+
+// ── Samples ────────────────────────────────────────────────
+async function loadSamples() {
+  const resp = await apiFetch(`/api/v1/samples?page=${state.samplesPage}&per_page=${state.samplesPerPage}`);
+  if (!resp.ok) return;
+  const data = await resp.json();
+  state.samplesTotal = data.total;
+
+  const tbody = document.querySelector('#samples-table tbody');
+  tbody.innerHTML = '';
+
+  for (const s of data.samples) {
+    const badge = statusBadge(s.status);
+    tbody.innerHTML += `<tr>
+      <td style="font-family:var(--mono);font-size:0.82rem">${esc(s.sample_id)}</td>
+      <td>${badge}</td>
+      <td>${formatDuration(s.elapsed_s || 0)}</td>
+      <td>${exitDot(s.apply_exit_code)}</td>
+      <td>${exitDot(s.sim_exit_code)}</td>
+      <td>${exitDot(s.extract_exit_code)}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(s.error_summary || '')}">${esc(s.error_summary || '—')}</td>
+      <td style="color:var(--text-muted);font-size:0.8rem">${esc(s.worker_id || '—')}</td>
+    </tr>`;
+  }
+
+  // Pagination
+  const totalPages = Math.ceil(data.total / state.samplesPerPage) || 1;
+  document.getElementById('page-info').textContent = `Page ${state.samplesPage} of ${totalPages} (${data.total} samples)`;
+  document.getElementById('prev-page').disabled = state.samplesPage <= 1;
+  document.getElementById('next-page').disabled = state.samplesPage >= totalPages;
+}
+
+document.getElementById('prev-page').addEventListener('click', () => {
+  if (state.samplesPage > 1) { state.samplesPage--; loadSamples(); }
+});
+document.getElementById('next-page').addEventListener('click', () => {
+  const totalPages = Math.ceil(state.samplesTotal / state.samplesPerPage) || 1;
+  if (state.samplesPage < totalPages) { state.samplesPage++; loadSamples(); }
+});
+
+// ── Results ────────────────────────────────────────────────
+async function loadResults() {
+  const resp = await apiFetch('/api/v1/results');
+  if (resp.status === 404) {
+    document.getElementById('results-table').style.display = 'none';
+    document.getElementById('results-empty').style.display = '';
+    return;
+  }
+  if (!resp.ok) return;
+  const data = await resp.json();
+  if (!data.length) {
+    document.getElementById('results-table').style.display = 'none';
+    document.getElementById('results-empty').style.display = '';
+    return;
+  }
+
+  document.getElementById('results-table').style.display = '';
+  document.getElementById('results-empty').style.display = 'none';
+
+  const keys = Object.keys(data[0]);
+  const thead = document.querySelector('#results-table thead tr');
+  thead.innerHTML = keys.map(k => `<th>${esc(k)}</th>`).join('');
+
+  const tbody = document.querySelector('#results-table tbody');
+  tbody.innerHTML = '';
+  for (const row of data) {
+    tbody.innerHTML += '<tr>' + keys.map(k => `<td>${esc(String(row[k] ?? '—'))}</td>`).join('') + '</tr>';
+  }
+}
+
+// ── Plots ──────────────────────────────────────────────────
+async function loadPlots() {
+  const resp = await apiFetch('/api/v1/plots');
+  if (resp.status === 404 || !resp.ok) {
+    document.getElementById('plots-grid').innerHTML = '';
+    document.getElementById('plots-empty').style.display = '';
+    return;
+  }
+  const data = await resp.json();
+  if (!data.plots || !data.plots.length) {
+    document.getElementById('plots-grid').innerHTML = '';
+    document.getElementById('plots-empty').style.display = '';
+    return;
+  }
+
+  document.getElementById('plots-empty').style.display = 'none';
+  const grid = document.getElementById('plots-grid');
+  grid.innerHTML = '';
+  for (const p of data.plots) {
+    const imgSrc = apiUrl(`/api/v1/plots/${encodeURIComponent(p.name)}`);
+    grid.innerHTML += `<div class="plot-card">
+      <img src="${imgSrc}" alt="${esc(p.name)}" loading="lazy">
+      <div class="plot-label">${esc(p.name)} <span style="float:right">${formatBytes(p.size)}</span></div>
+    </div>`;
+  }
+}
+
+// ── Live SSE ───────────────────────────────────────────────
+document.getElementById('btn-connect').addEventListener('click', connectSSE);
+document.getElementById('btn-disconnect').addEventListener('click', disconnectSSE);
+
+function connectSSE() {
+  if (state.eventSource) disconnectSSE();
+
+  const feed = document.getElementById('live-feed');
+  feed.innerHTML = '';
+
+  const key = apiKey();
+  const url = key ? `/api/v1/events?api_key=${encodeURIComponent(key)}` : '/api/v1/events';
+
+  try {
+    const es = new EventSource(url);
+    state.eventSource = es;
+
+    es.onopen = () => {
+      document.getElementById('sse-status').textContent = 'connected';
+      document.getElementById('sse-status').style.color = 'var(--success)';
+      document.getElementById('btn-connect').style.display = 'none';
+      document.getElementById('btn-disconnect').style.display = '';
+      addFeedEvent('system', 'Connected to event stream', '');
+    };
+
+    es.onerror = (e) => {
+      document.getElementById('sse-status').textContent = 'error / read-only';
+      document.getElementById('sse-status').style.color = 'var(--danger)';
+      addFeedEvent('system', 'Connection error — SSE may require --read-write mode', '');
+      disconnectSSE();
+    };
+
+    es.addEventListener('sample.started', e => {
+      const d = JSON.parse(e.data);
+      addFeedEvent('sample-started', `sample.started — ${d.sample_id}`, '');
+    });
+    es.addEventListener('sample.completed', e => {
+      const d = JSON.parse(e.data);
+      addFeedEvent('sample-completed', `sample.completed — ${d.sample_id} (${d.status})`, '');
+      // Auto-refresh dashboard if visible
+      if (state.currentPage === 'dashboard') loadDashboard();
+      if (state.currentPage === 'samples') loadSamples();
+    });
+    es.addEventListener('step.completed', e => {
+      const d = JSON.parse(e.data);
+      addFeedEvent('step-completed', `step.completed — ${d.step}`, '');
+      if (state.currentPage === 'steps') loadSteps();
+    });
+    es.addEventListener('campaign.completed', e => {
+      const d = JSON.parse(e.data);
+      addFeedEvent('campaign-completed', `campaign.completed — ${d.campaign_id}`, '');
+      if (state.currentPage === 'dashboard') loadDashboard();
+    });
+
+  } catch (err) {
+    addFeedEvent('system', `Failed to connect: ${err.message}`, '');
+  }
+}
+
+function disconnectSSE() {
+  if (state.eventSource) {
+    state.eventSource.close();
+    state.eventSource = null;
+  }
+  document.getElementById('sse-status').textContent = 'disconnected';
+  document.getElementById('sse-status').style.color = 'var(--text-muted)';
+  document.getElementById('btn-connect').style.display = '';
+  document.getElementById('btn-disconnect').style.display = 'none';
+}
+
+function addFeedEvent(type, text, time) {
+  const feed = document.getElementById('live-feed');
+  const now = time || new Date().toLocaleTimeString();
+  const typeClass = type.replace('.', '-');
+  const div = document.createElement('div');
+  div.className = 'evt';
+  div.innerHTML = `<span class="evt-time">${esc(now)}</span><span class="evt-type ${esc(typeClass)}">${esc(type)}</span><span>${esc(text)}</span>`;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ── Utilities ──────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function formatDuration(seconds) {
+  if (!seconds && seconds !== 0) return '—';
+  if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = (seconds % 60).toFixed(0);
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function statusBadge(status) {
+  const map = { ok: 'badge-ok', failed: 'badge-fail', cached: 'badge-cached' };
+  const cls = map[status] || 'badge-running';
+  return `<span class="badge ${cls}">${esc(status || 'unknown')}</span>`;
+}
+
+function exitDot(code) {
+  if (code === undefined || code === null) return '<span style="color:var(--text-muted)">—</span>';
+  return code === 0
+    ? '<span style="color:var(--success)">&#10003;</span>'
+    : `<span style="color:var(--danger)" title="exit ${code}">&#10007;</span>`;
+}
+
+function setConnOk() {
+  document.getElementById('connStatus').textContent = 'connected';
+  document.getElementById('connStatus').className = 'status status-ok';
+}
+
+function setConnError() {
+  document.getElementById('connStatus').textContent = 'error';
+  document.getElementById('connStatus').className = 'status status-err';
+}
+
+// ── Init ───────────────────────────────────────────────────
+loadDashboard();
+</script>
+
+</body>
+</html>
