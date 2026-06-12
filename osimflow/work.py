@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 from .executors import run_subprocess  # local helper (issue #6)
+from .weather import EPWValidationError, discover_epw_files, validate_epw_header
 
 log = logging.getLogger("osimflow.work")
 
@@ -487,6 +488,169 @@ def generate_plots(
 
 
 # ---------------------------------------------------------------------------
+# Preflight validation helpers (issue #198)
+# ---------------------------------------------------------------------------
+
+
+def _validate_weather_files(template_sim_package: Path) -> None:
+    """Validate EPW weather files in the template package.
+
+    Discovers all ``.epw`` files via :func:`osimflow.weather.discover_epw_files`
+    and validates each one's LOCATION header with
+    :func:`osimflow.weather.validate_epw_header`.  Logs city/country metadata
+    for every valid file.  Raises :class:`SevereEnergyPlusError` if any file
+    has an invalid header.
+
+    A missing ``weather/`` directory is not an error — some packages embed
+    weather paths that resolve at runtime.
+
+    Args:
+        template_sim_package: path to the user's seed model package.
+
+    Raises:
+        SevereEnergyPlusError: one or more EPW files have invalid headers.
+    """
+    epw_files = discover_epw_files(template_sim_package)
+    if not epw_files:
+        log.info("preflight weather: no .epw files found — skipping validation")
+        return
+
+    errors: list[str] = []
+    for epw_path in epw_files:
+        try:
+            header = validate_epw_header(epw_path)
+            log.info(
+                "preflight weather: validated %s — %s, %s",
+                epw_path.name,
+                header["city"],
+                header["country"],
+            )
+        except EPWValidationError as exc:
+            errors.append(f"{epw_path.name}: {exc}")
+            log.warning("preflight weather: INVALID — %s", exc)
+
+    if errors:
+        msg = (
+            "Preflight weather validation FAILED. "
+            "The following EPW files have invalid headers:\n"
+            + "\n".join(f"  {e}" for e in errors)
+            + "\nFix the weather files before running the full campaign."
+        )
+        raise SevereEnergyPlusError(msg)
+
+
+def _validate_model_geometry(template_sim_package: Path) -> None:
+    """Best-effort check that a model file exists and is parseable.
+
+    Recursively globs for ``.osm`` files in the template package.  If none
+    are found, logs a WARNING — some workflows are ``.osw``-only and this is
+    not a hard failure.  If an ``.osm`` exists and ``openstudio.cli`` is
+    available, attempts a trivial parse command, but swallows any error
+    (best-effort).
+
+    Args:
+        template_sim_package: path to the user's seed model package.
+    """
+    osm_files = list(template_sim_package.rglob("*.osm"))
+    if not osm_files:
+        log.warning(
+            "preflight geometry: no .osm files found in %s. "
+            "Some packages use .osw-only workflows — proceeding anyway.",
+            template_sim_package,
+        )
+        return
+
+    log.info(
+        "preflight geometry: found %d .osm file(s) in %s",
+        len(osm_files),
+        template_sim_package,
+    )
+
+    # Best-effort quick parse — only if the CLI is available.
+    if _is_openstudio_available() and not _is_stub_mode():
+        for osm_file in osm_files:
+            try:
+                result = subprocess.run(  # noqa: S603
+                    [
+                        "openstudio.cli",
+                        "openstudio",
+                        "--execute",
+                        "puts 'model ok'",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+                if result.returncode == 0:
+                    log.info(
+                        "preflight geometry: quick parse of %s succeeded",
+                        osm_file.name,
+                    )
+                else:
+                    log.warning(
+                        "preflight geometry: quick parse of %s returned "
+                        "exit code %d (non-fatal)",
+                        osm_file.name,
+                        result.returncode,
+                    )
+            except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+                log.warning(
+                    "preflight geometry: quick parse of %s failed (non-fatal): %s",
+                    osm_file.name,
+                    exc,
+                )
+
+
+def _validate_measure_entry_points(template_sim_package: Path) -> None:
+    """Best-effort check that measure subdirectories have entry-point files.
+
+    If the template package has a ``measures/`` directory, verifies that each
+    measure subdirectory contains a ``measure.rb`` or ``measure.py`` file.
+    Logs WARNINGs for measures missing their entry point, but does NOT raise
+    — some measures have non-standard names.
+
+    Args:
+        template_sim_package: path to the user's seed model package.
+    """
+    measures_dir = template_sim_package / "measures"
+    if not measures_dir.is_dir():
+        log.info(
+            "preflight measures: no measures/ directory found — skipping check"
+        )
+        return
+
+    measure_dirs = [d for d in measures_dir.iterdir() if d.is_dir()]
+    if not measure_dirs:
+        log.info("preflight measures: measures/ directory is empty")
+        return
+
+    missing_count = 0
+    for measure_dir in sorted(measure_dirs):
+        has_rb = (measure_dir / "measure.rb").is_file()
+        has_py = (measure_dir / "measure.py").is_file()
+        if has_rb or has_py:
+            entry = "measure.rb" if has_rb else "measure.py"
+            log.info(
+                "preflight measures: %s has %s", measure_dir.name, entry
+            )
+        else:
+            missing_count += 1
+            log.warning(
+                "preflight measures: %s is missing both measure.rb and "
+                "measure.py (non-standard entry point?)",
+                measure_dir.name,
+            )
+
+    if missing_count:
+        log.warning(
+            "preflight measures: %d measure(s) missing standard entry points "
+            "(non-fatal — check for non-standard naming)",
+            missing_count,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Preflight run model (issue #107)
 # ---------------------------------------------------------------------------
 def preflight_run_model(
@@ -519,6 +683,13 @@ def preflight_run_model(
         template_sim_package,
         openstudio_version,
     )
+
+    # ------------------------------------------------------------------
+    # Pre-simulation validation checks (issue #198)
+    # ------------------------------------------------------------------
+    _validate_weather_files(template_sim_package)
+    _validate_model_geometry(template_sim_package)
+    _validate_measure_entry_points(template_sim_package)
 
     with tempfile.TemporaryDirectory(prefix="osimflow_preflight_") as tmp_dir:
         tmp_pkg = Path(tmp_dir) / "preflight_package"
