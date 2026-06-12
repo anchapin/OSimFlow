@@ -384,7 +384,9 @@ class Campaign:
             max_workers=self.max_workers,
             thread_name_prefix="osimflow-fanout",
         ) as pool:
-            futures = {pool.submit(_await_one, item): sid for sid, item in submissions.items()}
+            futures = {
+                pool.submit(_await_one, (sid, item)): sid for sid, item in submissions.items()
+            }
             for future in concurrent.futures.as_completed(futures):
                 # Error already logged inside _await_one; continue
                 # processing remaining samples.
