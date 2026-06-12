@@ -52,3 +52,48 @@ output "container_image" {
   description = "Full container image URI used by the job definition"
   value       = local.container_image
 }
+
+# ---------------------------------------------------------------------------
+# Copy-paste ready CLI command — the "Easy Button" for first-time users.
+# After `terraform apply`, this output prints an osimflow run command
+# pre-populated with the correct queue, job definition, and OpenStudio
+# version for this deployment.
+# ---------------------------------------------------------------------------
+
+output "osimflow_run_command" {
+  description = "Ready-to-run osimflow CLI command with correct ARNs/flags for this deployment"
+  value       = <<-EOT
+  osimflow run \
+    --executor aws_batch \
+    --aws-batch-queue ${aws_batch_job_queue.osimflow.name} \
+    --aws-batch-job-definition ${aws_batch_job_definition.osimflow.name} \
+    --openstudio_version ${var.openstudio_version} \
+    --input_variables variables.yml \
+    --template_sim_package ./example_package \
+    --n_samples 100 \
+    --outdir ./results
+  EOT
+}
+
+output "osimflow_spot_command" {
+  description = "Ready-to-run osimflow CLI command with Spot Instance cost guardrails enabled"
+  value       = <<-EOT
+  osimflow run \
+    --executor aws_batch \
+    --aws-batch-queue ${aws_batch_job_queue.osimflow.name} \
+    --aws-batch-job-definition ${aws_batch_job_definition.osimflow.name} \
+    --aws-batch-max-spot-price-usd 0.05 \
+    --aws-batch-fallback-to-on-demand \
+    --aws-batch-max-retries 3 \
+    --openstudio_version ${var.openstudio_version} \
+    --input_variables variables.yml \
+    --template_sim_package ./example_package \
+    --n_samples 100 \
+    --outdir ./results
+  EOT
+}
+
+output "region" {
+  description = "AWS region for this deployment"
+  value       = var.region
+}
