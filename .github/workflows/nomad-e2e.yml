@@ -1,0 +1,124 @@
+# =============================================================================
+# .github/workflows/nomad-e2e.yml — Nomad E2E tests (single-node + multi-node)
+# =============================================================================
+# Nightly schedule (daily at 06:00 UTC) + manual trigger.
+#
+# Single-node (fast): runs on every PR via ci.yml. This workflow
+# supplements it with:
+#   1. A version matrix (Nomad 1.7 / 1.8 / 1.9) on the single-node test.
+#   2. Multi-node HA + failover tests (nightly only).
+#
+# Uses Docker Compose to spin up a Nomad cluster inside the GitHub
+# Actions runner. No external infrastructure required.
+# =============================================================================
+
+name: Nomad E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      nomad_version:
+        description: "Nomad version to test (e.g. 1.8)"
+        required: false
+        default: "1.8"
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Single-node version matrix
+  # ---------------------------------------------------------------------------
+  # Runs the existing single-node test against Nomad 1.7, 1.8, and 1.9
+  # to catch breaking API changes across supported versions.
+  # ---------------------------------------------------------------------------
+  single-node-matrix:
+    name: "nomad single-node (v${{ matrix.nomad_version }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        nomad_version: ["1.7", "1.8", "1.9"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+
+      - name: Override Nomad image version
+        run: |
+          # Patch the single-node compose file to use the matrix version.
+          sed -i 's|hashicorp/nomad:.*|hashicorp/nomad:${{ matrix.nomad_version }}|' \
+            tests/integration/nomad_e2e/docker-compose.single.yml
+
+      - name: Run single-node E2E tests
+        run: |
+          .venv/bin/pytest tests/integration/nomad_e2e/test_single_node.py -v -m nomad_e2e --no-cov
+
+  # ---------------------------------------------------------------------------
+  # Multi-node HA + failover (nightly only)
+  # ---------------------------------------------------------------------------
+  # Starts a 3-server + 2-client Nomad cluster via Docker Compose and
+  # runs the multi-node test suite:
+  #   - Cluster health + quorum verification
+  #   - 10-sample campaign with fan-out validation
+  #   - Failover test (kill one server, continue campaign)
+  # ---------------------------------------------------------------------------
+  multi-node:
+    name: "nomad multi-node HA (v${{ matrix.nomad_version }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        nomad_version: ["1.7", "1.8", "1.9"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+
+      - name: Run multi-node E2E tests
+        env:
+          NOMAD_VERSION: ${{ matrix.nomad_version }}
+        run: |
+          .venv/bin/pytest tests/integration/nomad_e2e/test_multi_node.py -v -m nomad_e2e --no-cov --timeout=300

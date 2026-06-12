@@ -1,0 +1,138 @@
+# =============================================================================
+# Docker Compose: multi-node Nomad HA cluster for E2E testing (issue #137)
+# =============================================================================
+# Starts a 3-server + 2-client Nomad cluster suitable for HA and
+# failover testing.  ACLs are disabled (test-only) so the test
+# harness does not need to bootstrap tokens.
+#
+# Usage:
+#   NOMAD_VERSION=1.8 docker compose -f docker-compose.multi.yml up -d
+#   # Wait for http://localhost:4646/v1/status/leader to return 200
+#   docker compose -f docker-compose.multi.yml down -v
+#
+# The server nodes form a Raft quorum (bootstrap_expect=3). Both
+# client nodes join the cluster and mount the Docker socket so
+# Nomad can dispatch Docker-based task drivers.
+#
+# Health checks verify server readiness before the API is exposed.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Server 1 — gateway node, exposes the HTTP API on the host.
+  # ---------------------------------------------------------------------------
+  nomad-server-1:
+    image: hashicorp/nomad:${NOMAD_VERSION:-1.8}
+    container_name: nomad-multi-server-1
+    command: agent -config=/etc/nomad/server1.hcl
+    volumes:
+      - ./configs/server1.hcl:/etc/nomad/server1.hcl:ro
+      - nomad-server-1-data:/opt/nomad/data
+    ports:
+      - "4646:4646"   # HTTP API
+      - "4647:4647"   # RPC
+      - "4648:4648"   # Serf LAN
+    networks:
+      - nomad
+    hostname: nomad-server-1
+    healthcheck:
+      test: ["CMD", "nomad", "server-members"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Server 2
+  # ---------------------------------------------------------------------------
+  nomad-server-2:
+    image: hashicorp/nomad:${NOMAD_VERSION:-1.8}
+    container_name: nomad-multi-server-2
+    command: agent -config=/etc/nomad/server2.hcl
+    volumes:
+      - ./configs/server2.hcl:/etc/nomad/server2.hcl:ro
+      - nomad-server-2-data:/opt/nomad/data
+    networks:
+      - nomad
+    hostname: nomad-server-2
+    depends_on:
+      nomad-server-1:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "nomad", "server-members"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Server 3
+  # ---------------------------------------------------------------------------
+  nomad-server-3:
+    image: hashicorp/nomad:${NOMAD_VERSION:-1.8}
+    container_name: nomad-multi-server-3
+    command: agent -config=/etc/nomad/server3.hcl
+    volumes:
+      - ./configs/server3.hcl:/etc/nomad/server3.hcl:ro
+      - nomad-server-3-data:/opt/nomad/data
+    networks:
+      - nomad
+    hostname: nomad-server-3
+    depends_on:
+      nomad-server-1:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "nomad", "server-members"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Client 1
+  # ---------------------------------------------------------------------------
+  nomad-client-1:
+    image: hashicorp/nomad:${NOMAD_VERSION:-1.8}
+    container_name: nomad-multi-client-1
+    command: agent -config=/etc/nomad/client.hcl
+    volumes:
+      - ./configs/client.hcl:/etc/nomad/client.hcl:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nomad-client-1-data:/opt/nomad/data
+    networks:
+      - nomad
+    hostname: nomad-client-1
+    depends_on:
+      nomad-server-1:
+        condition: service_healthy
+    privileged: true
+
+  # ---------------------------------------------------------------------------
+  # Client 2
+  # ---------------------------------------------------------------------------
+  nomad-client-2:
+    image: hashicorp/nomad:${NOMAD_VERSION:-1.8}
+    container_name: nomad-multi-client-2
+    command: agent -config=/etc/nomad/client.hcl
+    volumes:
+      - ./configs/client.hcl:/etc/nomad/client.hcl:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nomad-client-2-data:/opt/nomad/data
+    networks:
+      - nomad
+    hostname: nomad-client-2
+    depends_on:
+      nomad-server-1:
+        condition: service_healthy
+    privileged: true
+
+networks:
+  nomad:
+    driver: bridge
+
+volumes:
+  nomad-server-1-data:
+  nomad-server-2-data:
+  nomad-server-3-data:
+  nomad-client-1-data:
+  nomad-client-2-data:
