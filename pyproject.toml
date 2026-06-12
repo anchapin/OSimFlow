@@ -127,6 +127,7 @@ omit = [
     "osimflow/algorithms/pso.py",
     "osimflow/api/*",
     "osimflow/viz/dashboard.py",
+    "osimflow/_work_scripts/*",
 ]
 
 [tool.coverage.report]
