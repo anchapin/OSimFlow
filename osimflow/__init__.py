@@ -28,6 +28,7 @@ from .observability import (
     PrometheusBackend,
 )
 from .pareto import ParetoFront, ParetoSolution
+from .registry import CampaignRecord, CampaignRegistry
 from .weather import (
     EPWDownloadError,
     EPWValidationError,
@@ -64,6 +65,8 @@ __all__ = [
     "OpenTelemetryBackend",
     "ParetoFront",
     "ParetoSolution",
+    "CampaignRegistry",
+    "CampaignRecord",
     "SevereEnergyPlusError",
     "EPWValidationError",
     "EPWDownloadError",
