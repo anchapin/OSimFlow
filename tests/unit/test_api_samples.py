@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("fastapi", reason="osimflow[api] extra required")
-from fastapi.testclient import TestClient
-
 from osimflow.api import create_app
 
+pytest.importorskip("fastapi", reason="osimflow[api] extra required")
+
+# isort: split
+from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -116,14 +117,24 @@ def outdir_with_pareto(tmp_path: Path) -> Path:
         "objective_names": ["eui", "cost"],
         "maximize": [False, False],
         "solutions": [
-            {"sample_id": "s0", "objectives": {"eui": 100, "cost": 5000}, "parameters": {}, "generation": 0},
+            {
+                "sample_id": "s0",
+                "objectives": {"eui": 100, "cost": 5000},
+                "parameters": {},
+                "generation": 0,
+            },
         ],
     }
     gen1 = {
         "objective_names": ["eui", "cost"],
         "maximize": [False, False],
         "solutions": [
-            {"sample_id": "s2", "objectives": {"eui": 90, "cost": 4500}, "parameters": {}, "generation": 1},
+            {
+                "sample_id": "s2",
+                "objectives": {"eui": 90, "cost": 4500},
+                "parameters": {},
+                "generation": 1,
+            },
         ],
     }
     (pareto_dir / "gen_0.json").write_text(json.dumps(gen0))
