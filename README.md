@@ -24,9 +24,15 @@ The framework foundation (a custom Python driver built on `submitit` for Slurm, 
 
 ## Quick start
 
+### 1. Install
+
 ```bash
 pip install -e ".[dev,aws,slurm]"
+```
 
+### 2. Run a sample campaign
+
+```bash
 osimflow run \
   --executor local \
   --input_variables variables.yml \
@@ -36,7 +42,24 @@ osimflow run \
   --openstudio_version 3.11.0
 ```
 
-See [AGENTS.md §4](AGENTS.md) for the full set of build/run commands.
+- **`variables.yml`** defines the parameters to vary and their probability distributions (uniform, normal, lognormal, etc.) for the Latin Hypercube Sampler.
+- **`example_package/`** contains the seed building model (`model.osm`), the OpenStudio workflow (`workflow.osw`), and any required measure scripts.
+
+### 3. Verify your installation
+
+After the command completes, check that these outputs exist under `./results`:
+
+| Artifact | Description |
+|---|---|
+| `aggregated_results.csv` | Per-sample KPI summary table |
+| `run.json` | Campaign monitoring trace (step timing, sample status, cache hits) |
+| `plots/` | Directory containing summary visualizations |
+
+```bash
+ls results/aggregated_results.csv results/run.json results/plots/
+```
+
+If all three are present, your installation is working correctly. See [AGENTS.md §4](AGENTS.md) for the full set of build/run commands and the [User Guide](docs/user-guide.md) for detailed configuration.
 
 ## License
 
