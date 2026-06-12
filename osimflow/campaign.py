@@ -2087,6 +2087,13 @@ class Campaign:
                 err = result_path / "eplusout.err"
                 if err.exists() and err.stat().st_size == 0:
                     err.unlink()
+                # NOTE(issue #274): eplusout.sql is preserved unconditionally.
+                # It is NEVER deleted after a successful simulation because it
+                # contains the full 8760-hour raw time-series needed by the
+                # time-series API. The file lives at
+                #   {outdir}/work/sim/{sample_id}/eplusout.sql
+                # and is available for querying even when --archive_intermediates
+                # is not set. Storage implications: 5-200+ MB per sample.
                 self.cache.store(_key, Path(result_path), exit_code=0)
                 out[_sid] = Path(result_path)
                 _state["sim_exit_code"] = 0
