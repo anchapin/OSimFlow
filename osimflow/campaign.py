@@ -1103,11 +1103,6 @@ class Campaign:
         # Auto-register campaign in registry (issue #266).
         self._register_campaign()
 
-        # Initialize run.json early so incremental checkpoints via
-        # _checkpoint_sample() can write to it before the first step
-        # completes (issue #275).
-        self.trace.write(self.cfg.outdir / "run.json")
-
         # Write campaign metadata manifest at start (issue #277).
         self._write_campaign_meta()
 
@@ -1115,6 +1110,12 @@ class Campaign:
             # Init hook (issue #108): runs before the first campaign step.
             # Must succeed (exit 0) or the campaign aborts.
             self._run_init_script()
+
+            # Initialize run.json after init script succeeds so the init hook
+            # sees a clean outdir (issue #108).  _checkpoint_sample() handles a
+            # missing run.json gracefully (no-op), so this write is only needed
+            # for SSE clients to poll status from the start of the fan-out.
+            self.trace.write(self.cfg.outdir / "run.json")
 
             # Crash recovery (issue #263): reset any in-flight jobs from
             # a previous interrupted run back to pending so they are
