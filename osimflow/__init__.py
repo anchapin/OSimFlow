@@ -38,6 +38,7 @@ from .weather import (
     validate_epw,
     validate_epw_header,
 )
+from .validation import ValidationError
 from .work import SevereEnergyPlusError
 
 __all__ = [
@@ -68,6 +69,7 @@ __all__ = [
     "CampaignRegistry",
     "CampaignRecord",
     "SevereEnergyPlusError",
+    "ValidationError",
     "EPWValidationError",
     "EPWDownloadError",
     "discover_epw_files",

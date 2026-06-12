@@ -28,6 +28,8 @@ from starlette.staticfiles import StaticFiles
 from osimflow.api.campaigns import campaigns_router
 from osimflow.api.events import events_router
 from osimflow.api.pat_compat import pat_compat_router
+from osimflow.validation import sanitize_filename, sanitize_sample_id, validate_path_within_base
+from osimflow.validation import ValidationError as OsimflowValidationError
 
 log = logging.getLogger("osimflow.api")
 
@@ -202,20 +204,34 @@ async def get_samples(
 @router.get("/api/v1/samples/{sid}")  # type: ignore[untyped-decorator]
 async def get_sample_detail(sid: str, request: Request) -> dict[str, Any]:
     """Get detail for a single sample, including KPIs and log files."""
+    # Validate sample ID to prevent path traversal.
+    try:
+        safe_sid = sanitize_sample_id(sid)
+    except OsimflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     data = _load_run_json(request)
     all_samples: list[dict[str, Any]] = data.get("per_sample", [])
     sample: dict[str, Any] | None = None
     for s in all_samples:
-        if s.get("sample_id") == sid:
+        if s.get("sample_id") == safe_sid:
             sample = s
             break
     if sample is None:
-        raise HTTPException(status_code=404, detail=f"Sample '{sid}' not found")
+        raise HTTPException(status_code=404, detail=f"Sample '{safe_sid}' not found")
 
     kpis: dict[str, Any] | None = None
     log_files: dict[str, str] = {}
     if request.app.state.outdir is not None:
-        sim_dir = request.app.state.outdir / "work" / "sim" / sid
+        outdir_resolved: Path = request.app.state.outdir.resolve()
+        sim_dir = outdir_resolved / "work" / "sim" / safe_sid
+        # Validate the resolved sim_dir stays within outdir.
+        try:
+            validate_path_within_base(sim_dir.resolve(), outdir_resolved)
+        except OsimflowValidationError:
+            raise HTTPException(
+                status_code=400, detail="Invalid sample directory"
+            ) from None
         for kpi_name in ("kpi.json", "kpis.json"):
             kpi_path = sim_dir / kpi_name
             if kpi_path.exists():
@@ -227,7 +243,7 @@ async def get_sample_detail(sid: str, request: Request) -> dict[str, Any]:
                 log_files[log_name] = str(log_path)
 
     return {
-        "sample_id": sid,
+        "sample_id": safe_sid,
         "kpis": kpis,
         "log_files": log_files,
         **sample,
@@ -339,15 +355,27 @@ async def get_plot_file(filename: str, request: Request) -> FileResponse:
     """Serve a single PNG plot file."""
     if request.app.state.outdir is None:
         raise HTTPException(status_code=503, detail="No output directory configured")
-    # Sanitize: only allow .png files with safe names
-    if not filename.endswith(".png") or "/" in filename or "\\" in filename:
-        raise HTTPException(status_code=400, detail="Invalid plot filename")
+    # Sanitize filename to prevent path traversal.
+    try:
+        safe_name = sanitize_filename(filename)
+    except OsimflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not safe_name.endswith(".png"):
+        raise HTTPException(status_code=400, detail="Only .png files are allowed")
     # Check plots/ subdir first, then outdir root
-    for search_dir in [request.app.state.outdir / "plots", request.app.state.outdir]:
-        candidate = search_dir / filename
+    outdir_resolved: Path = request.app.state.outdir.resolve()
+    for search_dir in [outdir_resolved / "plots", outdir_resolved]:
+        candidate = (search_dir / safe_name).resolve()
+        # Path traversal check: candidate must be within search_dir.
+        try:
+            validate_path_within_base(candidate, outdir_resolved)
+        except OsimflowValidationError:
+            raise HTTPException(
+                status_code=400, detail="Invalid plot path"
+            ) from None
         if candidate.is_file():
             return FileResponse(candidate, media_type="image/png")
-    raise HTTPException(status_code=404, detail=f"Plot '{filename}' not found")
+    raise HTTPException(status_code=404, detail=f"Plot '{safe_name}' not found")
 
 
 # ---------------------------------------------------------------------------
