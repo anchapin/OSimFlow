@@ -4,8 +4,8 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
-``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, and ``PSOAlgorithm``
-implementations.
+``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``, ``FullFactorialAlgorithm``, and
+``GridSamplingAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:
 
@@ -435,11 +435,17 @@ class LHSAlgorithm(BaseAlgorithm):
 
 AlgorithmRegistry.register("lhs", LHSAlgorithm)
 
+from osimflow.algorithms.factorial import (  # noqa: E402
+    FullFactorialAlgorithm,
+    GridSamplingAlgorithm,
+)
 from osimflow.algorithms.halton import HaltonAlgorithm  # noqa: E402
 from osimflow.algorithms.sobol import SobolAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("sobol", SobolAlgorithm)
 AlgorithmRegistry.register("halton", HaltonAlgorithm)
+AlgorithmRegistry.register("full_factorial", FullFactorialAlgorithm)
+AlgorithmRegistry.register("grid", GridSamplingAlgorithm)
 
 from osimflow.algorithms.da import DualAnnealingAlgorithm  # noqa: E402
 from osimflow.algorithms.de import DifferentialEvolutionAlgorithm  # noqa: E402
