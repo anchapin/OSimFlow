@@ -10,9 +10,6 @@ Covers:
   * Integration: preflight_run_model calls all three validators before simulation
 """
 
-from __future__ import annotations
-
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -27,7 +24,6 @@ from osimflow.work import (
     _validate_weather_files,
     preflight_run_model,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -132,11 +128,7 @@ class TestValidateWeatherFiles:
             _validate_weather_files(template)
 
         # Check that info was called with city/country from the header
-        info_calls = [
-            c
-            for c in mock_log.info.call_args_list
-            if "validated" in str(c)
-        ]
+        info_calls = [c for c in mock_log.info.call_args_list if "validated" in str(c)]
         assert len(info_calls) >= 1
 
 
@@ -155,11 +147,7 @@ class TestValidateModelGeometry:
         with patch("osimflow.work.log") as mock_log:
             _validate_model_geometry(template)
 
-        info_calls = [
-            c
-            for c in mock_log.info.call_args_list
-            if ".osm" in str(c)
-        ]
+        info_calls = [c for c in mock_log.info.call_args_list if ".osm" in str(c)]
         assert len(info_calls) >= 1
 
     def test_no_osm_logs_warning(self, tmp_path: Path) -> None:
@@ -171,11 +159,7 @@ class TestValidateModelGeometry:
         with patch("osimflow.work.log") as mock_log:
             _validate_model_geometry(template)
 
-        warning_calls = [
-            c
-            for c in mock_log.warning.call_args_list
-            if "no .osm" in str(c)
-        ]
+        warning_calls = [c for c in mock_log.warning.call_args_list if "no .osm" in str(c)]
         assert len(warning_calls) >= 1
 
     def test_no_osm_does_not_raise(self, tmp_path: Path) -> None:
@@ -198,9 +182,7 @@ class TestValidateModelGeometry:
 
         # The format string contains "%d .osm" — check args, not interpolated string
         info_calls = [
-            c
-            for c in mock_log.info.call_args_list
-            if ".osm" in str(c) and "found" in str(c)
+            c for c in mock_log.info.call_args_list if ".osm" in str(c) and "found" in str(c)
         ]
         assert len(info_calls) >= 1
 
@@ -292,11 +274,7 @@ class TestValidateMeasureEntryPoints:
         with patch("osimflow.work.log") as mock_log:
             _validate_measure_entry_points(template)
 
-        warning_calls = [
-            c
-            for c in mock_log.warning.call_args_list
-            if "missing" in str(c).lower()
-        ]
+        warning_calls = [c for c in mock_log.warning.call_args_list if "missing" in str(c).lower()]
         assert len(warning_calls) == 0
 
     def test_measures_with_py_passes(self, tmp_path: Path) -> None:
@@ -309,11 +287,7 @@ class TestValidateMeasureEntryPoints:
         with patch("osimflow.work.log") as mock_log:
             _validate_measure_entry_points(template)
 
-        warning_calls = [
-            c
-            for c in mock_log.warning.call_args_list
-            if "missing" in str(c).lower()
-        ]
+        warning_calls = [c for c in mock_log.warning.call_args_list if "missing" in str(c).lower()]
         assert len(warning_calls) == 0
 
     def test_measure_missing_entry_point_logs_warning(self, tmp_path: Path) -> None:
@@ -327,11 +301,7 @@ class TestValidateMeasureEntryPoints:
             # Must NOT raise
             _validate_measure_entry_points(template)
 
-        warning_calls = [
-            c
-            for c in mock_log.warning.call_args_list
-            if "missing" in str(c).lower()
-        ]
+        warning_calls = [c for c in mock_log.warning.call_args_list if "missing" in str(c).lower()]
         assert len(warning_calls) >= 1
 
     def test_missing_entry_point_does_not_raise(self, tmp_path: Path) -> None:
@@ -360,11 +330,7 @@ class TestValidateMeasureEntryPoints:
         with patch("osimflow.work.log") as mock_log:
             _validate_measure_entry_points(template)
 
-        warning_calls = [
-            c
-            for c in mock_log.warning.call_args_list
-            if "BadMeasure" in str(c)
-        ]
+        warning_calls = [c for c in mock_log.warning.call_args_list if "BadMeasure" in str(c)]
         # Should have at least one warning about BadMeasure
         assert len(warning_calls) >= 1
 
@@ -459,12 +425,8 @@ class TestPreflightRunModelValidation:
         with (
             patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}),
             patch("osimflow.work._is_openstudio_available", return_value=False),
-            patch(
-                "osimflow.work._validate_weather_files", side_effect=_track_weather
-            ),
-            patch(
-                "osimflow.work._validate_model_geometry", side_effect=_track_geo
-            ),
+            patch("osimflow.work._validate_weather_files", side_effect=_track_weather),
+            patch("osimflow.work._validate_model_geometry", side_effect=_track_geo),
             patch(
                 "osimflow.work._validate_measure_entry_points",
                 side_effect=_track_measures,
@@ -484,9 +446,7 @@ class TestPreflightRunModelValidation:
             # Should not raise
             preflight_run_model(template, "3.11.0")
 
-    def test_missing_measure_entry_warns_but_preflight_succeeds(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_measure_entry_warns_but_preflight_succeeds(self, tmp_path: Path) -> None:
         """Missing measure.rb/measure.py should not prevent preflight."""
         template = tmp_path / "template"
         template.mkdir()
