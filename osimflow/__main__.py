@@ -28,7 +28,7 @@ from osimflow import (
     SlurmExecutor,
     load_config,
 )
-from osimflow.byos import load_user_function
+from osimflow.byos import ByosTrustLevel, load_user_function
 from osimflow.exporters.osa import OSAExporter
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 
@@ -254,6 +254,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
             "for multiple generations. LHS is single-generation."
         ),
     )
+    run.add_argument(
+        "--byos-trust-level",
+        choices=["subprocess", "inprocess"],
+        default="subprocess",
+        help=(
+            "BYOS script execution mode (default: subprocess). "
+            "'subprocess' runs user scripts in an isolated child process "
+            "(recommended). 'inprocess' loads scripts directly into the "
+            "orchestrator process (legacy, less secure)."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
@@ -419,11 +430,16 @@ def main(argv: list[str] | None = None) -> int:
         log.info("DRY RUN: forcing LocalExecutor with 1 worker")
     else:
         executor = _build_executor(args)
+    trust_level = ByosTrustLevel(args.byos_trust_level)
     apply_fn = (
-        load_user_function(Path(args.custom_apply_script)) if args.custom_apply_script else None
+        load_user_function(Path(args.custom_apply_script), trust_level=trust_level)
+        if args.custom_apply_script
+        else None
     )
     extract_fn = (
-        load_user_function(Path(args.custom_kpi_extractor)) if args.custom_kpi_extractor else None
+        load_user_function(Path(args.custom_kpi_extractor), trust_level=trust_level)
+        if args.custom_kpi_extractor
+        else None
     )
     campaign = Campaign(cfg, executor, apply_fn=apply_fn, extract_fn=extract_fn)
     try:

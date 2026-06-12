@@ -121,7 +121,9 @@ class Campaign:
             from .byos import load_user_function  # noqa: PLC0415
 
             log.info("loading BYOS apply_fn from %s", cfg.custom_apply_script)
-            self.apply_fn = load_user_function(cfg.custom_apply_script)
+            self.apply_fn = load_user_function(
+                cfg.custom_apply_script, trust_level=cfg.byos_trust_level
+            )
         else:
             self.apply_fn = default_apply_parameters
         # Resolve extract_fn: explicit param > cfg.custom_kpi_extractor > default.
@@ -131,7 +133,9 @@ class Campaign:
             from .byos import load_user_function  # noqa: PLC0415
 
             log.info("loading BYOS extract_fn from %s", cfg.custom_kpi_extractor)
-            self.extract_fn = load_user_function(cfg.custom_kpi_extractor)
+            self.extract_fn = load_user_function(
+                cfg.custom_kpi_extractor, trust_level=cfg.byos_trust_level
+            )
         else:
             self.extract_fn = extract_kpis
         self.cache = SQLiteCache(cfg.cache_db)

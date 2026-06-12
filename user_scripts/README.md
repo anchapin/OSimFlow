@@ -73,6 +73,21 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
 
 ## Security note
 
-BYOS scripts are treated as **untrusted** (see AGENTS.md §10). The OSimFlow
-runner validates the function signature, sandboxes the working directory, and
-applies a per-script timeout.
+BYOS scripts are treated as **untrusted** (see AGENTS.md §10). By default,
+OSimFlow runs BYOS scripts in an **isolated subprocess** (`--byos-trust-level
+subprocess`) so they cannot access the orchestrator's memory, credentials, or
+open file handles.
+
+For local development or when you explicitly trust the script, you can opt in
+to the legacy in-process mode:
+
+```bash
+osimflow run --byos-trust-level inprocess --custom_apply_script user_scripts/mine.py ...
+```
+
+**Cloud executors** (AWS Batch, Slurm) already run scripts inside a container
+or job isolation boundary; the subprocess mode is an additional
+defence-in-depth layer.
+
+The OSimFlow runner validates the function signature, and in subprocess mode
+applies process-level isolation with proper stdout/stderr capture.

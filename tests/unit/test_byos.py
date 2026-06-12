@@ -7,16 +7,19 @@ Covers:
   * Deprecated 'apply' name triggers DeprecationWarning
   * Non-callable attribute with matching name is skipped
   * Module with syntax errors raises ImportError
+  * Module with side effects on import
+  * Subprocess isolation (issue #269): default trust level, kwargs forwarding
 """
 
 from __future__ import annotations
 
+import json
 import warnings
 from pathlib import Path
 
 import pytest
 
-from osimflow.byos import load_user_function
+from osimflow.byos import ByosTrustLevel, load_user_function
 
 
 # ---------------------------------------------------------------------------
@@ -71,13 +74,14 @@ class TestLoadUserFunctionValid:
         func = load_user_function(path)
         assert func.__name__ == "apply_parameters"
 
-    def test_function_is_callable(self, user_scripts: Path) -> None:
+    def test_function_is_callable_inprocess(self, user_scripts: Path) -> None:
+        """In-process mode: the raw function is returned and callable."""
         path = _write_script(
             user_scripts,
             "callable.py",
             "def apply_parameters(template, parameters, sample_id, out):\n    return 42\n",
         )
-        func = load_user_function(path)
+        func = load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
         assert func(template="t", parameters={}, sample_id="s", out="o") == 42
 
 
@@ -207,3 +211,118 @@ class TestLoadUserFunctionModuleIsolation:
         load_user_function(path)
         assert marker.exists()
         assert marker.read_text() == "loaded"
+
+
+# ===========================================================================
+# Subprocess isolation (issue #269)
+# ===========================================================================
+class TestSubprocessIsolation:
+    """Tests for the default BYOS subprocess isolation mode."""
+
+    def test_subprocess_mode_returns_path(self, user_scripts: Path) -> None:
+        """Subprocess mode: function returns a Path via the child process."""
+        out_marker = user_scripts / "apply_out"
+        path = _write_script(
+            user_scripts,
+            "sub_apply.py",
+            "from pathlib import Path\n"
+            "def apply_parameters(template, parameters, sample_id, out):\n"
+            "    p = Path(str(out)) / sample_id\n"
+            "    p.mkdir(parents=True, exist_ok=True)\n"
+            "    return p\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
+        result = func(str(user_scripts / "template"), {"k": 1.0}, "0001", str(out_marker))
+        assert isinstance(result, Path)
+        assert result.name == "0001"
+
+    def test_subprocess_mode_extract_kpis(self, user_scripts: Path) -> None:
+        """Subprocess mode: extract_kpis function works in child process."""
+        path = _write_script(
+            user_scripts,
+            "sub_kpi.py",
+            "import json\nfrom pathlib import Path\n"
+            "def extract_kpis(simulation_dir, sample_id, out):\n"
+            "    kpi_file = Path(str(out)) / f'kpi_{sample_id}.json'\n"
+            "    kpi_file.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    kpi_file.write_text(json.dumps({'sample_id': sample_id, 'eui': 100}))\n"
+            "    return kpi_file\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
+        sim_dir = user_scripts / "sim"
+        sim_dir.mkdir()
+        out_dir = user_scripts / "kpi_out"
+        result = func(str(sim_dir), "0001", str(out_dir))
+        assert isinstance(result, Path)
+        assert result.name == "kpi_0001.json"
+        data = json.loads(result.read_text())
+        assert data["sample_id"] == "0001"
+
+    def test_subprocess_mode_error_propagates(self, user_scripts: Path) -> None:
+        """Subprocess mode: errors in the BYOS script are surfaced."""
+        path = _write_script(
+            user_scripts,
+            "sub_error.py",
+            "def apply_parameters(template, parameters, sample_id, out):\n"
+            "    raise ValueError('deliberate error')\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
+        with pytest.raises(RuntimeError, match="deliberate error"):
+            func(str(user_scripts), {}, "0001", str(user_scripts / "out"))
+
+    def test_subprocess_mode_nonzero_exit(self, user_scripts: Path) -> None:
+        """Subprocess mode: sys.exit() in the script surfaces as RuntimeError."""
+        path = _write_script(
+            user_scripts,
+            "sub_exit.py",
+            "import sys\n"
+            "def apply_parameters(template, parameters, sample_id, out):\n"
+            "    sys.exit(1)\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
+        with pytest.raises(RuntimeError, match="exit"):
+            func(str(user_scripts), {}, "0001", str(user_scripts / "out"))
+
+    def test_warning_logged_on_load(
+        self, user_scripts: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A warning is always logged when a BYOS script is loaded."""
+        path = _write_script(
+            user_scripts,
+            "warn_apply.py",
+            "def apply_parameters(t, p, s, o): pass\n",
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="osimflow.byos"):
+            func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
+        assert callable(func)
+        assert any("untrusted" in r.message.lower() for r in caplog.records)
+
+    def test_default_trust_level_is_subprocess(self, user_scripts: Path) -> None:
+        """Default trust level is subprocess (isolated)."""
+        path = _write_script(
+            user_scripts,
+            "default_apply.py",
+            "from pathlib import Path\n"
+            "def apply_parameters(template, parameters, sample_id, out):\n"
+            "    p = Path(str(out)) / sample_id\n"
+            "    p.mkdir(parents=True, exist_ok=True)\n"
+            "    return p\n",
+        )
+        func = load_user_function(path)  # No trust_level specified
+        # The wrapper should have the metadata showing subprocess mode.
+        assert func.__name__ == "apply_parameters"
+        assert getattr(func, "_byos_trust_level", None) == ByosTrustLevel.SUBPROCESS
+
+    def test_inprocess_mode_direct_call(self, user_scripts: Path) -> None:
+        """Inprocess mode: function runs directly in the caller process."""
+        path = _write_script(
+            user_scripts,
+            "inprocess_apply.py",
+            "def apply_parameters(template, parameters, sample_id, out):\n    return 42\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
+        assert func.__name__ == "apply_parameters"
+        # In-process mode returns the raw function, so we get 42 back.
+        assert func(template="t", parameters={}, sample_id="s", out="o") == 42

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import yaml
 
+from .byos import ByosTrustLevel
+
 log = logging.getLogger("osimflow.config")
 
 
@@ -97,6 +99,12 @@ class CampaignConfig:
     ecr_repository: str | None = (
         None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
     )
+    # BYOS trust level (issue #269). Controls how user-supplied scripts
+    # are executed. Default is SUBPROCESS (isolated child process) for
+    # security. INPROCESS (legacy) loads the script directly into the
+    # orchestrator process — use only when the user explicitly trusts
+    # the script.
+    byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
 
     @property
     def work_dir(self) -> Path:
@@ -185,4 +193,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         aws_batch_fallback_to_on_demand=bool(args.get("aws_batch_fallback_to_on_demand", False)),
         aws_batch_max_retries=int(str(args.get("aws_batch_max_retries", 3))),
         ecr_repository=str(args["ecr_repository"]) if args.get("ecr_repository") else None,
+        byos_trust_level=(
+            ByosTrustLevel(str(args["byos_trust_level"]))
+            if args.get("byos_trust_level")
+            else ByosTrustLevel.SUBPROCESS
+        ),
     )
