@@ -579,9 +579,7 @@ class Campaign:
                 try:
                     future.result()
                 except concurrent.futures.CancelledError as exc:
-                    raise KeyboardInterrupt(
-                        f"cancellation requested during {step_name}"
-                    ) from exc
+                    raise KeyboardInterrupt(f"cancellation requested during {step_name}") from exc
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
