@@ -364,13 +364,39 @@ def _add_export_args(exp: argparse.ArgumentParser) -> None:
 
 def _add_serve_args(serve: argparse.ArgumentParser) -> None:
     serve.add_argument("--outdir", type=Path, required=True, help="Campaign output directory")
-    serve.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host (default: 127.0.0.1 — localhost only). Pass 0.0.0.0 for network access.",
+    )
     serve.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
     serve.add_argument(
-        "--read-only",
+        "--enable-writes",
         action="store_true",
-        default=True,
-        help="Read-only mode (default). Disable with --read-write.",
+        default=False,
+        help="Enable write endpoints (POST/PUT/DELETE). Default: read-only.",
+    )
+    serve.add_argument(
+        "--api-key",
+        default=None,
+        help=(
+            "API key for authentication. Required when --enable-writes is set "
+            "(auto-generated and logged if not provided). When read-only, "
+            "authentication is disabled unless this is set."
+        ),
+    )
+    serve.add_argument(
+        "--cors-origins",
+        default=None,
+        help=(
+            "Comma-separated list of allowed CORS origins (default: empty = "
+            "same-origin only). Example: 'http://localhost:3000,https://app.example.com'"
+        ),
+    )
+    serve.add_argument(
+        "--rate-limit",
+        default="60/minute",
+        help="Rate limit string for slowapi (default: 60/minute).",
     )
     serve.add_argument(
         "--read-write",
@@ -436,9 +462,30 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         )
         return 1
 
-    from osimflow.api import create_app  # noqa: PLC0415
+    from osimflow.api import create_app, generate_api_key  # noqa: PLC0415
 
-    app = create_app(outdir=args.outdir, read_only=args.read_only)
+    # Resolve the API key.
+    api_key = args.api_key
+    if args.enable_writes and not api_key:
+        # Auto-generate a key when writes are enabled but none was provided.
+        api_key = generate_api_key()
+        log.warning("No --api-key provided; auto-generated key for write access: %s", api_key)
+
+    # Parse CORS origins.
+    cors_origins: list[str] | None = None
+    if args.cors_origins:
+        cors_origins = [o.strip() for o in args.cors_origins.split(",") if o.strip()]
+
+    read_only = not args.enable_writes and args.read_only
+    app = create_app(
+        outdir=args.outdir,
+        read_only=read_only,
+        api_key=api_key,
+        cors_origins=cors_origins,
+        rate_limit=args.rate_limit,
+    )
+    if args.host not in ("127.0.0.1", "localhost"):
+        log.warning("Binding to %s — the API is now network-accessible.", args.host)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 

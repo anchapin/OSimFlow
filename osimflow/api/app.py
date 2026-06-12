@@ -1,18 +1,105 @@
-"""FastAPI application for OSimFlow campaign monitoring."""
+"""FastAPI application for OSimFlow campaign monitoring.
+
+Security features (issue #268):
+- API key authentication (``X-API-Key`` header or ``api_key`` query param)
+- CORS middleware with configurable origins
+- Rate limiting via slowapi (default 60/minute)
+- Read-only mode by default; ``--enable-writes`` required for mutations
+- ``/health`` remains unauthenticated for load balancer probes
+"""
 
 import json
 import logging
+import secrets
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from osimflow.api.events import events_router
 
 log = logging.getLogger("osimflow.api")
 
 router = APIRouter()
+
+PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers (issue #268)
+# ---------------------------------------------------------------------------
+
+
+def generate_api_key() -> str:
+    """Generate a cryptographically secure API key.
+
+    Returns a URL-safe base64 string (~43 characters of entropy).
+    """
+    return secrets.token_urlsafe(32)
+
+
+def extract_api_key(request: Request) -> str | None:
+    """Extract the API key from a request.
+
+    Checks the ``X-API-Key`` header first, then the ``api_key`` query
+    parameter.  Returns ``None`` if neither is present.
+    """
+    header_key = request.headers.get("X-API-Key")
+    if header_key:
+        return str(header_key)
+    query_key = request.query_params.get("api_key")
+    if query_key:
+        return str(query_key)
+    return None
+
+
+def validate_api_key(provided: str | None, expected: str) -> bool:
+    """Validate *provided* against *expected* using constant-time comparison.
+
+    Returns ``True`` if the keys match, ``False`` otherwise (including when
+    *provided* is ``None``).
+    """
+    if provided is None:
+        return False
+    return secrets.compare_digest(provided, expected)
+
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    """HTTP middleware that enforces API key authentication.
+
+    Requests to paths in :data:`PUBLIC_PATHS` always pass through.
+    When ``app.state.api_key`` is ``None``, authentication is disabled
+    (backward-compatible with pre-#268 callers).
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Any,  # noqa: ANN401  (starlette callable protocol)
+    ) -> Response:
+        normalised = request.url.path.rstrip("/")
+        if normalised in PUBLIC_PATHS:
+            return cast(Response, await call_next(request))
+
+        expected_key: str | None = getattr(request.app.state, "api_key", None)
+        if expected_key is None:
+            return cast(Response, await call_next(request))
+
+        provided = extract_api_key(request)
+        if not validate_api_key(provided, expected_key):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key"},
+            )
+        return cast(Response, await call_next(request))
 
 
 # ---------------------------------------------------------------------------
@@ -122,18 +209,15 @@ async def get_sample_detail(sid: str, request: Request) -> dict[str, Any]:
     if sample is None:
         raise HTTPException(status_code=404, detail=f"Sample '{sid}' not found")
 
-    # Attempt to load KPI JSON from outdir/work/sim/{sid}/
     kpis: dict[str, Any] | None = None
     log_files: dict[str, str] = {}
     if request.app.state.outdir is not None:
         sim_dir = request.app.state.outdir / "work" / "sim" / sid
-        # Look for kpi JSON files (kpi.json or similar)
         for kpi_name in ("kpi.json", "kpis.json"):
             kpi_path = sim_dir / kpi_name
             if kpi_path.exists():
                 kpis = json.loads(kpi_path.read_text())
                 break
-        # Collect log file paths
         for log_name in ("stdout.log", "stderr.log"):
             log_path = sim_dir / log_name
             if log_path.exists():
@@ -222,23 +306,65 @@ async def get_pareto(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_app(outdir: Path | None = None, read_only: bool = True) -> FastAPI:
+def create_app(
+    outdir: Path | None = None,
+    *,
+    read_only: bool = True,
+    api_key: str | None = None,
+    cors_origins: list[str] | None = None,
+    rate_limit: str = "60/minute",
+) -> FastAPI:
     """Create the FastAPI application.
 
     Parameters
     ----------
     outdir
-        Path to the campaign output directory containing run.json.
+        Path to the campaign output directory containing ``run.json``.
     read_only
-        If True, only GET endpoints are available (no campaign control).
+        If ``True`` (default), only GET endpoints are available.
+    api_key
+        API key for authentication.  When ``None``, authentication is
+        disabled.  When set, all non-public endpoints require the
+        ``X-API-Key`` header or ``api_key`` query parameter to match.
+    cors_origins
+        List of allowed CORS origins.  When ``None`` or empty, CORS is
+        not configured (same-origin only).  Use ``["*"]`` for all
+        origins.
+    rate_limit
+        Rate limit string for slowapi (default ``"60/minute"``).
     """
     app = FastAPI(
         title="OSimFlow API",
         version="0.1.0",
         description="REST API for monitoring OSimFlow campaigns",
     )
+
+    # --- Application state ---
     app.state.outdir = outdir
     app.state.read_only = read_only
+    app.state.api_key = api_key
+
+    # --- CORS middleware ---
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["X-API-Key", "Content-Type"],
+        )
+
+    # --- Rate limiting (slowapi) ---
+    limiter = Limiter(key_func=get_remote_address, default_limits=[rate_limit])
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    app.add_middleware(SlowAPIMiddleware)
+
+    # --- Authentication middleware (innermost user middleware) ---
+    app.add_middleware(APIKeyMiddleware)
+
+    # --- Routes ---
     app.include_router(router)
     app.include_router(events_router)
+
     return app

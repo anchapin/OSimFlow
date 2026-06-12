@@ -37,7 +37,7 @@ class TestServeCLI:
             result = _cmd_serve(args)
 
         assert result == 0
-        mock_uvicorn.run.assert_called_once_with(mock_app, host="0.0.0.0", port=8000)
+        mock_uvicorn.run.assert_called_once_with(mock_app, host="127.0.0.1", port=8000)
 
     def test_serve_custom_host_port(self, tmp_path: Path) -> None:
         """Serve subcommand passes --host and --port to uvicorn."""
@@ -89,6 +89,9 @@ class TestServeCLI:
         mock_create_app.assert_called_once_with(
             outdir=tmp_path,
             read_only=False,
+            api_key=None,
+            cors_origins=None,
+            rate_limit="60/minute",
         )
 
     def test_serve_read_only_default(self, tmp_path: Path) -> None:
@@ -114,6 +117,9 @@ class TestServeCLI:
         mock_create_app.assert_called_once_with(
             outdir=tmp_path,
             read_only=True,
+            api_key=None,
+            cors_origins=None,
+            rate_limit="60/minute",
         )
 
     def test_serve_import_error_returns_1(self, tmp_path: Path) -> None:

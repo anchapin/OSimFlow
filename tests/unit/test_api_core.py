@@ -1,4 +1,4 @@
-"""Tests for osimflow/api/ core endpoints (issue #138)."""
+"""Tests for osimflow/api/ core endpoints (issue #138) and security (issue #268)."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("fastapi", reason="osimflow[api] extra required")
+pytest.importorskip("slowapi", reason="osimflow[api] extra required")
 from fastapi.testclient import TestClient
 
-from osimflow.api import create_app
+from osimflow.api import create_app, generate_api_key, validate_api_key
 
 
 @pytest.fixture
@@ -192,3 +193,242 @@ class TestUnknownRoutes:
         client = TestClient(app)
         resp = client.get("/unknown")
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Security tests (issue #268)
+# ---------------------------------------------------------------------------
+
+TEST_API_KEY = "test-secret-key-12345"
+
+
+class TestAPIKeyHelpers:
+    """Unit tests for the pure auth helper functions."""
+
+    def test_generate_api_key_returns_string(self) -> None:
+        key = generate_api_key()
+        assert isinstance(key, str)
+        assert len(key) >= 32
+
+    def test_generate_api_key_is_unique(self) -> None:
+        keys = {generate_api_key() for _ in range(100)}
+        assert len(keys) == 100  # all unique
+
+    def test_validate_api_key_correct(self) -> None:
+        assert validate_api_key("abc123", "abc123") is True
+
+    def test_validate_api_key_wrong(self) -> None:
+        assert validate_api_key("wrong", "abc123") is False
+
+    def test_validate_api_key_none(self) -> None:
+        assert validate_api_key(None, "abc123") is False
+
+
+class TestAPIKeyAuth:
+    """Tests for API key authentication on the running app."""
+
+    def test_no_key_configured_allows_all(self, tmp_outdir: Path) -> None:
+        """When api_key=None, authentication is disabled (backward compat)."""
+        app = create_app(outdir=tmp_outdir, api_key=None)
+        client = TestClient(app)
+        resp = client.get("/api/v1/campaign")
+        assert resp.status_code == 200
+
+    def test_health_bypasses_auth(self, tmp_outdir: Path) -> None:
+        """/health is always accessible, even with auth enabled."""
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "alive"
+
+    def test_protected_endpoint_without_key_returns_401(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get("/api/v1/campaign")
+        assert resp.status_code == 401
+        assert "API key" in resp.json()["detail"]
+
+    def test_protected_endpoint_with_wrong_key_returns_401(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get("/api/v1/campaign", headers={"X-API-Key": "wrong-key"})
+        assert resp.status_code == 401
+
+    def test_protected_endpoint_with_correct_header_key(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get("/api/v1/campaign", headers={"X-API-Key": TEST_API_KEY})
+        assert resp.status_code == 200
+
+    def test_protected_endpoint_with_correct_query_key(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get(f"/api/v1/campaign?api_key={TEST_API_KEY}")
+        assert resp.status_code == 200
+
+    def test_ready_endpoint_requires_auth(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get("/ready")
+        assert resp.status_code == 401
+
+    def test_ready_endpoint_with_auth(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get("/ready", headers={"X-API-Key": TEST_API_KEY})
+        assert resp.status_code == 200
+
+    def test_api_key_stored_in_state(self) -> None:
+        app = create_app(api_key=TEST_API_KEY)
+        assert app.state.api_key == TEST_API_KEY
+
+    def test_api_key_default_is_none(self) -> None:
+        app = create_app()
+        assert app.state.api_key is None
+
+    def test_health_trailing_slash_bypasses_auth(self, tmp_outdir: Path) -> None:
+        """/health/ (with trailing slash) should also bypass auth."""
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get("/health/")
+        # FastAPI may redirect or handle; the middleware should not block it.
+        assert resp.status_code in (200, 307)
+
+
+class TestCORSMiddleware:
+    """Tests for CORS configuration."""
+
+    def test_no_cors_no_allow_origin_header(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir)
+        client = TestClient(app)
+        resp = client.get(
+            "/api/v1/campaign",
+            headers={"Origin": "http://evil.example.com"},
+        )
+        assert "access-control-allow-origin" not in resp.headers
+
+    def test_cors_allowed_origin(self, tmp_outdir: Path) -> None:
+        origin = "http://localhost:3000"
+        app = create_app(outdir=tmp_outdir, cors_origins=[origin])
+        client = TestClient(app)
+        resp = client.get("/api/v1/campaign", headers={"Origin": origin})
+        assert resp.headers.get("access-control-allow-origin") == origin
+
+    def test_cors_wildcard_origin(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir, cors_origins=["*"])
+        client = TestClient(app)
+        resp = client.get(
+            "/api/v1/campaign",
+            headers={"Origin": "http://example.com"},
+        )
+        assert resp.status_code == 200
+
+    def test_cors_preflight_options(self, tmp_outdir: Path) -> None:
+        origin = "http://localhost:3000"
+        app = create_app(outdir=tmp_outdir, cors_origins=[origin])
+        client = TestClient(app)
+        resp = client.options(
+            "/api/v1/campaign",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-API-Key",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == origin
+
+
+class TestRateLimiting:
+    """Tests for rate limiting via slowapi."""
+
+    def test_rate_limit_allows_under_limit(self, tmp_outdir: Path) -> None:
+        """A few requests under the limit should succeed."""
+        app = create_app(outdir=tmp_outdir, rate_limit="10/minute")
+        client = TestClient(app)
+        for _ in range(5):
+            resp = client.get("/health")
+            assert resp.status_code == 200
+
+    def test_rate_limit_blocks_over_limit(self, tmp_path: Path) -> None:
+        """Exceeding the rate limit should return 429."""
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        app = create_app(outdir=tmp_path, rate_limit="2/minute")
+        client = TestClient(app)
+        # First two requests succeed.
+        assert client.get("/health").status_code == 200
+        assert client.get("/health").status_code == 200
+        # Third request should be rate limited.
+        resp = client.get("/health")
+        assert resp.status_code == 429
+
+
+class TestReadOnlyDefault:
+    """Tests for the secure read-only default."""
+
+    def test_read_only_default_true(self) -> None:
+        app = create_app()
+        assert app.state.read_only is True
+
+    def test_read_only_false_when_disabled(self) -> None:
+        app = create_app(read_only=False)
+        assert app.state.read_only is False
+
+    def test_limiter_stored_in_state(self) -> None:
+        app = create_app()
+        assert hasattr(app.state, "limiter")
+
+    def test_rate_limit_configurable(self) -> None:
+        app = create_app(rate_limit="100/minute")
+        # The limiter should be created with the given default limit.
+        assert app.state.limiter is not None
+
+
+class TestCLIArgumentChanges:
+    """Tests that the serve subcommand CLI arguments changed (issue #268)."""
+
+    def test_serve_has_enable_writes_flag(self) -> None:
+        from osimflow.__main__ import _build_parser
+
+        parser = _build_parser()
+        # --enable-writes should be accepted.
+        args = parser.parse_args(["serve", "--outdir", "/tmp/x", "--enable-writes"])
+        assert args.enable_writes is True
+
+    def test_serve_enable_writes_defaults_false(self) -> None:
+        from osimflow.__main__ import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["serve", "--outdir", "/tmp/x"])
+        assert args.enable_writes is False
+
+    def test_serve_host_defaults_localhost(self) -> None:
+        from osimflow.__main__ import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["serve", "--outdir", "/tmp/x"])
+        assert args.host == "127.0.0.1"
+
+    def test_serve_api_key_flag(self) -> None:
+        from osimflow.__main__ import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["serve", "--outdir", "/tmp/x", "--api-key", "mykey"])
+        assert args.api_key == "mykey"
+
+    def test_serve_cors_origins_flag(self) -> None:
+        from osimflow.__main__ import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["serve", "--outdir", "/tmp/x", "--cors-origins", "http://a.com,http://b.com"]
+        )
+        assert args.cors_origins == "http://a.com,http://b.com"
+
+    def test_serve_rate_limit_flag(self) -> None:
+        from osimflow.__main__ import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["serve", "--outdir", "/tmp/x", "--rate-limit", "120/minute"])
+        assert args.rate_limit == "120/minute"
