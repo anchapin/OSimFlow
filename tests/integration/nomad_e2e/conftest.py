@@ -7,7 +7,8 @@ Provides a session-scoped ``nomad_single`` fixture that:
   4. Tears down Docker Compose after the test session.
 
 Tests that use this fixture must be marked ``@pytest.mark.nomad_e2e``
-and will be skipped when Docker is not available.
+and will be marked XFAIL (not silently skipped) when Docker is not
+available — this prevents false-green CI results (issue #195).
 """
 
 from __future__ import annotations
@@ -81,7 +82,7 @@ def nomad_single() -> str:  # type: ignore[misc]  # fixture return is complex
     Skips the test session when Docker is not available.
     """
     if not _docker_available():
-        pytest.skip("Docker / Docker Compose not available — skipping Nomad E2E tests")
+        pytest.xfail("Docker / Docker Compose not available — Nomad E2E tests require Docker (issue #195)")
 
     # Start the Docker Compose stack.
     try:
@@ -99,7 +100,7 @@ def nomad_single() -> str:  # type: ignore[misc]  # fixture return is complex
             timeout=120,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        pytest.skip(f"Docker Compose failed to start Nomad: {exc}")
+        pytest.xfail(f"Docker Compose failed to start Nomad: {exc}")
         return  # pragma: no cover — skip already raised
 
     if proc.returncode != 0:
@@ -118,7 +119,7 @@ def nomad_single() -> str:  # type: ignore[misc]  # fixture return is complex
             check=False,
             timeout=60,
         )
-        pytest.skip(
+        pytest.xfail(
             f"Docker Compose up failed (rc={proc.returncode}). "
             f"stderr: {proc.stderr.decode('utf-8', errors='replace')[-500:]}\n"
             f"logs:\n{logs}"
@@ -139,7 +140,7 @@ def nomad_single() -> str:  # type: ignore[misc]  # fixture return is complex
             check=False,
         )
         logs = log_proc.stdout.decode("utf-8", errors="replace")[-2000:]
-        pytest.skip(
+        pytest.xfail(
             f"Nomad API did not become ready within {NOMAD_READY_TIMEOUT_S:.0f}s. "
             f"Container logs:\n{logs}"
         )
