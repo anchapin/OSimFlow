@@ -548,8 +548,10 @@ class Campaign:
             for item in submissions.items():
                 if self._check_cancel_requested():
                     log.warning("cancellation requested during %s — stopping fan-out", step_name)
-                    raise KeyboardInterrupt("cancellation requested during fan-out")
+                    break
                 _await_one(item)
+            if self._cancel_requested:
+                raise KeyboardInterrupt("cancellation requested during fan-out")
             return
 
         # max_workers > 1: use a ThreadPoolExecutor to await results
@@ -569,11 +571,13 @@ class Campaign:
                     # Cancel remaining futures.
                     for f in futures:
                         f.cancel()
-                    raise KeyboardInterrupt("cancellation requested during fan-out")
+                    break
                 # Error already logged inside _await_one; continue
                 # processing remaining samples.
                 with contextlib.suppress(Exception):
                     future.result()
+            if self._cancel_requested:
+                raise KeyboardInterrupt("cancellation requested during fan-out")
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
