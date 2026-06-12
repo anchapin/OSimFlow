@@ -13,6 +13,12 @@ from pathlib import Path
 import yaml
 
 from .byos import ByosTrustLevel
+from .validation import (
+    ValidationError,
+    validate_path_within,
+    validate_template_package,
+    validate_variables_yml,
+)
 
 log = logging.getLogger("osimflow.config")
 
@@ -134,12 +140,32 @@ class CampaignConfig:
         return self.work_dir / "cache.sqlite"
 
 
+def _validate_script_path(raw: object) -> None:
+    if not raw:
+        return
+    validate_path_within(
+        Path(str(raw)),
+        Path("/"),
+        must_exist=True,
+        must_be_file=True,
+        readable=True,
+    )
+
+
 def load_config(args: dict[str, object]) -> CampaignConfig:
     """Resolve a config from a flat dict (e.g. argparse namespace -> vars).
 
-    Each value is narrowed via `str()` / `bool()` / `int()` because argparse
-    already validates types — the cast here is purely a type-checker
-    shim, not a runtime guarantee.
+    Each value is narrowed via ``str()`` / ``bool()`` / ``int()`` because
+    argparse already validates types — the cast here is purely a
+    type-checker shim, not a runtime guarantee.
+
+    Raises
+    ------
+    ValidationError
+        When user-supplied inputs fail validation (path traversal,
+        missing required files, malformed variables.yml, etc.).
+    FileNotFoundError
+        When required input files do not exist.
     """
     variables_yml = Path(str(args["input_variables"])).resolve()
     template = Path(str(args["template_sim_package"])).resolve()
@@ -148,11 +174,60 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
     if not template.exists():
         raise FileNotFoundError(f"template_sim_package not found: {template}")
 
+    # --- Input validation (issue #278) ---
+
+    # 1. variables.yml schema validation.
+    try:
+        validate_variables_yml(variables_yml)
+    except ValidationError:
+        raise
+
+    # 2. Template package structure validation.
+    try:
+        validate_template_package(template)
+    except ValidationError:
+        raise
+
+    # 3. Path traversal protection: ensure user-supplied paths don't
+    #    escape sensible bounds.  We don't restrict to a single base dir
+    #    (the user may legitimately point to /data/models etc.), but we
+    #    verify that symlink targets resolve to real paths and reject
+    #    null bytes / absurdly long paths.
     outdir = Path(str(args["outdir"])).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
+    # Validate custom scripts don't escape via symlinks.
     custom_apply = args.get("custom_apply_script")
     custom_kpi = args.get("custom_kpi_extractor")
+    _validate_script_path(custom_apply)
+    _validate_script_path(custom_kpi)
+
+    # Validate init/finalize scripts.
+    init_script = args.get("init_script")
+    finalize_script = args.get("finalize_script")
+    _validate_script_path(init_script)
+    _validate_script_path(finalize_script)
+
+    # 4. Numeric range validation.
+    n_samples = int(str(args["n_samples"]))
+    if n_samples < 1:
+        raise ValidationError(
+            f"n_samples must be >= 1, got {n_samples}",
+            field="n_samples",
+        )
+    max_generations = int(str(args.get("max_generations", 1)))
+    if max_generations < 1:
+        raise ValidationError(
+            f"max_generations must be >= 1, got {max_generations}",
+            field="max_generations",
+        )
+
+    openstudio_version = str(args["openstudio_version"])
+    if not openstudio_version or not openstudio_version[0].isdigit():
+        raise ValidationError(
+            f"openstudio_version must start with a digit, got {openstudio_version!r}",
+            field="openstudio_version",
+        )
 
     # Parse the optional baseline section from variables.yml (issue #64).
     baseline: dict[str, object] | None = None

@@ -47,6 +47,7 @@ def workdir_with_baseline(tmp_path: Path) -> Path:
             }
         )
     )
+    (wd / "workflow.osw").write_text("{}")
     return wd
 
 
@@ -65,6 +66,7 @@ def workdir_no_baseline(tmp_path: Path) -> Path:
             }
         )
     )
+    (wd / "workflow.osw").write_text("{}")
     return wd
 
 

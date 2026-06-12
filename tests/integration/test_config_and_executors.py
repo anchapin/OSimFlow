@@ -60,9 +60,12 @@ def test_archive_and_custom_script_defaults() -> None:
 # ---------------------------------------------------------------------------
 def test_load_config_happy_path(tmp_path: Path) -> None:
     variables_yml = tmp_path / "variables.yml"
-    variables_yml.write_text("variables: []\n")
+    variables_yml.write_text(
+        "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+    )
     template = tmp_path / "template"
     template.mkdir()
+    (template / "workflow.osw").write_text("{}")
     args: dict[str, Any] = {
         "input_variables": str(variables_yml),
         "template_sim_package": str(template),
@@ -96,7 +99,9 @@ def test_load_config_raises_on_missing_variables_yml(tmp_path: Path) -> None:
 
 def test_load_config_raises_on_missing_template(tmp_path: Path) -> None:
     variables_yml = tmp_path / "variables.yml"
-    variables_yml.write_text("variables: []\n")
+    variables_yml.write_text(
+        "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+    )
     args: dict[str, Any] = {
         "input_variables": str(variables_yml),
         "template_sim_package": str(tmp_path / "no-template"),
@@ -110,9 +115,12 @@ def test_load_config_raises_on_missing_template(tmp_path: Path) -> None:
 
 def test_load_config_resolves_custom_scripts(tmp_path: Path) -> None:
     variables_yml = tmp_path / "variables.yml"
-    variables_yml.write_text("variables: []\n")
+    variables_yml.write_text(
+        "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+    )
     template = tmp_path / "template"
     template.mkdir()
+    (template / "workflow.osw").write_text("{}")
     apply_script = tmp_path / "apply.py"
     apply_script.write_text("def apply_parameters(*a, **k): pass\n")
     kpi_script = tmp_path / "kpi.py"

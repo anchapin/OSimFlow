@@ -494,6 +494,7 @@ class TestLoadConfigIntegration:
         )
         template = tmp_path / "template"
         template.mkdir()
+        (template / "workflow.osw").write_text("{}")
         outdir = tmp_path / "out"
 
         args = {
@@ -539,6 +540,7 @@ class TestLoadConfigIntegration:
         )
         template = tmp_path / "template"
         template.mkdir()
+        (template / "workflow.osw").write_text("{}")
         outdir = tmp_path / "out"
 
         args = {

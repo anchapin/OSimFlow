@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from osimflow.config import CampaignConfig, load_config
+from osimflow.validation import ValidationError
 
 
 @pytest.fixture
@@ -379,21 +380,23 @@ class TestLoadConfigBaseline:
         assert cfg.baseline is not None
         assert cfg.baseline["sample_id"] == "baseline"
 
-    def test_malformed_yaml_still_loads(
+    def test_malformed_yaml_rejected(
         self, tmp_path: Path, template_pkg: Path, outdir: Path
     ) -> None:
+        """Malformed YAML (non-dict) is now rejected by validation (issue #278)."""
         vyml = tmp_path / "variables.yml"
         vyml.write_text("just some text without yaml structure")
         args = _base_args(vyml, template_pkg, outdir)
-        cfg = load_config(args)
-        assert cfg.baseline is None
+        with pytest.raises(ValidationError):
+            load_config(args)
 
-    def test_empty_yaml(self, tmp_path: Path, template_pkg: Path, outdir: Path) -> None:
+    def test_empty_yaml_rejected(self, tmp_path: Path, template_pkg: Path, outdir: Path) -> None:
+        """Empty YAML is now rejected by validation (issue #278)."""
         vyml = tmp_path / "variables.yml"
         vyml.write_text("")
         args = _base_args(vyml, template_pkg, outdir)
-        cfg = load_config(args)
-        assert cfg.baseline is None
+        with pytest.raises(ValidationError):
+            load_config(args)
 
 
 class TestLoadConfigWeatherDir:

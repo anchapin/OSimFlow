@@ -129,9 +129,12 @@ def test_campaign_config_mlflow_tracking_uri_stores_uri() -> None:
 
 def test_load_config_passes_mlflow_tracking_uri(tmp_path: Path) -> None:
     variables_yml = tmp_path / "variables.yml"
-    variables_yml.write_text("variables: []\n")
+    variables_yml.write_text(
+        "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+    )
     template = tmp_path / "template"
     template.mkdir()
+    (template / "workflow.osw").write_text("{}")
     args: dict[str, Any] = {
         "input_variables": str(variables_yml),
         "template_sim_package": str(template),
