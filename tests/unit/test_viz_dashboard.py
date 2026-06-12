@@ -37,14 +37,18 @@ class TestDashboardData:
     def test_load_with_run_json(self, tmp_path: Path) -> None:
         """DashboardData loads run.json when present."""
         run_json = tmp_path / "run.json"
-        run_json.write_text(json.dumps({
-            "schema_version": 1,
-            "per_sample": [
-                {"sample_id": "0", "status": "ok", "elapsed_s": 5.0},
-                {"sample_id": "1", "status": "failed", "elapsed_s": 2.0},
-            ],
-            "steps": [],
-        }))
+        run_json.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "per_sample": [
+                        {"sample_id": "0", "status": "ok", "elapsed_s": 5.0},
+                        {"sample_id": "1", "status": "failed", "elapsed_s": 2.0},
+                    ],
+                    "steps": [],
+                }
+            )
+        )
 
         from osimflow.viz.dashboard import DashboardData
 
@@ -79,13 +83,15 @@ class TestDashboardData:
     def test_numeric_lhs_columns(self, tmp_path: Path) -> None:
         """numeric_lhs_columns() returns numeric non-KPI columns."""
         csv = tmp_path / "aggregated_results.csv"
-        df = pd.DataFrame({
-            "sample_id": [0],
-            "insulation_thickness": [0.1],
-            "window_ratio": [0.4],
-            "eui_kwh_m2_yr": [120.5],
-            "name": ["model_a"],
-        })
+        df = pd.DataFrame(
+            {
+                "sample_id": [0],
+                "insulation_thickness": [0.1],
+                "window_ratio": [0.4],
+                "eui_kwh_m2_yr": [120.5],
+                "name": ["model_a"],
+            }
+        )
         df.to_csv(csv, index=False)
 
         from osimflow.viz.dashboard import DashboardData
@@ -213,7 +219,8 @@ class TestDashboardCLI:
 
         assert result == 0
         mock_create.assert_called_once_with(
-            outdir=tmp_path.resolve(), port=8501,
+            outdir=tmp_path.resolve(),
+            port=8501,
         )
 
     def test_main_routes_dashboard(self, tmp_path: Path) -> None:

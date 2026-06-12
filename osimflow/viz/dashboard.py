@@ -109,8 +109,14 @@ class DashboardData:
         df = self.results_df
         if df is None:
             return []
-        kpi_like = {"eui", "eui_kwh_m2_yr", "eui_kbtu_ft2_yr", "cost_usd",
-                     "total_energy_kwh", "sample_id"}
+        kpi_like = {
+            "eui",
+            "eui_kwh_m2_yr",
+            "eui_kbtu_ft2_yr",
+            "cost_usd",
+            "total_energy_kwh",
+            "sample_id",
+        }
         cols: list[str] = []
         for col in df.columns:
             if col.lower() in kpi_like:
@@ -142,8 +148,7 @@ def create_dashboard_app(
         from streamlit.web.cli import main as st_main  # noqa: PLC0415, F401
     except ImportError as exc:
         print(
-            "Error: osimflow[viz] extra required. "
-            "Install with: pip install osimflow[viz]",
+            "Error: osimflow[viz] extra required. Install with: pip install osimflow[viz]",
             file=sys.stderr,
         )
         raise SystemExit(1) from exc

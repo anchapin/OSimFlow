@@ -434,8 +434,7 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
         from osimflow.viz.dashboard import create_dashboard_app  # noqa: PLC0415
     except ImportError:
         print(
-            "Error: osimflow[viz] extra required. "
-            "Install with: pip install osimflow[viz]",
+            "Error: osimflow[viz] extra required. Install with: pip install osimflow[viz]",
             file=sys.stderr,
         )
         return 1
