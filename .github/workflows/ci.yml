@@ -235,6 +235,7 @@ jobs:
             --timeout=120 \
             --ignore=tests/contract \
             --ignore=tests/integration/test_awsbatch_boto3_wiring.py \
+            -m "not nomad_e2e" \
             -q
 
       - name: Upload coverage
@@ -318,9 +319,72 @@ jobs:
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
 
-      - name: Run Nomad E2E tests
+      # -------------------------------------------------------------------
+      # Docker diagnostics (issue #195)
+      # -------------------------------------------------------------------
+      # Prints Docker availability, compose version, and privileged-mode
+      # info so that skip/xfail reasons can be diagnosed from CI logs.
+      # -------------------------------------------------------------------
+      - name: Docker diagnostics
+        id: docker_check
         run: |
-          .venv/bin/pytest tests/integration/nomad_e2e/ -v -m nomad_e2e --no-cov
+          echo "::group::Docker availability"
+          if docker info > /dev/null 2>&1; then
+            echo "docker_info=available" >> "$GITHUB_OUTPUT"
+            echo "Docker: available"
+            docker info --format '{{.ServerVersion}}'
+          else
+            echo "docker_info=unavailable" >> "$GITHUB_OUTPUT"
+            echo "Docker: NOT available"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Docker Compose version"
+          if docker compose version > /dev/null 2>&1; then
+            echo "compose_info=available" >> "$GITHUB_OUTPUT"
+            echo "Docker Compose: available"
+            docker compose version
+          else
+            echo "compose_info=unavailable" >> "$GITHUB_OUTPUT"
+            echo "Docker Compose: NOT available"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Privileged mode check"
+          if docker run --rm --privileged hello-world > /dev/null 2>&1; then
+            echo "privileged=available" >> "$GITHUB_OUTPUT"
+            echo "Privileged mode: available"
+          else
+            echo "privileged=unavailable" >> "$GITHUB_OUTPUT"
+            echo "Privileged mode: NOT available"
+          fi
+          echo "::endgroup::"
+
+      # -------------------------------------------------------------------
+      # Mock-based Nomad tests (always run, no Docker needed)
+      # -------------------------------------------------------------------
+      - name: Run mock-based Nomad tests
+        run: |
+          .venv/bin/pytest \
+            tests/integration/nomad_e2e/test_single_node_mock.py \
+            -v --no-cov -ra
+
+      # -------------------------------------------------------------------
+      # Docker-based E2E tests (require Docker)
+      # If Docker is unavailable, FAIL instead of silently skipping.
+      # -------------------------------------------------------------------
+      - name: Run Docker-based Nomad E2E tests
+        if: steps.docker_check.outputs.docker_info == 'available'
+        run: |
+          .venv/bin/pytest \
+            tests/integration/nomad_e2e/test_single_node.py \
+            -v -m nomad_e2e --no-cov -ra
+
+      - name: Fail if Docker unavailable for E2E tests
+        if: steps.docker_check.outputs.docker_info != 'available'
+        run: |
+          echo "::error title=Docker unavailable::Docker is not available on this runner — Nomad E2E tests cannot run. This is a hard failure, not a silent skip (issue #195)."
+          exit 1
 
   # ---------------------------------------------------------------------------
   # G18a: Terraform validate (issue #148)

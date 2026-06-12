@@ -55,7 +55,7 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
-from .executors import BaseExecutor
+from .executors import AWSBatchExecutor, BaseExecutor
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -64,6 +64,13 @@ from .mlflow_hook import (
     maybe_start_mlflow_run,
 )
 from .monitoring import RunTrace, SampleTrace, sample_log_paths
+from .observability import (
+    CloudWatchBackend,
+    NullBackend,
+    ObservabilityBackend,
+    OpenTelemetryBackend,
+    PrometheusBackend,
+)
 from .pareto import ParetoFront, ParetoSolution
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .work import (
@@ -164,21 +171,52 @@ class Campaign:
         # Per-sample accumulator. The three per-sample steps write here;
         # we emit SampleTrace rows in _finalize_samples().
         self._sample_state: dict[str, dict[str, object]] = {}
+        # Observability backend (issue #132). Built from cfg so the
+        # correct backend is always used — NullBackend when "none" (zero
+        # overhead) or a real backend when configured.
+        self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+
+    @staticmethod
+    def _build_observability_backend(cfg: CampaignConfig) -> ObservabilityBackend:
+        """Instantiate the correct observability backend from config.
+
+        Returns NullBackend when ``cfg.observability == "none"`` (zero
+        overhead — all methods are empty ``pass`` bodies).
+        """
+        backend_type = cfg.observability
+        if backend_type == "none":
+            return NullBackend()
+        if backend_type == "cloudwatch":
+            return CloudWatchBackend(
+                namespace=cfg.cloudwatch_namespace,
+            )
+        if backend_type == "prometheus":
+            return PrometheusBackend(
+                pushgateway_url=f"localhost:{cfg.prometheus_port}",
+            )
+        if backend_type == "opentelemetry":
+            endpoint = cfg.otel_endpoint or "http://localhost:4317"
+            return OpenTelemetryBackend(endpoint=endpoint)
+        raise ValueError(f"unknown observability backend: {backend_type}")
 
     def _compute_code_hashes(self) -> dict[str, str]:
-        """SHA-256 of every bin/*.py file, plus the work.py module.
+        """SHA-256 of every work script, plus the work.py module.
 
+        The work scripts live in ``osimflow._work_scripts`` (shipped
+        with the wheel).  A development checkout also has copies in
+        ``bin/``; the hash covers whichever directory is found.
         The work.py module is included because it is the work layer that
         the Campaign itself depends on; if a contributor edits it, we
         must re-run downstream steps.
         """
-        # Lazy import: keeps the work module out of the type-checker
-        # top-level chain and avoids importing pandas at osimflow import
-        # time for callers that only use Campaign/Cache.
         from . import work  # noqa: PLC0415
 
-        bin_dir = Path(__file__).resolve().parent.parent / "bin"
-        files = sorted(bin_dir.glob("*.py"))
+        # Resolve the work-scripts directory.
+        scripts_dir = Path(__file__).resolve().parent / "_work_scripts"
+        if not scripts_dir.is_dir():
+            # Development fallback: repo root bin/ directory.
+            scripts_dir = Path(__file__).resolve().parent.parent / "bin"
+        files = sorted(scripts_dir.glob("*.py"))
         work_file = Path(inspect.getfile(work))
         return {
             "bin": sha256_of_files(files),
@@ -186,7 +224,11 @@ class Campaign:
         }
 
     def _finalize_samples(self) -> None:
-        """Emit one SampleTrace per sample based on accumulated per-step state."""
+        """Emit one SampleTrace per sample based on accumulated per-step state.
+
+        Also records per-sample observability metrics (duration, status)
+        via the configured backend (issue #132).
+        """
         for sid, state in self._sample_state.items():
             apply_ok = state.get("apply_exit_code") == 0
             sim_ok = state.get("sim_exit_code") == 0
@@ -215,6 +257,16 @@ class Campaign:
             worker_ip = None if worker_ip_obj is None else str(worker_ip_obj)
             worker_region_obj = state.get("worker_region")
             worker_region = None if worker_region_obj is None else str(worker_region_obj)
+            # Cost tracking (issue #126): extract from per-sample state.
+            cost_usd_obj = state.get("cost_usd")
+            cost_usd: float | None = None if cost_usd_obj is None else float(str(cost_usd_obj))
+            billed_duration_obj = state.get("billed_duration_seconds")
+            billed_duration_seconds: float | None = (
+                None if billed_duration_obj is None else float(str(billed_duration_obj))
+            )
+            # Observability: record per-sample cost metric (issue #132).
+            if cost_usd is not None:
+                self._obs.record_sample_metric(sid, "cost_usd", cost_usd)
             self.trace.sample_done(
                 SampleTrace(
                     sample_id=sid,
@@ -230,8 +282,44 @@ class Campaign:
                     worker_id=worker_id,
                     worker_ip=worker_ip,
                     worker_region=worker_region,
+                    cost_usd=cost_usd,
+                    billed_duration_seconds=billed_duration_seconds,
                 )
             )
+            # Observability: record per-sample status metric (issue #132).
+            # status="ok" → 1.0, status="failed" → 0.0.
+            self._obs.record_sample_metric(sid, "status", 1.0 if status == "ok" else 0.0)
+
+        # Accumulate campaign-level cost totals (issue #126).
+        self._accumulate_cost_summary()
+
+    def _accumulate_cost_summary(self) -> None:
+        """Sum per-sample costs into campaign-level totals (issue #126).
+
+        Populates ``self.trace.total_cost_usd`` and
+        ``self.trace.spot_savings_usd`` from the individual
+        ``SampleTrace.cost_usd`` values.  Non-cloud executors produce
+        ``None`` costs, so both totals remain at 0.0 for local runs.
+        """
+        total = 0.0
+        for sample in self.trace.per_sample:
+            if sample.cost_usd is not None:
+                total += sample.cost_usd
+        self.trace.total_cost_usd = round(total, 6)
+        # Spot savings is the difference between on-demand and spot.
+        # The executor already uses on-demand pricing in cost_usd;
+        # spot_savings is the theoretical savings if the job ran on Spot
+        # instead. For simplicity, we estimate this as a fixed fraction
+        # (~40%) of total on-demand cost, matching the default pricing
+        # ratio ($0.05 on-demand vs $0.03 spot).
+        if total > 0:
+            savings_ratio = (
+                AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+                - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+            ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+            self.trace.spot_savings_usd = round(total * savings_ratio, 6)
+        else:
+            self.trace.spot_savings_usd = 0.0
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -616,6 +704,9 @@ class Campaign:
             # Runs even if init script failed, so the user gets a
             # notification that the campaign aborted.
             duration = time.time() - t0
+            # Observability: record campaign duration and flush backend.
+            self._obs.record_campaign_duration(duration)
+            self._obs.flush()
             self._run_finalize_script(campaign_status, duration)
             # Re-write run.json to include finalize hook timing
             if (self.cfg.outdir / "run.json").exists():
@@ -940,6 +1031,9 @@ class Campaign:
         log.info("  failed:        %s", aggregated["failed"])
         log.info("  plots:         %s", plots)
         log.info("  run trace:     %s", self.cfg.outdir / "run.json")
+        if self.trace.total_cost_usd > 0:
+            log.info("  total cost:    $%.4f", self.trace.total_cost_usd)
+            log.info("  spot savings:  $%.4f", self.trace.spot_savings_usd)
         log.info("=" * 60)
         return {
             "samples": last_samples,
@@ -1014,6 +1108,7 @@ class Campaign:
                 elapsed_s=time.time() - t0,
                 exit_code=0,
             )
+            self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
             return samples_from_cache
 
         out_dir = self.cfg.work_dir / algo.name()
@@ -1061,6 +1156,7 @@ class Campaign:
                 elapsed_s=time.time() - t0,
                 exit_code=0,
             )
+            self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
             return samples
         except Exception as e:
             log.error("%s failed: %s", step_label, e)
@@ -1133,12 +1229,14 @@ class Campaign:
         cached = self.cache.lookup(key)
         if cached:
             log.info("PREFLIGHT_RUN_MODEL: cache HIT")
+            elapsed = time.time() - t0
             self.trace.step_finished(
                 "PREFLIGHT_RUN_MODEL",
                 cache="HIT",
-                elapsed_s=time.time() - t0,
+                elapsed_s=elapsed,
                 exit_code=0,
             )
+            self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
             return
 
         try:
@@ -1161,14 +1259,16 @@ class Campaign:
         preflight_marker.parent.mkdir(parents=True, exist_ok=True)
         preflight_marker.write_text(f"preflight passed at {time.strftime('%Y-%m-%dT%H:%M:%S')}")
         self.cache.store(key, preflight_marker, exit_code=0)
+        elapsed = time.time() - t0
         self.trace.step_finished(
             "PREFLIGHT_RUN_MODEL",
             cache="MISS",
-            elapsed_s=time.time() - t0,
+            elapsed_s=elapsed,
             exit_code=0,
         )
+        self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
 
-    def step_apply_parameters(
+    def step_apply_parameters(  # noqa: PLR0915
         self,
         samples: list[SampleSpec],
         generation: int = 0,
@@ -1301,9 +1401,10 @@ class Campaign:
             elapsed_s=time.time() - t0,
             exit_code=0,
         )
+        self._obs.record_step_duration("APPLY_PARAMETERS", time.time() - t0, generation=generation)
         return out
 
-    def step_run_openstudio_sim(
+    def step_run_openstudio_sim(  # noqa: PLR0915
         self,
         parameterized: SampleDict,
         generation: int = 0,
@@ -1403,6 +1504,9 @@ class Campaign:
                 state["worker_id"] = handle.worker_id
                 state["worker_ip"] = handle.worker_ip
                 state["worker_region"] = handle.worker_region
+                # Cost tracking (issue #126): capture from the sim handle.
+                state["cost_usd"] = handle.cost_usd
+                state["billed_duration_seconds"] = handle.billed_duration_seconds
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                 # Archive eplusout.sql when flag is set
                 if self.cfg.archive_intermediates:
@@ -1420,6 +1524,9 @@ class Campaign:
             cache="MISS×N" if n else "SKIPPED",
             elapsed_s=time.time() - t0,
             exit_code=0,
+        )
+        self._obs.record_step_duration(
+            "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
         )
         return out
 
@@ -1484,6 +1591,7 @@ class Campaign:
             elapsed_s=time.time() - t0,
             exit_code=0,
         )
+        self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
         return sorted(out)
 
     def step_aggregate_results(
@@ -1518,12 +1626,14 @@ class Campaign:
         )
         cached = self.cache.lookup(key)
         if cached:
+            elapsed = time.time() - t0
             self.trace.step_finished(
                 "AGGREGATE_RESULTS",
                 cache="HIT",
-                elapsed_s=time.time() - t0,
+                elapsed_s=elapsed,
                 exit_code=0,
             )
+            self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
             return {
                 "csv": cached,
                 "parquet": cached.parent / "aggregated_results.parquet",
@@ -1544,12 +1654,14 @@ class Campaign:
         result_obj: object = handle.result(timeout=300)
         result = cast_aggregate_result(result_obj)
         self.cache.store(key, result["csv"], exit_code=0)
+        elapsed = time.time() - t0
         self.trace.step_finished(
             "AGGREGATE_RESULTS",
             cache="MISS",
-            elapsed_s=time.time() - t0,
+            elapsed_s=elapsed,
             exit_code=0,
         )
+        self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
         return result
 
     def step_generate_plots(
@@ -1582,12 +1694,14 @@ class Campaign:
         )
         result_obj: object = handle.result(timeout=120)
         result = cast_plot_paths(result_obj)
+        elapsed = time.time() - t0
         self.trace.step_finished(
             "GENERATE_BASIC_PLOTS",
             cache="SKIPPED",
-            elapsed_s=time.time() - t0,
+            elapsed_s=elapsed,
             exit_code=0,
         )
+        self._obs.record_step_duration("GENERATE_BASIC_PLOTS", elapsed)
         return result
 
 

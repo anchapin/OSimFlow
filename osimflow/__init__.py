@@ -20,6 +20,13 @@ from .executors import (
     SlurmExecutor,
 )
 from .monitoring import RunTrace, StepTrace
+from .observability import (
+    CloudWatchBackend,
+    NullBackend,
+    ObservabilityBackend,
+    OpenTelemetryBackend,
+    PrometheusBackend,
+)
 from .pareto import ParetoFront, ParetoSolution
 from .weather import (
     EPWDownloadError,
@@ -50,6 +57,11 @@ __all__ = [
     "NomadExecutor",
     "RunTrace",
     "StepTrace",
+    "ObservabilityBackend",
+    "NullBackend",
+    "CloudWatchBackend",
+    "PrometheusBackend",
+    "OpenTelemetryBackend",
     "ParetoFront",
     "ParetoSolution",
     "SevereEnergyPlusError",

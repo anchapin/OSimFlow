@@ -39,16 +39,29 @@ Typical OSA structure (analysis.json)::
 Distribution mapping
 --------------------
 
-============  ====================  ============================
-OSA type      OSimFlow distribution Parameters
-============  ====================  ============================
+============  ====================  ============================  ==============
+OSA type      OSimFlow distribution Parameters                    Notes
+============  ====================  ============================  ==============
 uniform       uniform               min, max
 normal        normal                mean, sigma
 lognormal     lognormal             mean, sigma
 triangular    triangular            min, max, mode (optional)
 discrete      discrete              values
 categorical   categorical           values, mapping (optional)
-============  ====================  ============================
+pivot         categorical           values, mapping (optional)    pivot: true
+(none)        static                value                         locked variables
+============  ====================  ============================  ==============
+
+Variable type mapping
+---------------------
+
+====================  =====================  ============================
+OSA variable_type     OSimFlow field         Notes
+====================  =====================  ============================
+variable              variable_type=variable  (default)
+argument              variable_type=argument  measure argument
+pivot                 pivot=true              mapped to categorical + flag
+====================  =====================  ============================
 """
 
 import json
@@ -73,6 +86,7 @@ OSA_DISTRIBUTION_MAP: dict[str, str] = {
     "discrete": "discrete",
     "categorical": "categorical",
     "enum": "categorical",
+    "pivot": "categorical",
 }
 
 
@@ -194,9 +208,67 @@ def _map_distribution(osa_dist: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _attach_common_fields(
+    entry: dict[str, Any],
+    osa_var: dict[str, Any],
+    name: str,
+    osa_variable_type: str,
+) -> None:
+    """Attach measure_argument, display_name, and variable_type to *entry*."""
+    if osa_variable_type and osa_variable_type != "variable":
+        entry["variable_type"] = osa_variable_type
+    measure_ref = _resolve_measure_argument(osa_var)
+    if measure_ref:
+        entry["measure_argument"] = measure_ref
+    display_name = osa_var.get("display_name")
+    if display_name and display_name != name:
+        entry["display_name"] = display_name
+
+
+def _convert_static_variable(
+    name: str, osa_var: dict[str, Any], osa_variable_type: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Convert a variable with no distribution (static / locked)."""
+    default_value = osa_var.get("default_value")
+    if default_value is None:
+        default_value = osa_var.get("value") or osa_var.get("static_value")
+    entry: dict[str, Any] = {"name": name, "distribution": "static"}
+    if default_value is not None:
+        entry["value"] = default_value
+    _attach_common_fields(entry, osa_var, name, osa_variable_type)
+    return entry, []
+
+
+def _convert_pivot_variable(
+    name: str, osa_var: dict[str, Any], osa_dist: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Convert a pivot variable to categorical with ``pivot: true``."""
+    warnings: list[str] = []
+    dist_entry: dict[str, Any] = {"distribution": "categorical"}
+    values = (
+        osa_dist.get("values") or osa_dist.get("discrete_values") or osa_dist.get("enumerations")
+    )
+    if values and isinstance(values, list):
+        dist_entry["values"] = values
+    else:
+        dist_entry["values"] = []
+        warnings.append(
+            f"Variable {name!r}: pivot distribution has no 'values'; imported with empty list"
+        )
+    mapping = osa_dist.get("mapping")
+    if mapping and isinstance(mapping, dict):
+        dist_entry["mapping"] = mapping
+    dist_entry["pivot"] = True
+
+    entry: dict[str, Any] = {"name": name}
+    entry.update(dist_entry)
+    entry["variable_type"] = "pivot"
+    _attach_common_fields(entry, osa_var, name, "pivot")
+    return entry, warnings
+
+
 def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, Any], list[str]]:
     """Try to convert a single OSA variable; return (entry, warnings)."""
-    warnings: list[str] = []
     if not isinstance(osa_var, dict):
         return {}, [f"Variable #{index}: skipped (not a dict)"]
 
@@ -204,9 +276,15 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     if not name:
         return {}, [f"Variable #{index}: skipped (no name)"]
 
+    osa_variable_type = osa_var.get("variable_type", "variable")
+    is_pivot = osa_variable_type == "pivot"
     osa_dist = osa_var.get("distribution")
-    if not osa_dist or not isinstance(osa_dist, dict):
-        return {}, [f"Variable {name!r}: skipped (no distribution)"]
+
+    if not osa_dist or not isinstance(osa_dist, dict) or not osa_dist.get("type"):
+        return _convert_static_variable(name, osa_var, osa_variable_type)
+
+    if is_pivot or osa_dist.get("type", "").lower() == "pivot":
+        return _convert_pivot_variable(name, osa_var, osa_dist)
 
     try:
         dist_entry = _map_distribution(osa_dist)
@@ -215,16 +293,8 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
 
     entry: dict[str, Any] = {"name": name}
     entry.update(dist_entry)
-
-    measure_ref = _resolve_measure_argument(osa_var)
-    if measure_ref:
-        entry["measure_argument"] = measure_ref
-
-    display_name = osa_var.get("display_name")
-    if display_name and display_name != name:
-        entry["display_name"] = display_name
-
-    return entry, warnings
+    _attach_common_fields(entry, osa_var, name, osa_variable_type)
+    return entry, []
 
 
 # Translation table: OSA algorithm type → OSimFlow registry name.

@@ -265,6 +265,48 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
             "orchestrator process (legacy, less secure)."
         ),
     )
+    run.add_argument(
+        "--observability",
+        choices=["none", "cloudwatch", "prometheus", "opentelemetry"],
+        default="none",
+        help=(
+            "Observability backend for campaign metrics (default: none). "
+            "none = no metrics emitted (zero overhead). "
+            "cloudwatch = AWS CloudWatch (requires osimflow[aws]). "
+            "prometheus = Prometheus pushgateway. "
+            "opentelemetry = OTLP gRPC exporter."
+        ),
+    )
+    run.add_argument(
+        "--cloudwatch-namespace",
+        default="OSimFlow",
+        help="CloudWatch namespace for metrics (default: OSimFlow).",
+    )
+    run.add_argument(
+        "--cloudwatch-log-group",
+        default=None,
+        help="CloudWatch log group name (optional).",
+    )
+    run.add_argument(
+        "--prometheus-port",
+        type=int,
+        default=9090,
+        help="Prometheus pushgateway port (default: 9090).",
+    )
+    run.add_argument(
+        "--otel-endpoint",
+        default=None,
+        help='OpenTelemetry OTLP gRPC endpoint (e.g. "http://localhost:4317").',
+    )
+    run.add_argument(
+        "--no-tui",
+        action="store_true",
+        help=(
+            "Disable the rich terminal UI even when rich is installed "
+            "and stdout is a TTY. Useful when piping output or running "
+            "in environments where the TUI causes display issues."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
@@ -328,9 +370,31 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         "--read-only",
         action="store_true",
         default=True,
-        help="Read-only mode (default)",
+        help="Read-only mode (default). Disable with --read-write.",
     )
+    serve.add_argument(
+        "--read-write",
+        dest="read_only",
+        action="store_false",
+        help="Allow campaign control (stop, live events). Disables --read-only.",
+    )
+    serve.add_argument("--log_level", default="INFO")
     serve.set_defaults(func=_cmd_serve)
+
+
+def _add_dashboard_args(dash: argparse.ArgumentParser) -> None:
+    dash.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory to visualise",
+    )
+    dash.add_argument(
+        "--port",
+        type=int,
+        default=8501,
+        help="Port for the local dashboard (default: 8501)",
+    )
+    dash.add_argument("--log_level", default="INFO")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -353,6 +417,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_export_args(exp)
     serve = sub.add_parser("serve", help="Start REST API server")
     _add_serve_args(serve)
+    dash = sub.add_parser(
+        "dashboard",
+        help="Launch local ephemeral dashboard for campaign results",
+    )
+    _add_dashboard_args(dash)
     return p
 
 
@@ -371,6 +440,26 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     app = create_app(outdir=args.outdir, read_only=args.read_only)
     uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
+def _cmd_dashboard(args: argparse.Namespace) -> int:
+    """Launch the local ephemeral Streamlit dashboard."""
+    outdir: Path = args.outdir.resolve()
+    if not outdir.is_dir():
+        print(f"error: {outdir} is not a directory", file=sys.stderr)
+        return 1
+
+    try:
+        from osimflow.viz.dashboard import create_dashboard_app  # noqa: PLC0415
+    except ImportError:
+        print(
+            "Error: osimflow[viz] extra required. Install with: pip install osimflow[viz]",
+            file=sys.stderr,
+        )
+        return 1
+
+    create_dashboard_app(outdir=outdir, port=args.port)
     return 0
 
 
@@ -409,7 +498,7 @@ def _run_export(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -421,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_export(args)
     if args.command == "serve":
         return _cmd_serve(args)
+    if args.command == "dashboard":
+        return _cmd_dashboard(args)
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))
@@ -442,10 +533,39 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
     campaign = Campaign(cfg, executor, apply_fn=apply_fn, extract_fn=extract_fn)
+    # TUI: wrap campaign execution with Rich TUI when available.
+    # The TUI is a passive observer (reads run.json) and does not
+    # modify campaign state.  It auto-degrades when rich is not
+    # installed, stdout is not a TTY, or --no-tui is passed.
+    use_tui = not args.no_tui
+    tui: object = None
+    if use_tui:
+        try:
+            from osimflow.tui import RichTUI, is_tui_available  # noqa: PLC0415
+
+            if is_tui_available():
+                tui = RichTUI(cfg.outdir)
+                log.info("Rich TUI enabled")
+        except Exception:
+            pass  # degrade silently
     try:
-        result = campaign.run()
-    finally:
+        if tui is not None:
+            from osimflow.tui import RichTUI  # noqa: PLC0415, F811
+
+            assert isinstance(tui, RichTUI)
+            tui.start()
+        try:
+            result = campaign.run()
+        finally:
+            if tui is not None:
+                from osimflow.tui import RichTUI  # noqa: PLC0415, F811
+
+                assert isinstance(tui, RichTUI)
+                tui.stop()
+            executor.shutdown()
+    except Exception:
         executor.shutdown()
+        raise
     print("\n=== CAMPAIGN RESULT ===")
     # The result is dict[str, object] at the type-checker level; the values
     # are well-known at runtime (see Campaign.run() return shape). Cast for

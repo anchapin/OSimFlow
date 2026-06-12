@@ -105,6 +105,17 @@ class CampaignConfig:
     # orchestrator process — use only when the user explicitly trusts
     # the script.
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
+    # Observability backend selection (issue #132 / G20c).
+    # When "none" (default), NullBackend is used — zero overhead.
+    # Supported: "none", "cloudwatch", "prometheus", "opentelemetry".
+    observability: str = "none"
+    # CloudWatch backend options (issue #132).
+    cloudwatch_namespace: str = "OSimFlow"
+    cloudwatch_log_group: str | None = None
+    # Prometheus backend options (issue #132).
+    prometheus_port: int = 9090
+    # OpenTelemetry backend options (issue #132).
+    otel_endpoint: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -198,4 +209,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             if args.get("byos_trust_level")
             else ByosTrustLevel.SUBPROCESS
         ),
+        observability=str(args.get("observability", "none")),
+        cloudwatch_namespace=str(args.get("cloudwatch_namespace", "OSimFlow")),
+        cloudwatch_log_group=(
+            str(args["cloudwatch_log_group"]) if args.get("cloudwatch_log_group") else None
+        ),
+        prometheus_port=int(str(args.get("prometheus_port", 9090))),
+        otel_endpoint=str(args["otel_endpoint"]) if args.get("otel_endpoint") else None,
     )

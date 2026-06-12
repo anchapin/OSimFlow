@@ -291,7 +291,9 @@ class TestOsaToVariablesYml:
         with pytest.raises(OSAImportError, match="No variables"):
             osa_to_variables_yml({}, out)
 
-    def test_malformed_variable_skipped(self, tmp_path: Path) -> None:
+    def test_malformed_variable_uuid_as_static(self, tmp_path: Path) -> None:
+        """A string entry is skipped, but a uuid-only dict is imported as
+        static (issue #196)."""
         data = {
             "problem": {
                 "variables": [
@@ -308,8 +310,11 @@ class TestOsaToVariablesYml:
         osa_to_variables_yml(data, out)
         with out.open() as f:
             yml = yaml.safe_load(f)
-        assert len(yml["variables"]) == 1
+        # "not a dict" is skipped; uuid-only entry is imported as static.
+        assert len(yml["variables"]) == 2
         assert yml["variables"][0]["name"] == "good_var"
+        assert yml["variables"][1]["name"] == "bad_no_dist"
+        assert yml["variables"][1]["distribution"] == "static"
 
     def test_bad_distribution_skipped_with_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -521,12 +526,13 @@ class TestConvertVariable:
         assert entry == {}
         assert "no name" in warnings[0]
 
-    def test_no_distribution_skipped(self) -> None:
+    def test_no_distribution_returns_static(self) -> None:
+        """Variables without a distribution are now imported as static (issue #196)."""
         from osimflow.importers.osa import _convert_variable
 
         entry, warnings = _convert_variable({"name": "x"}, 0)
-        assert entry == {}
-        assert "no distribution" in warnings[0]
+        assert entry["name"] == "x"
+        assert entry["distribution"] == "static"
 
     def test_bad_distribution_skipped(self) -> None:
         from osimflow.importers.osa import _convert_variable

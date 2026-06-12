@@ -138,49 +138,32 @@ def test_submit_poll_succeeded() -> None:
         job_definition=_JOB_DEF_NAME,
         poll_interval_s=0.01,
         max_poll_interval_s=0.02,
+        max_retries=0,
         region_name=_REGION,
     )
-    # Patch the lazy client so the executor uses the moto-backed one.
     executor._client = batch_client  # noqa: SLF001
 
-    handle = executor.submit(
-        lambda: "result",  # noqa: ARG005 — not run locally
-        name="test-succeed",
-        cpus=2,
-        memory_mb=1024,
-        time_min=10,
-        container="openstudio_cli_image:3.11.0",
-        openstudio_version="3.11.0",
-    )
-
-    # The handle should report done (moto submits the job and it can be
-    # described).  moto by default does not advance job status, so we
-    # need to manually mark the job as SUCCEEDED via the Batch mock.
-    # In moto, jobs submitted via submit_job start in SUBMITTED/RUNNABLE
-    # state.  We use describe_jobs to confirm the job exists, then
-    # directly set the status.
-    #
-    # However, moto's Batch mock may or may not auto-advance job states.
-    # The most reliable approach is to patch describe_jobs to return
-    # SUCCEEDED on the first call, which is the same pattern the
-    # existing tests use.  This is intentional: we are testing the
-    # executor's polling logic, not moto's state machine.
     original_describe = batch_client.describe_jobs
 
     def _describe_then_succeed(**kwargs: object) -> dict[str, object]:
-        # First call: let moto return the real job (RUNNING or SUBMITTED).
         resp = original_describe(**kwargs)
         jobs = resp.get("jobs", [])
-        if jobs and jobs[0].get("status") not in ("SUCCEEDED", "FAILED"):
-            # Force SUCCEEDED for the test.
+        if jobs and jobs[0].get("status") != "SUCCEEDED":
             jobs[0]["status"] = "SUCCEEDED"
             jobs[0]["statusReason"] = "All tasks completed"
         return resp  # type: ignore[return-value]
 
     with patch.object(batch_client, "describe_jobs", side_effect=_describe_then_succeed):
+        handle = executor.submit(
+            lambda: "result",  # noqa: ARG005 — not run locally
+            name="test-succeed",
+            cpus=2,
+            memory_mb=1024,
+            time_min=10,
+            container="openstudio_cli_image:3.11.0",
+            openstudio_version="3.11.0",
+        )
         result = handle.result(timeout=5)
-        # done() should return True while the patch is active (the mock
-        # returns SUCCEEDED).
         assert handle.done() is True
 
     assert result is None

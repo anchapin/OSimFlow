@@ -84,6 +84,12 @@ DOCUMENTED_PATTERNS = {
 }
 SKIP_DIRS = {".agents", ".github", "__pycache__", ".venv", "node_modules", ".git"}
 
+# Regex for markdown cross-references: [text](target.md) or [text](target#anchor)
+# Captures the link target (before any #anchor). We deliberately keep this
+# simple — it handles relative paths like `./foo.md`, `../bar.md`, and
+# bare filenames like `OSimFlow.md`. External URLs (http/https) are excluded.
+MARKDOWN_LINK_RE = re.compile(r"\[(?:[^\]]*)\]\(([^)#]+\.md(?:#[^\)]*)?)\)")
+
 
 def _is_documented_pattern(token: str) -> bool:
     """True if `token` is a documented file type we cannot resolve on disk
@@ -143,6 +149,84 @@ def _check_token(token: str) -> str | None:
     return None
 
 
+def _check_markdown_links(md: Path, text: str) -> list[str]:
+    """Validate internal markdown cross-references in ``text``.
+
+    Scans for ``[label](target.md)`` patterns and resolves ``target.md``
+    relative to ``md``'s parent directory. Returns a list of error
+    strings (empty if all links resolve).
+    """
+    errors: list[str] = []
+    for m in MARKDOWN_LINK_RE.finditer(text):
+        target = m.group(1)
+        # Strip any trailing anchor fragment.
+        if "#" in target:
+            target = target.split("#", 1)[0]
+        if not target:
+            continue
+        # Skip external URLs.
+        if target.startswith(("http://", "https://", "mailto:", "ftp://")):
+            continue
+        resolved = (md.parent / target).resolve()
+        # Skip targets that resolve outside the repo root (e.g. links
+        # from docs/ to .agents/ at the repo root level).
+        try:
+            resolved.relative_to(REPO_ROOT)
+        except ValueError:
+            continue
+        if not resolved.exists():
+            rel_resolved = resolved.relative_to(REPO_ROOT)
+            errors.append(
+                f"broken internal link `[...]({m.group(1)})` — "
+                f"resolved to `{rel_resolved}` which does not exist"
+            )
+    return errors
+
+
+def _check_file(md: Path) -> tuple[list[tuple[Path, str]], bool]:
+    """Check a single markdown file for broken references.
+
+    Returns ``(errors, was_checked)`` where *was_checked* is ``False``
+    when the file is opted out via ``<!-- docs-skip -->``.
+    """
+    text = md.read_text()
+    if "<!-- docs-skip -->" in text:
+        return [], False
+    rel = md.relative_to(REPO_ROOT)
+    errors: list[tuple[Path, str]] = []
+
+    for m in BACKTICKED_RE.finditer(text):
+        token = m.group(1)
+        if _is_skipped(token):
+            continue
+        err = _check_token(token)
+        if err:
+            errors.append((rel, err))
+
+    for m in CLI_FLAG_RE.finditer(text):
+        flag = m.group(1)
+        # Confirm the flag exists in __main__.py.
+        main_py = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
+        if f"--{flag}" not in main_py and f'"{flag}"' not in main_py:
+            # Only flag if the flag is the *only* token; lines with
+            # prose mentioning "--foo" without it being a real flag
+            # are common.
+            pass  # soft: don't fail CI on prose mentions
+
+    # bin script names (e.g. plain "extract_kpis.py" without backticks).
+    for m in BIN_SCRIPT_RE.finditer(text):
+        script = m.group(0)
+        target = REPO_ROOT / "bin" / script
+        if not target.is_file():
+            errors.append((rel, f"references missing bin script `bin/{script}`"))
+
+    # Internal markdown cross-references (issue #191).
+    for link_err in _check_markdown_links(md, text):
+        errors.append((rel, link_err))
+
+    return errors, True
+
+
 def main() -> int:
     if not DOCS_DIR.is_dir():
         print(f"ERROR: {DOCS_DIR} not found", file=sys.stderr)
@@ -152,36 +236,10 @@ def main() -> int:
     files_checked = 0
 
     for md in sorted(DOCS_DIR.rglob("*.md")):
-        text = md.read_text()
-        if "<!-- docs-skip -->" in text:
-            continue
-        files_checked += 1
-        rel = md.relative_to(REPO_ROOT)
-
-        for m in BACKTICKED_RE.finditer(text):
-            token = m.group(1)
-            if _is_skipped(token):
-                continue
-            err = _check_token(token)
-            if err:
-                errors.append((rel, err))
-
-        for m in CLI_FLAG_RE.finditer(text):
-            flag = m.group(1)
-            # Confirm the flag exists in __main__.py.
-            main_py = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
-            if f"--{flag}" not in main_py and f'"{flag}"' not in main_py:
-                # Only flag if the flag is the *only* token; lines with
-                # prose mentioning "--foo" without it being a real flag
-                # are common.
-                pass  # soft: don't fail CI on prose mentions
-
-        # bin script names (e.g. plain "extract_kpis.py" without backticks).
-        for m in BIN_SCRIPT_RE.finditer(text):
-            script = m.group(0)
-            target = REPO_ROOT / "bin" / script
-            if not target.is_file():
-                errors.append((rel, f"references missing bin script `bin/{script}`"))
+        file_errors, checked = _check_file(md)
+        if checked:
+            files_checked += 1
+        errors.extend(file_errors)
 
     if errors:
         print(f"docs/ sync check FAILED ({len(errors)} drift):", file=sys.stderr)

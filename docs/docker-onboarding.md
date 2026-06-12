@@ -456,7 +456,56 @@ cluster provides.
 
 ---
 
-## 9. Quick start checklist
+## 9. Quick start with the OSimFlow CLI image
+
+If you want to run OSimFlow without a local Python installation, use
+the pre-built CLI image published on Docker Hub:
+
+```bash
+# Pull the latest image
+docker pull anchapin/osimflow:latest
+
+# Show available commands
+docker run --rm anchapin/osimflow:latest --help
+
+# Run a small campaign (mount input files + output directory)
+docker run --rm \
+  -v $(pwd)/variables.yml:/workspace/variables.yml \
+  -v $(pwd)/example_package:/workspace/example_package \
+  -v $(pwd)/results:/workspace/results \
+  anchapin/osimflow:latest \
+  run --executor local \
+      --input_variables /workspace/variables.yml \
+      --template_sim_package /workspace/example_package \
+      --n_samples 5 \
+      --outdir /workspace/results
+```
+
+**How it works:** The image bundles Python 3.12, OSimFlow, and its
+common dependencies (`boto3`, `submitit`, `numpy`, `pandas`, `scipy`).
+The entry point is the `osimflow` CLI, so every flag from
+`osimflow run ...` works exactly as documented in the
+[user guide](user-guide.md).
+
+**Notes:**
+
+- The `-v` flags mount your local files into the container. Adjust the
+  host paths to match your setup.
+- On Windows PowerShell, replace `$(pwd)` with `${PWD}`.
+- For HPC clusters without Docker, convert the image to a Singularity
+  SIF (see [§8](#8-singularity--apptainer-on-hpc-for-slurm-users)):
+
+  ```bash
+  singularity pull osimflow.sif docker://anchapin/osimflow:latest
+  singularity exec osimflow.sif osimflow --help
+  ```
+
+See [`container-image-strategy.md`](container-image-strategy.md) for
+details on the Dockerfile, build process, and CI/CD pipeline.
+
+---
+
+## 10. Quick start checklist
 
 1. **Install Docker** (or Podman) — see [§2](#2-installing-docker) or
    [§3](#3-podman-as-an-alternative).
@@ -467,12 +516,16 @@ cluster provides.
    `docker run --rm nrel/openstudio:3.10.0 openstudio.cli --version`.
 5. **Run your campaign:**
    `osimflow run --executor local --openstudio_version 3.10.0 ...`.
-6. **On HPC:** use Singularity/Apptainer (see [§8](#8-singularity--apptainer-on-hpc-for-slurm-users)).
+6. **Or skip the local install:** use the Docker CLI image
+   (see [§9](#9-quick-start-with-the-osimflow-cli-image)).
+7. **On HPC:** use Singularity/Apptainer (see [§8](#8-singularity--apptainer-on-hpc-for-slurm-users)).
 
 ---
 
-## 10. References
+## 11. References
 
+- [Container image strategy](container-image-strategy.md) —
+  OSimFlow CLI image Dockerfile, build process, and CI/CD pipeline.
 - [OpenStudio image distribution](openstudio-image-distribution.md) —
   where the `nrel/openstudio` image comes from and supported versions.
 - [Podman guide](podman-guide.md) — full Podman installation and

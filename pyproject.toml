@@ -51,6 +51,8 @@ dev = [
     "types-PyYAML",
     "pre-commit>=3.7",
     "moto[batch]>=5",
+    "streamlit>=1.30",
+    "rich>=13.0",
 ]
 aws = [
     "boto3>=1.28",
@@ -71,6 +73,13 @@ optimization = [
 api = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
+    "sse-starlette>=2.0",
+]
+viz = [
+    "streamlit>=1.30",
+]
+tui = [
+    "rich>=13.0",
 ]
 
 [project.scripts]
@@ -80,11 +89,12 @@ osimflow = "osimflow.__main__:main"
 Homepage = "https://github.com/anchapin/OSimFlow"
 Issues = "https://github.com/anchapin/OSimFlow/issues"
 
-[tool.setuptools]
-packages = ["osimflow", "osimflow.executors", "osimflow.api"]
+[tool.setuptools.packages.find]
+include = ["osimflow*"]
 
 [tool.setuptools.package-data]
-osimflow = ["py.typed"]
+"osimflow" = ["py.typed"]
+"osimflow._work_scripts" = ["*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -113,6 +123,7 @@ omit = [
     "osimflow/algorithms/nsga2.py",
     "osimflow/algorithms/pso.py",
     "osimflow/api/*",
+    "osimflow/viz/dashboard.py",
 ]
 
 [tool.coverage.report]
@@ -150,6 +161,8 @@ fixable = ["ALL"]
 [tool.ruff.lint.per-file-ignores]
 # bin/*.py are CLI scripts (argparse, top-level side effects OK).
 "bin/*" = ["PL", "SIM"]
+# _work_scripts/ are CLI scripts (same as bin/).
+"osimflow/_work_scripts/*" = ["PL", "SIM"]
 # tests/ use pytest patterns that ruff would otherwise flag.
 "tests/**" = ["PL", "SIM", "B011"]
 # __init__.py: re-exports.
@@ -173,12 +186,21 @@ disallow_subclassing_any = true
 ignore_missing_imports = true
 exclude = [
     "bin/",
+    "osimflow/_work_scripts/",
     "user_scripts/",
     "tests/",
     "tools/",
     ".venv/",
     ".agents/",
 ]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.app"
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.events"
+warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
 module = "tests.*"
