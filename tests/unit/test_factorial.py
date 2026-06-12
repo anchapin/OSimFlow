@@ -184,9 +184,7 @@ class TestFullFactorialGenerateSamples:
         based on the cartesian product, not the supplied n_samples.
         """
         algo = FullFactorialAlgorithm()
-        result = algo.generate_samples(
-            _FACT_VARIABLES_2D, n_samples=10, seed=None, outdir=tmp_path
-        )
+        result = algo.generate_samples(_FACT_VARIABLES_2D, n_samples=10, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         # 3 levels × 2 levels = 6, not 10
         assert len(data["samples"]) == 6
@@ -460,7 +458,9 @@ class TestGridSamplingGenerateSamples:
     def test_n_samples_mismatch_produces_correct_count(self, tmp_path: Path) -> None:
         """Even with wrong n_samples, actual grid count is produced."""
         algo = GridSamplingAlgorithm()
-        result = algo.generate_samples(_GRID_VARIABLES_2D, n_samples=999, seed=None, outdir=tmp_path)
+        result = algo.generate_samples(
+            _GRID_VARIABLES_2D, n_samples=999, seed=None, outdir=tmp_path
+        )
         data = json.loads(result.read_text())
         assert len(data["samples"]) == 6
 

@@ -84,8 +84,7 @@ class FullFactorialAlgorithm(BaseAlgorithm):
                 )
             if not isinstance(levels, list) or len(levels) == 0:
                 raise ValueError(
-                    f"'levels' for variable '{var_name}' must be a non-empty list, "
-                    f"got {levels!r}"
+                    f"'levels' for variable '{var_name}' must be a non-empty list, got {levels!r}"
                 )
             level_lists.append(list(levels))
 
