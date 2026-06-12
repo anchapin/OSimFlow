@@ -20,7 +20,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .executors import run_subprocess  # local helper (issue #6)
 from .weather import EPWValidationError, discover_epw_files, validate_epw_header
@@ -33,6 +36,109 @@ log = logging.getLogger("osimflow.work")
 # ---------------------------------------------------------------------------
 class SevereEnergyPlusError(RuntimeError):
     """Raised when a preflight simulation encounters severe errors."""
+
+
+class TransientError(RuntimeError):
+    """Raised when a simulation failure is potentially transient and retryable.
+
+    Examples: network timeout, resource contention, temporary file lock,
+    exit code indicating a recoverable condition.
+    """
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """Return True if *exc* looks like a transient failure.
+
+    Checks for exit codes and error messages that indicate a retryable
+    condition (network timeout, resource busy, etc.).
+    """
+    msg = str(exc).lower()
+    transient_markers = (
+        "timeout",
+        "timed out",
+        "connection",
+        "network",
+        "resource busy",
+        "temporary failure",
+        "refused",
+        "too many open files",
+        "disk full",
+        "io error",
+    )
+    if any(m in msg for m in transient_markers):
+        return True
+    return isinstance(exc, subprocess.CalledProcessError) and exc.returncode in _TRANSIENT_EXIT_CODES
+
+
+_TRANSIENT_EXIT_CODES = frozenset([-1, 2, 4, 5, 6, 11, 12, 15, 24, 25, 26, 27, 28])
+
+
+def run_with_retry(
+    func: Callable[..., Path],
+    *args: Any,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    sample_id: str = "unknown",
+    step_name: str = "step",
+    **kwargs: Any,
+) -> Path:
+    """Run *func* with exponential-backoff retry for transient failures.
+
+    Parameters
+    ----------
+    func
+        Callable to invoke. Must accept *args and **kwargs.
+    *args
+        Positional arguments forwarded to *func*.
+    max_retries
+        Maximum retry attempts (default 3). A value <= 0 disables retries.
+    base_delay
+        Initial backoff delay in seconds (default 1.0). Each retry
+        doubles the delay: delay = base_delay * 2**attempt.
+    sample_id
+        Identifier for log messages.
+    step_name
+        Step name for log messages.
+    **kwargs
+        Keyword arguments forwarded to *func*.
+
+    Returns
+    -------
+    Path
+        The return value of *func* on first success or after retries.
+
+    Raises
+    ------
+    The last exception encountered when all retries are exhausted.
+    """
+    if max_retries <= 0:
+        return func(*args, **kwargs)
+
+    last_exc: BaseException | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001
+            if not _is_transient_error(exc):
+                raise
+            last_exc = exc
+            if attempt == max_retries:
+                break
+            delay = min(base_delay * (2**attempt), 60.0)
+            log.warning(
+                "%s %s transient failure (attempt %d/%d), retrying in %.1fs: %s",
+                step_name,
+                sample_id,
+                attempt + 1,
+                max_retries,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+
+    if last_exc is not None:
+        raise last_exc from None
+    raise RuntimeError("run_with_retry: unexpected code path")  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +286,7 @@ def _is_stub_mode() -> bool:
     return os.environ.get("OSIMFLOW_STUB_SIM") == "1"
 
 
-def run_openstudio_sim(
+def _run_openstudio_sim_impl(
     modified_sim_package: Path,
     sample_id: str,
     openstudio_version: str,
@@ -189,66 +295,18 @@ def run_openstudio_sim(
     *,
     stdout_path: Path | None = None,
     stderr_path: Path | None = None,
+    max_retries: int = 3,
 ) -> Path:
-    """Run the OpenStudio simulation.
-
-    When ``openstudio.cli`` is available on PATH and the environment
-    variable ``OSIMFLOW_STUB_SIM`` is not set to ``1``, this function
-    invokes the real OpenStudio CLI::
-
-        openstudio.cli run -w <workflow.osw>
-
-    The CLI produces ``eplusout.sql``, ``eplusout.err``, and other
-    artifacts in the per-sample work directory. The framework does **not**
-    write placeholder files when using the real CLI.
-
-    When ``openstudio.cli`` is not available (or ``OSIMFLOW_STUB_SIM=1``
-    is set), the function falls back to the stub behavior that sleeps
-    for ``simulate_work_s`` seconds and writes placeholder output files.
-    This fallback ensures existing integration tests pass without a real
-    OpenStudio installation.
-
-    Args:
-        modified_sim_package: per-sample modified package from APPLY_PARAMETERS.
-        sample_id: the sample's identifier (e.g. "0001").
-        openstudio_version: pinned OpenStudio version (selects container tag).
-        out: directory where simulation outputs are written.
-        simulate_work_s: how long the stub sleeps to simulate work
-            (only used in stub mode).
-        stdout_path: optional path to the per-sample stdout log file
-            (issue #6). When provided alongside ``stderr_path``, the
-            underlying subprocess has its stdout/stderr streams
-            redirected to these files. The Campaign populates them with
-            ``${outdir}/work/sim/<sample_id>/stdout.log`` and
-            ``stderr.log`` per `.agents/results/monitoring-decision.md`.
-        stderr_path: optional path to the per-sample stderr log file.
-
-    Returns:
-        Path to the simulation output directory (eplusout.sql inside).
-
-    Raises:
-        RuntimeError: when ``openstudio.cli`` is available but no
-            ``workflow.osw`` is found in the modified package.
-        subprocess.CalledProcessError: when ``openstudio.cli`` exits
-            with a non-zero code.
-    """
+    """Internal implementation — wrapped with retry by ``run_openstudio_sim``."""
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
     log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
 
-    # If the Campaign did not pass log paths (legacy callers, BYOS
-    # scripts that pre-date issue #6), fall back to a per-sample
-    # sentinel location inside `sim_out` so the files still exist on
-    # disk. The default keeps the helper back-compatible while the
-    # Campaign-driven path is the supported one.
     if stdout_path is None:
         stdout_path = sim_out / "stdout.log"
     if stderr_path is None:
         stderr_path = sim_out / "stderr.log"
 
-    # ------------------------------------------------------------------
-    # Decision: real CLI or stub?
-    # ------------------------------------------------------------------
     use_real_cli = _is_openstudio_available() and not _is_stub_mode()
 
     if use_real_cli:
@@ -260,9 +318,6 @@ def run_openstudio_sim(
             stderr_path=stderr_path,
         )
 
-    # ------------------------------------------------------------------
-    # Stub path (original behavior)
-    # ------------------------------------------------------------------
     cmd = [
         sys.executable,
         "-c",
@@ -282,14 +337,83 @@ def run_openstudio_sim(
             cwd=sim_out,
         )
     except subprocess.SubprocessError as e:
-        # Surface the failure; the Campaign maps non-zero exit to a
-        # failed SampleTrace row.
         log.error("run_openstudio_sim failed for %s: %s", sample_id, e)
         raise
 
     (sim_out / "eplusout.sql").write_text("-- placeholder sql")
-    (sim_out / "eplusout.err").write_text("")  # success: empty err
+    (sim_out / "eplusout.err").write_text("")
     return sim_out
+
+
+def run_openstudio_sim(
+    modified_sim_package: Path,
+    sample_id: str,
+    openstudio_version: str,
+    out: Path,
+    simulate_work_s: float = 2.0,
+    *,
+    stdout_path: Path | None = None,
+    stderr_path: Path | None = None,
+    max_retries: int = 3,
+) -> Path:
+    """Run the OpenStudio simulation with exponential-backoff retry.
+
+    When ``openstudio.cli`` is available on PATH and the environment
+    variable ``OSIMFLOW_STUB_SIM`` is not set to ``1``, this function
+    invokes the real OpenStudio CLI::
+
+        openstudio.cli run -w <workflow.osw>
+
+    The CLI produces ``eplusout.sql``, ``eplusout.err``, and other
+    artifacts in the per-sample work directory. The framework does **not**
+    write placeholder files when using the real CLI.
+
+    When ``openstudio.cli`` is not available (or ``OSIMFLOW_STUB_SIM=1``
+    is set), the function falls back to the stub behavior that sleeps
+    for ``simulate_work_s`` seconds and writes placeholder output files.
+    This fallback ensures existing integration tests pass without a real
+    OpenStudio installation.
+
+    Transient failures (network timeout, resource contention, specific
+    exit codes) are retried with exponential backoff (1s base, 60s cap)
+    up to ``max_retries`` attempts before surfacing the final error.
+
+    Args:
+        modified_sim_package: per-sample modified package from APPLY_PARAMETERS.
+        sample_id: the sample's identifier (e.g. "0001").
+        openstudio_version: pinned OpenStudio version (selects container tag).
+        out: directory where simulation outputs are written.
+        simulate_work_s: how long the stub sleeps to simulate work
+            (only used in stub mode).
+        stdout_path: optional path to the per-sample stdout log file
+            (issue #6). When provided alongside ``stderr_path``, the
+            underlying subprocess has its stdout/stderr streams
+            redirected to these files. The Campaign populates them with
+            ``${outdir}/work/sim/<sample_id>/stdout.log`` and
+            ``stderr.log`` per `.agents/results/monitoring-decision.md`.
+        stderr_path: optional path to the per-sample stderr log file.
+        max_retries: maximum retry attempts for transient failures
+            (default 3). Set to 0 to disable retries.
+
+    Returns:
+        Path to the simulation output directory (eplusout.sql inside).
+
+    Raises:
+        RuntimeError: when ``openstudio.cli`` is available but no
+            ``workflow.osw`` is found in the modified package.
+        subprocess.CalledProcessError: when ``openstudio.cli`` exits
+            with a non-zero code that is not transient.
+    """
+    return _run_openstudio_sim_impl(
+        modified_sim_package=modified_sim_package,
+        sample_id=sample_id,
+        openstudio_version=openstudio_version,
+        out=out,
+        simulate_work_s=simulate_work_s,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        max_retries=max_retries,
+    )
 
 
 def _run_real_openstudio(

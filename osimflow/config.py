@@ -137,6 +137,12 @@ class CampaignConfig:
     # During objective evaluation, constraint violations are penalised with
     # a large positive value (1e9) added to the objective.
     constraints: list[dict[str, object]] | None = None
+    # Per-sample retry configuration (issue #252).
+    # max_sample_retries: maximum retry attempts for transient per-sample
+    # failures (network timeout, resource contention, etc.). A value of 0
+    # disables retries. Each retry uses exponential backoff starting at
+    # base_delay seconds (default 1.0), doubling each attempt up to 60s cap.
+    max_sample_retries: int = 3
 
     @property
     def work_dir(self) -> Path:
@@ -366,4 +372,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         registry_path=(Path(str(args["registry"])).resolve() if args.get("registry") else None),
         objective=objective,
         constraints=constraints,
+        max_sample_retries=int(str(args.get("max_sample_retries", 3))),
     )
