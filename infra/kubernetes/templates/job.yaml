@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels:
+    {{- include "osimflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  ttlSecondsAfterFinish: 300
+  template:
+    spec:
+      containers:
+        - name: osimflow
+          image: {{ .Values.openstudio.container }}
+          command: ["/bin/sh", "-c", "sleep infinity"]
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
+          env:
+            - name: OSIMFLOW_OS_VERSION
+              value: {{ .Values.openstudio.version | quote }}
+            - name: OSIMFLOW_CONTAINER
+              value: {{ .Values.openstudio.container | quote }}
+      restartPolicy: Never
