@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 
 from osimflow.api import create_app
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
