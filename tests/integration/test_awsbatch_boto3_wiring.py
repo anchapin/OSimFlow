@@ -53,6 +53,10 @@ def test_aws_batch_submit_builds_container_overrides() -> None:
     carry vcpus / memory / command / environment."""
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "abc-123"}
+    # submit() now blocks until terminal state via _wait_for_terminal().
+    fake_client.describe_jobs.return_value = {
+        "jobs": [{"jobId": "abc-123", "status": "SUCCEEDED", "statusReason": "OK"}]
+    }
 
     with patch("boto3.client", return_value=fake_client) as boto3_client:
         ex = AWSBatchExecutor(job_queue="my-queue", job_definition="my-job-def")
@@ -105,6 +109,9 @@ def test_aws_batch_submit_uses_minimum_resource_defaults() -> None:
     must still build a valid submit_job payload from its own defaults."""
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-defaults"}
+    fake_client.describe_jobs.return_value = {
+        "jobs": [{"jobId": "job-defaults", "status": "SUCCEEDED", "statusReason": "OK"}]
+    }
 
     with patch("boto3.client", return_value=fake_client):
         ex = AWSBatchExecutor()
@@ -124,6 +131,9 @@ def test_aws_batch_submit_omits_env_when_not_provided() -> None:
     be absent. We assert the list itself is well-formed."""
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-no-env"}
+    fake_client.describe_jobs.return_value = {
+        "jobs": [{"jobId": "job-no-env", "status": "SUCCEEDED", "statusReason": "OK"}]
+    }
 
     with patch("boto3.client", return_value=fake_client):
         ex = AWSBatchExecutor()
@@ -175,9 +185,9 @@ def test_aws_batch_result_returns_none_on_success() -> None:
 
 
 def test_aws_batch_failed_raises_with_status_reason() -> None:
-    """When the Batch task FAILED, Handle.result() must re-raise an
-    exception whose message includes the statusReason. The Campaign's
-    `except Exception` path needs a string it can log."""
+    """When the Batch task FAILED, submit() raises RuntimeError directly
+    (since it blocks via _wait_for_terminal). The Campaign's `except
+    Exception` path needs a string it can log."""
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-fail"}
     fake_client.describe_jobs.return_value = {
@@ -193,9 +203,8 @@ def test_aws_batch_failed_raises_with_status_reason() -> None:
 
     with patch("boto3.client", return_value=fake_client):
         ex = AWSBatchExecutor(poll_interval_s=0.01, max_poll_interval_s=0.02)
-        handle = ex.submit(lambda: None, name="fail-job")
         with pytest.raises(RuntimeError, match="Essential container exited"):
-            handle.result(timeout=5)
+            ex.submit(lambda: None, name="fail-job")
     ex.shutdown()
 
 
@@ -210,11 +219,15 @@ def test_aws_batch_polling_uses_exponential_backoff() -> None:
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-poll"}
 
-    # Three RUNNING responses, then SUCCEEDED on the fourth call.
+    # Four RUNNING responses (consumed by submit()'s internal _wait_for_terminal),
+    # then SUCCEEDED for submit()'s final call, then SUCCEEDED again for
+    # handle.result()'s _wait_for_terminal call.
     describe_calls = [
         {"jobs": [{"jobId": "job-poll", "status": "RUNNING", "statusReason": "..."}]},
         {"jobs": [{"jobId": "job-poll", "status": "RUNNING", "statusReason": "..."}]},
         {"jobs": [{"jobId": "job-poll", "status": "RUNNING", "statusReason": "..."}]},
+        {"jobs": [{"jobId": "job-poll", "status": "RUNNING", "statusReason": "..."}]},
+        {"jobs": [{"jobId": "job-poll", "status": "SUCCEEDED", "statusReason": "OK"}]},
         {"jobs": [{"jobId": "job-poll", "status": "SUCCEEDED", "statusReason": "OK"}]},
     ]
     fake_client.describe_jobs.side_effect = describe_calls
@@ -270,6 +283,9 @@ def test_aws_batch_executor_rejects_aws_access_key_pair() -> None:
 def test_aws_batch_does_not_pin_aws_region_in_code() -> None:
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "x"}
+    fake_client.describe_jobs.return_value = {
+        "jobs": [{"jobId": "x", "status": "SUCCEEDED", "statusReason": "OK"}]
+    }
 
     with patch("boto3.client", return_value=fake_client) as boto3_client:
         # Clear AWS region env vars so we know nothing leaks from the
