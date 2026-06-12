@@ -82,7 +82,9 @@ def nomad_single() -> str:  # type: ignore[misc]  # fixture return is complex
     Skips the test session when Docker is not available.
     """
     if not _docker_available():
-        pytest.xfail("Docker / Docker Compose not available — Nomad E2E tests require Docker (issue #195)")
+        pytest.xfail(
+            "Docker / Docker Compose not available — Nomad E2E tests require Docker (issue #195)"
+        )
 
     # Start the Docker Compose stack.
     try:

@@ -70,7 +70,13 @@ def mocked_nomad_transport() -> Iterator[MagicMock]:
         if method == "GET" and "/v1/evaluation/" in url and "/allocations" in url:
             idx = call_counter
             alloc_calls.append({"method": method, "url": url})
-            result = [{"ID": f"alloc-eval-{idx}", "ClientStatus": "complete", "JobID": "osimflow/mock-job-1"}]
+            result = [
+                {
+                    "ID": f"alloc-eval-{idx}",
+                    "ClientStatus": "complete",
+                    "JobID": "osimflow/mock-job-1",
+                }
+            ]
             resp = MagicMock()
             resp.read.return_value = json.dumps(result).encode("utf-8")
             resp.__enter__ = lambda s: s
@@ -79,7 +85,9 @@ def mocked_nomad_transport() -> Iterator[MagicMock]:
 
         if method == "GET" and "/v1/job/" in url and "/allocations" in url:
             alloc_calls.append({"method": method, "url": url})
-            result = [{"ID": "alloc-job-mock", "ClientStatus": "complete", "JobID": "osimflow/mock-job-1"}]
+            result = [
+                {"ID": "alloc-job-mock", "ClientStatus": "complete", "JobID": "osimflow/mock-job-1"}
+            ]
             resp = MagicMock()
             resp.read.return_value = json.dumps(result).encode("utf-8")
             resp.__enter__ = lambda s: s
