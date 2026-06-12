@@ -177,6 +177,7 @@ def test_excel_to_variables_via_subprocess(tmp_path):
 def test_excel_to_variables_direct(tmp_path):
     pytest.importorskip("openpyxl", reason="openpyxl required for Excel conversion")
     import openpyxl
+
     from osimflow._work_scripts.excel_to_variables import excel_to_variables_yml
 
     xlsx_path = tmp_path / "variables.xlsx"

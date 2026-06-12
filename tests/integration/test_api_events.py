@@ -197,8 +197,7 @@ class TestSSEEndpoint:
 
     def test_sse_read_only_connects(self, client_ro: TestClient, outdir: Path) -> None:
         """SSE endpoint is available in read-only mode (issue #275)."""
-        import asyncio
-        from unittest.mock import patch, AsyncIterator
+        from unittest.mock import patch
 
         async def mock_generator(request, poll_interval=1.0, max_iterations=1):
             yield {"event": "campaign.completed", "data": "{}"}
