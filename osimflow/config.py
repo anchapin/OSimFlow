@@ -97,6 +97,17 @@ class CampaignConfig:
     ecr_repository: str | None = (
         None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
     )
+    # Observability backend selection (issue #132 / G20c).
+    # When "none" (default), NullBackend is used — zero overhead.
+    # Supported: "none", "cloudwatch", "prometheus", "opentelemetry".
+    observability: str = "none"
+    # CloudWatch backend options (issue #132).
+    cloudwatch_namespace: str = "OSimFlow"
+    cloudwatch_log_group: str | None = None
+    # Prometheus backend options (issue #132).
+    prometheus_port: int = 9090
+    # OpenTelemetry backend options (issue #132).
+    otel_endpoint: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -185,4 +196,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         aws_batch_fallback_to_on_demand=bool(args.get("aws_batch_fallback_to_on_demand", False)),
         aws_batch_max_retries=int(str(args.get("aws_batch_max_retries", 3))),
         ecr_repository=str(args["ecr_repository"]) if args.get("ecr_repository") else None,
+        observability=str(args.get("observability", "none")),
+        cloudwatch_namespace=str(args.get("cloudwatch_namespace", "OSimFlow")),
+        cloudwatch_log_group=(
+            str(args["cloudwatch_log_group"]) if args.get("cloudwatch_log_group") else None
+        ),
+        prometheus_port=int(str(args.get("prometheus_port", 9090))),
+        otel_endpoint=str(args["otel_endpoint"]) if args.get("otel_endpoint") else None,
     )

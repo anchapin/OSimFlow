@@ -64,6 +64,13 @@ from .mlflow_hook import (
     maybe_start_mlflow_run,
 )
 from .monitoring import RunTrace, SampleTrace, sample_log_paths
+from .observability import (
+    CloudWatchBackend,
+    NullBackend,
+    ObservabilityBackend,
+    OpenTelemetryBackend,
+    PrometheusBackend,
+)
 from .pareto import ParetoFront, ParetoSolution
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .work import (
@@ -160,6 +167,33 @@ class Campaign:
         # Per-sample accumulator. The three per-sample steps write here;
         # we emit SampleTrace rows in _finalize_samples().
         self._sample_state: dict[str, dict[str, object]] = {}
+        # Observability backend (issue #132). Built from cfg so the
+        # correct backend is always used — NullBackend when "none" (zero
+        # overhead) or a real backend when configured.
+        self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+
+    @staticmethod
+    def _build_observability_backend(cfg: CampaignConfig) -> ObservabilityBackend:
+        """Instantiate the correct observability backend from config.
+
+        Returns NullBackend when ``cfg.observability == "none"`` (zero
+        overhead — all methods are empty ``pass`` bodies).
+        """
+        backend_type = cfg.observability
+        if backend_type == "none":
+            return NullBackend()
+        if backend_type == "cloudwatch":
+            return CloudWatchBackend(
+                namespace=cfg.cloudwatch_namespace,
+            )
+        if backend_type == "prometheus":
+            return PrometheusBackend(
+                pushgateway_url=f"localhost:{cfg.prometheus_port}",
+            )
+        if backend_type == "opentelemetry":
+            endpoint = cfg.otel_endpoint or "http://localhost:4317"
+            return OpenTelemetryBackend(endpoint=endpoint)
+        raise ValueError(f"unknown observability backend: {backend_type}")
 
     def _compute_code_hashes(self) -> dict[str, str]:
         """SHA-256 of every bin/*.py file, plus the work.py module.
@@ -182,7 +216,11 @@ class Campaign:
         }
 
     def _finalize_samples(self) -> None:
-        """Emit one SampleTrace per sample based on accumulated per-step state."""
+        """Emit one SampleTrace per sample based on accumulated per-step state.
+
+        Also records per-sample observability metrics (duration, status)
+        via the configured backend (issue #132).
+        """
         for sid, state in self._sample_state.items():
             apply_ok = state.get("apply_exit_code") == 0
             sim_ok = state.get("sim_exit_code") == 0
@@ -218,6 +256,9 @@ class Campaign:
             billed_duration_seconds: float | None = (
                 None if billed_duration_obj is None else float(str(billed_duration_obj))
             )
+            # Observability: record per-sample cost metric (issue #132).
+            if cost_usd is not None:
+                self._obs.record_sample_metric(sid, "cost_usd", cost_usd)
             self.trace.sample_done(
                 SampleTrace(
                     sample_id=sid,
@@ -237,6 +278,9 @@ class Campaign:
                     billed_duration_seconds=billed_duration_seconds,
                 )
             )
+            # Observability: record per-sample status metric (issue #132).
+            # status="ok" → 1.0, status="failed" → 0.0.
+            self._obs.record_sample_metric(sid, "status", 1.0 if status == "ok" else 0.0)
 
         # Accumulate campaign-level cost totals (issue #126).
         self._accumulate_cost_summary()
@@ -652,6 +696,9 @@ class Campaign:
             # Runs even if init script failed, so the user gets a
             # notification that the campaign aborted.
             duration = time.time() - t0
+            # Observability: record campaign duration and flush backend.
+            self._obs.record_campaign_duration(duration)
+            self._obs.flush()
             self._run_finalize_script(campaign_status, duration)
             # Re-write run.json to include finalize hook timing
             if (self.cfg.outdir / "run.json").exists():
@@ -1053,6 +1100,7 @@ class Campaign:
                 elapsed_s=time.time() - t0,
                 exit_code=0,
             )
+            self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
             return samples_from_cache
 
         out_dir = self.cfg.work_dir / algo.name()
@@ -1100,6 +1148,7 @@ class Campaign:
                 elapsed_s=time.time() - t0,
                 exit_code=0,
             )
+            self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
             return samples
         except Exception as e:
             log.error("%s failed: %s", step_label, e)
@@ -1172,12 +1221,14 @@ class Campaign:
         cached = self.cache.lookup(key)
         if cached:
             log.info("PREFLIGHT_RUN_MODEL: cache HIT")
+            elapsed = time.time() - t0
             self.trace.step_finished(
                 "PREFLIGHT_RUN_MODEL",
                 cache="HIT",
-                elapsed_s=time.time() - t0,
+                elapsed_s=elapsed,
                 exit_code=0,
             )
+            self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
             return
 
         try:
@@ -1200,14 +1251,16 @@ class Campaign:
         preflight_marker.parent.mkdir(parents=True, exist_ok=True)
         preflight_marker.write_text(f"preflight passed at {time.strftime('%Y-%m-%dT%H:%M:%S')}")
         self.cache.store(key, preflight_marker, exit_code=0)
+        elapsed = time.time() - t0
         self.trace.step_finished(
             "PREFLIGHT_RUN_MODEL",
             cache="MISS",
-            elapsed_s=time.time() - t0,
+            elapsed_s=elapsed,
             exit_code=0,
         )
+        self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
 
-    def step_apply_parameters(
+    def step_apply_parameters(  # noqa: PLR0915
         self,
         samples: list[SampleSpec],
         generation: int = 0,
@@ -1340,9 +1393,10 @@ class Campaign:
             elapsed_s=time.time() - t0,
             exit_code=0,
         )
+        self._obs.record_step_duration("APPLY_PARAMETERS", time.time() - t0, generation=generation)
         return out
 
-    def step_run_openstudio_sim(
+    def step_run_openstudio_sim(  # noqa: PLR0915
         self,
         parameterized: SampleDict,
         generation: int = 0,
@@ -1463,6 +1517,9 @@ class Campaign:
             elapsed_s=time.time() - t0,
             exit_code=0,
         )
+        self._obs.record_step_duration(
+            "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
+        )
         return out
 
     def step_extract_kpis(
@@ -1526,6 +1583,7 @@ class Campaign:
             elapsed_s=time.time() - t0,
             exit_code=0,
         )
+        self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
         return sorted(out)
 
     def step_aggregate_results(
@@ -1560,12 +1618,14 @@ class Campaign:
         )
         cached = self.cache.lookup(key)
         if cached:
+            elapsed = time.time() - t0
             self.trace.step_finished(
                 "AGGREGATE_RESULTS",
                 cache="HIT",
-                elapsed_s=time.time() - t0,
+                elapsed_s=elapsed,
                 exit_code=0,
             )
+            self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
             return {
                 "csv": cached,
                 "parquet": cached.parent / "aggregated_results.parquet",
@@ -1586,12 +1646,14 @@ class Campaign:
         result_obj: object = handle.result(timeout=300)
         result = cast_aggregate_result(result_obj)
         self.cache.store(key, result["csv"], exit_code=0)
+        elapsed = time.time() - t0
         self.trace.step_finished(
             "AGGREGATE_RESULTS",
             cache="MISS",
-            elapsed_s=time.time() - t0,
+            elapsed_s=elapsed,
             exit_code=0,
         )
+        self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
         return result
 
     def step_generate_plots(
@@ -1624,12 +1686,14 @@ class Campaign:
         )
         result_obj: object = handle.result(timeout=120)
         result = cast_plot_paths(result_obj)
+        elapsed = time.time() - t0
         self.trace.step_finished(
             "GENERATE_BASIC_PLOTS",
             cache="SKIPPED",
-            elapsed_s=time.time() - t0,
+            elapsed_s=elapsed,
             exit_code=0,
         )
+        self._obs.record_step_duration("GENERATE_BASIC_PLOTS", elapsed)
         return result
 
 
