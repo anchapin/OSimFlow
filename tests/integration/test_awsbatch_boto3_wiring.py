@@ -50,16 +50,16 @@ def test_aws_batch_executor_does_not_import_boto3_at_module_load() -> None:
 # ---------------------------------------------------------------------------
 def test_aws_batch_submit_builds_container_overrides() -> None:
     """`submit()` must call `batch.submit_job` with containerOverrides that
-    carry vcpus / memory / command / environment.
+    carry vcpus / memory / command / environment and return immediately.
 
-    The executor's submit() is blocking — it polls describe_jobs until
-    the job reaches a terminal state (part of the Spot retry loop).
-    We mock describe_jobs to return SUCCEEDED immediately so submit()
-    returns without blocking.
+    The executor's submit() is non-blocking (issue #262) — it submits the
+    job and returns a Handle. The Handle's result() polls describe_jobs
+    until the job reaches a terminal state. We mock describe_jobs to
+    return SUCCEEDED immediately so result() returns without blocking.
     """
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "abc-123"}
-    # submit() blocks on _wait_for_terminal; return SUCCEEDED immediately.
+    # result() blocks on _wait_for_terminal; return SUCCEEDED immediately.
     fake_client.describe_jobs.return_value = {
         "jobs": [
             {
@@ -122,9 +122,8 @@ def test_aws_batch_submit_uses_minimum_resource_defaults() -> None:
     """When the caller does not pass cpus/memory_mb/time_min, the executor
     must still build a valid submit_job payload from its own defaults.
 
-    The executor's submit() is blocking — it polls describe_jobs until
-    the job reaches a terminal state. We mock describe_jobs to return
-    SUCCEEDED immediately.
+    submit() returns immediately (issue #262); the submit_job call is
+    made synchronously before the handle is returned.
     """
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-defaults"}
@@ -155,9 +154,8 @@ def test_aws_batch_submit_omits_env_when_not_provided() -> None:
     sane baseline) but `OSIMFLOW_CONTAINER` / `OSIMFLOW_OS_VERSION` may
     be absent. We assert the list itself is well-formed.
 
-    The executor's submit() is blocking — it polls describe_jobs until
-    the job reaches a terminal state. We mock describe_jobs to return
-    SUCCEEDED immediately.
+    submit() returns immediately (issue #262); the submit_job call is
+    made synchronously before the handle is returned.
     """
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-no-env"}
@@ -221,15 +219,14 @@ def test_aws_batch_result_returns_none_on_success() -> None:
 
 
 def test_aws_batch_failed_raises_with_status_reason() -> None:
-    """When the Batch task FAILED, submit() must re-raise an exception whose
+    """When the Batch task FAILED, result() must re-raise an exception whose
     message includes the statusReason. The Campaign's `except Exception`
     path needs a string it can log.
 
-    The executor's submit() is blocking — it polls describe_jobs until
-    the job reaches a terminal state. On FAILED, it raises RuntimeError
-    directly from submit() (inside the Spot retry loop), not from
-    handle.result(). We set max_retries=0 to disable Spot retries so
-    the FAILED status triggers an immediate RuntimeError.
+    The executor's submit() returns immediately (issue #262) — the polling
+    and error detection happen in Handle.result(). We set max_retries=0 to
+    disable Spot retries so the FAILED status triggers an immediate
+    RuntimeError from result().
     """
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-fail"}
@@ -250,8 +247,9 @@ def test_aws_batch_failed_raises_with_status_reason() -> None:
             max_poll_interval_s=0.02,
             max_retries=0,
         )
+        handle = ex.submit(lambda: None, name="fail-job")
         with pytest.raises(RuntimeError, match="Essential container exited"):
-            ex.submit(lambda: None, name="fail-job")
+            handle.result(timeout=5)
     ex.shutdown()
 
 
@@ -264,17 +262,16 @@ def test_aws_batch_polling_uses_exponential_backoff() -> None:
     caps at `max_poll_interval_s`. We assert that the sleep call sequence
     is monotonically non-decreasing and eventually bounded.
 
-    The executor's submit() is blocking — _wait_for_terminal() polls
-    describe_jobs inside submit(). The describe_jobs side_effect is
-    consumed during submit(), not result(). We set max_retries=0 to
-    disable the Spot retry loop so the FAILED path doesn't retry.
-    The sleep durations are captured during submit() (not result()).
+    submit() returns immediately (issue #262) — the polling and sleeps
+    happen during Handle.result(). We set max_retries=0 to disable the
+    Spot retry loop so the FAILED path doesn't retry. The sleep
+    durations are captured during result().
     """
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "job-poll"}
 
     # Three RUNNING responses, then SUCCEEDED on the fourth call.
-    # These are consumed by _wait_for_terminal() inside submit().
+    # These are consumed by _wait_for_terminal() inside result().
     describe_calls = [
         {"jobs": [{"jobId": "job-poll", "status": "RUNNING", "statusReason": "..."}]},
         {"jobs": [{"jobId": "job-poll", "status": "RUNNING", "statusReason": "..."}]},
@@ -297,14 +294,9 @@ def test_aws_batch_polling_uses_exponential_backoff() -> None:
             max_poll_interval_s=4.0,
             max_retries=0,
         )
-        # submit() blocks and polls describe_jobs — the sleeps happen here.
+        # submit() returns immediately — no polling happens here.
         handle = ex.submit(lambda: None, name="poll-job")
-        # result() polls again but describe_jobs side_effect is exhausted;
-        # set a return_value so it returns SUCCEEDED on subsequent calls.
-        fake_client.describe_jobs.side_effect = None
-        fake_client.describe_jobs.return_value = {
-            "jobs": [{"jobId": "job-poll", "status": "SUCCEEDED", "statusReason": "OK"}]
-        }
+        # result() polls describe_jobs — the sleeps happen here.
         handle.result(timeout=5)
 
     # The first sleep is poll_interval_s; subsequent sleeps double
@@ -345,9 +337,9 @@ def test_aws_batch_executor_rejects_aws_access_key_pair() -> None:
 def test_aws_batch_does_not_pin_aws_region_in_code() -> None:
     """The executor must not pin an AWS region in its boto3.client call.
 
-    The executor's submit() is blocking — it polls describe_jobs until
-    the job reaches a terminal state. We mock describe_jobs to return
-    SUCCEEDED immediately.
+    submit() returns immediately (issue #262); the boto3 client is
+    lazily created on first use. We mock describe_jobs to return
+    SUCCEEDED so that handle.result() completes without blocking.
     """
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "x"}
@@ -368,7 +360,8 @@ def test_aws_batch_does_not_pin_aws_region_in_code() -> None:
         env_before2 = os.environ.pop("AWS_REGION", None)
         try:
             ex = AWSBatchExecutor()
-            ex.submit(lambda: None, name="t")
+            handle = ex.submit(lambda: None, name="t")
+            handle.result(timeout=5)
         finally:
             if env_before is not None:
                 os.environ["AWS_DEFAULT_REGION"] = env_before
