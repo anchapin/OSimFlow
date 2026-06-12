@@ -52,6 +52,7 @@ dev = [
     "pre-commit>=3.7",
     "moto[batch]>=5",
     "streamlit>=1.30",
+    "rich>=13.0",
 ]
 aws = [
     "boto3>=1.28",
@@ -76,6 +77,10 @@ api = [
 ]
 viz = [
     "streamlit>=1.30",
+]
+tui = [
+    "rich>=13.0",
+]
 ]
 
 [project.scripts]

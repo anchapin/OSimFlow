@@ -287,6 +287,15 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
         default=None,
         help='OpenTelemetry OTLP gRPC endpoint (e.g. "http://localhost:4317").',
     )
+    run.add_argument(
+        "--no-tui",
+        action="store_true",
+        help=(
+            "Disable the rich terminal UI even when rich is installed "
+            "and stdout is a TTY. Useful when piping output or running "
+            "in environments where the TUI causes display issues."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
@@ -478,7 +487,7 @@ def _run_export(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -508,10 +517,39 @@ def main(argv: list[str] | None = None) -> int:
         load_user_function(Path(args.custom_kpi_extractor)) if args.custom_kpi_extractor else None
     )
     campaign = Campaign(cfg, executor, apply_fn=apply_fn, extract_fn=extract_fn)
+    # TUI: wrap campaign execution with Rich TUI when available.
+    # The TUI is a passive observer (reads run.json) and does not
+    # modify campaign state.  It auto-degrades when rich is not
+    # installed, stdout is not a TTY, or --no-tui is passed.
+    use_tui = not args.no_tui
+    tui: object = None
+    if use_tui:
+        try:
+            from osimflow.tui import RichTUI, is_tui_available  # noqa: PLC0415
+
+            if is_tui_available():
+                tui = RichTUI(cfg.outdir)
+                log.info("Rich TUI enabled")
+        except Exception:
+            pass  # degrade silently
     try:
-        result = campaign.run()
-    finally:
+        if tui is not None:
+            from osimflow.tui import RichTUI  # noqa: PLC0415, F811
+
+            assert isinstance(tui, RichTUI)
+            tui.start()
+        try:
+            result = campaign.run()
+        finally:
+            if tui is not None:
+                from osimflow.tui import RichTUI  # noqa: PLC0415, F811
+
+                assert isinstance(tui, RichTUI)
+                tui.stop()
+            executor.shutdown()
+    except Exception:
         executor.shutdown()
+        raise
     print("\n=== CAMPAIGN RESULT ===")
     # The result is dict[str, object] at the type-checker level; the values
     # are well-known at runtime (see Campaign.run() return shape). Cast for
