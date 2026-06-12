@@ -81,7 +81,6 @@ viz = [
 tui = [
     "rich>=13.0",
 ]
-]
 
 [project.scripts]
 osimflow = "osimflow.__main__:main"
