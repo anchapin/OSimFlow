@@ -213,13 +213,18 @@ def _query_timeseries(
 
 @timeseries_router.get(
     "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries",
+    response_model=dict[str, Any],
 )
 async def get_timeseries(
     campaign_id: str,
     sample_id: str,
     request: Request,
-    variable: str = Query(..., description="Variable name to retrieve (e.g. 'Zone Air Temperature')"),
-    freq: str = Query("hourly", description="Aggregation frequency: hourly (default), daily, or monthly"),
+    variable: str = Query(
+        ..., description="Variable name to retrieve (e.g. 'Zone Air Temperature')"
+    ),
+    freq: str = Query(
+        "hourly", description="Aggregation frequency: hourly (default), daily, or monthly"
+    ),
 ) -> dict[str, Any]:
     """Return time-series data for a variable from a sample's eplusout.sql.
 
@@ -278,6 +283,7 @@ async def get_timeseries(
 
 @timeseries_router.get(
     "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries/variables",
+    response_model=dict[str, Any],
 )
 async def list_timeseries_variables(
     campaign_id: str,
