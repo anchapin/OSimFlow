@@ -12,7 +12,9 @@ Provides:
 from __future__ import annotations
 
 import logging
+import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -134,11 +136,8 @@ def validate_path_within(
     if must_be_dir and resolved.exists() and not resolved.is_dir():
         raise ValidationError(f"Path is not a directory: {resolved}", field="path")
 
-    if readable and resolved.exists():
-        import os
-
-        if not os.access(resolved, os.R_OK):
-            raise ValidationError(f"Path is not readable: {resolved}", field="path")
+    if readable and resolved.exists() and not os.access(resolved, os.R_OK):
+        raise ValidationError(f"Path is not readable: {resolved}", field="path")
 
     return resolved
 
@@ -260,92 +259,105 @@ def _validate_single_variable(var: dict[str, Any], prefix: str) -> None:
 
 def _validate_distribution_params(var: dict[str, Any], dist: str, prefix: str) -> None:
     """Validate numeric constraints on distribution parameters."""
-    if dist == "uniform":
-        _require_numeric(var, "min", prefix)
-        _require_numeric(var, "max", prefix)
-        if var["min"] >= var["max"]:
+    _DISPATCH_TABLE[dist](var, prefix)
+
+
+def _validate_uniform(var: dict[str, Any], prefix: str) -> None:
+    _require_numeric(var, "min", prefix)
+    _require_numeric(var, "max", prefix)
+    if var["min"] >= var["max"]:
+        raise ValidationError(
+            f"{prefix}: 'min' ({var['min']}) must be less than 'max' ({var['max']})",
+            field=prefix,
+        )
+
+
+def _validate_normal_lognormal(var: dict[str, Any], prefix: str) -> None:
+    _require_numeric(var, "mean", prefix)
+    _require_numeric(var, "sigma", prefix)
+    if var["sigma"] <= 0:
+        raise ValidationError(
+            f"{prefix}: 'sigma' must be positive, got {var['sigma']}",
+            field=prefix,
+        )
+
+
+def _validate_triangular(var: dict[str, Any], prefix: str) -> None:
+    _require_numeric(var, "min", prefix)
+    _require_numeric(var, "max", prefix)
+    if var["min"] >= var["max"]:
+        raise ValidationError(
+            f"{prefix}: 'min' ({var['min']}) must be less than 'max' ({var['max']})",
+            field=prefix,
+        )
+    if "mode" in var:
+        _require_numeric(var, "mode", prefix)
+        if not (var["min"] <= var["mode"] <= var["max"]):
             raise ValidationError(
-                f"{prefix}: 'min' ({var['min']}) must be less than 'max' ({var['max']})",
+                f"{prefix}: 'mode' ({var['mode']}) must be between "
+                f"'min' ({var['min']}) and 'max' ({var['max']})",
                 field=prefix,
             )
 
-    elif dist == "normal":
-        _require_numeric(var, "mean", prefix)
-        _require_numeric(var, "sigma", prefix)
-        if var["sigma"] <= 0:
-            raise ValidationError(
-                f"{prefix}: 'sigma' must be positive, got {var['sigma']}",
-                field=prefix,
-            )
 
-    elif dist == "lognormal":
-        _require_numeric(var, "mean", prefix)
-        _require_numeric(var, "sigma", prefix)
-        if var["sigma"] <= 0:
-            raise ValidationError(
-                f"{prefix}: 'sigma' must be positive, got {var['sigma']}",
-                field=prefix,
-            )
+def _validate_discrete_categorical(var: dict[str, Any], prefix: str) -> None:
+    values = var.get("values")
+    if not isinstance(values, list):
+        raise ValidationError(
+            f"{prefix}: 'values' must be a list, got {type(values).__name__}",
+            field=prefix,
+        )
+    if len(values) == 0:
+        raise ValidationError(
+            f"{prefix}: 'values' list must not be empty",
+            field=prefix,
+        )
 
-    elif dist == "triangular":
-        _require_numeric(var, "min", prefix)
-        _require_numeric(var, "max", prefix)
-        if var["min"] >= var["max"]:
-            raise ValidationError(
-                f"{prefix}: 'min' ({var['min']}) must be less than 'max' ({var['max']})",
-                field=prefix,
-            )
-        if "mode" in var:
-            _require_numeric(var, "mode", prefix)
-            if not (var["min"] <= var["mode"] <= var["max"]):
-                raise ValidationError(
-                    f"{prefix}: 'mode' ({var['mode']}) must be between "
-                    f"'min' ({var['min']}) and 'max' ({var['max']})",
-                    field=prefix,
-                )
 
-    elif dist in ("discrete", "categorical"):
-        values = var.get("values")
-        if not isinstance(values, list):
-            raise ValidationError(
-                f"{prefix}: 'values' must be a list, got {type(values).__name__}",
-                field=prefix,
-            )
-        if len(values) == 0:
-            raise ValidationError(
-                f"{prefix}: 'values' list must not be empty",
-                field=prefix,
-            )
+def _validate_beta(var: dict[str, Any], prefix: str) -> None:
+    _require_numeric(var, "alpha", prefix)
+    _require_numeric(var, "beta", prefix)
+    if var["alpha"] <= 0:
+        raise ValidationError(
+            f"{prefix}: 'alpha' must be positive, got {var['alpha']}",
+            field=prefix,
+        )
+    if var["beta"] <= 0:
+        raise ValidationError(
+            f"{prefix}: 'beta' must be positive, got {var['beta']}",
+            field=prefix,
+        )
 
-    elif dist == "beta":
-        _require_numeric(var, "alpha", prefix)
-        _require_numeric(var, "beta", prefix)
-        if var["alpha"] <= 0:
-            raise ValidationError(
-                f"{prefix}: 'alpha' must be positive, got {var['alpha']}",
-                field=prefix,
-            )
-        if var["beta"] <= 0:
-            raise ValidationError(
-                f"{prefix}: 'beta' must be positive, got {var['beta']}",
-                field=prefix,
-            )
 
-    elif dist == "gamma":
-        _require_numeric(var, "alpha", prefix)
-        if var["alpha"] <= 0:
-            raise ValidationError(
-                f"{prefix}: 'alpha' must be positive, got {var['alpha']}",
-                field=prefix,
-            )
+def _validate_gamma(var: dict[str, Any], prefix: str) -> None:
+    _require_numeric(var, "alpha", prefix)
+    if var["alpha"] <= 0:
+        raise ValidationError(
+            f"{prefix}: 'alpha' must be positive, got {var['alpha']}",
+            field=prefix,
+        )
 
-    elif dist == "exponential":
-        _require_numeric(var, "rate", prefix)
-        if var["rate"] <= 0:
-            raise ValidationError(
-                f"{prefix}: 'rate' must be positive, got {var['rate']}",
-                field=prefix,
-            )
+
+def _validate_exponential(var: dict[str, Any], prefix: str) -> None:
+    _require_numeric(var, "rate", prefix)
+    if var["rate"] <= 0:
+        raise ValidationError(
+            f"{prefix}: 'rate' must be positive, got {var['rate']}",
+            field=prefix,
+        )
+
+
+_DISPATCH_TABLE: dict[str, Callable[[dict[str, Any], str], None]] = {
+    "uniform": _validate_uniform,
+    "normal": _validate_normal_lognormal,
+    "lognormal": _validate_normal_lognormal,
+    "triangular": _validate_triangular,
+    "discrete": _validate_discrete_categorical,
+    "categorical": _validate_discrete_categorical,
+    "beta": _validate_beta,
+    "gamma": _validate_gamma,
+    "exponential": _validate_exponential,
+}
 
 
 def _require_numeric(var: dict[str, Any], key: str, prefix: str) -> None:
@@ -409,8 +421,6 @@ def validate_template_package(path: Path) -> Path:
             )
 
     # Check readability of required files.
-    import os
-
     for required in _REQUIRED_TEMPLATE_FILES:
         required_path = resolved / required
         if not os.access(required_path, os.R_OK):
