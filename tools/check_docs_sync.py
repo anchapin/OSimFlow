@@ -183,6 +183,50 @@ def _check_markdown_links(md: Path, text: str) -> list[str]:
     return errors
 
 
+def _check_file(md: Path) -> tuple[list[tuple[Path, str]], bool]:
+    """Check a single markdown file for broken references.
+
+    Returns ``(errors, was_checked)`` where *was_checked* is ``False``
+    when the file is opted out via ``<!-- docs-skip -->``.
+    """
+    text = md.read_text()
+    if "<!-- docs-skip -->" in text:
+        return [], False
+    rel = md.relative_to(REPO_ROOT)
+    errors: list[tuple[Path, str]] = []
+
+    for m in BACKTICKED_RE.finditer(text):
+        token = m.group(1)
+        if _is_skipped(token):
+            continue
+        err = _check_token(token)
+        if err:
+            errors.append((rel, err))
+
+    for m in CLI_FLAG_RE.finditer(text):
+        flag = m.group(1)
+        # Confirm the flag exists in __main__.py.
+        main_py = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
+        if f"--{flag}" not in main_py and f'"{flag}"' not in main_py:
+            # Only flag if the flag is the *only* token; lines with
+            # prose mentioning "--foo" without it being a real flag
+            # are common.
+            pass  # soft: don't fail CI on prose mentions
+
+    # bin script names (e.g. plain "extract_kpis.py" without backticks).
+    for m in BIN_SCRIPT_RE.finditer(text):
+        script = m.group(0)
+        target = REPO_ROOT / "bin" / script
+        if not target.is_file():
+            errors.append((rel, f"references missing bin script `bin/{script}`"))
+
+    # Internal markdown cross-references (issue #191).
+    for link_err in _check_markdown_links(md, text):
+        errors.append((rel, link_err))
+
+    return errors, True
+
+
 def main() -> int:
     if not DOCS_DIR.is_dir():
         print(f"ERROR: {DOCS_DIR} not found", file=sys.stderr)
@@ -192,40 +236,10 @@ def main() -> int:
     files_checked = 0
 
     for md in sorted(DOCS_DIR.rglob("*.md")):
-        text = md.read_text()
-        if "<!-- docs-skip -->" in text:
-            continue
-        files_checked += 1
-        rel = md.relative_to(REPO_ROOT)
-
-        for m in BACKTICKED_RE.finditer(text):
-            token = m.group(1)
-            if _is_skipped(token):
-                continue
-            err = _check_token(token)
-            if err:
-                errors.append((rel, err))
-
-        for m in CLI_FLAG_RE.finditer(text):
-            flag = m.group(1)
-            # Confirm the flag exists in __main__.py.
-            main_py = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
-            if f"--{flag}" not in main_py and f'"{flag}"' not in main_py:
-                # Only flag if the flag is the *only* token; lines with
-                # prose mentioning "--foo" without it being a real flag
-                # are common.
-                pass  # soft: don't fail CI on prose mentions
-
-        # bin script names (e.g. plain "extract_kpis.py" without backticks).
-        for m in BIN_SCRIPT_RE.finditer(text):
-            script = m.group(0)
-            target = REPO_ROOT / "bin" / script
-            if not target.is_file():
-                errors.append((rel, f"references missing bin script `bin/{script}`"))
-
-        # Internal markdown cross-references (issue #191).
-        for link_err in _check_markdown_links(md, text):
-            errors.append((rel, link_err))
+        file_errors, checked = _check_file(md)
+        if checked:
+            files_checked += 1
+        errors.extend(file_errors)
 
     if errors:
         print(f"docs/ sync check FAILED ({len(errors)} drift):", file=sys.stderr)
