@@ -135,7 +135,7 @@ def test_generate_plots(tmp_path):
     assert (out_plots / "top_var_vs_eui.png").exists()
 
 
-def test_excel_to_variables(tmp_path):
+def test_excel_to_variables_via_subprocess(tmp_path):
     pytest.importorskip("openpyxl", reason="openpyxl required for Excel conversion")
     import openpyxl
 
@@ -172,3 +172,33 @@ def test_excel_to_variables(tmp_path):
     assert data["variables"][0]["max"] == 5.0
     assert data["variables"][1]["name"] == "light_lmp"
     assert data["variables"][1]["distribution"] == "normal"
+
+
+def test_excel_to_variables_direct(tmp_path):
+    pytest.importorskip("openpyxl", reason="openpyxl required for Excel conversion")
+    import openpyxl
+    from osimflow._work_scripts.excel_to_variables import excel_to_variables_yml
+
+    xlsx_path = tmp_path / "variables.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Variables"
+    ws.append(["var_name", "lower_bound", "upper_bound", "distribution"])
+    ws.append(["wall_r", 2.0, 5.0, "uniform"])
+    ws.append(["light_lmp", 0.05, 0.15, "normal"])
+    wb.save(xlsx_path)
+
+    out_yml = tmp_path / "variables.yml"
+    excel_to_variables_yml(xlsx_path, out_yml)
+
+    assert out_yml.exists()
+    data = yaml.safe_load(out_yml.read_text())
+    assert data["algorithm"] == "lhs"
+    assert len(data["variables"]) == 2
+    assert data["variables"][0]["name"] == "wall_r"
+    assert data["variables"][0]["min"] == 2.0
+    assert data["variables"][0]["max"] == 5.0
+    assert data["variables"][1]["name"] == "light_lmp"
+    assert data["variables"][1]["distribution"] == "normal"
+    assert data["variables"][1]["mean"] == 0.05
+    assert data["variables"][1]["sigma"] == 0.15
