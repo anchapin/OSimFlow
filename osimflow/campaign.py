@@ -196,19 +196,23 @@ class Campaign:
         raise ValueError(f"unknown observability backend: {backend_type}")
 
     def _compute_code_hashes(self) -> dict[str, str]:
-        """SHA-256 of every bin/*.py file, plus the work.py module.
+        """SHA-256 of every work script, plus the work.py module.
 
+        The work scripts live in ``osimflow._work_scripts`` (shipped
+        with the wheel).  A development checkout also has copies in
+        ``bin/``; the hash covers whichever directory is found.
         The work.py module is included because it is the work layer that
         the Campaign itself depends on; if a contributor edits it, we
         must re-run downstream steps.
         """
-        # Lazy import: keeps the work module out of the type-checker
-        # top-level chain and avoids importing pandas at osimflow import
-        # time for callers that only use Campaign/Cache.
         from . import work  # noqa: PLC0415
 
-        bin_dir = Path(__file__).resolve().parent.parent / "bin"
-        files = sorted(bin_dir.glob("*.py"))
+        # Resolve the work-scripts directory.
+        scripts_dir = Path(__file__).resolve().parent / "_work_scripts"
+        if not scripts_dir.is_dir():
+            # Development fallback: repo root bin/ directory.
+            scripts_dir = Path(__file__).resolve().parent.parent / "bin"
+        files = sorted(scripts_dir.glob("*.py"))
         work_file = Path(inspect.getfile(work))
         return {
             "bin": sha256_of_files(files),

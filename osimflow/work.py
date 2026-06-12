@@ -11,6 +11,7 @@ discovers it via `inspect.signature` and calls it directly — no second
 CLI surface to maintain.
 """
 
+import importlib.resources
 import json
 import logging
 import os
@@ -34,11 +35,43 @@ class SevereEnergyPlusError(RuntimeError):
     """Raised when a preflight simulation encounters severe errors."""
 
 
-# Resolve the project root from the package location so the work layer
-# does not hardcode a developer's local path. The convention is:
-#   <project>/osimflow/work.py  →  <project>/
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BIN = PROJECT_ROOT / "bin"
+# ---------------------------------------------------------------------------
+# Work-script resolver
+# ---------------------------------------------------------------------------
+def _resolve_work_script(name: str) -> Path:
+    """Resolve the path to a work script (e.g. ``generate_lhs.py``).
+
+    In a frozen PyInstaller build (``sys.frozen``), resolves from
+    ``sys._MEIPASS``.  In a normal install (wheel / editable), uses
+    ``importlib.resources`` to find the script inside the
+    ``osimflow._work_scripts`` package.  Falls back to the repo
+    ``bin/`` directory during development.
+    """
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundles files into sys._MEIPASS.
+        base = Path(getattr(sys, "_MEIPASS", ""))
+        candidate = base / "_work_scripts" / name
+        if candidate.is_file():
+            return candidate
+
+    # Try importlib.resources (works for wheel installs and editable installs).
+    try:
+        ref = importlib.resources.files("osimflow._work_scripts") / name
+        # importlib.resources may return a Traversable; convert to Path
+        # only when it is a real filesystem path.
+        if hasattr(ref, "is_file") and ref.is_file():
+            return Path(str(ref))
+    except (ModuleNotFoundError, TypeError):
+        pass
+
+    # Development fallback: repo root bin/ directory.
+    dev_bin = Path(__file__).resolve().parent.parent / "bin" / name
+    if dev_bin.is_file():
+        return dev_bin
+
+    raise FileNotFoundError(
+        f"Work script {name!r} not found. Searched: osimflow._work_scripts package, bin/ directory."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +99,7 @@ def default_apply_parameters(
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable,
-                str(BIN / "apply_params_to_model.py"),
+                str(_resolve_work_script("apply_params_to_model.py")),
                 "--template",
                 str(template),
                 "--parameter_set",
@@ -331,7 +364,7 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable,
-                str(BIN / "generate_lhs.py"),
+                str(_resolve_work_script("generate_lhs.py")),
                 "--variables_yml",
                 str(variables_yml),
                 "--n_samples",
@@ -357,7 +390,7 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
                 sys.executable,
-                str(BIN / "extract_kpis.py"),
+                str(_resolve_work_script("extract_kpis.py")),
                 "--simulation_dir",
                 str(simulation_dir),
                 "--sample_id",
@@ -405,7 +438,7 @@ def aggregate_results(
     parquet_path = out / "aggregated_results.parquet"
     cmd: list[str] = [
         sys.executable,
-        str(BIN / "aggregate_results.py"),
+        str(_resolve_work_script("aggregate_results.py")),
         "--kpis",
         *(str(p) for p in kpi_files),
         "--simulation_dirs",
@@ -462,7 +495,7 @@ def generate_plots(
     out.mkdir(parents=True, exist_ok=True)
     cmd: list[str] = [
         sys.executable,
-        str(BIN / "generate_plots.py"),
+        str(_resolve_work_script("generate_plots.py")),
         "--results_csv",
         str(csv_path),
         "--failed_csv",
