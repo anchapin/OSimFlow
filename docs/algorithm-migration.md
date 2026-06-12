@@ -10,7 +10,7 @@ algorithms to their OSimFlow equivalents, with migration guidance.
 **OSS mechanism:** R/Rserve-based genetic algorithm with gradient approximation.
 
 **OSimFlow equivalent:** [`DifferentialEvolutionAlgorithm`](../osimflow/algorithms/de.py)
-(`osimflow.algorithms.de`, registered as `"de"`).
+(osimflow.algorithms.de, registered as `"de"`).
 
 **Why:** DE is a pure-Python evolutionary algorithm (no R/Rserve dependency).
 It uses the same differential mutation/crossover schema as RGENOUD and
