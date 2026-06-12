@@ -7,8 +7,12 @@ Covers:
 - SQLiteCache: lookup, store, lookup hit/miss, invalidation, stats
 - Stale cache: output deleted after caching
 - Failed step caching (exit_code != 0)
+- WAL mode and busy_timeout for concurrent access (issue #247)
 """
 
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pytest
@@ -364,3 +368,60 @@ class TestSQLiteCache:
     def test_invalidate_sample_returns_zero_when_empty(self, cache: SQLiteCache) -> None:
         n = cache.invalidate_sample("NONEXISTENT", "s1")
         assert n == 0
+
+    def test_wal_mode_enabled(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "test_wal.sqlite"
+        SQLiteCache(db_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            result = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            assert result == "wal", f"Expected WAL mode, got {result}"
+        finally:
+            conn.close()
+
+    def test_busy_timeout_set(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "test_busy_timeout.sqlite"
+        SQLiteCache(db_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            result = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            assert result == 5000, f"Expected busy_timeout=5000, got {result}"
+        finally:
+            conn.close()
+
+    def test_concurrent_store_and_lookup(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "test_concurrent.sqlite"
+        cache = SQLiteCache(db_path)
+        num_threads = 10
+        num_operations = 20
+
+        errors: list[Exception] = []
+        lock = threading.Lock()
+
+        def worker(thread_id: int) -> None:
+            try:
+                for op_id in range(num_operations):
+                    key = CacheKey(
+                        step=f"STEP_{thread_id % 3}",
+                        sample_id=f"s{thread_id}_{op_id}",
+                        openstudio_version="N/A",
+                        inputs_sha256=f"hash_{op_id}",
+                        code_sha256="code",
+                        container_digest="py",
+                        generation=0,
+                    )
+                    out = tmp_path / f"out_{thread_id}_{op_id}"
+                    out.mkdir(exist_ok=True)
+                    cache.store(key, out, exit_code=0)
+                    result = cache.lookup(key)
+                    assert result == out
+            except Exception as e:
+                with lock:
+                    errors.append(e)
+
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(worker, i) for i in range(num_threads)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert not errors, f"Concurrent access errors: {errors}"
