@@ -210,8 +210,8 @@ class ParetoFront:
 
     @staticmethod
     def _hypervolume_2d(
-        points: "np.ndarray",
-        ref_point: "np.ndarray",
+        points: "np.ndarray[Any, Any]",
+        ref_point: "np.ndarray[Any, Any]",
         maximize: list[bool],
     ) -> float:
         """2D hypervolume (area) with mixed minimise / maximise support.
