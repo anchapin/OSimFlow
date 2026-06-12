@@ -292,6 +292,36 @@ def run_openstudio_sim(
     return sim_out
 
 
+def _parse_register_values(stdout_path: Path) -> dict[str, object] | None:
+    """Parse runner.registerValue JSON output from CLI stdout.
+
+    The OpenStudio CLI writes a JSON array of registered value objects
+    to stdout when measures call ``runner.registerValue``. Each entry
+    has the shape::
+
+        {"name": "variable_name", "value": 123.45, "type": "Double"}
+
+    Returns a dict mapping names to values, or None if parsing fails
+    or no registered values are found.
+    """
+    if not stdout_path.is_file():
+        return None
+    try:
+        text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
+        if not text:
+            return None
+        data = json.loads(text)
+        if not isinstance(data, list):
+            return None
+        result: dict[str, object] = {}
+        for entry in data:
+            if isinstance(entry, dict) and "name" in entry and "value" in entry:
+                result[str(entry["name"])] = entry["value"]
+        return result if result else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def _run_real_openstudio(
     *,
     modified_sim_package: Path,
@@ -308,6 +338,10 @@ def _run_real_openstudio(
     ``eplusout.err``, and other EnergyPlus output files in the
     per-sample work directory (``sim_out``). The framework does **not**
     write placeholder files — the CLI owns the output.
+
+    When measures call ``runner.registerValue``, the CLI outputs a JSON
+    array to stdout. This function captures those values and writes them
+    to ``register_values.json`` in the sample output directory (issue #251).
 
     Raises:
         RuntimeError: when no ``workflow.osw`` is found in the package.
@@ -347,6 +381,16 @@ def _run_real_openstudio(
             e,
         )
         raise
+
+    register_values = _parse_register_values(stdout_path)
+    if register_values is not None:
+        rv_path = sim_out / "register_values.json"
+        rv_path.write_text(json.dumps(register_values, indent=2, default=str))
+        log.info(
+            "captured %d runner.registerValue outputs for sample=%s",
+            len(register_values),
+            sample_id,
+        )
 
     return sim_out
 
