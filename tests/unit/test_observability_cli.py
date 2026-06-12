@@ -31,6 +31,7 @@ from osimflow.__main__ import _build_parser
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_cfg(**overrides: object) -> CampaignConfig:
     """Create a CampaignConfig with sensible defaults for testing."""
     defaults = {
@@ -48,113 +49,171 @@ def _make_cfg(**overrides: object) -> CampaignConfig:
 # CLI flag parsing
 # ---------------------------------------------------------------------------
 
+
 class TestCLIFlagParsing:
     """Test that --observability and related flags parse correctly."""
 
     def test_default_observability_is_none(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([
-            "run",
-            "--input_variables", "variables.yml",
-            "--template_sim_package", "./pkg",
-            "--n_samples", "5",
-            "--outdir", "./out",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--input_variables",
+                "variables.yml",
+                "--template_sim_package",
+                "./pkg",
+                "--n_samples",
+                "5",
+                "--outdir",
+                "./out",
+            ]
+        )
         assert args.observability == "none"
 
     def test_cloudwatch_flag(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([
-            "run",
-            "--input_variables", "variables.yml",
-            "--template_sim_package", "./pkg",
-            "--n_samples", "5",
-            "--outdir", "./out",
-            "--observability", "cloudwatch",
-            "--cloudwatch-namespace", "MyOrg/SimCampaigns",
-            "--cloudwatch-log-group", "/osimflow/logs",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--input_variables",
+                "variables.yml",
+                "--template_sim_package",
+                "./pkg",
+                "--n_samples",
+                "5",
+                "--outdir",
+                "./out",
+                "--observability",
+                "cloudwatch",
+                "--cloudwatch-namespace",
+                "MyOrg/SimCampaigns",
+                "--cloudwatch-log-group",
+                "/osimflow/logs",
+            ]
+        )
         assert args.observability == "cloudwatch"
         assert args.cloudwatch_namespace == "MyOrg/SimCampaigns"
         assert args.cloudwatch_log_group == "/osimflow/logs"
 
     def test_prometheus_flag(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([
-            "run",
-            "--input_variables", "variables.yml",
-            "--template_sim_package", "./pkg",
-            "--n_samples", "5",
-            "--outdir", "./out",
-            "--observability", "prometheus",
-            "--prometheus-port", "9091",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--input_variables",
+                "variables.yml",
+                "--template_sim_package",
+                "./pkg",
+                "--n_samples",
+                "5",
+                "--outdir",
+                "./out",
+                "--observability",
+                "prometheus",
+                "--prometheus-port",
+                "9091",
+            ]
+        )
         assert args.observability == "prometheus"
         assert args.prometheus_port == 9091
 
     def test_opentelemetry_flag(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([
-            "run",
-            "--input_variables", "variables.yml",
-            "--template_sim_package", "./pkg",
-            "--n_samples", "5",
-            "--outdir", "./out",
-            "--observability", "opentelemetry",
-            "--otel-endpoint", "http://otel-collector:4317",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--input_variables",
+                "variables.yml",
+                "--template_sim_package",
+                "./pkg",
+                "--n_samples",
+                "5",
+                "--outdir",
+                "./out",
+                "--observability",
+                "opentelemetry",
+                "--otel-endpoint",
+                "http://otel-collector:4317",
+            ]
+        )
         assert args.observability == "opentelemetry"
         assert args.otel_endpoint == "http://otel-collector:4317"
 
     def test_invalid_observability_rejected(self) -> None:
         parser = _build_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args([
-                "run",
-                "--input_variables", "variables.yml",
-                "--template_sim_package", "./pkg",
-                "--n_samples", "5",
-                "--outdir", "./out",
-                "--observability", "datadog",
-            ])
+            parser.parse_args(
+                [
+                    "run",
+                    "--input_variables",
+                    "variables.yml",
+                    "--template_sim_package",
+                    "./pkg",
+                    "--n_samples",
+                    "5",
+                    "--outdir",
+                    "./out",
+                    "--observability",
+                    "datadog",
+                ]
+            )
 
     def test_default_cloudwatch_namespace(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([
-            "run",
-            "--input_variables", "variables.yml",
-            "--template_sim_package", "./pkg",
-            "--n_samples", "5",
-            "--outdir", "./out",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--input_variables",
+                "variables.yml",
+                "--template_sim_package",
+                "./pkg",
+                "--n_samples",
+                "5",
+                "--outdir",
+                "./out",
+            ]
+        )
         assert args.cloudwatch_namespace == "OSimFlow"
 
     def test_default_prometheus_port(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([
-            "run",
-            "--input_variables", "variables.yml",
-            "--template_sim_package", "./pkg",
-            "--n_samples", "5",
-            "--outdir", "./out",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--input_variables",
+                "variables.yml",
+                "--template_sim_package",
+                "./pkg",
+                "--n_samples",
+                "5",
+                "--outdir",
+                "./out",
+            ]
+        )
         assert args.prometheus_port == 9090
 
     def test_default_otel_endpoint_is_none(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([
-            "run",
-            "--input_variables", "variables.yml",
-            "--template_sim_package", "./pkg",
-            "--n_samples", "5",
-            "--outdir", "./out",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--input_variables",
+                "variables.yml",
+                "--template_sim_package",
+                "./pkg",
+                "--n_samples",
+                "5",
+                "--outdir",
+                "./out",
+            ]
+        )
         assert args.otel_endpoint is None
 
 
 # ---------------------------------------------------------------------------
 # CampaignConfig fields
 # ---------------------------------------------------------------------------
+
 
 class TestCampaignConfigFields:
     """Test that CampaignConfig includes observability fields."""
@@ -197,6 +256,7 @@ class TestCampaignConfigFields:
 # ---------------------------------------------------------------------------
 # Backend instantiation
 # ---------------------------------------------------------------------------
+
 
 class TestBackendInstantiation:
     """Test that Campaign._build_observability_backend produces the correct backend."""
@@ -251,6 +311,7 @@ class TestBackendInstantiation:
 # NullBackend zero overhead
 # ---------------------------------------------------------------------------
 
+
 class TestNullBackendZeroOverhead:
     """Verify NullBackend adds no measurable overhead."""
 
@@ -278,6 +339,7 @@ class TestNullBackendZeroOverhead:
 # ---------------------------------------------------------------------------
 # Backend wiring into Campaign
 # ---------------------------------------------------------------------------
+
 
 class TestCampaignBackendWiring:
     """Test that Campaign uses the correct backend based on config."""
@@ -354,6 +416,7 @@ class TestCampaignBackendWiring:
 # Observability metric recording
 # ---------------------------------------------------------------------------
 
+
 class TestMetricRecording:
     """Test that observability methods are called at key lifecycle points."""
 
@@ -382,6 +445,7 @@ class TestMetricRecording:
 # ---------------------------------------------------------------------------
 # No MLflow regression
 # ---------------------------------------------------------------------------
+
 
 class TestNoMLflowRegression:
     """Verify that observability does not interfere with MLflow."""
@@ -416,6 +480,7 @@ class TestNoMLflowRegression:
 # load_config integration
 # ---------------------------------------------------------------------------
 
+
 class TestLoadConfigIntegration:
     """Test that load_config correctly maps CLI args to CampaignConfig."""
 
@@ -424,7 +489,9 @@ class TestLoadConfigIntegration:
         from osimflow.config import load_config
 
         variables_yml = tmp_path / "variables.yml"
-        variables_yml.write_text("variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n")
+        variables_yml.write_text(
+            "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+        )
         template = tmp_path / "template"
         template.mkdir()
         outdir = tmp_path / "out"
@@ -467,7 +534,9 @@ class TestLoadConfigIntegration:
         from osimflow.config import load_config
 
         variables_yml = tmp_path / "variables.yml"
-        variables_yml.write_text("variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n")
+        variables_yml.write_text(
+            "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+        )
         template = tmp_path / "template"
         template.mkdir()
         outdir = tmp_path / "out"

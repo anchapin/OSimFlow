@@ -100,7 +100,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Data processing | **Python 3.12+**, **`pandas`**, **`pyarrow`** (Parquet) | KPI extraction, aggregation, error parsing. |
 | Plotting | **`matplotlib`** + **`seaborn`** | 1–3 static summary plots (PNG/PDF). |
 | Container registry | **Docker Hub** (OpenStudio) + **`ghcr.io`** (scientific Python) | `docker.io/nrel/openstudio:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
-| Monitoring | **BYO: per-campaign `run.json` + tqdm** | See `.agents/results/monitoring-decision.md`. No external service. Optional MLflow add-on via `--mlflow_tracking_uri` (see `osimflow/mlflow_hook.py`). |
+| Monitoring | **BYO: per-campaign `run.json` + tqdm** + pluggable observability backends | See `.agents/results/monitoring-decision.md` and [`docs/observability.md`](docs/observability.md). Optional MLflow add-on via `--mlflow_tracking_uri` (see `osimflow/mlflow_hook.py`). Observability backends (CloudWatch, Prometheus, OpenTelemetry) via `--observability` flag (issue #145, #127). |
 | CI/CD | **GitHub Actions** | Terraform validate in CI for `infra/` changes (issue #148). |
 
 ---
@@ -162,6 +162,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/container-image-strategy.md` | Container image strategy: why we mirror to ECR, how to use the sync script, lifecycle policy, multi-region replication, and cost considerations (issue #129). |
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
 | `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
+| `docs/observability.md` | Pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry): configuration, usage, and extension guide (issue #145, #127). |
 | `infra/nomad/examples/ha/` | Docker Compose HA cluster for Nomad (3 server + 2 client) with ACL bootstrap (issue #123). |
 | `infra/nomad/examples/ha/docker-compose.yml` | 3-server + 2-client Docker Compose with named volumes and bridge networking. |
 | `infra/nomad/examples/ha/server*.hcl` | Per-server HCL configs with `bootstrap_expect=3` and `retry_join`. |
@@ -211,6 +212,11 @@ The 7-step DAG that the `Campaign` class drives:
 - `--init-script`, `--finalize-script` (pre/post campaign shell hooks. Issue #108)
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
+- `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
+- `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
+- `--cloudwatch-namespace` (CloudWatch metric namespace; used when `--observability cloudwatch`)
+- `--prometheus-port` (Prometheus metrics HTTP port; used when `--observability prometheus`)
+- `--otel-endpoint` (OpenTelemetry OTLP endpoint URL; used when `--observability opentelemetry`)
 - `--dry-run` (dry-run mode: force LocalExecutor, 1 sample, steps 1-4 only)
 - `--sample` (single-sample mode: re-run sample N from existing samples.json)
 - `--skip-preflight` (skip the PREFLIGHT_RUN_MODEL step that validates the seed model; issue #107)
@@ -583,6 +589,7 @@ generic role prompt's tool guidance when they disagree).
 - [ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md) — the decision record for adopting `nrel/openstudio` directly.
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
+- [Observability guide (docs/observability.md)](docs/observability.md) — pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry).
 - [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
 - [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding.
