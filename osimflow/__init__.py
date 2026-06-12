@@ -20,6 +20,7 @@ from .executors import (
     SlurmExecutor,
 )
 from .jobqueue import JobQueue
+from .logging import get_logger, setup_logging
 from .monitoring import RunTrace, StepTrace
 from .observability import (
     CloudWatchBackend,
@@ -79,4 +80,8 @@ __all__ = [
     "validate_all_epw_files",
     "validate_epw",
     "validate_epw_header",
+    "get_logger",
+    "setup_logging",
 ]
+
+setup_logging()
