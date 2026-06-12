@@ -29,6 +29,7 @@ from osimflow.api.campaigns import campaigns_router
 from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.pat_compat import pat_compat_router
+from osimflow.api.timeseries import timeseries_router
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import sanitize_filename, sanitize_sample_id, validate_path_within_base
 
@@ -463,6 +464,7 @@ def create_app(
     app.include_router(campaigns_router)
     app.include_router(pat_compat_router)
     app.include_router(files_router)
+    app.include_router(timeseries_router)
 
     # --- Static files for the web GUI (issue #264) ---
     static_dir = Path(__file__).parent / "static"
