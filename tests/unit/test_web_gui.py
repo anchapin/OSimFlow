@@ -32,7 +32,12 @@ def tmp_outdir(tmp_path: Path) -> Path:
         ],
         "per_sample": [
             {"sample_id": "s001", "status": "ok", "elapsed_s": 10.0},
-            {"sample_id": "s002", "status": "failed", "elapsed_s": 5.0, "error_summary": "Severe Error"},
+            {
+                "sample_id": "s002",
+                "status": "failed",
+                "elapsed_s": 5.0,
+                "error_summary": "Severe Error",
+            },
         ],
     }
     (tmp_path / "run.json").write_text(json.dumps(run_json))
