@@ -103,6 +103,8 @@ class SQLiteCache:
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.db_path)
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=5000")
         c.row_factory = sqlite3.Row
         return c
 
