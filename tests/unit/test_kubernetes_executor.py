@@ -40,7 +40,11 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 5.0
         ex.max_poll_interval_s = 60.0
-        with patch.object(ex, "_wait_for_terminal", return_value={"status": {"conditions": [{"type": "Complete"}]}}):
+        with patch.object(
+            ex,
+            "_wait_for_terminal",
+            return_value={"status": {"conditions": [{"type": "Complete"}]}},
+        ):
             handle = ex.submit(lambda: None, name="test")
         assert hasattr(handle, "result")
         assert hasattr(handle, "job_name")
@@ -53,7 +57,11 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 5.0
         ex.max_poll_interval_s = 60.0
-        with patch.object(ex, "_wait_for_terminal", return_value={"status": {"conditions": [{"type": "Complete"}]}}):
+        with patch.object(
+            ex,
+            "_wait_for_terminal",
+            return_value={"status": {"conditions": [{"type": "Complete"}]}},
+        ):
             handle = ex.submit(lambda: None, name="heavy", cpus=4, memory_mb=8192)
         assert handle.job_name == "osimflow-heavy"
 
@@ -71,7 +79,9 @@ class TestKubernetesExecutor:
         )
         assert spec["kind"] == "Job"
         assert spec["metadata"]["name"] == "osimflow-test"
-        assert spec["spec"]["template"]["spec"]["containers"][0]["image"] == "nrel/openstudio:3.11.0"
+        assert (
+            spec["spec"]["template"]["spec"]["containers"][0]["image"] == "nrel/openstudio:3.11.0"
+        )
         env = spec["spec"]["template"]["spec"]["containers"][0]["env"]
         env_names = [e["name"] for e in env]
         assert "OSIMFLOW_OS_VERSION" in env_names
@@ -111,9 +121,7 @@ class TestKubernetesHandle:
 
     def test_result_raises_on_failure(self) -> None:
         mock_ex = MagicMock()
-        mock_ex._wait_for_terminal.return_value = {
-            "status": {"conditions": [], "failed": 1}
-        }
+        mock_ex._wait_for_terminal.return_value = {"status": {"conditions": [], "failed": 1}}
         handle = _KubernetesHandle(job_name="test", executor=mock_ex)
         with pytest.raises(RuntimeError, match="failed"):
             handle.result()
@@ -128,9 +136,7 @@ class TestKubernetesHandle:
 
     def test_done_false_when_running(self) -> None:
         mock_ex = MagicMock()
-        mock_ex._client.get_job.return_value = {
-            "status": {"conditions": [], "failed": 0}
-        }
+        mock_ex._client.get_job.return_value = {"status": {"conditions": [], "failed": 0}}
         handle = _KubernetesHandle(job_name="test", executor=mock_ex)
         assert handle.done() is False
 

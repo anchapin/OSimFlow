@@ -1830,4 +1830,6 @@ class _KubernetesClient:
             name=name,
             namespace=self.namespace,
         )
-        return cast(dict[str, Any], kubernetes.client.ApiClient().api_client.sanitize_for_serialization(job))
+        return cast(
+            dict[str, Any], kubernetes.client.ApiClient().api_client.sanitize_for_serialization(job)
+        )
