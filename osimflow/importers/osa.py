@@ -245,12 +245,16 @@ def _convert_pivot_variable(
     """Convert a pivot variable to categorical with ``pivot: true``."""
     warnings: list[str] = []
     dist_entry: dict[str, Any] = {"distribution": "categorical"}
-    values = osa_dist.get("values") or osa_dist.get("discrete_values") or osa_dist.get("enumerations")
+    values = (
+        osa_dist.get("values") or osa_dist.get("discrete_values") or osa_dist.get("enumerations")
+    )
     if values and isinstance(values, list):
         dist_entry["values"] = values
     else:
         dist_entry["values"] = []
-        warnings.append(f"Variable {name!r}: pivot distribution has no 'values'; imported with empty list")
+        warnings.append(
+            f"Variable {name!r}: pivot distribution has no 'values'; imported with empty list"
+        )
     mapping = osa_dist.get("mapping")
     if mapping and isinstance(mapping, dict):
         dist_entry["mapping"] = mapping

@@ -449,23 +449,25 @@ class TestPivotVariableRoundTrip:
         distribution.type=pivot, then verify the variables.yml output."""
         analysis_json = tmp_path / "analysis.json"
         analysis_json.write_text(
-            json.dumps({
-                "analysis": {
-                    "problem": {
-                        "algorithm": {"type": "lhs", "number_of_samples": 10},
-                        "variables": [
-                            {
-                                "name": "climate_zone",
-                                "variable_type": "pivot",
-                                "distribution": {
-                                    "type": "pivot",
-                                    "values": ["CZ4", "CZ5", "CZ6"],
+            json.dumps(
+                {
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 10},
+                            "variables": [
+                                {
+                                    "name": "climate_zone",
+                                    "variable_type": "pivot",
+                                    "distribution": {
+                                        "type": "pivot",
+                                        "values": ["CZ4", "CZ5", "CZ6"],
+                                    },
                                 },
-                            },
-                        ],
+                            ],
+                        },
                     },
-                },
-            }),
+                }
+            ),
             encoding="utf-8",
         )
         osa_data = parse_osa(analysis_json)
@@ -525,20 +527,22 @@ class TestStaticVariableRoundTrip:
         """Import an OSA variable with no distribution block → static."""
         analysis_json = tmp_path / "analysis.json"
         analysis_json.write_text(
-            json.dumps({
-                "analysis": {
-                    "problem": {
-                        "algorithm": {"type": "lhs", "number_of_samples": 10},
-                        "variables": [
-                            {
-                                "name": "building_type",
-                                "variable_type": "argument",
-                                "default_value": "office_medium",
-                            },
-                        ],
+            json.dumps(
+                {
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 10},
+                            "variables": [
+                                {
+                                    "name": "building_type",
+                                    "variable_type": "argument",
+                                    "default_value": "office_medium",
+                                },
+                            ],
+                        },
                     },
-                },
-            }),
+                }
+            ),
             encoding="utf-8",
         )
         osa_data = parse_osa(analysis_json)
@@ -735,21 +739,23 @@ class TestMixedVariablesRoundTrip:
         static."""
         analysis_json = tmp_path / "analysis.json"
         analysis_json.write_text(
-            json.dumps({
-                "analysis": {
-                    "problem": {
-                        "algorithm": {"type": "lhs", "number_of_samples": 10},
-                        "variables": [
-                            {
-                                "name": "static_param",
-                                "variable_type": "variable",
-                                "default_value": 42,
-                                "distribution": {},
-                            },
-                        ],
+            json.dumps(
+                {
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 10},
+                            "variables": [
+                                {
+                                    "name": "static_param",
+                                    "variable_type": "variable",
+                                    "default_value": 42,
+                                    "distribution": {},
+                                },
+                            ],
+                        },
                     },
-                },
-            }),
+                }
+            ),
             encoding="utf-8",
         )
         osa_data = parse_osa(analysis_json)
