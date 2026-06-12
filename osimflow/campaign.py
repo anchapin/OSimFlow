@@ -34,10 +34,12 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 import concurrent.futures
 import contextlib
 import dataclasses
+import hashlib
 import inspect
 import json
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import time
@@ -86,6 +88,17 @@ from .work import (
     preflight_run_model,
     run_openstudio_sim,
 )
+
+
+def _osimflow_version() -> str:
+    """Return the installed OSimFlow version, or 'unknown'."""
+    try:
+        from importlib.metadata import version  # noqa: PLC0415
+
+        return version("osimflow")
+    except Exception:
+        return "unknown"
+
 
 log = logging.getLogger("osimflow.campaign")
 
@@ -857,6 +870,178 @@ class Campaign:
         return base
 
     # ------------------------------------------------------------------
+    # Manifest writers (issue #277)
+    # ------------------------------------------------------------------
+    def _write_campaign_meta(self) -> None:
+        """Write ``campaign_meta.json`` to outdir at campaign start.
+
+        Captures the campaign configuration in a queryable JSON form so
+        downstream tools (dashboards, comparators, auditors) can inspect
+        a campaign without parsing CLI args or run.json.
+
+        The file is overwritten on each run so re-runs produce the
+        latest configuration snapshot.
+        """
+        # Build input_variables summary from variables.yml.
+        variable_summary: list[dict[str, object]] = []
+        try:
+            raw: Any = yaml.safe_load(self.cfg.input_variables.read_text())
+            if isinstance(raw, dict):
+                for var in raw.get("variables", []):
+                    if isinstance(var, dict) and "name" in var:
+                        entry: dict[str, object] = {
+                            "name": var["name"],
+                            "distribution": var.get("distribution", "unknown"),
+                        }
+                        for key in ("min", "max", "mean", "sigma", "mode", "steps"):
+                            if key in var:
+                                entry[key] = var[key]
+                        variable_summary.append(entry)
+        except Exception as exc:
+            log.warning("could not parse variables.yml for campaign_meta: %s", exc)
+
+        meta: dict[str, object] = {
+            "campaign_id": self.trace.campaign_id,
+            "algorithm": self.cfg.algorithm,
+            "n_samples": self.cfg.n_samples,
+            "openstudio_version": self.cfg.openstudio_version,
+            "executor_type": self.executor.name,
+            "input_variables": {
+                "path": str(self.cfg.input_variables),
+                "variables": variable_summary,
+            },
+            "template_sim_package": str(self.cfg.template_sim_package),
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "osimflow_version": _osimflow_version(),
+        }
+        out_path = self.cfg.outdir / "campaign_meta.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(meta, indent=2, default=str))
+        log.info("wrote campaign metadata to %s", out_path)
+
+    def _write_provenance(self) -> None:
+        """Write ``provenance.json`` to outdir at campaign completion.
+
+        Captures the full sampling details, code hashes used for cache
+        invalidation, and runtime environment information for
+        reproducibility auditing.
+        """
+        # Read samples.json if it exists for seed/algorithm details.
+        sampling_details: dict[str, object] = {
+            "algorithm": self.cfg.algorithm,
+            "n_samples": self.cfg.n_samples,
+            "max_generations": self.cfg.max_generations,
+        }
+        samples_file = self.cfg.samples_file
+        if samples_file.exists():
+            try:
+                samples_data = json.loads(samples_file.read_text())
+                # Capture the sample IDs so provenance is self-describing.
+                sampling_details["sample_ids"] = [
+                    s.get("sample_id", f"unknown_{i}")
+                    for i, s in enumerate(samples_data.get("samples", []))
+                ]
+                sampling_details["n_actual_samples"] = len(samples_data.get("samples", []))
+            except Exception as exc:
+                log.warning("could not read samples.json for provenance: %s", exc)
+
+        provenance: dict[str, object] = {
+            "campaign_id": self.trace.campaign_id,
+            "sampling": sampling_details,
+            "code_hashes": self.code_hashes,
+            "environment": {
+                "osimflow_version": _osimflow_version(),
+                "python_version": platform.python_version(),
+                "platform": platform.platform(),
+                "python_implementation": platform.python_implementation(),
+            },
+            "cache_stats": self.cache.stats(),
+            "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+        out_path = self.cfg.outdir / "provenance.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(provenance, indent=2, default=str))
+        log.info("wrote provenance to %s", out_path)
+
+    def _write_artifact_manifest(self) -> None:
+        """Write ``artifact_manifest.json`` to outdir after aggregation.
+
+        Scans the outdir for all output files and records their paths,
+        sizes, and SHA-256 checksums grouped by category (results, plots,
+        logs, intermediates).
+        """
+        artifacts: list[dict[str, object]] = []
+
+        # Maps (path_prefix, is_prefix_match) -> category for common cases.
+        prefix_map = {
+            "plots": "plots",
+            "work/sim": "intermediates",
+            "work/apply": "intermediates",
+        }
+        ext_map = {
+            ".png": "plots",
+            ".pdf": "plots",
+            ".svg": "plots",
+            ".csv": "results",
+            ".parquet": "results",
+            ".log": "logs",
+            ".sqlite": "cache",
+        }
+
+        def _categorise(path: Path) -> str:
+            """Assign a category based on file location/extension."""
+            rel = str(path.relative_to(self.cfg.outdir))
+            # Check prefix-based categories first.
+            for prefix, cat in prefix_map.items():
+                if rel.startswith(prefix):
+                    return cat
+            # Check extension-based categories.
+            suffix = path.suffix
+            if suffix in ext_map:
+                return ext_map[suffix]
+            # JSON files: distinguish by name.
+            if suffix == ".json":
+                if "run.json" in rel:
+                    return "logs"
+                if any(x in rel for x in ("campaign_meta", "provenance", "artifact_manifest")):
+                    return "metadata"
+                return "results"
+            return "other"
+
+        for f in sorted(self.cfg.outdir.rglob("*")):
+            if not f.is_file():
+                continue
+            try:
+                rel_path = str(f.relative_to(self.cfg.outdir))
+            except ValueError:
+                continue  # skip files outside outdir
+            category = _categorise(f)
+            # Compute checksum for files that are not the manifest itself.
+            sha256 = (
+                hashlib.sha256(f.read_bytes()).hexdigest()
+                if "artifact_manifest" not in rel_path
+                else ""
+            )
+            artifacts.append(
+                {
+                    "path": rel_path,
+                    "size_bytes": f.stat().st_size,
+                    "checksum_sha256": sha256,
+                    "category": category,
+                }
+            )
+
+        manifest: dict[str, object] = {
+            "campaign_id": self.trace.campaign_id,
+            "artifacts": artifacts,
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+        out_path = self.cfg.outdir / "artifact_manifest.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(manifest, indent=2, default=str))
+        log.info("wrote artifact manifest to %s (%d files)", out_path, len(artifacts))
+
+    # ------------------------------------------------------------------
     # Registry helpers (issue #266)
     # ------------------------------------------------------------------
     def _register_campaign(self) -> None:
@@ -923,6 +1108,9 @@ class Campaign:
         # completes (issue #275).
         self.trace.write(self.cfg.outdir / "run.json")
 
+        # Write campaign metadata manifest at start (issue #277).
+        self._write_campaign_meta()
+
         try:
             # Init hook (issue #108): runs before the first campaign step.
             # Must succeed (exit 0) or the campaign aborts.
@@ -961,6 +1149,14 @@ class Campaign:
             # Re-write run.json to include finalize hook timing
             if (self.cfg.outdir / "run.json").exists():
                 self.trace.write(self.cfg.outdir / "run.json")
+
+            # Write provenance manifest at completion (issue #277).
+            self._write_provenance()
+
+            # Write artifact manifest after all files are produced (issue #277).
+            # Placed after provenance so the manifest captures all output files.
+            self._write_artifact_manifest()
+
             maybe_end_mlflow_run()
 
             # Update registry status (issue #266).
