@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 BIN = PROJECT_ROOT / "bin"
@@ -131,3 +133,44 @@ def test_generate_plots(tmp_path):
     assert (out_plots / "eui_histogram.png").exists()
     assert (out_plots / "failure_summary.png").exists()
     assert (out_plots / "top_var_vs_eui.png").exists()
+
+
+def test_excel_to_variables(tmp_path):
+    pytest.importorskip("openpyxl", reason="openpyxl required for Excel conversion")
+    import openpyxl
+
+    xlsx_path = tmp_path / "variables.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Variables"
+    ws.append(["var_name", "lower_bound", "upper_bound", "distribution", "display_name"])
+    ws.append(["wall_r", 2.0, 5.0, "uniform", "Wall R-value"])
+    ws.append(["light_lmp", 0.05, 0.15, "normal", None])
+    wb.save(xlsx_path)
+
+    out_yml = tmp_path / "variables.yml"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(BIN / "excel_to_variables.py"),
+            "--input",
+            str(xlsx_path),
+            "--output",
+            str(out_yml),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert out_yml.exists()
+    data = yaml.safe_load(out_yml.read_text())
+    assert data["algorithm"] == "lhs"
+    assert len(data["variables"]) == 2
+    assert data["variables"][0]["name"] == "wall_r"
+    assert data["variables"][0]["distribution"] == "uniform"
+    assert data["variables"][0]["min"] == 2.0
+    assert data["variables"][0]["max"] == 5.0
+    assert data["variables"][1]["name"] == "light_lmp"
+    assert data["variables"][1]["distribution"] == "normal"

@@ -195,11 +195,10 @@ class TestDiffEvents:
 class TestSSEEndpoint:
     """Tests for GET /api/v1/events HTTP behaviour."""
 
-    def test_sse_read_only_returns_403(self, client_ro: TestClient) -> None:
-        """SSE endpoint returns 403 in read-only mode."""
-        resp = client_ro.get("/api/v1/events")
-        assert resp.status_code == 403
-        assert "read-only" in resp.json()["detail"].lower()
+    def test_sse_read_only_connects(self, client_ro: TestClient) -> None:
+        """SSE endpoint is available in read-only mode (issue #275)."""
+        with client_ro.stream("GET", "/api/v1/events", timeout=5) as resp:
+            assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
