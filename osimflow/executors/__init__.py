@@ -1071,6 +1071,29 @@ class _NomadClient:
     def submit_job(self, spec: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/v1/jobs", body=spec)
 
+    def register_job(self, spec: dict[str, Any]) -> dict[str, Any]:
+        """Register (or update) a job spec via ``POST /v1/jobs``.
+
+        Idempotent — re-registering an identical job is a no-op.
+        Returns the Nomad response (``JobID``, ``EvalID``, ``Index``).
+        """
+        return self._request("POST", "/v1/jobs", body=spec)
+
+    def dispatch_job(
+        self, job_id: str, meta: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        """Dispatch a parameterized job via ``POST /v1/job/{job_id}/dispatch``.
+
+        ``meta`` is the per-dispatch payload that lands as
+        ``NOMAD_META_<key>`` env vars inside the task container. Returns
+        the Nomad dispatch response carrying ``JobID`` and ``EvalID`` of
+        the child (dispatched) job.
+        """
+        body: dict[str, Any] = {}
+        if meta:
+            body["Meta"] = meta
+        return self._request("POST", f"/v1/job/{job_id}/dispatch", body=body)
+
     def get_allocation(self, alloc_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/allocation/{alloc_id}")
 
@@ -1245,15 +1268,18 @@ class _NomadHandle(Handle):
 
 
 class NomadExecutor(BaseExecutor):
-    """HashiCorp Nomad batch executor (issue #27).
+    """HashiCorp Nomad batch executor (issue #27, issue #135).
 
-    Wraps the Nomad HTTP API (``/v1/jobs`` submit + ``/v1/allocation/<id>``
-    poll) to launch one ``batch`` job per ``submit()`` call. The
-    returned ``Handle`` polls the allocation status with exponential
-    backoff until the task reaches a terminal state; on failure it
-    re-raises a ``RuntimeError`` whose message includes the Nomad
-    status description so the Campaign's ``except Exception`` path
-    logs a useful line.
+    Supports two dispatch modes:
+
+    * **Dispatch mode** (default): registers a parameterized job spec once,
+      then uses ``POST /v1/job/osimflow-worker/dispatch`` for per-sample
+      work. Each ``submit()`` call dispatches a child job with the sample
+      parameters as Nomad meta vars.
+    * **Direct mode** (legacy): builds and submits a unique ``batch`` job
+      per ``submit()`` call via ``POST /v1/jobs``. Used when the
+      parameterized job is not yet registered or when ``use_dispatch`` is
+      ``False``.
 
     Resource directives (``cpus``, ``memory_mb``, ``time_min``) are
     mapped to the Nomad ``resources`` block (``CPU`` in MHz, ``MemoryMB``
@@ -1277,12 +1303,16 @@ class NomadExecutor(BaseExecutor):
 
     name = "nomad"
 
+    # The parameterized job ID used for dispatch mode.
+    DISPATCH_JOB_ID = "osimflow-worker"
+
     def __init__(
         self,
         address: str | None = None,
         datacentre: str = "dc1",
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
+        use_dispatch: bool = False,
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -1293,6 +1323,8 @@ class NomadExecutor(BaseExecutor):
         self.datacentre = datacentre
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
+        self.use_dispatch = use_dispatch
+        self._dispatch_job_registered = False
         self._client = _NomadClient(
             address=self.address,
             token=os.environ.get("NOMAD_TOKEN"),
@@ -1370,6 +1402,81 @@ class NomadExecutor(BaseExecutor):
             }
         }
 
+    def _build_dispatch_job_spec(self) -> dict[str, Any]:
+        """Build the parameterized job spec for dispatch mode (issue #135).
+
+        Returns a Nomad ``batch`` job spec with ``ParameterizedJob`` set
+        so the executor can dispatch child jobs via
+        ``POST /v1/job/osimflow-worker/dispatch``.
+
+        Security:
+          * ``privileged = false`` — no host-level access.
+          * Memory limited to 4096 MB, CPU to 2000 MHz (2 logical CPUs).
+          * No host network, no bind mounts.
+        """
+        return {
+            "Job": {
+                "ID": self.DISPATCH_JOB_ID,
+                "Name": self.DISPATCH_JOB_ID,
+                "Type": "batch",
+                "Datacenters": [self.datacentre],
+                "ParameterizedJob": {
+                    "MetaRequired": ["sample_id"],
+                    "MetaOptional": [
+                        "variables_json",
+                        "openstudio_version",
+                        "container_image",
+                    ],
+                },
+                "Meta": {
+                    "variables_json": "{}",
+                    "openstudio_version": "3.11.0",
+                    "container_image": "nrel/openstudio:3.11.0",
+                },
+                "TaskGroups": [
+                    {
+                        "Name": "osimflow",
+                        "Tasks": [
+                            {
+                                "Name": "simulate",
+                                "Driver": "docker",
+                                "Config": {
+                                    "image": "nrel/openstudio:3.11.0",
+                                    "command": "/bin/sh",
+                                    "args": ["-c", "sleep infinity"],
+                                    "privileged": False,
+                                },
+                                "Resources": {
+                                    "CPU": 2000,
+                                    "MemoryMB": 4096,
+                                },
+                                "Restart": {
+                                    "Attempts": 0,
+                                },
+                                "Env": {
+                                    "OSIMFLOW_STUB_SIM": "1",
+                                    "OSIMFLOW_OUTDIR": "/local/osimflow/out",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+
+    def _ensure_dispatch_job_registered(self) -> None:
+        """Register the parameterized job spec (idempotent).
+
+        Called once on the first ``submit()`` when ``use_dispatch`` is
+        True. Subsequent calls are no-ops.
+        """
+        if self._dispatch_job_registered:
+            return
+        spec = self._build_dispatch_job_spec()
+        log.info("nomad: registering parameterized dispatch job %s", self.DISPATCH_JOB_ID)
+        self._client.register_job(spec)
+        self._dispatch_job_registered = True
+
     def _wait_for_terminal(self, allocation_id: str) -> dict[str, Any]:
         """Poll ``GET /v1/allocation/<id>`` with exponential backoff
         until the allocation reaches a terminal state (``complete`` /
@@ -1399,22 +1506,45 @@ class NomadExecutor(BaseExecutor):
         openstudio_version = kwargs.get("openstudio_version")
 
         log.info(
-            "nomad submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
+            "nomad submit name=%s cpus=%d mem=%dMB time_min=%d container=%s dispatch=%s",
             name,
             cpus,
             memory_mb,
             time_min,
             container,
+            self.use_dispatch,
         )
 
-        spec = self._build_job_spec(
-            name=name,
-            cpus=cpus,
-            memory_mb=memory_mb,
-            container=container,
-            openstudio_version=openstudio_version,
-        )
-        response = self._client.submit_job(spec)
+        if self.use_dispatch:
+            # Dispatch mode: register the parameterized job once, then
+            # dispatch per-sample work via POST /v1/job/{id}/dispatch.
+            self._ensure_dispatch_job_registered()
+
+            # Build the per-dispatch meta payload.
+            image = container or "nrel/openstudio:3.11.0"
+            meta: dict[str, str] = {
+                "sample_id": name,
+                "openstudio_version": str(openstudio_version or ""),
+                "container_image": image,
+            }
+            variables_json = kwargs.get("variables_json")
+            if variables_json is not None:
+                meta["variables_json"] = (
+                    variables_json if isinstance(variables_json, str) else json.dumps(variables_json)
+                )
+
+            response = self._client.dispatch_job(self.DISPATCH_JOB_ID, meta=meta)
+        else:
+            # Legacy (direct) mode: build and submit a unique job per call.
+            spec = self._build_job_spec(
+                name=name,
+                cpus=cpus,
+                memory_mb=memory_mb,
+                container=container,
+                openstudio_version=openstudio_version,
+            )
+            response = self._client.submit_job(spec)
+
         job_id = response.get("JobID", "")
         eval_id = response.get("EvalID", "")
         log.info("nomad submit_job -> jobId=%s evalId=%s", job_id, eval_id)
