@@ -57,8 +57,8 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
-from .jobqueue import JobQueue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
+from .jobqueue import JobQueue
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,

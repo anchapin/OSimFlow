@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 
 import pytest
@@ -26,7 +25,7 @@ class TestJobQueueInit:
     """Directory structure creation."""
 
     def test_creates_state_subdirectories(self, queue_dir):
-        q = JobQueue(queue_dir)
+        JobQueue(queue_dir)
         from osimflow.jobqueue import STATES
 
         for state in STATES:
