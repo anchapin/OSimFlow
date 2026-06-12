@@ -175,14 +175,8 @@ async def sse_events(request: Request) -> EventSourceResponse:
     ``campaign.completed``.  Sends ``: ping`` heartbeat comments when
     the campaign has not started yet (no run.json).
 
-    Returns 403 when ``--read-only`` is set.
+    Available in both read-only and read-write modes (issue #275).
     """
-    if getattr(request.app.state, "read_only", True):
-        raise HTTPException(
-            status_code=403,
-            detail="Live events not available in read-only mode",
-        )
-
     return EventSourceResponse(_event_generator(request))
 
 
