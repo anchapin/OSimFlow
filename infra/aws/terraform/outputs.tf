@@ -97,3 +97,13 @@ output "region" {
   description = "AWS region for this deployment"
   value       = var.region
 }
+
+output "github_actions_role_arn" {
+  description = "ARN of the IAM role for GitHub Actions OIDC federated identity"
+  value       = aws_iam_role.github_actions.arn
+}
+
+output "cloudwatch_log_group_name" {
+  description = "CloudWatch log group name for Batch job logs"
+  value       = aws_cloudwatch_log_group.batch.name
+}
