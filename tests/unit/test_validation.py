@@ -177,22 +177,24 @@ def _write_yml(tmp_path: Path, data: object, name: str = "variables.yml") -> Pat
 
 class TestValidateVariablesYml:
     def test_valid_single_variable(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [
-                {"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}
-            ]
-        })
+        path = _write_yml(
+            tmp_path,
+            {"variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]},
+        )
         result = validate_variables_yml(path)
         assert len(result) == 1
         assert result[0]["name"] == "wall_r"
 
     def test_valid_multiple_variables(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [
-                {"name": "a", "distribution": "uniform", "min": 0, "max": 1},
-                {"name": "b", "distribution": "normal", "mean": 0, "sigma": 1},
-            ]
-        })
+        path = _write_yml(
+            tmp_path,
+            {
+                "variables": [
+                    {"name": "a", "distribution": "uniform", "min": 0, "max": 1},
+                    {"name": "b", "distribution": "normal", "mean": 0, "sigma": 1},
+                ]
+            },
+        )
         result = validate_variables_yml(path)
         assert len(result) == 2
 
@@ -240,130 +242,134 @@ class TestValidateVariablesYml:
             validate_variables_yml(path)
 
     def test_missing_name(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"distribution": "uniform", "min": 0, "max": 1}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"distribution": "uniform", "min": 0, "max": 1}]}
+        )
         with pytest.raises(ValidationError, match="missing required field 'name'"):
             validate_variables_yml(path)
 
     def test_empty_name(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "", "distribution": "uniform", "min": 0, "max": 1}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "", "distribution": "uniform", "min": 0, "max": 1}]}
+        )
         with pytest.raises(ValidationError, match="non-empty string"):
             validate_variables_yml(path)
 
     def test_missing_distribution(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "min": 0, "max": 1}]
-        })
+        path = _write_yml(tmp_path, {"variables": [{"name": "x", "min": 0, "max": 1}]})
         with pytest.raises(ValidationError, match="missing required field 'distribution'"):
             validate_variables_yml(path)
 
     def test_unknown_distribution(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "gamma_ray", "min": 0, "max": 1}]
-        })
+        path = _write_yml(
+            tmp_path,
+            {"variables": [{"name": "x", "distribution": "gamma_ray", "min": 0, "max": 1}]},
+        )
         with pytest.raises(ValidationError, match="unknown distribution 'gamma_ray'"):
             validate_variables_yml(path)
 
     def test_uniform_missing_max(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "uniform", "min": 0}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "uniform", "min": 0}]}
+        )
         with pytest.raises(ValidationError, match="requires parameter 'max'"):
             validate_variables_yml(path)
 
     def test_uniform_min_ge_max(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "uniform", "min": 10, "max": 5}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "uniform", "min": 10, "max": 5}]}
+        )
         with pytest.raises(ValidationError, match="must be less than 'max'"):
             validate_variables_yml(path)
 
     def test_uniform_min_eq_max(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "uniform", "min": 5, "max": 5}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "uniform", "min": 5, "max": 5}]}
+        )
         with pytest.raises(ValidationError, match="must be less than 'max'"):
             validate_variables_yml(path)
 
     def test_normal_negative_sigma(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "normal", "mean": 0, "sigma": -1}]
-        })
+        path = _write_yml(
+            tmp_path,
+            {"variables": [{"name": "x", "distribution": "normal", "mean": 0, "sigma": -1}]},
+        )
         with pytest.raises(ValidationError, match="sigma.*positive"):
             validate_variables_yml(path)
 
     def test_normal_zero_sigma(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "normal", "mean": 0, "sigma": 0}]
-        })
+        path = _write_yml(
+            tmp_path,
+            {"variables": [{"name": "x", "distribution": "normal", "mean": 0, "sigma": 0}]},
+        )
         with pytest.raises(ValidationError, match="sigma.*positive"):
             validate_variables_yml(path)
 
     def test_lognormal_negative_sigma(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "lognormal", "mean": 1, "sigma": -0.5}]
-        })
+        path = _write_yml(
+            tmp_path,
+            {"variables": [{"name": "x", "distribution": "lognormal", "mean": 1, "sigma": -0.5}]},
+        )
         with pytest.raises(ValidationError, match="sigma.*positive"):
             validate_variables_yml(path)
 
     def test_triangular_mode_out_of_range(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [
-                {"name": "x", "distribution": "triangular", "min": 0, "max": 1, "mode": 2}
-            ]
-        })
+        path = _write_yml(
+            tmp_path,
+            {
+                "variables": [
+                    {"name": "x", "distribution": "triangular", "min": 0, "max": 1, "mode": 2}
+                ]
+            },
+        )
         with pytest.raises(ValidationError, match="mode.*between"):
             validate_variables_yml(path)
 
     def test_discrete_empty_values(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "discrete", "values": []}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "discrete", "values": []}]}
+        )
         with pytest.raises(ValidationError, match="must not be empty"):
             validate_variables_yml(path)
 
     def test_discrete_values_not_list(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "discrete", "values": "bad"}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "discrete", "values": "bad"}]}
+        )
         with pytest.raises(ValidationError, match="'values' must be a list"):
             validate_variables_yml(path)
 
     def test_beta_negative_alpha(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "beta", "alpha": -1, "beta": 2}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "beta", "alpha": -1, "beta": 2}]}
+        )
         with pytest.raises(ValidationError, match="alpha.*positive"):
             validate_variables_yml(path)
 
     def test_gamma_zero_alpha(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "gamma", "alpha": 0}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "gamma", "alpha": 0}]}
+        )
         with pytest.raises(ValidationError, match="alpha.*positive"):
             validate_variables_yml(path)
 
     def test_exponential_negative_rate(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "exponential", "rate": -1}]
-        })
+        path = _write_yml(
+            tmp_path, {"variables": [{"name": "x", "distribution": "exponential", "rate": -1}]}
+        )
         with pytest.raises(ValidationError, match="rate.*positive"):
             validate_variables_yml(path)
 
     def test_non_numeric_min(self, tmp_path: Path) -> None:
-        path = _write_yml(tmp_path, {
-            "variables": [{"name": "x", "distribution": "uniform", "min": "bad", "max": 10}]
-        })
+        path = _write_yml(
+            tmp_path,
+            {"variables": [{"name": "x", "distribution": "uniform", "min": "bad", "max": 10}]},
+        )
         with pytest.raises(ValidationError, match="must be numeric"):
             validate_variables_yml(path)
 
     @pytest.mark.parametrize("dist", sorted(VALID_DISTRIBUTIONS))
-    def test_all_distributions_accepted_with_valid_input(
-        self, tmp_path: Path, dist: str
-    ) -> None:
+    def test_all_distributions_accepted_with_valid_input(self, tmp_path: Path, dist: str) -> None:
         """Every known distribution should pass with its required params."""
         required = DISTRIBUTION_PARAMS[dist]
         var: dict[str, object] = {"name": "v", "distribution": dist}

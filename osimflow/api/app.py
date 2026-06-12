@@ -229,9 +229,7 @@ async def get_sample_detail(sid: str, request: Request) -> dict[str, Any]:
         try:
             validate_path_within_base(sim_dir.resolve(), outdir_resolved)
         except OsimflowValidationError:
-            raise HTTPException(
-                status_code=400, detail="Invalid sample directory"
-            ) from None
+            raise HTTPException(status_code=400, detail="Invalid sample directory") from None
         for kpi_name in ("kpi.json", "kpis.json"):
             kpi_path = sim_dir / kpi_name
             if kpi_path.exists():
@@ -370,9 +368,7 @@ async def get_plot_file(filename: str, request: Request) -> FileResponse:
         try:
             validate_path_within_base(candidate, outdir_resolved)
         except OsimflowValidationError:
-            raise HTTPException(
-                status_code=400, detail="Invalid plot path"
-            ) from None
+            raise HTTPException(status_code=400, detail="Invalid plot path") from None
         if candidate.is_file():
             return FileResponse(candidate, media_type="image/png")
     raise HTTPException(status_code=404, detail=f"Plot '{safe_name}' not found")

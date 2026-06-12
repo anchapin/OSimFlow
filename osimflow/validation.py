@@ -221,15 +221,11 @@ def _validate_single_variable(var: dict[str, Any], prefix: str) -> None:
         raise ValidationError(f"{prefix}: missing required field 'name'", field=prefix)
     name = var["name"]
     if not isinstance(name, str) or not name.strip():
-        raise ValidationError(
-            f"{prefix}: 'name' must be a non-empty string", field=prefix
-        )
+        raise ValidationError(f"{prefix}: 'name' must be a non-empty string", field=prefix)
 
     # Required: distribution
     if "distribution" not in var:
-        raise ValidationError(
-            f"{prefix}: missing required field 'distribution'", field=prefix
-        )
+        raise ValidationError(f"{prefix}: missing required field 'distribution'", field=prefix)
     dist = var["distribution"]
     if not isinstance(dist, str):
         raise ValidationError(
@@ -239,8 +235,7 @@ def _validate_single_variable(var: dict[str, Any], prefix: str) -> None:
     if dist not in VALID_DISTRIBUTIONS:
         available = ", ".join(sorted(VALID_DISTRIBUTIONS))
         raise ValidationError(
-            f"{prefix}: unknown distribution '{dist}'. "
-            f"Valid distributions: {available}",
+            f"{prefix}: unknown distribution '{dist}'. Valid distributions: {available}",
             field=prefix,
         )
 
@@ -490,9 +485,7 @@ def sanitize_sample_id(sid: str) -> str:
         raise ValidationError("Sample ID must not be empty", field="sid")
 
     if len(sid) > 256:
-        raise ValidationError(
-            f"Sample ID too long ({len(sid)} chars, max 256)", field="sid"
-        )
+        raise ValidationError(f"Sample ID too long ({len(sid)} chars, max 256)", field="sid")
 
     # Block path separators and traversal sequences.
     if "/" in sid or "\\" in sid or ".." in sid:
