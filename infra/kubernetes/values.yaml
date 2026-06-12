@@ -1,0 +1,51 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/anchapin/scientific_python_image
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: osimflow
+  annotations: {}
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+resources:
+  limits:
+    cpu: 4
+    memory: 8Gi
+  requests:
+    cpu: 1
+    memory: 2Gi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+openstudio:
+  version: "3.11.0"
+  container: "nrel/openstudio:3.11.0"
+
+executor:
+  max_workers: 4
+  poll_interval_s: 5.0
+  max_poll_interval_s: 60.0
+
+persistence:
+  enabled: false
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi

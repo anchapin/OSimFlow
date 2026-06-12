@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osimflow.fullname" . }}
+  labels:
+    {{- include "osimflow.labels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "osimflow.fullname" . }}
+  labels:
+    {{- include "osimflow.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "osimflow.selectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osimflow.fullname" . }}
+  labels:
+    {{- include "osimflow.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "osimflow.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+      labels:
+        {{- include "osimflow.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "osimflow.fullname" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: OSIMFLOW_OS_VERSION
+              value: {{ .Values.openstudio.version | quote }}
+            - name: OSIMFLOW_CONTAINER
+              value: {{ .Values.openstudio.container | quote }}
+            - name: OSIMFLOW_EXECUTOR
+              value: "kubernetes"
+            - name: OSIMFLOW_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
