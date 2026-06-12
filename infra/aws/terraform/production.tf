@@ -188,7 +188,7 @@ resource "aws_budgets_budget" "monthly_cost" {
 
 resource "aws_cloudwatch_metric_alarm" "daily_cost_anomaly" {
   alarm_name          = "${local.name_prefix}-daily-cost-anomaly"
-  comparison_operator = "LESS_THAN_LOWER_BOUND"
+  comparison_operator = "LessThanLowerThreshold"
   evaluation_periods  = 1
   datapoints_to_alarm = 1
   threshold           = 0
