@@ -408,6 +408,19 @@ def _run_openstudio_sim_impl(
     if stderr_path is None:
         stderr_path = sim_out / "stderr.log"
 
+    # ------------------------------------------------------------------
+    # When openstudio.cli is available, default_apply_parameters now
+    # invokes the CLI which runs the full measure pipeline including
+    # simulation (issue #248). In that case, eplusout.sql already
+    # exists and we should skip re-running.
+    # ------------------------------------------------------------------
+    if (sim_out / "eplusout.sql").is_file():
+        log.info(
+            "simulation already run for sample=%s (eplusout.sql exists) - skipping",
+            sample_id,
+        )
+        return sim_out
+
     use_real_cli = _is_openstudio_available() and not _is_stub_mode()
 
     if use_real_cli:
