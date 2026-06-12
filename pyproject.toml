@@ -72,6 +72,7 @@ optimization = [
 ]
 api = [
     "fastapi>=0.110",
+    "pydantic>=2.0",
     "uvicorn[standard]>=0.29",
     "sse-starlette>=2.0",
     "slowapi>=0.1.9",
@@ -202,6 +203,14 @@ warn_unused_ignores = false
 [[tool.mypy.overrides]]
 module = "osimflow.api.events"
 warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.schemas"
+disallow_subclassing_any = false
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.campaigns"
+disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
