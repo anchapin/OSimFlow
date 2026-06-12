@@ -15,12 +15,10 @@ Tests cover:
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
 
-from osimflow.algorithms import BaseAlgorithm
 from osimflow.campaign import Campaign
 from osimflow.config import CampaignConfig
 from osimflow.executors import LocalExecutor
@@ -184,7 +182,7 @@ class TestDEFeedbackLoop:
         samples1 = json.loads(path1.read_text())["samples"]
         assert len(samples1) == len(proposed)
         # Verify the samples match what observe() proposed.
-        for orig, loaded in zip(proposed, samples1):
+        for orig, loaded in zip(proposed, samples1, strict=False):
             assert orig["sample_id"] == loaded["sample_id"]
             assert orig["values"] == loaded["values"]
 
@@ -279,7 +277,7 @@ class TestDAFeedbackLoop:
         path1 = algo.generate_samples(variables, 3, seed=42, outdir=outdir1)
         samples1 = json.loads(path1.read_text())["samples"]
         assert len(samples1) == len(proposed)
-        for orig, loaded in zip(proposed, samples1):
+        for orig, loaded in zip(proposed, samples1, strict=False):
             assert orig["sample_id"] == loaded["sample_id"]
             assert orig["values"] == loaded["values"]
 
@@ -327,7 +325,7 @@ class TestGenerationMonitoring:
             max_generations=3,
             algorithm="de",
         )
-        campaign = _run_campaign(cfg)
+        _run_campaign(cfg)
 
         run_json = outdir / "run.json"
         assert run_json.exists()

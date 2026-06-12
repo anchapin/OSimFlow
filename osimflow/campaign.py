@@ -1055,9 +1055,8 @@ class Campaign:
                 kpis = data.get("kpis", {})
                 # Default objective is "eui" — matches DE/DA/PSO defaults.
                 val = kpis.get("eui")
-                if val is not None and isinstance(val, (int, float)):
-                    if best is None or float(val) < best:
-                        best = float(val)
+                if val is not None and isinstance(val, (int, float)) and (best is None or float(val) < best):
+                    best = float(val)
             except (json.JSONDecodeError, ValueError, TypeError):
                 continue
         return best
