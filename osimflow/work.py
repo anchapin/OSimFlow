@@ -67,7 +67,9 @@ def _is_transient_error(exc: BaseException) -> bool:
     )
     if any(m in msg for m in transient_markers):
         return True
-    return isinstance(exc, subprocess.CalledProcessError) and exc.returncode in _TRANSIENT_EXIT_CODES
+    return (
+        isinstance(exc, subprocess.CalledProcessError) and exc.returncode in _TRANSIENT_EXIT_CODES
+    )
 
 
 _TRANSIENT_EXIT_CODES = frozenset([-1, 2, 4, 5, 6, 11, 12, 15, 24, 25, 26, 27, 28])
