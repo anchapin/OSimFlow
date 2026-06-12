@@ -1079,9 +1079,7 @@ class _NomadClient:
         """
         return self._request("POST", "/v1/jobs", body=spec)
 
-    def dispatch_job(
-        self, job_id: str, meta: dict[str, str] | None = None
-    ) -> dict[str, Any]:
+    def dispatch_job(self, job_id: str, meta: dict[str, str] | None = None) -> dict[str, Any]:
         """Dispatch a parameterized job via ``POST /v1/job/{job_id}/dispatch``.
 
         ``meta`` is the per-dispatch payload that lands as
@@ -1530,7 +1528,9 @@ class NomadExecutor(BaseExecutor):
             variables_json = kwargs.get("variables_json")
             if variables_json is not None:
                 meta["variables_json"] = (
-                    variables_json if isinstance(variables_json, str) else json.dumps(variables_json)
+                    variables_json
+                    if isinstance(variables_json, str)
+                    else json.dumps(variables_json)
                 )
 
             response = self._client.dispatch_job(self.DISPATCH_JOB_ID, meta=meta)

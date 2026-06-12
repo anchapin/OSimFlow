@@ -235,9 +235,7 @@ class TestNomadDispatch:
         meta = dispatch_payload.get("Meta", {})
         assert meta["sample_id"] == "sample-42", f"wrong sample_id: {meta}"
         assert meta["openstudio_version"] == "3.9.0", f"wrong openstudio_version: {meta}"
-        assert "nrel/openstudio:3.9.0" in meta["container_image"], (
-            f"wrong container_image: {meta}"
-        )
+        assert "nrel/openstudio:3.9.0" in meta["container_image"], f"wrong container_image: {meta}"
 
     def test_dispatch_sends_variables_json_meta(self) -> None:
         """When ``variables_json`` is provided, it must be included in the
