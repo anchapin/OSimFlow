@@ -26,8 +26,6 @@ from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from osimflow.executors import NomadExecutor
 
 
@@ -166,7 +164,7 @@ def test_nomad_client_submit_job_payload_shape() -> None:
 
 def test_nomad_client_resolve_allocation() -> None:
     """Verify ``resolve_allocation`` can look up an alloc from an eval."""
-    with mocked_nomad_transport() as transport:
+    with mocked_nomad_transport():
         executor = NomadExecutor(
             address="http://mock-nomad:4646",
             datacentre="dc1",
