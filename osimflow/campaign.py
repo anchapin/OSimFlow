@@ -65,7 +65,7 @@ from .mlflow_hook import (
     maybe_end_mlflow_run,
     maybe_start_mlflow_run,
 )
-from .monitoring import RunTrace, SampleTrace, sample_log_paths
+from .monitoring import GenerationTrace, RunTrace, SampleTrace, sample_log_paths
 from .observability import (
     CloudWatchBackend,
     NullBackend,
@@ -913,7 +913,9 @@ class Campaign:
             )
             result = self._run_one_generation(algo, history, generation)
             if result is None:
-                # Algorithm converged; stop the loop.
+                # Algorithm converged; mark last generation as converged.
+                if self.trace.generations:
+                    self.trace.generations[-1].converged = True
                 break
             samples, kpi_files, simulated = result
             last_samples = samples
@@ -942,7 +944,22 @@ class Campaign:
 
         Returns (samples, kpi_files, simulated_dirs), or ``None`` if
         the algorithm has converged and the loop should stop.
+
+        The feedback loop (issue #270):
+
+        1. For generation > 0, check convergence. If converged, stop.
+        2. Call ``algo.observe(history)`` — this reads KPI results from
+           previous generations and updates the optimizer's internal
+           state (best params, proposed samples, etc.).
+        3. Call ``step_generate_samples(algo)`` — for iterative algorithms,
+           ``algo.generate_samples()`` reads the internal state set by
+           ``observe()`` and returns the proposed samples. For single-shot
+           algorithms, it always returns LHS samples.
+        4. Run the fan-out DAG: apply → simulate → extract KPIs.
+        5. Record per-generation monitoring (issue #270).
         """
+        gen_t0 = time.time()
+
         # Convergence check: after the first generation, ask the
         # algorithm whether we should continue.
         if generation > 0:
@@ -953,6 +970,9 @@ class Campaign:
                     generation,
                 )
                 return None
+            # observe() reads KPI history and updates optimizer state.
+            # The returned samples are also stored in internal state
+            # so generate_samples() can use them (issue #270).
             new_samples = algo.observe(history)
             if new_samples:
                 cast_samples(new_samples)
@@ -981,7 +1001,66 @@ class Campaign:
         if algo.is_multi_objective() and kpi_files:
             self._persist_pareto_front(algo, samples, kpi_files, generation)
 
+        # Per-generation monitoring (issue #270).
+        gen_elapsed = time.time() - gen_t0
+        gen_samples = [
+            s for s in self.trace.per_sample
+            if s.generation == generation
+        ]
+        n_succeeded = sum(1 for s in gen_samples if s.status == "ok")
+        n_failed = sum(1 for s in gen_samples if s.status == "failed")
+        best_objective = self._extract_best_objective(algo, kpi_files)
+        self.trace.generation_done(
+            GenerationTrace(
+                generation=generation,
+                n_samples=len(samples),
+                n_succeeded=n_succeeded,
+                n_failed=n_failed,
+                converged=False,  # updated later if needed
+                best_objective=best_objective,
+                elapsed_s=round(gen_elapsed, 3),
+            )
+        )
+        log.info(
+            "generation %d complete: %d samples (%d ok, %d failed) in %.1fs",
+            generation,
+            len(samples),
+            n_succeeded,
+            n_failed,
+            gen_elapsed,
+        )
+
         return samples, kpi_files, simulated
+
+    @staticmethod
+    def _extract_best_objective(
+        algo: BaseAlgorithm,
+        kpi_files: list[Path],
+    ) -> float | None:
+        """Extract the best objective value from KPI files.
+
+        For single-objective algorithms (DE, DA, PSO), reads the primary
+        KPI. For multi-objective (NSGA-II), returns None (use Pareto front
+        instead). The objective name is inferred from the algorithm's
+        default (``eui`` for DE/DA/PSO).
+        """
+        if algo.is_multi_objective():
+            return None
+        if not kpi_files:
+            return None
+        best: float | None = None
+        for kpi_path in kpi_files:
+            try:
+                data = json.loads(kpi_path.read_text())
+                kpis = data.get("kpis", {})
+                # Default objective is "eui" — matches DE/DA/PSO defaults.
+                val = kpis.get("eui")
+                if val is not None and isinstance(val, (int, float)):
+                    if best is None or float(val) < best:
+                        best = float(val)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+        return best
 
     def _persist_pareto_front(
         self,

@@ -160,6 +160,9 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         self._prev_best: float = float("inf")
         self._independent_vars: list[dict[str, Any]] = []
         self._bounds: list[tuple[float, float]] = []
+        # Proposed samples from observe() — used by generate_samples()
+        # on subsequent generations (issue #270).
+        self._proposed_samples: list[dict[str, Any]] = []
 
     def generate_samples(
         self,
@@ -172,7 +175,7 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
 
         Generation 0 creates a Latin Hypercube population.  Later
         generations use the DE internal state (maintained via
-        ``observe()``) to propose new points.
+        ``observe()``) to propose new points around the current best.
         """
         outdir.mkdir(parents=True, exist_ok=True)
         samples_path = outdir / "samples.json"
@@ -188,6 +191,16 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         # Cache for later use in observe / is_converged.
         self._independent_vars = independent_vars
         self._bounds = _extract_bounds(independent_vars)
+
+        # If observe() has proposed new samples from the DE state,
+        # use those instead of generating a fresh LHS population
+        # (issue #270).
+        if self._proposed_samples:
+            samples = self._proposed_samples
+            self._proposed_samples = []  # consume
+            samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+            log.info("DE proposed %d samples from optimizer state", len(samples))
+            return samples_path
 
         # For the initial population, use LHS.
         try:
@@ -279,6 +292,10 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         center = best_point if best_point is not None else self._best_params
         var_names = [v["name"] for v in self._independent_vars]
         new_samples = _propose_samples_around(center, n_new, self._bounds, var_names, width=0.1)
+
+        # Store proposed samples so generate_samples() can use them
+        # on the next call (issue #270).
+        self._proposed_samples = new_samples
 
         log.info(
             "DE observe(): best_value=%.4f, proposed %d new samples",

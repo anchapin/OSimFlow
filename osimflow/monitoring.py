@@ -84,6 +84,26 @@ class SampleTrace:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
 
 
+@dataclasses.dataclass
+class GenerationTrace:
+    """Per-generation summary for iterative algorithms (issue #270).
+
+    Written to ``run.json`` under the ``generations`` key so users can
+    track optimisation progress across generations.
+    """
+
+    generation: int
+    n_samples: int
+    n_succeeded: int
+    n_failed: int
+    converged: bool = False
+    best_objective: float | None = None
+    elapsed_s: float = 0.0
+
+    def to_dict(self) -> dict[str, object]:
+        return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
+
+
 class RunTrace:
     """The per-campaign monitoring record. Written to run.json at end."""
 
@@ -96,6 +116,8 @@ class RunTrace:
         self.config_summary = config_summary
         self.steps: list[StepTrace] = []
         self.per_sample: list[SampleTrace] = []
+        # Per-generation summary for iterative algorithms (issue #270).
+        self.generations: list[GenerationTrace] = []
         # Baseline comparison data (issue #64). Populated after
         # EXTRACT_KPIS when cfg.baseline is defined. Contains keys
         # like baseline_eui, min_improvement_pct, max_improvement_pct.
@@ -144,6 +166,10 @@ class RunTrace:
     def sample_done(self, trace: SampleTrace) -> None:
         self.per_sample.append(trace)
 
+    def generation_done(self, trace: GenerationTrace) -> None:
+        """Record a completed generation (issue #270)."""
+        self.generations.append(trace)
+
     # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
@@ -181,6 +207,10 @@ class RunTrace:
             "steps": [s.to_dict() for s in self.steps],
             "per_sample": [s.to_dict() for s in self.per_sample],
         }
+        # Per-generation summary (issue #270). Only present when the
+        # campaign ran multiple generations (iterative algorithms).
+        if self.generations:
+            d["generations"] = [g.to_dict() for g in self.generations]
         if self.baseline_comparison is not None:
             d["baseline_comparison"] = self.baseline_comparison
         if self.init_script_duration_s is not None:
