@@ -140,6 +140,18 @@ class CampaignConfig:
         return self.work_dir / "cache.sqlite"
 
 
+def _validate_script_path(raw: object) -> None:
+    if not raw:
+        return
+    validate_path_within(
+        Path(str(raw)),
+        Path("/"),
+        must_exist=True,
+        must_be_file=True,
+        readable=True,
+    )
+
+
 def load_config(args: dict[str, object]) -> CampaignConfig:
     """Resolve a config from a flat dict (e.g. argparse namespace -> vars).
 
@@ -187,42 +199,14 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
     # Validate custom scripts don't escape via symlinks.
     custom_apply = args.get("custom_apply_script")
     custom_kpi = args.get("custom_kpi_extractor")
-    if custom_apply:
-        validate_path_within(
-            Path(str(custom_apply)),
-            Path("/"),
-            must_exist=True,
-            must_be_file=True,
-            readable=True,
-        )
-    if custom_kpi:
-        validate_path_within(
-            Path(str(custom_kpi)),
-            Path("/"),
-            must_exist=True,
-            must_be_file=True,
-            readable=True,
-        )
+    _validate_script_path(custom_apply)
+    _validate_script_path(custom_kpi)
 
     # Validate init/finalize scripts.
     init_script = args.get("init_script")
     finalize_script = args.get("finalize_script")
-    if init_script:
-        validate_path_within(
-            Path(str(init_script)),
-            Path("/"),
-            must_exist=True,
-            must_be_file=True,
-            readable=True,
-        )
-    if finalize_script:
-        validate_path_within(
-            Path(str(finalize_script)),
-            Path("/"),
-            must_exist=True,
-            must_be_file=True,
-            readable=True,
-        )
+    _validate_script_path(init_script)
+    _validate_script_path(finalize_script)
 
     # 4. Numeric range validation.
     n_samples = int(str(args["n_samples"]))

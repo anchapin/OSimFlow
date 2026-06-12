@@ -29,6 +29,7 @@ from .observability import (
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
+from .validation import ValidationError
 from .weather import (
     EPWDownloadError,
     EPWValidationError,
@@ -38,7 +39,6 @@ from .weather import (
     validate_epw,
     validate_epw_header,
 )
-from .validation import ValidationError
 from .work import SevereEnergyPlusError
 
 __all__ = [

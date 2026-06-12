@@ -28,8 +28,8 @@ from starlette.staticfiles import StaticFiles
 from osimflow.api.campaigns import campaigns_router
 from osimflow.api.events import events_router
 from osimflow.api.pat_compat import pat_compat_router
-from osimflow.validation import sanitize_filename, sanitize_sample_id, validate_path_within_base
 from osimflow.validation import ValidationError as OsimflowValidationError
+from osimflow.validation import sanitize_filename, sanitize_sample_id, validate_path_within_base
 
 log = logging.getLogger("osimflow.api")
 
