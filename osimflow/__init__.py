@@ -7,6 +7,7 @@ API; everything else is an implementation detail.
 """
 
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
+from .logging import get_logger, setup_logging
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
@@ -79,4 +80,8 @@ __all__ = [
     "validate_all_epw_files",
     "validate_epw",
     "validate_epw_header",
+    "get_logger",
+    "setup_logging",
 ]
+
+setup_logging()
