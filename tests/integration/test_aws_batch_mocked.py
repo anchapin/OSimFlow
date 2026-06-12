@@ -168,11 +168,9 @@ def test_submit_poll_succeeded() -> None:
     original_describe = batch_client.describe_jobs
 
     def _describe_then_succeed(**kwargs: object) -> dict[str, object]:
-        # First call: let moto return the real job (RUNNING or SUBMITTED).
         resp = original_describe(**kwargs)
         jobs = resp.get("jobs", [])
-        if jobs and jobs[0].get("status") not in ("SUCCEEDED", "FAILED"):
-            # Force SUCCEEDED for the test.
+        if jobs and jobs[0].get("status") != "SUCCEEDED":
             jobs[0]["status"] = "SUCCEEDED"
             jobs[0]["statusReason"] = "All tasks completed"
         return resp  # type: ignore[return-value]
