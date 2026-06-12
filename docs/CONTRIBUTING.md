@@ -250,7 +250,37 @@ the maintainer may request an RFC-style write-up. See
 
 ---
 
-## 10. License
+## 10. AI-Assisted Development
+
+OSimFlow ships configuration files that popular AI coding assistants
+auto-discover. These files are intentionally short — they point to
+`AGENTS.md` as the canonical source rather than duplicating rules.
+
+### Config files
+
+| File | Auto-discovered by | Purpose |
+|---|---|---|
+| `AGENTS.md` | All (canonical) | Full project conventions, architecture, task routing |
+| `.cursorrules` | Cursor | Points to AGENTS.md; 10-line rule summary |
+| `CLAUDE.md` | Claude Code | Points to AGENTS.md; project type + key docs |
+| `.github/copilot-instructions.md` | GitHub Copilot | Points to AGENTS.md; paths + commands |
+| `.clinerules` | Cline | Points to AGENTS.md; rule summary + commands |
+
+### Keeping them in sync
+
+All four config files are *pointers* — they reference `AGENTS.md` and
+do not duplicate substantive rules. When `AGENTS.md` changes (e.g. a new
+executor, a new CLI flag), the pointer files rarely need updating. If
+you add a new category of rule that should be surfaced in the summaries,
+update the relevant file and keep it under 30 lines.
+
+The AGENTS.md contract check (`make contract`) does **not** validate the
+pointer files — it validates that `AGENTS.md` itself stays in sync with
+the codebase. The pointer files are documentation, not configuration.
+
+---
+
+## 11. License
 
 By contributing, you agree that your contributions will be licensed
 under the [MIT License](../LICENSE).

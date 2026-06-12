@@ -216,6 +216,22 @@ make install                    # pip install -e ".[dev,aws,slurm]"
   `.vscode/` settings should point to `.venv/bin/python`.
 - **PyCharm**: Set the project interpreter to `.venv/bin/python`.
 
+### AI agent configuration files
+
+The repo ships config files that AI coding assistants auto-discover:
+
+| File | Auto-discovered by |
+|---|---|
+| `.cursorrules` | Cursor |
+| `CLAUDE.md` | Claude Code |
+| `.github/copilot-instructions.md` | GitHub Copilot |
+| `.clinerules` | Cline |
+
+These are short (< 30 lines each) pointers to `AGENTS.md` — the canonical
+source of project conventions. They do not duplicate rules. When `AGENTS.md`
+changes, the pointer files rarely need updating. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) §10 for details.
+
 ### Pre-commit hooks
 
 Pre-commit runs on every `git commit` and enforces:
