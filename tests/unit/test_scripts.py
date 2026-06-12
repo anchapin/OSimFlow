@@ -184,9 +184,9 @@ def test_excel_to_variables_direct(tmp_path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Variables"
-    ws.append(["var_name", "lower_bound", "upper_bound", "distribution"])
-    ws.append(["wall_r", 2.0, 5.0, "uniform"])
-    ws.append(["light_lmp", 0.05, 0.15, "normal"])
+    ws.append(["var_name", "lower_bound", "upper_bound", "distribution", "mean", "stddev"])
+    ws.append(["wall_r", 2.0, 5.0, "uniform", None, None])
+    ws.append(["light_lmp", None, None, "normal", 0.05, 0.15])
     wb.save(xlsx_path)
 
     out_yml = tmp_path / "variables.yml"
