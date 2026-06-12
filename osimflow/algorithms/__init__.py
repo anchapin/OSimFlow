@@ -46,6 +46,61 @@ class BaseAlgorithm(abc.ABC):
     ``is_iterative() == True`` and implement a real convergence check.
     """
 
+    # Objective configuration parsed from variables.yml (issue #282).
+    # Set by _configure_from_variables() called from generate_samples().
+    _objective: dict[str, Any] | None = None
+    _constraints: list[dict[str, Any]] | None = None
+
+    def _configure_from_variables(self, variables: dict[str, Any]) -> None:
+        """Extract objective and constraints from the variables dict.
+
+        Called at the start of ``generate_samples()`` so that algorithms
+        can read direction / weight / constraints for objective
+        sign-flipping and penalty evaluation.
+        """
+        self._objective = None
+        self._constraints = None
+        if not isinstance(variables, dict):
+            return
+        raw_obj = variables.get("objective")
+        if isinstance(raw_obj, dict):
+            self._objective = {
+                "name": str(raw_obj.get("name", "eui")),
+                "direction": str(raw_obj.get("direction", "minimize")),
+                "weight": float(raw_obj.get("weight", 1.0)),
+            }
+        raw_constraints = variables.get("constraints")
+        if isinstance(raw_constraints, list):
+            self._constraints = []
+            for c in raw_constraints:
+                if isinstance(c, dict):
+                    entry: dict[str, Any] = {
+                        "name": str(c.get("name", "")),
+                        "max": float(c["max"]) if "max" in c else float("inf"),
+                    }
+                    if "min" in c:
+                        entry["min"] = float(c["min"])
+                    self._constraints.append(entry)
+
+    def _apply_constraints(self, kpi_values: dict[str, float]) -> float:
+        """Return a penalty for violated constraints.
+
+        Sums a large positive value (1e9) for each violated constraint.
+        The penalty is added to the objective so that minimisation
+        algorithms treat infeasible solutions as worse.
+        """
+        if not self._constraints:
+            return 0.0
+        penalty = 0.0
+        for c in self._constraints:
+            name = c["name"]
+            val = kpi_values.get(name, 0.0)
+            max_val = c.get("max", float("inf"))
+            min_val = c.get("min", float("-inf"))
+            if val > max_val or val < min_val:
+                penalty += 1e9
+        return penalty
+
     @abc.abstractmethod
     def generate_samples(
         self,
@@ -60,6 +115,8 @@ class BaseAlgorithm(abc.ABC):
         ----------
         variables
             Parsed ``variables.yml`` dict (``{name: {distribution, …}}``).
+            May contain top-level ``objective`` and ``constraints`` keys
+            for optimisation configuration (issue #282).
         n_samples
             Number of parameter sets to produce.
         seed
