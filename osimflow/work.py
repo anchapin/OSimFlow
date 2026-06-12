@@ -515,6 +515,8 @@ def run_openstudio_sim(
         stderr_path=stderr_path,
         max_retries=max_retries,
     )
+
+
 def _parse_register_values(stdout_path: Path) -> dict[str, object] | None:
     """Parse runner.registerValue JSON output from CLI stdout.
 
