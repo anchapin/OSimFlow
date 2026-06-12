@@ -258,6 +258,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
         ),
     )
     run.add_argument(
+        "--max-sample-retries",
+        type=int,
+        default=3,
+        help=(
+            "Maximum retry attempts for transient per-sample failures "
+            "(network timeout, resource contention, etc.). Default: 3. "
+            "Set to 0 to disable retries. Each retry uses exponential "
+            "backoff starting at 1s, doubling each attempt up to 60s cap."
+        ),
+    )
+    run.add_argument(
         "--byos-trust-level",
         choices=["subprocess", "inprocess"],
         default="subprocess",
