@@ -10,7 +10,6 @@ Covers:
 """
 
 import json
-import math
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +20,6 @@ from osimflow.algorithms.factorial import (
     FullFactorialAlgorithm,
     GridSamplingAlgorithm,
 )
-
 
 # ======================================================================
 # Registry tests

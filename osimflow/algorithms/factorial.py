@@ -19,7 +19,6 @@ Both are single-shot (``is_iterative() == False``) and always converged.
 import itertools
 import json
 import logging
-import math
 from pathlib import Path
 from typing import Any
 
