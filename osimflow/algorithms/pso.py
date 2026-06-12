@@ -75,9 +75,10 @@ def _extract_bounds(independent_vars: list[dict[str, Any]]) -> list[tuple[float,
 def _read_kpi_values(
     history: list[dict[str, Any]],
     objective_kpi: str,
-) -> list[tuple[list[float], float]]:
-    """Read (params, kpi_value) pairs from history entries."""
-    results: list[tuple[list[float], float]] = []
+    constraints: list[dict[str, Any]] | None = None,
+) -> list[tuple[list[float], float, float]]:
+    """Read (params, kpi_value, constraint_penalty) triples from history entries."""
+    results: list[tuple[list[float], float, float]] = []
     for entry in history:
         samples: list[dict[str, Any]] = entry.get("samples", [])
         kpi_files: list[str] = entry.get("kpi_files", [])
@@ -90,7 +91,16 @@ def _read_kpi_values(
                         kpis = kpi_data.get("kpis", {})
                         value = float(kpis.get(objective_kpi, float("inf")))
                         params = list(sample.get("values", {}).values())
-                        results.append((params, value))
+                        penalty = 0.0
+                        if constraints:
+                            for c in constraints:
+                                name = c["name"]
+                                val = kpis.get(name, 0.0)
+                                max_val = c.get("max", float("inf"))
+                                min_val = c.get("min", float("-inf"))
+                                if val > max_val or val < min_val:
+                                    penalty += 1e9
+                        results.append((params, value, penalty))
                     except (json.JSONDecodeError, ValueError, TypeError):
                         continue
     return results
@@ -122,6 +132,9 @@ class PSOAlgorithm(BaseAlgorithm):
         Cognitive coefficient (personal best attraction).
     c2
         Social coefficient (global best attraction).
+    constraints
+        Optional list of constraint definitions from variables.yml
+        (issue #282).
     """
 
     def __init__(
@@ -132,6 +145,7 @@ class PSOAlgorithm(BaseAlgorithm):
         w: float = 0.7,
         c1: float = 1.5,
         c2: float = 1.5,
+        constraints: list[dict[str, Any]] | None = None,
     ) -> None:
         self._objective_kpi = objective_kpi
         self._maximize = maximize
@@ -139,6 +153,7 @@ class PSOAlgorithm(BaseAlgorithm):
         self._w = w
         self._c1 = c1
         self._c2 = c2
+        self._constraints = constraints
         self._independent_vars: list[dict[str, Any]] = []
         self._bounds: list[tuple[float, float]] = []
         # PSO state.
@@ -160,6 +175,14 @@ class PSOAlgorithm(BaseAlgorithm):
         outdir: Path,
     ) -> Path:
         """Generate initial or updated particle positions."""
+        # Extract objective/constraints from variables.yml (issue #282).
+        self._configure_from_variables(variables)
+        if self._objective:
+            self._objective_kpi = str(self._objective.get("name", self._objective_kpi))
+            self._maximize = self._objective.get("direction", "minimize") == "maximize"
+        if self._constraints:
+            self._constraints = self._constraints
+
         outdir.mkdir(parents=True, exist_ok=True)
         samples_path = outdir / "samples.json"
 
@@ -226,7 +249,7 @@ class PSOAlgorithm(BaseAlgorithm):
         if not history or not self._independent_vars:
             return []
 
-        results = _read_kpi_values(history, self._objective_kpi)
+        results = _read_kpi_values(history, self._objective_kpi, self._constraints)
         if not results:
             log.warning("PSO observe(): no KPI values found in history")
             return []
@@ -235,8 +258,12 @@ class PSOAlgorithm(BaseAlgorithm):
         n_particles = len(results)
 
         # Build position and fitness arrays from results.
+        # Penalty is added to fitness so constraint violations are penalised
+        # (issue #282).
         current_pos = np.array([r[0] for r in results], dtype=np.float64)
         current_fit = np.array([r[1] for r in results], dtype=np.float64)
+        penalties = np.array([r[2] for r in results], dtype=np.float64)
+        current_fit = current_fit + penalties
 
         # Sign-flip for maximisation.
         if self._maximize:

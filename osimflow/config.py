@@ -9,6 +9,7 @@ the PRD §1.4 calls out as required (`--input_variables`,
 import dataclasses
 import logging
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -126,6 +127,16 @@ class CampaignConfig:
     # ~/.osimflow/registry.db is used. Override via --registry flag
     # or OSIMFLOW_REGISTRY env var.
     registry_path: Path | None = None
+    # Objective function configuration (issue #282).
+    # objective: {name: <kpi_name>, direction: minimize|maximize, weight: <float>}
+    # For single-objective optimizers (DE, DA). Multi-objective algorithms
+    # (NSGA-II, PSO, SPEA2) read weights from the variables dict directly.
+    objective: dict[str, object] | None = None
+    # Constraint definitions (issue #282).
+    # List of {name: <kpi_name>, max: <float>, min: <float>|None}.
+    # During objective evaluation, constraint violations are penalised with
+    # a large positive value (1e9) added to the objective.
+    constraints: list[dict[str, object]] | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -138,6 +149,69 @@ class CampaignConfig:
     @property
     def cache_db(self) -> Path:
         return self.work_dir / "cache.sqlite"
+
+
+def _parse_objective_and_constraints(
+    yml_data: dict[str, object],
+) -> tuple[dict[str, object] | None, list[dict[str, object]] | None]:
+    """Parse ``objective`` and ``constraints`` sections from variables.yml (issue #282)."""
+    objective: dict[str, object] | None = None
+    constraints: list[dict[str, object]] | None = None
+
+    if "objective" in yml_data:
+        raw_obj = yml_data["objective"]
+        if isinstance(raw_obj, dict):
+            objective = {
+                "name": str(raw_obj.get("name", "eui")),
+                "direction": str(raw_obj.get("direction", "minimize")),
+                "weight": float(raw_obj.get("weight", 1.0)),
+            }
+            log.info(
+                "objective config: name=%s, direction=%s, weight=%.2f",
+                objective["name"],
+                objective["direction"],
+                objective["weight"],
+            )
+
+    if "constraints" in yml_data:
+        raw_constraints = yml_data["constraints"]
+        if isinstance(raw_constraints, list):
+            constraints = []
+            for c in raw_constraints:
+                if isinstance(c, dict):
+                    entry: dict[str, object] = {
+                        "name": str(c.get("name", "")),
+                        "max": float(c["max"]) if "max" in c else float("inf"),
+                    }
+                    if "min" in c:
+                        entry["min"] = float(c["min"])
+                    constraints.append(entry)
+            log.info("constraints config: %d constraint(s)", len(constraints))
+
+    return objective, constraints
+
+
+def _parse_baseline(variables_yml: Path) -> dict[str, object] | None:
+    """Parse the optional ``baseline`` section from variables.yml (issue #64)."""
+    try:
+        with variables_yml.open() as f:
+            yml_data = yaml.safe_load(f)
+        if isinstance(yml_data, dict) and "baseline" in yml_data:
+            raw_baseline = yml_data["baseline"]
+            if isinstance(raw_baseline, dict):
+                baseline: dict[str, Any] = {
+                    "sample_id": str(raw_baseline.get("sample_id", "baseline")),
+                    "parameters": dict(raw_baseline.get("parameters", {})),
+                }
+                log.info(
+                    "baseline comparison enabled: sample_id=%s, %d parameters",
+                    baseline["sample_id"],
+                    len(baseline["parameters"]),
+                )
+                return baseline
+    except Exception as exc:
+        log.warning("could not parse baseline section from %s: %s", variables_yml, exc)
+    return None
 
 
 def _validate_script_path(raw: object) -> None:
@@ -230,24 +304,18 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         )
 
     # Parse the optional baseline section from variables.yml (issue #64).
-    baseline: dict[str, object] | None = None
+    baseline = _parse_baseline(variables_yml)
+
+    # Parse objective and constraints sections (issue #282).
     try:
         with variables_yml.open() as f:
             yml_data = yaml.safe_load(f)
-        if isinstance(yml_data, dict) and "baseline" in yml_data:
-            raw_baseline = yml_data["baseline"]
-            if isinstance(raw_baseline, dict):
-                baseline = {
-                    "sample_id": str(raw_baseline.get("sample_id", "baseline")),
-                    "parameters": dict(raw_baseline.get("parameters", {})),
-                }
-                log.info(
-                    "baseline comparison enabled: sample_id=%s, %d parameters",
-                    baseline["sample_id"],
-                    len(baseline["parameters"]),  # type: ignore[arg-type]
-                )
+        objective, constraints = _parse_objective_and_constraints(
+            yml_data if isinstance(yml_data, dict) else {}
+        )
     except Exception as exc:
-        log.warning("could not parse baseline section from %s: %s", variables_yml, exc)
+        log.warning("could not parse objective/constraints from %s: %s", variables_yml, exc)
+        objective, constraints = None, None
 
     return CampaignConfig(
         input_variables=variables_yml,
@@ -296,4 +364,6 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         prometheus_port=int(str(args.get("prometheus_port", 9090))),
         otel_endpoint=str(args["otel_endpoint"]) if args.get("otel_endpoint") else None,
         registry_path=(Path(str(args["registry"])).resolve() if args.get("registry") else None),
+        objective=objective,
+        constraints=constraints,
     )

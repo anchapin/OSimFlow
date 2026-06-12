@@ -91,13 +91,15 @@ def _extract_bounds(independent_vars: list[dict[str, Any]]) -> list[tuple[float,
 def _read_multi_kpi_values(
     history: list[dict[str, Any]],
     objective_kpis: list[str],
-) -> list[tuple[list[float], list[float]]]:
-    """Read (params, [kpi_values]) pairs from history entries.
+    constraints: list[dict[str, Any]] | None = None,
+) -> list[tuple[list[float], list[float], float]]:
+    """Read (params, [kpi_values], constraint_penalty) triples from history.
 
     Each history entry has ``samples`` and ``kpi_files``.  We read each
-    KPI JSON file and extract the multiple objective values.
+    KPI JSON file and extract the multiple objective values and the
+    constraint penalty (issue #282).
     """
-    results: list[tuple[list[float], list[float]]] = []
+    results: list[tuple[list[float], list[float], float]] = []
     for entry in history:
         samples: list[dict[str, Any]] = entry.get("samples", [])
         kpi_files: list[str] = entry.get("kpi_files", [])
@@ -112,7 +114,16 @@ def _read_multi_kpi_values(
                             float(kpis.get(kpi_name, float("inf"))) for kpi_name in objective_kpis
                         ]
                         params = list(sample.get("values", {}).values())
-                        results.append((params, obj_values))
+                        penalty = 0.0
+                        if constraints:
+                            for c in constraints:
+                                name = c["name"]
+                                val = kpis.get(name, 0.0)
+                                max_val = c.get("max", float("inf"))
+                                min_val = c.get("min", float("-inf"))
+                                if val > max_val or val < min_val:
+                                    penalty += 1e9
+                        results.append((params, obj_values, penalty))
                     except (json.JSONDecodeError, ValueError, TypeError):
                         continue
     return results
@@ -133,6 +144,9 @@ class SPEA2Algorithm(BaseAlgorithm):
     maximize
         Per-KPI flags: ``True`` to maximise, ``False`` to minimise.
         Length must match *objective_kpis*.
+    weights
+        Per-KPI aggregation weights (issue #282). Applied before
+        sign-flipping so that weighted objectives are scaled correctly.
     hv_tol
         Hypervolume convergence tolerance.  Converges when relative
         hypervolume improvement < *hv_tol*.
@@ -140,21 +154,28 @@ class SPEA2Algorithm(BaseAlgorithm):
         Population size for each generation.
     n_offspring
         Number of offspring produced each generation.
+    constraints
+        Optional list of constraint definitions from variables.yml
+        (issue #282).
     """
 
     def __init__(
         self,
         objective_kpis: list[str] | None = None,
         maximize: list[bool] | None = None,
+        weights: list[float] | None = None,
         hv_tol: float = 1e-3,
         pop_size: int = 40,
         n_offspring: int | None = None,
+        constraints: list[dict[str, Any]] | None = None,
     ) -> None:
         self._objective_kpis = objective_kpis or ["eui", "cost"]
         self._maximize = maximize or [False, False]
+        self._weights = weights or [1.0] * len(self._objective_kpis)
         self._hv_tol = hv_tol
         self._pop_size = pop_size
         self._n_offspring = n_offspring
+        self._constraints = constraints
         self._independent_vars: list[dict[str, Any]] = []
         self._bounds: list[tuple[float, float]] = []
         self._hv_history: list[float] = []
@@ -175,6 +196,18 @@ class SPEA2Algorithm(BaseAlgorithm):
         ``observe()``), the SPEA-II selection produces the next
         population.
         """
+        # Extract objective/constraints from variables.yml (issue #282).
+        self._configure_from_variables(variables)
+        if self._objective:
+            obj_name = str(self._objective.get("name", "eui"))
+            direction = self._objective.get("direction", "minimize")
+            weight = self._objective.get("weight", 1.0)
+            self._objective_kpis = [obj_name]
+            self._maximize = [direction == "maximize"]
+            self._weights = [weight]
+        if self._constraints:
+            self._constraints = self._constraints
+
         outdir.mkdir(parents=True, exist_ok=True)
         samples_path = outdir / "samples.json"
 
@@ -227,11 +260,14 @@ class SPEA2Algorithm(BaseAlgorithm):
         return samples
 
     def _sign_objectives(self, F: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """Flip sign for objectives to maximise so everything is minimised."""
+        """Apply weights and flip sign for maximised objectives (issue #282)."""
         F_signed = F.copy()
         for j, maximize in enumerate(self._maximize):
+            weight = self._weights[j] if j < len(self._weights) else 1.0
             if maximize:
-                F_signed[:, j] = -F_signed[:, j]
+                F_signed[:, j] = -F_signed[:, j] * weight
+            else:
+                F_signed[:, j] = F_signed[:, j] * weight
         return F_signed
 
     def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -248,14 +284,17 @@ class SPEA2Algorithm(BaseAlgorithm):
         if not history or not self._independent_vars:
             return []
 
-        results = _read_multi_kpi_values(history, self._objective_kpis)
+        results = _read_multi_kpi_values(history, self._objective_kpis, self._constraints)
         if not results:
             log.warning("SPEA-II observe(): no KPI values found in history")
             return []
 
         # Build design matrix X and objective matrix F.
+        # Constraint penalty is added to each objective (issue #282).
         X_all = np.array([r[0] for r in results], dtype=np.float64)
         F_all = np.array([r[1] for r in results], dtype=np.float64)
+        penalties = np.array([r[2] for r in results], dtype=np.float64)
+        F_all = F_all + penalties[:, np.newaxis]
 
         # Sign-flip for maximisation objectives.
         F_signed = self._sign_objectives(F_all)

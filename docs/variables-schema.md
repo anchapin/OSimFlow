@@ -25,7 +25,7 @@ generate stratified parameter sets that efficiently explore the design space.
 
 ## File Structure
 
-`variables.yml` is a YAML file with three optional top-level sections:
+`variables.yml` is a YAML file with four optional top-level sections:
 
 ```yaml
 variables:
@@ -38,12 +38,27 @@ baseline:
   parameters:
     window_u_value: 2.5
     infiltration_rate: 0.5
+
+objective:
+  name: eui
+  direction: minimize
+  weight: 1.0
+
+constraints:
+  - name: cost
+    max: 5000
+    min: 100
 ```
 
 - **`variables`** (required) — list of parameter definitions.
 - **`baseline`** (optional) — a fixed-parameter baseline sample for
   ASHRAE 90.1 comparison mode. See
   [Baseline Comparison](#baseline-comparison).
+- **`objective`** (optional) — objective function configuration for
+  optimisation algorithms (DE, DA, NSGA-II, PSO, SPEA2). See
+  [Objective and Constraint Configuration](#objective-and-constraint-configuration).
+- **`constraints`** (optional) — list of constraint definitions.
+  See [Objective and Constraint Configuration](#objective-and-constraint-configuration).
 
 ---
 
@@ -53,6 +68,8 @@ baseline:
 |---|---|---|---|
 | `variables` | list of dicts | Yes | Parameter definitions. Each entry defines one parametric variable. |
 | `baseline` | dict | No | Baseline sample configuration. Contains `sample_id` (str) and `parameters` (dict of fixed values). |
+| `objective` | dict | No | Objective function configuration for optimisation algorithms. Contains `name` (KPI name), `direction` (`minimize`\|`maximize`), and `weight` (float, default 1.0). |
+| `constraints` | list of dicts | No | Constraint definitions. Each entry has `name` (KPI name), `max` (upper bound), and optionally `min` (lower bound). Violations are penalised with a large positive value (1e9) added to the objective. |
 
 ### Baseline Comparison
 
@@ -69,6 +86,93 @@ baseline:
     window_u_value: 2.5
     infiltration_rate: 0.5
     lighting_power_density: 10.0
+```
+
+---
+
+## Objective and Constraint Configuration
+
+When using an optimisation algorithm (`--algorithm de`, `dual_annealing`,
+`nsga2`, `pso`, `spea2`), the `objective` and `constraints` sections
+configure the goal and any bounds on the solution space (issue #282).
+
+### `objective`
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | No | `eui` | KPI name to optimise. |
+| `direction` | string | No | `minimize` | `minimize` or `maximize`. |
+| `weight` | float | No | `1.0` | Aggregation weight for multi-objective algorithms. |
+
+```yaml
+objective:
+  name: eui
+  direction: minimize
+  weight: 1.0
+```
+
+For **single-objective** algorithms (DE, Dual Annealing, PSO), `direction`
+controls whether the algorithm minimises or maximises the named KPI.
+For **multi-objective** algorithms (NSGA-II, SPEA2), `weight` scales the
+objective before the algorithm applies non-dominated sorting.
+
+### `constraints`
+
+Each entry defines an upper bound (`max`) and optionally a lower bound
+(`min`) on a KPI. When a constraint is violated, a penalty of `1e9` is
+added to the objective value, making infeasible solutions strictly worse
+than any feasible solution.
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | Yes | — | KPI name to constrain. |
+| `max` | float | Yes* | — | Upper bound. Required unless `min` is set. |
+| `min` | float | No | `-inf` | Lower bound. |
+
+*Either `max` or `min` (or both) must be provided.
+
+```yaml
+constraints:
+  - name: cost
+    max: 5000
+  - name: thermal_discomfort
+    max: 100
+    min: 0
+```
+
+**Penalty handling:** The penalty is added directly to the objective
+value before comparison. For minimisation, a constraint violation
+`cost = 6000 > max = 5000` adds `1e9` to the objective, making the
+solution worse than any feasible solution regardless of its raw KPI
+value. For maximisation, the same logic applies after sign-flipping.
+
+**Typical use:** Cost ceilings, thermal discomfort limits, maximum EUI
+caps for code compliance, minimum ventilation rates.
+
+#### Example: DE with objective and constraints
+
+```yaml
+variables:
+  - name: window_u_value
+    distribution: uniform
+    min: 1.0
+    max: 5.0
+
+  - name: wall_r_value
+    distribution: uniform
+    min: 2.0
+    max: 10.0
+
+objective:
+  name: eui
+  direction: minimize
+  weight: 1.0
+
+constraints:
+  - name: cost
+    max: 5000
+  - name: thermal_discomfort
+    max: 50
 ```
 
 ---

@@ -70,13 +70,14 @@ def _extract_bounds(independent_vars: list[dict[str, Any]]) -> list[tuple[float,
 def _read_kpi_values(
     history: list[dict[str, Any]],
     objective_kpi: str,
-) -> list[tuple[list[float], float]]:
-    """Read (params, kpi_value) pairs from history entries.
+    constraints: list[dict[str, Any]] | None = None,
+) -> list[tuple[list[float], float, float]]:
+    """Read (params, kpi_value, constraint_penalty) triples from history entries.
 
     Each history entry has ``samples`` and ``kpi_files``.  We read
-    each KPI JSON file and extract the objective value.
+    each KPI JSON file and extract the objective value and constraint penalty.
     """
-    results: list[tuple[list[float], float]] = []
+    results: list[tuple[list[float], float, float]] = []
     for entry in history:
         samples: list[dict[str, Any]] = entry.get("samples", [])
         kpi_files: list[str] = entry.get("kpi_files", [])
@@ -89,7 +90,17 @@ def _read_kpi_values(
                         kpis = kpi_data.get("kpis", {})
                         value = float(kpis.get(objective_kpi, float("inf")))
                         params = list(sample.get("values", {}).values())
-                        results.append((params, value))
+                        # Compute constraint penalty.
+                        penalty = 0.0
+                        if constraints:
+                            for c in constraints:
+                                name = c["name"]
+                                val = kpis.get(name, 0.0)
+                                max_val = c.get("max", float("inf"))
+                                min_val = c.get("min", float("-inf"))
+                                if val > max_val or val < min_val:
+                                    penalty += 1e9
+                        results.append((params, value, penalty))
                     except (json.JSONDecodeError, ValueError, TypeError):
                         continue
     return results
@@ -138,6 +149,10 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         Mutation constant or range (scipy default: (0.5, 1.0)).
     recombination
         Recombination constant (scipy default: 0.7).
+    constraints
+        Optional list of constraint definitions from variables.yml
+        (issue #282). Each constraint is a dict with ``name``, ``max``,
+        and optionally ``min``.
     """
 
     def __init__(
@@ -148,6 +163,7 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         popsize: int = 15,
         mutation: tuple[float, float] | float = (0.5, 1.0),
         recombination: float = 0.7,
+        constraints: list[dict[str, Any]] | None = None,
     ) -> None:
         self._objective_kpi = objective_kpi
         self._maximize = maximize
@@ -155,6 +171,7 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         self._popsize = popsize
         self._mutation = mutation
         self._recombination = recombination
+        self._constraints = constraints
         self._best_params: npt.NDArray[np.float64] = np.array([])
         self._best_value: float = float("inf")
         self._prev_best: float = float("inf")
@@ -177,6 +194,15 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         generations use the DE internal state (maintained via
         ``observe()``) to propose new points around the current best.
         """
+        # Extract objective direction and constraints from variables.yml
+        # (issue #282). Must be called before any stateful operation.
+        self._configure_from_variables(variables)
+        if self._objective:
+            self._objective_kpi = str(self._objective.get("name", self._objective_kpi))
+            self._maximize = self._objective.get("direction", "minimize") == "maximize"
+        if self._constraints:
+            self._constraints = self._constraints
+
         outdir.mkdir(parents=True, exist_ok=True)
         samples_path = outdir / "samples.json"
 
@@ -217,29 +243,33 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         log.info("DE generated %d initial samples", len(samples))
         return samples_path
 
-    def _update_best(self, results: list[tuple[list[float], float]]) -> None:
-        """Update ``_best_params`` and ``_best_value`` from observed results."""
+    def _update_best(self, results: list[tuple[list[float], float, float]]) -> None:
+        """Update ``_best_params`` and ``_best_value`` from observed results.
+
+        The constraint penalty is added to the effective value so that
+        constraint violations are penalised (issue #282).
+        """
         self._prev_best = self._best_value
-        for params, value in results:
-            eff_value = -value if self._maximize else value
+        for params, value, penalty in results:
+            eff_value = (-value if self._maximize else value) + penalty
             if eff_value < self._best_value:
                 self._best_value = eff_value
                 self._best_params = np.array(params, dtype=np.float64)
 
     def _run_scipy_de(
         self,
-        results: list[tuple[list[float], float]],
+        results: list[tuple[list[float], float, float]],
     ) -> npt.NDArray[np.float64] | None:
         """Run one step of scipy DE and return the best point, or None."""
 
         def _objective(x: npt.NDArray[np.float64]) -> float:
             best_dist = float("inf")
             best_val = self._best_value
-            for p, v in results:
+            for p, v, penalty in results:
                 dist = float(np.sum((np.array(p) - x) ** 2))
                 if dist < best_dist:
                     best_dist = dist
-                    eff_v = -v if self._maximize else v
+                    eff_v = (-v if self._maximize else v) + penalty
                     best_val = eff_v
             return best_val
 
@@ -270,7 +300,7 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         if not history or not self._independent_vars:
             return []
 
-        results = _read_kpi_values(history, self._objective_kpi)
+        results = _read_kpi_values(history, self._objective_kpi, self._constraints)
         if not results:
             log.warning("DE observe(): no KPI values found in history")
             return []
