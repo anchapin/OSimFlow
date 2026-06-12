@@ -465,9 +465,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     if args.cors_origins:
         cors_origins = [o.strip() for o in args.cors_origins.split(",") if o.strip()]
 
+    read_only = not args.enable_writes and args.read_only
     app = create_app(
         outdir=args.outdir,
-        read_only=not args.enable_writes,
+        read_only=read_only,
         api_key=api_key,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
