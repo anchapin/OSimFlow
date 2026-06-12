@@ -31,6 +31,8 @@ single `run.json` trace to `${outdir}/run.json` at completion. The trace
 includes per-step timing, per-sample status, and cache hit/miss counts.
 """
 
+import concurrent.futures
+import contextlib
 import dataclasses
 import inspect
 import json
@@ -55,7 +57,7 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
-from .executors import AWSBatchExecutor, BaseExecutor
+from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -118,9 +120,11 @@ class Campaign:
         executor: BaseExecutor,
         apply_fn: Callable[..., Path] | None = None,
         extract_fn: Callable[..., Path] | None = None,
+        max_workers: int = 1,
     ):
         self.cfg = cfg
         self.executor = executor
+        self.max_workers = max_workers
         # Resolve apply_fn: explicit param > cfg.custom_apply_script > default.
         if apply_fn is not None:
             self.apply_fn = apply_fn
@@ -167,6 +171,7 @@ class Campaign:
         # Per-sample accumulator. The three per-sample steps write here;
         # we emit SampleTrace rows in _finalize_samples().
         self._sample_state: dict[str, dict[str, object]] = {}
+        log.info("max_workers=%d (fan-out parallelism)", self.max_workers)
         # Observability backend (issue #132). Built from cfg so the
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
@@ -316,6 +321,77 @@ class Campaign:
             self.trace.spot_savings_usd = round(total * savings_ratio, 6)
         else:
             self.trace.spot_savings_usd = 0.0
+
+    def _submit_and_await_all(
+        self,
+        submissions: dict[str, tuple[Handle, Callable[[Any], None]]],
+        step_name: str,
+    ) -> None:
+        """Submit all samples to the executor, then await all results concurrently.
+
+        This is the core of the concurrent fan-out fix (issue #286).
+
+        Parameters
+        ----------
+        submissions
+            Mapping of sample_id to (handle, on_success_callback).
+            The ``handle`` has already been submitted to the executor.
+            The ``on_success_callback`` receives the result of
+            ``handle.result()`` and is responsible for updating
+            ``_sample_state``, cache, and monitoring.
+        step_name
+            The step name for logging.
+
+        The method submits no new work — all submissions are already
+        dispatched.  It awaits results using a
+        ``concurrent.futures.ThreadPoolExecutor`` sized to
+        ``self.max_workers``, so up to ``max_workers`` results are
+        collected in parallel.  Each per-sample error is caught, logged
+        with ``exc_info=True``, and recorded — it is never swallowed.
+
+        For ``max_workers=1`` the behaviour is identical to the old
+        sequential loop.
+        """
+        if not submissions:
+            return
+
+        def _await_one(
+            item: tuple[str, tuple[Handle, Callable[[Any], None]]],
+        ) -> str:
+            """Await one handle. Returns the sample_id."""
+            sid, (handle, on_success) = item
+            try:
+                result = handle.result()
+                on_success(result)
+            except Exception as e:
+                log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
+                return sid
+            return sid
+
+        # When max_workers == 1, use a sequential loop to avoid the
+        # overhead of spinning up a ThreadPoolExecutor.  This preserves
+        # the exact backward-compatible behaviour.
+        if self.max_workers <= 1:
+            for item in submissions.items():
+                _await_one(item)
+            return
+
+        # max_workers > 1: use a ThreadPoolExecutor to await results
+        # concurrently.  Each _await_one call blocks on handle.result(),
+        # so the pool parallelism effectively controls how many samples
+        # we wait for at the same time.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_workers,
+            thread_name_prefix="osimflow-fanout",
+        ) as pool:
+            futures = {
+                pool.submit(_await_one, (sid, item)): sid for sid, item in submissions.items()
+            }
+            for future in concurrent.futures.as_completed(futures):
+                # Error already logged inside _await_one; continue
+                # processing remaining samples.
+                with contextlib.suppress(Exception):
+                    future.result()
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -1331,6 +1407,10 @@ class Campaign:
         out: SampleDict = {}
         cache_label = "MISS×N" if samples else "SKIPPED"
         self.trace.step_started("APPLY_PARAMETERS", total=len(samples))
+
+        # --- Phase 1: cache check for all samples ---
+        # Collect non-cached samples and their per-sample context.
+        pending: dict[str, dict[str, Any]] = {}
         for s in samples:
             sid = str(s["sample_id"])
             params = s["values"]
@@ -1359,38 +1439,70 @@ class Campaign:
                 continue
             out_dir = self.cfg.work_dir / "apply" / sid
             out_dir.mkdir(parents=True, exist_ok=True)
+            pending[sid] = {
+                "resolved_params": resolved_params,
+                "out_dir": out_dir,
+                "key": key,
+                "state": state,
+            }
+
+        # --- Phase 2: submit all non-cached samples at once ---
+        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        for sid, ctx in pending.items():
             handle = self.executor.submit(
                 self.apply_fn,
                 self.cfg.template_sim_package,
-                resolved_params,
+                ctx["resolved_params"],
                 sid,
-                out_dir,
+                ctx["out_dir"],
                 name=f"apply_{sid}",
                 cpus=1,
                 memory_mb=512,
                 time_min=5,
                 container=CONTAINER_PY,
             )
-            try:
-                result_path = handle.result(timeout=120)
-                self.cache.store(key, Path(result_path), exit_code=0)
-                out[sid] = Path(result_path)
-                state["apply_exit_code"] = 0
-                state["apply_status"] = "ok"
+
+            # Build the on-success callback (captures per-sample context).
+            key = ctx["key"]
+            state = ctx["state"]
+            out_dir = ctx["out_dir"]
+            archive = self.cfg.archive_intermediates
+
+            def _on_success(
+                result_path: Any,
+                _sid: str = sid,
+                _key: CacheKey = key,
+                _state: dict[str, object] = state,
+                _out_dir: Path = out_dir,
+                _archive: bool = archive,
+            ) -> None:
+                self.cache.store(_key, Path(result_path), exit_code=0)
+                out[_sid] = Path(result_path)
+                _state["apply_exit_code"] = 0
+                _state["apply_status"] = "ok"
                 self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
                 # Archive modified .osw/.osm when flag is set
-                if self.cfg.archive_intermediates:
-                    archive_dst = self.cfg.outdir / "archive" / "apply" / sid
+                if _archive:
+                    archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
                     self._archive_sample_artifacts(
                         Path(result_path), archive_dst, ["*.osw", "*.osm"]
                     )
-            except Exception as e:
-                log.error("APPLY_PARAMETERS %s failed: %s", sid, e)
-                self.cache.store(key, out_dir, exit_code=1)
+
+            submissions[sid] = (handle, _on_success)
+
+        # --- Phase 3: await all results concurrently ---
+        self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
+
+        # Record failures for samples that didn't succeed.
+        for _sid, ctx in pending.items():
+            state = ctx["state"]
+            if state.get("apply_exit_code") != 0 and "apply_status" not in state:
                 state["apply_exit_code"] = 1
                 state["apply_status"] = "failed"
-                state["error_summary"] = f"APPLY: {e}"
+                state["error_summary"] = "APPLY: unknown error during concurrent execution"
+                self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
                 self.trace.step_item_done("APPLY_PARAMETERS", status="failed")
+
         self.trace.step_finished(
             "APPLY_PARAMETERS",
             cache=cache_label,
@@ -1422,6 +1534,9 @@ class Campaign:
         os_version = self.cfg.openstudio_version
         n = len(parameterized)
         self.trace.step_started("RUN_OPENSTUDIO_SIM", total=n)
+
+        # --- Phase 1: cache check for all samples ---
+        pending: dict[str, dict[str, Any]] = {}
         for sid, mod_pkg in parameterized.items():
             # Per-sample log file paths (issue #6). Computed here so the
             # work function receives them as kwargs. The
@@ -1467,23 +1582,48 @@ class Campaign:
                 continue
             out_dir = self.cfg.work_dir / "sim"
             out_dir.mkdir(parents=True, exist_ok=True)
+            pending[sid] = {
+                "mod_pkg": mod_pkg,
+                "out_dir": out_dir,
+                "key": key,
+                "state": state,
+                "stdout_log": stdout_log,
+                "stderr_log": stderr_log,
+            }
+
+        # --- Phase 2: submit all non-cached samples at once ---
+        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        for sid, ctx in pending.items():
             handle = self.executor.submit(
                 run_openstudio_sim,
-                mod_pkg,
+                ctx["mod_pkg"],
                 sid,
                 os_version,
-                out_dir,
+                ctx["out_dir"],
                 name=f"sim_{sid}",
                 cpus=4,
                 memory_mb=8 * 1024,
                 time_min=240,
                 container=CONTAINER_OS.format(version=os_version),
                 openstudio_version=os_version,
-                stdout_path=stdout_log,
-                stderr_path=stderr_log,
+                stdout_path=ctx["stdout_log"],
+                stderr_path=ctx["stderr_log"],
             )
-            try:
-                result_path = handle.result(timeout=600)
+
+            # Build the on-success callback (captures per-sample context).
+            key = ctx["key"]
+            state = ctx["state"]
+            archive = self.cfg.archive_intermediates
+            h = handle
+
+            def _on_success(
+                result_path: Any,
+                _sid: str = sid,
+                _key: CacheKey = key,
+                _state: dict[str, object] = state,
+                _archive: bool = archive,
+                _handle: Handle = h,
+            ) -> None:
                 # Intermediate-file optimization (PRD §1.4): drop empty
                 # `.err` (the eplusout.err from the OpenStudio run). The
                 # per-sample `stderr.log` is the *replacement* and is
@@ -1491,30 +1631,39 @@ class Campaign:
                 err = result_path / "eplusout.err"
                 if err.exists() and err.stat().st_size == 0:
                     err.unlink()
-                self.cache.store(key, Path(result_path), exit_code=0)
-                out[sid] = Path(result_path)
-                state["sim_exit_code"] = 0
-                state["sim_status"] = "ok"
-                state["eplusout_sql"] = str(result_path / "eplusout.sql")
+                self.cache.store(_key, Path(result_path), exit_code=0)
+                out[_sid] = Path(result_path)
+                _state["sim_exit_code"] = 0
+                _state["sim_status"] = "ok"
+                _state["eplusout_sql"] = str(result_path / "eplusout.sql")
                 # Worker tracking (issue #105): capture from the sim handle.
-                state["worker_id"] = handle.worker_id
-                state["worker_ip"] = handle.worker_ip
-                state["worker_region"] = handle.worker_region
+                _state["worker_id"] = _handle.worker_id
+                _state["worker_ip"] = _handle.worker_ip
+                _state["worker_region"] = _handle.worker_region
                 # Cost tracking (issue #126): capture from the sim handle.
-                state["cost_usd"] = handle.cost_usd
-                state["billed_duration_seconds"] = handle.billed_duration_seconds
+                _state["cost_usd"] = _handle.cost_usd
+                _state["billed_duration_seconds"] = _handle.billed_duration_seconds
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                 # Archive eplusout.sql when flag is set
-                if self.cfg.archive_intermediates:
-                    archive_dst = self.cfg.outdir / "archive" / "sim" / sid
+                if _archive:
+                    archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
                     self._archive_sample_artifacts(Path(result_path), archive_dst, ["eplusout.sql"])
-            except Exception as e:
-                log.error("RUN_OPENSTUDIO_SIM %s failed: %s", sid, e)
-                self.cache.store(key, out_dir, exit_code=1)
+
+            submissions[sid] = (handle, _on_success)
+
+        # --- Phase 3: await all results concurrently ---
+        self._submit_and_await_all(submissions, "RUN_OPENSTUDIO_SIM")
+
+        # Record failures for samples that didn't succeed.
+        for _sid, ctx in pending.items():
+            state = ctx["state"]
+            if state.get("sim_exit_code") != 0 and "sim_status" not in state:
                 state["sim_exit_code"] = 1
                 state["sim_status"] = "failed"
-                state["error_summary"] = f"SIM: {e}"
+                state["error_summary"] = "SIM: unknown error during concurrent execution"
+                self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="failed")
+
         self.trace.step_finished(
             "RUN_OPENSTUDIO_SIM",
             cache="MISS×N" if n else "SKIPPED",
@@ -1536,6 +1685,9 @@ class Campaign:
         out: list[Path] = []
         n = len(simulated)
         self.trace.step_started("EXTRACT_KPIS", total=n)
+
+        # --- Phase 1: cache check for all samples ---
+        pending: dict[str, dict[str, Any]] = {}
         for sid, sim_dir in simulated.items():
             inputs_hash = sha256_of_dict({"sim_dir": str(sim_dir), "sid": sid})
             key = CacheKey(
@@ -1557,30 +1709,58 @@ class Campaign:
                 continue
             kpi_dir = self.cfg.work_dir / "kpis"
             kpi_dir.mkdir(parents=True, exist_ok=True)
+            pending[sid] = {
+                "sim_dir": sim_dir,
+                "kpi_dir": kpi_dir,
+                "key": key,
+                "state": state,
+            }
+
+        # --- Phase 2: submit all non-cached samples at once ---
+        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        for sid, ctx in pending.items():
             handle = self.executor.submit(
                 self.extract_fn,
-                sim_dir,
+                ctx["sim_dir"],
                 sid,
-                kpi_dir,
+                ctx["kpi_dir"],
                 name=f"kpi_{sid}",
                 cpus=1,
                 memory_mb=1024,
                 time_min=10,
                 container=CONTAINER_PY,
             )
-            try:
-                result_path = handle.result(timeout=120)
-                self.cache.store(key, Path(result_path), exit_code=0)
+
+            # Build the on-success callback (captures per-sample context).
+            key = ctx["key"]
+            state = ctx["state"]
+
+            def _on_success(
+                result_path: Any,
+                _sid: str = sid,
+                _key: CacheKey = key,
+                _state: dict[str, object] = state,
+            ) -> None:
+                self.cache.store(_key, Path(result_path), exit_code=0)
                 out.append(Path(result_path))
-                state["extract_exit_code"] = 0
-                state["extract_status"] = "ok"
+                _state["extract_exit_code"] = 0
+                _state["extract_status"] = "ok"
                 self.trace.step_item_done("EXTRACT_KPIS", status="ok")
-            except Exception as e:
-                log.error("EXTRACT_KPIS %s failed: %s", sid, e)
+
+            submissions[sid] = (handle, _on_success)
+
+        # --- Phase 3: await all results concurrently ---
+        self._submit_and_await_all(submissions, "EXTRACT_KPIS")
+
+        # Record failures for samples that didn't succeed.
+        for _sid, ctx in pending.items():
+            state = ctx["state"]
+            if state.get("extract_exit_code") != 0 and "extract_status" not in state:
                 state["extract_exit_code"] = 1
                 state["extract_status"] = "failed"
-                state["error_summary"] = f"EXTRACT: {e}"
+                state["error_summary"] = "EXTRACT: unknown error during concurrent execution"
                 self.trace.step_item_done("EXTRACT_KPIS", status="failed")
+
         self.trace.step_finished(
             "EXTRACT_KPIS",
             cache="MISS×N" if n else "SKIPPED",

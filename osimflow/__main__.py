@@ -516,7 +516,13 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     extract_fn = (
         load_user_function(Path(args.custom_kpi_extractor)) if args.custom_kpi_extractor else None
     )
-    campaign = Campaign(cfg, executor, apply_fn=apply_fn, extract_fn=extract_fn)
+    campaign = Campaign(
+        cfg,
+        executor,
+        apply_fn=apply_fn,
+        extract_fn=extract_fn,
+        max_workers=args.max_workers,
+    )
     # TUI: wrap campaign execution with Rich TUI when available.
     # The TUI is a passive observer (reads run.json) and does not
     # modify campaign state.  It auto-degrades when rich is not
