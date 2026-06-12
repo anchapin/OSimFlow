@@ -19,6 +19,7 @@ from .executors import (
     NomadExecutor,
     SlurmExecutor,
 )
+from .jobqueue import JobQueue
 from .monitoring import RunTrace, StepTrace
 from .observability import (
     CloudWatchBackend,
@@ -56,6 +57,7 @@ __all__ = [
     "SlurmExecutor",
     "AWSBatchExecutor",
     "NomadExecutor",
+    "JobQueue",
     "RunTrace",
     "StepTrace",
     "ObservabilityBackend",

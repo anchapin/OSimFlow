@@ -132,6 +132,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `NomadExecutor`. |
+| `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
 | `osimflow/exporters/__init__.py` | Export campaign state to various formats. |

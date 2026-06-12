@@ -58,6 +58,7 @@ from .apply_params import (
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
+from .jobqueue import JobQueue
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -177,6 +178,11 @@ class Campaign:
         # we emit SampleTrace rows in _finalize_samples().
         self._sample_state: dict[str, dict[str, object]] = {}
         log.info("max_workers=%d (fan-out parallelism)", self.max_workers)
+        # Filesystem-based job queue for crash recovery (issue #263).
+        # Pending work items are persisted as JSON files so they survive
+        # orchestrator crashes. The queue is a lightweight single-process
+        # persistence layer — not a distributed message broker.
+        self._job_queue = JobQueue(cfg.work_dir / "queue")
         # Observability backend (issue #132). Built from cfg so the
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
@@ -364,9 +370,21 @@ class Campaign:
 
         For ``max_workers=1`` the behaviour is identical to the old
         sequential loop.
+
+        Job queue integration (issue #263): each sample is enqueued
+        before awaiting and marked completed/failed after.  The enqueue
+        is idempotent — a sample that was already queued from a previous
+        interrupted run is silently skipped.
         """
         if not submissions:
             return
+
+        # Enqueue all samples for crash-recovery persistence (issue #263).
+        for sid in submissions:
+            self._job_queue.enqueue(
+                f"{sid}_{step_name}",
+                {"sample_id": sid, "step": step_name},
+            )
 
         def _await_one(
             item: tuple[str, tuple[Handle, Callable[[Any], None]]],
@@ -376,8 +394,15 @@ class Campaign:
             try:
                 result = handle.result()
                 on_success(result)
+                # Mark completed in the job queue (issue #263).
+                self._job_queue.mark_completed(f"{sid}_{step_name}")
             except Exception as e:
                 log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
+                # Mark failed in the job queue (issue #263).
+                self._job_queue.mark_failed(
+                    f"{sid}_{step_name}",
+                    str(e)[:500],
+                )
                 return sid
             return sid
 
@@ -814,6 +839,19 @@ class Campaign:
             # Init hook (issue #108): runs before the first campaign step.
             # Must succeed (exit 0) or the campaign aborts.
             self._run_init_script()
+
+            # Crash recovery (issue #263): reset any in-flight jobs from
+            # a previous interrupted run back to pending so they are
+            # reprocessed during this run.  The cache layer ensures
+            # completed work is not re-executed — only truly lost work
+            # (where the executor completed but the orchestrator crashed
+            # before recording the result) gets retried.
+            recovered = self._job_queue.recover()
+            if recovered:
+                log.info(
+                    "crash recovery: %d in-flight job(s) reset to pending",
+                    len(recovered),
+                )
 
             if self.cfg.dry_run:
                 result = self._run_dry_run(t0)
