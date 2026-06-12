@@ -37,13 +37,13 @@ def _load_run_json(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/health")
+@router.get("/health")  # type: ignore[untyped-decorator]
 async def health() -> dict[str, str]:
     """Liveness probe."""
     return {"status": "alive"}
 
 
-@router.get("/ready")
+@router.get("/ready")  # type: ignore[untyped-decorator]
 async def ready(request: Request) -> dict[str, Any]:
     """Readiness probe — checks if run.json is accessible."""
     try:
@@ -58,7 +58,7 @@ async def ready(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/v1/campaign")
+@router.get("/api/v1/campaign")  # type: ignore[untyped-decorator]
 async def get_campaign(request: Request) -> dict[str, Any]:
     """Get campaign metadata from run.json."""
     data = _load_run_json(request)
@@ -71,7 +71,7 @@ async def get_campaign(request: Request) -> dict[str, Any]:
     }
 
 
-@router.get("/api/v1/steps")
+@router.get("/api/v1/steps")  # type: ignore[untyped-decorator]
 async def get_steps(request: Request) -> dict[str, Any]:
     """Get step traces from run.json."""
     data = _load_run_json(request)
@@ -86,7 +86,7 @@ async def get_steps(request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/v1/samples")
+@router.get("/api/v1/samples")  # type: ignore[untyped-decorator]
 async def get_samples(
     request: Request,
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
@@ -107,7 +107,7 @@ async def get_samples(
     }
 
 
-@router.get("/api/v1/samples/{sid}")
+@router.get("/api/v1/samples/{sid}")  # type: ignore[untyped-decorator]
 async def get_sample_detail(sid: str, request: Request) -> dict[str, Any]:
     """Get detail for a single sample, including KPIs and log files."""
     data = _load_run_json(request)
@@ -150,7 +150,7 @@ async def get_sample_detail(sid: str, request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/v1/results")
+@router.get("/api/v1/results")  # type: ignore[untyped-decorator]
 async def get_results(request: Request) -> list[dict[str, Any]]:
     """Read aggregated_results.csv and return as JSON array."""
     if request.app.state.outdir is None:
@@ -166,7 +166,7 @@ async def get_results(request: Request) -> list[dict[str, Any]]:
     return records
 
 
-@router.get("/api/v1/failures")
+@router.get("/api/v1/failures")  # type: ignore[untyped-decorator]
 async def get_failures(request: Request) -> list[dict[str, Any]]:
     """Read failed_simulations.csv and return as JSON array."""
     if request.app.state.outdir is None:
@@ -187,7 +187,7 @@ async def get_failures(request: Request) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/v1/pareto")
+@router.get("/api/v1/pareto")  # type: ignore[untyped-decorator]
 async def get_pareto(request: Request) -> dict[str, Any]:
     """Read pareto front data from outdir/pareto/gen_*.json files."""
     if request.app.state.outdir is None:
