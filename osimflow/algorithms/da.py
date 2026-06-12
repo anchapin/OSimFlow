@@ -156,6 +156,9 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
         self._prev_best: float = float("inf")
         self._independent_vars: list[dict[str, Any]] = []
         self._bounds: list[tuple[float, float]] = []
+        # Proposed samples from observe() — used by generate_samples()
+        # on subsequent generations (issue #270).
+        self._proposed_samples: list[dict[str, Any]] = []
 
     def generate_samples(
         self,
@@ -164,7 +167,12 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
         seed: int | None,
         outdir: Path,
     ) -> Path:
-        """Generate initial exploration points via LHS."""
+        """Generate initial exploration points via LHS.
+
+        Generation 0 creates an LHS population.  Subsequent generations
+        use the internal state from ``observe()`` to propose new points
+        around the current best.
+        """
         outdir.mkdir(parents=True, exist_ok=True)
         samples_path = outdir / "samples.json"
 
@@ -179,6 +187,16 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
         # Cache for later use.
         self._independent_vars = independent_vars
         self._bounds = _extract_bounds(independent_vars)
+
+        # If observe() has proposed new samples from the optimizer state,
+        # use those instead of generating a fresh LHS population
+        # (issue #270).
+        if self._proposed_samples:
+            samples = self._proposed_samples
+            self._proposed_samples = []  # consume
+            samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+            log.info("Dual annealing proposed %d samples from optimizer state", len(samples))
+            return samples_path
 
         # Initial population via LHS.
         try:
@@ -263,6 +281,10 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
         center = best_point if best_point is not None else self._best_params
         var_names = [v["name"] for v in self._independent_vars]
         new_samples = _propose_samples_around(center, n_new, self._bounds, var_names, width=0.15)
+
+        # Store proposed samples so generate_samples() can use them
+        # on the next call (issue #270).
+        self._proposed_samples = new_samples
 
         log.info(
             "Dual annealing observe(): best_value=%.4f, proposed %d new samples",
