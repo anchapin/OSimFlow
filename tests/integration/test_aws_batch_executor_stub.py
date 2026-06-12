@@ -222,6 +222,10 @@ class _StubAWSBatchExecutor(AWSBatchExecutor):
                 self.worker_id: str | None = real_handle.job_id
                 self.worker_ip: str | None = None
                 self.worker_region: str | None = None
+                # Cost tracking fields (issue #126): the Campaign
+                # reads these from every handle after simulation.
+                self.cost_usd: float | None = None
+                self.billed_duration_seconds: float | None = None
 
             def result(self, timeout: float | None = None) -> object:  # noqa: ARG002
                 return self._fut.result(timeout=timeout)  # type: ignore[attr-defined]
