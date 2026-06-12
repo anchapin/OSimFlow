@@ -453,6 +453,12 @@ def _add_list_args(lst: argparse.ArgumentParser) -> None:
         type=Path,
         help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
     )
+    lst.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
     lst.add_argument("--log_level", default="INFO")
 
 
@@ -486,6 +492,35 @@ def _add_compare_args(cmp: argparse.ArgumentParser) -> None:
         help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
     )
     cmp.add_argument("--log_level", default="INFO")
+
+
+def _add_status_args(st: argparse.ArgumentParser) -> None:
+    st.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json",
+    )
+    st.add_argument("--log_level", default="INFO")
+
+
+def _add_download_args(dl: argparse.ArgumentParser) -> None:
+    dl.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory to download results from",
+    )
+    dl.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Destination directory (default: <outdir>-downloads/<campaign_id>)",
+    )
+    dl.add_argument(
+        "--include-intermediates",
+        action="store_true",
+        help="Also download per-sample .osw/.osm and eplusout.sql files",
+    )
+    dl.add_argument("--log_level", default="INFO")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -528,6 +563,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Compare two campaigns side by side",
     )
     _add_compare_args(cmp)
+    st = sub.add_parser(
+        "status",
+        help="Show detailed status of a campaign (reads run.json)",
+    )
+    _add_status_args(st)
+    dl = sub.add_parser(
+        "download",
+        help="Download results from a completed campaign",
+    )
+    _add_download_args(dl)
     return p
 
 
@@ -627,6 +672,8 @@ def _run_export(args: argparse.Namespace) -> int:
 
 def _cmd_list(args: argparse.Namespace) -> int:
     """List all registered campaigns."""
+    import json as json_mod  # noqa: PLC0415
+
     registry_path = args.registry if args.registry else None
     reg = CampaignRegistry(db_path=registry_path)
     campaigns = reg.list_campaigns(status=args.status, limit=args.limit)
@@ -635,7 +682,17 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print("No campaigns registered.")
         return 0
 
-    # Header
+    if args.format == "json":
+        print(
+            json_mod.dumps(
+                [c.to_dict() for c in campaigns],
+                indent=2,
+                default=str,
+            )
+        )
+        return 0
+
+    # table format (default)
     print(
         f"{'ID':<25} {'STATUS':<10} {'ALGO':<8} {'N':<6} {'EXECUTOR':<10} {'OS VER':<10} {'CREATED'}"
     )
@@ -722,6 +779,146 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_status(args: argparse.Namespace) -> int:
+    """Show detailed status of a campaign by reading run.json."""
+    import json as json_mod  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    # Top-level summary
+    print(f"Campaign:   {run_data.get('campaign_id', 'unknown')}")
+    print(f"Outdir:      {outdir}")
+    status = run_data.get("status", "unknown")
+    print(f"Status:      {status}")
+    started = run_data.get("started_at", 0)
+    if started:
+        print(f"Started:     {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(started))}")
+    finished = run_data.get("finished_at")
+    if finished:
+        elapsed = finished - started if started else 0
+        print(f"Finished:    {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(finished))}")
+        print(f"Elapsed:     {elapsed:.1f}s ({elapsed / 60:.1f} min)")
+
+    # Steps table
+    steps = run_data.get("steps", [])
+    if steps:
+        print("\nSteps:")
+        print(f"  {'STEP':<30} {'CACHE':<10} {'ELAPSED':<10} {'EXIT'}")
+        print(f"  {'-' * 30} {'-' * 10} {'-' * 10} {'-' * 5}")
+        for s in steps:
+            print(
+                f"  {s.get('step', ''):<30} {s.get('cache', ''):<10} "
+                f"{s.get('elapsed_s', 0):<10.2f} {s.get('exit_code', 0)}"
+            )
+
+    # Per-sample summary
+    per_sample = run_data.get("per_sample", [])
+    if per_sample:
+        n_ok = sum(1 for s in per_sample if s.get("status") == "ok")
+        n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+        n_cached = sum(1 for s in per_sample if s.get("status") == "cached")
+        print(
+            f"\nSamples:    {len(per_sample)} total  |  {n_ok} ok  |  {n_failed} failed  |  {n_cached} cached"
+        )
+
+    # Generation info for iterative algorithms
+    generations = run_data.get("generations", [])
+    if generations:
+        print("\nGenerations:")
+        for g in generations:
+            print(
+                f"  gen {g.get('generation', '?')}: "
+                f"{g.get('n_succeeded', 0)}/{g.get('n_samples', 0)} succeeded  "
+                f"({g.get('elapsed_s', 0):.1f}s)"
+            )
+
+    print(f"\nrun.json:    {run_json_path}")
+    return 0
+
+
+def _cmd_download(args: argparse.Namespace) -> int:
+    """Download results from a completed campaign to a destination directory."""
+    import json as json_mod  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    campaign_id = run_data.get("campaign_id", outdir.name)
+    output_dir: Path
+    if args.output_dir:
+        output_dir = args.output_dir.resolve()
+    else:
+        output_dir = outdir.parent / f"{outdir.name}-downloads" / campaign_id
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log.info("Downloading campaign %s to %s", campaign_id, output_dir)
+
+    # Always copy: run.json, aggregated_results.csv, failed_simulations.csv, plots/
+    artifacts = [
+        ("run.json", run_json_path),
+    ]
+
+    csv_path = outdir / "aggregated_results.csv"
+    if csv_path.exists():
+        artifacts.append(("aggregated_results.csv", csv_path))
+
+    failed_csv = outdir / "failed_simulations.csv"
+    if failed_csv.exists():
+        artifacts.append(("failed_simulations.csv", failed_csv))
+
+    plots_dir = outdir / "plots"
+    if plots_dir.is_dir():
+        dest_plots = output_dir / "plots"
+        shutil.copytree(plots_dir, dest_plots, dirs_exist_ok=True)
+        log.info("  plots/ -> %s", dest_plots)
+
+    kpis_dir = outdir / "kpis"
+    if kpis_dir.is_dir():
+        dest_kpis = output_dir / "kpis"
+        shutil.copytree(kpis_dir, dest_kpis, dirs_exist_ok=True)
+        log.info("  kpis/ -> %s", dest_kpis)
+
+    for name, src in artifacts:
+        dest = output_dir / name
+        shutil.copy2(src, dest)
+        log.info("  %s -> %s", name, dest)
+
+    # Optionally copy per-sample intermediates
+    if args.include_intermediates:
+        work_dir = outdir / "work"
+        if work_dir.is_dir():
+            dest_work = output_dir / "work"
+            shutil.copytree(work_dir, dest_work, dirs_exist_ok=True)
+            log.info("  work/ -> %s", dest_work)
+
+    print(f"\nDownloaded campaign '{campaign_id}' to:\n  {output_dir}")
+    return 0
+
+
 def _format_field(record: CampaignRecord, key: str) -> str:
     """Format a campaign record field for display."""
     if key == "_created_fmt":
@@ -748,6 +945,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "list": _cmd_list,
         "show": _cmd_show,
         "compare": _cmd_compare,
+        "status": _cmd_status,
+        "download": _cmd_download,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
