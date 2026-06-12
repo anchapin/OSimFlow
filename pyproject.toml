@@ -181,6 +181,10 @@ exclude = [
 ]
 
 [[tool.mypy.overrides]]
+module = "osimflow.api.app"
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
 check_untyped_defs = false
