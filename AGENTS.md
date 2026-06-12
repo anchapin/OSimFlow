@@ -144,6 +144,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `bin/extract_kpis.py` | Default KPI extractor. |
 | `bin/aggregate_results.py` | Result aggregation + error-summary extraction. |
 | `bin/generate_plots.py` | Matplotlib/seaborn plot generator. |
+| `bin/excel_to_variables.py` | PAT/Analysis Gem Excel spreadsheet to ``variables.yml`` converter. Reads a PAT-style ``.xlsx`` and produces a OSimFlow ``variables.yml`` with support for uniform, normal, lognormal, triangular, discrete, categorical, and static distributions. |
 | `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |

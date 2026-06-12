@@ -37,6 +37,7 @@ dependencies = [
     "matplotlib>=3.7",
     "seaborn>=0.12",
     "tqdm>=4.65",
+    "openpyxl>=3.1",
     "submitit>=1.5; platform_system != 'Windows'",
 ]
 
@@ -126,6 +127,7 @@ omit = [
     "osimflow/algorithms/pso.py",
     "osimflow/api/*",
     "osimflow/viz/dashboard.py",
+    "osimflow/_work_scripts/*",
 ]
 
 [tool.coverage.report]
