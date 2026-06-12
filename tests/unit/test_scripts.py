@@ -150,7 +150,7 @@ def test_excel_to_variables(tmp_path):
 
     out_yml = tmp_path / "variables.yml"
 
-    result = subprocess.run(
+    subprocess.run(
         [
             sys.executable,
             str(BIN / "excel_to_variables.py"),
@@ -160,8 +160,6 @@ def test_excel_to_variables(tmp_path):
             str(out_yml),
         ],
         check=True,
-        capture_output=True,
-        text=True,
     )
 
     assert out_yml.exists()
