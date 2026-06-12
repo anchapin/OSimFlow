@@ -142,6 +142,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `bin/extract_kpis.py` | Default KPI extractor. |
 | `bin/aggregate_results.py` | Result aggregation + error-summary extraction. |
 | `bin/generate_plots.py` | Matplotlib/seaborn plot generator. |
+| `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
@@ -217,6 +218,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--cloudwatch-namespace` (CloudWatch metric namespace; used when `--observability cloudwatch`)
 - `--prometheus-port` (Prometheus metrics HTTP port; used when `--observability prometheus`)
 - `--otel-endpoint` (OpenTelemetry OTLP endpoint URL; used when `--observability opentelemetry`)
+- `--no-tui` (disable rich terminal UI even when `rich` is installed; issue #197)
 - `--dry-run` (dry-run mode: force LocalExecutor, 1 sample, steps 1-4 only)
 - `--sample` (single-sample mode: re-run sample N from existing samples.json)
 - `--skip-preflight` (skip the PREFLIGHT_RUN_MODEL step that validates the seed model; issue #107)
