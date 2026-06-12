@@ -27,6 +27,7 @@ from starlette.staticfiles import StaticFiles
 
 from osimflow.api.campaigns import campaigns_router
 from osimflow.api.events import events_router
+from osimflow.api.pat_compat import pat_compat_router
 
 log = logging.getLogger("osimflow.api")
 
@@ -435,6 +436,7 @@ def create_app(
     app.include_router(router)
     app.include_router(events_router)
     app.include_router(campaigns_router)
+    app.include_router(pat_compat_router)
 
     # --- Static files for the web GUI (issue #264) ---
     static_dir = Path(__file__).parent / "static"
