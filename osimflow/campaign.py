@@ -215,7 +215,9 @@ class Campaign:
             cost_usd_obj = state.get("cost_usd")
             cost_usd: float | None = None if cost_usd_obj is None else float(str(cost_usd_obj))
             billed_duration_obj = state.get("billed_duration_seconds")
-            billed_duration_seconds: float | None = None if billed_duration_obj is None else float(str(billed_duration_obj))
+            billed_duration_seconds: float | None = (
+                None if billed_duration_obj is None else float(str(billed_duration_obj))
+            )
             self.trace.sample_done(
                 SampleTrace(
                     sample_id=sid,

@@ -228,15 +228,9 @@ class TestCampaignCostSummary:
         """_accumulate_cost_summary sums cost_usd from per-sample traces."""
         # Create a minimal Campaign with a mock executor.
         trace = RunTrace(campaign_id="cost-acc", config_summary={"executor": "aws_batch"})
-        trace.sample_done(
-            SampleTrace(sample_id="s1", status="ok", elapsed_s=1.0, cost_usd=0.10)
-        )
-        trace.sample_done(
-            SampleTrace(sample_id="s2", status="ok", elapsed_s=1.0, cost_usd=0.20)
-        )
-        trace.sample_done(
-            SampleTrace(sample_id="s3", status="ok", elapsed_s=1.0, cost_usd=None)
-        )
+        trace.sample_done(SampleTrace(sample_id="s1", status="ok", elapsed_s=1.0, cost_usd=0.10))
+        trace.sample_done(SampleTrace(sample_id="s2", status="ok", elapsed_s=1.0, cost_usd=0.20))
+        trace.sample_done(SampleTrace(sample_id="s3", status="ok", elapsed_s=1.0, cost_usd=None))
 
         # Manually compute what _accumulate_cost_summary would do.
         total = sum(s.cost_usd for s in trace.per_sample if s.cost_usd is not None)
@@ -303,9 +297,7 @@ class TestCostInRunJson:
             campaign_id="local-e2e",
             config_summary={"executor": "local"},
         )
-        trace.sample_done(
-            SampleTrace(sample_id="s1", status="ok", elapsed_s=5.0)
-        )
+        trace.sample_done(SampleTrace(sample_id="s1", status="ok", elapsed_s=5.0))
         trace.finalize()
 
         d = trace.to_dict()
