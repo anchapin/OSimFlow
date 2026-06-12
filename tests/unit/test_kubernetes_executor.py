@@ -8,7 +8,6 @@ Covers:
 
 from __future__ import annotations
 
-from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
 
 import pytest
