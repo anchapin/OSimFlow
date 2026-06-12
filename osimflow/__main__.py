@@ -254,6 +254,39 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
             "for multiple generations. LHS is single-generation."
         ),
     )
+    run.add_argument(
+        "--observability",
+        choices=["none", "cloudwatch", "prometheus", "opentelemetry"],
+        default="none",
+        help=(
+            "Observability backend for campaign metrics (default: none). "
+            "none = no metrics emitted (zero overhead). "
+            "cloudwatch = AWS CloudWatch (requires osimflow[aws]). "
+            "prometheus = Prometheus pushgateway. "
+            "opentelemetry = OTLP gRPC exporter."
+        ),
+    )
+    run.add_argument(
+        "--cloudwatch-namespace",
+        default="OSimFlow",
+        help="CloudWatch namespace for metrics (default: OSimFlow).",
+    )
+    run.add_argument(
+        "--cloudwatch-log-group",
+        default=None,
+        help="CloudWatch log group name (optional).",
+    )
+    run.add_argument(
+        "--prometheus-port",
+        type=int,
+        default=9090,
+        help="Prometheus pushgateway port (default: 9090).",
+    )
+    run.add_argument(
+        "--otel-endpoint",
+        default=None,
+        help='OpenTelemetry OTLP gRPC endpoint (e.g. "http://localhost:4317").',
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
