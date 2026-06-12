@@ -54,10 +54,10 @@ def extract_api_key(request: Request) -> str | None:
     """
     header_key = request.headers.get("X-API-Key")
     if header_key:
-        return header_key
+        return str(header_key)
     query_key = request.query_params.get("api_key")
     if query_key:
-        return query_key
+        return str(query_key)
     return None
 
 
