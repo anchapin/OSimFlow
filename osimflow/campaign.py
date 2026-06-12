@@ -574,7 +574,10 @@ class Campaign:
                     break
                 # Error already logged inside _await_one; continue
                 # processing remaining samples.
-                with contextlib.suppress(Exception):
+                # CancelledError is a BaseException (not Exception), so we must
+                # suppress it explicitly here — it is raised when a future was
+                # cancelled via f.cancel() during a cancellation sweep.
+                with contextlib.suppress(Exception, concurrent.futures.CancelledError):
                     future.result()
             if self._cancel_requested:
                 raise KeyboardInterrupt("cancellation requested during fan-out")
@@ -2278,7 +2281,6 @@ class Campaign:
                 memory_mb=8 * 1024,
                 time_min=240,
                 container=CONTAINER_OS.format(version=os_version),
-                openstudio_version=os_version,
                 stdout_path=ctx["stdout_log"],
                 stderr_path=ctx["stderr_log"],
                 max_retries=self.cfg.max_sample_retries,
