@@ -1,0 +1,89 @@
+{
+  "analysis_type": "DOE",
+  "problem": {
+    "objective_functions": [
+      {
+        "name": "eui_kwh_m2",
+        "display_name": "Energy Use Intensity",
+        "objective": "minimize",
+        "units": "kWh/m²"
+      },
+      {
+        "name": "total_cost",
+        "display_name": "Total Construction Cost",
+        "objective": "minimize",
+        "units": "$"
+      }
+    ],
+    "design_variables": [
+      {
+        "name": "heating_setpoint",
+        "display_name": "Heating Setpoint",
+        "units": "C",
+        "minimum": 18.0,
+        "maximum": 22.0,
+        "attributes": [
+          {"name": "variable_type", "value": "double"},
+          {"name": "distribution", "value": "uniform"}
+        ]
+      },
+      {
+        "name": "cooling_setpoint",
+        "display_name": "Cooling Setpoint",
+        "units": "C",
+        "minimum": 24.0,
+        "maximum": 28.0,
+        "attributes": [
+          {"name": "variable_type", "value": "double"},
+          {"name": "distribution", "value": "uniform"}
+        ]
+      },
+      {
+        "name": "wall_r_value",
+        "display_name": "Wall R-Value",
+        "units": "m²K/W",
+        "minimum": 2.0,
+        "maximum": 5.0,
+        "attributes": [
+          {"name": "variable_type", "value": "double"},
+          {"name": "distribution", "value": "uniform"}
+        ]
+      },
+      {
+        "name": "window_wwr",
+        "display_name": "Window-to-Wall Ratio",
+        "units": "fraction",
+        "minimum": 0.2,
+        "maximum": 0.6,
+        "attributes": [
+          {"name": "variable_type", "value": "double"},
+          {"name": "distribution", "value": "uniform"}
+        ]
+      },
+      {
+        "name": "infiltration_rate",
+        "display_name": "Infiltration Rate",
+        "units": "ach",
+        "minimum": 0.1,
+        "maximum": 0.7,
+        "attributes": [
+          {"name": "variable_type", "value": "double"},
+          {"name": "distribution", "value": "normal"},
+          {"name": "mean", "value": 0.3},
+          {"name": "std", "value": 0.1}
+        ]
+      }
+    ],
+    "constraints": [
+      {
+        "name": "thermal_comfort",
+        "minimum": 0.8,
+        "description": "Minimum thermal comfort index"
+      }
+    ]
+  },
+  "seed": {
+    "seed_file": "model.osm",
+    "weather_file": "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw"
+  }
+}
