@@ -9,10 +9,10 @@ import pytest
 
 pytest.importorskip("fastapi", reason="osimflow[api] extra required")
 pytest.importorskip("slowapi", reason="osimflow[api] extra required")
+
 from fastapi.testclient import TestClient
 
 from osimflow.api import create_app
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

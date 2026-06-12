@@ -226,7 +226,7 @@ Response:
 
 6. **Optimization algorithms.** PAT supports `nsga_nrel` (NREL's NSGA-II variant). OSimFlow maps this to the standard `nsga2` algorithm from `pymoo`. Results should be equivalent but may differ in convergence details.
 
-7. **Round-trip fidelity.** OSimFlow's `exporters/osa.py` can produce `.osa` files, but `beta`, `gamma`, and `exponential` distributions are exported as `uniform` (lossy). Use `variables.yml` directly when exact distribution fidelity is needed.
+7. **Round-trip fidelity.** OSimFlow's `osimflow/exporters/osa.py` can produce `.osa` files, but `beta`, `gamma`, and `exponential` distributions are exported as `uniform` (lossy). Use `variables.yml` directly when exact distribution fidelity is needed.
 
 ---
 
