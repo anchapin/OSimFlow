@@ -1955,6 +1955,7 @@ class Campaign:
             sim_dirs,
             self.cfg.outdir,
             baseline_sample_id=baseline_sample_id,
+            samples_json=self.cfg.samples_file,
             name="aggregate",
             cpus=2,
             memory_mb=4 * 1024,

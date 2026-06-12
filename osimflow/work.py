@@ -417,6 +417,7 @@ def aggregate_results(
     out: Path,
     baseline_sample_id: str | None = None,
     ts_resolution: str = "monthly",
+    samples_json: Path | None = None,
 ) -> dict[str, Path]:
     """Aggregate per-sample KPIs into CSV/Parquet/failed-CSV. Returns paths.
 
@@ -431,6 +432,10 @@ def aggregate_results(
             One of 'hourly', 'daily', 'monthly', 'annual'. Defaults to
             'monthly'. Raw hourly data is preserved in per-sample .sql
             files behind --archive_intermediates.
+        samples_json: optional path to samples.json containing per-sample
+            input parameter values (issue #276). When provided, parameter
+            columns are merged into the aggregated results CSV before KPI
+            columns. Missing file is non-fatal (backward compatible).
     """
     out.mkdir(parents=True, exist_ok=True)
     csv_path = out / "aggregated_results.csv"
@@ -454,6 +459,8 @@ def aggregate_results(
     ]
     if baseline_sample_id is not None:
         cmd.extend(["--baseline_sample_id", baseline_sample_id])
+    if samples_json is not None:
+        cmd.extend(["--samples_json", str(samples_json)])
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             cmd,

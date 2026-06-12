@@ -436,6 +436,38 @@ def parse_kpi_json(kpi_path: Path) -> dict:
         return {"sample_id": kpi_path.stem.replace("kpi_", "")}
 
 
+def _load_samples_params(samples_json: Path) -> dict[str, dict[str, object]]:
+    """Load per-sample parameter values from samples.json.
+
+    Returns a dict mapping sample_id -> {param_name: value, ...}.
+    Categorical values with a ``label`` key are flattened to the label string.
+    Returns an empty dict if the file doesn't exist or is unreadable.
+    """
+    if not samples_json.exists():
+        log.info("samples.json not found at %s — skipping input parameter merge", samples_json)
+        return {}
+    try:
+        data = json.loads(samples_json.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("Could not read samples.json at %s: %s", samples_json, exc)
+        return {}
+
+    samples_list = data.get("samples", [])
+    result: dict[str, dict[str, object]] = {}
+    for sample in samples_list:
+        sid = sample.get("sample_id", "")
+        values = sample.get("values", {})
+        # Flatten categorical dicts with a "label" key to plain strings
+        flat: dict[str, object] = {}
+        for k, v in values.items():
+            if isinstance(v, dict) and "label" in v:
+                flat[k] = v["label"]
+            else:
+                flat[k] = v
+        result[sid] = flat
+    return result
+
+
 def extract_failure(sim_dir: Path) -> dict | None:
     err_path = sim_dir / "eplusout.err"
     err_summary = None
@@ -506,6 +538,16 @@ def main() -> int:
             "Defaults to the same directory as --out_csv."
         ),
     )
+    parser.add_argument(
+        "--samples_json",
+        type=Path,
+        default=None,
+        help=(
+            "Path to samples.json containing per-sample input parameter values. "
+            "When provided, parameter columns are merged into the aggregated results "
+            "CSV before KPI columns. Missing file is non-fatal (backward compatible)."
+        ),
+    )
     args = parser.parse_args()
 
     args.out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -533,6 +575,30 @@ def main() -> int:
                 "computed baseline comparison columns against sample_id=%s",
                 args.baseline_sample_id,
             )
+
+        # Merge input parameters from samples.json (issue #276).
+        # Parameter columns are placed before KPI columns so users can
+        # trace each result back to its inputs at a glance.
+        if args.samples_json is not None:
+            params_map = _load_samples_params(args.samples_json)
+            if params_map:
+                params_rows: list[dict[str, object]] = []
+                for sid in df["sample_id"]:
+                    params_rows.append(params_map.get(str(sid), {}))
+                params_df = pd.DataFrame(params_rows)
+                # Reorder: sample_id, then parameter columns, then KPI columns
+                df = pd.concat(
+                    [df[["sample_id"]], params_df, df.drop(columns=["sample_id"])], axis=1
+                )
+                log.info(
+                    "merged %d input parameter columns from %s",
+                    len(params_df.columns),
+                    args.samples_json,
+                )
+            else:
+                log.info("no input parameters loaded — writing KPIs only")
+        else:
+            log.info("no --samples_json provided — writing KPIs only")
 
         df.to_csv(args.out_csv, index=False)
         if args.out_parquet:
