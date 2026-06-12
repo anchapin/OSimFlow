@@ -135,17 +135,13 @@ def _run_campaign(
 class TestDEFeedbackLoop:
     """DE observe() → generate_samples() state passing (issue #270)."""
 
-    def test_de_proposed_samples_used_in_generate(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_de_proposed_samples_used_in_generate(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """After observe() proposes samples, generate_samples() must use them."""
         from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
 
         algo = DifferentialEvolutionAlgorithm(objective_kpi="eui", tol=1e-10)
         variables = {
-            "variables": [
-                {"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}
-            ]
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
         }
 
         # Generation 0: LHS initial population.
@@ -189,13 +185,13 @@ class TestDEFeedbackLoop:
         # After generate_samples(), proposed_samples should be consumed.
         assert algo._proposed_samples == []
 
-    def test_de_two_generation_campaign(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_de_two_generation_campaign(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Run a 2-generation DE campaign and verify feedback loop."""
         template, variables, outdir = tmp_dirs
         cfg = _make_cfg(
-            template, variables, outdir,
+            template,
+            variables,
+            outdir,
             n_samples=2,
             max_generations=2,
             algorithm="de",
@@ -231,17 +227,13 @@ class TestDEFeedbackLoop:
 class TestDAFeedbackLoop:
     """DA observe() → generate_samples() state passing (issue #270)."""
 
-    def test_da_proposed_samples_used_in_generate(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_da_proposed_samples_used_in_generate(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """After observe() proposes samples, generate_samples() must use them."""
         from osimflow.algorithms.da import DualAnnealingAlgorithm
 
         algo = DualAnnealingAlgorithm(objective_kpi="eui", tol=1e-10)
         variables = {
-            "variables": [
-                {"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}
-            ]
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
         }
 
         # Generation 0: LHS initial population.
@@ -284,13 +276,13 @@ class TestDAFeedbackLoop:
         # Proposed samples should be consumed.
         assert algo._proposed_samples == []
 
-    def test_da_two_generation_campaign(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_da_two_generation_campaign(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Run a 2-generation DA campaign and verify feedback loop."""
         template, variables, outdir = tmp_dirs
         cfg = _make_cfg(
-            template, variables, outdir,
+            template,
+            variables,
+            outdir,
             n_samples=2,
             max_generations=2,
             algorithm="dual_annealing",
@@ -314,13 +306,13 @@ class TestDAFeedbackLoop:
 class TestGenerationMonitoring:
     """Per-generation summary in run.json (issue #270)."""
 
-    def test_generation_trace_in_run_json(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_generation_trace_in_run_json(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """run.json must contain 'generations' array with per-gen stats."""
         template, variables, outdir = tmp_dirs
         cfg = _make_cfg(
-            template, variables, outdir,
+            template,
+            variables,
+            outdir,
             n_samples=3,
             max_generations=3,
             algorithm="de",
@@ -341,13 +333,13 @@ class TestGenerationMonitoring:
             assert "elapsed_s" in gen_data
             assert "best_objective" in gen_data
 
-    def test_generation_trace_best_objective(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_generation_trace_best_objective(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """best_objective should be the minimum EUI across samples."""
         template, variables, outdir = tmp_dirs
         cfg = _make_cfg(
-            template, variables, outdir,
+            template,
+            variables,
+            outdir,
             n_samples=2,
             max_generations=1,
             algorithm="de",
@@ -360,13 +352,13 @@ class TestGenerationMonitoring:
         assert gen_traces[0].best_objective is not None
         assert isinstance(gen_traces[0].best_objective, float)
 
-    def test_no_generations_key_for_single_shot(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_no_generations_key_for_single_shot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """LHS (single-shot) should NOT emit 'generations' in run.json."""
         template, variables, outdir = tmp_dirs
         cfg = _make_cfg(
-            template, variables, outdir,
+            template,
+            variables,
+            outdir,
             n_samples=2,
             max_generations=1,
             algorithm="lhs",
@@ -391,9 +383,7 @@ class TestGenerationMonitoring:
 class TestIterativeConvergence:
     """Convergence detection stops the generation loop (issue #270)."""
 
-    def test_de_convergence_limits_generations(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_de_convergence_limits_generations(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """DE with very loose tolerance should converge quickly."""
         template, variables, outdir = tmp_dirs
         # Use tol=1.0 (very loose — should converge after 2 gens).
@@ -404,15 +394,19 @@ class TestIterativeConvergence:
         loose_de = type(
             "LooseDE",
             (DifferentialEvolutionAlgorithm,),
-            {"__init__": lambda self: DifferentialEvolutionAlgorithm.__init__(
-                self, objective_kpi="eui", tol=100.0
-            )},
+            {
+                "__init__": lambda self: DifferentialEvolutionAlgorithm.__init__(
+                    self, objective_kpi="eui", tol=100.0
+                )
+            },
         )
         AlgorithmRegistry.register("loose_de", loose_de)
 
         try:
             cfg = _make_cfg(
-                template, variables, outdir / "conv_test",
+                template,
+                variables,
+                outdir / "conv_test",
                 n_samples=2,
                 max_generations=10,  # Would do 10, but should converge early
                 algorithm="loose_de",

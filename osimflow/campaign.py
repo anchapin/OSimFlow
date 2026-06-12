@@ -1003,10 +1003,7 @@ class Campaign:
 
         # Per-generation monitoring (issue #270).
         gen_elapsed = time.time() - gen_t0
-        gen_samples = [
-            s for s in self.trace.per_sample
-            if s.generation == generation
-        ]
+        gen_samples = [s for s in self.trace.per_sample if s.generation == generation]
         n_succeeded = sum(1 for s in gen_samples if s.status == "ok")
         n_failed = sum(1 for s in gen_samples if s.status == "failed")
         best_objective = self._extract_best_objective(algo, kpi_files)
@@ -1055,7 +1052,11 @@ class Campaign:
                 kpis = data.get("kpis", {})
                 # Default objective is "eui" — matches DE/DA/PSO defaults.
                 val = kpis.get("eui")
-                if val is not None and isinstance(val, (int, float)) and (best is None or float(val) < best):
+                if (
+                    val is not None
+                    and isinstance(val, (int, float))
+                    and (best is None or float(val) < best)
+                ):
                     best = float(val)
             except (json.JSONDecodeError, ValueError, TypeError):
                 continue
