@@ -7,7 +7,6 @@ API; everything else is an implementation detail.
 """
 
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
-from .logging import get_logger, setup_logging
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
@@ -21,6 +20,7 @@ from .executors import (
     SlurmExecutor,
 )
 from .jobqueue import JobQueue
+from .logging import get_logger, setup_logging
 from .monitoring import RunTrace, StepTrace
 from .observability import (
     CloudWatchBackend,
