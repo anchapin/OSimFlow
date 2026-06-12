@@ -1,0 +1,110 @@
+# Dockerfile.offline
+#
+# Multi-stage build for OSimFlow air-gapped deployment.
+# Stage 1: Builder — downloads all pip wheels and Docker images
+# Stage 2: Runtime — copies pre-bundled assets into a minimal image
+#
+# Usage:
+#   # Build the offline image
+#   docker build -f infra/offline/Dockerfile.offline \
+#       --build-arg PIP_EXTRAS=dev,aws,slurm \
+#       --build-arg OS_VERSION=3.11.0 \
+#       -t osimflow-offline:latest .
+#
+#   # Save to tar for air-gapped transfer
+#   docker save osimflow-offline:latest -o osimflow-offline.tar
+#
+#   # On air-gapped machine
+#   docker load -i osimflow-offline.tar
+#   docker run --rm osimflow-offline:latest osimflow run --offline ...
+#
+
+# ---------------------------------------------------------------------------
+# Stage 1: Builder — bundles assets on an online machine
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS builder
+
+ARG PIP_EXTRAS="dev,aws,slurm"
+ARG OS_VERSION="3.11.0"
+ARG PIP_CACHE_DIR="/opt/pip-cache"
+ARG DOCKER_CACHE_DIR="/opt/docker-cache"
+
+WORKDIR /build
+
+# Install pip and download OSimFlow wheels
+RUN python -m pip install --upgrade pip && \
+    pip download \
+        --no-deps \
+        --dest /dist/pip \
+        "osimflow[${PIP_EXTRAS}]"
+
+# Download OpenStudio Docker image (if docker is available)
+# Note: this stage requires Docker-in-Docker or docker save/load in the build
+# environment.  If Docker is not available in the build context, pre-pull the
+# image and load it via:
+#   docker save nrel/openstudio:${OS_VERSION} -o /dist/docker/nrel-openstudio-${OS_VERSION}.tar
+# then remove the --docker-pull block below.
+RUN if command -v docker &> /dev/null; then \
+        mkdir -p /dist/docker && \
+        docker pull nrel/openstudio:${OS_VERSION} && \
+        docker save nrel/openstudio:${OS_VERSION} \
+            -o /dist/docker/nrel-openstudio-${OS_VERSION}.tar && \
+        docker pull ghcr.io/anchapin/scientific_python_image:latest && \
+        docker save ghcr.io/anchapin/scientific_python_image:latest \
+            -o /dist/docker/scientific-python-image.tar \
+    ; fi
+
+# Bundle manifest
+RUN echo '{"created_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","os_version":"'"${OS_VERSION}"'","pip_extras":"'"${PIP_EXTRAS}"'"}' \
+    > /dist/bundle_manifest.json
+
+# ---------------------------------------------------------------------------
+# Stage 2: Runtime — minimal Python image with pre-bundled assets
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS runtime
+
+ARG OS_VERSION="3.11.0"
+
+# Install system dependencies needed by common pip wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        libopenblas \
+        liblapack \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy pre-bundled pip wheels from builder
+COPY --from=builder /dist/pip /opt/osimflow/offline/pip
+COPY --from=builder /dist/docker /opt/osimflow/offline/docker
+COPY --from=builder /dist/bundle_manifest.json /opt/osimflow/offline/bundle_manifest.json
+
+# Create non-root user for HPC environments
+RUN useradd -m -u 1000 osimflow && \
+    mkdir -p /opt/osimflow/offline && \
+    chown -R osimflow:osimflow /opt/osimflow
+
+# Install OSimFlow from local wheels (no PyPI access needed)
+RUN python -m pip install \
+        --no-index \
+        --find-links=/opt/osimflow/offline/pip/ \
+        osimflow
+
+# Pre-load Docker images into local registry (if present)
+# This is a no-op if the tar files are not present
+RUN for img in /opt/osimflow/offline/docker/*.tar; do \
+        if [ -f "$img" ]; then \
+            docker load -i "$img" || true; \
+        fi \
+    ; done
+
+WORKDIR /opt/osimflow
+
+# Environment variables for offline mode
+ENV OSIMFLOW_OFFLINE=1
+ENV OSIMFLOW_OFFLINE_BUNDLE=/opt/osimflow/offline
+# Disable Docker Hub lookups by pointing to local registry
+ENV DOCKER_BUILDKIT=0
+
+USER osimflow
+
+ENTRYPOINT ["python", "-m", "osimflow"]
+CMD ["--help"]

@@ -88,7 +88,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
     raise ValueError(f"unknown executor: {args.executor}")
 
 
-def _add_run_args(run: argparse.ArgumentParser) -> None:
+def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--executor",
         choices=["local", "slurm", "aws_batch", "nomad", "azure_batch", "google_batch"],
@@ -380,6 +380,25 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
         help=(
             "Path to the campaign registry database (default: ~/.osimflow/registry.db). "
             "Override the default location for multi-campaign management."
+        ),
+    )
+    run.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "Enable air-gapped / offline mode (issue #261). "
+            "Skips Docker Hub pulls, PyPI version checks, and online weather downloads. "
+            "Requires --offline-bundle to be set pointing to a pre-bundled offline asset directory."
+        ),
+    )
+    run.add_argument(
+        "--offline-bundle",
+        default=None,
+        type=Path,
+        help=(
+            "Path to the offline bundle directory created by "
+            "scripts/bundle_offline.py. Contains pip/, docker/, and weather/ subdirectories. "
+            "Required when --offline is set."
         ),
     )
 
