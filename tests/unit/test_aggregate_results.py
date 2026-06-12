@@ -1,9 +1,12 @@
 """Tests for domain-aware EnergyPlus error diagnosis in bin/aggregate_results.py."""
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 BIN = PROJECT_ROOT / "bin"
@@ -317,8 +320,6 @@ def test_aggregate_with_diagnosis_columns(tmp_path):
     out_csv = tmp_path / "agg.csv"
     out_fail = tmp_path / "fail.csv"
 
-    import subprocess
-
     subprocess.run(
         [
             sys.executable,
@@ -351,3 +352,234 @@ def test_aggregate_with_diagnosis_columns(tmp_path):
 def test_all_pattern_categories_have_suggestions():
     for category, _patterns in FAILURE_PATTERNS:
         assert category in CATEGORY_SUGGESTIONS, f"Missing suggestion for category: {category}"
+
+
+# ---------------------------------------------------------------------------
+# Tests for input parameter merging (issue #276)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadSamplesParams:
+    """Tests for _load_samples_params — loading samples.json for param merge."""
+
+    def test_loads_params_from_valid_json(self, tmp_path: Path) -> None:
+        from aggregate_results import _load_samples_params
+
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text(
+            json.dumps(
+                {
+                    "samples": [
+                        {"sample_id": "0001", "values": {"r_value": 5.0, "wwr": 0.4}},
+                        {"sample_id": "0002", "values": {"r_value": 3.0, "wwr": 0.6}},
+                    ]
+                }
+            )
+        )
+        result = _load_samples_params(samples_json)
+        assert result == {
+            "0001": {"r_value": 5.0, "wwr": 0.4},
+            "0002": {"r_value": 3.0, "wwr": 0.6},
+        }
+
+    def test_flattens_categorical_labels(self, tmp_path: Path) -> None:
+        from aggregate_results import _load_samples_params
+
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text(
+            json.dumps(
+                {
+                    "samples": [
+                        {
+                            "sample_id": "0001",
+                            "values": {
+                                "hvac_type": {"label": "VRF", "index": 0},
+                                "r_value": 5.0,
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+        result = _load_samples_params(samples_json)
+        assert result["0001"]["hvac_type"] == "VRF"
+        assert result["0001"]["r_value"] == 5.0
+
+    def test_returns_empty_on_missing_file(self, tmp_path: Path) -> None:
+        from aggregate_results import _load_samples_params
+
+        result = _load_samples_params(tmp_path / "nonexistent.json")
+        assert result == {}
+
+    def test_returns_empty_on_invalid_json(self, tmp_path: Path) -> None:
+        from aggregate_results import _load_samples_params
+
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text("{invalid json}")
+        result = _load_samples_params(samples_json)
+        assert result == {}
+
+    def test_returns_empty_on_empty_samples(self, tmp_path: Path) -> None:
+        from aggregate_results import _load_samples_params
+
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text(json.dumps({"samples": []}))
+        result = _load_samples_params(samples_json)
+        assert result == {}
+
+    def test_handles_missing_values_key(self, tmp_path: Path) -> None:
+        from aggregate_results import _load_samples_params
+
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text(json.dumps({"samples": [{"sample_id": "0001"}]}))
+        result = _load_samples_params(samples_json)
+        assert result == {"0001": {}}
+
+
+class TestMergeParamsIntoAggregatedResults:
+    """Tests for parameter columns in the aggregated CSV (issue #276).
+
+    Uses direct function calls (not subprocess) so tests work without
+    a pip-installed osimflow package.
+    """
+
+    def test_params_appear_before_kpi_columns(self, tmp_path: Path) -> None:
+        """Parameter columns should appear between sample_id and KPI columns."""
+        from aggregate_results import _load_samples_params, parse_kpi_json
+
+        # Write KPI files
+        for sid in ("0001", "0002"):
+            kpi_file = tmp_path / f"kpi_{sid}.json"
+            kpi_file.write_text(
+                json.dumps({"sample_id": sid, "kpis": {"eui_kwh_per_m2": 100.0 + int(sid)}})
+            )
+
+        # Write samples.json
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text(
+            json.dumps(
+                {
+                    "samples": [
+                        {"sample_id": "0001", "values": {"r_value": 5.0, "wwr": 0.4}},
+                        {"sample_id": "0002", "values": {"r_value": 3.0, "wwr": 0.6}},
+                    ]
+                }
+            )
+        )
+
+        # Simulate the aggregation logic
+        all_kpis = []
+        for sid in ("0001", "0002"):
+            all_kpis.append(parse_kpi_json(tmp_path / f"kpi_{sid}.json"))
+        df = pd.DataFrame(all_kpis)
+
+        params_map = _load_samples_params(samples_json)
+        assert params_map, "params_map should not be empty"
+        params_rows = [params_map.get(str(sid), {}) for sid in df["sample_id"]]
+        params_df = pd.DataFrame(params_rows)
+        df = pd.concat([df[["sample_id"]], params_df, df.drop(columns=["sample_id"])], axis=1)
+
+        cols = list(df.columns)
+        # sample_id must be first
+        assert cols[0] == "sample_id"
+        # Param columns come before KPI columns
+        assert "r_value" in cols
+        assert "wwr" in cols
+        assert "eui_kwh_per_m2" in cols
+        r_idx = cols.index("r_value")
+        wwr_idx = cols.index("wwr")
+        eui_idx = cols.index("eui_kwh_per_m2")
+        assert r_idx < eui_idx
+        assert wwr_idx < eui_idx
+        # Both params are between sample_id and eui
+        assert r_idx > 0
+        assert wwr_idx > 0
+
+    def test_backward_compat_no_samples_json(self, tmp_path: Path) -> None:
+        """Without --samples_json, the CSV still works (backward compat)."""
+        from aggregate_results import parse_kpi_json
+
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui_kwh_per_m2": 100.0}}))
+
+        all_kpis = [parse_kpi_json(kpi_file)]
+        df = pd.DataFrame(all_kpis)
+        assert "sample_id" in df.columns
+        assert "eui_kwh_per_m2" in df.columns
+
+    def test_samples_json_missing_file_no_error(self, tmp_path: Path) -> None:
+        """Passing a nonexistent samples.json path to _load_samples_params is non-fatal."""
+        from aggregate_results import _load_samples_params, parse_kpi_json
+
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui_kwh_per_m2": 100.0}}))
+
+        all_kpis = [parse_kpi_json(kpi_file)]
+        df = pd.DataFrame(all_kpis)
+
+        params_map = _load_samples_params(tmp_path / "nonexistent.json")
+        assert params_map == {}
+        assert len(df) == 1
+        assert "eui_kwh_per_m2" in df.columns
+
+    def test_param_values_match_samples(self, tmp_path: Path) -> None:
+        """Parameter values in the DataFrame match the samples.json input."""
+        from aggregate_results import _load_samples_params, parse_kpi_json
+
+        for i, (_r, _wwr) in enumerate([(5.0, 0.4), (3.0, 0.6)], start=1):
+            sid = f"{i:04d}"
+            kpi_file = tmp_path / f"kpi_{sid}.json"
+            kpi_file.write_text(
+                json.dumps({"sample_id": sid, "kpis": {"eui_kwh_per_m2": 100.0 + i}})
+            )
+
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text(
+            json.dumps(
+                {
+                    "samples": [
+                        {"sample_id": "0001", "values": {"r_value": 5.0, "wwr": 0.4}},
+                        {"sample_id": "0002", "values": {"r_value": 3.0, "wwr": 0.6}},
+                    ]
+                }
+            )
+        )
+
+        all_kpis = [
+            parse_kpi_json(tmp_path / "kpi_0001.json"),
+            parse_kpi_json(tmp_path / "kpi_0002.json"),
+        ]
+        df = pd.DataFrame(all_kpis)
+
+        params_map = _load_samples_params(samples_json)
+        params_rows = [params_map.get(str(sid), {}) for sid in df["sample_id"]]
+        params_df = pd.DataFrame(params_rows)
+        df = pd.concat([df[["sample_id"]], params_df, df.drop(columns=["sample_id"])], axis=1)
+
+        row1 = df[df["sample_id"] == "0001"].iloc[0]
+        assert row1["r_value"] == pytest.approx(5.0)
+        assert row1["wwr"] == pytest.approx(0.4)
+        row2 = df[df["sample_id"] == "0002"].iloc[0]
+        assert row2["r_value"] == pytest.approx(3.0)
+        assert row2["wwr"] == pytest.approx(0.6)
+
+    def test_sample_with_no_matching_params(self, tmp_path: Path) -> None:
+        """Samples not found in samples.json get empty parameter values."""
+        from aggregate_results import _load_samples_params, parse_kpi_json
+
+        kpi_file = tmp_path / "kpi_0099.json"
+        kpi_file.write_text(json.dumps({"sample_id": "0099", "kpis": {"eui_kwh_per_m2": 100.0}}))
+
+        samples_json = tmp_path / "samples.json"
+        samples_json.write_text(
+            json.dumps({"samples": [{"sample_id": "0001", "values": {"r_value": 5.0}}]})
+        )
+
+        all_kpis = [parse_kpi_json(kpi_file)]
+        df = pd.DataFrame(all_kpis)
+        params_map = _load_samples_params(samples_json)
+        params_rows = [params_map.get(str(sid), {}) for sid in df["sample_id"]]
+        params_df = pd.DataFrame(params_rows)
+        # params_df will be an empty DataFrame (no columns) since the
+        # unmatched sample got an empty dict
+        assert len(params_df) == 1
