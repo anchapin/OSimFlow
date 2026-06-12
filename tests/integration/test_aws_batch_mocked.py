@@ -396,7 +396,7 @@ def test_done_reflects_job_status() -> None:
 
     # Construct a handle directly to test done() without the blocking
     # submit() call (which calls _wait_for_terminal).
-    handle = _AWSBatchHandle(job_id=job_id, executor=executor)
+    handle = _AWSBatchHandle(job_id=job_id, executor=executor, submit_params={})
 
     original_describe = batch_client.describe_jobs
 
