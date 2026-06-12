@@ -10,14 +10,11 @@ Tests cover:
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
-import threading
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -56,7 +53,12 @@ def sample_run_json(tmp_path: Path) -> dict[str, Any]:
             {"sample_id": "s0", "status": "ok", "elapsed_s": 3.2},
             {"sample_id": "s1", "status": "ok", "elapsed_s": 3.1},
             {"sample_id": "s2", "status": "ok", "elapsed_s": 3.3},
-            {"sample_id": "s3", "status": "failed", "elapsed_s": 2.0, "error_summary": "Severe: overheating"},
+            {
+                "sample_id": "s3",
+                "status": "failed",
+                "elapsed_s": 2.0,
+                "error_summary": "Severe: overheating",
+            },
         ],
         "total_cost_usd": 0.05,
         "spot_savings_usd": 0.01,
@@ -105,7 +107,9 @@ class TestInferCurrentStep:
         assert _infer_current_step([]) == "GENERATE_LHS_SAMPLES"
 
     def test_after_generate_lhs(self) -> None:
-        steps = [{"step": "GENERATE_LHS_SAMPLES", "cache": "MISS", "elapsed_s": 0.1, "exit_code": 0}]
+        steps = [
+            {"step": "GENERATE_LHS_SAMPLES", "cache": "MISS", "elapsed_s": 0.1, "exit_code": 0}
+        ]
         assert _infer_current_step(steps) == "PREFLIGHT_RUN_MODEL"
 
     def test_after_apply_parameters(self) -> None:
@@ -282,10 +286,7 @@ class TestDataExtraction:
 
     def test_build_display_with_many_samples(self) -> None:
         """Ensure the display builder doesn't explode with many samples."""
-        samples = [
-            {"sample_id": f"s{i}", "status": "ok", "elapsed_s": float(i)}
-            for i in range(50)
-        ]
+        samples = [{"sample_id": f"s{i}", "status": "ok", "elapsed_s": float(i)} for i in range(50)]
         data: dict[str, Any] = {
             "summary": {"n_samples": 50, "n_succeeded": 50, "n_failed": 0},
             "steps": [],
