@@ -76,6 +76,9 @@ class SampleTrace:
     worker_id: str | None = None  # Batch job ID / Slurm job ID / Nomad alloc ID / "local"
     worker_ip: str | None = None  # IP address or hostname of the worker
     worker_region: str | None = None  # AWS region / Nomad datacenter
+    # Per-sample cost tracking (issue #126).
+    cost_usd: float | None = None  # estimated cost for this sample
+    billed_duration_seconds: float | None = None  # wall time billed
 
     def to_dict(self) -> dict[str, object]:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
@@ -100,6 +103,9 @@ class RunTrace:
         # Pre/post campaign hook timing (issue #108).
         self.init_script_duration_s: float | None = None
         self.finalize_script_duration_s: float | None = None
+        # Per-campaign cost tracking (issue #126).
+        self.total_cost_usd: float = 0.0
+        self.spot_savings_usd: float = 0.0
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -181,6 +187,9 @@ class RunTrace:
             d["init_script_duration_s"] = self.init_script_duration_s
         if self.finalize_script_duration_s is not None:
             d["finalize_script_duration_s"] = self.finalize_script_duration_s
+        # Cost summary (issue #126). Always present; defaults to 0.0.
+        d["total_cost_usd"] = self.total_cost_usd
+        d["spot_savings_usd"] = self.spot_savings_usd
         return d
 
     def write(self, path: Path) -> None:
