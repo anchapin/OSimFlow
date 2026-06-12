@@ -467,10 +467,12 @@ except ImportError:
 try:
     from osimflow.algorithms.nsga2 import NSGA2Algorithm  # noqa: E402
     from osimflow.algorithms.pso import PSOAlgorithm  # noqa: E402
+    from osimflow.algorithms.spea2 import SPEA2Algorithm  # noqa: E402
 
     AlgorithmRegistry.register("nsga2", NSGA2Algorithm)
     AlgorithmRegistry.register("pso", PSOAlgorithm)
+    AlgorithmRegistry.register("spea2", SPEA2Algorithm)
 except ImportError:
-    # pymoo is an optional dependency — NSGA-II and PSO are only
+    # pymoo is an optional dependency — NSGA-II, PSO, and SPEA-II are only
     # available when the [optimization] extra is installed.
     pass
