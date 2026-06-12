@@ -225,7 +225,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--max-generations` (maximum number of DAG generations; default 1 for single-shot LHS. Issue #122)
 - `--log_level`
 
-**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, and `--read-write` flags. Requires `pip install osimflow[api]`.
+**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, and `--rate-limit` flags. Requires `pip install osimflow[api]`.
 
 ### Developer workflow targets (Makefile)
 
