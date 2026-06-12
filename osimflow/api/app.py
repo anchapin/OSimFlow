@@ -8,6 +8,8 @@ from typing import Any
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 
+from osimflow.api.events import events_router
+
 log = logging.getLogger("osimflow.api")
 
 router = APIRouter()
@@ -238,4 +240,5 @@ def create_app(outdir: Path | None = None, read_only: bool = True) -> FastAPI:
     app.state.outdir = outdir
     app.state.read_only = read_only
     app.include_router(router)
+    app.include_router(events_router)
     return app

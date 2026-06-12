@@ -317,8 +317,15 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         "--read-only",
         action="store_true",
         default=True,
-        help="Read-only mode (default)",
+        help="Read-only mode (default). Disable with --read-write.",
     )
+    serve.add_argument(
+        "--read-write",
+        dest="read_only",
+        action="store_false",
+        help="Allow campaign control (stop, live events). Disables --read-only.",
+    )
+    serve.add_argument("--log_level", default="INFO")
     serve.set_defaults(func=_cmd_serve)
 
 

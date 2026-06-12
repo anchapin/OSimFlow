@@ -71,6 +71,7 @@ optimization = [
 api = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
+    "sse-starlette>=2.0",
 ]
 
 [project.scripts]
@@ -182,6 +183,10 @@ exclude = [
 
 [[tool.mypy.overrides]]
 module = "osimflow.api.app"
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.events"
 warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
