@@ -212,6 +212,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--openstudio_version`, `--archive_intermediates`
 - `--init-script`, `--finalize-script` (pre/post campaign shell hooks. Issue #108)
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
+- `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
