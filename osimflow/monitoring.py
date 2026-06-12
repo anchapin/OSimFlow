@@ -130,6 +130,8 @@ class RunTrace:
         # Per-campaign cost tracking (issue #126).
         self.total_cost_usd: float = 0.0
         self.spot_savings_usd: float = 0.0
+        # Campaign status: "success", "failure", "cancelled" (issue #255).
+        self.status: str = "failure"
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -195,6 +197,7 @@ class RunTrace:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
+            "status": self.status,
             "config": self.config_summary,
             "summary": {
                 "n_samples": len(self.per_sample),
