@@ -19,6 +19,7 @@ The framework foundation (a custom Python driver built on `submitit` for Slurm, 
 - [Decision verdict (spike results)](.agents/results/decision-verdict.md)
 - [Monitoring decision (BYO `run.json`)](.agents/results/monitoring-decision.md)
 - [User Guide](docs/user-guide.md) — installation, configuration, running campaigns, interpreting results
+- [Migration Guide from OpenStudio-Server / PAT](docs/migration-openstudio-server.md) — step-by-step guide for transitioning OSS users
 - [Contributing](docs/CONTRIBUTING.md)
 - [Governance](docs/GOVERNANCE.md)
 

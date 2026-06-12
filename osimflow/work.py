@@ -191,16 +191,115 @@ def default_apply_parameters(
 ) -> Path:
     """Default parameter-application logic.
 
-    A real implementation parses `template` (an .osm or .osw) and writes
-    a modified copy to `out/<sample_id>/`. The current stub is the same
-    one shipped in `bin/apply_params_to_model.py`; we call it as a
-    subprocess to keep the BYOS contract identical: same argv, same exit
-    code, same logging format.
+    Applies parameters by invoking the OpenStudio CLI which properly
+    executes measures through the SDK (issue #248). This replaces the
+    prior static .osw patching approach (apply_params_to_model.py)
+    which bypassed the SDK and prevented runner.registerValue,
+    measure-side pre/post-processing, and proper error reporting.
+
+    When ``openstudio.cli`` is available and ``OSIMFLOW_STUB_SIM`` is
+    not set, this function calls ``openstudio.cli run -w workflow.osw``
+    which executes the full measure pipeline through the SDK. When the
+    CLI is unavailable or stub mode is enabled, falls back to copying
+    the template and writing a placeholder to maintain backward
+    compatibility with the BYOS contract (same argv, same exit code).
     """
     out_dir = out / sample_id
     out_dir.mkdir(parents=True, exist_ok=True)
     param_file = out / f"{sample_id}.params.json"
     param_file.write_text(json.dumps(parameters, sort_keys=True))
+
+    use_real_cli = _is_openstudio_available() and not _is_stub_mode()
+
+    if use_real_cli:
+        return _apply_parameters_via_cli(
+            template=template,
+            sample_id=sample_id,
+            out_dir=out_dir,
+            param_file=param_file,
+        )
+    return _apply_parameters_stub(
+        template=template,
+        sample_id=sample_id,
+        out_dir=out_dir,
+        param_file=param_file,
+    )
+
+
+def _apply_parameters_via_cli(
+    template: Path,
+    sample_id: str,
+    out_dir: Path,
+    param_file: Path,
+) -> Path:
+    """Apply parameters via ``openstudio.cli run`` (issue #248).
+
+    Copies the template into the per-sample directory, finds the
+    workflow.osw, and invokes ``openstudio.cli run -w workflow.osw``.
+    This properly executes measures through the SDK rather than
+    patching the .osw file statically.
+    """
+    pkg_src = template if template.is_dir() else template.parent
+
+    shutil.copytree(pkg_src, out_dir, dirs_exist_ok=True)
+
+    workflow_path = _find_workflow_osw(out_dir)
+    if workflow_path is None:
+        raise RuntimeError(
+            f"No workflow.osw found in {out_dir} for sample={sample_id}. "
+            f"The OpenStudio CLI requires a workflow file to apply parameters."
+        )
+
+    stdout_path = out_dir / "stdout.log"
+    stderr_path = out_dir / "stderr.log"
+
+    cmd: list[str] = [
+        "openstudio.cli",
+        "run",
+        "-w",
+        str(workflow_path),
+    ]
+    log.info(
+        "apply_parameters: openstudio.cli invocation sample=%s workflow=%s cwd=%s",
+        sample_id,
+        workflow_path,
+        out_dir,
+    )
+    try:
+        run_subprocess(
+            cmd,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            cwd=out_dir,
+        )
+    except subprocess.SubprocessError as e:
+        log.error(
+            "apply_parameters: openstudio.cli failed for sample=%s: %s",
+            sample_id,
+            e,
+        )
+        raise RuntimeError(f"apply_parameters failed for {sample_id}") from e
+
+    log.info(
+        "apply_parameters: CLI applied parameters for sample=%s -> %s",
+        sample_id,
+        out_dir,
+    )
+    return out_dir
+
+
+def _apply_parameters_stub(
+    template: Path,
+    sample_id: str,
+    out_dir: Path,
+    param_file: Path,
+) -> Path:
+    """Fallback stub when CLI is unavailable (OSIMFLOW_STUB_SIM=1 or no CLI).
+
+    Copies the template to the output directory and writes a placeholder
+    to simulate successful measure application. Maintains the BYOS contract
+    (same argv, same exit code) without requiring a real OpenStudio install.
+    """
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
@@ -414,6 +513,34 @@ def run_openstudio_sim(
         stderr_path=stderr_path,
         max_retries=max_retries,
     )
+def _parse_register_values(stdout_path: Path) -> dict[str, object] | None:
+    """Parse runner.registerValue JSON output from CLI stdout.
+
+    The OpenStudio CLI writes a JSON array of registered value objects
+    to stdout when measures call ``runner.registerValue``. Each entry
+    has the shape::
+
+        {"name": "variable_name", "value": 123.45, "type": "Double"}
+
+    Returns a dict mapping names to values, or None if parsing fails
+    or no registered values are found.
+    """
+    if not stdout_path.is_file():
+        return None
+    try:
+        text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
+        if not text:
+            return None
+        data = json.loads(text)
+        if not isinstance(data, list):
+            return None
+        result: dict[str, object] = {}
+        for entry in data:
+            if isinstance(entry, dict) and "name" in entry and "value" in entry:
+                result[str(entry["name"])] = entry["value"]
+        return result if result else None
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def _run_real_openstudio(
@@ -432,6 +559,10 @@ def _run_real_openstudio(
     ``eplusout.err``, and other EnergyPlus output files in the
     per-sample work directory (``sim_out``). The framework does **not**
     write placeholder files — the CLI owns the output.
+
+    When measures call ``runner.registerValue``, the CLI outputs a JSON
+    array to stdout. This function captures those values and writes them
+    to ``register_values.json`` in the sample output directory (issue #251).
 
     Raises:
         RuntimeError: when no ``workflow.osw`` is found in the package.
@@ -471,6 +602,16 @@ def _run_real_openstudio(
             e,
         )
         raise
+
+    register_values = _parse_register_values(stdout_path)
+    if register_values is not None:
+        rv_path = sim_out / "register_values.json"
+        rv_path.write_text(json.dumps(register_values, indent=2, default=str))
+        log.info(
+            "captured %d runner.registerValue outputs for sample=%s",
+            len(register_values),
+            sample_id,
+        )
 
     return sim_out
 
