@@ -39,16 +39,29 @@ Typical OSA structure (analysis.json)::
 Distribution mapping
 --------------------
 
-============  ====================  ============================
-OSA type      OSimFlow distribution Parameters
-============  ====================  ============================
+============  ====================  ============================  ==============
+OSA type      OSimFlow distribution Parameters                    Notes
+============  ====================  ============================  ==============
 uniform       uniform               min, max
 normal        normal                mean, sigma
 lognormal     lognormal             mean, sigma
 triangular    triangular            min, max, mode (optional)
 discrete      discrete              values
 categorical   categorical           values, mapping (optional)
-============  ====================  ============================
+pivot         categorical           values, mapping (optional)    pivot: true
+(none)        static                value                         locked variables
+============  ====================  ============================  ==============
+
+Variable type mapping
+---------------------
+
+====================  =====================  ============================
+OSA variable_type     OSimFlow field         Notes
+====================  =====================  ============================
+variable              variable_type=variable  (default)
+argument              variable_type=argument  measure argument
+pivot                 pivot=true              mapped to categorical + flag
+====================  =====================  ============================
 """
 
 import json
@@ -73,6 +86,7 @@ OSA_DISTRIBUTION_MAP: dict[str, str] = {
     "discrete": "discrete",
     "categorical": "categorical",
     "enum": "categorical",
+    "pivot": "categorical",
 }
 
 
@@ -204,17 +218,87 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     if not name:
         return {}, [f"Variable #{index}: skipped (no name)"]
 
-    osa_dist = osa_var.get("distribution")
-    if not osa_dist or not isinstance(osa_dist, dict):
-        return {}, [f"Variable {name!r}: skipped (no distribution)"]
+    # --- Determine variable_type from OSA ---
+    # OSA uses "variable", "argument", or "pivot".  Pivot variables also
+    # have distribution.type == "pivot", but the variable_type field is
+    # the canonical source when present.
+    osa_variable_type = osa_var.get("variable_type", "variable")
+    is_pivot = osa_variable_type == "pivot"
 
+    osa_dist = osa_var.get("distribution")
+
+    # --- Handle missing / empty distribution (static / locked variables) ---
+    if not osa_dist or not isinstance(osa_dist, dict) or not osa_dist.get("type"):
+        # Static / locked variable: no distribution, just a fixed value.
+        default_value = osa_var.get("default_value")
+        if default_value is None:
+            # Try common alternative keys for the static value.
+            default_value = osa_var.get("value") or osa_var.get("static_value")
+        entry: dict[str, Any] = {"name": name, "distribution": "static"}
+        if default_value is not None:
+            entry["value"] = default_value
+
+        # Preserve variable_type for round-trip fidelity.
+        if osa_variable_type and osa_variable_type != "variable":
+            entry["variable_type"] = osa_variable_type
+
+        measure_ref = _resolve_measure_argument(osa_var)
+        if measure_ref:
+            entry["measure_argument"] = measure_ref
+
+        display_name = osa_var.get("display_name")
+        if display_name and display_name != name:
+            entry["display_name"] = display_name
+
+        return entry, warnings
+
+    # --- Handle pivot distribution type ---
+    # Pivot variables in OSA have distribution.type == "pivot".  We map
+    # them to ``categorical`` in OSimFlow but preserve a ``pivot: true``
+    # flag for lossless round-trip.
+    if is_pivot or osa_dist.get("type", "").lower() == "pivot":
+        dist_entry = {"distribution": "categorical"}
+        # Extract values from the pivot distribution if present.
+        values = osa_dist.get("values") or osa_dist.get("discrete_values") or osa_dist.get("enumerations")
+        if values and isinstance(values, list):
+            dist_entry["values"] = values
+        else:
+            # Pivot without explicit values — create a placeholder.
+            dist_entry["values"] = []
+            warnings.append(f"Variable {name!r}: pivot distribution has no 'values'; imported with empty list")
+        mapping = osa_dist.get("mapping")
+        if mapping and isinstance(mapping, dict):
+            dist_entry["mapping"] = mapping
+        dist_entry["pivot"] = True
+
+        entry = {"name": name}
+        entry.update(dist_entry)
+
+        # Preserve variable_type.
+        entry["variable_type"] = "pivot"
+
+        measure_ref = _resolve_measure_argument(osa_var)
+        if measure_ref:
+            entry["measure_argument"] = measure_ref
+
+        display_name = osa_var.get("display_name")
+        if display_name and display_name != name:
+            entry["display_name"] = display_name
+
+        return entry, warnings
+
+    # --- Normal distribution path ---
     try:
         dist_entry = _map_distribution(osa_dist)
     except OSAImportError as exc:
         return {}, [f"Variable {name!r}: {exc}"]
 
-    entry: dict[str, Any] = {"name": name}
+    entry = {"name": name}
     entry.update(dist_entry)
+
+    # Preserve variable_type for round-trip (only when non-default).
+    if osa_variable_type and osa_variable_type != "variable":
+        entry["variable_type"] = osa_variable_type
 
     measure_ref = _resolve_measure_argument(osa_var)
     if measure_ref:
