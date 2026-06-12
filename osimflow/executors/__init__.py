@@ -28,7 +28,22 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
+from osimflow.executors.google_batch_executor import GoogleBatchExecutor as GoogleBatchExecutor
+
 log = logging.getLogger("osimflow.executors")
+
+__all__ = [
+    "AWSBatchExecutor",
+    "AzureBatchExecutor",
+    "BaseExecutor",
+    "GoogleBatchExecutor",
+    "Handle",
+    "LocalExecutor",
+    "NomadExecutor",
+    "SlurmExecutor",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -116,70 +131,6 @@ def run_subprocess(
             timeout=timeout,
             text=True,
         )
-
-
-@dataclasses.dataclass
-class Handle:
-    """A future-like handle. Substrate-specific implementations subclass this.
-
-    The Handle abstracts over both `concurrent.futures.Future` (local)
-    and `submitit.Future` (Slurm), whose `.result()` and `.done()`
-    signatures differ slightly. We unify them here.
-
-    Worker tracking fields (issue #105) are populated by each executor
-    at submit time so the Campaign can attribute every sample to the
-    worker that processed it — essential for cost attribution and
-    debugging large campaigns.
-    """
-
-    job_id: str
-    _future: Future[Any]
-    worker_id: str | None = None
-    worker_ip: str | None = None
-    worker_region: str | None = None
-    # Per-sample cost tracking (issue #126).
-    cost_usd: float | None = None
-    billed_duration_seconds: float | None = None
-
-    def result(self, timeout: float | None = None) -> Any:
-        # submitit.Future.result() does not accept `timeout`; ignore the
-        # argument for that substrate. concurrent.futures.Future accepts it.
-        try:
-            return self._future.result(timeout=timeout)
-        except TypeError:
-            return self._future.result()
-
-    def done(self) -> bool:
-        try:
-            return self._future.done()
-        except AttributeError:
-            # submitit jobs have no done(); poll via _future._job_state or
-            # trust that result() with no timeout returns immediately if
-            # the job is finished. Fall back to a getattr that doesn't
-            # blow up.
-            return getattr(self._future, "_completed", False)
-
-
-class BaseExecutor(abc.ABC):
-    """All executors conform to this interface."""
-
-    name: str = "base"
-
-    @abc.abstractmethod
-    def submit(
-        self,
-        fn: Callable[..., Any],
-        *args: Any,
-        name: str = "task",
-        cpus: int = 1,
-        memory_mb: int = 1024,
-        time_min: int = 60,
-        container: str | None = None,
-        **kwargs: Any,
-    ) -> Handle: ...
-
-    @abc.abstractmethod
-    def shutdown(self) -> None: ...
 
 
 class LocalExecutor(BaseExecutor):

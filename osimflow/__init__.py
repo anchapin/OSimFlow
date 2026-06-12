@@ -14,7 +14,9 @@ from .campaign import Campaign
 from .config import CampaignConfig, load_config
 from .executors import (
     AWSBatchExecutor,
+    AzureBatchExecutor,
     BaseExecutor,
+    GoogleBatchExecutor,
     LocalExecutor,
     NomadExecutor,
     SlurmExecutor,
@@ -58,6 +60,8 @@ __all__ = [
     "LocalExecutor",
     "SlurmExecutor",
     "AWSBatchExecutor",
+    "AzureBatchExecutor",
+    "GoogleBatchExecutor",
     "NomadExecutor",
     "JobQueue",
     "RunTrace",

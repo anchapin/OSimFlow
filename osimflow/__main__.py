@@ -21,11 +21,13 @@ from pathlib import Path
 
 from osimflow import (
     AWSBatchExecutor,
+    AzureBatchExecutor,
     BaseExecutor,
     Campaign,
     CampaignConfig,
     CampaignRecord,
     CampaignRegistry,
+    GoogleBatchExecutor,
     LocalExecutor,
     NomadExecutor,
     SlurmExecutor,
@@ -70,12 +72,27 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
         )
+    if args.executor == "azure_batch":
+        return AzureBatchExecutor(
+            account_name=args.azure_batch_account_name,
+            account_url=args.azure_batch_account_url,
+            pool_id=args.azure_batch_pool_id,
+            location=args.azure_batch_location,
+        )
+    if args.executor == "google_batch":
+        return GoogleBatchExecutor(
+            project_id=args.google_batch_project_id,
+            region=args.google_batch_region,
+            batch_service_account=args.google_batch_service_account,
+        )
     raise ValueError(f"unknown executor: {args.executor}")
 
 
 def _add_run_args(run: argparse.ArgumentParser) -> None:
     run.add_argument(
-        "--executor", choices=["local", "slurm", "aws_batch", "nomad"], default="local"
+        "--executor",
+        choices=["local", "slurm", "aws_batch", "nomad", "azure_batch", "google_batch"],
+        default="local",
     )
     run.add_argument("--max-workers", type=int, default=4, help="Local executor parallelism")
     run.add_argument("--slurm-partition", default="short")
@@ -154,6 +171,41 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
         "--nomad-datacentre",
         default="dc1",
         help="Nomad datacentre to target (default: dc1).",
+    )
+    run.add_argument(
+        "--azure-batch-account-name",
+        default=None,
+        help="Azure Batch account name (e.g. osimflowbatch).",
+    )
+    run.add_argument(
+        "--azure-batch-account-url",
+        default=None,
+        help="Azure Batch account URL (e.g. https://osimflowbatch.eastus.batch.azure.com).",
+    )
+    run.add_argument(
+        "--azure-batch-pool-id",
+        default="osimflow-pool",
+        help="Azure Batch pool ID (default: osimflow-pool).",
+    )
+    run.add_argument(
+        "--azure-batch-location",
+        default="eastus",
+        help="Azure region/location for the Batch account (default: eastus).",
+    )
+    run.add_argument(
+        "--google-batch-project-id",
+        default=None,
+        help="Google Cloud project ID (e.g. my-project).",
+    )
+    run.add_argument(
+        "--google-batch-region",
+        default="us-central1",
+        help="Google Cloud region for Batch jobs (default: us-central1).",
+    )
+    run.add_argument(
+        "--google-batch-service-account",
+        default=None,
+        help="Google Cloud service account email for Batch jobs.",
     )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
