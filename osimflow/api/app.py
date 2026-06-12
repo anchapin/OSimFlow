@@ -17,12 +17,13 @@ from typing import Any, cast
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.staticfiles import StaticFiles
 
 from osimflow.api.events import events_router
 
@@ -30,7 +31,7 @@ log = logging.getLogger("osimflow.api")
 
 router = APIRouter()
 
-PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
+PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/", "/static/index.html", ""})
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +303,63 @@ async def get_pareto(request: Request) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Plots (issue #264)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/v1/plots")  # type: ignore[untyped-decorator]
+async def get_plots(request: Request) -> dict[str, Any]:
+    """List available PNG plot files from the campaign outdir."""
+    if request.app.state.outdir is None:
+        raise HTTPException(status_code=503, detail="No output directory configured")
+    plots: list[dict[str, Any]] = []
+    # Look for PNG files directly in outdir and in outdir/plots/
+    search_dirs: list[Path] = [request.app.state.outdir]
+    plots_dir = request.app.state.outdir / "plots"
+    if plots_dir.is_dir():
+        search_dirs.append(plots_dir)
+    for search_dir in search_dirs:
+        for png_file in sorted(search_dir.glob("*.png")):
+            plots.append({"name": png_file.name, "size": png_file.stat().st_size})
+    # Deduplicate by name (prefer plots/ subdir)
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for p in reversed(plots):
+        if p["name"] not in seen:
+            seen.add(p["name"])
+            unique.append(p)
+    unique.reverse()
+    return {"plots": unique, "total": len(unique)}
+
+
+@router.get("/api/v1/plots/{filename}")  # type: ignore[untyped-decorator]
+async def get_plot_file(filename: str, request: Request) -> FileResponse:
+    """Serve a single PNG plot file."""
+    if request.app.state.outdir is None:
+        raise HTTPException(status_code=503, detail="No output directory configured")
+    # Sanitize: only allow .png files with safe names
+    if not filename.endswith(".png") or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid plot filename")
+    # Check plots/ subdir first, then outdir root
+    for search_dir in [request.app.state.outdir / "plots", request.app.state.outdir]:
+        candidate = search_dir / filename
+        if candidate.is_file():
+            return FileResponse(candidate, media_type="image/png")
+    raise HTTPException(status_code=404, detail=f"Plot '{filename}' not found")
+
+
+# ---------------------------------------------------------------------------
+# Root redirect (issue #264)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/")  # type: ignore[untyped-decorator]
+async def root_redirect() -> RedirectResponse:
+    """Redirect root to the web GUI."""
+    return RedirectResponse(url="/static/index.html")
+
+
+# ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
 
@@ -366,5 +424,11 @@ def create_app(
     # --- Routes ---
     app.include_router(router)
     app.include_router(events_router)
+
+    # --- Static files for the web GUI (issue #264) ---
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        log.info("web GUI mounted at /static/ from %s", static_dir)
 
     return app
