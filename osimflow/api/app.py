@@ -24,6 +24,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from osimflow.api.campaigns import campaigns_router
 from osimflow.api.events import events_router
 
 log = logging.getLogger("osimflow.api")
@@ -309,6 +310,7 @@ async def get_pareto(request: Request) -> dict[str, Any]:
 def create_app(
     outdir: Path | None = None,
     *,
+    campaigns_base_dir: Path | None = None,
     read_only: bool = True,
     api_key: str | None = None,
     cors_origins: list[str] | None = None,
@@ -320,6 +322,13 @@ def create_app(
     ----------
     outdir
         Path to the campaign output directory containing ``run.json``.
+        Used by the legacy single-campaign endpoints and as a fallback
+        when ``campaigns_base_dir`` is not set.
+    campaigns_base_dir
+        Path to the base directory containing multiple campaign
+        subdirectories (issue #267).  Each subdirectory is identified
+        by its directory name (``campaign_id``) and must contain a
+        ``run.json`` to be discoverable.
     read_only
         If ``True`` (default), only GET endpoints are available.
     api_key
@@ -341,6 +350,7 @@ def create_app(
 
     # --- Application state ---
     app.state.outdir = outdir
+    app.state.campaigns_base_dir = campaigns_base_dir
     app.state.read_only = read_only
     app.state.api_key = api_key
 
@@ -366,5 +376,6 @@ def create_app(
     # --- Routes ---
     app.include_router(router)
     app.include_router(events_router)
+    app.include_router(campaigns_router)
 
     return app
