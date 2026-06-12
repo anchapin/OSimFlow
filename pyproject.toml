@@ -51,6 +51,7 @@ dev = [
     "types-PyYAML",
     "pre-commit>=3.7",
     "moto[batch]>=5",
+    "streamlit>=1.30",
 ]
 aws = [
     "boto3>=1.28",
@@ -73,6 +74,9 @@ api = [
     "uvicorn[standard]>=0.29",
     "sse-starlette>=2.0",
 ]
+viz = [
+    "streamlit>=1.30",
+]
 
 [project.scripts]
 osimflow = "osimflow.__main__:main"
@@ -82,7 +86,7 @@ Homepage = "https://github.com/anchapin/OSimFlow"
 Issues = "https://github.com/anchapin/OSimFlow/issues"
 
 [tool.setuptools]
-packages = ["osimflow", "osimflow.executors", "osimflow.api"]
+packages = ["osimflow", "osimflow.executors", "osimflow.api", "osimflow.viz"]
 
 [tool.setuptools.package-data]
 osimflow = ["py.typed"]
@@ -114,6 +118,7 @@ omit = [
     "osimflow/algorithms/nsga2.py",
     "osimflow/algorithms/pso.py",
     "osimflow/api/*",
+    "osimflow/viz/dashboard.py",
 ]
 
 [tool.coverage.report]

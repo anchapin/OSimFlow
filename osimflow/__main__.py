@@ -362,6 +362,21 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
     serve.set_defaults(func=_cmd_serve)
 
 
+def _add_dashboard_args(dash: argparse.ArgumentParser) -> None:
+    dash.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory to visualise",
+    )
+    dash.add_argument(
+        "--port",
+        type=int,
+        default=8501,
+        help="Port for the local dashboard (default: 8501)",
+    )
+    dash.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -382,6 +397,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_export_args(exp)
     serve = sub.add_parser("serve", help="Start REST API server")
     _add_serve_args(serve)
+    dash = sub.add_parser(
+        "dashboard",
+        help="Launch local ephemeral dashboard for campaign results",
+    )
+    _add_dashboard_args(dash)
     return p
 
 
@@ -400,6 +420,26 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     app = create_app(outdir=args.outdir, read_only=args.read_only)
     uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
+def _cmd_dashboard(args: argparse.Namespace) -> int:
+    """Launch the local ephemeral Streamlit dashboard."""
+    outdir: Path = args.outdir.resolve()
+    if not outdir.is_dir():
+        print(f"error: {outdir} is not a directory", file=sys.stderr)
+        return 1
+
+    try:
+        from osimflow.viz.dashboard import create_dashboard_app  # noqa: PLC0415
+    except ImportError:
+        print(
+            "Error: osimflow[viz] extra required. Install with: pip install osimflow[viz]",
+            file=sys.stderr,
+        )
+        return 1
+
+    create_dashboard_app(outdir=outdir, port=args.port)
     return 0
 
 
@@ -450,6 +490,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_export(args)
     if args.command == "serve":
         return _cmd_serve(args)
+    if args.command == "dashboard":
+        return _cmd_dashboard(args)
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))
