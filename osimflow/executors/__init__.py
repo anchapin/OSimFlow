@@ -445,22 +445,31 @@ class _AWSBatchHandle(Handle):
     and the Batch `jobId`; `result()` blocks on `_wait_for_terminal`
     and `done()` does a single non-blocking `describe_jobs` call.
 
+    Spot retry logic (issue #131) lives here so that `submit()` can
+    return immediately (issue #262).  When `result()` detects a Spot
+    interruption, it resubmits using the stored `_submit_params` and
+    retries up to ``executor.max_retries`` times before falling back
+    to on-demand or failing.
+
     Not a dataclass — the parent `Handle` is, and dataclass inheritance
     fights with the new `_executor` field (default-vs-required ordering
     gets ugly). Constructed only inside `AWSBatchExecutor.submit()`,
     so we own the call site and don't need the dataclass machinery.
     """
 
-    def __init__(self, job_id: str, executor: "AWSBatchExecutor") -> None:
+    def __init__(
+        self,
+        job_id: str,
+        executor: "AWSBatchExecutor",
+        submit_params: dict[str, Any],
+    ) -> None:
         self.job_id = job_id
         self._executor = executor
+        self._submit_params = submit_params
         # Keep a `Future` so the base-class `.result(timeout=...)` /
         # `.done()` paths remain reachable; we cache the poll result
         # in it so concurrent callers don't re-poll.
         self._future: Future[Any] = Future()
-        # _future must be set for the parent Handle; we set a sentinel
-        # value so concurrent `.done()` callers see a consistent state.
-        # The actual poll happens in `result()` below.
         # Worker tracking (issue #105): populate at submit time.
         self.worker_id: str | None = job_id
         self.worker_ip: str | None = None
@@ -469,18 +478,8 @@ class _AWSBatchHandle(Handle):
         self.cost_usd: float | None = None
         self.billed_duration_seconds: float | None = None
 
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
-        # The polling itself doesn't take a `timeout` parameter; the
-        # Batch attempt-duration timeout (set on submit_job) is the
-        # substrate-level kill. `timeout` here is accepted for the
-        # base-class signature but not enforced — the existing
-        # LocalExecutor/SlurmExecutor take the same approach.
-        try:
-            job = self._executor._wait_for_terminal(self.job_id)  # noqa: SLF001
-        except BaseException as exc:  # noqa: BLE001 — surface any poll error
-            self._future.set_exception(exc)
-            raise
-        # Compute per-job cost from startedAt/stoppedAt (issue #126).
+    def _apply_cost(self, job: dict[str, Any]) -> None:
+        """Compute and store per-job cost from a completed job dict."""
         started = job.get("startedAt")
         stopped = job.get("stoppedAt")
         if started is not None and stopped is not None:
@@ -488,17 +487,82 @@ class _AWSBatchHandle(Handle):
         cost_usd, _spot_savings = self._executor._calculate_job_cost(job)  # noqa: SLF001
         if cost_usd > 0:
             self.cost_usd = cost_usd
-        status = job.get("status")
-        if status == "SUCCEEDED":
-            self._future.set_result(None)
-            return None
-        # FAILED (or any non-SUCCEEDED terminal state): re-raise with
-        # the statusReason so the Campaign's `except Exception` path
-        # logs a useful line.
-        reason = job.get("statusReason", "unknown reason")
-        msg = f"AWS Batch job {self.job_id!r} {status}: {reason}"
-        self._future.set_exception(RuntimeError(msg))
-        raise RuntimeError(msg)
+
+    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
+        # The polling itself doesn't take a `timeout` parameter; the
+        # Batch attempt-duration timeout (set on submit_job) is the
+        # substrate-level kill. `timeout` here is accepted for the
+        # base-class signature but not enforced — the existing
+        # LocalExecutor/SlurmExecutor take the same approach.
+        #
+        # Spot retry loop (issue #131): on Spot interruption, resubmit
+        # up to max_retries times, then fall back to on-demand or fail.
+        effective_max_retries = max(0, self._executor.max_retries)
+        for attempt in range(effective_max_retries + 1):
+            try:
+                job = self._executor._wait_for_terminal(self.job_id)  # noqa: SLF001
+            except BaseException as exc:  # noqa: BLE001 — surface any poll error
+                self._future.set_exception(exc)
+                raise
+
+            self._apply_cost(job)
+            status = job.get("status")
+            if status == "SUCCEEDED":
+                self._future.set_result(None)
+                return None
+
+            # Job FAILED — check if it was a Spot interruption.
+            reason = job.get("statusReason", "")
+            is_spot = self._executor._is_spot_interruption(reason)  # noqa: SLF001
+
+            if is_spot and attempt < effective_max_retries:
+                backoff = min(5.0 * (2**attempt), 60.0)
+                log.warning(
+                    "Spot interrupted (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1,
+                    effective_max_retries,
+                    backoff,
+                    reason,
+                )
+                time.sleep(backoff)
+                # Resubmit and update the tracked job_id.
+                self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
+                self.worker_id = self.job_id
+                continue
+
+            if is_spot and attempt >= effective_max_retries:
+                # Exhausted retries — fall back or fail.
+                if self._executor.fallback_to_on_demand:
+                    log.warning(
+                        "Spot retries exhausted (%d), falling back to on-demand",
+                        effective_max_retries,
+                    )
+                    self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
+                    self.worker_id = self.job_id
+                    # Poll the on-demand job (no more retries).
+                    try:
+                        job = self._executor._wait_for_terminal(self.job_id)  # noqa: SLF001
+                    except BaseException as exc:  # noqa: BLE001
+                        self._future.set_exception(exc)
+                        raise
+                    self._apply_cost(job)
+                    status = job.get("status")
+                    if status == "SUCCEEDED":
+                        self._future.set_result(None)
+                        return None
+                    reason = job.get("statusReason", "unknown reason")
+                    msg = f"AWS Batch job {self.job_id!r} {status}: {reason}"
+                    self._future.set_exception(RuntimeError(msg))
+                    raise RuntimeError(msg)
+                raise RuntimeError(f"Spot retries exhausted ({effective_max_retries}): {reason}")
+
+            # Non-spot failure — don't retry, raise immediately.
+            msg = f"AWS Batch job {self.job_id!r} {status}: {reason}"
+            self._future.set_exception(RuntimeError(msg))
+            raise RuntimeError(msg)
+
+        # Unreachable, but satisfies the type checker.
+        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
 
     def done(self) -> bool:
         # A single non-blocking `describe_jobs` is the cheapest probe.
@@ -855,14 +919,14 @@ class AWSBatchExecutor(BaseExecutor):
         )
 
         # --- Spot price ceiling check (issue #131) ---
-        # If a price ceiling is configured and the current Spot price
-        # exceeds it, either raise or fall back to on-demand.
-        price_ceiling_breached = False
+        # Fast, non-blocking check: query the current Spot price and
+        # either raise or fall back to on-demand. This gate runs before
+        # any job submission so we don't waste a Batch task that would
+        # immediately be more expensive than the ceiling.
         if self.max_spot_price_usd is not None:
             try:
                 current_price = self._get_spot_price()
                 if current_price > self.max_spot_price_usd:
-                    price_ceiling_breached = True
                     msg = (
                         f"Spot price ${current_price:.4f} exceeds ceiling "
                         f"${self.max_spot_price_usd:.4f}"
@@ -879,89 +943,25 @@ class AWSBatchExecutor(BaseExecutor):
                 # transient EC2 API issues.
                 log.warning("could not check Spot price: %s", exc)
 
-        # If price ceiling is breached and fallback is enabled, go
-        # straight to on-demand without spot retry.
-        if price_ceiling_breached and self.fallback_to_on_demand:
-            job_id = self._submit_job(
-                name=name,
-                cpus=cpus,
-                memory_mb=memory_mb,
-                time_min=time_min,
-                environment=environment,
-            )
-            del fn, args  # noqa: ARG002 — see note below
-            return _AWSBatchHandle(
-                job_id=job_id,
-                executor=self,
-            )
+        # Submit the job to AWS Batch and return immediately (issue #262).
+        # Spot retry logic lives in _AWSBatchHandle.result() so that
+        # submit() is non-blocking — a prerequisite for concurrent fan-out.
+        del fn, args  # noqa: ARG002 — work runs inside the Batch container
 
-        # --- Spot retry loop (issue #131) ---
-        # Submit the job. On Spot interruption, retry up to max_retries
-        # times with exponential backoff. After exhausting retries,
-        # either fall back to on-demand or fail.
-        effective_max_retries = max(0, self.max_retries)
-        for attempt in range(effective_max_retries + 1):
-            job_id = self._submit_job(
-                name=name,
-                cpus=cpus,
-                memory_mb=memory_mb,
-                time_min=time_min,
-                environment=environment,
-            )
+        submit_params: dict[str, Any] = {
+            "name": name,
+            "cpus": cpus,
+            "memory_mb": memory_mb,
+            "time_min": time_min,
+            "environment": environment,
+        }
+        job_id = self._submit_job(**submit_params)
 
-            # Block until the job reaches a terminal state.
-            job = self._wait_for_terminal(job_id)
-            status = job.get("status")
-            if status == "SUCCEEDED":
-                del fn, args  # noqa: ARG002 — see note below
-                return _AWSBatchHandle(
-                    job_id=job_id,
-                    executor=self,
-                )
-
-            # Job FAILED — check if it was a Spot interruption.
-            reason = job.get("statusReason", "")
-            is_spot = self._is_spot_interruption(reason)
-            if is_spot and attempt < effective_max_retries:
-                # Exponential backoff: 5s, 10s, 20s, 40s, 60s cap.
-                backoff = min(5.0 * (2**attempt), 60.0)
-                log.warning(
-                    "Spot interrupted (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt + 1,
-                    effective_max_retries,
-                    backoff,
-                    reason,
-                )
-                time.sleep(backoff)
-                continue
-
-            if is_spot and attempt >= effective_max_retries:
-                # Exhausted retries — fall back or fail.
-                if self.fallback_to_on_demand:
-                    log.warning(
-                        "Spot retries exhausted (%d), falling back to on-demand",
-                        effective_max_retries,
-                    )
-                    on_demand_id = self._submit_job(
-                        name=name,
-                        cpus=cpus,
-                        memory_mb=memory_mb,
-                        time_min=time_min,
-                        environment=environment,
-                    )
-                    del fn, args  # noqa: ARG002 — see note below
-                    return _AWSBatchHandle(
-                        job_id=on_demand_id,
-                        executor=self,
-                    )
-                raise RuntimeError(f"Spot retries exhausted ({effective_max_retries}): {reason}")
-
-            # Non-spot failure — don't retry, raise immediately.
-            msg = f"AWS Batch job {job_id!r} {status}: {reason}"
-            raise RuntimeError(msg)
-
-        # Unreachable, but satisfies the type checker.
-        raise RuntimeError("submit loop exited unexpectedly")  # pragma: no cover
+        return _AWSBatchHandle(
+            job_id=job_id,
+            executor=self,
+            submit_params=submit_params,
+        )
 
     def shutdown(self) -> None:
         # boto3 clients hold an HTTP session that is closed by the

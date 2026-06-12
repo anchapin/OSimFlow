@@ -434,8 +434,9 @@ class TestAWSBatchSubmit:
         ex._client.describe_jobs.return_value = {
             "jobs": [{"jobId": "j-2", "status": "FAILED", "statusReason": "OOM"}]
         }
+        handle = ex.submit(lambda: None, name="fail")
         with pytest.raises(RuntimeError, match="OOM"):
-            ex.submit(lambda: None, name="fail")
+            handle.result(timeout=5)
 
     def test_wait_for_terminal_polls(self) -> None:
         ex = self._make_executor()
@@ -554,7 +555,10 @@ class TestAWSBatchHandle:
         ex._region_name = None
         ex.poll_interval_s = 0.01
         ex.max_poll_interval_s = 0.02
-        handle = _AWSBatchHandle(job_id="j-h", executor=ex)
+        ex.max_retries = 0
+        ex.fallback_to_on_demand = False
+        ex._ec2_client = MagicMock()
+        handle = _AWSBatchHandle(job_id="j-h", executor=ex, submit_params={})
         return handle, mock_client
 
     def test_result_succeeded(self) -> None:
