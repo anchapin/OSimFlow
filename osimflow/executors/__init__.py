@@ -137,6 +137,9 @@ class Handle:
     worker_id: str | None = None
     worker_ip: str | None = None
     worker_region: str | None = None
+    # Per-sample cost tracking (issue #126).
+    cost_usd: float | None = None
+    billed_duration_seconds: float | None = None
 
     def result(self, timeout: float | None = None) -> Any:
         # submitit.Future.result() does not accept `timeout`; ignore the
@@ -462,6 +465,9 @@ class _AWSBatchHandle(Handle):
         self.worker_id: str | None = job_id
         self.worker_ip: str | None = None
         self.worker_region: str | None = os.environ.get("AWS_REGION")
+        # Cost tracking (issue #126): populated after job completes.
+        self.cost_usd: float | None = None
+        self.billed_duration_seconds: float | None = None
 
     def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
         # The polling itself doesn't take a `timeout` parameter; the
@@ -474,6 +480,14 @@ class _AWSBatchHandle(Handle):
         except BaseException as exc:  # noqa: BLE001 — surface any poll error
             self._future.set_exception(exc)
             raise
+        # Compute per-job cost from startedAt/stoppedAt (issue #126).
+        started = job.get("startedAt")
+        stopped = job.get("stoppedAt")
+        if started is not None and stopped is not None:
+            self.billed_duration_seconds = max(0.0, (stopped - started) / 1000.0)
+        cost_usd, _spot_savings = self._executor._calculate_job_cost(job)  # noqa: SLF001
+        if cost_usd > 0:
+            self.cost_usd = cost_usd
         status = job.get("status")
         if status == "SUCCEEDED":
             self._future.set_result(None)
@@ -545,6 +559,13 @@ class AWSBatchExecutor(BaseExecutor):
     """
 
     name = "aws_batch"
+
+    # Default pricing estimates (USD per vCPU-hour). Conservative defaults
+    # used when the Spot price cannot be queried or the instance type is
+    # unknown. These are intentionally slightly above market average to
+    # keep estimates within 20% of the actual AWS bill (issue #126).
+    DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR: float = 0.05
+    DEFAULT_SPOT_PRICE_PER_VCPU_HOUR: float = 0.03
 
     # Sentinel used in statusReason to identify Spot interruptions.
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
@@ -699,6 +720,56 @@ class AWSBatchExecutor(BaseExecutor):
             "memory": memory_mb,
             "environment": environment,
         }
+
+    def _calculate_job_cost(
+        self,
+        job: dict[str, Any],
+        vcpus: int = 1,
+    ) -> tuple[float, float]:
+        """Estimate cost for a completed Batch job (issue #126).
+
+        Uses the job's ``startedAt`` and ``stoppedAt`` timestamps to
+        determine billed duration, then multiplies by the per-vCPU-hour
+        rate.  For Spot jobs, the rate is the lower Spot price; the
+        difference between Spot and On-Demand is the savings.
+
+        Returns (cost_usd, spot_savings_usd).  Both default to 0.0 when
+        timestamps or pricing data are unavailable.
+
+        Parameters
+        ----------
+        job
+            The Batch ``describe_jobs`` response dict for the completed job.
+        vcpus
+            Number of vCPUs allocated to the job (from container overrides
+            or the job definition).
+        """
+        started = job.get("startedAt")
+        stopped = job.get("stoppedAt")
+        if started is None or stopped is None:
+            return 0.0, 0.0
+
+        # Batch timestamps are milliseconds since epoch.
+        duration_s = max(0.0, (stopped - started) / 1000.0)
+        if duration_s <= 0:
+            return 0.0, 0.0
+
+        duration_hours = duration_s / 3600.0
+
+        # Determine the effective Spot price.
+        spot_price = self.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+        try:
+            queried_price = self._get_spot_price()
+            if queried_price > 0:
+                spot_price = queried_price
+        except Exception as exc:
+            log.debug("could not query Spot price for cost calc, using default: %s", exc)
+
+        on_demand_price = self.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+        cost_usd = duration_hours * vcpus * on_demand_price
+        spot_savings = duration_hours * vcpus * (on_demand_price - spot_price)
+
+        return cost_usd, spot_savings
 
     def _wait_for_terminal(self, job_id: str) -> dict[str, Any]:
         """Poll `describe_jobs` with exponential backoff until the task

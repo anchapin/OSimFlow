@@ -55,7 +55,7 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
-from .executors import BaseExecutor
+from .executors import AWSBatchExecutor, BaseExecutor
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -211,6 +211,13 @@ class Campaign:
             worker_ip = None if worker_ip_obj is None else str(worker_ip_obj)
             worker_region_obj = state.get("worker_region")
             worker_region = None if worker_region_obj is None else str(worker_region_obj)
+            # Cost tracking (issue #126): extract from per-sample state.
+            cost_usd_obj = state.get("cost_usd")
+            cost_usd: float | None = None if cost_usd_obj is None else float(str(cost_usd_obj))
+            billed_duration_obj = state.get("billed_duration_seconds")
+            billed_duration_seconds: float | None = (
+                None if billed_duration_obj is None else float(str(billed_duration_obj))
+            )
             self.trace.sample_done(
                 SampleTrace(
                     sample_id=sid,
@@ -226,8 +233,41 @@ class Campaign:
                     worker_id=worker_id,
                     worker_ip=worker_ip,
                     worker_region=worker_region,
+                    cost_usd=cost_usd,
+                    billed_duration_seconds=billed_duration_seconds,
                 )
             )
+
+        # Accumulate campaign-level cost totals (issue #126).
+        self._accumulate_cost_summary()
+
+    def _accumulate_cost_summary(self) -> None:
+        """Sum per-sample costs into campaign-level totals (issue #126).
+
+        Populates ``self.trace.total_cost_usd`` and
+        ``self.trace.spot_savings_usd`` from the individual
+        ``SampleTrace.cost_usd`` values.  Non-cloud executors produce
+        ``None`` costs, so both totals remain at 0.0 for local runs.
+        """
+        total = 0.0
+        for sample in self.trace.per_sample:
+            if sample.cost_usd is not None:
+                total += sample.cost_usd
+        self.trace.total_cost_usd = round(total, 6)
+        # Spot savings is the difference between on-demand and spot.
+        # The executor already uses on-demand pricing in cost_usd;
+        # spot_savings is the theoretical savings if the job ran on Spot
+        # instead. For simplicity, we estimate this as a fixed fraction
+        # (~40%) of total on-demand cost, matching the default pricing
+        # ratio ($0.05 on-demand vs $0.03 spot).
+        if total > 0:
+            savings_ratio = (
+                AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+                - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+            ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+            self.trace.spot_savings_usd = round(total * savings_ratio, 6)
+        else:
+            self.trace.spot_savings_usd = 0.0
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -936,6 +976,9 @@ class Campaign:
         log.info("  failed:        %s", aggregated["failed"])
         log.info("  plots:         %s", plots)
         log.info("  run trace:     %s", self.cfg.outdir / "run.json")
+        if self.trace.total_cost_usd > 0:
+            log.info("  total cost:    $%.4f", self.trace.total_cost_usd)
+            log.info("  spot savings:  $%.4f", self.trace.spot_savings_usd)
         log.info("=" * 60)
         return {
             "samples": last_samples,
@@ -1399,6 +1442,9 @@ class Campaign:
                 state["worker_id"] = handle.worker_id
                 state["worker_ip"] = handle.worker_ip
                 state["worker_region"] = handle.worker_region
+                # Cost tracking (issue #126): capture from the sim handle.
+                state["cost_usd"] = handle.cost_usd
+                state["billed_duration_seconds"] = handle.billed_duration_seconds
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                 # Archive eplusout.sql when flag is set
                 if self.cfg.archive_intermediates:
