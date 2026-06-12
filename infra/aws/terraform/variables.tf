@@ -92,3 +92,26 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "log_retention_days" {
+  description = "CloudWatch log retention period in days"
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827], var.log_retention_days)
+    error_message = "log_retention_days must be a valid CloudWatch Logs retention period (1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827)."
+  }
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly cost budget limit in USD for AWS Batch"
+  type        = number
+  default     = 500
+}
+
+variable "alert_email_addresses" {
+  description = "Email addresses to receive cost alerts"
+  type        = list(string)
+  default     = []
+}

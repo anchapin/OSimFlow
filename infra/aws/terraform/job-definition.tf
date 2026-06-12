@@ -36,7 +36,7 @@ resource "aws_batch_job_definition" "osimflow" {
     logConfiguration = {
       logDriver = "awslogs"
       options = {
-        "awslogs-group"         = "/aws/batch/${local.name_prefix}"
+        "awslogs-group"         = aws_cloudwatch_log_group.batch.name
         "awslogs-region"        = var.region
         "awslogs-stream-prefix" = "osimflow"
       }
