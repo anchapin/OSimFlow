@@ -79,6 +79,74 @@ terraform apply -target=aws_ecr_repository.openstudio -target=aws_ecr_lifecycle_
 
 Or apply the full stack to get the repository along with the Batch compute environment, job queue, and IAM roles.
 
+## OSimFlow CLI Image (`anchapin/osimflow`)
+
+In addition to the consumed `nrel/openstudio` simulation image, the
+project publishes its own CLI image to Docker Hub:
+
+```
+docker.io/anchapin/osimflow:<version>
+docker.io/anchapin/osimflow:latest
+```
+
+### What's inside
+
+| Layer | Details |
+|---|---|
+| Base image | `python:3.12-slim` |
+| OSimFlow | Installed from source with `[aws,slurm]` extras |
+| `bin/` scripts | Copied to `/opt/osimflow/bin` (called by the work layer) |
+| Entry point | `osimflow` CLI (`osimflow --help`) |
+
+The Dockerfile lives at `docker/osimflow-cli/Dockerfile` and uses a
+**multi-stage build** to keep the runtime image small — only the
+installed packages and entry point are carried into the final stage.
+
+### Building locally
+
+From the repository root:
+
+```bash
+docker build -f docker/osimflow-cli/Dockerfile -t anchapin/osimflow:local .
+```
+
+Run a quick smoke test:
+
+```bash
+docker run --rm anchapin/osimflow:local --help
+```
+
+Run a campaign with local input files mounted via volume:
+
+```bash
+docker run --rm \
+  -v $(pwd)/variables.yml:/workspace/variables.yml \
+  -v $(pwd)/example_package:/workspace/example_package \
+  -v $(pwd)/results:/workspace/results \
+  anchapin/osimflow:local \
+  run --executor local \
+      --input_variables /workspace/variables.yml \
+      --template_sim_package /workspace/example_package \
+      --n_samples 5 \
+      --outdir /workspace/results
+```
+
+### CI/CD pipeline
+
+The workflow at `.github/workflows/osimflow-cli-image.yml` builds and
+pushes the image automatically:
+
+| Trigger | Action |
+|---|---|
+| Tag push `osimflow-v*` | Build `linux/amd64` + `linux/arm64`, push `<version>` + `latest` tags |
+| `workflow_dispatch` | Manual build (optionally push) |
+
+**Docker Hub authentication** uses repository secrets
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+
+Build caches are stored on GitHub Actions cache (`type=gha`) so
+subsequent builds are fast when only metadata changed.
+
 ## Updating the Batch Job Definition
 
 After syncing a new version, update the Batch job definition to reference the new tag:
