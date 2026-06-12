@@ -45,7 +45,12 @@ def _make_run_json(
         "per_sample": samples
         or [
             {"sample_id": "sample_000", "status": "ok", "elapsed_s": 10.0},
-            {"sample_id": "sample_001", "status": "failed", "elapsed_s": 5.0, "error_summary": "Severe Error"},
+            {
+                "sample_id": "sample_001",
+                "status": "failed",
+                "elapsed_s": 5.0,
+                "error_summary": "Severe Error",
+            },
             {"sample_id": "sample_002", "status": "ok", "elapsed_s": 12.0},
         ],
     }
@@ -107,17 +112,13 @@ def campaigns_base(tmp_path: Path) -> Path:
 @pytest.fixture
 def client_rw(campaigns_base: Path) -> TestClient:
     """TestClient with campaigns_base_dir and read_only=False."""
-    return TestClient(
-        create_app(campaigns_base_dir=campaigns_base, read_only=False)
-    )
+    return TestClient(create_app(campaigns_base_dir=campaigns_base, read_only=False))
 
 
 @pytest.fixture
 def client_ro(campaigns_base: Path) -> TestClient:
     """TestClient with campaigns_base_dir and read_only=True (default)."""
-    return TestClient(
-        create_app(campaigns_base_dir=campaigns_base)
-    )
+    return TestClient(create_app(campaigns_base_dir=campaigns_base))
 
 
 @pytest.fixture
