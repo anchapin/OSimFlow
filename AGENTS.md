@@ -109,11 +109,12 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Path | Purpose |
 |---|---|
-| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`). |
+| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), and logging setup (`get_logger`, `setup_logging`). |
 | `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` — explicit, testable resume semantics. |
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
+| `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger` and `setup_logging`. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend`; plug-in metrics backends (issue #145, #127). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, and `osimflow compare` subcommands. |
