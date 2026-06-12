@@ -24,6 +24,8 @@ from osimflow import (
     BaseExecutor,
     Campaign,
     CampaignConfig,
+    CampaignRecord,
+    CampaignRegistry,
     LocalExecutor,
     NomadExecutor,
     SlurmExecutor,
@@ -625,8 +627,6 @@ def _run_export(args: argparse.Namespace) -> int:
 
 def _cmd_list(args: argparse.Namespace) -> int:
     """List all registered campaigns."""
-    from osimflow.registry import CampaignRegistry  # noqa: PLC0415
-
     registry_path = args.registry if args.registry else None
     reg = CampaignRegistry(db_path=registry_path)
     campaigns = reg.list_campaigns(status=args.status, limit=args.limit)
@@ -653,8 +653,6 @@ def _cmd_list(args: argparse.Namespace) -> int:
 def _cmd_show(args: argparse.Namespace) -> int:
     """Show detailed info for a single campaign."""
     import json as json_mod  # noqa: PLC0415
-
-    from osimflow.registry import CampaignRegistry  # noqa: PLC0415
 
     registry_path = args.registry if args.registry else None
     reg = CampaignRegistry(db_path=registry_path)
@@ -686,8 +684,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 def _cmd_compare(args: argparse.Namespace) -> int:
     """Compare two campaigns side by side."""
-    from osimflow.registry import CampaignRegistry  # noqa: PLC0415
-
     registry_path = args.registry if args.registry else None
     reg = CampaignRegistry(db_path=registry_path)
     result = reg.compare(args.id1, args.id2)
@@ -726,22 +722,16 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
-def _format_field(record: object, key: str) -> str:
+def _format_field(record: CampaignRecord, key: str) -> str:
     """Format a campaign record field for display."""
-    import dataclasses  # noqa: PLC0415
-
-    if not dataclasses.is_dataclass(record):
-        return ""
-    r = record  # type: ignore[assignment]
-
     if key == "_created_fmt":
-        return time.strftime("%Y-%m-%d %H:%M", time.localtime(r.created_at))
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(record.created_at))
     if key == "_duration_fmt":
-        if r.completed_at is not None:
-            elapsed = r.completed_at - r.created_at
+        if record.completed_at is not None:
+            elapsed = record.completed_at - record.created_at
             return f"{elapsed:.1f}s"
         return "(running)"
-    return str(getattr(r, key, ""))
+    return str(getattr(record, key, ""))
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
