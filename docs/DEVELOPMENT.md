@@ -251,6 +251,127 @@ If a hook fails, fix the issue and re-commit. Do not skip hooks with
 make precommit
 ```
 
+### Docker Compose (Local Multi-Service Development)
+
+OSimFlow ships with Docker Compose files for local multi-service development and testing.
+
+#### Services
+
+| Service | Port | Purpose |
+|---|---|---|
+| `postgres` | 5432 | Campaign registry database |
+| `redis` | 6379 | Job queue backend |
+| `mlflow` | 5000 | Optional MLflow tracking server |
+| `opensearch` | 9200/5601 | Observability backend |
+| `localstack` | 4566 | AWS mocking (Batch, S3, SecretsManager, CloudWatch) |
+
+#### Quick Start
+
+```bash
+# Start all services
+docker compose up -d
+
+# Verify services are healthy
+docker compose ps
+
+# View logs
+docker compose logs -f
+```
+
+#### Development Mode
+
+For development with hot-reload and volume mounts:
+
+```bash
+# Start dev stack (includes osimflow-dev container with source mounts)
+docker compose -f docker-compose.dev.yml up -d
+
+# Attach to the osimflow-dev container
+docker compose -f docker-compose.dev.yml exec osimflow-dev bash
+
+# Run a campaign from inside the dev container
+osimflow run \
+  --executor local \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 3 \
+  --outdir ./results \
+  --openstudio_version 3.11.0
+```
+
+#### CI/Testing Mode
+
+For isolated testing with resource limits:
+
+```bash
+# Start test stack
+docker compose -f docker-compose.test.yml up -d
+
+# Run tests against the test stack
+POSTGRES_HOST=localhost POSTGRES_DB=osimflow_test \
+POSTGRES_USER=osimflow_test POSTGRES_PASSWORD=osimflow_test \
+.venv/bin/pytest tests/ -v
+
+# Tear down test stack (removes volumes)
+docker compose -f docker-compose.test.yml down -v
+```
+
+#### Environment Variables
+
+Copy `.env.example` to `.env` and adjust:
+
+```bash
+cp .env.example .env
+```
+
+Key variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `POSTGRES_PASSWORD` | `osimflow-dev` | PostgreSQL password |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port |
+| `REDIS_PORT` | `6379` | Redis port |
+| `MLFLOW_PORT` | `5000` | MLflow tracking server port |
+| `OPENSEARCH_PORT` | `9200` | OpenSearch HTTP port |
+| `OPENSEARCH_DASHBOARD_PORT` | `5601` | OpenSearch Dashboards port |
+| `LOCALSTACK_PORT` | `4566` | LocalStack edge port |
+| `AWS_DEFAULT_REGION` | `us-east-1` | AWS region for LocalStack |
+
+#### Using LocalStack for AWS Testing
+
+LocalStack provides local AWS cloud emulation. After starting:
+
+```bash
+# Create an S3 bucket via AWS CLI
+aws --endpoint-url=http://localhost:4566 s3 mb s3://osimflow-test
+
+# Verify Batch is available
+aws --endpoint-url=http://localhost:4566 batch list-compute-environments
+
+# Run osimflow with LocalStack
+osimflow run \
+  --executor aws_batch \
+  --aws-batch-queue osimflow-batch-queue \
+  --aws-batch-job-definition osimflow-openstudio-job-def \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 3 \
+  --outdir ./results
+```
+
+#### Stopping Services
+
+```bash
+# Stop services (keep volumes)
+docker compose stop
+
+# Stop and remove containers
+docker compose down
+
+# Stop and remove volumes (clean slate)
+docker compose down -v
+```
+
 ---
 
 ## 5. Running Tests

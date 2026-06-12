@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+  postgres:
+    volumes:
+      - ./osimflow:/app/osimflow
+      - ./bin:/app/bin
+      - ./tests:/app/tests
+    environment:
+      POSTGRES_HOST: localhost
+    ports:
+      - "5432:5432"
+
+  redis:
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --loglevel debug
+    ports:
+      - "6379:6379"
+
+  mlflow:
+    volumes:
+      - ./osimflow:/app/osimflow
+      - ./bin:/app/bin
+      - ./tests:/app/tests
+      - mlflow_data:/mlflow
+    environment:
+      MLFLOW_TRACKING_URI: http://localhost:5000
+      MLFLOW_WS_PROXY_MODE: "true"
+    ports:
+      - "5000:5000"
+
+  opensearch:
+    environment:
+      OPENSEARCH_JAVA_OPTS: -Xmx512m -Xms256m
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: admin
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_SETUP_SAMPLE_DATA: "false"
+      OPENSEARCH_INDEX_PERMISSIONS: "false"
+    ports:
+      - "9200:9200"
+      - "5601:5601"
+
+  localstack:
+    environment:
+      DEBUG: "1"
+      SERVICES: batch,secretsmanager,cloudwatch,logs,s3
+      EDGE_PORT: "4566"
+      LOGS: "true"
+      DOCKER_FLAGS: "-d"
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # Convenience: run osimflow CLI directly in dev environment
+  osimflow-dev:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: osimflow-dev
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: osimflow
+      POSTGRES_USER: osimflow
+      POSTGRES_PASSWORD: osimflow-dev
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: 9200
+      LOCALSTACK_HOST: localstack
+      LOCALSTACK_PORT: 4566
+    volumes:
+      - ./osimflow:/app/osimflow
+      - ./bin:/app/bin
+      - ./tests:/app/tests
+      - ./docs:/app/docs
+      - ./user_scripts:/app/user_scripts
+      - ./example_package:/app/example_package
+      - ./variables.yml:/app/variables.yml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+    networks:
+      - osimflow-net
+    command: sleep infinity
