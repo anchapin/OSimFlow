@@ -266,9 +266,7 @@ class JobQueue:
         """Move a job from one state to another."""
         src = self._state_dir(from_state) / f"{job_id}.json"
         if not src.exists():
-            raise FileNotFoundError(
-                f"job {job_id!r} not found in {from_state} directory"
-            )
+            raise FileNotFoundError(f"job {job_id!r} not found in {from_state} directory")
         record = self._read_job(src)
         record["state"] = to_state
         record["completed_at"] = time.time()

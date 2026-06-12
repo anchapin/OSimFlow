@@ -400,7 +400,8 @@ class Campaign:
                 log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
                 # Mark failed in the job queue (issue #263).
                 self._job_queue.mark_failed(
-                    f"{sid}_{step_name}", str(e)[:500],
+                    f"{sid}_{step_name}",
+                    str(e)[:500],
                 )
                 return sid
             return sid
