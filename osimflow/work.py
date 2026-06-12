@@ -85,16 +85,115 @@ def default_apply_parameters(
 ) -> Path:
     """Default parameter-application logic.
 
-    A real implementation parses `template` (an .osm or .osw) and writes
-    a modified copy to `out/<sample_id>/`. The current stub is the same
-    one shipped in `bin/apply_params_to_model.py`; we call it as a
-    subprocess to keep the BYOS contract identical: same argv, same exit
-    code, same logging format.
+    Applies parameters by invoking the OpenStudio CLI which properly
+    executes measures through the SDK (issue #248). This replaces the
+    prior static .osw patching approach (apply_params_to_model.py)
+    which bypassed the SDK and prevented runner.registerValue,
+    measure-side pre/post-processing, and proper error reporting.
+
+    When ``openstudio.cli`` is available and ``OSIMFLOW_STUB_SIM`` is
+    not set, this function calls ``openstudio.cli run -w workflow.osw``
+    which executes the full measure pipeline through the SDK. When the
+    CLI is unavailable or stub mode is enabled, falls back to copying
+    the template and writing a placeholder to maintain backward
+    compatibility with the BYOS contract (same argv, same exit code).
     """
     out_dir = out / sample_id
     out_dir.mkdir(parents=True, exist_ok=True)
     param_file = out / f"{sample_id}.params.json"
     param_file.write_text(json.dumps(parameters, sort_keys=True))
+
+    use_real_cli = _is_openstudio_available() and not _is_stub_mode()
+
+    if use_real_cli:
+        return _apply_parameters_via_cli(
+            template=template,
+            sample_id=sample_id,
+            out_dir=out_dir,
+            param_file=param_file,
+        )
+    return _apply_parameters_stub(
+        template=template,
+        sample_id=sample_id,
+        out_dir=out_dir,
+        param_file=param_file,
+    )
+
+
+def _apply_parameters_via_cli(
+    template: Path,
+    sample_id: str,
+    out_dir: Path,
+    param_file: Path,
+) -> Path:
+    """Apply parameters via ``openstudio.cli run`` (issue #248).
+
+    Copies the template into the per-sample directory, finds the
+    workflow.osw, and invokes ``openstudio.cli run -w workflow.osw``.
+    This properly executes measures through the SDK rather than
+    patching the .osw file statically.
+    """
+    pkg_src = template if template.is_dir() else template.parent
+
+    shutil.copytree(pkg_src, out_dir, dirs_exist_ok=True)
+
+    workflow_path = _find_workflow_osw(out_dir)
+    if workflow_path is None:
+        raise RuntimeError(
+            f"No workflow.osw found in {out_dir} for sample={sample_id}. "
+            f"The OpenStudio CLI requires a workflow file to apply parameters."
+        )
+
+    stdout_path = out_dir / "stdout.log"
+    stderr_path = out_dir / "stderr.log"
+
+    cmd: list[str] = [
+        "openstudio.cli",
+        "run",
+        "-w",
+        str(workflow_path),
+    ]
+    log.info(
+        "apply_parameters: openstudio.cli invocation sample=%s workflow=%s cwd=%s",
+        sample_id,
+        workflow_path,
+        out_dir,
+    )
+    try:
+        run_subprocess(
+            cmd,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            cwd=out_dir,
+        )
+    except subprocess.SubprocessError as e:
+        log.error(
+            "apply_parameters: openstudio.cli failed for sample=%s: %s",
+            sample_id,
+            e,
+        )
+        raise RuntimeError(f"apply_parameters failed for {sample_id}") from e
+
+    log.info(
+        "apply_parameters: CLI applied parameters for sample=%s -> %s",
+        sample_id,
+        out_dir,
+    )
+    return out_dir
+
+
+def _apply_parameters_stub(
+    template: Path,
+    sample_id: str,
+    out_dir: Path,
+    param_file: Path,
+) -> Path:
+    """Fallback stub when CLI is unavailable (OSIMFLOW_STUB_SIM=1 or no CLI).
+
+    Copies the template to the output directory and writes a placeholder
+    to simulate successful measure application. Maintains the BYOS contract
+    (same argv, same exit code) without requiring a real OpenStudio install.
+    """
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             [
@@ -245,6 +344,20 @@ def run_openstudio_sim(
         stdout_path = sim_out / "stdout.log"
     if stderr_path is None:
         stderr_path = sim_out / "stderr.log"
+
+    # ------------------------------------------------------------------
+    # Check if simulation was already run during apply_parameters.
+    # When openstudio.cli is available, default_apply_parameters now
+    # invokes the CLI which runs the full measure pipeline including
+    # simulation (issue #248). In that case, eplusout.sql already
+    # exists and we should skip re-running.
+    # ------------------------------------------------------------------
+    if (sim_out / "eplusout.sql").is_file():
+        log.info(
+            "simulation already run for sample=%s (eplusout.sql exists) - skipping",
+            sample_id,
+        )
+        return sim_out
 
     # ------------------------------------------------------------------
     # Decision: real CLI or stub?
