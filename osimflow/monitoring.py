@@ -222,9 +222,57 @@ class RunTrace:
         d["spot_savings_usd"] = self.spot_savings_usd
         return d
 
+    def update_sample(self, trace: SampleTrace) -> None:
+        """Update a single sample entry in run.json (incremental checkpoint).
+
+        Reads the existing run.json, merges *trace* into the ``per_sample``
+        list (updates existing entry or appends), and writes atomically.
+        Used by the Campaign to checkpoint per-sample progress after each
+        step completes so SSE clients see live updates without waiting for
+        campaign end.
+        """
+        path = Path(self._checkpoint_path) if hasattr(self, "_checkpoint_path") else None
+        if path is None:
+            return
+        if not path.exists():
+            return
+
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+
+        samples: list[dict[str, object]] = data.get("per_sample", [])
+        # Replace existing entry or append.
+        replaced = False
+        for i, s in enumerate(samples):
+            if s.get("sample_id") == trace.sample_id:
+                samples[i] = trace.to_dict()
+                replaced = True
+                break
+        if not replaced:
+            samples.append(trace.to_dict())
+        data["per_sample"] = samples
+
+        # Update summary counts.
+        n_succeeded = sum(1 for s in data.get("per_sample", []) if s.get("status") == "ok")
+        n_failed = sum(1 for s in data.get("per_sample", []) if s.get("status") == "failed")
+        if "summary" not in data:
+            data["summary"] = {}
+        data["summary"]["n_succeeded"] = n_succeeded
+        data["summary"]["n_failed"] = n_failed
+        data["summary"]["n_samples"] = len(data["per_sample"])
+
+        # Atomic write: temp file + rename.
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str))
+        tmp.rename(path)
+
     def write(self, path: Path) -> None:
         """Write the run.json trace to disk. Idempotent."""
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Record path so update_sample() can do incremental writes.
+        self._checkpoint_path = str(path)
         path.write_text(json.dumps(self.to_dict(), indent=2, default=str))
         log.info("wrote run trace to %s", path)
 

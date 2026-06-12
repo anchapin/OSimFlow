@@ -248,7 +248,13 @@ class Campaign:
 
         Also records per-sample observability metrics (duration, status)
         via the configured backend (issue #132).
+
+        Deduplicates against incremental checkpoints: if a sample was
+        already written to run.json by _checkpoint_sample (via SSE live
+        updates), the existing entry is replaced rather than appended,
+        so the per_sample list never grows faster than the sample count.
         """
+        existing_ids: set[str] = {s.sample_id for s in self.trace.per_sample}
         for sid, state in self._sample_state.items():
             apply_ok = state.get("apply_exit_code") == 0
             sim_ok = state.get("sim_exit_code") == 0
@@ -287,25 +293,32 @@ class Campaign:
             # Observability: record per-sample cost metric (issue #132).
             if cost_usd is not None:
                 self._obs.record_sample_metric(sid, "cost_usd", cost_usd)
-            self.trace.sample_done(
-                SampleTrace(
-                    sample_id=sid,
-                    status=status,
-                    elapsed_s=0.0,  # per-sample total wall-clock — not yet tracked
-                    apply_exit_code=int(str(state.get("apply_exit_code", 0))),
-                    sim_exit_code=int(str(state.get("sim_exit_code", 0))),
-                    extract_exit_code=int(str(state.get("extract_exit_code", 0))),
-                    eplusout_sql=eplusout_sql,
-                    error_summary=error_summary,
-                    stdout_log=stdout_log,
-                    stderr_log=stderr_log,
-                    worker_id=worker_id,
-                    worker_ip=worker_ip,
-                    worker_region=worker_region,
-                    cost_usd=cost_usd,
-                    billed_duration_seconds=billed_duration_seconds,
-                )
+            trace = SampleTrace(
+                sample_id=sid,
+                status=status,
+                elapsed_s=0.0,  # per-sample total wall-clock — not yet tracked
+                apply_exit_code=int(str(state.get("apply_exit_code", 0))),
+                sim_exit_code=int(str(state.get("sim_exit_code", 0))),
+                extract_exit_code=int(str(state.get("extract_exit_code", 0))),
+                eplusout_sql=eplusout_sql,
+                error_summary=error_summary,
+                stdout_log=stdout_log,
+                stderr_log=stderr_log,
+                worker_id=worker_id,
+                worker_ip=worker_ip,
+                worker_region=worker_region,
+                cost_usd=cost_usd,
+                billed_duration_seconds=billed_duration_seconds,
             )
+            # Deduplicate: replace existing entry from incremental checkpoint.
+            if sid in existing_ids:
+                for i, existing in enumerate(self.trace.per_sample):
+                    if existing.sample_id == sid:
+                        self.trace.per_sample[i] = trace
+                        break
+            else:
+                self.trace.per_sample.append(trace)
+                existing_ids.add(sid)
             # Observability: record per-sample status metric (issue #132).
             # status="ok" → 1.0, status="failed" → 0.0.
             self._obs.record_sample_metric(sid, "status", 1.0 if status == "ok" else 0.0)
@@ -340,6 +353,66 @@ class Campaign:
             self.trace.spot_savings_usd = round(total * savings_ratio, 6)
         else:
             self.trace.spot_savings_usd = 0.0
+
+    def _checkpoint_sample(self, sid: str) -> None:
+        """Write an incremental run.json checkpoint for a single sample.
+
+        Called after each sample completes (success or failure) inside
+        the fan-out loop so SSE clients see live progress without waiting
+        for campaign end (issue #275).
+
+        The checkpoint updates only the per-sample entry for *sid* using
+        atomic write (temp file + rename).  If run.json does not exist yet
+        (campaign not started), this is a no-op.
+        """
+        state = self._sample_state.get(sid)
+        if state is None:
+            return
+
+        apply_ok = state.get("apply_exit_code") == 0
+        sim_ok = state.get("sim_exit_code") == 0
+        extract_ok = state.get("extract_exit_code") == 0
+        status = "ok" if apply_ok and sim_ok and extract_ok else "failed"
+
+        eplusout_sql_obj = state.get("eplusout_sql")
+        eplusout_sql = None if eplusout_sql_obj is None else str(eplusout_sql_obj)
+        error_summary_obj = state.get("error_summary")
+        error_summary = None if error_summary_obj is None else str(error_summary_obj)
+        stdout_log_obj = state.get("stdout_log")
+        stdout_log = None if stdout_log_obj is None else str(stdout_log_obj)
+        stderr_log_obj = state.get("stderr_log")
+        stderr_log = None if stderr_log_obj is None else str(stderr_log_obj)
+        worker_id_obj = state.get("worker_id")
+        worker_id = None if worker_id_obj is None else str(worker_id_obj)
+        worker_ip_obj = state.get("worker_ip")
+        worker_ip = None if worker_ip_obj is None else str(worker_ip_obj)
+        worker_region_obj = state.get("worker_region")
+        worker_region = None if worker_region_obj is None else str(worker_region_obj)
+        cost_usd_obj = state.get("cost_usd")
+        cost_usd: float | None = None if cost_usd_obj is None else float(str(cost_usd_obj))
+        billed_duration_obj = state.get("billed_duration_seconds")
+        billed_duration_seconds: float | None = (
+            None if billed_duration_obj is None else float(str(billed_duration_obj))
+        )
+
+        trace = SampleTrace(
+            sample_id=sid,
+            status=status,
+            elapsed_s=0.0,
+            apply_exit_code=int(str(state.get("apply_exit_code", 0))),
+            sim_exit_code=int(str(state.get("sim_exit_code", 0))),
+            extract_exit_code=int(str(state.get("extract_exit_code", 0))),
+            eplusout_sql=eplusout_sql,
+            error_summary=error_summary,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+            worker_id=worker_id,
+            worker_ip=worker_ip,
+            worker_region=worker_region,
+            cost_usd=cost_usd,
+            billed_duration_seconds=billed_duration_seconds,
+        )
+        self.trace.update_sample(trace)
 
     def _submit_and_await_all(
         self,
@@ -403,7 +476,17 @@ class Campaign:
                     f"{sid}_{step_name}",
                     str(e)[:500],
                 )
+                # Record failure in _sample_state so _finalize_samples
+                # and _checkpoint_sample see a consistent failed sample.
+                state = self._sample_state.setdefault(sid, {})
+                state[f"{step_name.lower}_exit_code"] = 1
+                state[f"{step_name.lower}_status"] = "failed"
+                state["error_summary"] = str(e)[:500]
+                self._checkpoint_sample(sid)
                 return sid
+            # Incremental checkpoint: update run.json after each sample
+            # completes so SSE clients see live progress (issue #275).
+            self._checkpoint_sample(sid)
             return sid
 
         # When max_workers == 1, use a sequential loop to avoid the
@@ -834,6 +917,11 @@ class Campaign:
 
         # Auto-register campaign in registry (issue #266).
         self._register_campaign()
+
+        # Initialize run.json early so incremental checkpoints via
+        # _checkpoint_sample() can write to it before the first step
+        # completes (issue #275).
+        self.trace.write(self.cfg.outdir / "run.json")
 
         try:
             # Init hook (issue #108): runs before the first campaign step.
