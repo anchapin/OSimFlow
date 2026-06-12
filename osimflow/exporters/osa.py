@@ -10,19 +10,32 @@ This is the reverse of :mod:`osimflow.importers.osa`.
 Distribution mapping (reverse of the import table)
 ---------------------------------------------------
 
-=================  ====================  ============================
-OSimFlow name      OSA distribution      Parameters
-=================  ====================  ============================
+================  ====================  ============================  ==============
+OSimFlow name      OSA distribution      Parameters                    Notes
+================  ====================  ============================  ==============
 uniform            uniform               minimum, maximum
 normal             normal                mean, stddev
 lognormal          lognormal             mean, stddev
-triangular         triangular            minimum, maximum, mode (optional)
+triangular         triangular            minimum, maximum, mode (opt.)
 discrete           discrete              values
 categorical        categorical           values
+categorical+pivot  pivot                 values                        pivot: true
+static             (no distribution)     default_value only            locked/fixed
 beta               uniform*              min, max (lossy)
 gamma              uniform*              min, max (lossy)
 exponential        uniform*              min, max (lossy)
-=================  ====================  ============================
+================  ====================  ============================  ==============
+
+Variable type mapping
+---------------------
+
+====================  =====================  ============================
+OSimFlow field        OSA variable_type      Notes
+====================  =====================  ============================
+variable_type=variable variable              (default, omitted)
+variable_type=argument argument              measure argument
+pivot=true             pivot                  categorical with pivot flag
+====================  =====================  ============================
 
 ``Beta``, ``gamma``, and ``exponential`` distributions do not have direct OSA
 equivalents.  They are exported as ``uniform`` spanning the same
@@ -312,11 +325,49 @@ class OSAExporter:
             return None
 
         distribution_name = var.get("distribution", "uniform")
-        osa_dist = self._convert_distribution(distribution_name, var)
+        is_pivot = var.get("pivot") is True
 
-        osa_var: dict[str, Any] = {
+        # Determine OSA variable_type from OSimFlow fields.
+        osa_variable_type: str = var.get("variable_type", "variable")
+        if is_pivot:
+            osa_variable_type = "pivot"
+
+        # --- Handle static distribution ---
+        if distribution_name == "static":
+            osa_var: dict[str, Any] = {
+                "name": name,
+                "variable_type": osa_variable_type,
+            }
+            # Static variables carry a default_value but no distribution block.
+            static_value = var.get("value")
+            if static_value is not None:
+                osa_var["default_value"] = static_value
+            # Still carry measure reference if present.
+            measure_arg = var.get("measure_argument")
+            if measure_arg and isinstance(measure_arg, str) and "." in measure_arg:
+                parts = measure_arg.split(".", 1)
+                osa_var["measure"] = {
+                    "display_name": parts[0],
+                    "argument": parts[1],
+                }
+            display_name = var.get("display_name")
+            if display_name:
+                osa_var["display_name"] = display_name
+            return osa_var
+
+        # --- Handle pivot distribution ---
+        if is_pivot:
+            values = var.get("values", [])
+            osa_dist: dict[str, Any] = {"type": "pivot", "values": values}
+            mapping = var.get("mapping")
+            if mapping and isinstance(mapping, dict):
+                osa_dist["mapping"] = mapping
+        else:
+            osa_dist = self._convert_distribution(distribution_name, var)
+
+        osa_var = {
             "name": name,
-            "variable_type": "variable",
+            "variable_type": osa_variable_type,
             "distribution": osa_dist,
         }
 

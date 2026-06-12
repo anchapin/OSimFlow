@@ -60,6 +60,32 @@ VARIABLES_YML = textwrap.dedent("""\
         values: ["packaged_rooftop", "vav", "gshtp"]
 """)
 
+VARIABLES_YML_WITH_PIVOT_AND_STATIC = textwrap.dedent("""\
+    variables:
+      - name: insulation_r
+        distribution: uniform
+        min: 5.0
+        max: 30.0
+        measure_argument: SetInsulationRValue.r_value
+      - name: climate_zone
+        distribution: categorical
+        values: ["CZ4", "CZ5", "CZ6"]
+        pivot: true
+        variable_type: pivot
+      - name: building_type
+        distribution: static
+        value: "office_medium"
+        variable_type: argument
+        measure_argument: SetBuildingType.type
+      - name: wwr
+        distribution: normal
+        mean: 0.4
+        sigma: 0.05
+      - name: locked_efficiency
+        distribution: static
+        value: 0.95
+""")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -407,3 +433,339 @@ class TestOsaRoundTrip:
         assert len(reimported["variables"]) == 5
         names = [v["name"] for v in reimported["variables"]]
         assert names == ["insulation_r", "wwr", "shgc", "roof_abs", "hvac_type"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: pivot, static, and variable_type round-trip (issue #196)
+# ---------------------------------------------------------------------------
+
+
+class TestPivotVariableRoundTrip:
+    """Pivot variables (categorical + pivot: true) must survive a full
+    export → pack → import round trip without loss."""
+
+    def test_pivot_preserved_on_import(self, tmp_path: Path) -> None:
+        """Directly import an OSA variable with variable_type=pivot and
+        distribution.type=pivot, then verify the variables.yml output."""
+        analysis_json = tmp_path / "analysis.json"
+        analysis_json.write_text(
+            json.dumps(
+                {
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 10},
+                            "variables": [
+                                {
+                                    "name": "climate_zone",
+                                    "variable_type": "pivot",
+                                    "distribution": {
+                                        "type": "pivot",
+                                        "values": ["CZ4", "CZ5", "CZ6"],
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        osa_data = parse_osa(analysis_json)
+        out_yml = tmp_path / "variables.yml"
+        osa_to_variables_yml(osa_data, out_yml)
+
+        with out_yml.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        assert len(data["variables"]) == 1
+        var = data["variables"][0]
+        assert var["name"] == "climate_zone"
+        assert var["distribution"] == "categorical"
+        assert var["pivot"] is True
+        assert var["variable_type"] == "pivot"
+        assert var["values"] == ["CZ4", "CZ5", "CZ6"]
+
+    def test_pivot_round_trip_via_export(self, tmp_path: Path) -> None:
+        """Export variables.yml with a pivot variable → OSA → re-import → verify."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        # Inspect the raw analysis.json to confirm pivot distribution type.
+        with zipfile.ZipFile(osa_path) as zf:
+            raw = json.loads(zf.read("analysis.json"))
+        osa_vars = raw["analysis"]["problem"]["variables"]
+        climate_var = next(v for v in osa_vars if v["name"] == "climate_zone")
+        assert climate_var["variable_type"] == "pivot"
+        assert climate_var["distribution"]["type"] == "pivot"
+        assert climate_var["distribution"]["values"] == ["CZ4", "CZ5", "CZ6"]
+
+        # Re-import and verify the variables.yml output.
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        variables = {v["name"]: v for v in reimported["variables"]}
+        cz = variables["climate_zone"]
+        assert cz["distribution"] == "categorical"
+        assert cz["pivot"] is True
+        assert cz["variable_type"] == "pivot"
+        assert cz["values"] == ["CZ4", "CZ5", "CZ6"]
+
+
+class TestStaticVariableRoundTrip:
+    """Static/locked variables (no distribution, fixed value) must survive
+    export → pack → import without error."""
+
+    def test_static_import_no_distribution(self, tmp_path: Path) -> None:
+        """Import an OSA variable with no distribution block → static."""
+        analysis_json = tmp_path / "analysis.json"
+        analysis_json.write_text(
+            json.dumps(
+                {
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 10},
+                            "variables": [
+                                {
+                                    "name": "building_type",
+                                    "variable_type": "argument",
+                                    "default_value": "office_medium",
+                                },
+                            ],
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        osa_data = parse_osa(analysis_json)
+        out_yml = tmp_path / "variables.yml"
+        osa_to_variables_yml(osa_data, out_yml)
+
+        with out_yml.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        assert len(data["variables"]) == 1
+        var = data["variables"][0]
+        assert var["name"] == "building_type"
+        assert var["distribution"] == "static"
+        assert var["value"] == "office_medium"
+        assert var["variable_type"] == "argument"
+
+    def test_static_round_trip_via_export(self, tmp_path: Path) -> None:
+        """Export a static variable → OSA → re-import → verify value preserved."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        # Inspect raw analysis.json: static vars should have no distribution.
+        with zipfile.ZipFile(osa_path) as zf:
+            raw = json.loads(zf.read("analysis.json"))
+        osa_vars = raw["analysis"]["problem"]["variables"]
+        bt_var = next(v for v in osa_vars if v["name"] == "building_type")
+        assert bt_var["variable_type"] == "argument"
+        assert "distribution" not in bt_var
+        assert bt_var["default_value"] == "office_medium"
+
+        # Re-import.
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        variables = {v["name"]: v for v in reimported["variables"]}
+        bt = variables["building_type"]
+        assert bt["distribution"] == "static"
+        assert bt["value"] == "office_medium"
+        assert bt["variable_type"] == "argument"
+
+    def test_static_no_measure_round_trip(self, tmp_path: Path) -> None:
+        """Static variable without a measure_argument should also round-trip."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        variables = {v["name"]: v for v in reimported["variables"]}
+        eff = variables["locked_efficiency"]
+        assert eff["distribution"] == "static"
+        assert eff["value"] == 0.95
+        assert "measure_argument" not in eff
+
+
+class TestVariableTypeRoundTrip:
+    """The variable_type field must be preserved through the round trip."""
+
+    def test_argument_type_preserved(self, tmp_path: Path) -> None:
+        """variable_type=argument should survive export → import."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        variables = {v["name"]: v for v in reimported["variables"]}
+        # building_type has variable_type=argument in the source.
+        assert variables["building_type"]["variable_type"] == "argument"
+
+    def test_default_variable_type_omitted(self, tmp_path: Path) -> None:
+        """Regular variables (type=variable) should not carry variable_type."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        variables = {v["name"]: v for v in reimported["variables"]}
+        # insulation_r is a regular variable — no variable_type field expected.
+        assert "variable_type" not in variables["insulation_r"]
+
+
+class TestMixedVariablesRoundTrip:
+    """A single analysis with pivot, static, and regular variables round-trips
+    without loss."""
+
+    def test_mixed_variable_count_preserved(self, tmp_path: Path) -> None:
+        """All 5 variables in the mixed config survive the round trip."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        assert len(reimported["variables"]) == 5
+
+    def test_mixed_variable_names_preserved(self, tmp_path: Path) -> None:
+        """Variable names are stable across the round trip."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        names = [v["name"] for v in reimported["variables"]]
+        assert names == [
+            "insulation_r",
+            "climate_zone",
+            "building_type",
+            "wwr",
+            "locked_efficiency",
+        ]
+
+    def test_mixed_distributions_correct(self, tmp_path: Path) -> None:
+        """Each variable retains its correct distribution type."""
+        cfg = _make_config(
+            tmp_path,
+            variables_text=VARIABLES_YML_WITH_PIVOT_AND_STATIC,
+        )
+        exporter = OSAExporter()
+        osa_path = exporter.pack_osa(cfg, tmp_path / "pack_out")
+
+        osa_data = parse_osa(osa_path)
+        reimport_path = tmp_path / "roundtrip_variables.yml"
+        osa_to_variables_yml(osa_data, reimport_path)
+
+        with reimport_path.open(encoding="utf-8") as f:
+            reimported = yaml.safe_load(f)
+
+        expected = {
+            "insulation_r": "uniform",
+            "climate_zone": "categorical",
+            "building_type": "static",
+            "wwr": "normal",
+            "locked_efficiency": "static",
+        }
+        for var in reimported["variables"]:
+            assert var["distribution"] == expected[var["name"]], (
+                f"Variable {var['name']!r}: expected {expected[var['name']]!r}, "
+                f"got {var['distribution']!r}"
+            )
+
+    def test_missing_distribution_edge_case(self, tmp_path: Path) -> None:
+        """An OSA variable with distribution: {} (empty dict) is treated as
+        static."""
+        analysis_json = tmp_path / "analysis.json"
+        analysis_json.write_text(
+            json.dumps(
+                {
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 10},
+                            "variables": [
+                                {
+                                    "name": "static_param",
+                                    "variable_type": "variable",
+                                    "default_value": 42,
+                                    "distribution": {},
+                                },
+                            ],
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        osa_data = parse_osa(analysis_json)
+        out_yml = tmp_path / "variables.yml"
+        osa_to_variables_yml(osa_data, out_yml)
+
+        with out_yml.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        assert len(data["variables"]) == 1
+        var = data["variables"][0]
+        assert var["distribution"] == "static"
+        assert var["value"] == 42
