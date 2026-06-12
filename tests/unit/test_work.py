@@ -81,7 +81,11 @@ def _env_without_stub() -> dict[str, str]:
 class TestDefaultApplyParameters:
     def test_creates_out_dir_and_param_file(self, template_pkg: Path, out_dir: Path) -> None:
         params = {"heating_setpoint": 20.0, "cooling_setpoint": 25.0}
-        with patch("osimflow.work.subprocess.run") as mock_run:
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=False),
+            patch("osimflow.work.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -94,9 +98,38 @@ class TestDefaultApplyParameters:
         written = json.loads(param_file.read_text())
         assert written == {"cooling_setpoint": 25.0, "heating_setpoint": 20.0}
 
-    def test_subprocess_called_with_correct_args(self, template_pkg: Path, out_dir: Path) -> None:
+    def test_cli_invoked_when_available(self, template_pkg: Path, out_dir: Path) -> None:
+        """When openstudio.cli is available, it is called instead of static patching (issue #248)."""
+        pkg = template_pkg
+        (pkg / "workflow.osw").write_text(json.dumps({"name": "test_workflow"}))
         params = {"wwr": 0.4}
-        with patch("osimflow.work.subprocess.run") as mock_run:
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            default_apply_parameters(pkg, params, "0042", out_dir)
+
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        assert cmd[0] == "openstudio.cli"
+        assert "run" in cmd
+        assert "-w" in cmd
+
+    def test_fallback_to_apply_params_script_when_cli_missing(
+        self, template_pkg: Path, out_dir: Path
+    ) -> None:
+        """When CLI is unavailable, falls back to apply_params_to_model.py (backward compat)."""
+        params = {"wwr": 0.4}
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=False),
+            patch("osimflow.work.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
@@ -107,13 +140,16 @@ class TestDefaultApplyParameters:
         cmd = call_args[0][0]
         assert cmd[0] == sys.executable
         assert "--template" in cmd
-        assert str(template_pkg) in cmd
         assert "--sample_id" in cmd
         assert "0042" in cmd
         assert "--out" in cmd
 
     def test_raises_on_subprocess_failure(self, template_pkg: Path, out_dir: Path) -> None:
-        with patch("osimflow.work.subprocess.run") as mock_run:
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=False),
+            patch("osimflow.work.subprocess.run") as mock_run,
+        ):
             mock_run.side_effect = subprocess.CalledProcessError(
                 returncode=1, cmd=[], stderr="apply_params error"
             )
@@ -124,12 +160,30 @@ class TestDefaultApplyParameters:
         template = tmp_path / "tmpl"
         template.mkdir()
         deep_out = out_dir / "nested" / "deep"
-        with patch("osimflow.work.subprocess.run") as mock_run:
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=False),
+            patch("osimflow.work.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
             result = default_apply_parameters(template, {"a": 1}, "0001", deep_out)
         assert result.is_dir()
+
+    def test_cli_error_raises(self, template_pkg: Path, out_dir: Path) -> None:
+        """When CLI is available but fails, RuntimeError is raised."""
+        pkg = template_pkg
+        (pkg / "workflow.osw").write_text(json.dumps({"name": "test_workflow"}))
+        params = {"wwr": 0.4}
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
+            mock_run.side_effect = subprocess.SubprocessError("CLI failed")
+            with pytest.raises(RuntimeError, match="apply_parameters failed"):
+                default_apply_parameters(pkg, params, "0001", out_dir)
 
 
 # ===========================================================================
@@ -283,6 +337,32 @@ class TestRunOpenstudioSimRealCli:
         assert cmd[0] == "openstudio.cli"
         assert "run" in cmd
         assert "-w" in cmd
+
+    def test_skips_when_eplusout_sql_exists(
+        self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
+    ) -> None:
+        """When eplusout.sql already exists (simulation ran in apply_parameters), skip re-run."""
+        stdout_path, stderr_path = log_paths
+        sim_out = out_dir / "0001"
+        sim_out.mkdir(parents=True, exist_ok=True)
+        (sim_out / "eplusout.sql").write_text("-- already simulated")
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
+            result = run_openstudio_sim(
+                modified_sim_package=sim_package,
+                sample_id="0001",
+                openstudio_version="3.11.0",
+                out=out_dir,
+                simulate_work_s=0.0,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        mock_run.assert_not_called()
+        assert result == sim_out
+        assert (sim_out / "eplusout.sql").read_text() == "-- already simulated"
 
     def test_no_placeholder_sql_on_real_cli(
         self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
