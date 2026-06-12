@@ -548,7 +548,7 @@ class Campaign:
             for item in submissions.items():
                 if self._check_cancel_requested():
                     log.warning("cancellation requested during %s — stopping fan-out", step_name)
-                    break
+                    raise KeyboardInterrupt("cancellation requested during fan-out")
                 _await_one(item)
             return
 
@@ -569,7 +569,7 @@ class Campaign:
                     # Cancel remaining futures.
                     for f in futures:
                         f.cancel()
-                    break
+                    raise KeyboardInterrupt("cancellation requested during fan-out")
                 # Error already logged inside _await_one; continue
                 # processing remaining samples.
                 with contextlib.suppress(Exception):
