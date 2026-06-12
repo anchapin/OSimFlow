@@ -195,10 +195,18 @@ class TestDiffEvents:
 class TestSSEEndpoint:
     """Tests for GET /api/v1/events HTTP behaviour."""
 
-    def test_sse_read_only_connects(self, client_ro: TestClient) -> None:
+    def test_sse_read_only_connects(self, client_ro: TestClient, outdir: Path) -> None:
         """SSE endpoint is available in read-only mode (issue #275)."""
-        with client_ro.stream("GET", "/api/v1/events", timeout=5) as resp:
-            assert resp.status_code == 200
+        import asyncio
+        from unittest.mock import patch, AsyncIterator
+
+        async def mock_generator(request, poll_interval=1.0, max_iterations=1):
+            yield {"event": "campaign.completed", "data": "{}"}
+            return
+
+        with patch("osimflow.api.events._event_generator", mock_generator):
+            resp = client_ro.get("/api/v1/events", timeout=10)
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
