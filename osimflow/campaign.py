@@ -74,6 +74,7 @@ from .observability import (
     PrometheusBackend,
 )
 from .pareto import ParetoFront, ParetoSolution
+from .registry import CampaignRegistry
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .work import (
     SevereEnergyPlusError,
@@ -180,6 +181,14 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+        # Campaign registry (issue #266). Auto-register on run start
+        # and update status on completion.
+        self._registry: CampaignRegistry | None = None
+        reg_path = getattr(cfg, "registry_path", None)
+        try:
+            self._registry = CampaignRegistry(db_path=reg_path)
+        except Exception as exc:
+            log.warning("could not open campaign registry: %s (continuing without)", exc)
 
     @staticmethod
     def _build_observability_backend(cfg: CampaignConfig) -> ObservabilityBackend:
@@ -740,6 +749,41 @@ class Campaign:
         return base
 
     # ------------------------------------------------------------------
+    # Registry helpers (issue #266)
+    # ------------------------------------------------------------------
+    def _register_campaign(self) -> None:
+        """Register this campaign in the campaign registry at start."""
+        if self._registry is None:
+            return
+        try:
+            self._registry.register(
+                self.trace.campaign_id,
+                name=self.trace.campaign_id,
+                outdir=str(self.cfg.outdir),
+                status="running",
+                algorithm=self.cfg.algorithm,
+                n_samples=self.cfg.n_samples,
+                executor=self.executor.name,
+                openstudio_version=self.cfg.openstudio_version,
+                metadata={
+                    "archive_intermediates": self.cfg.archive_intermediates,
+                    "dry_run": self.cfg.dry_run,
+                    "max_generations": self.cfg.max_generations,
+                },
+            )
+        except Exception as exc:
+            log.warning("failed to register campaign: %s", exc)
+
+    def _update_registry_status(self, status: str) -> None:
+        """Update the campaign status in the registry on completion."""
+        if self._registry is None:
+            return
+        try:
+            self._registry.update_status(self.trace.campaign_id, status)
+        except Exception as exc:
+            log.warning("failed to update campaign status in registry: %s", exc)
+
+    # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
     def run(self) -> dict[str, object]:
@@ -762,6 +806,10 @@ class Campaign:
 
         t0 = time.time()
         campaign_status = "failure"
+
+        # Auto-register campaign in registry (issue #266).
+        self._register_campaign()
+
         try:
             # Init hook (issue #108): runs before the first campaign step.
             # Must succeed (exit 0) or the campaign aborts.
@@ -788,6 +836,9 @@ class Campaign:
             if (self.cfg.outdir / "run.json").exists():
                 self.trace.write(self.cfg.outdir / "run.json")
             maybe_end_mlflow_run()
+
+            # Update registry status (issue #266).
+            self._update_registry_status(campaign_status)
 
     def _run_dry_run(self, t0: float) -> dict[str, object]:
         """Dry-run mode: 1 sample, local executor, steps 1-4 only."""

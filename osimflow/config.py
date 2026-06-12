@@ -116,6 +116,10 @@ class CampaignConfig:
     prometheus_port: int = 9090
     # OpenTelemetry backend options (issue #132).
     otel_endpoint: str | None = None
+    # Campaign registry path (issue #266). When None, the default
+    # ~/.osimflow/registry.db is used. Override via --registry flag
+    # or OSIMFLOW_REGISTRY env var.
+    registry_path: Path | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -216,4 +220,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         ),
         prometheus_port=int(str(args.get("prometheus_port", 9090))),
         otel_endpoint=str(args["otel_endpoint"]) if args.get("otel_endpoint") else None,
+        registry_path=(Path(str(args["registry"])).resolve() if args.get("registry") else None),
     )

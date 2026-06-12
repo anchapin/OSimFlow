@@ -16,6 +16,7 @@ After `pip install -e .`, also available as:
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 
 from osimflow import (
@@ -23,6 +24,8 @@ from osimflow import (
     BaseExecutor,
     Campaign,
     CampaignConfig,
+    CampaignRecord,
+    CampaignRegistry,
     LocalExecutor,
     NomadExecutor,
     SlurmExecutor,
@@ -307,6 +310,15 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:
             "in environments where the TUI causes display issues."
         ),
     )
+    run.add_argument(
+        "--registry",
+        default=None,
+        type=Path,
+        help=(
+            "Path to the campaign registry database (default: ~/.osimflow/registry.db). "
+            "Override the default location for multi-campaign management."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
@@ -423,6 +435,59 @@ def _add_dashboard_args(dash: argparse.ArgumentParser) -> None:
     dash.add_argument("--log_level", default="INFO")
 
 
+def _add_list_args(lst: argparse.ArgumentParser) -> None:
+    lst.add_argument(
+        "--status",
+        default=None,
+        help="Filter by campaign status (running, success, failure)",
+    )
+    lst.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum number of campaigns to show (default: 50)",
+    )
+    lst.add_argument(
+        "--registry",
+        default=None,
+        type=Path,
+        help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
+    )
+    lst.add_argument("--log_level", default="INFO")
+
+
+def _add_show_args(show: argparse.ArgumentParser) -> None:
+    show.add_argument(
+        "campaign_id",
+        help="Campaign ID to show details for",
+    )
+    show.add_argument(
+        "--registry",
+        default=None,
+        type=Path,
+        help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
+    )
+    show.add_argument("--log_level", default="INFO")
+
+
+def _add_compare_args(cmp: argparse.ArgumentParser) -> None:
+    cmp.add_argument(
+        "id1",
+        help="First campaign ID",
+    )
+    cmp.add_argument(
+        "id2",
+        help="Second campaign ID",
+    )
+    cmp.add_argument(
+        "--registry",
+        default=None,
+        type=Path,
+        help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
+    )
+    cmp.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -448,6 +513,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Launch local ephemeral dashboard for campaign results",
     )
     _add_dashboard_args(dash)
+    lst = sub.add_parser(
+        "list",
+        help="List all registered campaigns",
+    )
+    _add_list_args(lst)
+    show = sub.add_parser(
+        "show",
+        help="Show detailed info for a campaign",
+    )
+    _add_show_args(show)
+    cmp = sub.add_parser(
+        "compare",
+        help="Compare two campaigns side by side",
+    )
+    _add_compare_args(cmp)
     return p
 
 
@@ -545,20 +625,133 @@ def _run_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_list(args: argparse.Namespace) -> int:
+    """List all registered campaigns."""
+    registry_path = args.registry if args.registry else None
+    reg = CampaignRegistry(db_path=registry_path)
+    campaigns = reg.list_campaigns(status=args.status, limit=args.limit)
+
+    if not campaigns:
+        print("No campaigns registered.")
+        return 0
+
+    # Header
+    print(
+        f"{'ID':<25} {'STATUS':<10} {'ALGO':<8} {'N':<6} {'EXECUTOR':<10} {'OS VER':<10} {'CREATED'}"
+    )
+    print("-" * 95)
+    for c in campaigns:
+        created = time.strftime("%Y-%m-%d %H:%M", time.localtime(c.created_at))
+        print(
+            f"{c.id:<25} {c.status:<10} {c.algorithm:<8} {c.n_samples:<6} "
+            f"{c.executor:<10} {c.openstudio_version:<10} {created}"
+        )
+    print(f"\nTotal: {len(campaigns)} campaign(s)")
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace) -> int:
+    """Show detailed info for a single campaign."""
+    import json as json_mod  # noqa: PLC0415
+
+    registry_path = args.registry if args.registry else None
+    reg = CampaignRegistry(db_path=registry_path)
+    record = reg.get_campaign(args.campaign_id)
+
+    if record is None:
+        print(f"Campaign '{args.campaign_id}' not found in registry.", file=sys.stderr)
+        return 1
+
+    print(f"Campaign: {record.id}")
+    print(f"  Name:               {record.name}")
+    print(f"  Status:             {record.status}")
+    print(f"  Output directory:   {record.outdir}")
+    print(f"  Algorithm:          {record.algorithm}")
+    print(f"  Samples:            {record.n_samples}")
+    print(f"  Executor:           {record.executor}")
+    print(f"  OpenStudio version: {record.openstudio_version}")
+    created = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created_at))
+    print(f"  Created at:         {created}")
+    if record.completed_at is not None:
+        completed = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.completed_at))
+        elapsed = record.completed_at - record.created_at
+        print(f"  Completed at:       {completed}")
+        print(f"  Duration:           {elapsed:.1f}s ({elapsed / 60:.1f} min)")
+    if record.metadata:
+        print(f"  Metadata:           {json_mod.dumps(record.metadata, indent=4)}")
+    return 0
+
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    """Compare two campaigns side by side."""
+    registry_path = args.registry if args.registry else None
+    reg = CampaignRegistry(db_path=registry_path)
+    result = reg.compare(args.id1, args.id2)
+
+    left = result["left"]
+    right = result["right"]
+
+    if left is None:
+        print(f"Campaign '{args.id1}' not found in registry.", file=sys.stderr)
+        return 1
+    if right is None:
+        print(f"Campaign '{args.id2}' not found in registry.", file=sys.stderr)
+        return 1
+
+    # Side-by-side comparison table
+    fields = [
+        ("ID", "id"),
+        ("Status", "status"),
+        ("Algorithm", "algorithm"),
+        ("Samples", "n_samples"),
+        ("Executor", "executor"),
+        ("OS version", "openstudio_version"),
+        ("Created", "_created_fmt"),
+        ("Duration", "_duration_fmt"),
+    ]
+
+    col_w = 18
+    print(f"{'Field':<16} {'Left':<{col_w}} {'Right':<{col_w}}")
+    print("-" * (16 + col_w * 2 + 4))
+
+    for label, key in fields:
+        lv = _format_field(left, key)
+        rv = _format_field(right, key)
+        print(f"{label:<16} {lv:<{col_w}} {rv:<{col_w}}")
+
+    return 0
+
+
+def _format_field(record: CampaignRecord, key: str) -> str:
+    """Format a campaign record field for display."""
+    if key == "_created_fmt":
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(record.created_at))
+    if key == "_duration_fmt":
+        if record.completed_at is not None:
+            elapsed = record.completed_at - record.created_at
+            return f"{elapsed:.1f}s"
+        return "(running)"
+    return str(getattr(record, key, ""))
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    if args.command == "import-osa":
-        return _run_import_osa(args)
-    if args.command == "export":
-        return _run_export(args)
-    if args.command == "serve":
-        return _cmd_serve(args)
-    if args.command == "dashboard":
-        return _cmd_dashboard(args)
+    dispatch = {
+        "import-osa": _run_import_osa,
+        "export": _run_export,
+        "serve": _cmd_serve,
+        "dashboard": _cmd_dashboard,
+        "list": _cmd_list,
+        "show": _cmd_show,
+        "compare": _cmd_compare,
+    }
+    handler = dispatch.get(args.command)
+    if handler is not None:
+        return handler(args)
     if args.command != "run":
         return 1
     cfg: CampaignConfig = load_config(vars(args))
