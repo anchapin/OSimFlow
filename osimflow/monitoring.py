@@ -295,7 +295,7 @@ class RunTrace:
             raw["summary"] = {}
         raw["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
         raw["summary"]["n_failed"] = n_failed  # type: ignore[index]
-        raw["summary"]["n_samples"] = len(per_sample)
+        raw["summary"]["n_samples"] = len(per_sample)  # type: ignore[index]
 
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(raw, indent=2, default=str))
