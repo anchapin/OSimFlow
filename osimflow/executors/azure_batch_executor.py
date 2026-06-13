@@ -138,8 +138,8 @@ class _AzureBatchHandle(Handle):
         if self._future.done():
             return True
         try:
-            task = self._executor._get_task(self.job_id)
-            if task.end_time is not None:
+            job = self._executor._get_job(self.job_id)
+            if job.properties.execution_info.end_time is not None:
                 return True
         except Exception:
             return False
@@ -229,10 +229,9 @@ class AzureBatchExecutor(BaseExecutor):
             assert self._client is not None
         return self._client
 
-    def _get_task(self, job_id: str, task_id: str | None = None) -> Any:
-        """Get a task from Azure Batch."""
-        tid = task_id or job_id
-        return self._get_client().task.get(self.account_name, job_id, tid)
+    def _get_job(self, job_id: str) -> Any:
+        """Get a job from Azure Batch."""
+        return self._get_client().job.get(self.account_name, job_id)
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
         """Return True if the failure reason indicates a Spot interruption."""
@@ -245,9 +244,9 @@ class AzureBatchExecutor(BaseExecutor):
         """Poll Azure Batch with exponential backoff until terminal state."""
         delay = self.poll_interval_s
         while True:
-            task = self._get_task(job_id)
-            if task.end_time is not None:
-                return task
+            job = self._get_job(job_id)
+            if job.properties.execution_info.end_time is not None:
+                return job
             log.info("azure_batch poll jobId=%s (sleeping %.1fs)", job_id, delay)
             time.sleep(delay)
             delay = min(delay * 2, self.max_poll_interval_s)

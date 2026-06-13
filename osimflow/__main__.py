@@ -84,20 +84,26 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             key=args.nomad_key,
             ca_cert=args.nomad_ca_cert,
         )
-    # Azure Batch executor — account credentials and pool.
+    # Azure Batch executor — account credentials, pool, and Spot handling.
     if args.executor == "azure_batch":
         return AzureBatchExecutor(
             account_name=args.azure_batch_account_name,
             account_url=args.azure_batch_account_url,
             pool_id=args.azure_batch_pool_id,
             location=args.azure_batch_location,
+            use_spot=args.azure_use_spot,
+            fallback_to_on_demand=args.azure_fallback_to_on_demand,
+            max_retries=args.azure_max_retries,
         )
-    # Google Cloud Batch executor — project, region, and service account.
+    # Google Cloud Batch executor — project, region, service account, and Spot handling.
     if args.executor == "google_batch":
         return GoogleBatchExecutor(
             project_id=args.google_batch_project_id,
             region=args.google_batch_region,
             batch_service_account=args.google_batch_service_account,
+            use_spot=args.google_use_spot,
+            fallback_to_on_demand=args.google_fallback_to_on_demand,
+            max_retries=args.google_max_retries,
         )
     # Kubernetes executor — namespace and polling config.
     if args.executor == "kubernetes":
@@ -276,6 +282,35 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help="Azure region/location for the Batch account (default: eastus).",
     )
     run.add_argument(
+        "--azure-use-spot",
+        action="store_true",
+        help=(
+            "Use Azure Spot VMs (low-priority) for Batch tasks (issue #352). "
+            "When a Spot interruption occurs, the executor retries up to "
+            "--azure-max-retries times before falling back to on-demand "
+            "(if --azure-fallback-to-on-demand is set) or failing."
+        ),
+    )
+    run.add_argument(
+        "--azure-fallback-to-on-demand",
+        action="store_true",
+        help=(
+            "When Azure Spot retries are exhausted, fall back to on-demand "
+            "VMs instead of failing (issue #352). Requires --azure-use-spot."
+        ),
+    )
+    run.add_argument(
+        "--azure-max-retries",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of retries on Azure Spot VM interruption "
+            "(default: 3). Each retry uses exponential backoff. After "
+            "exhausting retries, the job fails unless "
+            "--azure-fallback-to-on-demand is set."
+        ),
+    )
+    run.add_argument(
         "--google-batch-project-id",
         default=None,
         help="Google Cloud project ID (e.g. my-project).",
@@ -289,6 +324,36 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--google-batch-service-account",
         default=None,
         help="Google Cloud service account email for Batch jobs.",
+    )
+    run.add_argument(
+        "--google-use-spot",
+        action="store_true",
+        help=(
+            "Use Google Spot VMs (preemptible) for Batch jobs (issue #352). "
+            "When a preemptible VM is interrupted, the executor retries up to "
+            "--google-max-retries times before falling back to on-demand "
+            "(if --google-fallback-to-on-demand is set) or failing."
+        ),
+    )
+    run.add_argument(
+        "--google-fallback-to-on-demand",
+        action="store_true",
+        help=(
+            "When Google Spot/preemptible retries are exhausted, fall back to "
+            "on-demand VMs instead of failing (issue #352). "
+            "Requires --google-use-spot."
+        ),
+    )
+    run.add_argument(
+        "--google-max-retries",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of retries on Google preemptible VM interruption "
+            "(default: 3). Each retry uses exponential backoff. After "
+            "exhausting retries, the job fails unless "
+            "--google-fallback-to-on-demand is set."
+        ),
     )
     run.add_argument(
         "--kubernetes-namespace",
