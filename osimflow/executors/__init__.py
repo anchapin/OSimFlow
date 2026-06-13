@@ -975,23 +975,60 @@ class _NomadClient:
     ``verify_tls=True`` path calls ``self.urlopen`` directly.
     """
 
-    def __init__(self, address: str, token: str | None, verify_tls: bool = True) -> None:
+    def __init__(
+        self,
+        address: str,
+        token: str | None,
+        verify_tls: bool = True,
+        tls: bool = False,
+        cert: str | None = None,
+        key: str | None = None,
+        ca_cert: str | None = None,
+    ) -> None:
         import ssl  # noqa: PLC0415
         import urllib.request  # noqa: PLC0415
 
         self.address = address.rstrip("/")
         self.token = token
         self.verify_tls = verify_tls
+        self.tls = tls
+        self.cert = cert
+        self.key = key
+        self.ca_cert = ca_cert
 
         # Store urlopen so tests can patch ``urllib.request.urlopen``
         # and intercept every request through ``self.urlopen``.
         self.urlopen = urllib.request.urlopen
 
-        # When TLS verification is disabled, build a custom opener
-        # with an SSL context that skips certificate verification.
-        if verify_tls:
-            self._opener: urllib.request.OpenerDirector | None = None
+        # Build custom opener based on TLS configuration:
+        # - tls=False: plain HTTP (no TLS)
+        # - tls=True, verify_tls=True, cert+key: mTLS with custom client certs
+        # - tls=True, verify_tls=True: TLS with system CA certs
+        # - tls=True, verify_tls=False: TLS with CERT_NONE (skip verification)
+        # - verify_tls=False alone (tls=False): legacy behavior for dev with
+        #   self-signed certs - uses HTTPSHandler with CERT_NONE even without tls=True
+        self._opener: urllib.request.OpenerDirector | None = None
+        self._ssl_context: ssl.SSLContext | None = None
+
+        if not tls and verify_tls:
+            # Plain HTTP, no TLS
+            pass
+        elif verify_tls and cert and key:
+            # mTLS: custom SSL context with client cert + CA verification.
+            # Defer loading cert/key/ca until first request so tests can
+            # verify parameters without requiring real certificate files.
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = True
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+            self._ssl_context = ssl_context
+            self._opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=ssl_context),
+            )
+        elif verify_tls:
+            # TLS with system CA certs (no client cert)
+            self._opener = None  # use stdlib urlopen
         else:
+            # verify_tls=False: skip cert verification (legacy dev mode)
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
@@ -1031,8 +1068,16 @@ class _NomadClient:
             method=method,
         )
         try:
+            # Lazily load certificates on first mTLS request.
+            if self._ssl_context is not None:
+                if self.ca_cert:
+                    self._ssl_context.load_verify_locations(cafile=self.ca_cert)
+                if self.cert and self.key:
+                    self._ssl_context.load_cert_chain(certfile=self.cert, keyfile=self.key)
+                self._ssl_context = None  # only load once
+
             if self._opener is not None:
-                # verify_tls=False: use the custom opener that skips cert verification.
+                # verify_tls=False or mTLS: use the custom opener.
                 with self._opener.open(request) as resp:
                     payload = resp.read()
             else:
@@ -1292,6 +1337,10 @@ class NomadExecutor(BaseExecutor):
         max_poll_interval_s: float = 60.0,
         use_dispatch: bool = False,
         verify_tls: bool = True,
+        tls: bool = False,
+        cert: str | None = None,
+        key: str | None = None,
+        ca_cert: str | None = None,
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -1304,11 +1353,19 @@ class NomadExecutor(BaseExecutor):
         self.max_poll_interval_s = max_poll_interval_s
         self.use_dispatch = use_dispatch
         self.verify_tls = verify_tls
+        self.tls = tls
+        self.cert = cert
+        self.key = key
+        self.ca_cert = ca_cert
         self._dispatch_job_registered = False
         self._client = _NomadClient(
             address=self.address,
             token=os.environ.get("NOMAD_TOKEN"),
             verify_tls=verify_tls,
+            tls=tls,
+            cert=cert,
+            key=key,
+            ca_cert=ca_cert,
         )
 
     def _build_job_spec(

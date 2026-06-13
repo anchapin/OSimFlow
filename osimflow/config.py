@@ -167,6 +167,14 @@ class CampaignConfig:
     # GENERATE_BASIC_PLOTS step completes. Best-effort: delivery failures
     # are logged but do not affect campaign status.
     webhook_url: str | None = None
+    # Nomad TLS configuration (issue #344). When nomad_tls is True, the
+    # NomadExecutor uses HTTPS to connect to the Nomad cluster. The
+    # nomad_cert, nomad_key, and nomad_ca_cert fields specify client
+    # certificate, key, and CA certificate paths for mTLS authentication.
+    nomad_tls: bool = False
+    nomad_cert: Path | None = None
+    nomad_key: Path | None = None
+    nomad_ca_cert: Path | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -419,4 +427,10 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             Path(str(args["offline_bundle"])).resolve() if args.get("offline_bundle") else None
         ),
         webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
+        nomad_tls=bool(args.get("nomad_tls", False)),
+        nomad_cert=(Path(str(args["nomad_cert"])).resolve() if args.get("nomad_cert") else None),
+        nomad_key=(Path(str(args["nomad_key"])).resolve() if args.get("nomad_key") else None),
+        nomad_ca_cert=(
+            Path(str(args["nomad_ca_cert"])).resolve() if args.get("nomad_ca_cert") else None
+        ),
     )
