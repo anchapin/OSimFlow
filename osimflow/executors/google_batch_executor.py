@@ -141,6 +141,8 @@ class _GoogleBatchHandle(Handle):
             self._future.set_result(None)
             return None
 
+        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
+
     def done(self) -> bool:
         if self._future.done():
             return True
@@ -187,7 +189,6 @@ class GoogleBatchExecutor(BaseExecutor):
 
     name = "google_batch"
 
-    # Sentinel markers used in statusDetails to identify Spot interruptions.
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
         "preempted",
         "preempt",
@@ -221,13 +222,7 @@ class GoogleBatchExecutor(BaseExecutor):
         self._client: Any = None
 
     def _get_client(self) -> Any:
-        """Lazy Google Cloud Batch synchronous client construction.
-
-        Uses google.cloud.batch_v1.BatchServiceClient (synchronous).
-        Authentication is handled via Application Default Credentials
-        (ADC) which supports Managed Identity, service account credentials,
-        and gcloud auth.
-        """
+        """Lazy Google Cloud Batch synchronous client construction."""
         if self._client is None:
             self._client = self._batch_v1.BatchServiceClient()
         return self._client
@@ -281,13 +276,9 @@ class GoogleBatchExecutor(BaseExecutor):
         memory_mb: int,
         time_min: int,
         environment: list[dict[str, str]],
-        command: list[str],
         use_spot: bool | None = None,
     ) -> str:
-        """Submit a single Google Cloud Batch job and return the job name.
-
-        Uses *use_spot* if provided, otherwise ``self.use_spot``.
-        """
+        """Submit a single Google Cloud Batch job and return the job name."""
         use_spot_final = use_spot if use_spot is not None else self.use_spot
         job_name = f"projects/{self.project_id}/locations/{self.region}/jobs/osimflow-{name}"
 
@@ -302,7 +293,7 @@ class GoogleBatchExecutor(BaseExecutor):
             task_spec=self._batch_v1.TaskSpec(
                 container=self._batch_v1.ContainerSpec(
                     image_uri=container_image,
-                    command=command,
+                    command=["/bin/sh", "-c", "sleep infinity"],
                 ),
                 environment={
                     "variables": {e["name"]: e["value"] for e in environment},
@@ -378,7 +369,7 @@ class GoogleBatchExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
         )
 
-        command = ["/bin/sh", "-c", "echo 'TODO: implement work command'"]
+        del fn, args  # noqa: ARG002
 
         submit_params: dict[str, Any] = {
             "name": name,
@@ -386,7 +377,6 @@ class GoogleBatchExecutor(BaseExecutor):
             "memory_mb": memory_mb,
             "time_min": time_min,
             "environment": environment,
-            "command": command,
         }
         job_name = self._submit_job(**submit_params)
 

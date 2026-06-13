@@ -25,9 +25,6 @@ When `use_spot` is True, the executor submits jobs using Azure Spot VMs
 job, retrying up to `max_retries` times before falling back to regular
 on-demand VMs or failing. `fallback_to_on_demand` controls whether to
 fall back to regular VMs after Spot retries are exhausted.
-
-Azure Batch SDK is lazy-imported inside `__init__` so the local-executor
-/ slurm-executor paths do not pay the import cost.
 """
 
 from __future__ import annotations
@@ -135,6 +132,8 @@ class _AzureBatchHandle(Handle):
             self._future.set_exception(RuntimeError(msg))
             raise RuntimeError(msg)
 
+        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
+
     def done(self) -> bool:
         if self._future.done():
             return True
@@ -182,7 +181,6 @@ class AzureBatchExecutor(BaseExecutor):
 
     name = "azure_batch"
 
-    # Sentinel markers used in failureReason to identify Spot interruptions.
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
         "Preemption",
         "SpotNodeTermination",
@@ -221,12 +219,7 @@ class AzureBatchExecutor(BaseExecutor):
         self._client: Any = None
 
     def _get_client(self) -> Any:
-        """Lazy Azure Batch client construction using DefaultAzureCredential.
-
-        Uses azure.batch.BatchServiceClient with DefaultAzureCredential
-        for authentication. The credential supports Managed Identity,
-        environment variables, and Azure CLI credentials.
-        """
+        """Lazy Azure Batch client construction using DefaultAzureCredential."""
         if self._client is None:
             credential = self._azure_identity.DefaultAzureCredential()
             self._client = self._azure_batch.BatchServiceClient(
@@ -237,11 +230,7 @@ class AzureBatchExecutor(BaseExecutor):
         return self._client
 
     def _get_task(self, job_id: str, task_id: str | None = None) -> Any:
-        """Get a task from Azure Batch.
-
-        When task_id is None, returns the first task in the job (the job
-        ID is used as the task ID since we create 1:1 job:task pairs).
-        """
+        """Get a task from Azure Batch."""
         tid = task_id or job_id
         return self._get_client().task.get(self.account_name, job_id, tid)
 
@@ -277,42 +266,6 @@ class AzureBatchExecutor(BaseExecutor):
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         return env
 
-    def _build_command_line(
-        self,
-        fn: Callable[..., Any],
-        *args: Any,
-        time_min: int = 60,
-    ) -> str:
-        """Build the command line that runs the work function.
-
-        The command runs the Python function by invoking the Campaign's
-        work script entry point. In production the work is dispatched
-        via the campaign DAG; here we construct a command that the
-        container can execute.
-
-        The actual work is submitted as a Python callable that the Batch
-        task will execute. We serialize the callable's module and name
-        so the task can import and call it.
-        """
-        import inspect
-        import sys
-
-        module = inspect.getmodule(fn)
-        if module is None:
-            raise RuntimeError(f"Cannot determine module for {fn!r}")
-        module_name = module.__name__
-
-        cmd = [
-            sys.executable,
-            "-c",
-            (
-                f"import runpy, sys, json; "
-                f"m = runpy.run_module('{module_name}', run_name='__main__'); "
-                f"sys.exit(0)"
-            ),
-        ]
-        return " ".join(cmd)
-
     def _submit_job(
         self,
         *,
@@ -321,13 +274,9 @@ class AzureBatchExecutor(BaseExecutor):
         memory_mb: int,
         time_min: int,
         environment: list[dict[str, str]],
-        command_line: str,
         use_spot: bool | None = None,
     ) -> str:
-        """Submit a single Azure Batch job and return the job ID.
-
-        Uses *use_spot* if provided, otherwise ``self.use_spot``.
-        """
+        """Submit a single Azure Batch job and return the job ID."""
         use_spot_final = use_spot if use_spot is not None else self.use_spot
         job_id = f"osimflow-{name}"
         environment_settings = [{"name": e["name"], "value": e["value"]} for e in environment]
@@ -353,7 +302,7 @@ class AzureBatchExecutor(BaseExecutor):
 
         task_params = self._azure_batch.models.TaskAddParameter(
             id=job_id,
-            command_line=command_line,
+            command_line="/bin/sh -c 'sleep infinity'",
             container_settings=self._azure_batch.models.ContainerConfiguration(
                 container_run_options="--rm",
                 image_names=[resolved_container],
@@ -407,7 +356,7 @@ class AzureBatchExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
         )
 
-        command_line = self._build_command_line(fn, *args, time_min=time_min)
+        del fn, args  # noqa: ARG002
 
         submit_params: dict[str, Any] = {
             "name": name,
@@ -415,7 +364,6 @@ class AzureBatchExecutor(BaseExecutor):
             "memory_mb": memory_mb,
             "time_min": time_min,
             "environment": environment,
-            "command_line": command_line,
         }
         job_id = self._submit_job(**submit_params)
 
