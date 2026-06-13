@@ -40,6 +40,7 @@ __all__ = [
     "BaseExecutor",
     "GoogleBatchExecutor",
     "Handle",
+    "KubernetesExecutor",
     "LocalExecutor",
     "NomadExecutor",
     "SlurmExecutor",

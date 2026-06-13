@@ -28,6 +28,7 @@ from osimflow import (
     CampaignRecord,
     CampaignRegistry,
     GoogleBatchExecutor,
+    KubernetesExecutor,
     LocalExecutor,
     NomadExecutor,
     SlurmExecutor,
@@ -40,9 +41,12 @@ from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_o
 log = logging.getLogger("osimflow.__main__")
 
 
-def _build_executor(args: argparse.Namespace) -> BaseExecutor:
+def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
+    """Dispatch to the correct executor based on ``args.executor``."""
+    # Local executor — no extra config needed.
     if args.executor == "local":
         return LocalExecutor(max_workers=args.max_workers)
+    # Slurm executor — partition, account, and submitit debug flag.
     if args.executor == "slurm":
         return SlurmExecutor(
             partition=args.slurm_partition,
@@ -55,6 +59,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             constraint=args.slurm_constraint,
             gres=args.slurm_gres,
         )
+    # AWS Batch executor — job queue, job definition, and Spot handling.
     if args.executor == "aws_batch":
         return AWSBatchExecutor(
             job_queue=args.aws_batch_queue,
@@ -67,11 +72,13 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             fallback_to_on_demand=args.aws_batch_fallback_to_on_demand,
             max_retries=args.aws_batch_max_retries,
         )
+    # Nomad executor — address and datacentre.
     if args.executor == "nomad":
         return NomadExecutor(
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
         )
+    # Azure Batch executor — account credentials and pool.
     if args.executor == "azure_batch":
         return AzureBatchExecutor(
             account_name=args.azure_batch_account_name,
@@ -79,11 +86,19 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             pool_id=args.azure_batch_pool_id,
             location=args.azure_batch_location,
         )
+    # Google Cloud Batch executor — project, region, and service account.
     if args.executor == "google_batch":
         return GoogleBatchExecutor(
             project_id=args.google_batch_project_id,
             region=args.google_batch_region,
             batch_service_account=args.google_batch_service_account,
+        )
+    # Kubernetes executor — namespace and polling config.
+    if args.executor == "kubernetes":
+        return KubernetesExecutor(
+            namespace=args.kubernetes_namespace,
+            poll_interval_s=args.kubernetes_poll_interval_s,
+            max_poll_interval_s=args.kubernetes_max_poll_interval_s,
         )
     raise ValueError(f"unknown executor: {args.executor}")
 
@@ -91,7 +106,15 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
 def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--executor",
-        choices=["local", "slurm", "aws_batch", "nomad", "azure_batch", "google_batch"],
+        choices=[
+            "local",
+            "slurm",
+            "aws_batch",
+            "nomad",
+            "azure_batch",
+            "google_batch",
+            "kubernetes",
+        ],
         default="local",
     )
     run.add_argument("--max-workers", type=int, default=4, help="Local executor parallelism")
@@ -206,6 +229,23 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--google-batch-service-account",
         default=None,
         help="Google Cloud service account email for Batch jobs.",
+    )
+    run.add_argument(
+        "--kubernetes-namespace",
+        default="default",
+        help="Kubernetes namespace for jobs (default: default).",
+    )
+    run.add_argument(
+        "--kubernetes-poll-interval-s",
+        type=float,
+        default=5.0,
+        help="Poll interval for Job status (seconds, default: 5.0).",
+    )
+    run.add_argument(
+        "--kubernetes-max-poll-interval-s",
+        type=float,
+        default=60.0,
+        help="Max poll interval for Job status (seconds, default: 60.0).",
     )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
