@@ -181,3 +181,54 @@ class FileDeleteResponse(BaseModel):
 
     file_id: str
     status: str = Field(description="deleted")
+
+
+# ---------------------------------------------------------------------------
+# Measure management (issue #348)
+# ---------------------------------------------------------------------------
+
+
+class MeasureArgument(BaseModel):
+    """A single argument accepted by a measure."""
+
+    name: str = Field(description="Argument variable name")
+    display_name: str = Field(description="Human-readable argument name")
+    description: str | None = Field(default=None, description="What this argument controls")
+    argument_type: str = Field(
+        default="String",
+        description="OpenStudio argument type: String | Double | Integer | Boolean | Choice",
+    )
+    default_value: Any = Field(default=None, description="Default value in the workflow")
+    required: bool = Field(default=False, description="Whether this argument is required")
+    valid_choices: list[str] | None = Field(
+        default=None, description="Valid choices for Choice arguments"
+    )
+    units: str | None = Field(default=None, description="Physical units, if applicable")
+    measure_dir_name: str = Field(
+        default="", description="Measure directory name this argument belongs to"
+    )
+
+
+class MeasureInfo(BaseModel):
+    """Summary information for a single measure."""
+
+    measure_dir_name: str = Field(description="Directory name of the measure")
+    display_name: str = Field(description="Human-readable measure name")
+    description: str | None = Field(default=None, description="What the measure does")
+    measure_type: str = Field(
+        default="Model",
+        description="OpenStudio measure type: Model | EnergyPlus | Reporting",
+    )
+    arguments: list[MeasureArgument] = Field(
+        default_factory=list, description="Arguments accepted by this measure"
+    )
+
+
+class MeasureListResponse(BaseModel):
+    """Envelope for the measure list endpoint."""
+
+    measures: list[MeasureInfo] = Field(default_factory=list)
+    total: int
+    source: str = Field(
+        description="Source of measure information: workflow.osw | template_package"
+    )
