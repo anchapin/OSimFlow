@@ -562,6 +562,7 @@ except ImportError:
     # DEAP is an optional dependency — GeneticAlgorithm is only available
     # when the [ga] extra is installed.
     pass
+
 from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402
 from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
 
