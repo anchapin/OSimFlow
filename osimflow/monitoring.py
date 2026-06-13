@@ -25,6 +25,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -130,8 +131,12 @@ class RunTrace:
         # Per-campaign cost tracking (issue #126).
         self.total_cost_usd: float = 0.0
         self.spot_savings_usd: float = 0.0
+        # Campaign status: "success", "failure", "cancelled" (issue #255).
+        self.status: str = "failure"
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
+        self._checkpoint_path: str | None = None
+        self._checkpoint_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Step hooks (called by the Campaign)
@@ -195,6 +200,7 @@ class RunTrace:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
+            "status": self.status,
             "config": self.config_summary,
             "summary": {
                 "n_samples": len(self.per_sample),
@@ -233,42 +239,43 @@ class RunTrace:
         step completes so SSE clients see live updates without waiting for
         campaign end.
         """
-        path = Path(self._checkpoint_path) if hasattr(self, "_checkpoint_path") else None
+        path = Path(self._checkpoint_path) if self._checkpoint_path is not None else None
         if path is None:
             return
         if not path.exists():
             return
 
-        try:
-            data = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
-            return
+        with self._checkpoint_lock:
+            try:
+                data = json.loads(path.read_text())
+            except (json.JSONDecodeError, OSError):
+                return
 
-        samples: list[dict[str, object]] = data.get("per_sample", [])
-        # Replace existing entry or append.
-        replaced = False
-        for i, s in enumerate(samples):
-            if s.get("sample_id") == trace.sample_id:
-                samples[i] = trace.to_dict()
-                replaced = True
-                break
-        if not replaced:
-            samples.append(trace.to_dict())
-        data["per_sample"] = samples
+            samples: list[dict[str, object]] = data.get("per_sample", [])
+            # Replace existing entry or append.
+            replaced = False
+            for i, s in enumerate(samples):
+                if s.get("sample_id") == trace.sample_id:
+                    samples[i] = trace.to_dict()
+                    replaced = True
+                    break
+            if not replaced:
+                samples.append(trace.to_dict())
+            data["per_sample"] = samples
 
-        # Update summary counts.
-        n_succeeded = sum(1 for s in data.get("per_sample", []) if s.get("status") == "ok")
-        n_failed = sum(1 for s in data.get("per_sample", []) if s.get("status") == "failed")
-        if "summary" not in data:
-            data["summary"] = {}
-        data["summary"]["n_succeeded"] = n_succeeded
-        data["summary"]["n_failed"] = n_failed
-        data["summary"]["n_samples"] = len(data["per_sample"])
+            # Update summary counts.
+            n_succeeded = sum(1 for s in data.get("per_sample", []) if s.get("status") == "ok")
+            n_failed = sum(1 for s in data.get("per_sample", []) if s.get("status") == "failed")
+            if "summary" not in data:
+                data["summary"] = {}
+            data["summary"]["n_succeeded"] = n_succeeded
+            data["summary"]["n_failed"] = n_failed
+            data["summary"]["n_samples"] = len(data["per_sample"])
 
-        # Atomic write: temp file + rename.
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2, default=str))
-        tmp.rename(path)
+            # Atomic write: temp file + rename.
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2, default=str))
+            tmp.rename(path)
 
     def write(self, path: Path) -> None:
         """Write the run.json trace to disk. Idempotent."""

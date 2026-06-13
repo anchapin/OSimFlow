@@ -32,7 +32,6 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 """
 
 import concurrent.futures
-import contextlib
 import dataclasses
 import hashlib
 import inspect
@@ -41,7 +40,9 @@ import logging
 import os
 import platform
 import shutil
+import signal
 import subprocess
+import threading
 import time
 import warnings
 from collections.abc import Callable
@@ -128,6 +129,36 @@ class VariableSpec(TypedDict, total=False):
 SampleDict = dict[str, Path]  # sample_id -> path (per-sample work dir)
 
 
+class _CancelRegistry:
+    """Global registry holding the currently-running Campaign for signal handling.
+
+    When a SIGINT/SIGTERM is received, the signal handler calls
+    ``request_cancel()`` on whatever Campaign is registered here.
+    Only one Campaign can run at a time per process — the registry
+    is updated at ``run()`` entry and cleared on exit.
+    """
+
+    def __init__(self) -> None:
+        self._campaign: Campaign | None = None
+        self._lock = threading.Lock()
+
+    def register(self, campaign: "Campaign") -> None:
+        with self._lock:
+            self._campaign = campaign
+
+    def request_cancel(self) -> None:
+        with self._lock:
+            if self._campaign is not None:
+                self._campaign.request_cancel()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._campaign = None
+
+
+_cancel_registry = _CancelRegistry()
+
+
 class Campaign:
     def __init__(
         self,
@@ -208,6 +239,13 @@ class Campaign:
             self._registry = CampaignRegistry(db_path=reg_path)
         except Exception as exc:
             log.warning("could not open campaign registry: %s (continuing without)", exc)
+
+        # Graceful shutdown (issue #255): cancellation flag and lock.
+        self._cancel_requested = False
+        self._cancel_lock = threading.Lock()
+        # Original signal handlers — restored on exit.
+        self._prev_sigint: Any = None
+        self._prev_sigterm: Any = None
 
     @staticmethod
     def _build_observability_backend(cfg: CampaignConfig) -> ObservabilityBackend:
@@ -507,7 +545,12 @@ class Campaign:
         # the exact backward-compatible behaviour.
         if self.max_workers <= 1:
             for item in submissions.items():
+                if self._check_cancel_requested():
+                    log.warning("cancellation requested during %s — stopping fan-out", step_name)
+                    break
                 _await_one(item)
+            if self._cancel_requested:
+                raise KeyboardInterrupt("cancellation requested during fan-out")
             return
 
         # max_workers > 1: use a ThreadPoolExecutor to await results
@@ -522,10 +565,21 @@ class Campaign:
                 pool.submit(_await_one, (sid, item)): sid for sid, item in submissions.items()
             }
             for future in concurrent.futures.as_completed(futures):
-                # Error already logged inside _await_one; continue
-                # processing remaining samples.
-                with contextlib.suppress(Exception):
+                if self._check_cancel_requested():
+                    log.warning("cancellation requested during %s — stopping fan-out", step_name)
+                    # Cancel remaining futures.
+                    for f in futures:
+                        f.cancel()
+                    break
+                # CancelledError is a BaseException (not Exception), so we must
+                # catch it explicitly here. It is raised when a future was
+                # cancelled via f.cancel() during a cancellation sweep.
+                # We convert it to KeyboardInterrupt so the outer handler
+                # (which catches Exception) can set campaign_status="cancelled".
+                try:
                     future.result()
+                except concurrent.futures.CancelledError as exc:
+                    raise KeyboardInterrupt(f"cancellation requested during {step_name}") from exc
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -1077,9 +1131,98 @@ class Campaign:
             log.warning("failed to update campaign status in registry: %s", exc)
 
     # ------------------------------------------------------------------
+    # Graceful shutdown (issue #255)
+    # ------------------------------------------------------------------
+    def request_cancel(self) -> None:
+        """Request campaign cancellation.
+
+        Called by the signal handler or by external code that wants to
+        stop a running campaign. Thread-safe. Idempotent.
+        """
+        with self._cancel_lock:
+            self._cancel_requested = True
+        log.warning("campaign cancellation requested")
+
+    def _check_cancel_requested(self) -> bool:
+        """Check if cancellation has been requested.
+
+        Checks both the in-memory flag and the ``.stop`` file in the
+        outdir. The ``.stop`` file is written by the REST API's
+        ``POST /api/v1/campaign/stop`` endpoint (issue #143) and by
+        external tooling that wants to interrupt a running campaign.
+
+        Returns:
+            ``True`` if cancellation is requested, ``False`` otherwise.
+        """
+        with self._cancel_lock:
+            if self._cancel_requested:
+                return True
+        # Also check the .stop file (written by the API server).
+        stop_file = self.cfg.outdir / ".stop"
+        if stop_file.is_file():
+            log.warning(".stop file detected — requesting cancellation")
+            with self._cancel_lock:
+                self._cancel_requested = True
+            return True
+        return False
+
+    def _setup_signal_handlers(self) -> None:
+        """Register SIGINT/SIGTERM handlers to request graceful shutdown.
+
+        Saves the previous handlers so they can be restored on exit.
+        When a signal is received, ``request_cancel()`` is called.
+        """
+        self._prev_sigint = signal.signal(signal.SIGINT, self._handle_signal)
+        self._prev_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
+        log.debug("signal handlers registered (SIGINT/SIGTERM)")
+
+    @staticmethod
+    def _handle_signal(signum: int, _frame: object) -> None:
+        """Signal handler that requests cancellation on the Campaign instance.
+
+        Uses a global registry so the signal can reach the running Campaign
+        even though the signal callback only receives (signum, frame).
+        """
+        sig_name = signal.Signals(signum).name
+        log.warning("received %s — requesting cancellation", sig_name)
+        _cancel_registry.request_cancel()
+
+    def _restore_signal_handlers(self) -> None:
+        """Restore the previous signal handlers."""
+        if self._prev_sigint is not None:
+            signal.signal(signal.SIGINT, self._prev_sigint)
+        if self._prev_sigterm is not None:
+            signal.signal(signal.SIGTERM, self._prev_sigterm)
+        log.debug("signal handlers restored")
+
+    def _cancel_active_jobs(self) -> None:
+        """Cancel all active futures submitted to the executor.
+
+        Called during graceful shutdown to stop in-flight work as quickly
+        as possible. The executor's ``cancel()`` method is called on
+        each active handle; handles that were already completing are
+        given a short grace period to finish.
+        """
+        log.info("canceling active executor jobs")
+        self.executor.cancel()
+        log.info("executor cancel requested")
+
+    def _write_shutdown_trace(self, status: str = "cancelled") -> None:
+        """Write run.json with cancellation status before exit.
+
+        Marks the campaign as cancelled so a re-run can resume correctly.
+        """
+        try:
+            self.trace.status = status
+            self.trace.write(self.cfg.outdir / "run.json")
+            log.info("wrote cancellation trace to run.json")
+        except Exception as exc:
+            log.warning("could not write cancellation trace: %s", exc)
+
+    # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
-    def run(self) -> dict[str, object]:
+    def run(self) -> dict[str, object]:  # noqa: PLR0912, PLR0915
         log.info("=" * 60)
         log.info("OSimFlow campaign start")
         log.info("  executor:      %s", self.executor.name)
@@ -1092,6 +1235,12 @@ class Campaign:
         if self.cfg.sample is not None:
             log.info("  ** SINGLE SAMPLE MODE: sample %d **", self.cfg.sample)
         log.info("=" * 60)
+
+        # Register this campaign for signal handling (issue #255).
+        _cancel_registry.register(self)
+
+        # Setup signal handlers for graceful shutdown.
+        self._setup_signal_handlers()
 
         run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
         if run_name is not None:
@@ -1107,6 +1256,15 @@ class Campaign:
         self._write_campaign_meta()
 
         try:
+            # Pre-campaign cancellation check: if cancellation is requested
+            # BEFORE the campaign starts, the except/finally blocks below
+            # will write run.json, restore signal handlers, and close the
+            # cache.  Keeping this inside the try block is essential so that
+            # the finally cleanup (WAL checkpoint, registry update, etc.)
+            # always runs even for pre-campaign cancellations.
+            if self._check_cancel_requested():
+                raise KeyboardInterrupt("cancellation requested before campaign start")
+
             # Init hook (issue #108): runs before the first campaign step.
             # Must succeed (exit 0) or the campaign aborts.
             self._run_init_script()
@@ -1136,9 +1294,33 @@ class Campaign:
                 result = self._run_single_sample(t0)
             else:
                 result = self._run_full_campaign(t0)
-            campaign_status = "success"
+            # If cancellation was detected in _finalize_full_campaign,
+            # self.trace.status will be "cancelled" — propagate that to
+            # campaign_status so the caller sees the correct final state.
+            campaign_status = "cancelled" if self.trace.status == "cancelled" else "success"
             return result
+        except KeyboardInterrupt:
+            campaign_status = "cancelled"
+            log.warning("campaign cancelled by user or signal")
+            self.trace.status = "cancelled"
+            self._cancel_active_jobs()
+            self.trace.finalize()
+            # Always write the trace on cancellation so callers can inspect
+            # the partial state.  The file may not exist yet when
+            # cancellation fires before the first step (e.g. pre-campaign
+            # cancel or .stop file present before run()).
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            # Do NOT re-raise — cancellation has been handled; the finally
+            # block will run and the campaign will exit with the correct
+            # status. Re-raising would crash the worker in concurrent mode
+            # and cause test_cancel_during_generation_loop_stops to fail.
+            return {"status": "cancelled", "trace": self.trace}
         finally:
+            # Restore signal handlers FIRST, before any other cleanup.
+            self._restore_signal_handlers()
+            _cancel_registry.clear()
+
             # Finalize hook (issue #108): best-effort after all steps.
             # Runs even if init script failed, so the user gets a
             # notification that the campaign aborted.
@@ -1162,6 +1344,12 @@ class Campaign:
 
             # Update registry status (issue #266).
             self._update_registry_status(campaign_status)
+
+            # Close the SQLite cache: checkpoints the WAL and removes the
+            # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
+            # parallel teardown does not see "FileNotFoundError" on those
+            # files. Safe to call multiple times (close() is idempotent).
+            self.cache.close()
 
     def _run_dry_run(self, t0: float) -> dict[str, object]:
         """Dry-run mode: 1 sample, local executor, steps 1-4 only."""
@@ -1280,6 +1468,9 @@ class Campaign:
         last_samples: list[SampleSpec] = []
 
         for generation in range(self.cfg.max_generations):
+            if self._check_cancel_requested():
+                log.warning("cancellation requested — stopping generation loop")
+                break
             log.info(
                 "--- generation %d/%d ---",
                 generation + 1,
@@ -1529,6 +1720,20 @@ class Campaign:
         last_samples: list[SampleSpec],
     ) -> dict[str, object]:
         """Aggregate, plot, archive, and write the run trace."""
+        if self._check_cancel_requested():
+            log.warning("cancellation requested before aggregation — writing partial trace")
+            self._finalize_samples()
+            self.trace.status = "cancelled"
+            self.trace.finalize()
+            self.trace.write(self.cfg.outdir / "run.json")
+            return {
+                "samples": last_samples,
+                "kpis": all_kpi_files,
+                "aggregated": {},
+                "plots": [],
+                "elapsed_s": time.time() - t0,
+                "run_json": self.cfg.outdir / "run.json",
+            }
         aggregated: dict[str, Path] = self.step_aggregate_results(
             all_kpi_files, last_simulated, baseline_sample_id=self._baseline_sample_id()
         )
@@ -1606,6 +1811,10 @@ class Campaign:
         kept as a deprecated convenience wrapper.
         """
         t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before GENERATE_SAMPLES")
+
         algo_name = algo.name().upper()
         step_label = f"GENERATE_{algo_name}_SAMPLES"
 
@@ -1744,6 +1953,9 @@ class Campaign:
             )
             return
 
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before PREFLIGHT_RUN_MODEL")
+
         t0 = time.time()
         os_version = self.cfg.openstudio_version
         inputs_hash = sha256_of_files(sorted(self.cfg.template_sim_package.rglob("*")))
@@ -1836,6 +2048,9 @@ class Campaign:
                 simulation package.
         """
         t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before APPLY_PARAMETERS")
 
         # Load variable definitions from variables.yml for epw_file
         # target resolution and pre-flight validation (issue #55).
@@ -1987,6 +2202,10 @@ class Campaign:
         SampleTrace row in `run.json` references them.
         """
         t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before RUN_OPENSTUDIO_SIM")
+
         out: SampleDict = {}
         os_version = self.cfg.openstudio_version
         n = len(parameterized)
@@ -2147,6 +2366,10 @@ class Campaign:
     ) -> list[Path]:
         """Fan-out: for each simulated sample, extract KPIs."""
         t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before EXTRACT_KPIS")
+
         out: list[Path] = []
         n = len(simulated)
         self.trace.step_started("EXTRACT_KPIS", total=n)
@@ -2250,6 +2473,10 @@ class Campaign:
                 When provided, the aggregator adds pct improvement columns.
         """
         t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before AGGREGATE_RESULTS")
+
         sim_dirs = list(simulated.values())
         inputs_hash = sha256_of_dict(
             {
@@ -2321,6 +2548,10 @@ class Campaign:
                 line for the baseline EUI on the EUI histogram.
         """
         t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before GENERATE_BASIC_PLOTS")
+
         plots_dir = self.cfg.outdir / "plots"
         handle = self.executor.submit(
             generate_plots,

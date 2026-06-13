@@ -69,3 +69,13 @@ class BaseExecutor(abc.ABC):
 
     @abc.abstractmethod
     def shutdown(self) -> None: ...
+
+    def cancel(self) -> None:
+        """Cancel all active futures (issue #255).
+
+        Override in subclasses that manage their own job queues
+        (Slurm, AWS Batch) to send cancellation signals to the
+        underlying substrate. The base implementation is a no-op
+        for executors that do not need explicit cancellation.
+        """
+        return None
