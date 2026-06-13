@@ -59,6 +59,9 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
     # Recursion guard: this test runs inside a pytest process, so the
     # inner pytest must NOT re-collect this directory. Restrict to the
     # integration and unit suites that exercise the osimflow/ package surface.
+    # Exclude nomad_e2e: those tests require a Docker-based Nomad cluster
+    # and hang indefinitely when the cluster isn't available (local dev).
+    # CI runs them in a separate workflow with Docker pre-provisioned.
     return _run(
         [
             sys.executable,
@@ -71,6 +74,7 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
             "pytest",
             "-q",
             "--no-cov",
+            "--ignore=tests/integration/nomad_e2e",
             "tests/integration",
             "tests/unit",
         ]
