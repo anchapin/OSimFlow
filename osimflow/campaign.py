@@ -1564,6 +1564,18 @@ class Campaign:
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
 
+        # Sobol sensitivity indices (issue #346): compute after KPI extraction.
+        if self.cfg.algorithm == "sobol":
+            variables: dict[str, Any] = {}
+            if self.cfg.input_variables.exists():
+                with self.cfg.input_variables.open() as fh:
+                    raw = yaml.safe_load(fh)
+                    if isinstance(raw, dict):
+                        variables = raw
+            self.step_compute_sensitivity_indices(
+                samples, kpi_files, variables, generation=generation
+            )
+
         # Per-generation Pareto front persistence for multi-objective
         # algorithms (issue #141).  When the algorithm reports
         # is_multi_objective(), build ParetoSolution objects from the
@@ -2497,6 +2509,111 @@ class Campaign:
         )
         self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
         return sorted(out)
+
+    def step_compute_sensitivity_indices(
+        self,
+        samples: list[SampleSpec],
+        kpi_files: list[Path],
+        variables: dict[str, Any],
+        generation: int = 0,
+    ) -> Path | None:
+        """Compute Sobol sensitivity indices after KPI extraction.
+
+        This step runs only when ``cfg.algorithm == "sobol"``. It reads
+        the per-sample KPI values, passes them to
+        :meth:`SobolAlgorithm.compute_sensitivity_indices`, and stores
+        the resulting ``sensitivity_indices.json`` in the campaign
+        output directory.
+
+        The step is not cached — sensitivity index computation is cheap
+        relative to simulation and the user may want to re-run with
+        different KPI selections.
+
+        Parameters
+        ----------
+        samples
+            Sample specs from ``step_generate_samples``.
+        kpi_files
+            Per-sample KPI JSON files from ``step_extract_kpis``.
+        variables
+            Parsed ``variables.yml`` dict.
+        generation
+            Generation number (included for consistency; Sobol is
+            single-shot so this is always 0).
+
+        Returns
+        -------
+        Path | None
+            Path to ``sensitivity_indices.json``, or ``None`` if the
+            algorithm is not ``"sobol"`` or no KPI files are available.
+        """
+        if self.cfg.algorithm != "sobol":
+            return None
+
+        t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before COMPUTE_SENSITIVITY_INDICES")
+
+        if not kpi_files:
+            log.warning("COMPUTE_SENSITIVITY_INDICES: no KPI files — skipping")
+            self.trace.step_finished(
+                "COMPUTE_SENSITIVITY_INDICES",
+                cache="SKIPPED",
+                elapsed_s=0.0,
+                exit_code=0,
+            )
+            return None
+
+        # Build {sample_id: {kpi_name: value}} mapping from KPI files.
+        kpi_values: dict[str, dict[str, float]] = {}
+        for kpi_path in kpi_files:
+            try:
+                data = json.loads(kpi_path.read_text())
+                sid = str(data.get("sample_id", kpi_path.stem.replace("kpi_", "")))
+                kpis = data.get("kpis", {})
+                numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
+                kpi_values[sid] = numeric_kpis
+            except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                log.warning("could not read KPI file %s: %s", kpi_path, exc)
+
+        algo = AlgorithmRegistry.get("sobol")
+        indices_dir = self.cfg.outdir / "sensitivity"
+        indices_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            indices_path = algo.compute_sensitivity_indices(
+                variables=variables,
+                samples=samples,  # type: ignore[arg-type]
+                kpi_values=kpi_values,
+                outdir=indices_dir,
+            )
+        except Exception as exc:
+            log.error(
+                "COMPUTE_SENSITIVITY_INDICES failed: %s",
+                exc,
+                exc_info=True,
+            )
+            self.trace.step_finished(
+                "COMPUTE_SENSITIVITY_INDICES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
+            )
+            raise RuntimeError("compute_sensitivity_indices failed") from exc
+
+        elapsed = time.time() - t0
+        self.trace.step_finished(
+            "COMPUTE_SENSITIVITY_INDICES",
+            cache="MISS",
+            elapsed_s=elapsed,
+            exit_code=0,
+        )
+        self._obs.record_step_duration(
+            "COMPUTE_SENSITIVITY_INDICES", elapsed, generation=generation
+        )
+        log.info("COMPUTE_SENSITIVITY_INDICES: wrote %s", indices_path)
+        return indices_path
 
     def step_aggregate_results(
         self,

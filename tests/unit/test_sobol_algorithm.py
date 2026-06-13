@@ -354,3 +354,208 @@ class TestSobolDiscrepancy:
         sobol_disc = scipy.stats.qmc.discrepancy(sobol_samples)
 
         assert sobol_disc <= 0.01, f"Sobol discrepancy {sobol_disc:.6f} exceeds 0.01"
+
+
+# ======================================================================
+# Sensitivity indices tests (issue #346)
+# Requires SALib: pip install osimflow[sensitivity]
+# ======================================================================
+
+
+class TestSobolSensitivityIndices:
+    """Tests for SobolAlgorithm.compute_sensitivity_indices()."""
+
+    @pytest.fixture
+    def algo(self) -> SobolAlgorithm:
+        return SobolAlgorithm()
+
+    @pytest.fixture
+    def samples(self, tmp_path: Path) -> list[dict[str, Any]]:
+        algo = SobolAlgorithm()
+        result = algo.generate_samples(_VARIABLES_2D, n_samples=8, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        return data["samples"]
+
+    @pytest.fixture
+    def kpi_values(self) -> dict[str, dict[str, float]]:
+        """Simple Euclidean-distance KPI for testing."""
+        return {f"{(i + 1):04d}": {"eui": float(i + 1)} for i in range(8)}
+
+    def test_compute_sensitivity_indices_creates_file(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        tmp_path: Path,
+    ) -> None:
+        """compute_sensitivity_indices writes a sensitivity_indices.json file."""
+        indices_path = algo.compute_sensitivity_indices(
+            variables=_VARIABLES_2D,
+            samples=samples,
+            kpi_values=kpi_values,
+            outdir=tmp_path,
+        )
+        assert indices_path is not None
+        assert indices_path.exists()
+        assert indices_path.name == "sensitivity_indices.json"
+
+    def test_compute_sensitivity_indices_output_structure(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        tmp_path: Path,
+    ) -> None:
+        """Output JSON contains algorithm, problem, and indices sections."""
+        indices_path = algo.compute_sensitivity_indices(
+            variables=_VARIABLES_2D,
+            samples=samples,
+            kpi_values=kpi_values,
+            outdir=tmp_path,
+        )
+        data = json.loads(indices_path.read_text())
+        assert data["algorithm"] == "sobol"
+        assert "problem" in data
+        assert "indices" in data
+        assert "S1" in data["indices"]
+        assert "ST" in data["indices"]
+
+    def test_compute_sensitivity_indices_s1_keys(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        tmp_path: Path,
+    ) -> None:
+        """S1 indices contain one entry per variable name."""
+        indices_path = algo.compute_sensitivity_indices(
+            variables=_VARIABLES_2D,
+            samples=samples,
+            kpi_values=kpi_values,
+            outdir=tmp_path,
+        )
+        data = json.loads(indices_path.read_text())
+        s1 = data["indices"]["S1"]
+        assert "wall_r" in s1
+        assert "window_shgc" in s1
+        # Values should be floats between 0 and 1 (for valid sensitivity indices)
+        for v in s1.values():
+            assert isinstance(v, float)
+            assert 0.0 <= v <= 1.0
+
+    def test_compute_sensitivity_indices_st_keys(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        tmp_path: Path,
+    ) -> None:
+        """ST indices contain one entry per variable name."""
+        indices_path = algo.compute_sensitivity_indices(
+            variables=_VARIABLES_2D,
+            samples=samples,
+            kpi_values=kpi_values,
+            outdir=tmp_path,
+        )
+        data = json.loads(indices_path.read_text())
+        st = data["indices"]["ST"]
+        assert "wall_r" in st
+        assert "window_shgc" in st
+        for v in st.values():
+            assert isinstance(v, float)
+            assert 0.0 <= v <= 1.0
+
+    def test_compute_sensitivity_indices_problem_structure(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        tmp_path: Path,
+    ) -> None:
+        """Problem dict has num_vars, names, and bounds."""
+        indices_path = algo.compute_sensitivity_indices(
+            variables=_VARIABLES_2D,
+            samples=samples,
+            kpi_values=kpi_values,
+            outdir=tmp_path,
+        )
+        data = json.loads(indices_path.read_text())
+        problem = data["problem"]
+        assert problem["num_vars"] == 2
+        assert problem["names"] == ["wall_r", "window_shgc"]
+        assert len(problem["bounds"]) == 2
+
+    def test_compute_sensitivity_indices_empty_variables(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        tmp_path: Path,
+    ) -> None:
+        """Raises RuntimeError when no variables are defined."""
+        with pytest.raises(RuntimeError, match="no variables defined"):
+            algo.compute_sensitivity_indices(
+                variables={"variables": []},
+                samples=samples,
+                kpi_values=kpi_values,
+                outdir=tmp_path,
+            )
+
+    def test_compute_sensitivity_indices_no_independent_vars(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        tmp_path: Path,
+    ) -> None:
+        """Raises RuntimeError when all variables are conditional."""
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        with pytest.raises(RuntimeError, match="no independent variables"):
+            algo.compute_sensitivity_indices(
+                variables=variables,
+                samples=samples,
+                kpi_values=kpi_values,
+                outdir=tmp_path,
+            )
+
+    def test_compute_sensitivity_indices_no_numeric_kpi(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        tmp_path: Path,
+    ) -> None:
+        """Raises RuntimeError when no numeric KPIs are found for a sample."""
+        kpi_values: dict[str, dict[str, float]] = {
+            f"{(i + 1):04d}": {"eui": "not_a_number"} for i in range(8)
+        }
+        with pytest.raises(RuntimeError, match="no numeric KPI found"):
+            algo.compute_sensitivity_indices(
+                variables=_VARIABLES_2D,
+                samples=samples,
+                kpi_values=kpi_values,
+                outdir=tmp_path,
+            )
+
+    def test_compute_sensitivity_indices_fallback_kpi(
+        self,
+        algo: SobolAlgorithm,
+        samples: list[dict[str, Any]],
+        tmp_path: Path,
+    ) -> None:
+        """Falls back to first numeric KPI when 'eui' is not present."""
+        kpi_values: dict[str, dict[str, float]] = {
+            f"{(i + 1):04d}": {"some_other_kpi": float(i + 1)} for i in range(8)
+        }
+        indices_path = algo.compute_sensitivity_indices(
+            variables=_VARIABLES_2D,
+            samples=samples,
+            kpi_values=kpi_values,
+            outdir=tmp_path,
+        )
+        assert indices_path.exists()
+        data = json.loads(indices_path.read_text())
+        assert "S1" in data["indices"]

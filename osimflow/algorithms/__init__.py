@@ -164,6 +164,20 @@ class BaseAlgorithm(abc.ABC):
         """
         return False
 
+    def compute_sensitivity_indices(
+        self,
+        variables: dict[str, Any],
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        outdir: Path,
+    ) -> Path:
+        """Compute sensitivity indices for the algorithm.
+
+        Only implemented for sensitivity analysis algorithms (Sobol, Morris, FAST99).
+        The default implementation raises ``NotImplementedError``.
+        """
+        raise NotImplementedError(f"{self.name()} does not support sensitivity index computation")
+
 
 # ======================================================================
 # Registry
@@ -543,7 +557,6 @@ except ImportError:
     # DEAP is an optional dependency — GeneticAlgorithm is only available
     # when the [ga] extra is installed.
     pass
-
 from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402
 from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
 
