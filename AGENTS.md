@@ -132,10 +132,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
-| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `NomadExecutor`. |
+| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor`. |
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
 | `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
 | `osimflow/executors/google_batch_executor.py` | `GoogleBatchExecutor` — Google Cloud Batch executor using the Google Cloud SDK. |
+| `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
@@ -216,16 +217,20 @@ The 7-step DAG that the `Campaign` class drives:
 - `--azure-use-spot`, `--azure-fallback-to-on-demand`, `--azure-max-retries` (Azure spot/preemptible instance handling; issue #352)
 - `--google-batch-project-id`, `--google-batch-region`, `--google-batch-service-account` (Google Cloud Batch executor configuration)
 - `--google-use-spot`, `--google-fallback-to-on-demand`, `--google-max-retries` (Google preemptible VM handling; issue #352)
+- `--pbs-queue`, `--pbs-real`, `--pbs-server` (PBS/Torque executor configuration; issue #351)
 - `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
 - `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
 - `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)
 - `--nomad-address`, `--nomad-datacentre`
+- `--nomad-ca-cert`, `--nomad-cert`, `--nomad-key`, `--nomad-tls`, `--nomad-tls-verify` (Nomad TLS configuration; issue #344)
+- `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
 - `--openstudio_version`, `--archive_intermediates`
 - `--init-script`, `--finalize-script` (pre/post campaign shell hooks. Issue #108)
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
 - `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
+- `--byos-resource-limits` (CPU/memory limits for BYOS subprocess wrapper; issue #343)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
@@ -238,6 +243,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--skip-preflight` (skip the PREFLIGHT_RUN_MODEL step that validates the seed model; issue #107)
 - `--max-generations` (maximum number of DAG generations; default 1 for single-shot LHS. Issue #122)
 - `--max-sample-retries` (maximum retry attempts for transient per-sample failures; default 3. Issue #252)
+- `--webhook-url` (campaign completion webhook callback URL; issue #283)
 - `--log_level`
 
 **Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, and `--rate-limit` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`.
