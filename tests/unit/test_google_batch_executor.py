@@ -1,4 +1,4 @@
-"""Unit tests for GoogleBatchExecutor (issue #254)."""
+"""Unit tests for GoogleBatchExecutor (issue #254, #352)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,11 @@ class TestGoogleBatchExecutor:
         ex.batch_service_account = kw.get("batch_service_account", None)
         ex.poll_interval_s = 0.01
         ex.max_poll_interval_s = 0.02
+        ex.use_spot = kw.get("use_spot", False)
+        ex.fallback_to_on_demand = kw.get("fallback_to_on_demand", False)
+        ex.max_retries = kw.get("max_retries", 3)
         ex._client = MagicMock()
+        ex._submit_job = MagicMock(return_value="osimflow-test")
         return ex
 
     def test_name_attribute(self) -> None:
@@ -45,6 +49,7 @@ class TestGoogleBatchExecutor:
         ex = self._make_executor()
         mock_job = MagicMock()
         mock_job.status.state = ex._batch_v1.JobStatus.State.FAILED
+        mock_job.status.status_details = "resource not found"
         ex._client.get_job.return_value = mock_job
         ex._client.create_job.return_value = None
 
@@ -82,6 +87,19 @@ class TestGoogleBatchExecutor:
         ex = self._make_executor()
         ex.shutdown()
 
+    def test_is_spot_interruption_preempted(self) -> None:
+        ex = self._make_executor()
+        assert ex._is_spot_interruption("instance was preempted") is True
+        assert ex._is_spot_interruption("preempted VM") is True
+        assert ex._is_spot_interruption("spot instance was preempted") is True
+
+    def test_is_spot_interruption_non_spot(self) -> None:
+        ex = self._make_executor()
+        assert ex._is_spot_interruption("exit code 137") is False
+        assert ex._is_spot_interruption("OOM killed") is False
+        assert ex._is_spot_interruption(None) is False
+        assert ex._is_spot_interruption("") is False
+
 
 class TestGoogleBatchHandle:
     """_GoogleBatchHandle polls Google Cloud Batch on .result() and .done()."""
@@ -89,17 +107,33 @@ class TestGoogleBatchHandle:
     def _make_handle(self, **kw: object) -> tuple[_GoogleBatchHandle, MagicMock]:
         ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
         ex._batch_v1 = MagicMock()
+        ex.project_id = "test-project"
         ex.region = "us-central1"
         ex.poll_interval_s = 0.01
         ex.max_poll_interval_s = 0.02
+        ex.use_spot = False
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 3
         ex._client = MagicMock()
 
         state = kw.get("state", "SUCCEEDED")
         mock_job = MagicMock()
         mock_job.status.state = getattr(ex._batch_v1.JobStatus.State, state)
+        mock_job.status.status_details = kw.get("status_details", None)
         ex._client.get_job.return_value = mock_job
 
-        handle = _GoogleBatchHandle(job_name="test-job", executor=ex)
+        submit_params = {
+            "name": "test",
+            "cpus": 1,
+            "memory_mb": 1024,
+            "time_min": 60,
+            "environment": [],
+        }
+        handle = _GoogleBatchHandle(
+            job_name="test-job",
+            executor=ex,
+            submit_params=submit_params,
+        )
         return handle, ex._client
 
     def test_result_succeeded(self) -> None:
@@ -107,7 +141,7 @@ class TestGoogleBatchHandle:
         assert handle.result() is None
 
     def test_result_failed_raises(self) -> None:
-        handle, _ = self._make_handle(state="FAILED")
+        handle, _ = self._make_handle(state="FAILED", status_details="resource not found")
         with pytest.raises(RuntimeError, match="failed"):
             handle.result()
 
@@ -123,3 +157,132 @@ class TestGoogleBatchHandle:
         handle, mock_client = self._make_handle(state="RUNNING")
         mock_client.get_job.side_effect = Exception("network")
         assert handle.done() is False
+
+    def test_spot_interruption_retries_and_succeeds(self) -> None:
+        """When a preemptible VM interruption occurs, handle retries and succeeds."""
+        ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
+        ex._batch_v1 = MagicMock()
+        ex.project_id = "test-project"
+        ex.region = "us-central1"
+        ex.batch_service_account = None
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.use_spot = True
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 3
+        ex._client = MagicMock()
+        ex._submit_job = MagicMock(return_value="osimflow-test")
+
+        submit_params = {
+            "name": "test",
+            "cpus": 1,
+            "memory_mb": 1024,
+            "time_min": 60,
+            "environment": [],
+        }
+
+        # First call: preempted, second call: success
+        mock_job_preempted = MagicMock()
+        mock_job_preempted.status.state = ex._batch_v1.JobStatus.State.FAILED
+        mock_job_preempted.status.status_details = "instance was preempted"
+
+        mock_job_success = MagicMock()
+        mock_job_success.status.state = ex._batch_v1.JobStatus.State.SUCCEEDED
+
+        ex._client.get_job.side_effect = [mock_job_preempted, mock_job_success]
+        ex._client.create_job.return_value = None
+
+        handle = _GoogleBatchHandle(
+            job_name="test-job",
+            executor=ex,
+            submit_params=submit_params,
+        )
+
+        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+            result = handle.result()
+        assert result is None
+
+    def test_spot_interruption_exhausted_retries_raises(self) -> None:
+        """When preemptible retries are exhausted, raises RuntimeError."""
+        ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
+        ex._batch_v1 = MagicMock()
+        ex.project_id = "test-project"
+        ex.region = "us-central1"
+        ex.batch_service_account = None
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.use_spot = True
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 1  # Only 1 retry
+        ex._client = MagicMock()
+        ex._submit_job = MagicMock(return_value="osimflow-test")
+
+        submit_params = {
+            "name": "test",
+            "cpus": 1,
+            "memory_mb": 1024,
+            "time_min": 60,
+            "environment": [],
+        }
+
+        # All calls: preempted
+        mock_job_preempted = MagicMock()
+        mock_job_preempted.status.state = ex._batch_v1.JobStatus.State.FAILED
+        mock_job_preempted.status.status_details = "instance was preempted"
+
+        ex._client.get_job.return_value = mock_job_preempted
+        ex._client.create_job.return_value = None
+
+        handle = _GoogleBatchHandle(
+            job_name="test-job",
+            executor=ex,
+            submit_params=submit_params,
+        )
+
+        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+            with pytest.raises(RuntimeError, match="Spot retries exhausted"):
+                handle.result()
+
+    def test_spot_interruption_fallback_to_on_demand(self) -> None:
+        """When fallback_to_on_demand is True, retries then falls back to on-demand."""
+        ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
+        ex._batch_v1 = MagicMock()
+        ex.project_id = "test-project"
+        ex.region = "us-central1"
+        ex.batch_service_account = None
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.use_spot = True
+        ex.fallback_to_on_demand = True
+        ex.max_retries = 1
+        ex._client = MagicMock()
+        ex._submit_job = MagicMock(return_value="osimflow-test")
+
+        submit_params = {
+            "name": "test",
+            "cpus": 1,
+            "memory_mb": 1024,
+            "time_min": 60,
+            "environment": [],
+        }
+
+        # First: preempted, second: on-demand success
+        mock_job_preempted = MagicMock()
+        mock_job_preempted.status.state = ex._batch_v1.JobStatus.State.FAILED
+        mock_job_preempted.status.status_details = "instance was preempted"
+
+        mock_job_on_demand = MagicMock()
+        mock_job_on_demand.status.state = ex._batch_v1.JobStatus.State.SUCCEEDED
+
+        ex._client.get_job.side_effect = [mock_job_preempted, mock_job_on_demand]
+        ex._client.create_job.return_value = None
+
+        handle = _GoogleBatchHandle(
+            job_name="test-job",
+            executor=ex,
+            submit_params=submit_params,
+        )
+
+        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+            result = handle.result()
+        assert result is None

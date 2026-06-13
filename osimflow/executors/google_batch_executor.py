@@ -21,6 +21,14 @@ security policy.
 
 Google Cloud Batch SDK is lazy-imported inside `__init__` so the
 local-executor / slurm-executor paths do not pay the import cost.
+
+Spot/preemptible instance handling (issue #352):
+When `use_spot` is True, the executor requests Spot VMs (preemptible)
+via the allocation policy. When a Spot/preemptible interruption occurs,
+the handle's `result()` method detects it via the status details and
+resubmits the job, retrying up to `max_retries` times before falling back
+to regular on-demand VMs or failing. `fallback_to_on_demand` controls
+whether to fall back to regular VMs after Spot retries are exhausted.
 """
 
 from __future__ import annotations
@@ -40,15 +48,24 @@ log = logging.getLogger("osimflow.executors.google_batch")
 
 
 class _GoogleBatchHandle(Handle):
-    """Handle that polls Google Cloud Batch on `.result()`."""
+    """Handle that polls Google Cloud Batch on `.result()`.
+
+    Spot/preemptible retry logic (issue #352) lives here so that
+    `submit()` can return immediately. When `result()` detects a
+    preemptible VM interruption, it resubmits using the stored
+    `_submit_params` and retries up to ``executor.max_retries`` times
+    before falling back to on-demand or failing.
+    """
 
     def __init__(
         self,
         job_name: str,
         executor: GoogleBatchExecutor,
+        submit_params: dict[str, Any],
     ) -> None:
         self.job_name = job_name
         self._executor = executor
+        self._submit_params = submit_params
         self._future: Future[Any] = Future()
         self.worker_id: str | None = job_name
         self.worker_ip: str | None = None
@@ -57,24 +74,82 @@ class _GoogleBatchHandle(Handle):
         self.billed_duration_seconds: float | None = None
 
     def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
-        try:
-            job = self._executor._wait_for_terminal(self.job_name)
-        except BaseException as exc:
-            self._future.set_exception(exc)
-            raise
+        effective_max_retries = max(0, self._executor.max_retries)
+        for attempt in range(effective_max_retries + 1):
+            try:
+                job = self._executor._wait_for_terminal(self.job_name)
+            except BaseException as exc:
+                self._future.set_exception(exc)
+                raise
 
-        status = job.status.state
-        if status in (self._executor._batch_v1.JobStatus.State.SUCCEEDED,):
+            status = job.status.state
+            if status == self._executor._batch_v1.JobStatus.State.SUCCEEDED:
+                self._future.set_result(None)
+                return None
+
+            if status == self._executor._batch_v1.JobStatus.State.FAILED:
+                # Check if it was a preemptible VM interruption.
+                status_details = str(job.status.status_details or "")
+                is_spot = self._executor._is_spot_interruption(status_details)
+
+                if is_spot and attempt < effective_max_retries:
+                    backoff = min(5.0 * (2**attempt), 60.0)
+                    log.warning(
+                        "Spot/preemptible interrupted (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1,
+                        effective_max_retries,
+                        backoff,
+                        status_details,
+                    )
+                    time.sleep(backoff)
+                    # Resubmit and update the tracked job_name.
+                    self.job_name = self._executor._submit_job(**self._submit_params)
+                    self.worker_id = self.job_name
+                    continue
+
+                if is_spot and attempt >= effective_max_retries:
+                    # Exhausted retries — fall back or fail.
+                    if self._executor.fallback_to_on_demand:
+                        log.warning(
+                            "Spot retries exhausted (%d), falling back to on-demand",
+                            effective_max_retries,
+                        )
+                        self.job_name = self._executor._submit_job(
+                            **self._submit_params, use_spot=False
+                        )
+                        self.worker_id = self.job_name
+                        # Poll the on-demand job (no more retries).
+                        try:
+                            job = self._executor._wait_for_terminal(self.job_name)
+                        except BaseException as exc:
+                            self._future.set_exception(exc)
+                            raise
+                        status = job.status.state
+                        if status == self._executor._batch_v1.JobStatus.State.SUCCEEDED:
+                            self._future.set_result(None)
+                            return None
+                        status_details = str(job.status.status_details or "unknown reason")
+                        msg = (
+                            f"Google Batch job {self.job_name!r} failed after fallback: "
+                            f"status={status}, details: {status_details}"
+                        )
+                        self._future.set_exception(RuntimeError(msg))
+                        raise RuntimeError(msg)
+                    raise RuntimeError(
+                        f"Spot retries exhausted ({effective_max_retries}): {status_details}"
+                    )
+
+                # Non-spot failure — don't retry, raise immediately.
+                reason = f"job {self.job_name} failed: {status_details}"
+                self._future.set_exception(RuntimeError(reason))
+                raise RuntimeError(reason)
+
+            # Any other non-terminal state — treat as still running.
             self._future.set_result(None)
             return None
 
-        if status in (self._executor._batch_v1.JobStatus.State.FAILED,):
-            reason = f"job {self.job_name} failed"
-            self._future.set_exception(RuntimeError(reason))
-            raise RuntimeError(reason)
-
-        self._future.set_result(None)
-        return None
+        # Unreachable, but satisfies the type checker.
+        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
 
     def done(self) -> bool:
         if self._future.done():
@@ -114,9 +189,25 @@ class GoogleBatchExecutor(BaseExecutor):
 
     Google Cloud Batch SDK is lazy-imported inside `__init__` so the
     local-executor / slurm-executor paths do not pay the import cost.
+
+    Spot/preemptible instance handling (issue #352):
+    When `use_spot` is True, the executor requests Spot VMs (preemptible)
+    via the allocation policy. When a Spot/preemptible interruption occurs,
+    the handle's `result()` method detects it via the status details and
+    resubmits the job, retrying up to `max_retries` times before falling back
+    to regular on-demand VMs or failing. `fallback_to_on_demand` controls
+    whether to fall back to regular VMs after Spot retries are exhausted.
     """
 
     name = "google_batch"
+
+    # Sentinel markers used in statusDetails to identify Spot interruptions.
+    _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
+        "preempted",
+        "preempt",
+        "spot",
+        "instance was preempted",
+    )
 
     def __init__(
         self,
@@ -125,6 +216,10 @@ class GoogleBatchExecutor(BaseExecutor):
         batch_service_account: str | None = None,
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
+        *,
+        use_spot: bool = False,
+        fallback_to_on_demand: bool = False,
+        max_retries: int = 3,
     ):
         from google.cloud import batch_v1
 
@@ -134,6 +229,9 @@ class GoogleBatchExecutor(BaseExecutor):
         self.batch_service_account = batch_service_account
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
+        self.use_spot = use_spot
+        self.fallback_to_on_demand = fallback_to_on_demand
+        self.max_retries = max_retries
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -146,6 +244,13 @@ class GoogleBatchExecutor(BaseExecutor):
         """Get a job by name from Google Cloud Batch."""
         assert self._client is not None, "_get_client must be called first"
         return self._client.get_job(name=job_name)
+
+    def _is_spot_interruption(self, status_details: str | None) -> bool:
+        """Return True if the status details indicate a Spot/preemptible interruption."""
+        if not status_details:
+            return False
+        lower = status_details.lower()
+        return any(marker.lower() in lower for marker in self._SPOT_INTERRUPTION_MARKERS)
 
     def _wait_for_terminal(self, job_name: str) -> Any:
         """Poll Google Cloud Batch with exponential backoff until terminal state."""
@@ -175,6 +280,89 @@ class GoogleBatchExecutor(BaseExecutor):
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         return env
 
+    def _submit_job(
+        self,
+        *,
+        name: str,
+        cpus: int,
+        memory_mb: int,
+        time_min: int,
+        environment: list[dict[str, str]],
+        use_spot: bool | None = None,
+    ) -> str:
+        """Submit a single Google Cloud Batch job and return the job name.
+
+        Uses *use_spot* if provided, otherwise ``self.use_spot``.
+        """
+        use_spot_final = use_spot if use_spot is not None else self.use_spot
+        job_name = f"projects/{self.project_id}/locations/{self.region}/jobs/osimflow-{name}"
+
+        # Task group configuration.
+        # Extract container image from OSIMFLOW_CONTAINER env var.
+        container_image = "nrel/openstudio:latest"
+        for e in environment:
+            if e["name"] == "OSIMFLOW_CONTAINER":
+                container_image = e["value"]
+                break
+
+        task_group = self._batch_v1.TaskGroup(
+            task_count=1,
+            task_spec=self._batch_v1.TaskSpec(
+                container=self._batch_v1.ContainerSpec(
+                    image_uri=container_image,
+                    command=["/bin/sh", "-c", "sleep infinity"],
+                ),
+                environment={
+                    "variables": {e["name"]: e["value"] for e in environment},
+                },
+                compute_resource=self._batch_v1.ComputeResource(
+                    cpu_cores=cpus,
+                    memory_mb=memory_mb,
+                ),
+                timeout=self._batch_v1.Duration(seconds=int(time_min) * 60),
+            ),
+        )
+
+        # Build the instance policy with optional preemptible setting.
+        instance_policy = self._batch_v1.InstancePolicy(
+            machine_type="e2-standard-4",
+        )
+        if use_spot_final:
+            # Configure Spot/preemptible VM scheduling.
+            instance_policy.scheduling = self._batch_v1.Scheduling(
+                preemptible=True,
+            )
+
+        # Job configuration.
+        job = self._batch_v1.Job(
+            name=job_name,
+            task_groups=[task_group],
+            allocation_policy=self._batch_v1.AllocationPolicy(
+                service_account=self.batch_service_account,
+                instances=[instance_policy],
+            ),
+            logs_policy=self._batch_v1.LogsPolicy(
+                destination=self._batch_v1.LogsPolicy.Destination.CLOUD_LOGGING,
+            ),
+        )
+
+        # Submit the job.
+        client = self._get_client()
+        client.create_job(
+            self._batch_v1.CreateJobRequest(
+                parent=f"projects/{self.project_id}/locations/{self.region}",
+                job=job,
+                job_id=f"osimflow-{name}",
+            ),
+        )
+
+        log.info(
+            "google_batch submit_job -> job=%s use_spot=%s",
+            job_name,
+            use_spot_final,
+        )
+        return job_name
+
     def submit(
         self,
         fn: Callable[..., Any],
@@ -202,58 +390,21 @@ class GoogleBatchExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
         )
 
-        # Build the Google Cloud Batch job
-        job_name = f"projects/{self.project_id}/locations/{self.region}/jobs/osimflow-{name}"
+        del fn, args  # noqa: ARG002 — work runs inside the Batch container
 
-        # Task group configuration
-        task_group = self._batch_v1.TaskGroup(
-            task_count=1,
-            task_spec=self._batch_v1.TaskSpec(
-                container=self._batch_v1.ContainerSpec(
-                    image_uri=container or f"nrel/openstudio:{openstudio_version or 'latest'}",
-                    command=["/bin/sh", "-c", "sleep infinity"],
-                ),
-                environment={
-                    "variables": {e["name"]: e["value"] for e in environment},
-                },
-                compute_resource=self._batch_v1.ComputeResource(
-                    cpu_cores=cpus,
-                    memory_mb=memory_mb,
-                ),
-                timeout=self._batch_v1.Duration(seconds=int(time_min) * 60),
-            ),
-        )
-
-        # Job configuration
-        job = self._batch_v1.Job(
-            name=job_name,
-            task_groups=[task_group],
-            allocation_policy=self._batch_v1.AllocationPolicy(
-                service_account=self.batch_service_account,
-                instances=[
-                    self._batch_v1.InstancePolicy(
-                        machine_type="e2-standard-4",
-                    )
-                ],
-            ),
-            logs_policy=self._batch_v1.LogsPolicy(
-                destination=self._batch_v1.LogsPolicy.Destination.CLOUD_LOGGING,
-            ),
-        )
-
-        # Submit the job
-        client = self._get_client()
-        client.create_job(
-            self._batch_v1.CreateJobRequest(
-                parent=f"projects/{self.project_id}/locations/{self.region}",
-                job=job,
-                job_id=f"osimflow-{name}",
-            ),
-        )
+        submit_params: dict[str, Any] = {
+            "name": name,
+            "cpus": cpus,
+            "memory_mb": memory_mb,
+            "time_min": time_min,
+            "environment": environment,
+        }
+        job_name = self._submit_job(**submit_params)
 
         return _GoogleBatchHandle(
             job_name=job_name,
             executor=self,
+            submit_params=submit_params,
         )
 
     def shutdown(self) -> None:
