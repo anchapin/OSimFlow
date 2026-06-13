@@ -6,10 +6,10 @@ import pandas as pd
 import pytest
 
 from osimflow.exporters.r_dataframe import (
-    RDataFrameExporter,
     R_CODE_SNIPPETS,
-    get_r_code_snippet,
     SUPPORTED_FORMATS,
+    RDataFrameExporter,
+    get_r_code_snippet,
 )
 
 

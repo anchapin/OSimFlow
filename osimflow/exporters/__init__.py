@@ -2,8 +2,8 @@
 
 from osimflow.exporters.osa import OSAExporter
 from osimflow.exporters.r_dataframe import (
-    RDataFrameExporter,
     R_CODE_SNIPPETS,
+    RDataFrameExporter,
     get_r_code_snippet,
 )
 
