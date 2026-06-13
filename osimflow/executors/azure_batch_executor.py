@@ -83,9 +83,7 @@ class _AzureBatchHandle(Handle):
                 return None
 
             # Job failed (non-zero exit code) — check if it was a Spot interruption.
-            failure_reason = getattr(
-                job.properties.execution_info, "failure_reason", None
-            )
+            failure_reason = getattr(job.properties.execution_info, "failure_reason", None)
             is_spot = self._executor._is_spot_interruption(failure_reason)
 
             if is_spot and attempt < effective_max_retries:
@@ -110,9 +108,7 @@ class _AzureBatchHandle(Handle):
                         "Spot retries exhausted (%d), falling back to on-demand",
                         effective_max_retries,
                     )
-                    self.job_id = self._executor._submit_job(
-                        **self._submit_params, use_spot=False
-                    )
+                    self.job_id = self._executor._submit_job(**self._submit_params, use_spot=False)
                     self.worker_id = self.job_id
                     # Poll the on-demand job (no more retries).
                     try:
@@ -297,9 +293,7 @@ class AzureBatchExecutor(BaseExecutor):
         """
         use_spot_final = use_spot if use_spot is not None else self.use_spot
         job_id = f"osimflow-{name}"
-        environment_settings = [
-            {"name": e["name"], "value": e["value"]} for e in environment
-        ]
+        environment_settings = [{"name": e["name"], "value": e["value"]} for e in environment]
 
         # Build the job-level configuration.
         job_params: dict[str, Any] = {
