@@ -230,6 +230,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--init-script`, `--finalize-script` (pre/post campaign shell hooks. Issue #108)
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
 - `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
+- `--byos-resource-limits` (JSON dict of rlimit names to values, e.g. `{"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}`; applied via `resource.setrlimit` before BYOS subprocess spawns. Issue #343)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--webhook-url` (optional; delivers campaign completion POST to a configurable URL with retry and exponential backoff. Issue #283)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)

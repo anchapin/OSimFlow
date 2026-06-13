@@ -175,6 +175,12 @@ class CampaignConfig:
     nomad_cert: Path | None = None
     nomad_key: Path | None = None
     nomad_ca_cert: Path | None = None
+    # BYOS resource limits (issue #343). A dict mapping rlimit names to
+    # integer values (e.g. {"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}).
+    # Applied via resource.setrlimit before the BYOS subprocess is
+    # spawned. resource.error from impossible limits is caught and
+    # logged as a warning (non-fatal).
+    byos_resource_limits: dict[str, int] | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -432,5 +438,8 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         nomad_key=(Path(str(args["nomad_key"])).resolve() if args.get("nomad_key") else None),
         nomad_ca_cert=(
             Path(str(args["nomad_ca_cert"])).resolve() if args.get("nomad_ca_cert") else None
+        ),
+        byos_resource_limits=(
+            args["byos_resource_limits"] if args.get("byos_resource_limits") else None  # type: ignore[arg-type]
         ),
     )
