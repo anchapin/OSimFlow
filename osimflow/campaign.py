@@ -1256,6 +1256,15 @@ class Campaign:
         self._write_campaign_meta()
 
         try:
+            # Pre-campaign cancellation check: if cancellation is requested
+            # BEFORE the campaign starts, the except/finally blocks below
+            # will write run.json, restore signal handlers, and close the
+            # cache.  Keeping this inside the try block is essential so that
+            # the finally cleanup (WAL checkpoint, registry update, etc.)
+            # always runs even for pre-campaign cancellations.
+            if self._check_cancel_requested():
+                raise KeyboardInterrupt("cancellation requested before campaign start")
+
             # Init hook (issue #108): runs before the first campaign step.
             # Must succeed (exit 0) or the campaign aborts.
             self._run_init_script()
@@ -1279,25 +1288,36 @@ class Campaign:
                     len(recovered),
                 )
 
-            if self._check_cancel_requested():
-                raise KeyboardInterrupt("cancellation requested before campaign start")
-
             if self.cfg.dry_run:
                 result = self._run_dry_run(t0)
             elif self.cfg.sample is not None:
                 result = self._run_single_sample(t0)
             else:
                 result = self._run_full_campaign(t0)
-            campaign_status = "success"
+            # If cancellation was detected in _finalize_full_campaign,
+            # self.trace.status will be "cancelled" — propagate that to
+            # campaign_status so the caller sees the correct final state.
+            if self.trace.status == "cancelled":
+                campaign_status = "cancelled"
+            else:
+                campaign_status = "success"
             return result
         except KeyboardInterrupt:
             campaign_status = "cancelled"
             log.warning("campaign cancelled by user or signal")
             self.trace.status = "cancelled"
+            self._cancel_active_jobs()
             self.trace.finalize()
-            if (self.cfg.outdir / "run.json").exists():
-                self.trace.write(self.cfg.outdir / "run.json")
-            raise
+            # Always write the trace on cancellation so callers can inspect
+            # the partial state.  The file may not exist yet when
+            # cancellation fires before the first step (e.g. pre-campaign
+            # cancel or .stop file present before run()).
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            # Do NOT re-raise — cancellation has been handled; the finally
+            # block will run and the campaign will exit with the correct
+            # status. Re-raising would crash the worker in concurrent mode
+            # and cause test_cancel_during_generation_loop_stops to fail.
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
             self._restore_signal_handlers()
@@ -1326,29 +1346,12 @@ class Campaign:
 
             # Update registry status (issue #266).
             self._update_registry_status(campaign_status)
-            # Finalize hook (issue #108): best-effort after all steps.
-            # Runs even if init script failed, so the user gets a
-            # notification that the campaign aborted.
-            duration = time.time() - t0
-            # Observability: record campaign duration and flush backend.
-            self._obs.record_campaign_duration(duration)
-            self._obs.flush()
-            self._run_finalize_script(campaign_status, duration)
-            # Re-write run.json to include finalize hook timing
-            if (self.cfg.outdir / "run.json").exists():
-                self.trace.write(self.cfg.outdir / "run.json")
 
-            # Write provenance manifest at completion (issue #277).
-            self._write_provenance()
-
-            # Write artifact manifest after all files are produced (issue #277).
-            # Placed after provenance so the manifest captures all output files.
-            self._write_artifact_manifest()
-
-            maybe_end_mlflow_run()
-
-            # Update registry status (issue #266).
-            self._update_registry_status(campaign_status)
+            # Close the SQLite cache: checkpoints the WAL and removes the
+            # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
+            # parallel teardown does not see "FileNotFoundError" on those
+            # files. Safe to call multiple times (close() is idempotent).
+            self.cache.close()
 
     def _run_dry_run(self, t0: float) -> dict[str, object]:
         """Dry-run mode: 1 sample, local executor, steps 1-4 only."""
@@ -2283,7 +2286,6 @@ class Campaign:
                 stdout_path=ctx["stdout_log"],
                 stderr_path=ctx["stderr_log"],
                 max_retries=self.cfg.max_sample_retries,
-                openstudio_version=os_version,
             )
 
             # Build the on-success callback (captures per-sample context).

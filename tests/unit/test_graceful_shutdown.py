@@ -9,11 +9,12 @@ Covers:
 - Signal handler calls request_cancel()
 - Campaign.run() registers signal handlers and _cancel_registry
 - Campaign.run() restores signal handlers on exit
-- Cancellation check raises KeyboardInterrupt before steps
+- Cancellation before steps sets status to "cancelled"
 - Cancellation is checked in _submit_and_await_all
 - Cancellation is checked in _run_full_campaign generation loop
 - Cancellation in _finalize_full_campaign writes partial trace
 - State preservation: run.json written before exit
+- Executor.cancel() called on campaign cancellation
 """
 
 import json
@@ -265,27 +266,28 @@ class TestSignalHandlers:
 
 
 class TestCampaignCancellation:
-    def test_cancel_before_steps_raises_keyboard_interrupt(
+    def test_cancel_before_steps_sets_cancelled_status(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
     ) -> None:
         cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
         campaign = Campaign(cfg=cfg, executor=StubExecutor())
         campaign.request_cancel()
 
-        with pytest.raises(KeyboardInterrupt, match="cancellation requested"):
-            campaign.run()
+        # run() handles cancellation gracefully — it does NOT re-raise
+        # KeyboardInterrupt.  The campaign status is set to "cancelled"
+        # and run.json is written.
+        campaign.run()
 
         assert campaign.trace.status == "cancelled"
 
-    def test_stop_file_before_steps_raises_keyboard_interrupt(
+    def test_stop_file_before_steps_sets_cancelled_status(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
     ) -> None:
         cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
         (outdir / ".stop").touch()
         campaign = Campaign(cfg=cfg, executor=StubExecutor())
 
-        with pytest.raises(KeyboardInterrupt, match="cancellation requested"):
-            campaign.run()
+        campaign.run()
 
         assert campaign.trace.status == "cancelled"
 
@@ -314,7 +316,10 @@ class TestCampaignCancellation:
     def test_cancel_in_finalize_writes_partial_trace(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
     ) -> None:
-        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        # Do NOT use dry_run=True — dry-run mode skips the finalize steps
+        # where cancellation should be detected.  With StubExecutor the
+        # full campaign path still completes instantly (synchronous exec).
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=False)
         campaign = Campaign(cfg=cfg, executor=StubExecutor())
 
         call_count = 0
