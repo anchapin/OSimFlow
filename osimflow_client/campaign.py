@@ -245,9 +245,7 @@ class CampaignClient:
             data = self._get(f"/api/v1/campaigns/{campaign_id}")
         except APIError as exc:
             if exc.status_code == 404:
-                raise CampaignNotFoundError(
-                    f"Campaign '{campaign_id}' not found"
-                ) from exc
+                raise CampaignNotFoundError(f"Campaign '{campaign_id}' not found") from exc
             raise
         return CampaignDetail(
             campaign_id=data["campaign_id"],
@@ -283,9 +281,7 @@ class CampaignClient:
             self._delete(f"/api/v1/campaigns/{campaign_id}")
         except APIError as exc:
             if exc.status_code == 404:
-                raise CampaignNotFoundError(
-                    f"Campaign '{campaign_id}' not found"
-                ) from exc
+                raise CampaignNotFoundError(f"Campaign '{campaign_id}' not found") from exc
             if exc.status_code == 403:
                 raise CampaignDeletionError(
                     "Campaign deletion requires --enable-writes mode on the server"
@@ -311,13 +307,10 @@ class CampaignClient:
             self._post(f"/api/v1/campaigns/{campaign_id}/cancel")
         except APIError as exc:
             if exc.status_code == 404:
-                raise CampaignNotFoundError(
-                    f"Campaign '{campaign_id}' not found"
-                ) from exc
+                raise CampaignNotFoundError(f"Campaign '{campaign_id}' not found") from exc
             if exc.status_code == 409:
                 raise APIError(
                     exc.status_code,
                     f"Campaign '{campaign_id}' is not currently running",
                 ) from exc
             raise
-

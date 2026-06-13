@@ -110,9 +110,7 @@ class ResultsClient:
             return cast(list[dict[str, Any]], data)
         except APIError as exc:
             if exc.status_code == 404:
-                raise CampaignNotFoundError(
-                    f"Campaign '{campaign_id}' not found"
-                ) from exc
+                raise CampaignNotFoundError(f"Campaign '{campaign_id}' not found") from exc
             raise
 
     def list_variables(self, campaign_id: str) -> list[str]:
@@ -194,9 +192,7 @@ class ResultsClient:
             ]
         except APIError as exc:
             if exc.status_code == 404:
-                raise CampaignNotFoundError(
-                    f"Campaign '{campaign_id}' not found"
-                ) from exc
+                raise CampaignNotFoundError(f"Campaign '{campaign_id}' not found") from exc
             raise
 
     def get_samples(
@@ -241,8 +237,5 @@ class ResultsClient:
             ]
         except APIError as exc:
             if exc.status_code == 404:
-                raise CampaignNotFoundError(
-                    f"Campaign '{campaign_id}' not found"
-                ) from exc
+                raise CampaignNotFoundError(f"Campaign '{campaign_id}' not found") from exc
             raise
-
