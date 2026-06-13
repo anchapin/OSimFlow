@@ -1827,7 +1827,11 @@ class Campaign:
         log.info("firing webhook to %s (status=%s)", self.cfg.webhook_url, campaign_status)
         ok = client.deliver(payload)
         if not ok:
-            log.warning("webhook delivery to %s failed (campaign_status=%s)", self.cfg.webhook_url, campaign_status)
+            log.warning(
+                "webhook delivery to %s failed (campaign_status=%s)",
+                self.cfg.webhook_url,
+                campaign_status,
+            )
 
     # ------------------------------------------------------------------
     # Steps
