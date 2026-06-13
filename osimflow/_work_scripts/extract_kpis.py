@@ -127,7 +127,7 @@ def _extract_eui(cur: sqlite3.Cursor, floor_area_m2: float | None) -> dict[str, 
     )
 
     if site_energy_mj_per_m2 is not None:
-        kpis["eui_kwh_per_m2"] = round(site_energy_mj_per_m2 * _MJ_TO_KWH, 3)
+        kpis["eui_kwh_m2_yr"] = round(site_energy_mj_per_m2 * _MJ_TO_KWH, 3)
         kpis["eui_kbtu_per_ft2"] = round(site_energy_mj_per_m2 * _MJ_M2_TO_KBTU_FT2, 3)
 
     total_site_energy_mj = _safe_float(
@@ -150,7 +150,7 @@ def _extract_eui(cur: sqlite3.Cursor, floor_area_m2: float | None) -> dict[str, 
         )
     )
     if net_site_energy_mj is not None:
-        kpis["net_eui_kwh_per_m2"] = round(net_site_energy_mj * _MJ_TO_KWH, 3)
+        kpis["net_eui_kwh_m2_yr"] = round(net_site_energy_mj * _MJ_TO_KWH, 3)
 
     return kpis
 
@@ -372,15 +372,15 @@ def extract_kpis_from_sql(sql_path: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 DEFAULT_QUALITY_THRESHOLDS: dict[str, Any] = {
-    "eui_min_kwh_per_m2": 10.0,
-    "eui_max_kwh_per_m2": 1000.0,
+    "eui_min_kwh_m2_yr": 10.0,
+    "eui_max_kwh_m2_yr": 1000.0,
     "unmet_hours_max": 300.0,
     "extreme_value_multiplier": 10.0,
     "near_zero_tolerance": 0.01,
 }
 
 _CRITICAL_KPI_KEYS: list[str] = [
-    "eui_kwh_per_m2",
+    "eui_kwh_m2_yr",
     "total_site_energy_kwh",
 ]
 
@@ -418,17 +418,17 @@ def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None
             failures.append(f"Missing critical KPI: {key}")
 
     # --- 2. EUI range check --------------------------------------------------
-    eui = kpis.get("eui_kwh_per_m2")
+    eui = kpis.get("eui_kwh_m2_yr")
     if eui is not None:
-        if eui < t["eui_min_kwh_per_m2"]:
+        if eui < t["eui_min_kwh_m2_yr"]:
             failures.append(
                 f"EUI ({eui:.1f} kWh/m²/yr) is below minimum threshold "
-                f"({t['eui_min_kwh_per_m2']:.1f}). Check plant loop connections."
+                f"({t['eui_min_kwh_m2_yr']:.1f}). Check plant loop connections."
             )
-        if eui > t["eui_max_kwh_per_m2"]:
+        if eui > t["eui_max_kwh_m2_yr"]:
             failures.append(
                 f"EUI ({eui:.1f} kWh/m²/yr) exceeds maximum threshold "
-                f"({t['eui_max_kwh_per_m2']:.1f}). Check for duplicate loads."
+                f"({t['eui_max_kwh_m2_yr']:.1f}). Check for duplicate loads."
             )
 
     # --- 3. Zero-energy detection --------------------------------------------
