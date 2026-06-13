@@ -338,9 +338,7 @@ class AzureBatchExecutor(BaseExecutor):
             self.account_name,
             self._azure_batch.models.JobAddParameter(
                 id=job_id,
-                pool_info=self._azure_batch.models.PoolInformation(
-                    pool_id=self.pool_id
-                ),
+                pool_info=self._azure_batch.models.PoolInformation(pool_id=self.pool_id),
                 on_all_tasks_complete="terminate",
                 on_task_failure="terminate",
                 priority=0 if use_spot_final else 1000,
@@ -361,9 +359,7 @@ class AzureBatchExecutor(BaseExecutor):
                 image_names=[resolved_container],
             ),
             environment_settings=[
-                self._azure_batch.models.EnvironmentSetting(
-                    name=e["name"], value=e["value"]
-                )
+                self._azure_batch.models.EnvironmentSetting(name=e["name"], value=e["value"])
                 for e in environment
             ],
             resource_files=[],
