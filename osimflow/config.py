@@ -468,8 +468,6 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         result_storage_backend=str(args.get("result_storage_backend", "local")),
         result_storage_bucket=str(args.get("result_storage_bucket", "")),
         result_storage_endpoint=(
-            str(args["result_storage_endpoint"])
-            if args.get("result_storage_endpoint")
-            else None
+            str(args["result_storage_endpoint"]) if args.get("result_storage_endpoint") else None
         ),
     )

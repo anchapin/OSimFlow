@@ -116,7 +116,9 @@ class ResultStorage(ABC):
                     self.upload_file(file_path, remote_path)
                     log.debug("uploaded %s -> %s", file_path, remote_path)
                 except OSError as exc:
-                    log.warning("upload_dir: failed to upload %s -> %s: %s", file_path, remote_path, exc)
+                    log.warning(
+                        "upload_dir: failed to upload %s -> %s: %s", file_path, remote_path, exc
+                    )
 
 
 class LocalStorage(ResultStorage):
@@ -461,8 +463,7 @@ class AzureBlobStorage(ResultStorage):
         try:
             asyncio.get_running_loop()
             raise RuntimeError(
-                "AzureBlobStorage.upload_file is async; use "
-                "ResultStorageUploader for batch uploads"
+                "AzureBlobStorage.upload_file is async; use ResultStorageUploader for batch uploads"
             )
         except RuntimeError:
             pass

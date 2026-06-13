@@ -206,7 +206,9 @@ class TestLoadConfigStorageArgs:
         from osimflow.config import load_config
 
         variables = tmp_path / "variables.yml"
-        variables.write_text("variables:\n  - name: x\n    distribution: uniform\n    min: 0\n    max: 1")
+        variables.write_text(
+            "variables:\n  - name: x\n    distribution: uniform\n    min: 0\n    max: 1"
+        )
         template = tmp_path / "template"
         template.mkdir()
         (template / "workflow.osw").write_text('{"steps": []}')
@@ -232,7 +234,9 @@ class TestLoadConfigStorageArgs:
         from osimflow.config import load_config
 
         variables = tmp_path / "variables.yml"
-        variables.write_text("variables:\n  - name: x\n    distribution: uniform\n    min: 0\n    max: 1")
+        variables.write_text(
+            "variables:\n  - name: x\n    distribution: uniform\n    min: 0\n    max: 1"
+        )
         template = tmp_path / "template"
         template.mkdir()
         (template / "workflow.osw").write_text('{"steps": []}')
