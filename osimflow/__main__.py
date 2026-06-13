@@ -106,7 +106,15 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
 def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--executor",
-        choices=["local", "slurm", "aws_batch", "nomad", "azure_batch", "google_batch", "kubernetes"],
+        choices=[
+            "local",
+            "slurm",
+            "aws_batch",
+            "nomad",
+            "azure_batch",
+            "google_batch",
+            "kubernetes",
+        ],
         default="local",
     )
     run.add_argument("--max-workers", type=int, default=4, help="Local executor parallelism")
