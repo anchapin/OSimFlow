@@ -2283,6 +2283,7 @@ class Campaign:
                 stdout_path=ctx["stdout_log"],
                 stderr_path=ctx["stderr_log"],
                 max_retries=self.cfg.max_sample_retries,
+                openstudio_version=os_version,
             )
 
             # Build the on-success callback (captures per-sample context).
