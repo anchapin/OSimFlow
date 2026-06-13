@@ -28,6 +28,7 @@ import enum
 import importlib.util
 import json
 import logging
+import resource
 import subprocess
 import sys
 import tempfile
@@ -227,6 +228,7 @@ def _run_byos_subprocess(
     function_name: str,
     args: tuple[object, ...],
     kwargs: dict[str, object] | None = None,
+    resource_limits: dict[str, int] | None = None,
 ) -> Path:
     """Run a BYOS function in an isolated subprocess.
 
@@ -238,11 +240,21 @@ def _run_byos_subprocess(
     credentials from the IAM role, etc. are available) but does **not**
     share the orchestrator's memory space.
 
+    When ``resource_limits`` is provided (issue #343), ``resource.setrlimit``
+    is called before ``Popen`` to cap CPU time, address space, and open files.
+    ``resource.error`` from impossible limits is caught and logged as a
+    warning (limits that cannot be lowered below the current usage are
+    non-fatal).
+
     Args:
         script_path: Absolute path to the user's ``.py`` script.
         function_name: The function to call (e.g. ``apply_parameters``).
         args: Positional arguments to forward to the function.
         kwargs: Keyword arguments to forward (Path values are serialized).
+        resource_limits: Optional dict mapping rlimit names to values.
+            Keys are rlimit names (``RLIMIT_CPU``, ``RLIMIT_AS``,
+            ``RLIMIT_NOFILE``, etc.); values are the soft/hard limit to set.
+            Applied via ``resource.setrlimit`` before ``Popen``.
 
     Returns:
         The Path returned by the BYOS function.
@@ -269,37 +281,54 @@ def _run_byos_subprocess(
         json.dump(payload, tmp)
         tmp_path = tmp.name
 
+    if resource_limits:
+        for name, value in resource_limits.items():
+            try:
+                limit_constant = getattr(resource, name)
+                resource.setrlimit(limit_constant, (value, value))
+            except resource.error as exc:
+                log.warning(
+                    "BYOS rlimit %s=%d could not be set (non-fatal): %s",
+                    name,
+                    value,
+                    exc,
+                )
+
     try:
-        result = subprocess.run(  # noqa: S603
+        proc = subprocess.Popen(  # noqa: S603
             [sys.executable, "-c", _SUBPROCESS_RUNNER, tmp_path],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
-            timeout=600,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"BYOS subprocess timed out after 600s: script={script_path} function={function_name}"
-        ) from exc
+        try:
+            stdout, stderr = proc.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise RuntimeError(
+                f"BYOS subprocess timed out after 600s: script={script_path} "
+                f"function={function_name}"
+            )
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    if result.returncode != 0:
-        error_detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        raise RuntimeError(f"BYOS subprocess failed (exit {result.returncode}): {error_detail}")
+    if proc.returncode != 0:
+        error_detail = stderr.strip() or stdout.strip() or "unknown error"
+        raise RuntimeError(f"BYOS subprocess failed (exit {proc.returncode}): {error_detail}")
 
-    # Log subprocess stderr as debug info (the user script may print to stderr).
-    if result.stderr:
-        for line in result.stderr.splitlines():
+    if stderr:
+        for line in stderr.splitlines():
             log.debug("BYOS subprocess stderr: %s", line)
 
-    return _parse_subprocess_response(result.stdout.strip(), script_path, function_name)
+    return _parse_subprocess_response(stdout.strip(), script_path, function_name)
 
 
 def load_user_function(
     path: Path,
     *,
     trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS,
+    resource_limits: dict[str, int] | None = None,
 ) -> Callable[..., Any]:
     """Import a user ``.py`` file and return a callable that respects the trust level.
 
@@ -318,6 +347,11 @@ def load_user_function(
     Args:
         path: Path to the user's ``.py`` script.
         trust_level: Execution isolation mode (default: ``SUBPROCESS``).
+        resource_limits: Optional dict of rlimit names to values
+            (e.g. ``{"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}``).
+            Applied via ``resource.setrlimit`` before ``Popen`` in
+            subprocess mode (issue #343).  ``resource.error`` from
+            impossible limits is caught and logged as a warning.
 
     Returns:
         A callable with the same signature as the discovered function.
@@ -338,19 +372,19 @@ def load_user_function(
     if trust_level == ByosTrustLevel.INPROCESS:
         return _load_inprocess(path)
 
-    # Subprocess mode: discover the function name, then return a wrapper
-    # that runs the script in a child process.
     function_name = _discover_function_name(path)
     script_path = path.resolve()
 
     def _subprocess_wrapper(*args: object, **kwargs: object) -> Path:
-        return _run_byos_subprocess(script_path, function_name, args, kwargs)
+        return _run_byos_subprocess(
+            script_path, function_name, args, kwargs, resource_limits=resource_limits
+        )
 
-    # Preserve metadata for inspect.signature validation in Campaign.
     _subprocess_wrapper.__name__ = function_name
     _subprocess_wrapper.__qualname__ = function_name
     _subprocess_wrapper._byos_script_path = script_path  # type: ignore[attr-defined]
     _subprocess_wrapper._byos_trust_level = trust_level  # type: ignore[attr-defined]
+    _subprocess_wrapper._byos_resource_limits = resource_limits  # type: ignore[attr-defined]
 
     return _subprocess_wrapper
 

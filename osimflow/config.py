@@ -162,6 +162,7 @@ class CampaignConfig:
     # scripts/bundle_offline.py. When set alongside --offline, the campaign
     # uses this path instead of reaching out to the internet.
     offline_bundle: Path | None = None
+<<<<<<< HEAD
     # Webhook URL for campaign completion callbacks (issue #283).
     # When set, OSimFlow POSTs a JSON summary to this URL after the
     # GENERATE_BASIC_PLOTS step completes. Best-effort: delivery failures
@@ -175,6 +176,14 @@ class CampaignConfig:
     nomad_cert: Path | None = None
     nomad_key: Path | None = None
     nomad_ca_cert: Path | None = None
+=======
+    # BYOS resource limits (issue #343). A dict mapping rlimit names to
+    # integer values (e.g. {"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}).
+    # Applied via resource.setrlimit before the BYOS subprocess is
+    # spawned. resource.error from impossible limits is caught and
+    # logged as a warning (non-fatal).
+    byos_resource_limits: dict[str, int] | None = None
+>>>>>>> 807ddbf (fix #343: Add CPU/memory resource limits to BYOS subprocess wrapper)
 
     @property
     def work_dir(self) -> Path:
@@ -426,11 +435,14 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         offline_bundle=(
             Path(str(args["offline_bundle"])).resolve() if args.get("offline_bundle") else None
         ),
-        webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
+webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
         nomad_tls=bool(args.get("nomad_tls", False)),
         nomad_cert=(Path(str(args["nomad_cert"])).resolve() if args.get("nomad_cert") else None),
         nomad_key=(Path(str(args["nomad_key"])).resolve() if args.get("nomad_key") else None),
         nomad_ca_cert=(
             Path(str(args["nomad_ca_cert"])).resolve() if args.get("nomad_ca_cert") else None
+        ),
+        byos_resource_limits=(
+            args["byos_resource_limits"] if args.get("byos_resource_limits") else None  # type: ignore[arg-type]
         ),
     )
