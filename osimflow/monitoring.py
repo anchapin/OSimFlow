@@ -132,6 +132,7 @@ class RunTrace:
         self.spot_savings_usd: float = 0.0
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
+        self.status: str = "running"  # "running", "success", "cancelled", "failed"
 
     # ------------------------------------------------------------------
     # Step hooks (called by the Campaign)
@@ -272,11 +273,11 @@ class RunTrace:
             return
 
         try:
-            data = json.loads(path.read_text())
+            data: dict[str, object] = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             return
 
-        samples: list[dict[str, object]] = data.get("per_sample", [])
+        samples: list[dict[str, object]] = data.get("per_sample", [])  # type: ignore[assignment]
         replaced = False
         for i, s in enumerate(samples):
             if s.get("sample_id") == trace.sample_id:
@@ -287,13 +288,14 @@ class RunTrace:
             samples.append(trace.to_dict())
         data["per_sample"] = samples
 
-        n_succeeded = sum(1 for s in data.get("per_sample", []) if s.get("status") == "ok")
-        n_failed = sum(1 for s in data.get("per_sample", []) if s.get("status") == "failed")
+        per_sample: list[dict[str, object]] = data.get("per_sample", [])  # type: ignore[assignment]
+        n_succeeded = sum(1 for s in per_sample if s.get("status") == "ok")
+        n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
         if "summary" not in data:
             data["summary"] = {}
-        data["summary"]["n_succeeded"] = n_succeeded
-        data["summary"]["n_failed"] = n_failed
-        data["summary"]["n_samples"] = len(data["per_sample"])
+        data["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
+        data["summary"]["n_failed"] = n_failed  # type: ignore[index]
+        data["summary"]["n_samples"] = len(per_sample)
 
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, default=str))
