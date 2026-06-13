@@ -296,3 +296,83 @@ class TestSampleLogPaths:
         s2, e2 = sample_log_paths(tmp_path, "s0001")
         assert s1 == s2
         assert e1 == e2
+
+
+class TestRunTraceUpdateSample:
+    """Tests for incremental run.json checkpointing (issue #280)."""
+
+    def test_update_sample_creates_run_json_if_missing(self, tmp_path: Path) -> None:
+        """When run.json does not exist, update_sample() creates it."""
+        trace = RunTrace(campaign_id="checkpoint-test", config_summary={"executor": "local"})
+        out_file = tmp_path / "run.json"
+        trace.write(out_file)
+
+        sample_trace = SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0)
+        trace.update_sample(sample_trace)
+
+        assert out_file.exists()
+        data = json.loads(out_file.read_text())
+        assert data["campaign_id"] == "checkpoint-test"
+        assert len(data["per_sample"]) == 1
+        assert data["per_sample"][0]["sample_id"] == "s0001"
+        assert data["summary"]["n_succeeded"] == 1
+        assert data["summary"]["n_failed"] == 0
+
+    def test_update_sample_updates_existing_entry(self, tmp_path: Path) -> None:
+        """When sample_id already exists, update_sample() replaces the entry."""
+        trace = RunTrace(campaign_id="update-test", config_summary={})
+        out_file = tmp_path / "run.json"
+        trace.write(out_file)
+
+        trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
+        trace.update_sample(SampleTrace(sample_id="s0001", status="failed", elapsed_s=2.0))
+
+        data = json.loads(out_file.read_text())
+        assert len(data["per_sample"]) == 1
+        assert data["per_sample"][0]["status"] == "failed"
+        assert data["summary"]["n_succeeded"] == 0
+        assert data["summary"]["n_failed"] == 1
+
+    def test_update_sample_appends_new_entry(self, tmp_path: Path) -> None:
+        """When sample_id is new, update_sample() appends it."""
+        trace = RunTrace(campaign_id="append-test", config_summary={})
+        out_file = tmp_path / "run.json"
+        trace.write(out_file)
+
+        trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
+        trace.update_sample(SampleTrace(sample_id="s0002", status="failed", elapsed_s=2.0))
+
+        data = json.loads(out_file.read_text())
+        assert len(data["per_sample"]) == 2
+        assert data["summary"]["n_succeeded"] == 1
+        assert data["summary"]["n_failed"] == 1
+
+    def test_update_sample_atomic_write(self, tmp_path: Path) -> None:
+        """update_sample() uses atomic write (temp file + rename)."""
+        trace = RunTrace(campaign_id="atomic-test", config_summary={})
+        out_file = tmp_path / "run.json"
+        trace.write(out_file)
+
+        trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
+
+        tmp_files = list(tmp_path.glob("run.json.tmp"))
+        assert tmp_files == []
+
+    def test_update_sample_no_checkpoint_path_noops(self) -> None:
+        """update_sample() is a no-op when _checkpoint_path is not set."""
+        trace = RunTrace(campaign_id="no-path", config_summary={})
+        trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
+
+    def test_update_sample_creates_parents(self, tmp_path: Path) -> None:
+        """update_sample() creates parent directories when needed."""
+        trace = RunTrace(campaign_id="parents-test", config_summary={})
+        out_file = tmp_path / "deeply" / "nested" / "run.json"
+        trace.write(out_file)
+
+        nested_dir = tmp_path / "deeply" / "nested"
+        import shutil
+
+        shutil.rmtree(nested_dir)
+
+        trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
+        assert out_file.exists()
