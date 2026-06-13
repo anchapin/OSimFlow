@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
@@ -515,7 +516,7 @@ def _v_exponential(var: dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="'rate' must be positive")
 
 
-_VALIDATORS: dict[str, callable] = {
+_VALIDATORS: dict[str, Callable[..., Any]] = {
     "uniform": _v_uniform,
     "normal": _v_normal_lognormal,
     "lognormal": _v_normal_lognormal,
