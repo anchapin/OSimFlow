@@ -798,6 +798,12 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         action="store_false",
         help="Allow campaign control (stop, live events). Disables --read-only.",
     )
+    serve.add_argument(
+        "--ui",
+        action="store_true",
+        default=False,
+        help="Enable the campaign setup web UI at /ui/ (issue #337).",
+    )
     serve.add_argument("--log_level", default="INFO")
     serve.set_defaults(func=_cmd_serve)
 
@@ -1004,6 +1010,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         api_key=api_key,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
+        ui_enabled=args.ui,
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
