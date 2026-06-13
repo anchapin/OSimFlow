@@ -195,6 +195,7 @@ class RunTrace:
             "campaign_id": self.campaign_id,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "status": self.status,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
             "config": self.config_summary,
             "summary": {
