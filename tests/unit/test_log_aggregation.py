@@ -2,9 +2,6 @@
 
 import json
 import logging
-from pathlib import Path
-
-import pytest
 
 from osimflow.logging import JSONFormatter, LogAggregator, get_logger, setup_logging
 
@@ -103,9 +100,7 @@ class TestLogAggregator:
         log_file = tmp_path / "stdout.log"
         log_file.write_text("hello\n")
 
-        agg = LogAggregator(
-            log_aggregation_url="https://logs.us-east-1.amazonaws.com/test/group"
-        )
+        agg = LogAggregator(log_aggregation_url="https://logs.us-east-1.amazonaws.com/test/group")
         agg.add_log_file(log_file, log_stream="test-stream")
         agg.publish()
 
