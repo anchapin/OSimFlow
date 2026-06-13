@@ -286,7 +286,7 @@ def _run_byos_subprocess(
             try:
                 limit_constant = getattr(resource, name)
                 resource.setrlimit(limit_constant, (value, value))
-            except resource.error as exc:
+            except OSError as exc:
                 log.warning(
                     "BYOS rlimit %s=%d could not be set (non-fatal): %s",
                     name,
@@ -303,13 +303,13 @@ def _run_byos_subprocess(
         )
         try:
             stdout, stderr = proc.communicate(timeout=600)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             proc.kill()
             proc.communicate()
             raise RuntimeError(
                 f"BYOS subprocess timed out after 600s: script={script_path} "
                 f"function={function_name}"
-            )
+            ) from exc
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
