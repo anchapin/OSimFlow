@@ -4,8 +4,9 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
-``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``, ``FullFactorialAlgorithm``, and
-``GridSamplingAlgorithm`` implementations.
+``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``, ``FullFactorialAlgorithm``,
+``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
+``RandomSamplingAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:
 
@@ -533,3 +534,9 @@ except ImportError:
     # pymoo is an optional dependency — NSGA-II, PSO, and SPEA-II are only
     # available when the [optimization] extra is installed.
     pass
+
+from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402
+from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
+
+AlgorithmRegistry.register("repeat_all", RepeatAllAlgorithm)
+AlgorithmRegistry.register("random", RandomSamplingAlgorithm)
