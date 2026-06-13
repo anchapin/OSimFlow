@@ -152,6 +152,16 @@ class CampaignConfig:
     # disables retries. Each retry uses exponential backoff starting at
     # base_delay seconds (default 1.0), doubling each attempt up to 60s cap.
     max_sample_retries: int = 3
+    # Air-gapped / offline mode (issue #261). When True, OSimFlow skips
+    # Docker Hub pulls, PyPI version checks, and online weather downloads.
+    # It reads pip wheels from --offline_bundle/pip/ and uses pre-loaded
+    # Docker images from the local registry.
+    offline: bool = False
+    # Path to the offline bundle directory (issue #261). Contains pip/,
+    # docker/, and weather/ subdirectories created by
+    # scripts/bundle_offline.py. When set alongside --offline, the campaign
+    # uses this path instead of reaching out to the internet.
+    offline_bundle: Path | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -399,4 +409,8 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         objective=objective,
         constraints=constraints,
         max_sample_retries=int(str(args.get("max_sample_retries", 3))),
+        offline=bool(args.get("offline", False)),
+        offline_bundle=(
+            Path(str(args["offline_bundle"])).resolve() if args.get("offline_bundle") else None
+        ),
     )
