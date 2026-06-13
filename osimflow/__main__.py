@@ -79,6 +79,10 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
             verify_tls=args.nomad_tls_verify,
+            tls=args.nomad_tls,
+            cert=args.nomad_cert,
+            key=args.nomad_key,
+            ca_cert=args.nomad_ca_cert,
         )
     # Azure Batch executor — account credentials and pool.
     if args.executor == "azure_batch":
@@ -214,6 +218,41 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Nomad HTTP API. Disable with --nomad-tls-verify=false for "
             "development with self-signed certificates. "
             "SEC-009: protects NOMAD_TOKEN from interception."
+        ),
+    )
+    run.add_argument(
+        "--nomad-tls",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable TLS for the Nomad HTTP API connection. "
+            "When enabled, use --nomad-cert, --nomad-key, and --nomad-ca-cert "
+            "to specify client certificate files for mTLS authentication."
+        ),
+    )
+    run.add_argument(
+        "--nomad-cert",
+        default=None,
+        help=(
+            "Path to the client certificate file (PEM) for mTLS authentication "
+            "with the Nomad cluster. Required when --nomad-tls is enabled."
+        ),
+    )
+    run.add_argument(
+        "--nomad-key",
+        default=None,
+        help=(
+            "Path to the client private key file (PEM) for mTLS authentication "
+            "with the Nomad cluster. Required when --nomad-tls is enabled."
+        ),
+    )
+    run.add_argument(
+        "--nomad-ca-cert",
+        default=None,
+        help=(
+            "Path to the CA certificate file (PEM) to verify the Nomad server's "
+            "certificate when --nomad-tls is enabled. If not specified, the "
+            "system default CA certificates are used."
         ),
     )
     run.add_argument(

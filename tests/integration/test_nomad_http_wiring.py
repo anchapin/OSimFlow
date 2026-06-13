@@ -553,3 +553,82 @@ def test_nomad_executor_verify_tls_attribute_passed_to_client() -> None:
     ex = NomadExecutor(address="http://nomad.local:4646", verify_tls=True)
     assert ex._client.verify_tls is True
     ex.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# mTLS configuration: when tls=True with cert/key/ca_cert, the client uses
+# a custom SSL context with client certificate authentication (issue #344).
+# ---------------------------------------------------------------------------
+
+
+def test_nomad_executor_tls_defaults_to_false() -> None:
+    """``tls`` must default to ``False`` for backward compatibility."""
+    ex = NomadExecutor(address="http://nomad.local:4646")
+    assert ex.tls is False
+    ex.shutdown()
+
+
+def test_nomad_executor_tls_parameters_stored() -> None:
+    """The tls, cert, key, and ca_cert parameters must be stored on the executor."""
+    ex = NomadExecutor(
+        address="http://nomad.local:4646",
+        tls=True,
+        cert="/path/to/cert.pem",
+        key="/path/to/key.pem",
+        ca_cert="/path/to/ca.pem",
+    )
+    assert ex.tls is True
+    assert ex.cert == "/path/to/cert.pem"
+    assert ex.key == "/path/to/key.pem"
+    assert ex.ca_cert == "/path/to/ca.pem"
+    ex.shutdown()
+
+
+def test_nomad_executor_tls_parameters_passed_to_client() -> None:
+    """The tls, cert, key, and ca_cert parameters must be passed to _NomadClient."""
+    ex = NomadExecutor(
+        address="http://nomad.local:4646",
+        tls=True,
+        cert="/path/to/cert.pem",
+        key="/path/to/key.pem",
+        ca_cert="/path/to/ca.pem",
+    )
+    assert ex._client.tls is True
+    assert ex._client.cert == "/path/to/cert.pem"
+    assert ex._client.key == "/path/to/key.pem"
+    assert ex._client.ca_cert == "/path/to/ca.pem"
+    ex.shutdown()
+
+
+def test_nomad_client_tls_with_custom_certs_uses_custom_opener() -> None:
+    """When tls=True with custom certs, the client must use a custom SSL context."""
+    ex = NomadExecutor(
+        address="http://nomad.local:4646",
+        tls=True,
+        cert="/path/to/cert.pem",
+        key="/path/to/key.pem",
+        ca_cert="/path/to/ca.pem",
+    )
+
+    # When tls=True with cert/key, _opener is not None and uses HTTPSHandler.
+    assert ex._client._opener is not None
+    ex.shutdown()
+
+
+def test_nomad_client_tls_without_custom_certs_uses_stdlib() -> None:
+    """When tls=True without custom certs, the client uses stdlib urlopen."""
+    ex = NomadExecutor(address="http://nomad.local:4646", tls=True, verify_tls=True)
+
+    # When tls=True with verify_tls=True but no custom certs, _opener is None.
+    assert ex._client._opener is None
+    ex.shutdown()
+
+
+def test_nomad_client_tls_false_uses_plain_http() -> None:
+    """When tls=False, the client uses plain HTTP (no TLS)."""
+    ex = NomadExecutor(address="http://nomad.local:4646", tls=False)
+
+    # When tls=False, _opener is None and urlopen is used directly.
+    assert ex._client._opener is None
+    assert ex._client.tls is False
+    ex.shutdown()
