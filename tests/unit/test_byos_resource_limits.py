@@ -52,7 +52,9 @@ class TestByosResourceLimitsNone:
         )
         func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
         with patch("osimflow.byos.resource.setrlimit") as mock_setrlimit:
-            result = func(str(user_scripts / "template"), {"k": 1.0}, "0001", str(user_scripts / "out"))
+            result = func(
+                str(user_scripts / "template"), {"k": 1.0}, "0001", str(user_scripts / "out")
+            )
             mock_setrlimit.assert_not_called()
         assert isinstance(result, Path)
         assert result.name == "0001"
@@ -61,9 +63,7 @@ class TestByosResourceLimitsNone:
 class TestByosResourceLimitsSet:
     """resource_limits dict is passed to resource.setrlimit before Popen."""
 
-    def test_resource_limits_applied_before_popen(
-        self, user_scripts: Path
-    ) -> None:
+    def test_resource_limits_applied_before_popen(self, user_scripts: Path) -> None:
         path = _write_script(
             user_scripts,
             "limits_apply.py",
@@ -83,9 +83,7 @@ class TestByosResourceLimitsSet:
             func(str(user_scripts / "template"), {"k": 1.0}, "0001", str(user_scripts / "out"))
             mock_setrlimit.assert_called_once_with(resource.RLIMIT_NOFILE, (1024, 1024))
 
-    def test_multiple_resource_limits_applied(
-        self, user_scripts: Path
-    ) -> None:
+    def test_multiple_resource_limits_applied(self, user_scripts: Path) -> None:
         path = _write_script(
             user_scripts,
             "multi_limits.py",
@@ -147,9 +145,7 @@ class TestByosResourceLimitsError:
 class TestByosResourceLimitsMetadata:
     """The resource_limits dict is stored on the wrapper for introspection."""
 
-    def test_resource_limits_stored_on_wrapper(
-        self, user_scripts: Path
-    ) -> None:
+    def test_resource_limits_stored_on_wrapper(self, user_scripts: Path) -> None:
         path = _write_script(
             user_scripts,
             "meta_apply.py",
@@ -163,9 +159,7 @@ class TestByosResourceLimitsMetadata:
         )
         assert getattr(func, "_byos_resource_limits", None) == limits
 
-    def test_none_resource_limits_stored_as_none(
-        self, user_scripts: Path
-    ) -> None:
+    def test_none_resource_limits_stored_as_none(self, user_scripts: Path) -> None:
         path = _write_script(
             user_scripts,
             "meta_none.py",
@@ -178,14 +172,11 @@ class TestByosResourceLimitsMetadata:
 class TestByosResourceLimitsInprocess:
     """Inprocess mode does not call setrlimit (no subprocess spawned)."""
 
-    def test_inprocess_ignores_resource_limits(
-        self, user_scripts: Path
-    ) -> None:
+    def test_inprocess_ignores_resource_limits(self, user_scripts: Path) -> None:
         path = _write_script(
             user_scripts,
             "inprocess_limits.py",
-            "def apply_parameters(template, parameters, sample_id, out):\n"
-            "    return 42\n",
+            "def apply_parameters(template, parameters, sample_id, out):\n    return 42\n",
         )
         limits = {"RLIMIT_CPU": 300}
         func = load_user_function(

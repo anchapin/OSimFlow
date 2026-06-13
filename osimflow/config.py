@@ -432,7 +432,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         offline_bundle=(
             Path(str(args["offline_bundle"])).resolve() if args.get("offline_bundle") else None
         ),
-webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
+        webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
         nomad_tls=bool(args.get("nomad_tls", False)),
         nomad_cert=(Path(str(args["nomad_cert"])).resolve() if args.get("nomad_cert") else None),
         nomad_key=(Path(str(args["nomad_key"])).resolve() if args.get("nomad_key") else None),

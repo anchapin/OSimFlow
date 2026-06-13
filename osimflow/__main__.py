@@ -455,7 +455,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help=(
             "JSON dict of rlimit names to values applied to the BYOS "
             "subprocess (issue #343). Example: "
-            "'{\"RLIMIT_CPU\": 300, \"RLIMIT_AS\": 4294967296}'. "
+            '\'{"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}\'. '
             "resource.error from impossible limits is caught and logged "
             "as a warning (non-fatal)."
         ),
@@ -1254,7 +1254,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
 
             byos_resource_limits = json_mod.loads(args.byos_resource_limits)
         except (json_mod.JSONDecodeError, TypeError) as exc:
-            print(f"error: --byos-resource-limits must be a valid JSON dict: {exc}", file=sys.stderr)
+            print(
+                f"error: --byos-resource-limits must be a valid JSON dict: {exc}", file=sys.stderr
+            )
             return 1
     apply_fn = (
         load_user_function(
