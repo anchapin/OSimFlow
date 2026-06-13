@@ -234,13 +234,9 @@ class TestLoadConfigStorageArgs:
         from osimflow.config import load_config
 
         variables = tmp_path / "variables.yml"
-<<<<<<< HEAD
         variables.write_text(
             "variables:\n  - name: x\n    distribution: uniform\n    min: 0\n    max: 1"
         )
-=======
-        variables.write_text("variables:\n  - name: x\n    distribution: uniform\n    min: 0\n    max: 1")
->>>>>>> 2786148 (Add S3/GCS/Azure Blob result storage backend (issue #339))
         template = tmp_path / "template"
         template.mkdir()
         (template / "workflow.osw").write_text('{"steps": []}')
