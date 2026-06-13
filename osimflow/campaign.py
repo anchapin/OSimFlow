@@ -32,6 +32,7 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 """
 
 import concurrent.futures
+import contextlib
 import dataclasses
 import hashlib
 import inspect
@@ -572,14 +573,10 @@ class Campaign:
                         f.cancel()
                     break
                 # CancelledError is a BaseException (not Exception), so we must
-                # catch it explicitly here. It is raised when a future was
+                # suppress it explicitly here — it is raised when a future was
                 # cancelled via f.cancel() during a cancellation sweep.
-                # We convert it to KeyboardInterrupt so the outer handler
-                # (which catches Exception) can set campaign_status="cancelled".
-                try:
+                with contextlib.suppress(Exception, concurrent.futures.CancelledError):
                     future.result()
-                except concurrent.futures.CancelledError as exc:
-                    raise KeyboardInterrupt(f"cancellation requested during {step_name}") from exc
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
