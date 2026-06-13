@@ -110,6 +110,8 @@ class WebhookClient:
                     self.max_retries + 1,
                     exc,
                 )
+                if status < 500:
+                    return False
             except urllib.error.URLError as exc:
                 log.warning(
                     "webhook URL error for %s (attempt %d/%d): %s",
