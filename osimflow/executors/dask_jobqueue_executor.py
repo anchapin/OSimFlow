@@ -154,7 +154,12 @@ class DaskJobQueueExecutor(BaseExecutor):
         cluster = self._ensure_cluster()
         requested = max(self.min_workers, min(n_workers, self.max_workers))
         cluster.scale(requested)
-        log.info("dask_jobqueue: scale request -> %d workers (range: %d-%d)", requested, self.min_workers, self.max_workers)
+        log.info(
+            "dask_jobqueue: scale request -> %d workers (range: %d-%d)",
+            requested,
+            self.min_workers,
+            self.max_workers,
+        )
 
     def _auto_scale(self) -> None:
         """Scale workers based on pending task backlog.
