@@ -2496,7 +2496,7 @@ class Campaign:
         )
         return out
 
-    def step_extract_kpis(
+    def step_extract_kpis(  # noqa: PLR0915
         self,
         simulated: SampleDict,
         generation: int = 0,

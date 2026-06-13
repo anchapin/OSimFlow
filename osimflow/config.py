@@ -199,6 +199,13 @@ class CampaignConfig:
     # S3-compatible endpoint URL for result storage (issue #339).
     # Used for MinIO, Cloudflare R2, and other S3-compatible stores.
     result_storage_endpoint: str | None = None
+    # Distributed task queue backend (issue #335). When "none" (default),
+    # fan-out steps submit directly to the configured executor. When
+    # "dask", work is submitted to a Dask scheduler via DaskTaskQueue.
+    task_queue: str = "none"
+    # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
+    # When None and task_queue="dask", an embedded LocalCluster is used.
+    dask_scheduler_address: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -473,5 +480,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         result_storage_bucket=str(args.get("result_storage_bucket", "")),
         result_storage_endpoint=(
             str(args["result_storage_endpoint"]) if args.get("result_storage_endpoint") else None
+        ),
+        task_queue=str(args.get("task_queue", "none")),
+        dask_scheduler_address=(
+            str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
     )
