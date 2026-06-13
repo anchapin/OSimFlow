@@ -35,6 +35,15 @@ from .observability import (
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
+from .storage import (
+    AzureBlobStorage,
+    GCSStorage,
+    LocalStorage,
+    ResultStorage,
+    ResultStorageUploader,
+    S3Storage,
+    build_result_storage,
+)
 from .validation import ValidationError
 from .weather import (
     EPWDownloadError,
@@ -90,6 +99,13 @@ __all__ = [
     "validate_epw_header",
     "get_logger",
     "setup_logging",
+    "ResultStorage",
+    "LocalStorage",
+    "S3Storage",
+    "GCSStorage",
+    "AzureBlobStorage",
+    "ResultStorageUploader",
+    "build_result_storage",
 ]
 
 setup_logging()

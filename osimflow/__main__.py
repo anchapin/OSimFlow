@@ -606,6 +606,36 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "not affect campaign status. (issue #283)"
         ),
     )
+    run.add_argument(
+        "--result-storage-backend",
+        choices=["local", "s3", "gs", "azure"],
+        default="local",
+        help=(
+            "Result storage backend for multi-node campaigns (issue #339). "
+            "local = no remote upload (default). "
+            "s3 = Amazon S3 (or S3-compatible like MinIO/R2). "
+            "gs = Google Cloud Storage. "
+            "azure = Azure Blob Storage."
+        ),
+    )
+    run.add_argument(
+        "--result-storage-bucket",
+        default=None,
+        help=(
+            "Bucket/container name for result storage (issue #339). "
+            "For S3/gs this is the bucket name; for Azure it is the container name. "
+            "Required when --result-storage-backend is not 'local'."
+        ),
+    )
+    run.add_argument(
+        "--result-storage-endpoint",
+        default=None,
+        help=(
+            "Custom S3-compatible endpoint URL for result storage (issue #339). "
+            "Use for MinIO, Cloudflare R2, or other S3-compatible stores. "
+            "Only valid when --result-storage-backend is 's3'."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:

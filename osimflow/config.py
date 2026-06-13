@@ -187,6 +187,17 @@ class CampaignConfig:
     # spawned. resource.error from impossible limits is caught and
     # logged as a warning (non-fatal).
     byos_resource_limits: dict[str, int] | None = None
+    # Result storage backend (issue #339). When set to a non-local value
+    # (s3/gs/azure), simulation outputs (eplusout.sql) and KPI JSONs are
+    # uploaded to the configured bucket after each successful step.
+    result_storage_backend: str = "local"
+    # Bucket/container name for result storage (issue #339).
+    # For S3: the bucket name. For GCS: the bucket name. For Azure: the container.
+    # Ignored when result_storage_backend is "local".
+    result_storage_bucket: str = ""
+    # S3-compatible endpoint URL for result storage (issue #339).
+    # Used for MinIO, Cloudflare R2, and other S3-compatible stores.
+    result_storage_endpoint: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -453,5 +464,12 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         ),
         byos_resource_limits=(
             args["byos_resource_limits"] if args.get("byos_resource_limits") else None  # type: ignore[arg-type]
+        ),
+        result_storage_backend=str(args.get("result_storage_backend", "local")),
+        result_storage_bucket=str(args.get("result_storage_bucket", "")),
+        result_storage_endpoint=(
+            str(args["result_storage_endpoint"])
+            if args.get("result_storage_endpoint")
+            else None
         ),
     )
