@@ -34,6 +34,7 @@ from osimflow import (
     NomadExecutor,
     PBSExecutor,
     SlurmExecutor,
+    build_task_queue,
     load_config,
 )
 from osimflow.byos import ByosTrustLevel, load_user_function
@@ -447,6 +448,28 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         default=None,
         help="HPC project/account for Dask workers.",
     )
+    run.add_argument(
+        "--task-queue",
+        choices=["none", "dask"],
+        default="none",
+        help=(
+            "Distributed task queue backend for fan-out steps "
+            "(APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS). "
+            "When 'none' (default), work is submitted directly to the "
+            "configured --executor. When 'dask', work is submitted to "
+            "a Dask scheduler (requires --dask-scheduler-address unless "
+            "a local embedded cluster is acceptable)."
+        ),
+    )
+    run.add_argument(
+        "--dask-scheduler-address",
+        default=None,
+        help=(
+            "Dask scheduler address (e.g. tcp://scheduler:8786). "
+            "When omitted and --task-queue is 'dask', an embedded "
+            "single-process LocalCluster is started automatically."
+        ),
+    )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)
@@ -603,14 +626,6 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--cloudwatch-log-group",
         default=None,
         help="CloudWatch log group name (optional).",
-    )
-    run.add_argument(
-        "--log-aggregation-url",
-        default=None,
-        help=(
-            "CloudWatch Logs URL for distributed log aggregation "
-            "(e.g. https://logs.us-east-1.amazonaws.com/<log-group>/<log-stream>)."
-        ),
     )
     run.add_argument(
         "--prometheus-port",
@@ -1443,12 +1458,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         if args.custom_kpi_extractor
         else None
     )
+    task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+    if cfg.task_queue != "none":
+        log.info("task queue enabled: backend=%s", cfg.task_queue)
     campaign = Campaign(
         cfg,
         executor,
         apply_fn=apply_fn,
         extract_fn=extract_fn,
         max_workers=args.max_workers,
+        task_queue=task_queue,
     )
     # TUI: wrap campaign execution with Rich TUI when available.
     # The TUI is a passive observer (reads run.json) and does not
