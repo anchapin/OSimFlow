@@ -451,7 +451,7 @@ class TestMergeParamsIntoAggregatedResults:
         for sid in ("0001", "0002"):
             kpi_file = tmp_path / f"kpi_{sid}.json"
             kpi_file.write_text(
-                json.dumps({"sample_id": sid, "kpis": {"eui_kwh_per_m2": 100.0 + int(sid)}})
+                json.dumps({"sample_id": sid, "kpis": {"eui_kwh_m2_yr": 100.0 + int(sid)}})
             )
 
         # Write samples.json
@@ -485,10 +485,10 @@ class TestMergeParamsIntoAggregatedResults:
         # Param columns come before KPI columns
         assert "r_value" in cols
         assert "wwr" in cols
-        assert "eui_kwh_per_m2" in cols
+        assert "eui_kwh_m2_yr" in cols
         r_idx = cols.index("r_value")
         wwr_idx = cols.index("wwr")
-        eui_idx = cols.index("eui_kwh_per_m2")
+        eui_idx = cols.index("eui_kwh_m2_yr")
         assert r_idx < eui_idx
         assert wwr_idx < eui_idx
         # Both params are between sample_id and eui
@@ -500,19 +500,19 @@ class TestMergeParamsIntoAggregatedResults:
         from aggregate_results import parse_kpi_json
 
         kpi_file = tmp_path / "kpi_0001.json"
-        kpi_file.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui_kwh_per_m2": 100.0}}))
+        kpi_file.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui_kwh_m2_yr": 100.0}}))
 
         all_kpis = [parse_kpi_json(kpi_file)]
         df = pd.DataFrame(all_kpis)
         assert "sample_id" in df.columns
-        assert "eui_kwh_per_m2" in df.columns
+        assert "eui_kwh_m2_yr" in df.columns
 
     def test_samples_json_missing_file_no_error(self, tmp_path: Path) -> None:
         """Passing a nonexistent samples.json path to _load_samples_params is non-fatal."""
         from aggregate_results import _load_samples_params, parse_kpi_json
 
         kpi_file = tmp_path / "kpi_0001.json"
-        kpi_file.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui_kwh_per_m2": 100.0}}))
+        kpi_file.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui_kwh_m2_yr": 100.0}}))
 
         all_kpis = [parse_kpi_json(kpi_file)]
         df = pd.DataFrame(all_kpis)
@@ -520,7 +520,7 @@ class TestMergeParamsIntoAggregatedResults:
         params_map = _load_samples_params(tmp_path / "nonexistent.json")
         assert params_map == {}
         assert len(df) == 1
-        assert "eui_kwh_per_m2" in df.columns
+        assert "eui_kwh_m2_yr" in df.columns
 
     def test_param_values_match_samples(self, tmp_path: Path) -> None:
         """Parameter values in the DataFrame match the samples.json input."""
@@ -530,7 +530,7 @@ class TestMergeParamsIntoAggregatedResults:
             sid = f"{i:04d}"
             kpi_file = tmp_path / f"kpi_{sid}.json"
             kpi_file.write_text(
-                json.dumps({"sample_id": sid, "kpis": {"eui_kwh_per_m2": 100.0 + i}})
+                json.dumps({"sample_id": sid, "kpis": {"eui_kwh_m2_yr": 100.0 + i}})
             )
 
         samples_json = tmp_path / "samples.json"
@@ -568,7 +568,7 @@ class TestMergeParamsIntoAggregatedResults:
         from aggregate_results import _load_samples_params, parse_kpi_json
 
         kpi_file = tmp_path / "kpi_0099.json"
-        kpi_file.write_text(json.dumps({"sample_id": "0099", "kpis": {"eui_kwh_per_m2": 100.0}}))
+        kpi_file.write_text(json.dumps({"sample_id": "0099", "kpis": {"eui_kwh_m2_yr": 100.0}}))
 
         samples_json = tmp_path / "samples.json"
         samples_json.write_text(
