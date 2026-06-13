@@ -232,20 +232,14 @@ class TestGAGenerateSamples:
 
     def test_empty_variables(self, tmp_path: Path) -> None:
         algo = _get_ga_class()()
-        result = algo.generate_samples(
-            {"variables": []}, n_samples=5, seed=None, outdir=tmp_path
-        )
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         assert data["samples"] == []
 
     def test_seed_reproducible(self, tmp_path: Path) -> None:
         algo = _get_ga_class()()
-        r1 = algo.generate_samples(
-            _VARIABLES_2D, n_samples=10, seed=123, outdir=tmp_path / "r1"
-        )
-        r2 = algo.generate_samples(
-            _VARIABLES_2D, n_samples=10, seed=123, outdir=tmp_path / "r2"
-        )
+        r1 = algo.generate_samples(_VARIABLES_2D, n_samples=10, seed=123, outdir=tmp_path / "r1")
+        r2 = algo.generate_samples(_VARIABLES_2D, n_samples=10, seed=123, outdir=tmp_path / "r2")
         assert json.loads(r1.read_text()) == json.loads(r2.read_text())
 
     def test_no_independent_vars(self, tmp_path: Path) -> None:
@@ -476,8 +470,6 @@ class TestGAConvergenceEdgeCases:
 
     def test_empty_variables_returns_empty(self, tmp_path: Path) -> None:
         algo = _get_ga_class()()
-        result = algo.generate_samples(
-            {"variables": []}, n_samples=5, seed=None, outdir=tmp_path
-        )
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         assert data["samples"] == []

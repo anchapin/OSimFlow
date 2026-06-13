@@ -47,8 +47,7 @@ try:
     from deap import tools as deap_tools
 except ImportError as exc:
     raise ImportError(
-        "osimflow[ga] is required for GeneticAlgorithm. "
-        "Install with: pip install osimflow[ga]"
+        "osimflow[ga] is required for GeneticAlgorithm. Install with: pip install osimflow[ga]"
     ) from exc
 
 
@@ -222,9 +221,7 @@ class GeneticAlgorithm(BaseAlgorithm):
         population: list[Any] = []
         for _ in range(popsize):
             ind = [
-                float(
-                    np.clip(c + rng.normal(0, 0.1 * (hi - lo)), lo, hi)
-                )
+                float(np.clip(c + rng.normal(0, 0.1 * (hi - lo)), lo, hi))
                 for c, (lo, hi) in zip(centre, self._bounds, strict=True)
             ]
             population.append(deap_creator.Individual(ind))
@@ -268,9 +265,7 @@ class GeneticAlgorithm(BaseAlgorithm):
 
         # Evaluate fitness.
         for ind in new_pop:
-            ind.fitness.values = self._eval_fitness(
-                list(ind), fitness_map, self._bounds, penalty
-            )
+            ind.fitness.values = self._eval_fitness(list(ind), fitness_map, self._bounds, penalty)
 
         return new_pop
 
@@ -284,9 +279,7 @@ class GeneticAlgorithm(BaseAlgorithm):
             candidate = np.array(best_ind) + perturbation
             for j, (lo, hi) in enumerate(self._bounds):
                 candidate[j] = float(np.clip(candidate[j], lo, hi))
-            values: dict[str, Any] = {
-                name: float(candidate[j]) for j, name in enumerate(var_names)
-            }
+            values: dict[str, Any] = {name: float(candidate[j]) for j, name in enumerate(var_names)}
             new_samples.append({"sample_id": f"{i + 1:04d}", "values": values})
         return new_samples
 
@@ -341,9 +334,7 @@ class GeneticAlgorithm(BaseAlgorithm):
         def _init_individual() -> deap_creator.Individual:
             """Create one random individual within bounds."""
             rng = np.random.default_rng(seed=seed)
-            return deap_creator.Individual(
-                [rng.uniform(lo, hi) for lo, hi in bounds]
-            )
+            return deap_creator.Individual([rng.uniform(lo, hi) for lo, hi in bounds])
 
         def _mate(a: list[float], b: list[float]) -> tuple[list[float], list[float]]:
             """SBX crossover."""
@@ -481,9 +472,7 @@ class GeneticAlgorithm(BaseAlgorithm):
 
         # Evaluate initial population.
         for ind in self._deap_population:
-            ind.fitness.values = self._eval_fitness(
-                list(ind), fitness_map, self._bounds, 0.0
-            )
+            ind.fitness.values = self._eval_fitness(list(ind), fitness_map, self._bounds, 0.0)
 
         # Update hall-of-fame.
         if self._hof is None:
@@ -500,9 +489,7 @@ class GeneticAlgorithm(BaseAlgorithm):
                     break
 
         # Run one GA generation.
-        new_pop = self._run_one_ga_generation(
-            toolbox, self._deap_population, fitness_map, penalty
-        )
+        new_pop = self._run_one_ga_generation(toolbox, self._deap_population, fitness_map, penalty)
         self._deap_population = new_pop
 
         # Update hall-of-fame.
