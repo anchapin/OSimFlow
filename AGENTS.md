@@ -109,10 +109,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Path | Purpose |
 |---|---|
-| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), and logging setup (`get_logger`, `setup_logging`). |
+| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `CampaignConfig`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), and logging setup (`get_logger`, `setup_logging`). |
 | `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` — explicit, testable resume semantics. |
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
+| `osimflow/storage.py` | `ResultStorage` ABC, `LocalStorage` (no-op), `S3Storage` (boto3), `GCSStorage` (google-cloud-storage), `AzureBlobStorage` (azure-storage-blob async), `ResultStorageUploader` (sync wrapper), and `build_result_storage` factory (issue #339). |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
 | `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger` and `setup_logging`. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend`; plug-in metrics backends (issue #145, #127). |
@@ -244,6 +245,9 @@ The 7-step DAG that the `Campaign` class drives:
 - `--max-generations` (maximum number of DAG generations; default 1 for single-shot LHS. Issue #122)
 - `--max-sample-retries` (maximum retry attempts for transient per-sample failures; default 3. Issue #252)
 - `--webhook-url` (campaign completion webhook callback URL; issue #283)
+- `--result-storage-backend` (result storage backend: `local` (default), `s3`, `gs`, `azure`; issue #339)
+- `--result-storage-bucket` (bucket/container name for result storage; issue #339)
+- `--result-storage-endpoint` (custom S3-compatible endpoint URL for result storage; issue #339)
 - `--log_level`
 
 **Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, and `--rate-limit` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`.
