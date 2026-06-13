@@ -1,0 +1,41 @@
+# OSimFlow Helm Chart
+# Kubernetes deployment for OSimFlow batch workloads.
+#
+# Usage:
+#   helm install osimflow ./osimflow \
+#     --set openstudio.version=3.11.0 \
+#     --set executor.queue=osimflow-batch-queue
+#
+# Prerequisites:
+#   - Kubernetes 1.28+
+#   - Helm 3.12+
+#   - kubectl configured with a target cluster
+#   - Docker Hub pull credentials if using private images
+
+apiVersion: v2
+name: osimflow
+description: |
+  OSimFlow: OpenStudio simulation orchestration framework.
+  Deploys batch workloads on Kubernetes using the KubernetesExecutor.
+
+type: application
+
+version: "0.1.0"
+appVersion: "0.1.0"
+
+keywords:
+  - openstudio
+  - energyplus
+  - building-energy-modeling
+  - batch-simulation
+  - kubernetes
+
+maintainers:
+  - name: OSimFlow contributors
+    url: https://github.com/anchapin/OSimFlow
+
+sources:
+  - https://github.com/anchapin/OSimFlow
+
+annotations:
+  category: Scientific/Engineering

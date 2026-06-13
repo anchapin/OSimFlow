@@ -1,0 +1,62 @@
+# OSimFlow Helm Chart
+
+Thank you for installing OSimFlow!
+
+## Getting started
+
+### Run a campaign with KubernetesExecutor
+
+```bash
+# Set up a kubectl context pointing to your cluster
+kubectl config use-context <context-name>
+
+# Install the chart
+helm install osimflow ./osimflow \
+  --set openstudio.version=3.11.0
+
+# Verify the installation
+helm test osimflow
+
+# Run a campaign
+osimflow run \
+  --executor kubernetes \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 10 \
+  --outdir ./results \
+  --openstudio_version 3.11.0
+```
+
+### REST API server
+
+```bash
+# Install with API enabled
+helm install osimflow ./osimflow \
+  --set api.enabled=true \
+  --set ingress.enabled=true \
+  --set ingress.host=osimflow.example.com \
+  --set openstudio.version=3.11.0
+```
+
+## Uninstall
+
+```bash
+helm uninstall osimflow
+```
+
+## Configuration
+
+| Parameter | Description | Default |
+|---|---|---|
+| `openstudio.version` | OpenStudio container version | `3.11.0` |
+| `openstudio.repository` | Container image repository | `nrel/openstudio` |
+| `executor.namespace` | Kubernetes namespace for jobs | `default` |
+| `executor.service_account` | Service account for jobs | `default` |
+| `job.ttl_seconds_after_finish` | Job TTL after completion | `300` |
+| `job.backoff_limit` | Job retry backoff limit | `3` |
+| `job.active_deadline_seconds` | Max runtime per job (seconds) | `14400` |
+| `resources.cpu` | CPU request/limit per task | `1` |
+| `resources.memory` | Memory request/limit per task | `2048Mi` |
+| `api.enabled` | Enable REST API server | `false` |
+| `api.read_only` | REST API read-only mode | `true` |
+| `mlflow.enabled` | Enable MLflow integration | `false` |
