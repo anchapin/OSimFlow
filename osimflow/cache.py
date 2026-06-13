@@ -191,20 +191,20 @@ class SQLiteCache:
         with self._lock:
             c = self.connection
             row = c.execute(
-            """SELECT output_path, exit_code FROM cache_entries
+                """SELECT output_path, exit_code FROM cache_entries
                WHERE step=? AND sample_id=? AND openstudio_version=?
                  AND inputs_sha256=? AND code_sha256=? AND container_digest=?
                  AND generation=?""",
-            (
-                key.step,
-                key.sample_id,
-                key.openstudio_version,
-                key.inputs_sha256,
-                key.code_sha256,
-                key.container_digest,
-                key.generation,
-            ),
-        ).fetchone()
+                (
+                    key.step,
+                    key.sample_id,
+                    key.openstudio_version,
+                    key.inputs_sha256,
+                    key.code_sha256,
+                    key.container_digest,
+                    key.generation,
+                ),
+            ).fetchone()
         if row is None:
             return None
         if row["exit_code"] != 0:
