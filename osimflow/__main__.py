@@ -27,6 +27,7 @@ from osimflow import (
     CampaignConfig,
     CampaignRecord,
     CampaignRegistry,
+    DaskJobQueueExecutor,
     GoogleBatchExecutor,
     KubernetesExecutor,
     LocalExecutor,
@@ -119,6 +120,17 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             queue=args.pbs_queue,
             debug=not args.pbs_real,  # debug unless --pbs-real
         )
+    if args.executor == "dask_jobqueue":
+        return DaskJobQueueExecutor(
+            cluster_type=args.dask_cluster_type,
+            min_workers=args.dask_min_workers,
+            max_workers=args.dask_max_workers,
+            cpus_per_worker=args.dask_cpus_per_worker,
+            memory_per_worker=args.dask_memory_per_worker,
+            walltime=args.dask_walltime,
+            queue=args.dask_queue,
+            project=args.dask_project,
+        )
     raise ValueError(f"unknown executor: {args.executor}")
 
 
@@ -134,6 +146,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "google_batch",
             "kubernetes",
             "pbs",
+            "dask_jobqueue",
         ],
         default="local",
     )
@@ -389,6 +402,50 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--pbs-real",
         action="store_true",
         help="Submit to real PBS (default: debug mode runs locally).",
+    )
+    run.add_argument(
+        "--dask-cluster-type",
+        choices=["slurm", "pbs", "kubernetes"],
+        default="slurm",
+        help="Dask-JobQueue cluster backend (default: slurm).",
+    )
+    run.add_argument(
+        "--dask-min-workers",
+        type=int,
+        default=0,
+        help="Minimum number of Dask workers to keep alive (default: 0).",
+    )
+    run.add_argument(
+        "--dask-max-workers",
+        type=int,
+        default=10,
+        help="Maximum number of Dask workers to scale up to (default: 10).",
+    )
+    run.add_argument(
+        "--dask-cpus-per-worker",
+        type=int,
+        default=2,
+        help="CPUs per Dask worker (default: 2).",
+    )
+    run.add_argument(
+        "--dask-memory-per-worker",
+        default="4GiB",
+        help="Memory per Dask worker (default: 4GiB).",
+    )
+    run.add_argument(
+        "--dask-walltime",
+        default="02:00:00",
+        help="Walltime for Dask cluster jobs (default: 02:00:00).",
+    )
+    run.add_argument(
+        "--dask-queue",
+        default=None,
+        help=" HPC queue/partition for Dask workers (e.g. short, gpu).",
+    )
+    run.add_argument(
+        "--dask-project",
+        default=None,
+        help="HPC project/account for Dask workers.",
     )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
