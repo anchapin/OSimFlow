@@ -10,7 +10,7 @@
 
 ## Overview
 
-OSimFlow's [`aggregate_results.py`](../osimflow/_work_scripts/aggregate_results.py)
+OSimFlow's [`aggregate_results.py`](../bin/aggregate_results.py)
 writes two output formats by default:
 
 | File | Format | R read function |
