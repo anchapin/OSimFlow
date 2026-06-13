@@ -401,6 +401,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Required when --offline is set."
         ),
     )
+    run.add_argument(
+        "--webhook-url",
+        default=None,
+        help=(
+            "URL to POST a campaign completion summary to. "
+            "The POST contains a JSON payload with campaign_id, status, "
+            "elapsed_s, n_samples, n_succeeded, n_failed, total_cost_usd, "
+            "and outdir. Best-effort: delivery failures are logged but do "
+            "not affect campaign status. (issue #283)"
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:

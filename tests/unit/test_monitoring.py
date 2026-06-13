@@ -354,14 +354,17 @@ class TestRunTraceUpdateSample:
         trace.write(out_file)
 
         trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
-
+        # No .tmp file should remain after atomic write.
         tmp_files = list(tmp_path.glob("run.json.tmp"))
         assert tmp_files == []
 
     def test_update_sample_no_checkpoint_path_noops(self) -> None:
         """update_sample() is a no-op when _checkpoint_path is not set."""
         trace = RunTrace(campaign_id="no-path", config_summary={})
+<<<<<<< HEAD
         trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
+        # Don't call write(), so _checkpoint_path is not set.
+        # Should not raise.
 
     def test_update_sample_creates_parents(self, tmp_path: Path) -> None:
         """update_sample() creates parent directories when needed."""

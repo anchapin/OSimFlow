@@ -162,6 +162,11 @@ class CampaignConfig:
     # scripts/bundle_offline.py. When set alongside --offline, the campaign
     # uses this path instead of reaching out to the internet.
     offline_bundle: Path | None = None
+    # Webhook URL for campaign completion callbacks (issue #283).
+    # When set, OSimFlow POSTs a JSON summary to this URL after the
+    # GENERATE_BASIC_PLOTS step completes. Best-effort: delivery failures
+    # are logged but do not affect campaign status.
+    webhook_url: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -413,4 +418,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         offline_bundle=(
             Path(str(args["offline_bundle"])).resolve() if args.get("offline_bundle") else None
         ),
+        webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
     )

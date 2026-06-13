@@ -80,6 +80,7 @@ from .observability import (
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
+from .webhook import WebhookClient
 from .work import (
     SevereEnergyPlusError,
     aggregate_results,
@@ -1345,6 +1346,10 @@ class Campaign:
             # Update registry status (issue #266).
             self._update_registry_status(campaign_status)
 
+            # Fire webhook callback (issue #283). Best-effort: delivery
+            # failures are logged but do not affect campaign status.
+            self._maybe_fire_webhook(campaign_status, duration)
+
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
             # parallel teardown does not see "FileNotFoundError" on those
@@ -1791,6 +1796,38 @@ class Campaign:
         log.info("archived template_sim_package -> %s", pkg_dst)
         shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
         log.info("archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name)
+
+    def _maybe_fire_webhook(self, campaign_status: str, elapsed_s: float) -> None:
+        """Fire a webhook callback if ``cfg.webhook_url`` is configured (issue #283).
+
+        Best-effort: delivery failures are logged but do not propagate.
+        The webhook is sent after the GENERATE_BASIC_PLOTS step, in the
+        ``finally`` block of ``run()``, so it fires regardless of success
+        or failure — ``campaign_status`` will be ``"success"``,
+        ``"failure"``, or ``"cancelled"``.
+        """
+        if not self.cfg.webhook_url:
+            return
+
+        n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
+        n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+
+        client = WebhookClient(url=self.cfg.webhook_url)
+        payload = client.build_payload(
+            campaign_id=self.trace.campaign_id,
+            status=campaign_status,
+            elapsed_s=elapsed_s,
+            n_samples=self.cfg.n_samples,
+            n_succeeded=n_succeeded,
+            n_failed=n_failed,
+            total_cost_usd=self.trace.total_cost_usd if self.trace.total_cost_usd > 0 else None,
+            outdir=str(self.cfg.outdir),
+        )
+
+        log.info("firing webhook to %s (status=%s)", self.cfg.webhook_url, campaign_status)
+        ok = client.deliver(payload)
+        if not ok:
+            log.warning("webhook delivery to %s failed (campaign_status=%s)", self.cfg.webhook_url, campaign_status)
 
     # ------------------------------------------------------------------
     # Steps
