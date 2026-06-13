@@ -201,6 +201,7 @@ class RunTrace:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
+            "status": self.status,
             "config": self.config_summary,
             "summary": {
                 "n_samples": len(self.per_sample),
