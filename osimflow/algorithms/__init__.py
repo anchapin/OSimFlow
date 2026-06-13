@@ -5,8 +5,13 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
 <<<<<<< HEAD
+<<<<<<< HEAD
 ``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``,
 ``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
+=======
+``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``, ``FullFactorialAlgorithm``,
+``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
+>>>>>>> 9613e03 (feat: resolve #285 — add Repeat All and random sampling analysis types)
 =======
 ``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``, ``FullFactorialAlgorithm``,
 ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and

@@ -18,7 +18,7 @@ class TestAzureBatchExecutor:
     def _make_executor(self, **kw: object) -> AzureBatchExecutor:
         ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
         ex._azure_identity = MagicMock()
-        ex._azure_mgmt_batch = MagicMock()
+        ex._azure_batch = MagicMock()
         ex.account_name = kw.get("account_name", "testaccount")
         ex.account_url = kw.get("account_url", "https://testaccount.eastus.batch.azure.com")
         ex.pool_id = kw.get("pool_id", "test-pool")

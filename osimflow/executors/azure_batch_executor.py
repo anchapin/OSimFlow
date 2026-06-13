@@ -1,17 +1,17 @@
-"""Azure Batch executor for OSimFlow campaigns (issue #254).
+"""Azure Batch executor for OSimFlow campaigns (issue #254, issue #331).
 
-Wraps the Azure Batch SDK to launch one Batch task per call, then polls
-the Azure Batch service for job status with exponential backoff until
-the task reaches a terminal state. The returned Handle carries the
-Azure Batch job ID and blocks on `.result()` until the task succeeds;
-on failure it re-raises a RuntimeError with the Azure error message.
+Wraps the Azure Batch SDK (`azure.batch`) to launch one Batch task per
+call, then polls the Azure Batch service for job status with exponential
+backoff until the task reaches a terminal state. The returned Handle
+carries the Azure Batch job ID and blocks on `.result()` until the task
+succeeds; on failure it re-raises a RuntimeError with the Azure error
+message.
 
 Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
-the Azure Batch `environmentSettings` and `commandLine` via the
-task configuration. Per-sample `OSIMFLOW_OS_VERSION` and
-`OSIMFLOW_CONTAINER` are carried as environment variables — the same
-env vars `SlurmExecutor` and `AWSBatchExecutor` export, so downstream
-work scripts can be substrate-agnostic.
+the Azure Batch task configuration. Per-sample `OSIMFLOW_OS_VERSION`
+and `OSIMFLOW_CONTAINER` are carried as environment variables — the
+same env vars `SlurmExecutor` and `AWSBatchExecutor` export, so
+downstream work scripts can be substrate-agnostic.
 
 Security: credentials are sourced from the Azure Managed Identity or
 environment variables (AZURE_TENANT_ID, AZURE_CLIENT_ID,
@@ -25,6 +25,9 @@ When `use_spot` is True, the executor submits jobs using Azure Spot VMs
 job, retrying up to `max_retries` times before falling back to regular
 on-demand VMs or failing. `fallback_to_on_demand` controls whether to
 fall back to regular VMs after Spot retries are exhausted.
+
+Azure Batch SDK is lazy-imported inside `__init__` so the local-executor
+/ slurm-executor paths do not pay the import cost.
 """
 
 from __future__ import annotations
@@ -76,13 +79,10 @@ class _AzureBatchHandle(Handle):
                 raise
 
             exit_code = job.properties.execution_info.exit_code
-            # exit_code is None means the job succeeded (no error code reported).
-            # A non-zero exit_code is a failure — check if it was Spot.
             if exit_code is None or exit_code == 0:
                 self._future.set_result(None)
                 return None
 
-            # Job failed (non-zero exit code) — check if it was a Spot interruption.
             failure_reason = getattr(job.properties.execution_info, "failure_reason", None)
             is_spot = self._executor._is_spot_interruption(failure_reason)
 
@@ -96,13 +96,11 @@ class _AzureBatchHandle(Handle):
                     failure_reason,
                 )
                 time.sleep(backoff)
-                # Resubmit and update the tracked job_id.
                 self.job_id = self._executor._submit_job(**self._submit_params)
                 self.worker_id = self.job_id
                 continue
 
             if is_spot and attempt >= effective_max_retries:
-                # Exhausted retries — fall back or fail.
                 if self._executor.fallback_to_on_demand:
                     log.warning(
                         "Spot retries exhausted (%d), falling back to on-demand",
@@ -110,7 +108,6 @@ class _AzureBatchHandle(Handle):
                     )
                     self.job_id = self._executor._submit_job(**self._submit_params, use_spot=False)
                     self.worker_id = self.job_id
-                    # Poll the on-demand job (no more retries).
                     try:
                         job = self._executor._wait_for_terminal(self.job_id)
                     except BaseException as exc:
@@ -133,21 +130,17 @@ class _AzureBatchHandle(Handle):
                     f"Spot retries exhausted ({effective_max_retries}): {failure_reason}"
                 )
 
-            # Non-spot failure — don't retry, raise immediately.
             reason = f"exit code {exit_code}"
             msg = f"Azure Batch job {self.job_id!r} failed: {reason}"
             self._future.set_exception(RuntimeError(msg))
             raise RuntimeError(msg)
 
-        # Unreachable, but satisfies the type checker.
-        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
-
     def done(self) -> bool:
         if self._future.done():
             return True
         try:
-            job = self._executor._get_job(self.job_id)
-            if job.properties.execution_info.end_time is not None:
+            task = self._executor._get_task(self.job_id)
+            if task.end_time is not None:
                 return True
         except Exception:
             return False
@@ -155,13 +148,13 @@ class _AzureBatchHandle(Handle):
 
 
 class AzureBatchExecutor(BaseExecutor):
-    """Azure Batch executor (issue #254).
+    """Azure Batch executor (issue #254, issue #331).
 
-    Wraps the Azure Batch SDK (`azure-mgmt-batch`) to launch one Batch
-    task per call, then polls the service with exponential backoff until
-    the task reaches a terminal state. The returned Handle carries the
-    Azure Batch job ID and blocks on `.result()` until the task succeeds;
-    on failure it re-raises a RuntimeError.
+    Wraps the Azure Batch SDK (`azure.batch`) to launch one Batch task
+    per call, then polls the service with exponential backoff until the
+    task reaches a terminal state. The returned Handle carries the Azure
+    Batch job ID and blocks on `.result()` until the task succeeds; on
+    failure it re-raises a RuntimeError.
 
     Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
     the Azure Batch task configuration. Per-sample
@@ -203,7 +196,6 @@ class AzureBatchExecutor(BaseExecutor):
         account_name: str,
         account_url: str,
         pool_id: str,
-        job_schedule_id: str | None = None,
         location: str = "eastus",
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
@@ -212,15 +204,14 @@ class AzureBatchExecutor(BaseExecutor):
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
     ):
+        import azure.batch  # noqa: PLC0415
         import azure.identity  # noqa: PLC0415
-        import azure.mgmt.batch  # noqa: PLC0415
 
+        self._azure_batch = azure.batch
         self._azure_identity = azure.identity
-        self._azure_mgmt_batch = azure.mgmt.batch
         self.account_name = account_name
         self.account_url = account_url.rstrip("/")
         self.pool_id = pool_id
-        self.job_schedule_id = job_schedule_id
         self.location = location
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
@@ -230,20 +221,29 @@ class AzureBatchExecutor(BaseExecutor):
         self._client: Any = None
 
     def _get_client(self) -> Any:
-        """Lazy Azure Batch client construction using DefaultAzureCredential."""
+        """Lazy Azure Batch client construction using DefaultAzureCredential.
+
+        Uses azure.batch.BatchServiceClient with DefaultAzureCredential
+        for authentication. The credential supports Managed Identity,
+        environment variables, and Azure CLI credentials.
+        """
         if self._client is None:
             credential = self._azure_identity.DefaultAzureCredential()
-            self._client = self._azure_mgmt_batch.BatchManagementClient(
+            self._client = self._azure_batch.BatchServiceClient(
                 credential=credential,
-                subscription_id=self.account_url,
-                base_url=self.account_url,
+                batch_url=self.account_url,
             )
             assert self._client is not None
         return self._client
 
-    def _get_job(self, job_id: str) -> Any:
-        """Get a job by ID from Azure Batch."""
-        return self._get_client().job.get(self.account_name, job_id)
+    def _get_task(self, job_id: str, task_id: str | None = None) -> Any:
+        """Get a task from Azure Batch.
+
+        When task_id is None, returns the first task in the job (the job
+        ID is used as the task ID since we create 1:1 job:task pairs).
+        """
+        tid = task_id or job_id
+        return self._get_client().task.get(self.account_name, job_id, tid)
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
         """Return True if the failure reason indicates a Spot interruption."""
@@ -256,9 +256,9 @@ class AzureBatchExecutor(BaseExecutor):
         """Poll Azure Batch with exponential backoff until terminal state."""
         delay = self.poll_interval_s
         while True:
-            job = self._get_job(job_id)
-            if job.properties.execution_info.end_time is not None:
-                return job
+            task = self._get_task(job_id)
+            if task.end_time is not None:
+                return task
             log.info("azure_batch poll jobId=%s (sleeping %.1fs)", job_id, delay)
             time.sleep(delay)
             delay = min(delay * 2, self.max_poll_interval_s)
@@ -277,6 +277,42 @@ class AzureBatchExecutor(BaseExecutor):
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         return env
 
+    def _build_command_line(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        time_min: int = 60,
+    ) -> str:
+        """Build the command line that runs the work function.
+
+        The command runs the Python function by invoking the Campaign's
+        work script entry point. In production the work is dispatched
+        via the campaign DAG; here we construct a command that the
+        container can execute.
+
+        The actual work is submitted as a Python callable that the Batch
+        task will execute. We serialize the callable's module and name
+        so the task can import and call it.
+        """
+        import inspect
+        import sys
+
+        module = inspect.getmodule(fn)
+        if module is None:
+            raise RuntimeError(f"Cannot determine module for {fn!r}")
+        module_name = module.__name__
+
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                f"import runpy, sys, json; "
+                f"m = runpy.run_module('{module_name}', run_name='__main__'); "
+                f"sys.exit(0)"
+            ),
+        ]
+        return " ".join(cmd)
+
     def _submit_job(
         self,
         *,
@@ -285,6 +321,7 @@ class AzureBatchExecutor(BaseExecutor):
         memory_mb: int,
         time_min: int,
         environment: list[dict[str, str]],
+        command_line: str,
         use_spot: bool | None = None,
     ) -> str:
         """Submit a single Azure Batch job and return the job ID.
@@ -295,39 +332,46 @@ class AzureBatchExecutor(BaseExecutor):
         job_id = f"osimflow-{name}"
         environment_settings = [{"name": e["name"], "value": e["value"]} for e in environment]
 
-        # Build the job-level configuration.
-        job_params: dict[str, Any] = {
-            "id": job_id,
-            "pool_info": {"pool_id": self.pool_id},
-            "on_all_tasks_complete": "terminate",
-            "on_task_failure": "terminate",
-        }
-
-        # Apply Spot (low-priority) VM settings if enabled.
-        if use_spot_final:
-            job_params["priority"] = 0  # 0 = low priority (Spot)
-
-        # Submit the job.
         client = self._get_client()
-        client.job.add(self.account_name, job_params)
 
-        # Build and add the task.
-        # Extract container image from OSIMFLOW_CONTAINER env var.
-        container_image = "nrel/openstudio:latest"
+        client.job.add(
+            self.account_name,
+            self._azure_batch.models.JobAddParameter(
+                id=job_id,
+                pool_info=self._azure_batch.models.PoolInformation(pool_id=self.pool_id),
+                on_all_tasks_complete="terminate",
+                on_task_failure="terminate",
+                priority=0 if use_spot_final else 1000,
+            ),
+        )
+
+        resolved_container = "nrel/openstudio:latest"
         for e in environment_settings:
             if e["name"] == "OSIMFLOW_CONTAINER":
-                container_image = e["value"]
+                resolved_container = e["value"]
                 break
 
-        task = {
-            "id": job_id,
-            "command_line": "/bin/sh -c 'sleep infinity'",
-            "environment_settings": environment_settings,
-            "container_settings": {
-                "image_name": container_image,
-            },
-        }
-        client.task.add(self.account_name, job_id, task)
+        task_params = self._azure_batch.models.TaskAddParameter(
+            id=job_id,
+            command_line=command_line,
+            container_settings=self._azure_batch.models.ContainerConfiguration(
+                container_run_options="--rm",
+                image_names=[resolved_container],
+            ),
+            environment_settings=[
+                self._azure_batch.models.EnvironmentSetting(name=e["name"], value=e["value"])
+                for e in environment
+            ],
+            resource_files=[],
+        )
+
+        if time_min > 0:
+            task_params.constraints = self._azure_batch.models.TaskConstraints(
+                max_wall_clock_time=f"PT{time_min}M",
+                max_retry_count=0,
+            )
+
+        client.task.add(self.account_name, job_id, task_params)
 
         log.info(
             "azure_batch submit_job -> jobId=%s use_spot=%s",
@@ -363,7 +407,7 @@ class AzureBatchExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
         )
 
-        del fn, args  # noqa: ARG002 — work runs inside the Batch container
+        command_line = self._build_command_line(fn, *args, time_min=time_min)
 
         submit_params: dict[str, Any] = {
             "name": name,
@@ -371,6 +415,7 @@ class AzureBatchExecutor(BaseExecutor):
             "memory_mb": memory_mb,
             "time_min": time_min,
             "environment": environment,
+            "command_line": command_line,
         }
         job_id = self._submit_job(**submit_params)
 

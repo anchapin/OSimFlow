@@ -1,10 +1,11 @@
-"""Google Cloud Batch executor for OSimFlow campaigns (issue #254).
+"""Google Cloud Batch executor for OSimFlow campaigns (issue #254, issue #331).
 
-Wraps the Google Cloud Batch SDK to launch one Batch task per call, then
-polls the Cloud Batch service for job status with exponential backoff
-until the task reaches a terminal state. The returned Handle carries the
-Google Cloud Batch job name and blocks on `.result()` until the task
-succeeds; on failure it re-raises a RuntimeError with the error message.
+Wraps the Google Cloud Batch SDK (`google-cloud-batch`) to launch one
+Batch task per call, then polls the Cloud Batch service for job status
+with exponential backoff until the task reaches a terminal state. The
+returned Handle carries the Google Cloud Batch job name and blocks on
+`.result()` until the task succeeds; on failure it re-raises a RuntimeError
+with the error message.
 
 Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
 the Google Cloud Batch task configuration. Per-sample
@@ -37,12 +38,9 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from osimflow.executors.base import BaseExecutor, Handle
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("osimflow.executors.google_batch")
 
@@ -63,6 +61,7 @@ class _GoogleBatchHandle(Handle):
         executor: GoogleBatchExecutor,
         submit_params: dict[str, Any],
     ) -> None:
+        self.job_id = job_name
         self.job_name = job_name
         self._executor = executor
         self._submit_params = submit_params
@@ -88,7 +87,6 @@ class _GoogleBatchHandle(Handle):
                 return None
 
             if status == self._executor._batch_v1.JobStatus.State.FAILED:
-                # Check if it was a preemptible VM interruption.
                 status_details = str(job.status.status_details or "")
                 is_spot = self._executor._is_spot_interruption(status_details)
 
@@ -102,13 +100,11 @@ class _GoogleBatchHandle(Handle):
                         status_details,
                     )
                     time.sleep(backoff)
-                    # Resubmit and update the tracked job_name.
                     self.job_name = self._executor._submit_job(**self._submit_params)
                     self.worker_id = self.job_name
                     continue
 
                 if is_spot and attempt >= effective_max_retries:
-                    # Exhausted retries — fall back or fail.
                     if self._executor.fallback_to_on_demand:
                         log.warning(
                             "Spot retries exhausted (%d), falling back to on-demand",
@@ -118,7 +114,6 @@ class _GoogleBatchHandle(Handle):
                             **self._submit_params, use_spot=False
                         )
                         self.worker_id = self.job_name
-                        # Poll the on-demand job (no more retries).
                         try:
                             job = self._executor._wait_for_terminal(self.job_name)
                         except BaseException as exc:
@@ -139,35 +134,26 @@ class _GoogleBatchHandle(Handle):
                         f"Spot retries exhausted ({effective_max_retries}): {status_details}"
                     )
 
-                # Non-spot failure — don't retry, raise immediately.
                 reason = f"job {self.job_name} failed: {status_details}"
                 self._future.set_exception(RuntimeError(reason))
                 raise RuntimeError(reason)
 
-            # Any other non-terminal state — treat as still running.
             self._future.set_result(None)
             return None
-
-        # Unreachable, but satisfies the type checker.
-        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
 
     def done(self) -> bool:
         if self._future.done():
             return True
         try:
             job = self._executor._get_job(self.job_name)
-            if job.status.state in (
-                self._executor._batch_v1.JobStatus.State.SUCCEEDED,
-                self._executor._batch_v1.JobStatus.State.FAILED,
-            ):
-                return True
+            state_name = str(job.status.state.name)
+            return "SUCCEEDED" in state_name or "FAILED" in state_name
         except Exception:
             return False
-        return False
 
 
 class GoogleBatchExecutor(BaseExecutor):
-    """Google Cloud Batch executor (issue #254).
+    """Google Cloud Batch executor (issue #254, issue #331).
 
     Wraps the Google Cloud Batch SDK (`google-cloud-batch`) to launch one
     Batch task per call, then polls the service with exponential backoff
@@ -235,15 +221,21 @@ class GoogleBatchExecutor(BaseExecutor):
         self._client: Any = None
 
     def _get_client(self) -> Any:
-        """Lazy Google Cloud Batch client construction."""
+        """Lazy Google Cloud Batch synchronous client construction.
+
+        Uses google.cloud.batch_v1.BatchServiceClient (synchronous).
+        Authentication is handled via Application Default Credentials
+        (ADC) which supports Managed Identity, service account credentials,
+        and gcloud auth.
+        """
         if self._client is None:
-            self._client = self._batch_v1.BatchServiceAsyncClient()
+            self._client = self._batch_v1.BatchServiceClient()
         return self._client
 
     def _get_job(self, job_name: str) -> Any:
         """Get a job by name from Google Cloud Batch."""
         assert self._client is not None, "_get_client must be called first"
-        return self._client.get_job(name=job_name)
+        return self._client.get_job(job_name)
 
     def _is_spot_interruption(self, status_details: str | None) -> bool:
         """Return True if the status details indicate a Spot/preemptible interruption."""
@@ -257,12 +249,13 @@ class GoogleBatchExecutor(BaseExecutor):
         delay = self.poll_interval_s
         while True:
             job = self._get_job(job_name)
-            if job.status.state in (
-                self._batch_v1.JobStatus.State.SUCCEEDED,
-                self._batch_v1.JobStatus.State.FAILED,
-            ):
+            state = job.status.state
+            state_str = str(state.name)
+            if "SUCCEEDED" in state_str or "FAILED" in state_str:
                 return job
-            log.info("google_batch poll job=%s (sleeping %.1fs)", job_name, delay)
+            log.info(
+                "google_batch poll job=%s state=%s (sleeping %.1fs)", job_name, state_str, delay
+            )
             time.sleep(delay)
             delay = min(delay * 2, self.max_poll_interval_s)
 
@@ -288,6 +281,7 @@ class GoogleBatchExecutor(BaseExecutor):
         memory_mb: int,
         time_min: int,
         environment: list[dict[str, str]],
+        command: list[str],
         use_spot: bool | None = None,
     ) -> str:
         """Submit a single Google Cloud Batch job and return the job name.
@@ -297,8 +291,6 @@ class GoogleBatchExecutor(BaseExecutor):
         use_spot_final = use_spot if use_spot is not None else self.use_spot
         job_name = f"projects/{self.project_id}/locations/{self.region}/jobs/osimflow-{name}"
 
-        # Task group configuration.
-        # Extract container image from OSIMFLOW_CONTAINER env var.
         container_image = "nrel/openstudio:latest"
         for e in environment:
             if e["name"] == "OSIMFLOW_CONTAINER":
@@ -310,7 +302,7 @@ class GoogleBatchExecutor(BaseExecutor):
             task_spec=self._batch_v1.TaskSpec(
                 container=self._batch_v1.ContainerSpec(
                     image_uri=container_image,
-                    command=["/bin/sh", "-c", "sleep infinity"],
+                    command=command,
                 ),
                 environment={
                     "variables": {e["name"]: e["value"] for e in environment},
@@ -323,17 +315,14 @@ class GoogleBatchExecutor(BaseExecutor):
             ),
         )
 
-        # Build the instance policy with optional preemptible setting.
         instance_policy = self._batch_v1.InstancePolicy(
             machine_type="e2-standard-4",
         )
         if use_spot_final:
-            # Configure Spot/preemptible VM scheduling.
             instance_policy.scheduling = self._batch_v1.Scheduling(
                 preemptible=True,
             )
 
-        # Job configuration.
         job = self._batch_v1.Job(
             name=job_name,
             task_groups=[task_group],
@@ -346,7 +335,6 @@ class GoogleBatchExecutor(BaseExecutor):
             ),
         )
 
-        # Submit the job.
         client = self._get_client()
         client.create_job(
             self._batch_v1.CreateJobRequest(
@@ -390,7 +378,7 @@ class GoogleBatchExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
         )
 
-        del fn, args  # noqa: ARG002 — work runs inside the Batch container
+        command = ["/bin/sh", "-c", "echo 'TODO: implement work command'"]
 
         submit_params: dict[str, Any] = {
             "name": name,
@@ -398,6 +386,7 @@ class GoogleBatchExecutor(BaseExecutor):
             "memory_mb": memory_mb,
             "time_min": time_min,
             "environment": environment,
+            "command": command,
         }
         job_name = self._submit_job(**submit_params)
 
