@@ -134,6 +134,7 @@ class CampaignConfig:
     # CloudWatch backend options (issue #132).
     cloudwatch_namespace: str = "OSimFlow"
     cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
     # Prometheus backend options (issue #132).
     prometheus_port: int = 9090
     # OpenTelemetry backend options (issue #132).
@@ -444,6 +445,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         cloudwatch_namespace=str(args.get("cloudwatch_namespace", "OSimFlow")),
         cloudwatch_log_group=(
             str(args["cloudwatch_log_group"]) if args.get("cloudwatch_log_group") else None
+        ),
+        log_aggregation_url=(
+            str(args["log_aggregation_url"]) if args.get("log_aggregation_url") else None
         ),
         prometheus_port=int(str(args.get("prometheus_port", 9090))),
         otel_endpoint=str(args["otel_endpoint"]) if args.get("otel_endpoint") else None,

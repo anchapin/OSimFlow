@@ -115,7 +115,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
 | `osimflow/storage.py` | `ResultStorage` ABC, `LocalStorage` (no-op), `S3Storage` (boto3), `GCSStorage` (google-cloud-storage), `AzureBlobStorage` (azure-storage-blob async), `ResultStorageUploader` (sync wrapper), and `build_result_storage` factory (issue #339). |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
-| `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger` and `setup_logging`. |
+| `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger`, `setup_logging`, and `LogAggregator`. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend`; plug-in metrics backends (issue #145, #127). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, and `osimflow compare` subcommands. |
@@ -240,6 +240,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--cloudwatch-namespace` (CloudWatch metric namespace; used when `--observability cloudwatch`)
 - `--prometheus-port` (Prometheus metrics HTTP port; used when `--observability prometheus`)
 - `--otel-endpoint` (OpenTelemetry OTLP endpoint URL; used when `--observability opentelemetry`)
+- `--log-aggregation-url` (CloudWatch Logs aggregation URL for distributed log collection; issue #340)
 - `--no-tui` (disable rich terminal UI even when `rich` is installed; issue #197)
 - `--dry-run` (dry-run mode: force LocalExecutor, 1 sample, steps 1-4 only)
 - `--sample` (single-sample mode: re-run sample N from existing samples.json)

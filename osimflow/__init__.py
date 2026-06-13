@@ -25,7 +25,7 @@ from .executors import (
     SlurmExecutor,
 )
 from .jobqueue import JobQueue
-from .logging import get_logger, setup_logging
+from .logging import LogAggregator, get_logger, setup_logging
 from .monitoring import RunTrace, StepTrace
 from .observability import (
     CloudWatchBackend,
@@ -108,6 +108,7 @@ __all__ = [
     "AzureBlobStorage",
     "ResultStorageUploader",
     "build_result_storage",
+    "LogAggregator",
 ]
 
 setup_logging()
