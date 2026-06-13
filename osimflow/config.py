@@ -106,15 +106,21 @@ class CampaignConfig:
     ecr_repository: str | None = (
         None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
     )
-    # Azure Batch configuration (issue #254).
+    # Azure Batch configuration (issue #254, issue #352).
     azure_batch_account_name: str | None = None
     azure_batch_account_url: str | None = None
     azure_batch_pool_id: str = "osimflow-pool"
     azure_batch_location: str = "eastus"
-    # Google Cloud Batch configuration (issue #254).
+    azure_use_spot: bool = False
+    azure_fallback_to_on_demand: bool = False
+    azure_max_retries: int = 3
+    # Google Cloud Batch configuration (issue #254, issue #352).
     google_batch_project_id: str | None = None
     google_batch_region: str = "us-central1"
     google_batch_service_account: str | None = None
+    google_use_spot: bool = False
+    google_fallback_to_on_demand: bool = False
+    google_max_retries: int = 3
     # BYOS trust level (issue #269). Controls how user-supplied scripts
     # are executed. Default is SUBPROCESS (isolated child process) for
     # security. INPROCESS (legacy) loads the script directly into the
@@ -403,6 +409,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         ),
         azure_batch_pool_id=str(args.get("azure_batch_pool_id", "osimflow-pool")),
         azure_batch_location=str(args.get("azure_batch_location", "eastus")),
+        azure_use_spot=bool(args.get("azure_use_spot", False)),
+        azure_fallback_to_on_demand=bool(args.get("azure_fallback_to_on_demand", False)),
+        azure_max_retries=int(str(args.get("azure_max_retries", 3))),
         google_batch_project_id=(
             str(args["google_batch_project_id"]) if args.get("google_batch_project_id") else None
         ),
@@ -412,6 +421,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             if args.get("google_batch_service_account")
             else None
         ),
+        google_use_spot=bool(args.get("google_use_spot", False)),
+        google_fallback_to_on_demand=bool(args.get("google_fallback_to_on_demand", False)),
+        google_max_retries=int(str(args.get("google_max_retries", 3))),
         byos_trust_level=(
             ByosTrustLevel(str(args["byos_trust_level"]))
             if args.get("byos_trust_level")

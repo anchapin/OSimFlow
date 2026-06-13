@@ -171,6 +171,8 @@ class TestAzureBatchHandle:
         """When a Spot interruption occurs, handle retries and succeeds on second attempt."""
         ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
         ex._client = MagicMock()
+        ex._azure_batch = MagicMock()
+        ex._azure_identity = MagicMock()
         ex.account_name = "testaccount"
         ex.location = "eastus"
         ex.poll_interval_s = 0.01
@@ -216,6 +218,8 @@ class TestAzureBatchHandle:
         """When Spot retries are exhausted, raises RuntimeError."""
         ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
         ex._client = MagicMock()
+        ex._azure_batch = MagicMock()
+        ex._azure_identity = MagicMock()
         ex.account_name = "testaccount"
         ex.location = "eastus"
         ex.poll_interval_s = 0.01
@@ -257,6 +261,8 @@ class TestAzureBatchHandle:
         """When fallback_to_on_demand is True, retries then falls back to on-demand."""
         ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
         ex._client = MagicMock()
+        ex._azure_batch = MagicMock()
+        ex._azure_identity = MagicMock()
         ex.account_name = "testaccount"
         ex.location = "eastus"
         ex.poll_interval_s = 0.01
