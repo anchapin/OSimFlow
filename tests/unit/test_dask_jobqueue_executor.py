@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
