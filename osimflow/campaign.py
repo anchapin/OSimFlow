@@ -79,6 +79,7 @@ from .observability import (
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
+from .storage import ResultStorageUploader, build_result_storage
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .webhook import WebhookClient
 from .work import (
@@ -240,6 +241,34 @@ class Campaign:
             self._registry = CampaignRegistry(db_path=reg_path)
         except Exception as exc:
             log.warning("could not open campaign registry: %s (continuing without)", exc)
+
+        # Result storage uploader for distributed campaigns (issue #339).
+        # Built here so the correct backend is always used.  LocalStorage
+        # is a no-op so there is zero overhead when result_storage_backend
+        # is "local" (the default).
+        self._result_storage: ResultStorageUploader | None = None
+        if cfg.result_storage_backend != "local" and cfg.result_storage_bucket:
+            try:
+                store = build_result_storage(
+                    backend=cfg.result_storage_backend,
+                    bucket=cfg.result_storage_bucket,
+                    prefix=str(cfg.outdir.name),
+                    endpoint_url=cfg.result_storage_endpoint,
+                )
+                self._result_storage = ResultStorageUploader(store)
+                log.info(
+                    "result storage enabled: backend=%s bucket=%s prefix=%s",
+                    cfg.result_storage_backend,
+                    cfg.result_storage_bucket,
+                    cfg.outdir.name,
+                )
+            except Exception as exc:
+                log.warning(
+                    "could not initialize result storage (%s:%s): %s — continuing without",
+                    cfg.result_storage_backend,
+                    cfg.result_storage_bucket,
+                    exc,
+                )
 
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
@@ -1356,6 +1385,10 @@ class Campaign:
             # files. Safe to call multiple times (close() is idempotent).
             self.cache.close()
 
+            # Close the result storage uploader (issue #339).
+            if self._result_storage is not None:
+                self._result_storage.close()
+
     def _run_dry_run(self, t0: float) -> dict[str, object]:
         """Dry-run mode: 1 sample, local executor, steps 1-4 only."""
         original_n = self.cfg.n_samples
@@ -2385,6 +2418,26 @@ class Campaign:
                 if _archive:
                     archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
                     self._archive_sample_artifacts(Path(result_path), archive_dst, ["eplusout.sql"])
+                # Result storage upload (issue #339): upload eplusout.sql after
+                # successful simulation when a remote backend is configured.
+                if self._result_storage is not None:
+                    sql_path = result_path / "eplusout.sql"
+                    if sql_path.is_file():
+                        try:
+                            self._result_storage.upload_file(
+                                sql_path,
+                                f"sim/{_sid}/eplusout.sql",
+                            )
+                            log.debug(
+                                "result storage: uploaded eplusout.sql for sample %s",
+                                _sid,
+                            )
+                        except OSError as exc:
+                            log.warning(
+                                "result storage: upload failed for sample %s: %s",
+                                _sid,
+                                exc,
+                            )
 
             submissions[sid] = (handle, _on_success)
 
@@ -2487,6 +2540,26 @@ class Campaign:
                 _state["extract_exit_code"] = 0
                 _state["extract_status"] = "ok"
                 self.trace.step_item_done("EXTRACT_KPIS", status="ok")
+                # Result storage upload (issue #339): upload KPI JSON after
+                # successful extraction when a remote backend is configured.
+                if self._result_storage is not None:
+                    kpi_path = Path(result_path)
+                    if kpi_path.is_file():
+                        try:
+                            self._result_storage.upload_file(
+                                kpi_path,
+                                f"kpis/{kpi_path.name}",
+                            )
+                            log.debug(
+                                "result storage: uploaded KPI for sample %s",
+                                _sid,
+                            )
+                        except OSError as exc:
+                            log.warning(
+                                "result storage: upload failed for KPI sample %s: %s",
+                                _sid,
+                                exc,
+                            )
 
             submissions[sid] = (handle, _on_success)
 
