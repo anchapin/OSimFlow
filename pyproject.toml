@@ -84,6 +84,9 @@ viz = [
 tui = [
     "rich>=13.0",
 ]
+r = [
+    "pyarrow>=12",
+]
 
 [project.scripts]
 osimflow = "osimflow.__main__:main"
