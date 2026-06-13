@@ -380,7 +380,9 @@ class WorkerHeartbeat:
     def start(self) -> None:
         """Start the background heartbeat writer thread."""
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name=f"heartbeat-{self.sample_id}")
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name=f"heartbeat-{self.sample_id}"
+        )
         self._thread.start()
 
     def _loop(self) -> None:
