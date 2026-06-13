@@ -609,3 +609,212 @@ class TestLHSAlgorithm:
             assert "u" in s["values"]
             assert "n" in s["values"]
             assert "ln" in s["values"]
+
+
+# ---------------------------------------------------------------------------
+# RepeatAllAlgorithm
+# ---------------------------------------------------------------------------
+
+from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
+
+
+class TestRepeatAllAlgorithm:
+    """Tests for the RepeatAllAlgorithm (issue #285)."""
+
+    _VARIABLES: dict[str, Any] = {
+        "variables": [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+        ]
+    }
+
+    def test_name(self) -> None:
+        algo = RepeatAllAlgorithm()
+        assert algo.name() == "repeat_all"
+
+    def test_is_iterative_false(self) -> None:
+        algo = RepeatAllAlgorithm()
+        assert algo.is_iterative() is False
+
+    def test_is_converged(self) -> None:
+        algo = RepeatAllAlgorithm()
+        assert algo.is_converged([]) is True
+
+    def test_observe_empty_history(self) -> None:
+        algo = RepeatAllAlgorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_returns_last_samples(self) -> None:
+        algo = RepeatAllAlgorithm()
+        history = [{"samples": [{"sample_id": "s0001"}]}]
+        assert algo.observe(history) == [{"sample_id": "s0001"}]
+
+    def test_generate_samples_repeats_base_set(self, tmp_path: Path) -> None:
+        algo = RepeatAllAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ],
+            "repeat_all_repeats": 3,
+        }
+        result = algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        # 5 unique × 3 repeats = 15 total
+        assert len(data["samples"]) == 15
+
+    def test_generate_samples_repeats_default_1(self, tmp_path: Path) -> None:
+        algo = RepeatAllAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ],
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        # repeats defaults to 1
+        assert len(data["samples"]) == 4
+
+    def test_generate_samples_sample_ids_prefixed(self, tmp_path: Path) -> None:
+        algo = RepeatAllAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ],
+            "repeat_all_repeats": 2,
+        }
+        result = algo.generate_samples(variables, n_samples=2, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        ids = [s["sample_id"] for s in data["samples"]]
+        # r1-0001, r1-0002, r2-0001, r2-0002
+        assert "r1-0001" in ids
+        assert "r2-0001" in ids
+
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = RepeatAllAlgorithm()
+        result = algo.generate_samples({"variables": []}, n_samples=3, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_generate_samples_reproducible_with_seed(self, tmp_path: Path) -> None:
+        algo = RepeatAllAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ],
+            "repeat_all_repeats": 2,
+        }
+        r1 = algo.generate_samples(variables, n_samples=3, seed=99, outdir=tmp_path / "a")
+        r2 = algo.generate_samples(variables, n_samples=3, seed=99, outdir=tmp_path / "b")
+        assert json.loads(r1.read_text()) == json.loads(r2.read_text())
+
+    def test_generate_samples_wraps_lhs_failure(self, tmp_path: Path) -> None:
+        algo = RepeatAllAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "unsupported_dist_xyz"},
+            ],
+        }
+        with pytest.raises(RuntimeError, match="repeat_all failed"):
+            algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# RandomSamplingAlgorithm
+# ---------------------------------------------------------------------------
+
+from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402
+
+
+class TestRandomSamplingAlgorithm:
+    """Tests for the RandomSamplingAlgorithm (issue #285)."""
+
+    def test_name(self) -> None:
+        algo = RandomSamplingAlgorithm()
+        assert algo.name() == "random"
+
+    def test_is_iterative_false(self) -> None:
+        algo = RandomSamplingAlgorithm()
+        assert algo.is_iterative() is False
+
+    def test_is_converged(self) -> None:
+        algo = RandomSamplingAlgorithm()
+        assert algo.is_converged([]) is True
+
+    def test_observe_empty_history(self) -> None:
+        algo = RandomSamplingAlgorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_returns_last_samples(self) -> None:
+        algo = RandomSamplingAlgorithm()
+        history = [{"samples": [{"sample_id": "s0001"}]}]
+        assert algo.observe(history) == [{"sample_id": "s0001"}]
+
+    def test_generate_samples_basic(self, tmp_path: Path) -> None:
+        algo = RandomSamplingAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=10, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 10
+        for s in data["samples"]:
+            assert "sample_id" in s
+            assert "values" in s
+            assert "x" in s["values"]
+
+    def test_generate_samples_all_distribution_types(self, tmp_path: Path) -> None:
+        algo = RandomSamplingAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "u", "distribution": "uniform", "min": 0.0, "max": 10.0},
+                {"name": "n", "distribution": "normal", "mean": 5.0, "sigma": 1.0},
+                {"name": "ln", "distribution": "lognormal", "mean": 0.0, "sigma": 0.5},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 5
+        for s in data["samples"]:
+            assert "u" in s["values"]
+            assert "n" in s["values"]
+            assert "ln" in s["values"]
+
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = RandomSamplingAlgorithm()
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_generate_samples_reproducible_with_seed(self, tmp_path: Path) -> None:
+        algo = RandomSamplingAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ]
+        }
+        r1 = algo.generate_samples(variables, n_samples=10, seed=123, outdir=tmp_path / "a")
+        r2 = algo.generate_samples(variables, n_samples=10, seed=123, outdir=tmp_path / "b")
+        assert json.loads(r1.read_text()) == json.loads(r2.read_text())
+
+    def test_generate_samples_different_seeds_different_results(self, tmp_path: Path) -> None:
+        algo = RandomSamplingAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ]
+        }
+        r1 = algo.generate_samples(variables, n_samples=10, seed=1, outdir=tmp_path / "a")
+        r2 = algo.generate_samples(variables, n_samples=10, seed=2, outdir=tmp_path / "b")
+        assert json.loads(r1.read_text()) != json.loads(r2.read_text())
+
+    def test_generate_samples_wraps_error(self, tmp_path: Path) -> None:
+        algo = RandomSamplingAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "unsupported_dist_xyz"},
+            ]
+        }
+        with pytest.raises(NotImplementedError):
+            algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
