@@ -102,8 +102,13 @@ class TestPBSExecutorQsubCmd:
     def test_server_flag(self) -> None:
         ex = self._make(server="pbsserver", debug=False)
         cmd = ex._qsub_cmd(
-            name="s", cpus=1, memory_mb=512, time_min=30,
-            container=None, openstudio_version=None, script_lines=["true"],
+            name="s",
+            cpus=1,
+            memory_mb=512,
+            time_min=30,
+            container=None,
+            openstudio_version=None,
+            script_lines=["true"],
         )
         assert "-q" in cmd
         q_idx = cmd.index("-q")
@@ -112,8 +117,13 @@ class TestPBSExecutorQsubCmd:
     def test_queue_flag(self) -> None:
         ex = self._make(queue="batch", debug=False)
         cmd = ex._qsub_cmd(
-            name="s", cpus=1, memory_mb=512, time_min=30,
-            container=None, openstudio_version=None, script_lines=["true"],
+            name="s",
+            cpus=1,
+            memory_mb=512,
+            time_min=30,
+            container=None,
+            openstudio_version=None,
+            script_lines=["true"],
         )
         assert "-q" in cmd
         q_idx = cmd.index("-q")
@@ -122,8 +132,13 @@ class TestPBSExecutorQsubCmd:
     def test_select_resource(self) -> None:
         ex = self._make(cpus_per_node=2, mem_mb_per_node=4096, debug=False)
         cmd = ex._qsub_cmd(
-            name="r", cpus=4, memory_mb=8192, time_min=60,
-            container=None, openstudio_version=None, script_lines=["true"],
+            name="r",
+            cpus=4,
+            memory_mb=8192,
+            time_min=60,
+            container=None,
+            openstudio_version=None,
+            script_lines=["true"],
         )
         assert "-l" in cmd
         li = cmd.index("-l")
@@ -136,8 +151,13 @@ class TestPBSExecutorQsubCmd:
         ex = self._make(debug=False)
         # 90 minutes -> 01:30:00
         cmd = ex._qsub_cmd(
-            name="w", cpus=1, memory_mb=512, time_min=90,
-            container=None, openstudio_version=None, script_lines=["true"],
+            name="w",
+            cpus=1,
+            memory_mb=512,
+            time_min=90,
+            container=None,
+            openstudio_version=None,
+            script_lines=["true"],
         )
         assert "-l" in cmd
         li = cmd.index("-l")
@@ -149,8 +169,12 @@ class TestPBSExecutorQsubCmd:
     def test_script_lines_appended(self) -> None:
         ex = self._make(debug=False)
         cmd = ex._qsub_cmd(
-            name="s", cpus=1, memory_mb=512, time_min=10,
-            container=None, openstudio_version=None,
+            name="s",
+            cpus=1,
+            memory_mb=512,
+            time_min=10,
+            container=None,
+            openstudio_version=None,
             script_lines=["echo hello", "sleep 1"],
         )
         assert "--" in cmd
@@ -297,8 +321,11 @@ class TestPBSExecutorSubmit:
         ex = self._make()
         with patch.object(ex, "_submit_job", return_value="456.pbs") as mock_submit:
             handle = ex.submit(
-                lambda: None, name="heavy",
-                cpus=4, memory_mb=16384, time_min=120,
+                lambda: None,
+                name="heavy",
+                cpus=4,
+                memory_mb=16384,
+                time_min=120,
             )
             assert handle.job_id == "456.pbs"
             # Verify _submit_job was called with correct resources.
@@ -327,9 +354,7 @@ class TestPBSExecutorSubmit:
 class TestPBSHandle:
     """_PBSHandle polls qstat on result() and done()."""
 
-    def _make_handle(
-        self, *, state: str = "F", exit_code: int = 0
-    ) -> tuple[_PBSHandle, MagicMock]:
+    def _make_handle(self, *, state: str = "F", exit_code: int = 0) -> tuple[_PBSHandle, MagicMock]:
         mock_ex = MagicMock()
         mock_ex._wait_for_terminal.return_value = (state, exit_code)
         mock_ex.poll_interval_s = 0.01

@@ -173,9 +173,7 @@ class PBSExecutor(BaseExecutor):
         # Each chunk requests cpus_per_node CPUs and mem_mb_per_node memory.
         n_chunks = max(1, cpus // self.cpus_per_node)
         mem_gb = (memory_mb + 1023) // 1024  # MB -> GB, rounded up
-        resource_str = (
-            f"select={n_chunks}:ncpus={cpus}:mem={mem_gb}gb"
-        )
+        resource_str = f"select={n_chunks}:ncpus={cpus}:mem={mem_gb}gb"
         cmd += ["-l", resource_str]
 
         # Walltime: format HH:MM:SS

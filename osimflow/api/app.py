@@ -28,6 +28,7 @@ from starlette.staticfiles import StaticFiles
 from osimflow.api.campaigns import campaigns_router
 from osimflow.api.events import events_router
 from osimflow.api.files import files_router
+from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
 from osimflow.api.timeseries import timeseries_router
 from osimflow.validation import ValidationError as OsimflowValidationError
@@ -465,6 +466,7 @@ def create_app(
     app.include_router(pat_compat_router)
     app.include_router(files_router)
     app.include_router(timeseries_router)
+    app.include_router(measures_router)
 
     # --- Static files for the web GUI (issue #264) ---
     static_dir = Path(__file__).parent / "static"
