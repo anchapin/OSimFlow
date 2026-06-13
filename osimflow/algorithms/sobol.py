@@ -219,7 +219,9 @@ class SobolAlgorithm(BaseAlgorithm):
             y_list.append(value)
 
         try:
-            result = sobol_analyze.analyze(problem, np.array(y_list), calc_second_order=calc_second_order)
+            result = sobol_analyze.analyze(
+                problem, np.array(y_list), calc_second_order=calc_second_order
+            )
         except (ValueError, NotImplementedError) as exc:
             raise RuntimeError("compute_sensitivity_indices: SALib sobol.analyze failed") from exc
 
