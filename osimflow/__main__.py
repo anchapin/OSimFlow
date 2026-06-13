@@ -31,6 +31,7 @@ from osimflow import (
     KubernetesExecutor,
     LocalExecutor,
     NomadExecutor,
+    PBSExecutor,
     SlurmExecutor,
     load_config,
 )
@@ -100,6 +101,13 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             poll_interval_s=args.kubernetes_poll_interval_s,
             max_poll_interval_s=args.kubernetes_max_poll_interval_s,
         )
+    # PBS executor — server, queue, and debug flag.
+    if args.executor == "pbs":
+        return PBSExecutor(
+            server=args.pbs_server,
+            queue=args.pbs_queue,
+            debug=not args.pbs_real,  # debug unless --pbs-real
+        )
     raise ValueError(f"unknown executor: {args.executor}")
 
 
@@ -114,6 +122,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "azure_batch",
             "google_batch",
             "kubernetes",
+            "pbs",
         ],
         default="local",
     )
@@ -246,6 +255,24 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         type=float,
         default=60.0,
         help="Max poll interval for Job status (seconds, default: 60.0).",
+    )
+    run.add_argument(
+        "--pbs-server",
+        default=None,
+        help=(
+            "PBS server/cluster address (e.g. pbsserver). "
+            "Defaults to the PBS_DEFAULT env var or system default."
+        ),
+    )
+    run.add_argument(
+        "--pbs-queue",
+        default=None,
+        help="PBS queue to submit jobs to (e.g. batch).",
+    )
+    run.add_argument(
+        "--pbs-real",
+        action="store_true",
+        help="Submit to real PBS (default: debug mode runs locally).",
     )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)

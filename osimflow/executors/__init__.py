@@ -31,6 +31,7 @@ from typing import Any, Optional, cast
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor as GoogleBatchExecutor
+from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
 
 log = logging.getLogger("osimflow.executors")
 
@@ -43,6 +44,7 @@ __all__ = [
     "KubernetesExecutor",
     "LocalExecutor",
     "NomadExecutor",
+    "PBSExecutor",
     "SlurmExecutor",
 ]
 
