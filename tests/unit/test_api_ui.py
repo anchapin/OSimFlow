@@ -142,7 +142,9 @@ def test_setup_writes_variables_yml(tmp_outdir: Path) -> None:
     template_dir.mkdir()
     (template_dir / "workflow.osw").write_text("{}")
 
-    yaml_content = "variables:\n  - name: wall_area\n    distribution: uniform\n    min: 100\n    max: 500"
+    yaml_content = (
+        "variables:\n  - name: wall_area\n    distribution: uniform\n    min: 100\n    max: 500"
+    )
     results_dir = tmp_outdir / "results"
 
     resp = client.post(
