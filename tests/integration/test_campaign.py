@@ -155,6 +155,11 @@ def test_step_generate_lhs_returns_deterministic_samples(
 ) -> None:
     """Two calls with the same inputs must produce the same samples (cache-stable)."""
     samples_a = campaign.step_generate_lhs()
+    # Close the first campaign's cache so the second campaign can acquire
+    # the WAL write lock on the shared cache DB.  The persistent-connection
+    # model in SQLiteCache means the first connection stays open until
+    # explicitly closed (or GC'd).
+    campaign.cache.close()
     campaign2 = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
     samples_b = campaign2.step_generate_lhs()
     assert samples_a == samples_b

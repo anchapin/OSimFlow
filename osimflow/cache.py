@@ -24,11 +24,13 @@ The DB schema is small enough to inspect with `sqlite3 cache.db ".schema"`.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
 import logging
 import sqlite3
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -46,7 +48,7 @@ CREATE TABLE IF NOT EXISTS cache_entries (
     generation        INTEGER NOT NULL DEFAULT 0,
     output_path       TEXT NOT NULL,
     started_at        REAL NOT NULL,
-    finished_at       REAL NOT NULL,
+    finished_at      REAL NOT NULL,
     exit_code         INTEGER NOT NULL,
     PRIMARY KEY (step, sample_id, openstudio_version, inputs_sha256, code_sha256, container_digest, generation)
 );
@@ -92,30 +94,107 @@ def sha256_of_dict(d: dict[str, object]) -> str:
 
 
 class SQLiteCache:
-    """The campaign's resume cache. Append-only on hits, INSERT OR REPLACE on misses."""
+    """The campaign's resume cache. Append-only on hits, INSERT OR REPLACE on misses.
+
+    The cache uses a single persistent connection in WAL mode for the
+    lifetime of the instance. This avoids the race condition where
+    concurrent connections fighting over the same ``.sqlite-wal`` and
+    ``.sqlite-shm`` auxiliary files cause ``FileNotFoundError`` during
+    pytest-xdist parallel test teardown.
+
+    The cache is itself a context manager — use it with ``with`` to ensure
+    the WAL is checkpointed and the connection is closed when done::
+
+        with SQLiteCache(db_path) as cache:
+            cache.store(key, path, exit_code=0)
+
+    Or call ``close()`` explicitly::
+
+        cache = SQLiteCache(db_path)
+        try:
+            cache.store(key, path, exit_code=0)
+        finally:
+            cache.close()
+    """
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
+        self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._conn() as c:
-            c.executescript(SCHEMA)
+        self._init_db()
         log.info("cache opened at %s", db_path)
 
-    def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path)
+    def _init_db(self) -> None:
+        conn = self._connect()
+        conn.executescript(SCHEMA)
+        conn.close()
+
+    def _connect(self) -> sqlite3.Connection:
+        c = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA busy_timeout=5000")
         c.row_factory = sqlite3.Row
         return c
 
+    def _ensure_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = self._connect()
+        return self._conn
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Return the persistent connection (lazy initialization)."""
+        return self._ensure_conn()
+
+    def close(self) -> None:
+        """Checkpoint the WAL, run ``PRAGMA optimize``, and close the connection.
+
+        After this method returns, the WAL auxiliary files (``.sqlite-wal``
+        and ``.sqlite-shm``) are removed and the database is in a clean
+        state. Subsequent operations will re-open the connection.
+
+        Safe to call multiple times.
+        """
+        if self._conn is None:
+            return
+        try:
+            # Commit any pending transaction before checkpointing.
+            # Without this, the WAL checkpoint may fail because
+            # uncommitted data is still in the WAL and the database
+            # is locked by the active transaction.
+            self._conn.commit()
+            # TRUNCATE checkpoint writes WAL content back to the main DB
+            # and removes the auxiliary WAL/shm files. This is the cleanup
+            # that prevents "FileNotFoundError" race conditions with
+            # pytest-xdist parallel test teardown.
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self._conn.execute("PRAGMA optimize")
+        except Exception:
+            pass  # best-effort during shutdown
+        with contextlib.suppress(Exception):
+            self._conn.close()
+        self._conn = None
+        log.debug("cache closed at %s", self.db_path)
+
+    def __enter__(self) -> SQLiteCache:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
+
     def lookup(self, key: CacheKey) -> Path | None:
         """Return the cached output path if this exact key is present and successful."""
-        with self._conn() as c:
+        with self._lock:
+            c = self.connection
             row = c.execute(
                 """SELECT output_path, exit_code FROM cache_entries
-                   WHERE step=? AND sample_id=? AND openstudio_version=?
-                     AND inputs_sha256=? AND code_sha256=? AND container_digest=?
-                     AND generation=?""",
+               WHERE step=? AND sample_id=? AND openstudio_version=?
+                 AND inputs_sha256=? AND code_sha256=? AND container_digest=?
+                 AND generation=?""",
                 (
                     key.step,
                     key.sample_id,
@@ -139,7 +218,8 @@ class SQLiteCache:
         return out
 
     def store(self, key: CacheKey, output_path: Path, exit_code: int) -> None:
-        with self._conn() as c:
+        with self._lock:
+            c = self.connection
             c.execute(
                 """INSERT OR REPLACE INTO cache_entries
                    (step, sample_id, openstudio_version, inputs_sha256,
@@ -170,14 +250,16 @@ class SQLiteCache:
 
     def invalidate_step(self, step: str) -> int:
         """Drop every entry for a given step. Used by --openstudio_version bumps."""
-        with self._conn() as c:
+        with self._lock:
+            c = self.connection
             cur = c.execute("DELETE FROM cache_entries WHERE step=?", (step,))
             n = cur.rowcount
         log.warning("cache INVALIDATE step=%s (%d rows)", step, n)
         return n
 
     def invalidate_sample(self, step: str, sample_id: str) -> int:
-        with self._conn() as c:
+        with self._lock:
+            c = self.connection
             cur = c.execute(
                 "DELETE FROM cache_entries WHERE step=? AND sample_id=?",
                 (step, sample_id),
@@ -187,7 +269,8 @@ class SQLiteCache:
         return n
 
     def stats(self) -> dict[str, object]:
-        with self._conn() as c:
+        with self._lock:
+            c = self.connection
             n_total = c.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
             by_step = dict(
                 c.execute("SELECT step, COUNT(*) FROM cache_entries GROUP BY step").fetchall()

@@ -1,0 +1,115 @@
+# docker-compose.airgapped.yml
+#
+# Docker Compose configuration for air-gapped OSimFlow deployment.
+# This file is designed for environments where:
+#   - Internet access is not available
+#   - Docker images are pre-loaded from tar files
+#   - pip packages are installed from a local wheel cache
+#
+# Usage:
+#   # Pre-load images (on online machine, then transfer tar files)
+#   docker save nrel/openstudio:3.11.0 -o nrel-openstudio-3.11.0.tar
+#   docker save osimflow-offline:latest -o osimflow-offline.tar
+#   scp *.tar airgapped-host:/data/images/
+#
+#   # On air-gapped machine
+#   docker load -i /data/images/nrel-openstudio-3.11.0.tar
+#   docker load -i /data/images/osimflow-offline.tar
+#
+#   # Run a campaign
+#   docker compose -f infra/offline/docker-compose.airgapped.yml \
+#       run --rm osimflow \
+#       osimflow run \
+#           --offline \
+#           --offline-bundle /opt/osimflow/offline \
+#           --executor local \
+#           --input_variables /data/inputs/variables.yml \
+#           --template_sim_package /data/inputs/example_package \
+#           --n_samples 10 \
+#           --outdir /data/outputs/run01 \
+#           --openstudio_version 3.11.0
+#
+# For Singularity HPC environments, convert images using:
+#   singularity build osimflow-offline.sif docker-archive://osimflow-offline.tar
+
+version: "3.9"
+
+services:
+  osimflow:
+    image: osimflow-offline:latest
+    container_name: osimflow-airgapped
+    environment:
+      # --- Offline mode ---
+      OSIMFLOW_OFFLINE: "1"
+      OSIMFLOW_OFFLINE_BUNDLE: "/opt/osimflow/offline"
+      # Disable Docker Hub / PyPI lookups
+      PIP_NO_INDEX: "1"
+      PIP_FIND_LINKS: "file:///opt/osimflow/offline/pip"
+      # Working directory (bind-mounted from host)
+      OSIMFLOW_WORKDIR: "/data"
+    volumes:
+      # Bundle assets (pip wheels, docker images, weather files)
+      - type: bind
+        source: ${OFFLINE_BUNDLE_PATH:-./offline}
+        target: /opt/osimflow/offline
+        read_only: true
+      # Campaign inputs
+      - type: bind
+        source: ${INPUT_PATH:-./data/inputs}
+        target: /data/inputs
+        read_only: true
+      # Campaign outputs (writable)
+      - type: bind
+        source: ${OUTPUT_PATH:-./data/outputs}
+        target: /data/outputs
+      # Singularity socket (if using Singularity instead of Docker)
+      - type: bind
+        source: /var/run/singularity.sock
+        target: /var/run/singularity.sock
+        if: exists
+    working_dir: /opt/osimflow
+    user: "${UID:-1000}:${GID:-1000}"
+    # Resource limits for HPC job submission
+    deploy:
+      resources:
+        limits:
+          cpus: "${N_CPUS:-4}"
+          memory: "${MEMORY_GB:-8}G"
+        reservations:
+          cpus: "${N_CPUS_RESERVE:-2}"
+          memory: "${MEMORY_GB_RESERVE:-4}G"
+    restart: "no"
+    # Network disabled — air-gapped
+    networks:
+      - none
+
+  # Optional: local pip mirror HTTP server for teams
+  # Uncomment and run separately: docker compose -f ... up pip-mirror
+  pip-mirror:
+    image: python:3.12-slim
+    container_name: osimflow-pip-mirror
+    environment:
+      PIP_MIRROR_DIR: /var/local/pip-mirror
+    volumes:
+      - type: bind
+        source: ${OFFLINE_BUNDLE_PATH:-./offline}/pip
+        target: /var/local/pip-mirror
+        read_only: true
+    command: python -m http.server 8080 --directory /var/local/pip-mirror
+    ports:
+      - "8080:8080"
+    networks:
+      - offline-net
+    restart: "no"
+    profiles:
+      - pip-mirror
+
+networks:
+  # Isolated network — no internet egress
+  none:
+    driver: bridge
+    internal: true
+  # Internal network for pip mirror service
+  offline-net:
+    driver: bridge
+    internal: true

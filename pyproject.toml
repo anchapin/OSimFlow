@@ -150,7 +150,11 @@ target-version = "py312"
 src = ["osimflow", "bin", "user_scripts", "tests"]
 # Spike/ directory holds one-off scripts from the workflow-framework decision
 # spike. They are not shipped; lint them separately or not at all.
-extend-exclude = [".agents/spike"]
+extend-exclude = [
+    ".agents/spike",
+    ".agents/skills",
+    "worktrees",
+]
 
 [tool.ruff.lint]
 # E/W: pycodestyle; F: pyflakes; I: isort; UP: pyupgrade;
