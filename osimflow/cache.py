@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -118,6 +119,7 @@ class SQLiteCache:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         log.info("cache opened at %s", db_path)
@@ -128,7 +130,7 @@ class SQLiteCache:
         conn.close()
 
     def _connect(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path, timeout=10.0)
+        c = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA busy_timeout=5000")
         c.row_factory = sqlite3.Row
@@ -187,8 +189,9 @@ class SQLiteCache:
 
     def lookup(self, key: CacheKey) -> Path | None:
         """Return the cached output path if this exact key is present and successful."""
-        c = self.connection
-        row = c.execute(
+        with self._lock:
+            c = self.connection
+            row = c.execute(
             """SELECT output_path, exit_code FROM cache_entries
                WHERE step=? AND sample_id=? AND openstudio_version=?
                  AND inputs_sha256=? AND code_sha256=? AND container_digest=?
@@ -216,27 +219,28 @@ class SQLiteCache:
         return out
 
     def store(self, key: CacheKey, output_path: Path, exit_code: int) -> None:
-        c = self.connection
-        c.execute(
-            """INSERT OR REPLACE INTO cache_entries
-               (step, sample_id, openstudio_version, inputs_sha256,
-                code_sha256, container_digest, generation, output_path,
-                started_at, finished_at, exit_code)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                key.step,
-                key.sample_id,
-                key.openstudio_version,
-                key.inputs_sha256,
-                key.code_sha256,
-                key.container_digest,
-                key.generation,
-                str(output_path),
-                time.time(),
-                time.time(),
-                exit_code,
-            ),
-        )
+        with self._lock:
+            c = self.connection
+            c.execute(
+                """INSERT OR REPLACE INTO cache_entries
+                   (step, sample_id, openstudio_version, inputs_sha256,
+                    code_sha256, container_digest, generation, output_path,
+                    started_at, finished_at, exit_code)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    key.step,
+                    key.sample_id,
+                    key.openstudio_version,
+                    key.inputs_sha256,
+                    key.code_sha256,
+                    key.container_digest,
+                    key.generation,
+                    str(output_path),
+                    time.time(),
+                    time.time(),
+                    exit_code,
+                ),
+            )
         log.info(
             "cache STORE step=%s sample=%s exit=%d -> %s",
             key.step,
@@ -247,26 +251,29 @@ class SQLiteCache:
 
     def invalidate_step(self, step: str) -> int:
         """Drop every entry for a given step. Used by --openstudio_version bumps."""
-        c = self.connection
-        cur = c.execute("DELETE FROM cache_entries WHERE step=?", (step,))
-        n = cur.rowcount
+        with self._lock:
+            c = self.connection
+            cur = c.execute("DELETE FROM cache_entries WHERE step=?", (step,))
+            n = cur.rowcount
         log.warning("cache INVALIDATE step=%s (%d rows)", step, n)
         return n
 
     def invalidate_sample(self, step: str, sample_id: str) -> int:
-        c = self.connection
-        cur = c.execute(
-            "DELETE FROM cache_entries WHERE step=? AND sample_id=?",
-            (step, sample_id),
-        )
-        n = cur.rowcount
+        with self._lock:
+            c = self.connection
+            cur = c.execute(
+                "DELETE FROM cache_entries WHERE step=? AND sample_id=?",
+                (step, sample_id),
+            )
+            n = cur.rowcount
         log.info("cache INVALIDATE step=%s sample=%s (%d rows)", step, sample_id, n)
         return n
 
     def stats(self) -> dict[str, object]:
-        c = self.connection
-        n_total = c.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
-        by_step = dict(
-            c.execute("SELECT step, COUNT(*) FROM cache_entries GROUP BY step").fetchall()
-        )
+        with self._lock:
+            c = self.connection
+            n_total = c.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
+            by_step = dict(
+                c.execute("SELECT step, COUNT(*) FROM cache_entries GROUP BY step").fetchall()
+            )
         return {"total": n_total, "by_step": by_step}
