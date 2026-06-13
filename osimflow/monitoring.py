@@ -25,9 +25,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import threading
 import time
 from pathlib import Path
-import threading
 from typing import Any
 
 log = logging.getLogger("osimflow.monitoring")

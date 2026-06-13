@@ -1297,10 +1297,7 @@ class Campaign:
             # If cancellation was detected in _finalize_full_campaign,
             # self.trace.status will be "cancelled" — propagate that to
             # campaign_status so the caller sees the correct final state.
-            if self.trace.status == "cancelled":
-                campaign_status = "cancelled"
-            else:
-                campaign_status = "success"
+            campaign_status = "cancelled" if self.trace.status == "cancelled" else "success"
             return result
         except KeyboardInterrupt:
             campaign_status = "cancelled"
@@ -1318,6 +1315,7 @@ class Campaign:
             # block will run and the campaign will exit with the correct
             # status. Re-raising would crash the worker in concurrent mode
             # and cause test_cancel_during_generation_loop_stops to fail.
+            return {"status": "cancelled", "trace": self.trace}
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
             self._restore_signal_handlers()

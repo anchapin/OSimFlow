@@ -25,8 +25,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
 from osimflow import Campaign, CampaignConfig
 from osimflow.campaign import _cancel_registry, _CancelRegistry
 from osimflow.executors import BaseExecutor, Handle

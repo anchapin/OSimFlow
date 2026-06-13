@@ -24,6 +24,7 @@ The DB schema is small enough to inspect with `sqlite3 cache.db ".schema"`.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -171,14 +172,12 @@ class SQLiteCache:
             self._conn.execute("PRAGMA optimize")
         except Exception:
             pass  # best-effort during shutdown
-        try:
+        with contextlib.suppress(Exception):
             self._conn.close()
-        except Exception:
-            pass  # best-effort during shutdown
         self._conn = None
         log.debug("cache closed at %s", self.db_path)
 
-    def __enter__(self) -> "SQLiteCache":
+    def __enter__(self) -> SQLiteCache:
         return self
 
     def __exit__(self, *args: object) -> None:
