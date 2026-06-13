@@ -240,6 +240,10 @@ module = "osimflow.api.timeseries"
 disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]
+module = "osimflow.api.measures"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
 check_untyped_defs = false
