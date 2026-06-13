@@ -43,7 +43,8 @@ Orchestrator → Executor → Work function
   drives the 6-step DAG.
 - **Executor** — `osimflow/executors/__init__.py` provides
   `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
-  `AzureBatchExecutor`, `GoogleBatchExecutor`, `KubernetesExecutor`, and `NomadExecutor` implementations.
+  `AzureBatchExecutor`, `GoogleBatchExecutor`, `KubernetesExecutor`, `NomadExecutor`,
+  and `PBSExecutor` implementations.
 - **Work function** — `osimflow/work.py` (per-step logic) and
   `bin/*.py` (CLI scripts invoked by the work layer) implement the
   actual step work.
@@ -91,7 +92,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Layer | Technology | Notes |
 |---|---|---|
 | Workflow orchestration | **Custom Python driver** (`osimflow/`) | ~300 LoC `Campaign` class; subcommand CLI `osimflow run`. |
-| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `KubernetesExecutor`, `NomadExecutor` | All conform to the same `submit()` → `Handle` interface. |
+| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor` | All conform to the same `submit()` → `Handle` interface. |
 | Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
 | AWS Batch backend | **`boto3`** (future) | Stub today; `AWSBatchExecutor.submit()` is a placeholder. |
 | Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
@@ -133,10 +134,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
-| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `KubernetesExecutor` + `NomadExecutor`. |
+| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor`. |
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
 | `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
 | `osimflow/executors/google_batch_executor.py` | `GoogleBatchExecutor` — Google Cloud Batch executor using the Google Cloud SDK. |
+| `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using qsub/qstat CLI (issue #351). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
@@ -206,7 +208,7 @@ The 7-step DAG that the `Campaign` class drives:
 
 ### CLI flags (referenced from `osimflow/__main__.py`)
 
-- `--executor` (local / slurm / aws_batch / azure_batch / google_batch / nomad)
+- `--executor` (local / slurm / aws_batch / azure_batch / google_batch / nomad / pbs)
 - `--max-workers` (local executor parallelism)
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
 - `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
@@ -217,6 +219,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-pool-id`, `--azure-batch-location` (Azure Batch executor configuration)
 - `--google-batch-project-id`, `--google-batch-region`, `--google-batch-service-account` (Google Cloud Batch executor configuration)
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
+- `--pbs-server`, `--pbs-queue`, `--pbs-real` (PBS/Torque executor configuration)
 - `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
 - `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
 - `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)

@@ -20,6 +20,7 @@ from .executors import (
     KubernetesExecutor,
     LocalExecutor,
     NomadExecutor,
+    PBSExecutor,
     SlurmExecutor,
 )
 from .jobqueue import JobQueue
@@ -65,6 +66,7 @@ __all__ = [
     "GoogleBatchExecutor",
     "KubernetesExecutor",
     "NomadExecutor",
+    "PBSExecutor",
     "JobQueue",
     "RunTrace",
     "StepTrace",
