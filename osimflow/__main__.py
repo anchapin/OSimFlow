@@ -605,6 +605,15 @@ def _add_download_args(dl: argparse.ArgumentParser) -> None:
     dl.add_argument("--log_level", default="INFO")
 
 
+def _add_cancel_args(cancel: argparse.ArgumentParser) -> None:
+    cancel.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json",
+    )
+    cancel.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -655,6 +664,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Download results from a completed campaign",
     )
     _add_download_args(dl)
+    cncl = sub.add_parser(
+        "cancel",
+        help="Request graceful cancellation of a running campaign",
+    )
+    _add_cancel_args(cncl)
     return p
 
 
@@ -1013,6 +1027,55 @@ def _format_field(record: CampaignRecord, key: str) -> str:
     return str(getattr(record, key, ""))
 
 
+def _cmd_cancel(args: argparse.Namespace) -> int:
+    """Request graceful cancellation of a running campaign.
+
+    Writes a ``.stop`` flag file to the campaign's output directory.
+    The campaign orchestrator checks for this file between steps and
+    initiates a graceful shutdown that stops accepting new samples and
+    waits for in-flight samples to complete before writing the final
+    ``run.json``.
+    """
+    import json as json_mod  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    # Check if campaign has already completed
+    if run_data.get("finished_at") is not None:
+        print(
+            f"error: campaign '{run_data.get('campaign_id', 'unknown')}' "
+            f"has already completed (finished_at is set)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check if .stop file already exists
+    stop_file = outdir / ".stop"
+    if stop_file.exists():
+        print(f"cancellation already requested (--outdir={outdir})")
+        return 0
+
+    # Write the .stop flag
+    stop_file.write_text(json_mod.dumps({"requested_at": time.time()}))
+    campaign_id = run_data.get("campaign_id", outdir.name)
+    print(f"cancellation requested for campaign '{campaign_id}'")
+    print(f"  outdir:  {outdir}")
+    print(f"  stop file: {stop_file}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -1029,6 +1092,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "compare": _cmd_compare,
         "status": _cmd_status,
         "download": _cmd_download,
+        "cancel": _cmd_cancel,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
