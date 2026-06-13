@@ -110,9 +110,7 @@ class TaskHandle:
         Raises ``RuntimeError`` if the task is not in FAILED state.
         """
         if self.status != TaskQueueStatus.FAILED:
-            raise RuntimeError(
-                f"task {self.task_id!r} cannot be retried in state {self.status}"
-            )
+            raise RuntimeError(f"task {self.task_id!r} cannot be retried in state {self.status}")
         log.info("retry requested for task %s", self.task_id)
 
 
@@ -272,9 +270,7 @@ class DaskTaskQueue(TaskQueue):
                 silence_logs=logging.WARNING,
             )
             self._embedded_cluster = cluster
-            log.info(
-                "dask task queue: started embedded LocalCluster (workers=2, threads=1)"
-            )
+            log.info("dask task queue: started embedded LocalCluster (workers=2, threads=1)")
         else:
             log.info("dask task queue: connecting to scheduler %s", self.scheduler_address)
 

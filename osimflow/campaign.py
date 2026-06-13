@@ -2443,7 +2443,9 @@ class Campaign:
                 _state["worker_region"] = getattr(_handle, "worker_region", None)
                 # Cost tracking (issue #126): capture from the sim handle.
                 _state["cost_usd"] = getattr(_handle, "cost_usd", None)
-                _state["billed_duration_seconds"] = getattr(_handle, "billed_duration_seconds", None)
+                _state["billed_duration_seconds"] = getattr(
+                    _handle, "billed_duration_seconds", None
+                )
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                 # Archive eplusout.sql when flag is set
                 if _archive:
