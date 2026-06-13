@@ -80,7 +80,7 @@ def _read_aggregated_csv(outdir: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-@ui_router.get("/", response_class=HTMLResponse)
+@ui_router.get("/", response_class=HTMLResponse)  # type: ignore[untyped-decorator]
 async def get_ui_index() -> HTMLResponse:
     """Serve the OSimFlow campaign setup web UI."""
     html_path = Path(__file__).parent / "templates" / "index.html"
@@ -94,7 +94,7 @@ async def get_ui_index() -> HTMLResponse:
 # ---------------------------------------------------------------------------
 
 
-@ui_router.get("/api/campaigns")
+@ui_router.get("/api/campaigns")  # type: ignore[untyped-decorator]
 async def list_campaigns() -> list[dict[str, Any]]:
     """List all campaigns known to the UI layer."""
     result: list[dict[str, Any]] = []
@@ -134,7 +134,7 @@ async def _run_campaign_in_thread(cfg: CampaignConfig, campaign_id: str) -> None
             _UI_CAMPAIGNS[campaign_id]["finished_at"] = _CAMPAIGNS_LOCK  # placeholder
 
 
-@ui_router.post("/api/setup")
+@ui_router.post("/api/setup")  # type: ignore[untyped-decorator]
 async def setup_campaign(request: Request) -> JSONResponse:
     """Create and start a new campaign from UI-provided config.
 
@@ -216,7 +216,7 @@ async def setup_campaign(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-@ui_router.get("/api/campaigns/{campaign_id}")
+@ui_router.get("/api/campaigns/{campaign_id}")  # type: ignore[untyped-decorator]
 async def get_campaign_status(campaign_id: str) -> JSONResponse:
     """Get the current status of a campaign."""
     with _CAMPAIGNS_LOCK:
@@ -237,7 +237,7 @@ async def get_campaign_status(campaign_id: str) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-@ui_router.get("/api/campaigns/{campaign_id}/results")
+@ui_router.get("/api/campaigns/{campaign_id}/results")  # type: ignore[untyped-decorator]
 async def get_campaign_results(campaign_id: str) -> JSONResponse:
     """Get the aggregated results CSV as a JSON array."""
     with _CAMPAIGNS_LOCK:
@@ -258,7 +258,7 @@ async def get_campaign_results(campaign_id: str) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-@ui_router.post("/api/campaigns/{campaign_id}/stop")
+@ui_router.post("/api/campaigns/{campaign_id}/stop")  # type: ignore[untyped-decorator]
 async def stop_campaign(campaign_id: str) -> JSONResponse:
     """Request graceful cancellation of a running campaign."""
     with _CAMPAIGNS_LOCK:
