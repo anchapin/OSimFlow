@@ -78,6 +78,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
         return NomadExecutor(
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
+            verify_tls=args.nomad_tls_verify,
         )
     # Azure Batch executor — account credentials and pool.
     if args.executor == "azure_batch":
@@ -203,6 +204,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--nomad-datacentre",
         default="dc1",
         help="Nomad datacentre to target (default: dc1).",
+    )
+    run.add_argument(
+        "--nomad-tls-verify",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Enable (default) or disable TLS certificate verification for the "
+            "Nomad HTTP API. Disable with --nomad-tls-verify=false for "
+            "development with self-signed certificates. "
+            "SEC-009: protects NOMAD_TOKEN from interception."
+        ),
     )
     run.add_argument(
         "--azure-batch-account-name",

@@ -964,20 +964,40 @@ class _NomadClient:
     The client is lazy-imported (``urllib.request`` is stdlib, so this
     is mostly about deferring the import out of ``__init__.py``). No
     third-party HTTP library is required.
+
+    TLS verification: when ``verify_tls`` is ``True`` (the default),
+    the client delegates to ``urllib.request.urlopen`` (the stdlib
+    default, which uses system CA certs and verifies the server cert).
+    When ``False``, the client builds a custom opener with an SSL
+    context that skips certificate verification (for development with
+    self-signed certs). Tests patch ``urllib.request.urlopen`` to
+    intercept the wire format; this works because the
+    ``verify_tls=True`` path calls ``self.urlopen`` directly.
     """
 
-    def __init__(self, address: str, token: str | None) -> None:
-        # urllib.request is stdlib; the import is cheap but we keep it
-        # lazy so the local / slurm / aws paths do not pay even the
-        # import cost. Tests patch ``urllib.request.urlopen`` so they
-        # can intercept every request. The attribute is named
-        # ``urlopen`` (no leading underscore) so tests can reach the
-        # patched mock via ``executor._client.urlopen.call_args``.
+    def __init__(self, address: str, token: str | None, verify_tls: bool = True) -> None:
+        import ssl  # noqa: PLC0415
         import urllib.request  # noqa: PLC0415
 
-        self.urlopen = urllib.request.urlopen
         self.address = address.rstrip("/")
         self.token = token
+        self.verify_tls = verify_tls
+
+        # Store urlopen so tests can patch ``urllib.request.urlopen``
+        # and intercept every request through ``self.urlopen``.
+        self.urlopen = urllib.request.urlopen
+
+        # When TLS verification is disabled, build a custom opener
+        # with an SSL context that skips certificate verification.
+        if verify_tls:
+            self._opener: urllib.request.OpenerDirector | None = None
+        else:
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            self._opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=ssl_context),
+            )
 
     def _request(
         self,
@@ -1011,8 +1031,14 @@ class _NomadClient:
             method=method,
         )
         try:
-            with self.urlopen(request) as resp:
-                payload = resp.read()
+            if self._opener is not None:
+                # verify_tls=False: use the custom opener that skips cert verification.
+                with self._opener.open(request) as resp:
+                    payload = resp.read()
+            else:
+                # verify_tls=True: use stdlib urlopen (system CA certs, test-mockable).
+                with self.urlopen(request) as resp:
+                    payload = resp.read()
         except urllib.error.HTTPError as exc:  # pragma: no cover — error path
             body_text = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(
@@ -1265,6 +1291,7 @@ class NomadExecutor(BaseExecutor):
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
         use_dispatch: bool = False,
+        verify_tls: bool = True,
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -1276,10 +1303,12 @@ class NomadExecutor(BaseExecutor):
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
         self.use_dispatch = use_dispatch
+        self.verify_tls = verify_tls
         self._dispatch_job_registered = False
         self._client = _NomadClient(
             address=self.address,
             token=os.environ.get("NOMAD_TOKEN"),
+            verify_tls=verify_tls,
         )
 
     def _build_job_spec(

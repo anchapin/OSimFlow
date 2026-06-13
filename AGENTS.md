@@ -223,7 +223,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
 - `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
 - `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)
-- `--nomad-address`, `--nomad-datacentre`
+- `--nomad-address`, `--nomad-datacentre`, `--nomad-tls-verify` (Nomad executor configuration; `--nomad-tls-verify` defaults to true for production safety; set to false for self-signed certs. SEC-009)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
 - `--openstudio_version`, `--archive_intermediates`
