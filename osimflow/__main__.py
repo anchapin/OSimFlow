@@ -548,6 +548,14 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help="CloudWatch log group name (optional).",
     )
     run.add_argument(
+        "--log-aggregation-url",
+        default=None,
+        help=(
+            "CloudWatch Logs URL for distributed log aggregation "
+            "(e.g. https://logs.us-east-1.amazonaws.com/<log-group>/<log-stream>)."
+        ),
+    )
+    run.add_argument(
         "--prometheus-port",
         type=int,
         default=9090,

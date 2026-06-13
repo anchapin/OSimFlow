@@ -62,6 +62,7 @@ from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .jobqueue import JobQueue
+from .logging import LogAggregator
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -233,6 +234,11 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+        # Log aggregator for distributed CloudWatch Logs (issue #340).
+        # When log_aggregation_url is set, per-sample stdout/stderr files
+        # are collected and published to CloudWatch Logs after the
+        # RUN_OPENSTUDIO_SIM step completes.
+        self._log_aggregator = LogAggregator(cfg.log_aggregation_url)
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -2463,7 +2469,25 @@ class Campaign:
         self._obs.record_step_duration(
             "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
         )
+        self._publish_sample_logs()
         return out
+
+    def _publish_sample_logs(self) -> None:
+        """Collect per-sample stdout/stderr logs and publish to CloudWatch Logs.
+
+        Iterates over all sample states accumulated during the
+        RUN_OPENSTUDIO_SIM fan-out and registers each sample's log files
+        with the LogAggregator. Called after the fan-out completes so all
+        log file paths are known.
+        """
+        for _sid, state in self._sample_state.items():
+            stdout = state.get("stdout_log")
+            stderr = state.get("stderr_log")
+            if stdout:
+                self._log_aggregator.add_log_file(Path(str(stdout)))
+            if stderr:
+                self._log_aggregator.add_log_file(Path(str(stderr)))
+        self._log_aggregator.publish()
 
     def step_extract_kpis(
         self,
