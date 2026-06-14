@@ -247,10 +247,7 @@ class KubernetesExecutor(BaseExecutor):
                 container_image = e["value"]
                 break
 
-        env_vars = [
-            client.V1EnvVar(name=e["name"], value=e["value"])
-            for e in environment
-        ]
+        env_vars = [client.V1EnvVar(name=e["name"], value=e["value"]) for e in environment]
 
         resources = client.V1ResourceRequirements(
             requests={"cpu": str(cpus), "memory": f"{memory_mb}Mi"},

@@ -1616,6 +1616,3 @@ class NomadExecutor(BaseExecutor):
         # urllib's HTTP handler is closed by the underlying
         # http.client on GC; nothing actionable here.
         pass
-
-
-

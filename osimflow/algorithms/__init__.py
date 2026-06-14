@@ -164,6 +164,23 @@ class BaseAlgorithm(abc.ABC):
         """
         return False
 
+    def compute_sensitivity_indices(
+        self,
+        variables: dict[str, Any],
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        outdir: Path,
+        calc_second_order: bool = False,
+    ) -> Path:
+        """Compute sensitivity indices (Sobol). Raises NotImplementedError by default.
+
+        Only ``SobolAlgorithm`` implements this method. Other algorithms
+        that do not support sensitivity analysis will raise ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement compute_sensitivity_indices"
+        )
+
 
 # ======================================================================
 # Registry

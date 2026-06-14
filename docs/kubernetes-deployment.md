@@ -19,8 +19,8 @@ Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to Kubernetes r
 
 | OSimFlow Directive | Kubernetes Field |
 |---|---|
-| `cpus` | `resources.requests.cpu` / `resources.limits.cpu` |
-| `memory_mb` | `resources.requests.memory` / `resources.limits.memory` |
+| `cpus` | `requests.cpu` / `limits.cpu` (inside `V1ResourceRequirements`) |
+| `memory_mb` | `requests.memory` / `limits.memory` (inside `V1ResourceRequirements`) |
 | `time_min` | `activeDeadlineSeconds` |
 
 Per-sample `OSIMFLOW_OS_VERSION` and `OSIMFLOW_CONTAINER` are set as environment variables on the container, matching the convention used by `SlurmExecutor` and `AWSBatchExecutor`.

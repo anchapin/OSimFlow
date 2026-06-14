@@ -292,6 +292,73 @@ class FileDeleteResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Variable management (issue #347)
+# ---------------------------------------------------------------------------
+
+
+class VariableSummary(BaseModel):
+    """Lightweight variable entry returned by ``GET /api/v1/variables``."""
+
+    name: str
+    distribution: str
+    description: str | None = None
+
+
+class VariableListResponse(BaseModel):
+    """Envelope for the variable list endpoint."""
+
+    variables: list[VariableSummary]
+    total: int
+
+
+class VariableDetailResponse(BaseModel):
+    """Full variable detail returned by ``GET /api/v1/variables/{name}``."""
+
+    name: str
+    distribution: str
+    description: str | None = None
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableUpdateRequest(BaseModel):
+    """Request body for ``PUT /api/v1/variables/{name}``.
+
+    All fields are optional — only provided fields are updated.
+    """
+
+    name: str | None = Field(default=None, description="New variable name")
+    distribution: str | None = Field(default=None, description="Distribution type")
+    description: str | None = Field(default=None)
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableDeleteResponse(BaseModel):
+    """Response for variable deletion."""
+
+    name: str
+    status: str = Field(description="deleted")
+
+
 # Measure management (issue #348)
 # ---------------------------------------------------------------------------
 
