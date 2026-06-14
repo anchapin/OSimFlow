@@ -10,6 +10,7 @@ from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
+from .distributed_cache import DistributedCache, build_cache
 from .campaign import Campaign
 from .config import CampaignConfig, load_config
 from .executors import (
@@ -73,6 +74,8 @@ __all__ = [
     "HaltonAlgorithm",
     "CacheKey",
     "SQLiteCache",
+    "DistributedCache",
+    "build_cache",
     "Campaign",
     "CampaignConfig",
     "load_config",

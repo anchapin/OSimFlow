@@ -39,6 +39,13 @@ class CampaignConfig:
     # When set, the Campaign begins an MLflow run at start and ends it at
     # completion, logging params / metrics / artifacts.
     mlflow_tracking_uri: str | None = None
+    # Optional Redis URL for distributed cache invalidation (issue #330).
+    # When None, a single-node SQLiteCache is used. When set (e.g.,
+    # "redis://localhost:6379/0"), a DistributedCache is used that
+    # broadcasts invalidation events across all campaign workers via
+    # Redis pub/sub, enabling coherent cache state on multi-node
+    # Slurm/AWS Batch campaigns.
+    redis_url: str | None = None
     # Optional Slurm advanced directives (issue #4). Forwarded to
     # `SlurmExecutor` when `--executor slurm` is selected. All default
     # to `None`; submitit omits unset directives from the sbatch header.
