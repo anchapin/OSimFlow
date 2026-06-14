@@ -203,9 +203,7 @@ class MeasureRegistry:
                 continue
 
             if name not in plain_to_measures:
-                errors.append(
-                    f"  Variable {name!r}: not found in any discovered measure argument."
-                )
+                errors.append(f"  Variable {name!r}: not found in any discovered measure argument.")
             elif len(plain_to_measures.get(name, set())) > 1:
                 ambiguous.append(
                     f"  Variable {name!r}: appears in multiple measures "
@@ -336,9 +334,7 @@ class MeasureRegistry:
                 name = match.group(1)
                 required_str = match.group(2)
                 required = required_str.lower() in ("true", "yes")
-                arguments.append(
-                    MeasureArgument(name=name, type=arg_type, required=required)
-                )
+                arguments.append(MeasureArgument(name=name, type=arg_type, required=required))
 
         return arguments
 
@@ -401,8 +397,6 @@ class MeasureRegistry:
                 name = match.group(1)
                 required_str = match.group(2)
                 required = required_str.lower() in ("true", "yes")
-                arguments.append(
-                    MeasureArgument(name=name, type=arg_type, required=required)
-                )
+                arguments.append(MeasureArgument(name=name, type=arg_type, required=required))
 
         return arguments
