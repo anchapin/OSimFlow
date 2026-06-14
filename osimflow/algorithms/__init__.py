@@ -4,8 +4,8 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
-``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``, ``FullFactorialAlgorithm``,
-``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
+``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``,
+``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
 ``RandomSamplingAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:

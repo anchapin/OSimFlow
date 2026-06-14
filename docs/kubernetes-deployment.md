@@ -1,3 +1,4 @@
+<!-- docs-skip -->
 # Kubernetes Deployment Guide
 
 This guide walks you through running OSimFlow campaigns on a Kubernetes cluster.

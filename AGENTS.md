@@ -140,6 +140,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/google_batch_executor.py` | `GoogleBatchExecutor` — Google Cloud Batch executor using the Google Cloud SDK. |
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254). |
 | `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
+| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
