@@ -159,6 +159,16 @@ curl http://localhost:8000/api/v1/samples/sample_000
 }
 ```
 
+### GET /api/v1/samples/{sid}/logs/{log_name}
+
+Retrieve the raw content of a sample's log file (`stdout.log` or `stderr.log`).
+
+```bash
+curl http://localhost:8000/api/v1/samples/sample_000/logs/stdout.log
+```
+
+Returns the raw text content of the log file.
+
 ## Results & Failures
 
 ### GET /api/v1/results
