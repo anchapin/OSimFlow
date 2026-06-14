@@ -9,6 +9,8 @@ Covers:
   * Module with syntax errors raises ImportError
   * Module with side effects on import
   * Subprocess isolation (issue #269): default trust level, kwargs forwarding
+  * _parse_subprocess_response: empty stdout, JSON errors, error responses,
+    missing result path (lines 207-222)
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from osimflow.byos import ByosTrustLevel, load_user_function
+from osimflow.byos import ByosTrustLevel, _parse_subprocess_response, load_user_function
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +181,30 @@ class TestLoadUserFunctionPathErrors:
         with pytest.raises((ImportError, FileNotFoundError)):
             load_user_function(missing)
 
+    def test_spec_loader_none_raises_import_error(
+        self, user_scripts: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 85: spec or spec.loader is None raises ImportError."""
+        import importlib.util
+
+        # Create a file that exists but has no loader — this is hard to
+        # trigger with real paths, so we mock spec_from_file_location.
+        path = user_scripts / "valid_name.py"
+        path.write_text("def apply_parameters(t, p, s, o): pass\n")
+
+        original_spec = importlib.util.spec_from_file_location
+
+        def _broken_spec(name: str, location: str | Path, **kwargs: object):
+            # Return a spec with loader=None
+            spec = original_spec(name, location, **kwargs)
+            if spec is not None:
+                spec.loader = None
+            return spec
+
+        monkeypatch.setattr(importlib.util, "spec_from_file_location", _broken_spec)
+        with pytest.raises(ImportError, match="could not load spec"):
+            load_user_function(path)
+
 
 # ===========================================================================
 # Module with syntax errors
@@ -326,3 +352,40 @@ class TestSubprocessIsolation:
         assert func.__name__ == "apply_parameters"
         # In-process mode returns the raw function, so we get 42 back.
         assert func(template="t", parameters={}, sample_id="s", out="o") == 42
+
+
+# ===========================================================================
+# _parse_subprocess_response error paths (lines 207-222)
+# ===========================================================================
+
+
+class TestParseSubprocessResponse:
+    """Unit tests for _parse_subprocess_response private function."""
+
+    def test_empty_stdout_raises_runtime_error(self) -> None:
+        """Line 207-210: empty stdout raises RuntimeError."""
+        with pytest.raises(RuntimeError, match="no output"):
+            _parse_subprocess_response("", Path("script.py"), "apply_parameters")
+
+    def test_invalid_json_raises_runtime_error(self) -> None:
+        """Lines 214-215: JSONDecodeError raises RuntimeError."""
+        with pytest.raises(RuntimeError, match="invalid JSON"):
+            _parse_subprocess_response("not valid json {{{", Path("script.py"), "extract_kpis")
+
+    def test_error_in_response_raises_runtime_error(self) -> None:
+        """Line 218: 'error' key in response raises RuntimeError."""
+        response = {"error": "something went wrong"}
+        with pytest.raises(RuntimeError, match="something went wrong"):
+            _parse_subprocess_response(json.dumps(response), Path("script.py"), "apply_parameters")
+
+    def test_missing_result_key_raises_runtime_error(self) -> None:
+        """Line 222: result key missing raises RuntimeError."""
+        response = {"result": None}
+        with pytest.raises(RuntimeError, match="did not return a result path"):
+            _parse_subprocess_response(json.dumps(response), Path("script.py"), "extract_kpis")
+
+    def test_valid_response_returns_path(self) -> None:
+        """Valid JSON with result returns Path."""
+        response = {"result": "/tmp/out/kpi_0001.json"}
+        result = _parse_subprocess_response(json.dumps(response), Path("script.py"), "extract_kpis")
+        assert result == Path("/tmp/out/kpi_0001.json")

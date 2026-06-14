@@ -630,68 +630,71 @@ class TestExplicitPendingSamplesSlot:
 
 
 class TestObserveValidation:
-    """Verify observe() return vs _pending_proposed_samples mismatch logging (issue #332)."""
+    """Verify observe() return vs _pending_proposed_samples mismatch logging (issue #332).
 
-    def test_observe_mismatch_logs_error(self, caplog: pytest.LogCaptureFixture) -> None:
-        """When observe() return != _pending_proposed_samples, an error must be logged.
+    The mismatch check lives in Campaign._run_generation_loop() (campaign.py
+    lines 1588-1594). It fires when an algorithm sets _pending_proposed_samples
+    to one value but observe() returns a different value. A well-behaved
+    algorithm never triggers this — the check is a defensive guard for
+    algorithm bugs. The test below deliberately creates a buggy algorithm to
+    exercise the code path.
+    """
 
-        The check lives in Campaign._run_generation_loop() after algo.observe() returns.
-        We exercise the mismatch by subclassing to corrupt the slot after observe() sets it.
+    def test_observe_mismatch_detected_in_campaign_run(
+        self, caplog: pytest.LogCaptureFixture, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When observe() return != _pending_proposed_samples, Campaign logs an error.
+
+        This test exercises the real Campaign._run_generation_loop() code path
+        (campaign.py lines 1588-1594), not a inline simulation.
         """
+        from osimflow.algorithms import AlgorithmRegistry
         from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
 
-        # Subclass that corrupts the slot after observe() sets it to match the return.
+        # A buggy DE subclass that sets _pending_proposed_samples to a different
+        # value than what observe() returns. This simulates an algorithm author
+        # who updated internal state but forgot to return the right value.
         class MismatchedDE(DifferentialEvolutionAlgorithm):
+            _corruption: list[dict[str, Any]] = []
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                # Pre-seed the corruption that will be injected after observe().
+                self._corruption = [{"sample_id": "corrupted", "values": {"wall_r": 999.0}}]
+
             def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 result = super().observe(history)
-                # Corrupt the slot immediately after observe() sets it to match.
-                self._pending_proposed_samples = [{"sample_id": "fake", "values": {}}]  # type: ignore[list-item]
+                # Corrupt the slot immediately after super().observe() sets it
+                # to match the return. Now _pending_proposed_samples != return.
+                self._pending_proposed_samples = self._corruption  # type: ignore[list-item]
                 return result
 
-        algo = MismatchedDE(objective_kpi="eui", tol=1e-10)
-        variables = {
-            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
-        }
+        AlgorithmRegistry.register("mismatched_de", MismatchedDE)
 
-        # Gen 0: LHS.
-        outdir = Path("/tmp/mismatch_test")
-        outdir.mkdir(exist_ok=True)
-        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
-        samples0 = json.loads(path0.read_text())["samples"]
+        try:
+            template, variables, outdir = tmp_dirs
+            cfg = _make_cfg(
+                template,
+                variables,
+                outdir / "mismatch_campaign_test",
+                n_samples=2,
+                max_generations=2,
+                algorithm="mismatched_de",
+            )
+            campaign = _run_campaign(cfg)
 
-        # Fake KPI history.
-        kpi_dir = outdir / "kpis"
-        kpi_dir.mkdir(exist_ok=True)
-        kpi_files = []
-        for s in samples0:
-            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
-            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
-            kpi_files.append(str(kpi_path))
-
-        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
-
-        # First observe() sets _pending_proposed_samples = returned.
-        returned = algo.observe(history)
-        # Now the slot was just corrupted by MismatchedDE.observe().
-        pending = algo._pending_proposed_samples
-        assert pending is not None
-        assert returned != pending, "precondition: return and slot must differ for this test"
-
-        # Simulate the check that Campaign._run_generation_loop() does.
-        import osimflow.logging as _logging
-
-        _log = _logging.get_logger(__name__)
-        with caplog.at_level("ERROR"):
-            if pending is not None and pending != returned:
-                _log.error(
-                    "observe() return value does not match "
-                    "_pending_proposed_samples for algorithm %s",
-                    algo.name(),
-                )
-
-        assert any("observe() return value does not match" in r.message for r in caplog.records), (
-            "observe() mismatch should log an error"
-        )
+            # The mismatch should have been logged at least once.
+            mismatch_records = [
+                r for r in caplog.records if "observe() return value does not match" in r.message
+            ]
+            assert len(mismatch_records) >= 1, (
+                "Campaign should log error when observe() return != "
+                "_pending_proposed_samples (campaign.py lines 1588-1594)"
+            )
+            # The campaign should still have completed (error is logged, not raised).
+            assert len(campaign.trace.generations) >= 1, "Campaign should still run"
+        finally:
+            AlgorithmRegistry._registry.pop("mismatched_de", None)
 
 
 # ---------------------------------------------------------------------------

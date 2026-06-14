@@ -564,6 +564,15 @@ except ImportError:
     # available when the [optimization] extra is installed.
     pass
 
+try:
+    from osimflow.algorithms.ga import GeneticAlgorithm  # noqa: F401, E402
+
+    AlgorithmRegistry.register("ga", GeneticAlgorithm)
+except ImportError:
+    # deap is a required dependency for GeneticAlgorithm — only available
+    # when the [ga] extra is installed.
+    pass
+
 from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402
 from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
 
