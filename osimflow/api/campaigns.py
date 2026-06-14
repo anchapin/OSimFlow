@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from osimflow.api.schemas import (
     CampaignCancelResponse,
+    CampaignComparisonResponse,
     CampaignCreateRequest,
     CampaignCreateResponse,
     CampaignDetailResponse,
@@ -400,6 +401,75 @@ def _launch_campaign_background(
     thread = threading.Thread(target=_run, daemon=True, name=f"campaign-{campaign_id}")
     thread.start()
     log.info("launched campaign %s in background thread", campaign_id)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/campaigns/compare — compare two campaigns side by side
+# ---------------------------------------------------------------------------
+
+
+@campaigns_router.get(
+    "/api/v1/campaigns/compare",
+    response_model=CampaignComparisonResponse,
+)
+async def compare_campaigns(
+    request: Request,
+    id1: str = Query(..., description="First campaign ID"),
+    id2: str = Query(..., description="Second campaign ID"),
+) -> CampaignComparisonResponse:
+    """Compare two campaigns side by side by their campaign IDs.
+
+    Both campaigns must exist under the campaigns base directory.
+    Returns ``null`` for whichever campaign is not found.
+    """
+    base = _campaigns_base_dir(request)
+
+    left: CampaignDetailResponse | None = None
+    right: CampaignDetailResponse | None = None
+
+    # Load left campaign
+    try:
+        left_dir = _campaign_dir_from_id(base, id1)
+        left_data = _load_campaign_json(left_dir)
+        left = CampaignDetailResponse(
+            campaign_id=left_data.get("campaign_id", id1),
+            status=_derive_status(left_data),
+            started_at=left_data.get("started_at"),
+            finished_at=left_data.get("finished_at"),
+            elapsed_s=left_data.get("elapsed_s"),
+            config=left_data.get("config") or left_data.get("config_summary"),
+            summary=left_data.get("summary"),
+            quality_summary=left_data.get("quality_summary"),
+            baseline_comparison=left_data.get("baseline_comparison"),
+            total_cost_usd=left_data.get("total_cost_usd"),
+            spot_savings_usd=left_data.get("spot_savings_usd"),
+            steps=left_data.get("steps", []),
+        )
+    except HTTPException:
+        pass  # Campaign not found — return None
+
+    # Load right campaign
+    try:
+        right_dir = _campaign_dir_from_id(base, id2)
+        right_data = _load_campaign_json(right_dir)
+        right = CampaignDetailResponse(
+            campaign_id=right_data.get("campaign_id", id2),
+            status=_derive_status(right_data),
+            started_at=right_data.get("started_at"),
+            finished_at=right_data.get("finished_at"),
+            elapsed_s=right_data.get("elapsed_s"),
+            config=right_data.get("config") or right_data.get("config_summary"),
+            summary=right_data.get("summary"),
+            quality_summary=right_data.get("quality_summary"),
+            baseline_comparison=right_data.get("baseline_comparison"),
+            total_cost_usd=right_data.get("total_cost_usd"),
+            spot_savings_usd=right_data.get("spot_savings_usd"),
+            steps=right_data.get("steps", []),
+        )
+    except HTTPException:
+        pass  # Campaign not found — return None
+
+    return CampaignComparisonResponse(left=left, right=right)
 
 
 # ---------------------------------------------------------------------------
