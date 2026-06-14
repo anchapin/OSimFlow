@@ -90,6 +90,9 @@ tui = [
 r = [
     "pyarrow>=12",
 ]
+kubernetes = [
+    "kubernetes>=29",
+]
 
 [project.scripts]
 osimflow = "osimflow.__main__:main"
