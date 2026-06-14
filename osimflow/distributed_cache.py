@@ -64,7 +64,8 @@ _redis_asyncio_module: dict[str, Any] = {}
 def _get_redis_asyncio() -> Any:
     """Import and return the redis.asyncio module (lazy, cached)."""
     if not _redis_asyncio_module:
-        import redis.asyncio as ra
+        import redis.asyncio as ra  # noqa: PLC0415
+
         _redis_asyncio_module["module"] = ra
     return _redis_asyncio_module["module"]
 
@@ -159,7 +160,7 @@ class DistributedCache:
             return
 
         def _run() -> None:
-            import asyncio
+            import asyncio  # noqa: PLC0415
 
             redis_async = _get_redis_asyncio()
 
@@ -211,7 +212,9 @@ class DistributedCache:
 
             asyncio.run(_main())
 
-        t = threading.Thread(target=_run, name=f"osimflow-subscriber-{self._campaign_id}", daemon=True)
+        t = threading.Thread(
+            target=_run, name=f"osimflow-subscriber-{self._campaign_id}", daemon=True
+        )
         t.start()
         self._subscriber_thread = t
 
@@ -253,7 +256,7 @@ class DistributedCache:
 
     def _publish(self, payload: dict[str, Any]) -> None:
         """Publish an invalidation message to Redis (async, non-blocking)."""
-        import asyncio
+        import asyncio  # noqa: PLC0415
 
         async def _pub() -> None:
             try:
@@ -274,6 +277,7 @@ class DistributedCache:
             # Sync context — run the coroutine in a background thread.
             def _run() -> None:
                 asyncio.run(_pub())
+
             t = threading.Thread(target=_run, daemon=True)
             t.start()
 
@@ -322,7 +326,7 @@ class DistributedCache:
 
         # Close the Redis client.
         if self._redis_client is not None:
-            import asyncio
+            import asyncio  # noqa: PLC0415
 
             async def _close() -> None:
                 await self._redis_client.aclose()  # type: ignore[union-attr]
