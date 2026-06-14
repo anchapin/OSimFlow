@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OSimFlow — Variable Designer</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242836;
+      --border: #2e3347;
+      --accent: #4f9cf9;
+      --accent2: #7eb8ff;
+      --text: #e8eaf0;
+      --muted: #8b8fa8;
+      --success: #3ecf8e;
+      --error: #f45b5b;
+      --warning: #f5a623;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.02em;
+    }
+    header .subtitle {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    header .nav-links {
+      margin-left: auto;
+      display: flex;
+      gap: 1rem;
+    }
+    header .nav-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: color 0.15s;
+    }
+    header .nav-links a:hover {
+      color: var(--accent);
+    }
+    main {
+      flex: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+      width: 100%;
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--accent2);
+    }
+    .card h3 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      color: var(--accent2);
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    input, select, textarea {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    textarea { resize: vertical; min-height: 80px; font-family: 'Courier New', monospace; font-size: 0.85rem; }
+    .full { grid-column: 1 / -1; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.6rem 1.5rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.secondary {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    button.success {
+      background: var(--success);
+    }
+    button.danger {
+      background: var(--error);
+    }
+    button.small {
+      padding: 0.3rem 0.75rem;
+      font-size: 0.8rem;
+    }
+    .canvas-wrap {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      margin-top: 1rem;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 200px;
+    }
+    .var-list {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .var-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .var-item .var-name {
+      font-weight: 600;
+      color: var(--accent2);
+      min-width: 120px;
+    }
+    .var-item .var-dist {
+      font-size: 0.8rem;
+      color: var(--muted);
+      background: var(--surface);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+    }
+    .var-item .var-desc {
+      flex: 1;
+      font-size: 0.85rem;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .var-item .var-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 2rem;
+    }
+    .error-msg { color: var(--error); font-size: 0.85rem; margin-top: 0.3rem; }
+    .success-msg { color: var(--success); font-size: 0.85rem; margin-top: 0.3rem; }
+    .yaml-preview {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      font-family: 'Courier New', monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .distribution-info {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+      padding: 0.5rem;
+      background: var(--surface2);
+      border-radius: 4px;
+    }
+    .param-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+    .values-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .values-list .value-chip {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .values-list .value-chip button {
+      background: none;
+      border: none;
+      color: var(--error);
+      cursor: pointer;
+      padding: 0;
+      font-size: 1rem;
+      line-height: 1;
+    }
+    #add-value-btn {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.8rem;
+    }
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>OSimFlow</h1>
+  <span class="subtitle">Variable Designer</span>
+  <nav class="nav-links">
+    <a href="/ui/">Campaign Setup</a>
+    <a href="/ui/designer/">Variable Designer</a>
+  </nav>
+</header>
+
+<main>
+  <div class="two-col">
+    <!-- Left column: form + visualization -->
+    <div>
+      <!-- Add/Edit Variable Form -->
+      <div class="card">
+        <h2 id="form-title">Add Variable</h2>
+        <form id="var-form" onsubmit="return false;">
+          <div class="form-grid">
+            <label class="full">
+              Variable Name
+              <input type="text" id="var-name" placeholder="e.g., wall_r_value" required />
+            </label>
+            <label class="full">
+              Distribution Type
+              <select id="var-dist">
+                <option value="uniform">Uniform (min, max)</option>
+                <option value="normal">Normal (mean, sigma)</option>
+                <option value="lognormal">Lognormal (mean, sigma)</option>
+                <option value="triangular">Triangular (min, max, mode)</option>
+                <option value="discrete">Discrete (list of values)</option>
+                <option value="categorical">Categorical (list of values)</option>
+                <option value="beta">Beta (alpha, beta)</option>
+                <option value="gamma">Gamma (alpha)</option>
+                <option value="exponential">Exponential (rate)</option>
+              </select>
+            </label>
+
+            <!-- Numeric params -->
+            <label id="label-min" style="display:none;">
+              Min
+              <input type="number" id="var-min" step="any" placeholder="0" />
+            </label>
+            <label id="label-max" style="display:none;">
+              Max
+              <input type="number" id="var-max" step="any" placeholder="100" />
+            </label>
+            <label id="label-mean" style="display:none;">
+              Mean
+              <input type="number" id="var-mean" step="any" placeholder="0" />
+            </label>
+            <label id="label-sigma" style="display:none;">
+              Sigma (std dev)
+              <input type="number" id="var-sigma" step="any" min="0.001" placeholder="1" />
+            </label>
+            <label id="label-mode" style="display:none;">
+              Mode (optional)
+              <input type="number" id="var-mode" step="any" placeholder="auto" />
+            </label>
+            <label id="label-alpha" style="display:none;">
+              Alpha
+              <input type="number" id="var-alpha" step="any" min="0.001" placeholder="2" />
+            </label>
+            <label id="label-beta" style="display:none;">
+              Beta
+              <input type="number" id="var-beta" step="any" min="0.001" placeholder="5" />
+            </label>
+            <label id="label-rate" style="display:none;">
+              Rate
+              <input type="number" id="var-rate" step="any" min="0.001" placeholder="1" />
+            </label>
+
+            <!-- Values list for discrete/categorical -->
+            <label id="label-values" class="full" style="display:none;">
+              Values (one per line or comma-separated)
+              <input type="text" id="var-values-input" placeholder="e.g., 1, 2, 3, 4 or high, medium, low" />
+              <div class="values-list" id="values-list"></div>
+            </label>
+
+            <label class="full">
+              Description (optional)
+              <input type="text" id="var-desc" placeholder="Wall thermal resistance in m²K/W" />
+            </label>
+          </div>
+
+          <div class="distribution-info" id="dist-info">
+            Select a distribution to see parameter requirements
+          </div>
+
+          <div style="margin-top:1rem; display:flex; gap:0.75rem; align-items:center;">
+            <button type="button" id="add-var-btn" onclick="addVariable()">Add Variable</button>
+            <button type="button" id="update-var-btn" class="success" onclick="updateVariable()" style="display:none;">Update Variable</button>
+            <button type="button" class="secondary" onclick="cancelEdit()">Cancel</button>
+            <span id="form-error" class="error-msg"></span>
+          </div>
+        </form>
+      </div>
+
+      <!-- Distribution Visualization -->
+      <div class="card">
+        <h2>Distribution Preview</h2>
+        <div class="canvas-wrap">
+          <canvas id="dist-canvas"></canvas>
+        </div>
+        <p class="param-hint" id="canvas-hint">Configure parameters above to see the distribution curve</p>
+      </div>
+    </div>
+
+    <!-- Right column: variable list + YAML -->
+    <div>
+      <!-- Variable List -->
+      <div class="card">
+        <h2>Variables (<span id="var-count">0</span>)</h2>
+        <div class="var-list" id="var-list">
+          <div class="empty">No variables yet. Add one using the form.</div>
+        </div>
+      </div>
+
+      <!-- YAML Preview -->
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+          <h2 style="margin-bottom:0;">YAML Preview</h2>
+          <button class="secondary small" onclick="copyYaml()">Copy to Clipboard</button>
+        </div>
+        <div class="yaml-preview" id="yaml-preview">variables: []</div>
+        <div id="copy-msg" class="success-msg" style="display:none; margin-top:0.5rem;">Copied!</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// State
+let variables = [];
+let editingName = null;
+let discreteValues = [];
+
+// Distribution parameter mapping
+const DIST_PARAMS = {
+  uniform: { min: true, max: true },
+  normal: { mean: true, sigma: true },
+  lognormal: { mean: true, sigma: true },
+  triangular: { min: true, max: true, mode: false },
+  discrete: { values: true },
+  categorical: { values: true },
+  beta: { alpha: true, beta: true },
+  gamma: { alpha: true },
+  exponential: { rate: true },
+};
+
+const DIST_INFO = {
+  uniform: 'Uniform: equal probability across the range [min, max]',
+  normal: 'Normal (Gaussian): symmetric bell curve centered at mean',
+  lognormal: 'Lognormal: skewed distribution for positive-valued variables',
+  triangular: 'Triangular: has a peak at mode within [min, max]',
+  discrete: 'Discrete: pick from a finite list of numeric values',
+  categorical: 'Categorical: pick from a finite list of string categories',
+  beta: 'Beta: flexible bounded distribution [0, 1] via alpha/beta shapes',
+  gamma: 'Gamma: right-skewed distribution for positive variables',
+  exponential: 'Exponential: memoryless decay with given rate parameter',
+};
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  updateFormForDistribution();
+  renderVariableList();
+  updateYamlPreview();
+
+  document.getElementById('var-dist').addEventListener('change', () => {
+    updateFormForDistribution();
+    drawDistribution();
+  });
+
+  // Param input listeners for live preview
+  ['var-min', 'var-max', 'var-mean', 'var-sigma', 'var-mode', 'var-alpha', 'var-beta', 'var-rate'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', drawDistribution);
+  });
+
+  // Values input
+  document.getElementById('var-values-input').addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    if (val) {
+      const newVals = val.split(/[,\n]/).map(v => v.trim()).filter(v => v);
+      discreteValues = newVals;
+      renderValuesList();
+    }
+    drawDistribution();
+  });
+});
+
+function updateFormForDistribution() {
+  const dist = document.getElementById('var-dist').value;
+  const params = DIST_PARAMS[dist] || {};
+
+  // Hide all param labels
+  ['label-min', 'label-max', 'label-mean', 'label-sigma', 'label-mode',
+   'label-alpha', 'label-beta', 'label-rate', 'label-values'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+
+  // Show relevant params
+  if (params.min) document.getElementById('label-min').style.display = '';
+  if (params.max) document.getElementById('label-max').style.display = '';
+  if (params.mean) document.getElementById('label-mean').style.display = '';
+  if (params.sigma) document.getElementById('label-sigma').style.display = '';
+  if (params.mode === true) document.getElementById('label-mode').style.display = '';
+  if (params.alpha) document.getElementById('label-alpha').style.display = '';
+  if (params.beta) document.getElementById('label-beta').style.display = '';
+  if (params.rate) document.getElementById('label-rate').style.display = '';
+  if (params.values) {
+    document.getElementById('label-values').style.display = '';
+  }
+
+  // Update info
+  document.getElementById('dist-info').textContent = DIST_INFO[dist] || '';
+}
+
+function getFormValues() {
+  const dist = document.getElementById('var-dist').value;
+  const name = document.getElementById('var-name').value.trim();
+  const desc = document.getElementById('var-desc').value.trim();
+
+  const varDef = { name, distribution: dist };
+  if (desc) varDef.description = desc;
+
+  const params = DIST_PARAMS[dist] || {};
+  if (params.min) {
+    const v = parseFloat(document.getElementById('var-min').value);
+    if (!isNaN(v)) varDef.min = v;
+  }
+  if (params.max) {
+    const v = parseFloat(document.getElementById('var-max').value);
+    if (!isNaN(v)) varDef.max = v;
+  }
+  if (params.mean) {
+    const v = parseFloat(document.getElementById('var-mean').value);
+    if (!isNaN(v)) varDef.mean = v;
+  }
+  if (params.sigma) {
+    const v = parseFloat(document.getElementById('var-sigma').value);
+    if (!isNaN(v)) varDef.sigma = v;
+  }
+  if (params.mode === true) {
+    const v = parseFloat(document.getElementById('var-mode').value);
+    if (!isNaN(v)) varDef.mode = v;
+  }
+  if (params.alpha) {
+    const v = parseFloat(document.getElementById('var-alpha').value);
+    if (!isNaN(v)) varDef.alpha = v;
+  }
+  if (params.beta) {
+    const v = parseFloat(document.getElementById('var-beta').value);
+    if (!isNaN(v)) varDef.beta = v;
+  }
+  if (params.rate) {
+    const v = parseFloat(document.getElementById('var-rate').value);
+    if (!isNaN(v)) varDef.rate = v;
+  }
+  if (params.values) {
+    if (discreteValues.length > 0) {
+      // Check if values are numeric
+      const numeric = discreteValues.every(v => !isNaN(parseFloat(v)));
+      varDef.values = numeric ? discreteValues.map(v => parseFloat(v)) : discreteValues;
+    }
+  }
+
+  return varDef;
+}
+
+function setFormValues(varDef) {
+  document.getElementById('var-name').value = varDef.name || '';
+  document.getElementById('var-dist').value = varDef.distribution || 'uniform';
+  document.getElementById('var-desc').value = varDef.description || '';
+
+  updateFormForDistribution();
+
+  const dist = varDef.distribution;
+  if ('min' in varDef) document.getElementById('var-min').value = varDef.min;
+  if ('max' in varDef) document.getElementById('var-max').value = varDef.max;
+  if ('mean' in varDef) document.getElementById('var-mean').value = varDef.mean;
+  if ('sigma' in varDef) document.getElementById('var-sigma').value = varDef.sigma;
+  if ('mode' in varDef) document.getElementById('var-mode').value = varDef.mode;
+  if ('alpha' in varDef) document.getElementById('var-alpha').value = varDef.alpha;
+  if ('beta' in varDef) document.getElementById('var-beta').value = varDef.beta;
+  if ('rate' in varDef) document.getElementById('var-rate').value = varDef.rate;
+  if ('values' in varDef) {
+    discreteValues = varDef.values.map(v => String(v));
+    document.getElementById('var-values-input').value = discreteValues.join(', ');
+    renderValuesList();
+  }
+
+  drawDistribution();
+}
+
+function validateForm() {
+  const varDef = getFormValues();
+  const errors = [];
+
+  if (!varDef.name) errors.push('Variable name is required');
+  if (!varDef.distribution) errors.push('Distribution type is required');
+
+  const dist = varDef.distribution;
+  const params = DIST_PARAMS[dist] || {};
+
+  if (params.min && !('min' in varDef)) errors.push('min is required for uniform distribution');
+  if (params.max && !('max' in varDef)) errors.push('max is required for uniform distribution');
+  if (params.mean && !('mean' in varDef)) errors.push('mean is required for normal distribution');
+  if (params.sigma && !('sigma' in varDef)) errors.push('sigma is required for normal distribution');
+  if (params.alpha && !('alpha' in varDef)) errors.push('alpha is required for beta/gamma distribution');
+  if (params.beta && !('beta' in varDef)) errors.push('beta is required for beta distribution');
+  if (params.rate && !('rate' in varDef)) errors.push('rate is required for exponential distribution');
+  if (params.values && (!varDef.values || varDef.values.length === 0)) {
+    errors.push('values are required for discrete/categorical distribution');
+  }
+
+  if (params.min && params.max && varDef.min >= varDef.max) {
+    errors.push('min must be less than max');
+  }
+
+  if (params.sigma && varDef.sigma <= 0) {
+    errors.push('sigma must be positive');
+  }
+
+  if (params.alpha && varDef.alpha <= 0) {
+    errors.push('alpha must be positive');
+  }
+
+  if (params.beta && varDef.beta <= 0) {
+    errors.push('beta must be positive');
+  }
+
+  if (params.rate && varDef.rate <= 0) {
+    errors.push('rate must be positive');
+  }
+
+  return errors;
+}
+
+function addVariable() {
+  const errors = validateForm();
+  if (errors.length > 0) {
+    document.getElementById('form-error').textContent = errors.join('; ');
+    return;
+  }
+
+  const varDef = getFormValues();
+
+  // Check for duplicate
+  if (variables.some(v => v.name === varDef.name)) {
+    document.getElementById('form-error').textContent = 'Variable with this name already exists';
+    return;
+  }
+
+  variables.push(varDef);
+  document.getElementById('form-error').textContent = '';
+  clearForm();
+  renderVariableList();
+  updateYamlPreview();
+}
+
+function startEdit(name) {
+  const varDef = variables.find(v => v.name === name);
+  if (!varDef) return;
+
+  editingName = name;
+  document.getElementById('form-title').textContent = 'Edit Variable';
+  document.getElementById('add-var-btn').style.display = 'none';
+  document.getElementById('update-var-btn').style.display = '';
+  setFormValues(varDef);
+}
+
+function updateVariable() {
+  if (!editingName) return;
+
+  const errors = validateForm();
+  if (errors.length > 0) {
+    document.getElementById('form-error').textContent = errors.join('; ');
+    return;
+  }
+
+  const varDef = getFormValues();
+
+  // Check for duplicate if name changed
+  if (varDef.name !== editingName && variables.some(v => v.name === varDef.name)) {
+    document.getElementById('form-error').textContent = 'Variable with this name already exists';
+    return;
+  }
+
+  const idx = variables.findIndex(v => v.name === editingName);
+  if (idx !== -1) {
+    variables[idx] = varDef;
+  }
+
+  cancelEdit();
+  renderVariableList();
+  updateYamlPreview();
+}
+
+function cancelEdit() {
+  editingName = null;
+  document.getElementById('form-title').textContent = 'Add Variable';
+  document.getElementById('add-var-btn').style.display = '';
+  document.getElementById('update-var-btn').style.display = 'none';
+  document.getElementById('form-error').textContent = '';
+  clearForm();
+}
+
+function clearForm() {
+  document.getElementById('var-name').value = '';
+  document.getElementById('var-dist').value = 'uniform';
+  document.getElementById('var-desc').value = '';
+  document.getElementById('var-min').value = '';
+  document.getElementById('var-max').value = '';
+  document.getElementById('var-mean').value = '';
+  document.getElementById('var-sigma').value = '';
+  document.getElementById('var-mode').value = '';
+  document.getElementById('var-alpha').value = '';
+  document.getElementById('var-beta').value = '';
+  document.getElementById('var-rate').value = '';
+  document.getElementById('var-values-input').value = '';
+  discreteValues = [];
+  renderValuesList();
+  updateFormForDistribution();
+  drawDistribution();
+}
+
+function deleteVariable(name) {
+  variables = variables.filter(v => v.name !== name);
+  if (editingName === name) cancelEdit();
+  renderVariableList();
+  updateYamlPreview();
+}
+
+function renderVariableList() {
+  const listEl = document.getElementById('var-list');
+  document.getElementById('var-count').textContent = variables.length;
+
+  if (variables.length === 0) {
+    listEl.innerHTML = '<div class="empty">No variables yet. Add one using the form.</div>';
+    return;
+  }
+
+  listEl.innerHTML = variables.map(v => `
+    <div class="var-item">
+      <span class="var-name">${escapeHtml(v.name)}</span>
+      <span class="var-dist">${v.distribution}</span>
+      <span class="var-desc">${escapeHtml(v.description || '')}</span>
+      <div class="var-actions">
+        <button class="secondary small" onclick="startEdit('${escapeHtml(v.name)}')">Edit</button>
+        <button class="danger small" onclick="deleteVariable('${escapeHtml(v.name)}')">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderValuesList() {
+  const listEl = document.getElementById('values-list');
+  listEl.innerHTML = discreteValues.map((v, i) => `
+    <span class="value-chip">
+      ${escapeHtml(v)}
+      <button onclick="removeValue(${i})" title="Remove">&times;</button>
+    </span>
+  `).join('');
+}
+
+function removeValue(idx) {
+  discreteValues.splice(idx, 1);
+  document.getElementById('var-values-input').value = discreteValues.join(', ');
+  renderValuesList();
+  drawDistribution();
+}
+
+function updateYamlPreview() {
+  const yaml = toYaml({ variables });
+  document.getElementById('yaml-preview').textContent = yaml;
+}
+
+function toYaml(obj) {
+  // Simple YAML serializer
+  if (obj === null || obj === undefined) return 'null';
+  if (typeof obj !== 'object') return String(obj);
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return '[]';
+    return obj.map(item => '  - ' + toYaml(item).split('\n').join('\n    ')).join('\n');
+  }
+
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return '{}';
+
+  return keys.map(k => {
+    const v = obj[k];
+    if (v === null || v === undefined) return `${k}: null`;
+    if (typeof v === 'object') {
+      const inner = toYaml(v);
+      if (Array.isArray(v)) {
+        return `${k}:\n${inner.split('\n').map((l, i) => i === 0 ? `  ${l}` : `    ${l}`).join('\n')}`;
+      }
+      return `${k}:\n${inner.split('\n').map((l, i) => i === 0 ? `  ${l}` : `    ${l}`).join('\n')}`;
+    }
+    if (typeof v === 'string' && (v.includes(':') || v.includes('#') || v.includes("'") || v.includes('"'))) {
+      return `${k}: "${v.replace(/"/g, '\\"')}"`;
+    }
+    return `${k}: ${v}`;
+  }).join('\n');
+}
+
+function copyYaml() {
+  const yaml = document.getElementById('yaml-preview').textContent;
+  navigator.clipboard.writeText(yaml).then(() => {
+    const msg = document.getElementById('copy-msg');
+    msg.style.display = '';
+    setTimeout(() => msg.style.display = 'none', 2000);
+  });
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Distribution visualization
+function drawDistribution() {
+  const canvas = document.getElementById('dist-canvas');
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+  const dist = document.getElementById('var-dist').value;
+  const w = rect.width;
+  const h = rect.height;
+
+  // Clear
+  ctx.fillStyle = '#242836';
+  ctx.fillRect(0, 0, w, h);
+
+  // Draw axes
+  ctx.strokeStyle = '#2e3347';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(40, h - 30);
+  ctx.lineTo(w - 20, h - 30);
+  ctx.moveTo(40, h - 30);
+  ctx.lineTo(40, 20);
+  ctx.stroke();
+
+  // Get parameters
+  const varDef = getFormValues();
+
+  // Calculate x range and PDF values
+  let xMin, xMax, pdf;
+  const nPoints = 200;
+
+  try {
+    switch (dist) {
+      case 'uniform':
+        xMin = varDef.min ?? 0;
+        xMax = varDef.max ?? 1;
+        pdf = (x) => {
+          if (x < xMin || x > xMax) return 0;
+          return 1 / (xMax - xMin);
+        };
+        break;
+
+      case 'normal':
+      case 'lognormal': {
+        const mean = varDef.mean ?? 0;
+        const sigma = varDef.sigma ?? 1;
+        if (sigma <= 0) {
+          drawText(ctx, 'sigma must be > 0', w / 2, h / 2, w);
+          return;
+        }
+        if (dist === 'lognormal') {
+          xMin = Math.max(0, mean - 4 * sigma);
+          xMax = mean + 4 * sigma;
+        } else {
+          xMin = mean - 4 * sigma;
+          xMax = mean + 4 * sigma;
+        }
+        const sqrt2pi = Math.sqrt(2 * Math.PI);
+        const denom = sigma * sqrt2pi;
+        if (dist === 'lognormal') {
+          pdf = (x) => {
+            if (x <= 0) return 0;
+            const z = (Math.log(x) - mean) / sigma;
+            return Math.exp(-0.5 * z * z) / (x * denom);
+          };
+        } else {
+          pdf = (x) => Math.exp(-0.5 * ((x - mean) / sigma) ** 2) / denom;
+        }
+        break;
+      }
+
+      case 'triangular': {
+        xMin = varDef.min ?? 0;
+        xMax = varDef.max ?? 1;
+        const mode = varDef.mode !== undefined ? varDef.mode : (xMin + xMax) / 2;
+        const range = xMax - xMin;
+        if (range <= 0) {
+          drawText(ctx, 'min must be < max', w / 2, h / 2, w);
+          return;
+        }
+        const c = (mode - xMin) / range;
+        pdf = (x) => {
+          if (x < xMin || x > xMax) return 0;
+          const t = (x - xMin) / range;
+          if (t < c) return 2 * t / (range * c);
+          return 2 * (1 - t) / (range * (1 - c));
+        };
+        break;
+      }
+
+      case 'beta': {
+        const alpha = varDef.alpha ?? 2;
+        const beta = varDef.beta ?? 5;
+        if (alpha <= 0 || beta <= 0) {
+          drawText(ctx, 'alpha and beta must be > 0', w / 2, h / 2, w);
+          return;
+        }
+        xMin = 0;
+        xMax = 1;
+        const B = gammaLn(alpha) * gammaLn(beta) / gammaLn(alpha + beta);
+        pdf = (x) => {
+          if (x <= 0 || x >= 1) return 0;
+          return Math.pow(x, alpha - 1) * Math.pow(1 - x, beta - 1) / B;
+        };
+        break;
+      }
+
+      case 'gamma': {
+        const alpha = varDef.alpha ?? 2;
+        if (alpha <= 0) {
+          drawText(ctx, 'alpha must be > 0', w / 2, h / 2, w);
+          return;
+        }
+        xMin = 0;
+        xMax = alpha * 4; // Mean + 4 std devs (std = sqrt(alpha))
+        const gAlpha = alpha;
+        const gBeta = 1; // rate = 1/scale, scale = alpha
+        pdf = (x) => {
+          if (x <= 0) return 0;
+          return Math.pow(x, gAlpha - 1) * Math.exp(-x * gBeta) / (gammaLn(gAlpha));
+        };
+        break;
+      }
+
+      case 'exponential': {
+        const rate = varDef.rate ?? 1;
+        if (rate <= 0) {
+          drawText(ctx, 'rate must be > 0', w / 2, h / 2, w);
+          return;
+        }
+        xMin = 0;
+        xMax = 5 / rate;
+        pdf = (x) => {
+          if (x < 0) return 0;
+          return rate * Math.exp(-rate * x);
+        };
+        break;
+      }
+
+      case 'discrete':
+      case 'categorical': {
+        const vals = varDef.values || [];
+        if (vals.length === 0) {
+          drawText(ctx, 'Add values to see distribution', w / 2, h / 2, w);
+          return;
+        }
+        // Bar chart
+        const barW = (w - 60) / vals.length;
+        const barH = h - 60;
+        ctx.fillStyle = '#4f9cf9';
+        vals.forEach((v, i) => {
+          const x = 45 + i * barW;
+          const barHeight = barH * 0.8;
+          ctx.fillRect(x, h - 30 - barHeight, barW - 4, barHeight);
+          ctx.fillStyle = '#8b8fa8';
+          ctx.font = '10px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(String(v).substring(0, 6), x + barW / 2 - 2, h - 35);
+          ctx.fillStyle = '#4f9cf9';
+        });
+        // Y-axis label
+        ctx.fillStyle = '#8b8fa8';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('p = 1/' + vals.length, w / 2, 15);
+        return;
+      }
+
+      default:
+        drawText(ctx, 'Configure parameters to see distribution', w / 2, h / 2, w);
+        return;
+    }
+
+    // Calculate y range
+    const ys = [];
+    for (let i = 0; i < nPoints; i++) {
+      const x = xMin + (i / (nPoints - 1)) * (xMax - xMin);
+      ys.push(pdf(x));
+    }
+    const yMax = Math.max(...ys) * 1.1;
+
+    if (!isFinite(yMax) || yMax === 0) {
+      drawText(ctx, 'Invalid parameters', w / 2, h / 2, w);
+      return;
+    }
+
+    // Draw PDF curve
+    ctx.strokeStyle = '#4f9cf9';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < nPoints; i++) {
+      const x = xMin + (i / (nPoints - 1)) * (xMax - xMin);
+      const y = ys[i];
+      const px = 40 + (i / (nPoints - 1)) * (w - 60);
+      const py = h - 30 - (y / yMax) * (h - 60);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+
+    // Fill under curve
+    ctx.fillStyle = 'rgba(79, 156, 249, 0.2)';
+    ctx.lineTo(40 + (w - 60), h - 30);
+    ctx.lineTo(40, h - 30);
+    ctx.closePath();
+    ctx.fill();
+
+    // X-axis labels
+    ctx.fillStyle = '#8b8fa8';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(formatNum(xMin), 40, h - 10);
+    ctx.fillText(formatNum(xMax), w - 20, h - 10);
+    if (dist !== 'uniform' && dist !== 'discrete' && dist !== 'categorical') {
+      const mid = (xMin + xMax) / 2;
+      ctx.fillText(formatNum(mid), 40 + (w - 60) / 2, h - 10);
+    }
+
+    // Y-axis labels
+    ctx.textAlign = 'right';
+    ctx.fillText(formatNum(yMax), 35, 25);
+    ctx.fillText('0', 35, h - 25);
+
+    // Axis titles
+    ctx.fillStyle = '#8b8fa8';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('x', w - 15, h - 35);
+    ctx.save();
+    ctx.translate(15, h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('PDF', 0, 0);
+    ctx.restore();
+
+  } catch (e) {
+    drawText(ctx, 'Error computing distribution', w / 2, h / 2, w);
+  }
+}
+
+function drawText(ctx, text, x, y, maxWidth) {
+  ctx.fillStyle = '#8b8fa8';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y, maxWidth);
+}
+
+function formatNum(n) {
+  if (Math.abs(n) >= 1000) return n.toExponential(1);
+  if (Math.abs(n) < 0.01 && n !== 0) return n.toExponential(1);
+  return parseFloat(n.toPrecision(3)).toString();
+}
+
+// Gamma function approximation (Lanczos)
+function gammaLn(z) {
+  const g = 7;
+  const c = [
+    0.99999999999980993,
+    676.5203681218851,
+    -1259.1392167224028,
+    771.32342877765313,
+    -176.61502916214059,
+    12.507343278686905,
+    -0.13857109526572012,
+    9.9843695780195716e-6,
+    1.5056327351493116e-7
+  ];
+
+  if (z < 0.5) {
+    return Math.log(Math.PI / Math.sin(Math.PI * z)) - gammaLn(1 - z);
+  }
+
+  z -= 1;
+  let x = c[0];
+  for (let i = 1; i < g + 2; i++) {
+    x += c[i] / (z + i);
+  }
+  const t = z + g + 0.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+</script>
+</body>
+</html>

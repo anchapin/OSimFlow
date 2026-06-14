@@ -1,12 +1,13 @@
 """Web UI for campaign setup and results visualization (issue #337).
 
 Provides:
-  - GET  /ui/              — campaign setup page
-  - GET  /ui/api/campaigns  — list all campaigns with their status
-  - POST /ui/api/setup       — create and start a new campaign
-  - GET  /ui/api/campaigns/<id> — get campaign status / run.json
+  - GET  /ui/                   — campaign setup page
+  - GET  /ui/designer/           — visual variable designer (issue #381)
+  - GET  /ui/api/campaigns       — list all campaigns with their status
+  - POST /ui/api/setup           — create and start a new campaign
+  - GET  /ui/api/campaigns/<id>  — get campaign status / run.json
   - GET  /ui/api/campaigns/<id>/results — get aggregated_results.csv as JSON
-  - POST /ui/api/campaigns/<id>/stop     — stop a running campaign
+  - POST /ui/api/campaigns/<id>/stop    — stop a running campaign
 """
 
 from __future__ import annotations
@@ -87,6 +88,20 @@ async def get_ui_index() -> HTMLResponse:
     if html_path.exists():
         return HTMLResponse(content=html_path.read_text(), status_code=200)
     raise HTTPException(status_code=404, detail="UI not found")
+
+
+# ---------------------------------------------------------------------------
+# GET /ui/designer/  — serve the variable designer page (issue #381)
+# ---------------------------------------------------------------------------
+
+
+@ui_router.get("/designer/", response_class=HTMLResponse)
+async def get_variable_designer() -> HTMLResponse:
+    """Serve the OSimFlow visual variable designer page (issue #381)."""
+    html_path = Path(__file__).parent / "templates" / "variable_designer.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(), status_code=200)
+    raise HTTPException(status_code=404, detail="Variable designer not found")
 
 
 # ---------------------------------------------------------------------------
