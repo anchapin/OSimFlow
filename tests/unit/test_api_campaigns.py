@@ -501,6 +501,79 @@ class TestCancelCampaign:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/campaigns/compare
+# ---------------------------------------------------------------------------
+
+
+class TestCompareCampaigns:
+    """Tests for campaign comparison (issue #386)."""
+
+    def test_compare_both_found(
+        self, client_ro: TestClient, campaigns_base: Path
+    ) -> None:
+        """When both campaigns exist, return both details."""
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={"id1": "campaign-aaa", "id2": "campaign-bbb"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["left"] is not None
+        assert data["right"] is not None
+        assert data["left"]["campaign_id"] == "campaign-aaa"
+        assert data["right"]["campaign_id"] == "campaign-bbb"
+        assert data["left"]["status"] == "completed"
+        assert data["right"]["status"] == "running"
+
+    def test_compare_left_not_found(self, client_ro: TestClient) -> None:
+        """When left campaign is missing, return null for left."""
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={"id1": "nonexistent", "id2": "campaign-aaa"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["left"] is None
+        assert data["right"] is not None
+        assert data["right"]["campaign_id"] == "campaign-aaa"
+
+    def test_compare_right_not_found(self, client_ro: TestClient) -> None:
+        """When right campaign is missing, return null for right."""
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={"id1": "campaign-aaa", "id2": "nonexistent"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["left"] is not None
+        assert data["left"]["campaign_id"] == "campaign-aaa"
+        assert data["right"] is None
+
+    def test_compare_both_not_found(self, client_ro: TestClient) -> None:
+        """When neither campaign exists, return both as null."""
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={"id1": "nonexistent-1", "id2": "nonexistent-2"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["left"] is None
+        assert data["right"] is None
+
+    def test_compare_missing_id1(self, client_ro: TestClient) -> None:
+        """When id1 is not provided, return 422 validation error."""
+        resp = client_ro.get("/api/v1/campaigns/compare", params={"id2": "campaign-aaa"})
+        assert resp.status_code == 422
+
+    def test_compare_missing_id2(self, client_ro: TestClient) -> None:
+        """When id2 is not provided, return 422 validation error."""
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare", params={"id1": "campaign-aaa"}
+        )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Backward compatibility — existing endpoints still work
 # ---------------------------------------------------------------------------
 

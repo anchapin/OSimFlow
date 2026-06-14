@@ -253,6 +253,24 @@ class CampaignCancelResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Campaign comparison (issue #386)
+# ---------------------------------------------------------------------------
+
+
+class CampaignComparisonResponse(BaseModel):
+    """Side-by-side comparison of two campaigns."""
+
+    left: CampaignDetailResponse | None = Field(
+        default=None,
+        description="Left campaign details (or null if not found)",
+    )
+    right: CampaignDetailResponse | None = Field(
+        default=None,
+        description="Right campaign details (or null if not found)",
+    )
+
+
+# ---------------------------------------------------------------------------
 # File management (issue #273)
 # ---------------------------------------------------------------------------
 
