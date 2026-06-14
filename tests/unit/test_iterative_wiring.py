@@ -188,8 +188,8 @@ class TestDEFeedbackLoop:
 
         # After generate_samples(), _pending_proposed_samples must be cleared
         # (issue #332). _proposed_samples is the fallback path and is NOT
-        # consumed when the explicit slot is set.
-        assert algo._pending_proposed_samples is None, (
+        # consumed when the explicit slot is set.  Uses [] (falsy) as sentinel.
+        assert not algo._pending_proposed_samples, (
             "_pending_proposed_samples must be cleared after generate_samples() (issue #332)"
         )
 
@@ -282,7 +282,8 @@ class TestDAFeedbackLoop:
             assert orig["values"] == loaded["values"]
 
         # _pending_proposed_samples must be cleared after use (issue #332).
-        assert algo._pending_proposed_samples is None, (
+        # Uses [] (falsy) as sentinel.
+        assert not algo._pending_proposed_samples, (
             "_pending_proposed_samples must be cleared after generate_samples()"
         )
         # _proposed_samples (fallback path) is also set by observe() dual-write
