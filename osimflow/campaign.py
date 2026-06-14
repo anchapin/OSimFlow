@@ -62,6 +62,7 @@ from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .jobqueue import JobQueue
+from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -318,7 +319,7 @@ class Campaign:
 
         # Resolve the work-scripts directory.
         scripts_dir = Path(__file__).resolve().parent / "_work_scripts"
-        if not scripts_dir.is_dir():
+        if not scripts_dir.is_dir():  # noqa: SIM108
             # Development fallback: repo root bin/ directory.
             scripts_dir = Path(__file__).resolve().parent.parent / "bin"
         files = sorted(scripts_dir.glob("*.py"))
@@ -1598,6 +1599,7 @@ class Campaign:
             self.step_preflight_run_model()
 
         parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
+        self.step_validate_measure_variables(generation=generation)
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
 
@@ -2098,6 +2100,61 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
+
+    def step_validate_measure_variables(self, generation: int = 0) -> None:
+        """Validate variables.yml against discovered measure arguments.
+
+        Runs before ``RUN_OPENSTUDIO_SIM`` as a pre-flight check (GAP-003).
+        Raises ``UnmappedVariableError`` if any variable name in
+        ``variables.yml`` does not correspond to a discovered measure
+        argument.
+        """
+        if self.cfg.skip_preflight:
+            return
+
+        if not self.cfg.input_variables.exists():
+            return
+
+        t0 = time.time()
+        try:
+            with self.cfg.input_variables.open() as fh:
+                raw = yaml.safe_load(fh)
+            variables: list[dict[str, Any]]
+            if isinstance(raw, dict):
+                variables = raw.get("variables", [])
+            else:
+                variables = []
+        except Exception:
+            return
+
+        if not variables:
+            return
+
+        registry = MeasureRegistry()
+        registry.index_measures(self.cfg.template_sim_package)
+
+        if not registry._measures:
+            return
+
+        try:
+            registry.validate_variables_mapping(variables, registry)
+        except UnmappedVariableError:
+            self.trace.step_finished(
+                "VALIDATE_MEASURE_VARIABLES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
+            )
+            self._obs.record_step_duration("VALIDATE_MEASURE_VARIABLES", time.time() - t0)
+            raise
+
+        self.trace.step_finished(
+            "VALIDATE_MEASURE_VARIABLES",
+            cache="MISS",
+            elapsed_s=time.time() - t0,
+            exit_code=0,
+        )
+        self._obs.record_step_duration("VALIDATE_MEASURE_VARIABLES", time.time() - t0)
 
     def step_apply_parameters(  # noqa: PLR0915
         self,
