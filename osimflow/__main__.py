@@ -268,9 +268,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help=(
             "Apply a named preset of recommended flags for a specific use case. "
             "Individual CLI flags override preset values. "
-            "Presets: "
-            + ", ".join(PRESETS.keys())
-            + ". "
+            "Presets: " + ", ".join(PRESETS.keys()) + ". "
             "Use 'local-quick' for a fast 2-sample local test. "
             "Use 'slurm-hpc' for a real Slurm cluster. "
             "Use 'aws-batch-cloud' for AWS Batch. "
