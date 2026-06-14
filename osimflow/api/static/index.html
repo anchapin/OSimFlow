@@ -214,6 +214,7 @@ tr:hover td { background: var(--surface-alt); }
 .live-feed .evt-type { font-weight: 600; min-width: 160px; }
 .live-feed .evt-type.sample-started { color: var(--warning); }
 .live-feed .evt-type.sample-completed { color: var(--success); }
+.live-feed .evt-type.sample-error { color: var(--danger); }
 .live-feed .evt-type.step-completed { color: var(--primary); }
 .live-feed .evt-type.campaign-completed { color: var(--cached); }
 
@@ -911,6 +912,13 @@ function connectSSE() {
       addFeedEvent('sample-completed', `sample.completed — ${d.sample_id} (${d.status})`, '');
       // Auto-refresh dashboard if visible
       if (state.currentPage === 'dashboard') loadDashboard();
+      if (state.currentPage === 'samples') loadSamples();
+    });
+    es.addEventListener('sample.error', e => {
+      const d = JSON.parse(e.data);
+      const errMsg = d.error_summary ? `: ${d.error_summary}` : '';
+      addFeedEvent('sample-error', `sample.error — ${d.sample_id}${errMsg}`, '');
+      // Auto-refresh samples page to show updated error info
       if (state.currentPage === 'samples') loadSamples();
     });
     es.addEventListener('step.completed', e => {

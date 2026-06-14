@@ -407,3 +407,34 @@ class MeasureListResponse(BaseModel):
     source: str = Field(
         description="Source of measure information: workflow.osw | template_package"
     )
+
+
+# ---------------------------------------------------------------------------
+# Error diagnosis (issue #385)
+# ---------------------------------------------------------------------------
+
+
+class ErrorDiagnosisResponse(BaseModel):
+    """Error diagnosis result for a failed sample."""
+
+    sample_id: str = Field(description="Sample identifier")
+    error_summary: str | None = Field(default=None, description="First severe error line from eplusout.err")
+    failure_category: str | None = Field(
+        default=None,
+        description="Classified failure type: convergence | surface_geometry | hvac_sizing | schedule | material_construction | weather_file | memory_timeout | timestep_instability | generic_severe",
+    )
+    root_cause_line: str | None = Field(
+        default=None, description="Root cause line from the error file"
+    )
+    total_severe_errors: int = Field(
+        default=0, description="Total count of severe errors in the error file"
+    )
+    diagnosis_suggestion: str | None = Field(
+        default=None, description="Actionable suggestion for resolving this error"
+    )
+    severity: str | None = Field(
+        default=None, description="Error severity: critical | high | medium | low"
+    )
+    log_path: str | None = Field(
+        default=None, description="Path to the eplusout.err file"
+    )

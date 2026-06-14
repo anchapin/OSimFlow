@@ -148,7 +148,7 @@ class TestDiffEvents:
         assert "campaign.completed" in event_types
 
     def test_failed_sample(self) -> None:
-        """Emits sample.completed for failed status."""
+        """Emits sample.completed and sample.error for failed status (issue #385)."""
         old = _make_run_json(samples=[])
         new = _make_run_json(
             samples=[
@@ -161,9 +161,12 @@ class TestDiffEvents:
             ]
         )
         events = diff_events(old, new)
-        assert len(events) == 1
+        assert len(events) == 2
         assert events[0]["event"] == "sample.completed"
         assert events[0]["data"]["status"] == "failed"
+        assert events[1]["event"] == "sample.error"
+        assert events[1]["data"]["sample_id"] == "sample_001"
+        assert events[1]["data"]["error_summary"] == "Severe Error"
 
     def test_cached_sample(self) -> None:
         """Emits sample.completed for cached status."""

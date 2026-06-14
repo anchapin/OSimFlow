@@ -10,6 +10,7 @@ Security features (issue #268):
 
 import json
 import logging
+import re
 import secrets
 from pathlib import Path
 from typing import Any, cast
@@ -377,6 +378,218 @@ async def get_plot_file(filename: str, request: Request) -> FileResponse:
         if candidate.is_file():
             return FileResponse(candidate, media_type="image/png")
     raise HTTPException(status_code=404, detail=f"Plot '{safe_name}' not found")
+
+
+# ---------------------------------------------------------------------------
+# Error diagnosis (issue #385)
+# ---------------------------------------------------------------------------
+
+# Error classification patterns — mirrors aggregate_results.py for consistency.
+_ERROR_FAILURE_PATTERNS: list[tuple[str, list[re.Pattern[str]]]] = [
+    (
+        "convergence",
+        [
+            re.compile(r"did not converge", re.IGNORECASE),
+            re.compile(r"exceeded max iterations", re.IGNORECASE),
+            re.compile(r"not converged", re.IGNORECASE),
+            re.compile(r"iteration.?limit", re.IGNORECASE),
+        ],
+    ),
+    (
+        "surface_geometry",
+        [
+            re.compile(r"surface.*(?:intersection|non.convex)", re.IGNORECASE),
+            re.compile(r"non.convex\s*surface", re.IGNORECASE),
+            re.compile(r"zero.area\s*surface", re.IGNORECASE),
+            re.compile(r"surfaceless\s*zone", re.IGNORECASE),
+            re.compile(r"detected.*zero.area", re.IGNORECASE),
+        ],
+    ),
+    (
+        "hvac_sizing",
+        [
+            re.compile(r"autosize.*(?:failed|out.of.range)", re.IGNORECASE),
+            re.compile(r"plant\s*loop.*(?:not.converged|no.demand|no.load)", re.IGNORECASE),
+            re.compile(r"no\s*load\s*on\s*plant\s*loop", re.IGNORECASE),
+            re.compile(r"sizing.*(?:failed|error)", re.IGNORECASE),
+        ],
+    ),
+    (
+        "schedule",
+        [
+            re.compile(r"schedule.*(?:not.found|invalid|does not exist)", re.IGNORECASE),
+            re.compile(r"(?:missing|unknown)\s*schedule", re.IGNORECASE),
+        ],
+    ),
+    (
+        "material_construction",
+        [
+            re.compile(r"material.*(?:not.found|does not exist)", re.IGNORECASE),
+            re.compile(r"construction.*(?:not.found|does not exist|invalid)", re.IGNORECASE),
+            re.compile(r"(?:missing|unknown)\s*(?:material|construction)", re.IGNORECASE),
+        ],
+    ),
+    (
+        "weather_file",
+        [
+            re.compile(r"weather\s*file.*(?:error|not.found|invalid|missing)", re.IGNORECASE),
+            re.compile(r"cannot\s*(?:open|find|read).*\.epw", re.IGNORECASE),
+        ],
+    ),
+    (
+        "memory_timeout",
+        [
+            re.compile(r"(?:allocation|memory).*error", re.IGNORECASE),
+            re.compile(r"timeout", re.IGNORECASE),
+            re.compile(r"out\s*of\s*memory", re.IGNORECASE),
+        ],
+    ),
+    (
+        "timestep_instability",
+        [
+            re.compile(r"temperatures?\s*out\s*of\s*bounds?", re.IGNORECASE),
+            re.compile(r"node.*temperature\s*out\s*of\s*range", re.IGNORECASE),
+            re.compile(r"facsimile.*failed", re.IGNORECASE),
+            re.compile(r"timestep.*(?:unstable|error)", re.IGNORECASE),
+        ],
+    ),
+]
+
+_ERROR_CATEGORY_SUGGESTIONS: dict[str, str] = {
+    "convergence": "Consider increasing iteration limits or relaxing convergence tolerances in the HVAC controller settings.",
+    "surface_geometry": "Simplify geometry or fix non-convex surfaces. Check for coincident/overlapping surfaces.",
+    "hvac_sizing": "Review autosizing parameters or provide manual sizing values. Verify design-day definitions.",
+    "schedule": "Check schedule names in the model match those referenced by objects (e.g., thermostat, lights).",
+    "material_construction": "Verify all materials and constructions are defined and referenced correctly in the model.",
+    "weather_file": "Verify the EPW weather file exists, is readable, and has the expected format.",
+    "memory_timeout": "Reduce model complexity or increase available compute resources (memory/timestep count).",
+    "timestep_instability": "Reduce the simulation timestep (e.g., from 60 to 10 minutes) or relax convergence criteria.",
+    "generic_severe": "Review the full eplusout.err for additional context around this error.",
+}
+
+
+def _classify_error_line(line: str) -> str:
+    """Classify an error line into a failure category."""
+    for category, patterns in _ERROR_FAILURE_PATTERNS:
+        for pat in patterns:
+            if pat.search(line):
+                return category
+    return "generic_severe"
+
+
+def _count_severe_errors(err_path: Path) -> int:
+    """Count total severe error lines in an EnergyPlus error file."""
+    count = 0
+    try:
+        with err_path.open() as f:
+            for line in f:
+                if "  * Severe" in line or "** Severe" in line:
+                    count += 1
+    except (OSError, UnicodeDecodeError):
+        log.warning("Could not read error file for counting: %s", err_path)
+    return count
+
+
+def _find_root_cause_line(err_path: Path) -> str:
+    """Find the earliest root-cause line from an EnergyPlus error file."""
+    first_severe = ""
+    try:
+        with err_path.open() as f:
+            for line in f:
+                stripped = line.strip()
+                if not first_severe and ("  * Severe" in line or "** Severe" in line):
+                    first_severe = stripped
+                for _cat, patterns in _ERROR_FAILURE_PATTERNS:
+                    for pat in patterns:
+                        if pat.search(stripped):
+                            return stripped
+    except (OSError, UnicodeDecodeError):
+        log.warning("Could not read error file for root cause: %s", err_path)
+    return first_severe
+
+
+def _diagnose_sample_error(err_path: Path) -> dict[str, Any]:
+    """Diagnose an EnergyPlus error file and return actionable information.
+
+    Returns a dict with keys: category, summary, root_cause_line,
+    total_severe_errors, diagnosis_suggestion, severity.
+    """
+    error_summary = ""
+    try:
+        with err_path.open() as f:
+            for line in f:
+                if "  * Severe" in line or "** Severe" in line:
+                    error_summary = line.strip()
+                    break
+    except (OSError, UnicodeDecodeError):
+        log.warning("Could not read error file: %s", err_path)
+        return {
+            "category": "generic_severe",
+            "summary": "",
+            "root_cause_line": "",
+            "total_severe_errors": 0,
+            "diagnosis_suggestion": _ERROR_CATEGORY_SUGGESTIONS["generic_severe"],
+            "severity": "high",
+        }
+
+    category = _classify_error_line(error_summary)
+    total_severe = _count_severe_errors(err_path)
+    root_cause = _find_root_cause_line(err_path)
+    suggestion = _ERROR_CATEGORY_SUGGESTIONS.get(category, _ERROR_CATEGORY_SUGGESTIONS["generic_severe"])
+
+    return {
+        "category": category,
+        "summary": error_summary[:500],
+        "root_cause_line": root_cause[:500] if root_cause else error_summary[:500],
+        "total_severe_errors": total_severe,
+        "diagnosis_suggestion": suggestion,
+        "severity": "critical" if total_severe > 10 else "high",
+    }
+
+
+@router.get("/api/v1/errors/{sample_id}")  # type: ignore[untyped-decorator]
+async def get_sample_error(sid: str, request: Request) -> dict[str, Any]:
+    """Get detailed error diagnosis for a failed sample.
+
+    Reads the ``eplusout.err`` file from the sample's simulation directory
+    and returns classified error information with actionable suggestions.
+    """
+    # Validate sample ID to prevent path traversal.
+    try:
+        safe_sid = sanitize_sample_id(sid)
+    except OsimflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if request.app.state.outdir is None:
+        raise HTTPException(status_code=503, detail="No output directory configured")
+
+    outdir_resolved: Path = request.app.state.outdir.resolve()
+    sim_dir = outdir_resolved / "work" / "sim" / safe_sid
+
+    # Validate the resolved sim_dir stays within outdir.
+    try:
+        validate_path_within_base(sim_dir.resolve(), outdir_resolved)
+    except OsimflowValidationError:
+        raise HTTPException(status_code=400, detail="Invalid sample directory") from None
+
+    err_path = sim_dir / "eplusout.err"
+    if not err_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No error file found for sample '{safe_sid}'",
+        )
+
+    diagnosis = _diagnose_sample_error(err_path)
+    return {
+        "sample_id": safe_sid,
+        "error_summary": diagnosis["summary"],
+        "failure_category": diagnosis["category"],
+        "root_cause_line": diagnosis["root_cause_line"],
+        "total_severe_errors": diagnosis["total_severe_errors"],
+        "diagnosis_suggestion": diagnosis["diagnosis_suggestion"],
+        "severity": diagnosis["severity"],
+        "log_path": str(err_path),
+    }
 
 
 # ---------------------------------------------------------------------------
