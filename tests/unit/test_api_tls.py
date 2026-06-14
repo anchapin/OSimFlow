@@ -54,9 +54,7 @@ class TestTLSServeCLI:
         parser = _build_parser()
         cert = tmp_path / "cert.pem"
         cert.touch()
-        args = parser.parse_args(
-            ["serve", "--outdir", str(tmp_path), "--tls-cert", str(cert)]
-        )
+        args = parser.parse_args(["serve", "--outdir", str(tmp_path), "--tls-cert", str(cert)])
 
         mock_app = MagicMock()
         mock_uvicorn = MagicMock()
@@ -75,9 +73,7 @@ class TestTLSServeCLI:
         parser = _build_parser()
         key = tmp_path / "key.pem"
         key.touch()
-        args = parser.parse_args(
-            ["serve", "--outdir", str(tmp_path), "--tls-key", str(key)]
-        )
+        args = parser.parse_args(["serve", "--outdir", str(tmp_path), "--tls-key", str(key)])
 
         mock_app = MagicMock()
         mock_uvicorn = MagicMock()
