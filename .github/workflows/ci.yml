@@ -87,7 +87,7 @@ jobs:
       - name: Install (editable + dev extras)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       - name: mypy osimflow/
         run: .venv/bin/mypy osimflow
@@ -118,7 +118,7 @@ jobs:
       - name: Install (editable + dev extras)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       - name: AGENTS.md / code drift
         run: .venv/bin/python tools/check_agents_contract.py
@@ -160,7 +160,7 @@ jobs:
       - name: Install (editable + dev extras)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       - name: Install pip-audit
         run: uv pip install --python .venv/bin/python "pip-audit>=2.7"
@@ -220,7 +220,7 @@ jobs:
       - name: Install (editable + all extras + pytest-xdist)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,api,sensitivity,optimization]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization]"
           uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
 
       - name: pytest with coverage gate
@@ -278,7 +278,7 @@ jobs:
       - name: Install (editable + dev + aws extras)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       - name: pytest (AWS Batch mocked tests)
         run: .venv/bin/pytest tests/integration/test_aws_batch_mocked.py -v --no-cov
@@ -317,7 +317,7 @@ jobs:
       - name: Install (editable + dev extras)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       # -------------------------------------------------------------------
       # Docker diagnostics (issue #195)

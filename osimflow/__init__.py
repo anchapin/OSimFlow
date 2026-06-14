@@ -12,6 +12,7 @@ from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
 from .config import CampaignConfig, load_config
+from .distributed_cache import DistributedCache, build_cache
 from .executors import (
     AWSBatchExecutor,
     AzureBatchExecutor,
@@ -76,6 +77,8 @@ __all__ = [
     "Campaign",
     "CampaignConfig",
     "load_config",
+    "DistributedCache",
+    "build_cache",
     "BaseExecutor",
     "LocalExecutor",
     "SlurmExecutor",

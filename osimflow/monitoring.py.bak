@@ -29,7 +29,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 log = logging.getLogger("osimflow.monitoring")
 
@@ -135,9 +135,9 @@ class RunTrace:
         # Per-campaign cost tracking (issue #126).
         self.total_cost_usd: float = 0.0
         self.spot_savings_usd: float = 0.0
-        self.status: str = "running"  # "running", "success", "cancelled", "failed"
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
+        self.status: str = "running"  # "running", "success", "cancelled", "failed"
 
     # ------------------------------------------------------------------
     # Step hooks (called by the Campaign)
@@ -198,11 +198,10 @@ class RunTrace:
         d: dict[str, object] = {
             "schema_version": self.SCHEMA_VERSION,
             "campaign_id": self.campaign_id,
-            "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
-            # NOTE: This is the only status key in this dict - do not duplicate (issue #6241b5d)
+            "status": self.status,
             "config": self.config_summary,
             "summary": {
                 "n_samples": len(self.per_sample),
@@ -250,7 +249,7 @@ class RunTrace:
             return
 
         if not path.exists():
-            data: dict[str, object] = {
+            data = {
                 "schema_version": self.SCHEMA_VERSION,
                 "campaign_id": self.campaign_id,
                 "started_at": self.started_at,
@@ -280,11 +279,11 @@ class RunTrace:
             return
 
         try:
-            data = cast(dict[str, Any], json.loads(path.read_text()))
+            raw: dict[str, object] = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             return
 
-        samples: list[dict[str, object]] = data.get("per_sample", [])  # type: ignore[assignment]
+        samples: list[dict[str, object]] = raw.get("per_sample", [])  # type: ignore[assignment]
         replaced = False
         for i, s in enumerate(samples):
             if s.get("sample_id") == trace.sample_id:
@@ -293,18 +292,19 @@ class RunTrace:
                 break
         if not replaced:
             samples.append(trace.to_dict())
-        data["per_sample"] = samples
+        raw["per_sample"] = samples
 
-        n_succeeded = sum(1 for s in samples if s.get("status") == "ok")
-        n_failed = sum(1 for s in samples if s.get("status") == "failed")
-        if "summary" not in data:
-            data["summary"] = {}
-        data["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
-        data["summary"]["n_failed"] = n_failed  # type: ignore[index]
-        data["summary"]["n_samples"] = len(samples)  # type: ignore[index]
+        per_sample: list[dict[str, object]] = raw.get("per_sample", [])  # type: ignore[assignment]
+        n_succeeded = sum(1 for s in per_sample if s.get("status") == "ok")
+        n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+        if "summary" not in raw:
+            raw["summary"] = {}
+        raw["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
+        raw["summary"]["n_failed"] = n_failed  # type: ignore[index]
+        raw["summary"]["n_samples"] = len(per_sample)  # type: ignore[index]
 
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2, default=str))
+        tmp.write_text(json.dumps(raw, indent=2, default=str))
         tmp.rename(path)
 
     def write(self, path: Path) -> None:
