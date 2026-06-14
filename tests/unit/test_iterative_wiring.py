@@ -621,3 +621,127 @@ class TestExplicitPendingSamplesSlot:
         assert returned == pending, (
             "observe() return must match _pending_proposed_samples (issue #332)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Observe validation error path (issue #332)
+# ---------------------------------------------------------------------------
+
+
+class TestObserveValidation:
+    """Verify observe() return vs _pending_proposed_samples mismatch logging (issue #332)."""
+
+    def test_observe_mismatch_logs_error(
+        self, tmp_dirs: tuple[Path, Path, Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When observe() return != _pending_proposed_samples, an error must be logged."""
+        from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
+
+        algo = DifferentialEvolutionAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+
+        # Manually corrupt _pending_proposed_samples to trigger mismatch error.
+        algo.observe(history)
+        algo._pending_proposed_samples = [{"sample_id": "fake", "values": {}}]  # type: ignore[list-item]
+
+        # Now run a campaign — the mismatch should log an error.
+        template, variables_yml, outdir = tmp_dirs
+        cfg = _make_cfg(
+            template,
+            variables_yml,
+            outdir / "mismatch_test",
+            n_samples=2,
+            max_generations=2,
+            algorithm="de",
+        )
+        with caplog.at_level("ERROR"):
+            _run_campaign(cfg)
+
+        # The mismatch should produce a log error (the Campaign.run() calls
+        # observe() internally and checks the contract).
+        assert any("observe() return value does not match" in r.message for r in caplog.records), (
+            "observe() mismatch should log an error"
+        )
+
+
+# ---------------------------------------------------------------------------
+# step_validate_measure_variables coverage (GAP-003)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateMeasureVariables:
+    """Cover step_validate_measure_variables (GAP-003)."""
+
+    def test_validate_measure_variables_no_preflight(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When skip_preflight=True, validate_measure_variables returns early."""
+        template, variables_yml, outdir = tmp_dirs
+        cfg = _make_cfg(
+            template,
+            variables_yml,
+            outdir / "novalidate_test",
+            n_samples=2,
+            max_generations=1,
+            algorithm="lhs",
+        )
+        # skip_preflight=True is set by _make_cfg — validate should be a no-op.
+        executor = LocalExecutor(max_workers=1)
+        campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
+        # This should not raise even if variables.yml references non-existent measures.
+        campaign.step_validate_measure_variables(generation=0)
+
+    def test_validate_measure_variables_no_variables_file(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When input_variables does not exist, validate returns early."""
+        template, _, outdir = tmp_dirs
+        variables_yml = tmp_dirs[1]
+        # Remove variables.yml
+        variables_yml.unlink()
+        cfg = _make_cfg(
+            template,
+            variables_yml,
+            outdir / "novars_test",
+            n_samples=2,
+            max_generations=1,
+            algorithm="lhs",
+        )
+        executor = LocalExecutor(max_workers=1)
+        campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
+        campaign.step_validate_measure_variables(generation=0)
+
+    def test_validate_measure_variables_empty_variables(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When variables.yml has empty variables list, validate returns early."""
+        template, variables_yml, outdir = tmp_dirs
+        # Write empty variables
+        variables_yml.write_text(yaml.dump({"variables": []}))
+        cfg = _make_cfg(
+            template,
+            variables_yml,
+            outdir / "emptyvars_test",
+            n_samples=2,
+            max_generations=1,
+            algorithm="lhs",
+        )
+        executor = LocalExecutor(max_workers=1)
+        campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
+        campaign.step_validate_measure_variables(generation=0)
