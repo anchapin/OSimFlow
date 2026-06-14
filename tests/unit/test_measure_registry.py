@@ -10,16 +10,11 @@ Covers:
 
 from __future__ import annotations
 
-import json
-import shutil
 from pathlib import Path
 
 import pytest
 
 from osimflow.measures import (
-    AmbiguousVariableError,
-    DiscoveredMeasure,
-    MeasureArgument,
     MeasureRegistry,
     UnmappedVariableError,
 )

@@ -315,7 +315,7 @@ class Campaign:
 
         # Resolve the work-scripts directory.
         scripts_dir = Path(__file__).resolve().parent / "_work_scripts"
-        if not scripts_dir.is_dir():
+        if not scripts_dir.is_dir():  # noqa: SIM108
             # Development fallback: repo root bin/ directory.
             scripts_dir = Path(__file__).resolve().parent.parent / "bin"
         files = sorted(scripts_dir.glob("*.py"))
