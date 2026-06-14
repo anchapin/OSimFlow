@@ -198,6 +198,14 @@ class CampaignConfig:
     # S3-compatible endpoint URL for result storage (issue #339).
     # Used for MinIO, Cloudflare R2, and other S3-compatible stores.
     result_storage_endpoint: str | None = None
+    # Redis pub/sub for distributed cache invalidation (issue #330).
+    # When set, the campaign uses RedisCache instead of SQLiteCache.
+    # Format: redis://<host>:<port>[/db]. Example: "redis://localhost:6379/0".
+    redis_url: str | None = None
+    # Redis channel name for cache invalidation broadcasts (issue #330).
+    # Default: "osimflow:cache:invalidate". All workers in a distributed
+    # campaign must use the same channel.
+    redis_channel: str = "osimflow:cache:invalidate"
 
     @property
     def work_dir(self) -> Path:
@@ -470,4 +478,6 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         result_storage_endpoint=(
             str(args["result_storage_endpoint"]) if args.get("result_storage_endpoint") else None
         ),
+        redis_url=str(args["redis_url"]) if args.get("redis_url") else None,
+        redis_channel=str(args.get("redis_channel", "osimflow:cache:invalidate")),
     )

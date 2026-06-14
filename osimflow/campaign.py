@@ -58,7 +58,7 @@ from .apply_params import (
     _build_mappings,
     preflight_check,
 )
-from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
+from .cache import CacheKey, RedisCache, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .jobqueue import JobQueue
@@ -197,7 +197,12 @@ class Campaign:
             )
         else:
             self.extract_fn = extract_kpis
-        self.cache = SQLiteCache(cfg.cache_db)
+        if cfg.redis_url:
+            log.info("using RedisCache (redis_url=%s channel=%s)", cfg.redis_url, cfg.redis_channel)
+            self.cache = RedisCache(cfg.cache_db, cfg.redis_url, cfg.redis_channel)
+        else:
+            log.info("using SQLiteCache (local mode)")
+            self.cache = SQLiteCache(cfg.cache_db)
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in

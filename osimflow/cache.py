@@ -276,3 +276,133 @@ class SQLiteCache:
                 c.execute("SELECT step, COUNT(*) FROM cache_entries GROUP BY step").fetchall()
             )
         return {"total": n_total, "by_step": by_step}
+
+
+class RedisCache:
+    """Redis-backed distributed cache for multi-node campaigns.
+
+    Uses Redis pub/sub to broadcast cache invalidation events so that all
+    workers share a consistent cache view. Each worker still maintains a
+    local SQLite cache for reads, but invalidations are propagated via Redis.
+
+    The Redis channel carries JSON messages with the following shape::
+
+        {"action": "invalidate_step", "step": "RUN_OPENSTUDIO_SIM", "count": <int>}
+        {"action": "invalidate_sample", "step": "...", "sample_id": "..."}
+        {"action": "store", "key": {...}}
+
+    Only invalidation broadcasts are sent over pub/sub; store operations
+    are written directly to the local SQLite and the broadcast is a hint
+    for other nodes to invalidate their local entries.
+    """
+
+    def __init__(
+        self,
+        db_path: Path,
+        redis_url: str,
+        channel: str = "osimflow:cache:invalidate",
+    ) -> None:
+        self.sqlite = SQLiteCache(db_path)
+        self.redis_url = redis_url
+        self.channel = channel
+        self._pubsub: object | None = None
+        self._redis: object | None = None
+        self._lock = threading.Lock()
+        self._ready = False
+        self._init_redis()
+
+    def _init_redis(self) -> None:
+        import redis as redis_lib
+
+        self._redis = redis_lib.from_url(
+            self.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+        )
+        try:
+            self._redis.ping()
+        except Exception as exc:
+            log.warning("Redis ping failed: %s (proceeding without pub/sub)", exc)
+            return
+        self._pubsub = self._redis.pubsub()
+        try:
+            self._pubsub.subscribe(self.channel)
+        except Exception as exc:
+            log.warning("Redis subscribe failed: %s (proceeding without pub/sub)", exc)
+            self._pubsub = None
+            return
+        self._ready = True
+        log.info("RedisCache connected to %s channel=%s", self.redis_url, self.channel)
+
+    def _broadcast(self, action: str, **kwargs: object) -> None:
+        if not self._ready:
+            return
+        import json
+
+        try:
+            msg = json.dumps({"action": action, **kwargs}, default=str)
+            self._redis.publish(self.channel, msg)  # type: ignore[union-attr]
+        except Exception as exc:
+            log.warning("Redis broadcast failed: %s", exc)
+
+    def lookup(self, key: CacheKey) -> Path | None:
+        return self.sqlite.lookup(key)
+
+    def store(self, key: CacheKey, output_path: Path, exit_code: int) -> None:
+        self.sqlite.store(key, output_path, exit_code)
+        self._broadcast(
+            "store",
+            key={
+                "step": key.step,
+                "sample_id": key.sample_id,
+                "openstudio_version": key.openstudio_version,
+                "inputs_sha256": key.inputs_sha256,
+                "code_sha256": key.code_sha256,
+                "container_digest": key.container_digest,
+                "generation": key.generation,
+            },
+            output_path=str(output_path),
+            exit_code=exit_code,
+        )
+
+    def invalidate_step(self, step: str) -> int:
+        n = self.sqlite.invalidate_step(step)
+        self._broadcast("invalidate_step", step=step, count=n)
+        return n
+
+    def invalidate_sample(self, step: str, sample_id: str) -> int:
+        n = self.sqlite.invalidate_sample(step, sample_id)
+        self._broadcast("invalidate_sample", step=step, sample_id=sample_id, count=n)
+        return n
+
+    def stats(self) -> dict[str, object]:
+        base = self.sqlite.stats()
+        base["backend"] = "redis+sqlite"
+        base["redis_url"] = self.redis_url
+        base["channel"] = self.channel
+        return base
+
+    def close(self) -> None:
+        if self._pubsub is not None:
+            try:
+                self._pubsub.unsubscribe()
+                self._pubsub.close()
+            except Exception:
+                pass
+        if self._redis is not None:
+            try:
+                self._redis.close()
+            except Exception:
+                pass
+        self.sqlite.close()
+        log.debug("RedisCache closed")
+
+    def __enter__(self) -> RedisCache:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
