@@ -286,10 +286,10 @@ class TestDAFeedbackLoop:
         assert not algo._pending_proposed_samples, (
             "_pending_proposed_samples must be cleared after generate_samples()"
         )
-        # _proposed_samples (fallback path) is also set by observe() dual-write
-        # and is NOT cleared when the explicit slot is used (issue #332).
-        assert len(algo._proposed_samples) > 0, (
-            "_proposed_samples (fallback) must be set by observe() dual-write"
+        # _proposed_samples is also cleared when the explicit slot is used
+        # (issue #332) — both slots are consumed together.
+        assert not algo._proposed_samples, (
+            "_proposed_samples must be cleared when explicit slot is consumed"
         )
 
     def test_da_two_generation_campaign(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
@@ -526,7 +526,7 @@ class TestExplicitPendingSamplesSlot:
         samples1 = json.loads(path1.read_text())["samples"]
 
         pending = algo._pending_proposed_samples
-        assert pending is None, "_pending_proposed_samples must be cleared after use"
+        assert not pending, "_pending_proposed_samples must be cleared after use"
         assert len(samples1) == len(algo.observe(history)), (
             "generate_samples() must use _pending_proposed_samples when only that is set"
         )
