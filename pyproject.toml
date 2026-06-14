@@ -184,7 +184,7 @@ fixable = ["ALL"]
 "**/__init__.py" = ["F401"]
 # Executors use lazy SDK imports inside __init__ to avoid paying import
 # cost when the local/slurm path is used (AWSBatchExecutor precedent).
-"osimflow/executors/__init__.py" = ["PLC0415"]
+"osimflow/executors/*.py" = ["PLC0415"]
 # base.py defines shared primitives; import order here is intentional to
 # avoid circular deps (azure/google_batch_executor import from base).
 "osimflow/executors/__init__.py" = ["I001"]
