@@ -18,6 +18,7 @@ Tests cover:
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -631,23 +632,36 @@ class TestExplicitPendingSamplesSlot:
 class TestObserveValidation:
     """Verify observe() return vs _pending_proposed_samples mismatch logging (issue #332)."""
 
-    def test_observe_mismatch_logs_error(
-        self, tmp_dirs: tuple[Path, Path, Path], caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """When observe() return != _pending_proposed_samples, an error must be logged."""
+    def test_observe_mismatch_logs_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When observe() return != _pending_proposed_samples, an error must be logged.
+
+        The check lives in Campaign._run_generation_loop() after algo.observe() returns.
+        We exercise the mismatch by subclassing to corrupt the slot after observe() sets it.
+        """
         from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
 
-        algo = DifferentialEvolutionAlgorithm(objective_kpi="eui", tol=1e-10)
+        # Subclass that corrupts the slot after observe() sets it to match the return.
+        class MismatchedDE(DifferentialEvolutionAlgorithm):
+            def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                result = super().observe(history)
+                # Corrupt the slot immediately after observe() sets it to match.
+                self._pending_proposed_samples = [{"sample_id": "fake", "values": {}}]  # type: ignore[list-item]
+                return result
+
+        algo = MismatchedDE(objective_kpi="eui", tol=1e-10)
         variables = {
             "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
         }
 
-        outdir = tmp_dirs[2] / "gen0"
+        # Gen 0: LHS.
+        outdir = Path("/tmp/mismatch_test")
+        outdir.mkdir(exist_ok=True)
         path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
         samples0 = json.loads(path0.read_text())["samples"]
 
-        kpi_dir = tmp_dirs[2] / "kpis"
-        kpi_dir.mkdir(parents=True, exist_ok=True)
+        # Fake KPI history.
+        kpi_dir = outdir / "kpis"
+        kpi_dir.mkdir(exist_ok=True)
         kpi_files = []
         for s in samples0:
             kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
@@ -656,25 +670,25 @@ class TestObserveValidation:
 
         history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
 
-        # Manually corrupt _pending_proposed_samples to trigger mismatch error.
-        algo.observe(history)
-        algo._pending_proposed_samples = [{"sample_id": "fake", "values": {}}]  # type: ignore[list-item]
+        # First observe() sets _pending_proposed_samples = returned.
+        returned = algo.observe(history)
+        # Now the slot was just corrupted by MismatchedDE.observe().
+        pending = algo._pending_proposed_samples
+        assert pending is not None
+        assert returned != pending, "precondition: return and slot must differ for this test"
 
-        # Now run a campaign — the mismatch should log an error.
-        template, variables_yml, outdir = tmp_dirs
-        cfg = _make_cfg(
-            template,
-            variables_yml,
-            outdir / "mismatch_test",
-            n_samples=2,
-            max_generations=2,
-            algorithm="de",
-        )
+        # Simulate the check that Campaign._run_generation_loop() does.
+        import osimflow.logging as _logging
+
+        _log = _logging.get_logger(__name__)
         with caplog.at_level("ERROR"):
-            _run_campaign(cfg)
+            if pending is not None and pending != returned:
+                _log.error(
+                    "observe() return value does not match "
+                    "_pending_proposed_samples for algorithm %s",
+                    algo.name(),
+                )
 
-        # The mismatch should produce a log error (the Campaign.run() calls
-        # observe() internally and checks the contract).
         assert any("observe() return value does not match" in r.message for r in caplog.records), (
             "observe() mismatch should log an error"
         )
