@@ -360,7 +360,9 @@ def _generate_interactive_report(
                 annotation_text=f"Baseline: {baseline_eui:.1f}",
             )
         fig_eui.update_layout(template="plotly_white")
-        sections.append(f'<div class="section"><h2>EUI Distribution</h2>{fig_eui.to_html(full_html=False, include_plotlyjs="cdn")}</div>')
+        sections.append(
+            f'<div class="section"><h2>EUI Distribution</h2>{fig_eui.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+        )
 
     # ── Parameter vs EUI Scatter ─────────────────────────────────────
     if not results.empty:
