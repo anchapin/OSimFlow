@@ -485,5 +485,4 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
-        ),
     )
