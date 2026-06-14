@@ -16,6 +16,7 @@ After `pip install -e .`, also available as:
 import argparse
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -839,6 +840,15 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         default=False,
         help="Enable the campaign setup web UI at /ui/ (issue #337).",
     )
+    serve.add_argument(
+        "--dashboard",
+        action="store_true",
+        default=False,
+        help=(
+            "Also launch the Streamlit results dashboard on port 8501. "
+            "Requires osimflow[viz] extra. (issue #383)"
+        ),
+    )
     serve.add_argument("--log_level", default="INFO")
     serve.set_defaults(func=_cmd_serve)
 
@@ -1059,6 +1069,26 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     if tls_key is not None and tls_cert is None:
         print("Error: --tls-cert is required when --tls-key is provided.", file=sys.stderr)
         return 1
+
+    # Launch Streamlit dashboard in a background thread if --dashboard is set.
+    dashboard_thread: threading.Thread | None = None
+    if args.dashboard:
+        try:
+            from osimflow.viz.dashboard import create_dashboard_app  # noqa: PLC0415
+        except ImportError:
+            print(
+                "Error: osimflow[viz] extra required for --dashboard. "
+                "Install with: pip install osimflow[viz]",
+                file=sys.stderr,
+            )
+            return 1
+
+        def run_dashboard() -> None:
+            create_dashboard_app(outdir=args.outdir.resolve(), port=8501)
+
+        dashboard_thread = threading.Thread(target=run_dashboard, daemon=True)
+        dashboard_thread.start()
+        log.info("Streamlit dashboard started on port 8501")
 
     if tls_cert is not None and tls_key is not None:
         log.warning("TLS enabled: serving on https://%s:%d", args.host, args.port)
