@@ -224,6 +224,14 @@ class NSGA2Algorithm(BaseAlgorithm):
         self._independent_vars = independent_vars
         self._bounds = _extract_bounds(independent_vars)
 
+        # Check the explicit feedback-loop slot first (issue #332).
+        if self._pending_proposed_samples:
+            samples = self._pending_proposed_samples
+            self._pending_proposed_samples = []  # consume
+            samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+            log.info("NSGA-II proposed %d samples from explicit slot", len(samples))
+            return samples_path
+
         # If we have a population from a previous observe() call,
         # use the NSGA-II selected individuals.
         if self._population_X.size > 0:
@@ -365,6 +373,9 @@ class NSGA2Algorithm(BaseAlgorithm):
 
         var_names = [v["name"] for v in self._independent_vars]
         new_samples = self._array_to_samples(self._population_X, var_names)
+
+        # Explicit feedback-loop slot for Campaign validation (issue #332).
+        self._pending_proposed_samples = list(new_samples)
 
         log.info(
             "NSGA-II observe(): proposed %d new samples, hypervolume=%.4f",

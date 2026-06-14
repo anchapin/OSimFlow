@@ -199,6 +199,14 @@ class PSOAlgorithm(BaseAlgorithm):
         if seed is not None:
             self._rng = np.random.default_rng(seed=seed)
 
+        # Check the explicit feedback-loop slot first (issue #332).
+        if self._pending_proposed_samples:
+            samples = self._pending_proposed_samples
+            self._pending_proposed_samples = []  # consume
+            samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+            log.info("PSO proposed %d samples from explicit slot", len(samples))
+            return samples_path
+
         if self._initialized and self._positions.size > 0:
             # Return updated positions from observe().
             var_names = [v["name"] for v in self._independent_vars]
@@ -314,6 +322,9 @@ class PSOAlgorithm(BaseAlgorithm):
 
         var_names = [v["name"] for v in self._independent_vars]
         new_samples = self._array_to_samples(self._positions, var_names)
+
+        # Explicit feedback-loop slot for Campaign validation (issue #332).
+        self._pending_proposed_samples = list(new_samples)
 
         log.info(
             "PSO observe(): global_best=%.4f, proposed %d new positions",

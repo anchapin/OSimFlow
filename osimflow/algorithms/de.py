@@ -218,9 +218,17 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         self._independent_vars = independent_vars
         self._bounds = _extract_bounds(independent_vars)
 
-        # If observe() has proposed new samples from the DE state,
-        # use those instead of generating a fresh LHS population
-        # (issue #270).
+        # Check the explicit feedback-loop slot first (issue #332).
+        if self._pending_proposed_samples:
+            samples = self._pending_proposed_samples
+            self._pending_proposed_samples = []  # consume
+            self._proposed_samples = []  # also consume the redundant slot
+            samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+            log.info("DE proposed %d samples from explicit slot", len(samples))
+            return samples_path
+
+        # Fallback to internal _proposed_samples state (legacy path for
+        # backward compatibility with existing internal state mechanism).
         if self._proposed_samples:
             samples = self._proposed_samples
             self._proposed_samples = []  # consume
@@ -326,6 +334,8 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         # Store proposed samples so generate_samples() can use them
         # on the next call (issue #270).
         self._proposed_samples = new_samples
+        # Explicit feedback-loop slot for Campaign validation (issue #332).
+        self._pending_proposed_samples = list(new_samples)
 
         log.info(
             "DE observe(): best_value=%.4f, proposed %d new samples",
