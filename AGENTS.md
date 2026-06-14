@@ -43,7 +43,7 @@ Orchestrator → Executor → Work function
   drives the 6-step DAG.
 - **Executor** — `osimflow/executors/__init__.py` provides
   `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
-  `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `NomadExecutor`, and `PBSExecutor` implementations.
+  `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, and `PBSExecutor` implementations.
 - **Work function** — `osimflow/work.py` (per-step logic) and
   `bin/*.py` (CLI scripts invoked by the work layer) implement the
   actual step work.
@@ -115,7 +115,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()`. |
 | `osimflow/storage.py` | `ResultStorage` ABC, `LocalStorage` (no-op), `S3Storage` (boto3), `GCSStorage` (google-cloud-storage), `AzureBlobStorage` (azure-storage-blob async), `ResultStorageUploader` (sync wrapper), and `build_result_storage` factory (issue #339). |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
-| `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger` and `setup_logging`. |
+| `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger`, `setup_logging`, and `LogAggregator`. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend`; plug-in metrics backends (issue #145, #127). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, and `osimflow compare` subcommands. |
@@ -138,8 +138,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
 | `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
 | `osimflow/executors/google_batch_executor.py` | `GoogleBatchExecutor` — Google Cloud Batch executor using the Google Cloud SDK. |
+| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254). |
 | `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
+| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
+| `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
 | `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
@@ -221,6 +224,8 @@ The 7-step DAG that the `Campaign` class drives:
 - `--google-use-spot`, `--google-fallback-to-on-demand`, `--google-max-retries` (Google preemptible VM handling; issue #352)
 - `--pbs-queue`, `--pbs-real`, `--pbs-server` (PBS/Torque executor configuration; issue #351)
 - `--dask-cluster-type`, `--dask-min-workers`, `--dask-max-workers`, `--dask-cpus-per-worker`, `--dask-memory-per-worker`, `--dask-walltime`, `--dask-queue`, `--dask-project` (Dask-JobQueue elastic HPC executor configuration; issue #338)
+- `--task-queue` (distributed task queue backend: `none` (default) or `dask`; issue #335)
+- `--dask-scheduler-address` (Dask scheduler address for task queue; issue #335)
 - `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
 - `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
 - `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)
@@ -240,6 +245,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--cloudwatch-namespace` (CloudWatch metric namespace; used when `--observability cloudwatch`)
 - `--prometheus-port` (Prometheus metrics HTTP port; used when `--observability prometheus`)
 - `--otel-endpoint` (OpenTelemetry OTLP endpoint URL; used when `--observability opentelemetry`)
+- `--log-aggregation-url` (CloudWatch Logs aggregation URL for distributed log collection; issue #340)
 - `--no-tui` (disable rich terminal UI even when `rich` is installed; issue #197)
 - `--dry-run` (dry-run mode: force LocalExecutor, 1 sample, steps 1-4 only)
 - `--sample` (single-sample mode: re-run sample N from existing samples.json)
@@ -252,7 +258,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--result-storage-endpoint` (custom S3-compatible endpoint URL for result storage; issue #339)
 - `--log_level`
 
-**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, and `--rate-limit` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`.
+**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, `--rate-limit`, `--tls-cert`, and `--tls-key` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`.
 
 ### Developer workflow targets (Makefile)
 

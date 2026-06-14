@@ -45,6 +45,14 @@ from .storage import (
     S3Storage,
     build_result_storage,
 )
+from .taskqueue import (
+    DaskTaskQueue,
+    NoOpTaskQueue,
+    TaskHandle,
+    TaskQueue,
+    TaskQueueStatus,
+    build_task_queue,
+)
 from .validation import ValidationError
 from .weather import (
     EPWDownloadError,
@@ -108,6 +116,12 @@ __all__ = [
     "AzureBlobStorage",
     "ResultStorageUploader",
     "build_result_storage",
+    "TaskQueue",
+    "DaskTaskQueue",
+    "NoOpTaskQueue",
+    "TaskHandle",
+    "TaskQueueStatus",
+    "build_task_queue",
 ]
 
 setup_logging()

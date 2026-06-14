@@ -1,9 +1,8 @@
-"""Unit tests for osimflow.executors.KubernetesExecutor (issue #250).
+"""Unit tests for osimflow.executors.KubernetesExecutor (issue #254).
 
 Covers:
-  - KubernetesExecutor: submit, _build_job_spec, _wait_for_terminal
+  - KubernetesExecutor: submit, _submit_job, _wait_for_terminal, _get_pod_status
   - _KubernetesHandle: result, done
-  - _KubernetesClient: create_job, get_job
 """
 
 from __future__ import annotations
@@ -12,11 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors import (
-    KubernetesExecutor,
-    _KubernetesClient,
-    _KubernetesHandle,
-)
+from osimflow.executors import KubernetesExecutor
+from osimflow.executors.kubernetes_executor import _KubernetesHandle
 
 
 class TestKubernetesExecutor:
@@ -24,13 +20,7 @@ class TestKubernetesExecutor:
 
     def _make_mock_client(self) -> MagicMock:
         mock_client = MagicMock()
-        mock_client.create_job.return_value = None
-        mock_client.get_job.return_value = {
-            "api_version": "batch/v1",
-            "kind": "Job",
-            "metadata": {"name": "osimflow-test"},
-            "status": {"conditions": [{"type": "Complete", "status": "True"}], "failed": 0},
-        }
+        mock_client.create_namespaced_job.return_value = None
         return mock_client
 
     def test_submit_returns_handle(self) -> None:
@@ -43,12 +33,12 @@ class TestKubernetesExecutor:
         with patch.object(
             ex,
             "_wait_for_terminal",
-            return_value={"status": {"conditions": [{"type": "Complete"}]}},
+            return_value={"status": {"phase": "Succeeded"}},
         ):
             handle = ex.submit(lambda: None, name="test")
         assert hasattr(handle, "result")
-        assert hasattr(handle, "job_name")
-        assert handle.job_name == "osimflow-test"
+        assert hasattr(handle, "job_id")
+        assert handle.job_id == "osimflow-test"
 
     def test_submit_with_resources(self) -> None:
         mock_client = self._make_mock_client()
@@ -60,32 +50,38 @@ class TestKubernetesExecutor:
         with patch.object(
             ex,
             "_wait_for_terminal",
-            return_value={"status": {"conditions": [{"type": "Complete"}]}},
+            return_value={"status": {"phase": "Succeeded"}},
         ):
             handle = ex.submit(lambda: None, name="heavy", cpus=4, memory_mb=8192)
-        assert handle.job_name == "osimflow-heavy"
+        assert handle.job_id == "osimflow-heavy"
 
-    def test_build_job_spec(self) -> None:
+    def test_submit_with_container(self) -> None:
         mock_client = self._make_mock_client()
         ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
         ex._client = mock_client
         ex.namespace = "default"
-        spec = ex._build_job_spec(
-            name="test",
-            cpus=2,
-            memory_mb=4096,
-            container="nrel/openstudio:3.11.0",
-            openstudio_version="3.11.0",
-        )
-        assert spec["kind"] == "Job"
-        assert spec["metadata"]["name"] == "osimflow-test"
-        assert (
-            spec["spec"]["template"]["spec"]["containers"][0]["image"] == "nrel/openstudio:3.11.0"
-        )
-        env = spec["spec"]["template"]["spec"]["containers"][0]["env"]
-        env_names = [e["name"] for e in env]
-        assert "OSIMFLOW_OS_VERSION" in env_names
-        assert "OSIMFLOW_CONTAINER" in env_names
+        ex.poll_interval_s = 5.0
+        ex.max_poll_interval_s = 60.0
+        with patch.object(
+            ex,
+            "_wait_for_terminal",
+            return_value={"status": {"phase": "Succeeded"}},
+        ):
+            handle = ex.submit(
+                lambda: None,
+                name="test",
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+            )
+        assert handle.job_id == "osimflow-test"
+        mock_client.create_namespaced_job.assert_called_once()
+        call_kwargs = mock_client.create_namespaced_job.call_args
+        job = call_kwargs.kwargs["body"]
+        container = job.spec.template.spec.containers[0]
+        assert container.image == "nrel/openstudio:3.11.0"
+        env = {e.name: e.value for e in container.env}
+        assert env["OSIMFLOW_OS_VERSION"] == "3.11.0"
+        assert env["OSIMFLOW_CONTAINER"] == "nrel/openstudio:3.11.0"
 
     def test_name_attribute(self) -> None:
         assert KubernetesExecutor.__new__(KubernetesExecutor).name == "kubernetes"  # noqa: SLF001
@@ -95,76 +91,154 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         assert ex.namespace == "default"
 
-    def test_wait_for_terminal(self) -> None:
+    def test_wait_for_terminal_succeeds(self) -> None:
         mock_client = self._make_mock_client()
+        mock_pod = MagicMock()
+        mock_pod.to_dict.return_value = {"status": {"phase": "Succeeded"}}
+        mock_client.list_namespaced_pod.return_value.items = [mock_pod]
         ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
         ex._client = mock_client
         ex.namespace = "default"
-        ex.poll_interval_s = 5.0
-        ex.max_poll_interval_s = 60.0
+        ex.poll_interval_s = 0.1
+        ex.max_poll_interval_s = 1.0
         with patch("osimflow.executors.time.sleep"):
             result = ex._wait_for_terminal("osimflow-test")
-        assert "conditions" in result["status"]
+        assert result["status"]["phase"] == "Succeeded"
+
+    def test_wait_for_terminal_fails(self) -> None:
+        mock_client = self._make_mock_client()
+        mock_pod = MagicMock()
+        mock_pod.to_dict.return_value = {"status": {"phase": "Failed"}}
+        mock_client.list_namespaced_pod.return_value.items = [mock_pod]
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex._client = mock_client
+        ex.namespace = "default"
+        ex.poll_interval_s = 0.1
+        ex.max_poll_interval_s = 1.0
+        with patch("osimflow.executors.time.sleep"):
+            result = ex._wait_for_terminal("osimflow-test")
+        assert result["status"]["phase"] == "Failed"
+
+    def test_get_pod_status_no_pods(self) -> None:
+        mock_client = self._make_mock_client()
+        mock_client.list_namespaced_pod.return_value.items = []
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex._client = mock_client
+        ex.namespace = "default"
+        result = ex._get_pod_status("osimflow-test")
+        assert result == {"status": {"phase": "Pending"}}
+
+    def test_get_pod_status_with_pods(self) -> None:
+        mock_client = self._make_mock_client()
+        mock_pod = MagicMock()
+        mock_pod.to_dict.return_value = {"status": {"phase": "Running"}}
+        mock_client.list_namespaced_pod.return_value.items = [mock_pod]
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex._client = mock_client
+        ex.namespace = "default"
+        result = ex._get_pod_status("osimflow-test")
+        assert result["status"]["phase"] == "Running"
+
+    def test_build_job_name(self) -> None:
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex.namespace = "default"
+        assert ex._build_job_name("test") == "osimflow-test"
+        assert ex._build_job_name("sample_0") == "osimflow-sample-0"
+        assert ex._build_job_name("Heavy_Simulation") == "osimflow-heavy-simulation"
+
+    def test_build_environment(self) -> None:
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex.namespace = "default"
+        env = ex._build_environment(
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+        )
+        env_dict = {e["name"]: e["value"] for e in env}
+        assert env_dict["OSIMFLOW_OS_VERSION"] == "3.11.0"
+        assert env_dict["OSIMFLOW_CONTAINER"] == "nrel/openstudio:3.11.0"
+
+    def test_build_environment_defaults(self) -> None:
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex.namespace = "default"
+        env = ex._build_environment(container=None, openstudio_version=None)
+        env_dict = {e["name"]: e["value"] for e in env}
+        assert env_dict["OSIMFLOW_CONTAINER"] == "nrel/openstudio:latest"
 
 
 class TestKubernetesHandle:
     """_KubernetesHandle polls K8s Job on .result() and .done()."""
 
-    def test_result_returns_none_on_complete(self) -> None:
+    def test_result_returns_none_on_succeeded(self) -> None:
         mock_ex = MagicMock()
-        mock_ex._wait_for_terminal.return_value = {
-            "status": {"conditions": [{"type": "Complete", "status": "True"}]}
-        }
-        handle = _KubernetesHandle(job_name="test", executor=mock_ex)
+        mock_ex._wait_for_terminal.return_value = {"status": {"phase": "Succeeded"}}
+        handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
         result = handle.result()
         assert result is None
 
-    def test_result_raises_on_failure(self) -> None:
+    def test_result_raises_on_failed(self) -> None:
         mock_ex = MagicMock()
-        mock_ex._wait_for_terminal.return_value = {"status": {"conditions": [], "failed": 1}}
-        handle = _KubernetesHandle(job_name="test", executor=mock_ex)
-        with pytest.raises(RuntimeError, match="failed"):
+        mock_ex._wait_for_terminal.return_value = {
+            "status": {"phase": "Failed"},
+        }
+        handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
+        with pytest.raises(RuntimeError, match="Failed"):
             handle.result()
 
-    def test_done_true_when_complete(self) -> None:
+    def test_done_true_when_succeeded(self) -> None:
         mock_ex = MagicMock()
-        mock_ex._client.get_job.return_value = {
-            "status": {"conditions": [{"type": "Complete", "status": "True"}]}
-        }
-        handle = _KubernetesHandle(job_name="test", executor=mock_ex)
+        mock_ex._get_pod_status.return_value = {"status": {"phase": "Succeeded"}}
+        handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
         assert handle.done() is True
 
     def test_done_false_when_running(self) -> None:
         mock_ex = MagicMock()
-        mock_ex._client.get_job.return_value = {"status": {"conditions": [], "failed": 0}}
-        handle = _KubernetesHandle(job_name="test", executor=mock_ex)
+        mock_ex._get_pod_status.return_value = {"status": {"phase": "Running"}}
+        handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
         assert handle.done() is False
 
     def test_worker_fields(self) -> None:
         mock_ex = MagicMock()
         mock_ex.namespace = "default"
-        handle = _KubernetesHandle(job_name="test", executor=mock_ex)
+        handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
         assert handle.worker_id == "test"
-        assert handle.worker_region == "default"
+        assert handle.worker_region is None
 
+    def test_extract_failure_reason_terminated(self) -> None:
+        mock_ex = MagicMock()
+        handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
+        pod_status = {
+            "status": {
+                "containerStatuses": [
+                    {
+                        "state": {
+                            "terminated": {
+                                "exitCode": 1,
+                                "reason": "NonZeroExit",
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+        reason = handle._extract_failure_reason(pod_status)
+        assert "exit code 1" in reason
 
-class TestKubernetesClient:
-    """_KubernetesClient wraps the K8s BatchV1Api.
-
-    These tests verify the interface by mocking the underlying batch_v1
-    client directly. The real create_job/get_job require the kubernetes
-    package which may not be installed in the test environment.
-    """
-
-    def test_create_job_signature(self) -> None:
-        mock_batch = MagicMock()
-        client = _KubernetesClient(batch_v1=mock_batch, namespace="default")
-        assert hasattr(client, "create_job")
-        assert hasattr(client, "get_job")
-        assert client.namespace == "default"
-
-    def test_get_job_signature(self) -> None:
-        mock_batch = MagicMock()
-        client = _KubernetesClient(batch_v1=mock_batch, namespace="default")
-        assert callable(client.get_job)
-        assert callable(client.create_job)
+    def test_extract_failure_reason_waiting(self) -> None:
+        mock_ex = MagicMock()
+        handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
+        pod_status = {
+            "status": {
+                "containerStatuses": [
+                    {
+                        "state": {
+                            "waiting": {
+                                "reason": "ImagePullBackOff",
+                                "message": "rpc error",
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+        reason = handle._extract_failure_reason(pod_status)
+        assert "ImagePullBackOff" in reason

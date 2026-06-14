@@ -233,8 +233,8 @@ class TestWebhookClient:
         parsed = json.loads(body.decode("utf-8"))
         assert parsed["campaign_id"] == "abc123"
         assert parsed["status"] == "success"
-        assert req.get_header("Content-Type") == "application/json"
-        assert req.get_header("User-Agent") == "OSimFlow/1.0"
+        assert req.get_header("Content-type") == "application/json"
+        assert req.get_header("User-agent") == "OSimFlow/1.0"
 
     def test_build_payload_returns_expected_keys(self) -> None:
         """build_payload produces all required keys."""

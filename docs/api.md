@@ -15,6 +15,22 @@ osimflow serve --outdir ./results --read-write
 osimflow serve --outdir ./results --host 127.0.0.1 --port 9000
 ```
 
+## TLS (SEC-004)
+
+**TLS is required for production deployments.** The API supports API key authentication (issue #268) but defaults to plain HTTP with no TLS enforcement. Without TLS, API keys are transmitted in clear text and are vulnerable to interception.
+
+```bash
+# Generate a self-signed certificate for testing
+openssl req -x509 -newkey rsa:4096 -keyout /tmp/tls-key.pem -out /tmp/tls-cert.pem -days 365 -nodes -subj "/CN=localhost"
+
+# Production: use a certificate from Let's Encrypt or your CA
+osimflow serve --outdir ./results --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem --host 0.0.0.0 --port 443
+```
+
+> **Important:** When `--enable-writes` or `--read-write` is set, the API accepts mutating requests (POST/PUT/DELETE). TLS is strongly recommended for these deployments to protect credentials in transit.
+
+Both `--tls-cert` and `--tls-key` must be provided together. Omitting either one produces a clear error message at startup rather than a cryptic traceback.
+
 ## Health & Readiness
 
 ### GET /health

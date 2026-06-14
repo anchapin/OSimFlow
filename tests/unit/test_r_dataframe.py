@@ -38,7 +38,7 @@ class TestExportResults:
 
         # Create a source CSV (simulating aggregated_results.csv)
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_csv.parent.mkdir()
+        src_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame({"sample_id": ["0001", "0002"], "eui": [150.5, 200.0]})
         df.to_csv(src_csv, index=False)
 
@@ -55,7 +55,7 @@ class TestExportResults:
         exporter = RDataFrameExporter(outdir=tmp_path, format="csv")
 
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_csv.parent.mkdir()
+        src_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame({"sample_id": ["0001"], "eui": [150.5]})
         df.to_csv(src_csv, index=False)
 
@@ -70,8 +70,8 @@ class TestExportResults:
 
         src_parquet = tmp_path / "in" / "aggregated_results.parquet"
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_parquet.parent.mkdir()
-        src_csv.parent.mkdir()
+        src_parquet.parent.mkdir(exist_ok=True)
+        src_csv.parent.mkdir(exist_ok=True)
 
         df = pd.DataFrame({"sample_id": ["0001"], "eui": [150.5]})
         df.to_parquet(src_parquet, index=False)
@@ -94,7 +94,7 @@ class TestExportResults:
         exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
 
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_csv.parent.mkdir()
+        src_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame(
             {
                 "sample_id": ["0001", "0002"],
@@ -117,7 +117,7 @@ class TestExportFailures:
         exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
 
         failed_csv = tmp_path / "in" / "failed_simulations.csv"
-        failed_csv.parent.mkdir()
+        failed_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame(
             {
                 "sample_id": ["0003"],
@@ -144,7 +144,7 @@ class TestExportTimeseries:
         exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
 
         ts_parquet = tmp_path / "in" / "timeseries_aggregated.parquet"
-        ts_parquet.parent.mkdir()
+        ts_parquet.parent.mkdir(exist_ok=True)
         df = pd.DataFrame(
             {
                 "sample_id": ["0001", "0001"],
@@ -172,7 +172,7 @@ class TestExportAll:
 
         # Create standard OSimFlow output files
         work_dir = tmp_path / "campaign"
-        work_dir.mkdir()
+        work_dir.mkdir(exist_ok=True)
         agg = work_dir / "aggregated_results.csv"
         df_agg = pd.DataFrame({"sample_id": ["0001"], "eui": [150.0]})
         df_agg.to_csv(agg, index=False)

@@ -134,6 +134,7 @@ class CampaignConfig:
     # CloudWatch backend options (issue #132).
     cloudwatch_namespace: str = "OSimFlow"
     cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
     # Prometheus backend options (issue #132).
     prometheus_port: int = 9090
     # OpenTelemetry backend options (issue #132).
@@ -206,6 +207,13 @@ class CampaignConfig:
     # Default: "osimflow:cache:invalidate". All workers in a distributed
     # campaign must use the same channel.
     redis_channel: str = "osimflow:cache:invalidate"
+    # Distributed task queue backend (issue #335). When "none" (default),
+    # fan-out steps submit directly to the configured executor. When
+    # "dask", work is submitted to a Dask scheduler via DaskTaskQueue.
+    task_queue: str = "none"
+    # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
+    # When None and task_queue="dask", an embedded LocalCluster is used.
+    dask_scheduler_address: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -453,6 +461,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         cloudwatch_log_group=(
             str(args["cloudwatch_log_group"]) if args.get("cloudwatch_log_group") else None
         ),
+        log_aggregation_url=(
+            str(args["log_aggregation_url"]) if args.get("log_aggregation_url") else None
+        ),
         prometheus_port=int(str(args.get("prometheus_port", 9090))),
         otel_endpoint=str(args["otel_endpoint"]) if args.get("otel_endpoint") else None,
         registry_path=(Path(str(args["registry"])).resolve() if args.get("registry") else None),
@@ -480,4 +491,8 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         ),
         redis_url=str(args["redis_url"]) if args.get("redis_url") else None,
         redis_channel=str(args.get("redis_channel", "osimflow:cache:invalidate")),
+        task_queue=str(args.get("task_queue", "none")),
+        dask_scheduler_address=(
+            str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
+        ),
     )

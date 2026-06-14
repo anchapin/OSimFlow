@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OSimFlow — Campaign Setup</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242836;
+      --border: #2e3347;
+      --accent: #4f9cf9;
+      --accent2: #7eb8ff;
+      --text: #e8eaf0;
+      --muted: #8b8fa8;
+      --success: #3ecf8e;
+      --error: #f45b5b;
+      --warning: #f5a623;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.02em;
+    }
+    header .subtitle {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    main {
+      flex: 1;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem;
+      width: 100%;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--accent2);
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    input, select, textarea {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    textarea { resize: vertical; min-height: 120px; font-family: 'Courier New', monospace; font-size: 0.85rem; }
+    .full { grid-column: 1 / -1; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.6rem 1.5rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.secondary {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .progress-bar {
+      height: 6px;
+      background: var(--surface2);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 0.5rem;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      transition: width 0.4s ease;
+      width: 0%;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .status-running { background: rgba(79,156,249,0.2); color: var(--accent); }
+    .status-success { background: rgba(62,207,142,0.2); color: var(--success); }
+    .status-failure { background: rgba(244,91,91,0.2); color: var(--error); }
+    .status-stopping { background: rgba(245,166,35,0.2); color: var(--warning); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-top: 0.5rem;
+    }
+    th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-weight: 500;
+    }
+    td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:last-child td { border-bottom: none; }
+    .empty { text-align: center; color: var(--muted); padding: 2rem; }
+    .error-msg { color: var(--error); font-size: 0.85rem; margin-top: 0.3rem; }
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>OSimFlow</h1>
+  <span class="subtitle">Campaign Setup & Results</span>
+</header>
+
+<main>
+  <!-- ── Setup Form ─────────────────────────────────────────── -->
+  <div class="card">
+    <h2>New Campaign</h2>
+    <form id="setup-form" onsubmit="return false;">
+      <div class="form-grid">
+        <label>
+          Number of Samples
+          <input type="number" id="n_samples" value="10" min="1" max="10000" />
+        </label>
+        <label>
+          Executor
+          <select id="executor">
+            <option value="local">local</option>
+            <option value="slurm">slurm</option>
+            <option value="aws_batch">aws_batch</option>
+            <option value="azure_batch">azure_batch</option>
+            <option value="google_batch">google_batch</option>
+            <option value="dask_jobqueue">dask_jobqueue</option>
+            <option value="nomad">nomad</option>
+            <option value="pbs">pbs</option>
+          </select>
+        </label>
+        <label>
+          OpenStudio Version
+          <input type="text" id="openstudio_version" value="3.11.0" placeholder="3.11.0" />
+        </label>
+        <label>
+          Algorithm
+          <select id="algorithm">
+            <option value="lhs">Latin Hypercube (LHS)</option>
+            <option value="sobol">Sobol</option>
+            <option value="halton">Halton</option>
+            <option value="morris">Morris</option>
+            <option value="fast99">FAST99</option>
+          </select>
+        </label>
+        <label class="full">
+          Template Sim Package (absolute path)
+          <input type="text" id="template_sim_package" placeholder="/path/to/template_sim_package" />
+        </label>
+        <label class="full">
+          Output Directory (absolute path)
+          <input type="text" id="outdir" placeholder="/path/to/results" />
+        </label>
+        <label class="full">
+          variables.yml (YAML content)
+          <textarea id="input_variables_yaml" placeholder="variables:
+  - name: wall_area
+    distribution: uniform
+    min: 100
+    max: 500
+  - name: cop
+    distribution: normal
+    mean: 3.0
+    std: 0.3"></textarea>
+        </label>
+      </div>
+      <div style="margin-top:1rem; display:flex; gap:0.75rem; align-items:center;">
+        <button type="button" id="start-btn" onclick="startCampaign()">Start Campaign</button>
+        <span id="start-spinner" class="spinner" style="display:none;"></span>
+        <span id="start-error" class="error-msg"></span>
+      </div>
+    </form>
+  </div>
+
+  <!-- ── Active Campaign ───────────────────────────────────── -->
+  <div class="card" id="active-card" style="display:none;">
+    <h2>Active Campaign &mdash; <span id="active-id"></span></h2>
+    <div style="display:flex; align-items:center; gap:1rem; margin-bottom:0.5rem;">
+      <span id="active-status" class="status-badge status-running">running</span>
+      <span id="active-elapsed" style="font-size:0.85rem; color:var(--muted);"></span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="active-progress"></div></div>
+    <div style="margin-top:0.75rem; display:flex; gap:0.75rem;">
+      <button class="secondary" id="stop-btn" onclick="stopCampaign()">Stop</button>
+      <button class="secondary" onclick="loadResults()">View Results</button>
+    </div>
+  </div>
+
+  <!-- ── Results ────────────────────────────────────────────── -->
+  <div class="card" id="results-card" style="display:none;">
+    <h2>Results — <span id="results-id"></span></h2>
+    <div id="results-meta" style="font-size:0.8rem; color:var(--muted); margin-bottom:0.75rem;"></div>
+    <div id="results-table-wrap" style="overflow-x:auto;"></div>
+    <div style="margin-top:1rem;">
+      <button class="secondary" onclick="clearResults()">Clear</button>
+    </div>
+  </div>
+
+  <!-- ── All Campaigns ──────────────────────────────────────── -->
+  <div class="card">
+    <h2>All Campaigns</h2>
+    <button class="secondary" onclick="refreshCampaigns()" style="margin-bottom:0.75rem;">Refresh</button>
+    <div id="campaigns-list">
+      <div class="empty">No campaigns yet</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const API = '/ui/api';
+let activeId = null;
+let eventsSource = null;
+let elapsedTimer = null;
+
+async function startCampaign() {
+  const btn = document.getElementById('start-btn');
+  const spinner = document.getElementById('start-spinner');
+  const errEl = document.getElementById('start-error');
+  errEl.textContent = '';
+
+  const payload = {
+    n_samples: parseInt(document.getElementById('n_samples').value),
+    executor: document.getElementById('executor').value,
+    openstudio_version: document.getElementById('openstudio_version').value,
+    algorithm: document.getElementById('algorithm').value,
+    template_sim_package: document.getElementById('template_sim_package').value,
+    outdir: document.getElementById('outdir').value,
+    input_variables_yaml: document.getElementById('input_variables_yaml').value,
+  };
+
+  btn.disabled = true;
+  spinner.style.display = 'inline-block';
+
+  try {
+    const res = await fetch(`${API}/setup`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Setup failed');
+
+    activeId = data.campaign_id;
+    showActive(data.campaign_id, 'running', data.outdir);
+    connectSSE(data.campaign_id);
+  } catch (e) {
+    errEl.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+  }
+}
+
+function showActive(id, status, outdir) {
+  const card = document.getElementById('active-card');
+  card.style.display = 'block';
+  document.getElementById('active-id').textContent = id;
+  setStatusBadge('active-status', status);
+  document.getElementById('active-progress').style.width = '0%';
+  document.getElementById('active-elapsed').textContent = '';
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(() => refreshActive(id), 2000);
+}
+
+function setStatusBadge(elId, status) {
+  const el = document.getElementById(elId);
+  el.className = 'status-badge status-' + status;
+  el.textContent = status;
+}
+
+async function refreshActive(id) {
+  try {
+    const res = await fetch(`${API}/campaigns/${id}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setStatusBadge('active-status', data.status);
+
+    const run = data;
+    if (run && run.elapsed_s !== undefined) {
+      const s = Math.round(run.elapsed_s);
+      document.getElementById('active-elapsed').textContent = `elapsed: ${s}s`;
+    }
+
+    // simple progress: n_completed / n_samples
+    if (run && run.n_samples && run.n_completed !== undefined) {
+      const pct = Math.round((run.n_completed / run.n_samples) * 100);
+      document.getElementById('active-progress').style.width = pct + '%';
+    }
+
+    if (data.status === 'success' || data.status === 'failure') {
+      clearInterval(elapsedTimer);
+      if (activeId === id) {
+        activeId = null;
+        if (eventsSource) { eventsSource.close(); eventsSource = null; }
+        if (data.status === 'success') loadResults();
+      }
+    }
+  } catch (_) {}
+}
+
+function connectSSE(id) {
+  if (eventsSource) eventsSource.close();
+  eventsSource = new EventSource('/api/v1/events');
+  eventsSource.onmessage = (e) => {
+    try {
+      const events = JSON.parse(e.data);
+      const ours = events.filter(ev => ev.campaign_id === id);
+      if (ours.length) refreshActive(id);
+    } catch (_) {}
+  };
+  eventsSource.onerror = () => { eventsSource.close(); eventsSource = null; };
+}
+
+async function stopCampaign() {
+  if (!activeId) return;
+  const btn = document.getElementById('stop-btn');
+  btn.disabled = true;
+  try {
+    await fetch(`${API}/campaigns/${activeId}/stop`, {method: 'POST'});
+    setStatusBadge('active-status', 'stopping');
+  } catch (_) {}
+  btn.disabled = false;
+}
+
+async function loadResults() {
+  if (!activeId) return;
+  const res = await fetch(`${API}/campaigns/${activeId}/results`);
+  const data = await res.json();
+  showResults(activeId, data.results || []);
+}
+
+function showResults(id, results) {
+  const card = document.getElementById('results-card');
+  card.style.display = 'block';
+  document.getElementById('results-id').textContent = id;
+  document.getElementById('results-meta').textContent = `${results.length} rows`;
+
+  const wrap = document.getElementById('results-table-wrap');
+  if (!results.length) {
+    wrap.innerHTML = '<div class="empty">No results yet</div>';
+    return;
+  }
+  const keys = Object.keys(results[0]);
+  let html = `<table><thead><tr>${keys.map(k => `<th>${k}</th>`).join('')}</tr></thead><tbody>`;
+  for (const row of results) {
+    html += '<tr>' + keys.map(k => `<td>${row[k] ?? ''}</td>`).join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function clearResults() {
+  document.getElementById('results-card').style.display = 'none';
+}
+
+async function refreshCampaigns() {
+  const res = await fetch(`${API}/campaigns`);
+  const list = await res.json();
+  const el = document.getElementById('campaigns-list');
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">No campaigns yet</div>';
+    return;
+  }
+  let html = `<table><thead><tr><th>ID</th><th>Status</th><th>Executor</th><th>Samples</th><th>Outdir</th><th>Actions</th></tr></thead><tbody>`;
+  for (const c of list) {
+    html += `<tr>
+      <td>${c.campaign_id}</td>
+      <td><span class="status-badge status-${c.status}">${c.status}</span></td>
+      <td>${c.executor || ''}</td>
+      <td>${c.n_samples || ''}</td>
+      <td style="font-size:0.8rem; color:var(--muted);">${c.outdir || ''}</td>
+      <td>
+        <button class="secondary" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="viewCampaign('${c.campaign_id}')">View</button>
+        ${c.status === 'running' ? `<button class="secondary" style="padding:0.25rem 0.6rem; font-size:0.75rem;" onclick="stopCampaignById('${c.campaign_id}')">Stop</button>` : ''}
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function viewCampaign(id) {
+  activeId = id;
+  const res = await fetch(`${API}/campaigns/${id}`);
+  const data = await res.json();
+  showActive(id, data.status, data.outdir);
+  if (data.status === 'running') connectSSE(id);
+  else if (data.status === 'success' || data.status === 'failure') loadResults();
+}
+
+async function stopCampaignById(id) {
+  await fetch(`${API}/campaigns/${id}/stop`, {method: 'POST'});
+  refreshCampaigns();
+}
+
+// refresh campaigns list on load
+refreshCampaigns();
+setInterval(refreshCampaigns, 5000);
+</script>
+</body>
+</html>

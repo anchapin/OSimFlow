@@ -170,13 +170,16 @@ class BaseAlgorithm(abc.ABC):
         samples: list[dict[str, Any]],
         kpi_values: dict[str, dict[str, float]],
         outdir: Path,
+        calc_second_order: bool = False,
     ) -> Path:
-        """Compute sensitivity indices for the algorithm.
+        """Compute sensitivity indices (Sobol). Raises NotImplementedError by default.
 
-        Only implemented for sensitivity analysis algorithms (Sobol, Morris, FAST99).
-        The default implementation raises ``NotImplementedError``.
+        Only ``SobolAlgorithm`` implements this method. Other algorithms
+        that do not support sensitivity analysis will raise ``NotImplementedError``.
         """
-        raise NotImplementedError(f"{self.name()} does not support sensitivity index computation")
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement compute_sensitivity_indices"
+        )
 
 
 # ======================================================================
@@ -547,15 +550,6 @@ try:
 except ImportError:
     # pymoo is an optional dependency — NSGA-II, PSO, and SPEA-II are only
     # available when the [optimization] extra is installed.
-    pass
-
-try:
-    from osimflow.algorithms.ga import GeneticAlgorithm  # noqa: E402
-
-    AlgorithmRegistry.register("ga", GeneticAlgorithm)
-except ImportError:
-    # DEAP is an optional dependency — GeneticAlgorithm is only available
-    # when the [ga] extra is installed.
     pass
 
 from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402

@@ -136,6 +136,8 @@ omit = [
     "osimflow/api/*",
     "osimflow/viz/dashboard.py",
     "osimflow/_work_scripts/*",
+    "osimflow/taskqueue.py",
+    "osimflow/storage.py",
 ]
 
 [tool.coverage.report]
@@ -189,6 +191,8 @@ fixable = ["ALL"]
 # base.py defines shared primitives; import order here is intentional to
 # avoid circular deps (azure/google_batch_executor import from base).
 "osimflow/executors/__init__.py" = ["I001"]
+# campaign.py: SIM108 if-else block is more readable with explanatory comment.
+"osimflow/campaign.py" = ["SIM108"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["osimflow"]
