@@ -150,6 +150,8 @@ th {
   top: 0;
 }
 tr:hover td { background: var(--surface-alt); }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: var(--surface-alt); }
 
 /* ── Badges ──────────────────────────────────────────────── */
 .badge {
@@ -351,6 +353,91 @@ tr:hover td { background: var(--surface-alt); }
 }
 .create-result td:first-child { width: 140px; }
 
+/* ── Sample Detail Modal ──────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.active {
+  display: flex;
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 700px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.modal-close:hover { color: var(--text); }
+.modal-body { padding: 20px; }
+.modal-section { margin-bottom: 20px; }
+.modal-section:last-child { margin-bottom: 0; }
+.modal-section h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+.kpi-card {
+  background: var(--surface-alt);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.kpi-card .kpi-label { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
+.kpi-card .kpi-value { font-size: 1.1rem; font-weight: 600; }
+.log-files { display: flex; flex-direction: column; gap: 8px; }
+.log-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-alt);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+}
+.log-file-item .log-icon { color: var(--text-muted); }
+.log-file-item .log-name { flex: 1; font-family: var(--mono); }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.detail-item { display: flex; flex-direction: column; gap: 2px; }
+.detail-item .detail-label { font-size: 0.75rem; color: var(--text-muted); }
+.detail-item .detail-value { font-size: 0.9rem; }
+.register-values { background: var(--surface-alt); border-radius: var(--radius); padding: 12px; }
+.register-values pre { font-family: var(--mono); font-size: 0.8rem; white-space: pre-wrap; word-break: break-all; }
+
 /* ── Responsive ─────────────────────────────────────────── */
 @media (max-width: 768px) {
   .app { flex-direction: column; }
@@ -359,6 +446,7 @@ tr:hover td { background: var(--surface-alt); }
   .sidebar-nav a { white-space: nowrap; }
   .page { padding: 16px; }
   .plots-grid { grid-template-columns: 1fr; }
+  .detail-grid { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -442,7 +530,7 @@ tr:hover td { background: var(--surface-alt); }
     <!-- ═══ Samples Page ═══ -->
     <div id="page-samples" class="page">
       <h1>Sample Browser</h1>
-      <p class="subtitle">Per-sample execution results</p>
+      <p class="subtitle">Per-sample execution results — click a row to see details</p>
       <div class="table-wrap">
         <table id="samples-table">
           <thead>
@@ -609,6 +697,19 @@ tr:hover td { background: var(--surface-alt); }
         </table>
         <div style="margin-top:16px">
           <button id="btn-goto-dashboard" class="btn-secondary">Go to Dashboard</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Sample Detail Modal ═══ -->
+    <div id="sample-modal" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 id="modal-sample-id">Sample Detail</h2>
+          <button class="modal-close" id="modal-close">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body">
+          <!-- Dynamic content injected here -->
         </div>
       </div>
     </div>
@@ -786,7 +887,10 @@ async function loadSamples() {
 
   for (const s of data.samples) {
     const badge = statusBadge(s.status);
-    tbody.innerHTML += `<tr>
+    const row = document.createElement('tr');
+    row.className = 'clickable';
+    row.dataset.sampleId = s.sample_id;
+    row.innerHTML = `
       <td style="font-family:var(--mono);font-size:0.82rem">${esc(s.sample_id)}</td>
       <td>${badge}</td>
       <td>${formatDuration(s.elapsed_s || 0)}</td>
@@ -795,7 +899,9 @@ async function loadSamples() {
       <td>${exitDot(s.extract_exit_code)}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(s.error_summary || '')}">${esc(s.error_summary || '—')}</td>
       <td style="color:var(--text-muted);font-size:0.8rem">${esc(s.worker_id || '—')}</td>
-    </tr>`;
+    `;
+    row.addEventListener('click', () => openSampleModal(s.sample_id));
+    tbody.appendChild(row);
   }
 
   // Pagination
@@ -1055,6 +1161,225 @@ document.getElementById('create-form').addEventListener('submit', async e => {
     btn.disabled = false;
   }
 });
+
+// ── Sample Detail Modal ─────────────────────────────────────
+document.getElementById('modal-close').addEventListener('click', closeSampleModal);
+document.getElementById('sample-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('sample-modal')) closeSampleModal();
+});
+
+function closeSampleModal() {
+  document.getElementById('sample-modal').classList.remove('active');
+}
+
+async function openSampleModal(sampleId) {
+  const modal = document.getElementById('sample-modal');
+  const body = document.getElementById('modal-body');
+  const title = document.getElementById('modal-sample-id');
+
+  title.textContent = `Sample: ${sampleId}`;
+  body.innerHTML = '<p style="color:var(--text-muted)">Loading...</p>';
+  modal.classList.add('active');
+
+  try {
+    const resp = await apiFetch(`/api/v1/samples/${encodeURIComponent(sampleId)}`);
+    if (!resp.ok) {
+      body.innerHTML = `<p style="color:var(--danger)">Failed to load sample: ${resp.status}</p>`;
+      return;
+    }
+    const data = await resp.json();
+    renderSampleDetail(body, data);
+  } catch (err) {
+    body.innerHTML = `<p style="color:var(--danger)">Error: ${esc(err.message)}</p>`;
+  }
+}
+
+function renderSampleDetail(container, data) {
+  const statusBadgeHtml = statusBadge(data.status);
+  const statusColor = data.status === 'ok' ? 'var(--success)' : data.status === 'failed' ? 'var(--danger)' : 'var(--cached)';
+
+  let html = `
+    <div class="modal-section">
+      <h3>Status & Timing</h3>
+      <div class="detail-grid">
+        <div class="detail-item">
+          <span class="detail-label">Status</span>
+          <span class="detail-value" style="color:${statusColor}">${statusBadgeHtml}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Elapsed</span>
+          <span class="detail-value">${formatDuration(data.elapsed_s || 0)}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Apply Exit</span>
+          <span class="detail-value">${exitCodeDisplay(data.apply_exit_code)}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Sim Exit</span>
+          <span class="detail-value">${exitCodeDisplay(data.sim_exit_code)}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Extract Exit</span>
+          <span class="detail-value">${exitCodeDisplay(data.extract_exit_code)}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Worker</span>
+          <span class="detail-value">${esc(data.worker_id || '—')}</span>
+        </div>
+        ${data.generation !== undefined ? `
+        <div class="detail-item">
+          <span class="detail-label">Generation</span>
+          <span class="detail-value">${data.generation}</span>
+        </div>
+        ` : ''}
+        ${data.worker_ip ? `
+        <div class="detail-item">
+          <span class="detail-label">Worker IP</span>
+          <span class="detail-value">${esc(data.worker_ip)}</span>
+        </div>
+        ` : ''}
+        ${data.worker_region ? `
+        <div class="detail-item">
+          <span class="detail-label">Region</span>
+          <span class="detail-value">${esc(data.worker_region)}</span>
+        </div>
+        ` : ''}
+        ${data.cost_usd != null ? `
+        <div class="detail-item">
+          <span class="detail-label">Cost (USD)</span>
+          <span class="detail-value">$${data.cost_usd.toFixed(4)}</span>
+        </div>
+        ` : ''}
+        ${data.billed_duration_seconds != null ? `
+        <div class="detail-item">
+          <span class="detail-label">Billed Duration</span>
+          <span class="detail-value">${formatDuration(data.billed_duration_seconds)}</span>
+        </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+
+  if (data.error_summary) {
+    html += `
+    <div class="modal-section">
+      <h3>Error Summary</h3>
+      <div style="background:var(--surface-alt);border-radius:var(--radius);padding:12px;color:var(--danger);font-size:0.88rem">
+        ${esc(data.error_summary)}
+      </div>
+    </div>
+    `;
+  }
+
+  if (data.quality_valid !== undefined || data.quality_warnings != null || data.quality_failures != null) {
+    html += `
+    <div class="modal-section">
+      <h3>Quality</h3>
+      <div class="detail-grid">
+        ${data.quality_valid !== undefined ? `
+        <div class="detail-item">
+          <span class="detail-label">Valid</span>
+          <span class="detail-value" style="color:${data.quality_valid ? 'var(--success)' : 'var(--danger)'}">${data.quality_valid ? 'Yes' : 'No'}</span>
+        </div>
+        ` : ''}
+        ${data.quality_warnings != null ? `
+        <div class="detail-item">
+          <span class="detail-label">Warnings</span>
+          <span class="detail-value">${data.quality_warnings}</span>
+        </div>
+        ` : ''}
+        ${data.quality_failures != null ? `
+        <div class="detail-item">
+          <span class="detail-label">Failures</span>
+          <span class="detail-value" style="color:${data.quality_failures > 0 ? 'var(--danger)' : 'inherit'}">${data.quality_failures}</span>
+        </div>
+        ` : ''}
+      </div>
+    </div>
+    `;
+  }
+
+  if (data.register_values) {
+    html += `
+    <div class="modal-section">
+      <h3>Register Values</h3>
+      <div class="register-values">
+        <pre>${esc(JSON.stringify(data.register_values, null, 2))}</pre>
+      </div>
+    </div>
+    `;
+  }
+
+  if (data.kpis) {
+    const kpiEntries = Object.entries(data.kpis);
+    if (kpiEntries.length > 0) {
+      html += `
+      <div class="modal-section">
+        <h3>KPIs</h3>
+        <div class="kpi-grid">
+      `;
+      for (const [key, value] of kpiEntries) {
+        const displayValue = typeof value === 'number' ? Number(value).toFixed(2) : String(value);
+        html += `
+          <div class="kpi-card">
+            <div class="kpi-label">${esc(key)}</div>
+            <div class="kpi-value">${esc(displayValue)}</div>
+          </div>
+        `;
+      }
+      html += `
+        </div>
+      </div>
+      `;
+    }
+  }
+
+  if (data.log_files && Object.keys(data.log_files).length > 0) {
+    html += `
+    <div class="modal-section">
+      <h3>Log Files</h3>
+      <div class="log-files">
+    `;
+    for (const [logName] of Object.entries(data.log_files)) {
+      const icon = logName === 'stdout.log' ? '&#128203;' : '&#128165;';
+      const logUrl = apiUrl(`/api/v1/samples/${encodeURIComponent(data.sample_id)}/logs/${encodeURIComponent(logName)}`);
+      html += `
+        <a href="${logUrl}" target="_blank" class="log-file-item" style="text-decoration:none;color:inherit;cursor:pointer;">
+          <span class="log-icon">${icon}</span>
+          <span class="log-name">${esc(logName)}</span>
+          <span style="color:var(--primary);font-size:0.78rem">view &rarr;</span>
+        </a>
+      `;
+    }
+    html += `
+      </div>
+    </div>
+    `;
+  }
+
+  if (data.eplusout_sql) {
+    html += `
+    <div class="modal-section">
+      <h3>Output Files</h3>
+      <div class="log-files">
+        <div class="log-file-item">
+          <span class="log-icon">&#128203;</span>
+          <span class="log-name">eplusout.sql</span>
+          <span style="color:var(--text-muted);font-size:0.78rem">${esc(data.eplusout_sql)}</span>
+        </div>
+      </div>
+    </div>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
+function exitCodeDisplay(code) {
+  if (code === undefined || code === null) return '—';
+  if (code === 0) return '<span style="color:var(--success)">0 (success)</span>';
+  return `<span style="color:var(--danger)">${code} (failed)</span>`;
+}
 
 // ── Init ───────────────────────────────────────────────────
 loadDashboard();

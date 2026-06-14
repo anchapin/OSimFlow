@@ -253,6 +253,53 @@ async def get_sample_detail(sid: str, request: Request) -> dict[str, Any]:
     }
 
 
+@router.get("/api/v1/samples/{sid}/logs/{log_name}")  # type: ignore[untyped-decorator]
+async def get_sample_log(sid: str, log_name: str, request: Request) -> Response:
+    """Get the content of a sample's log file.
+
+    Returns the raw log file content with appropriate content-type.
+    """
+    if request.app.state.outdir is None:
+        raise HTTPException(status_code=503, detail="No output directory configured")
+
+    # Validate sample ID to prevent path traversal.
+    try:
+        safe_sid = sanitize_sample_id(sid)
+    except OsimflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Explicitly reject ".." in sample IDs — resolve() normalizes .. before
+    # is_relative_to() can detect traversal, so we must catch it here.
+    if ".." in safe_sid:
+        raise HTTPException(status_code=400, detail="Invalid sample ID") from None
+
+    # Validate log name to prevent path traversal.
+    try:
+        safe_log_name = sanitize_filename(log_name)
+    except OsimflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if safe_log_name not in ("stdout.log", "stderr.log"):
+        raise HTTPException(status_code=400, detail="Only stdout.log and stderr.log are allowed")
+
+    outdir_resolved: Path = request.app.state.outdir.resolve()
+    log_path = outdir_resolved / "work" / "sim" / safe_sid / safe_log_name
+
+    try:
+        validate_path_within_base(log_path.resolve(), outdir_resolved)
+    except OsimflowValidationError:
+        raise HTTPException(status_code=400, detail="Invalid log path") from None
+
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail=f"Log file '{safe_log_name}' not found")
+
+    return FileResponse(
+        log_path,
+        media_type="text/plain",
+        filename=safe_log_name,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Results / failures
 # ---------------------------------------------------------------------------

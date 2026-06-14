@@ -265,6 +265,43 @@ class TestGetSampleDetail:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/samples/{sid}/logs/{log_name}
+# ---------------------------------------------------------------------------
+
+
+class TestGetSampleLog:
+    """Tests for sample log file endpoint."""
+
+    def test_get_stdout_log(self, outdir_with_logs: Path) -> None:
+        client = TestClient(create_app(outdir=outdir_with_logs))
+        resp = client.get("/api/v1/samples/sample_000/logs/stdout.log")
+        assert resp.status_code == 200
+        assert resp.text == "sim output"
+
+    def test_get_stderr_log(self, outdir_with_logs: Path) -> None:
+        client = TestClient(create_app(outdir=outdir_with_logs))
+        resp = client.get("/api/v1/samples/sample_000/logs/stderr.log")
+        assert resp.status_code == 200
+        assert resp.text == "sim errors"
+
+    def test_log_not_found(self, outdir_with_logs: Path) -> None:
+        client = TestClient(create_app(outdir=outdir_with_logs))
+        resp = client.get("/api/v1/samples/sample_000/logs/nonexistent.log")
+        assert resp.status_code == 400
+
+    def test_log_invalid_sample_id(self, outdir_with_logs: Path) -> None:
+        client = TestClient(create_app(outdir=outdir_with_logs))
+        # URL-encode ".." to prevent Starlette route mismatch
+        resp = client.get("/api/v1/samples/%2e%2e/logs/stdout.log")
+        assert resp.status_code == 400
+
+    def test_log_no_outdir(self) -> None:
+        client = TestClient(create_app(outdir=None))
+        resp = client.get("/api/v1/samples/sample_000/logs/stdout.log")
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/results
 # ---------------------------------------------------------------------------
 
