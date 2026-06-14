@@ -535,7 +535,9 @@ def _diagnose_sample_error(err_path: Path) -> dict[str, Any]:
     category = _classify_error_line(error_summary)
     total_severe = _count_severe_errors(err_path)
     root_cause = _find_root_cause_line(err_path)
-    suggestion = _ERROR_CATEGORY_SUGGESTIONS.get(category, _ERROR_CATEGORY_SUGGESTIONS["generic_severe"])
+    suggestion = _ERROR_CATEGORY_SUGGESTIONS.get(
+        category, _ERROR_CATEGORY_SUGGESTIONS["generic_severe"]
+    )
 
     return {
         "category": category,

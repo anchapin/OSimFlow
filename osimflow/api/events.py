@@ -83,13 +83,15 @@ def diff_events(
                 # Emit error event for failed samples (issue #385)
                 if status == "failed":
                     error_summary = sample.get("error_summary")
-                    events.append({
-                        "event": "sample.error",
-                        "data": {
-                            "sample_id": sid,
-                            "error_summary": error_summary,
-                        },
-                    })
+                    events.append(
+                        {
+                            "event": "sample.error",
+                            "data": {
+                                "sample_id": sid,
+                                "error_summary": error_summary,
+                            },
+                        }
+                    )
             else:
                 events.append({"event": "sample.started", "data": sample})
         else:
@@ -105,13 +107,15 @@ def diff_events(
                 # Emit error event when sample transitions to failed (issue #385)
                 if new_status == "failed":
                     error_summary = sample.get("error_summary")
-                    events.append({
-                        "event": "sample.error",
-                        "data": {
-                            "sample_id": sid,
-                            "error_summary": error_summary,
-                        },
-                    })
+                    events.append(
+                        {
+                            "event": "sample.error",
+                            "data": {
+                                "sample_id": sid,
+                                "error_summary": error_summary,
+                            },
+                        }
+                    )
 
     return events
 
