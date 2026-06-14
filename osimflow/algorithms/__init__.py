@@ -4,8 +4,8 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
-``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``,
-``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
+``DualAnnealingAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``, ``FullFactorialAlgorithm``,
+``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
 ``RandomSamplingAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:
@@ -163,20 +163,6 @@ class BaseAlgorithm(abc.ABC):
         per-generation Pareto data (issue #141).
         """
         return False
-
-    def compute_sensitivity_indices(
-        self,
-        variables: dict[str, Any],
-        samples: list[dict[str, Any]],
-        kpi_values: dict[str, dict[str, float]],
-        outdir: Path,
-    ) -> Path:
-        """Compute sensitivity indices for the algorithm.
-
-        Only implemented for sensitivity analysis algorithms (Sobol, Morris, FAST99).
-        The default implementation raises ``NotImplementedError``.
-        """
-        raise NotImplementedError(f"{self.name()} does not support sensitivity index computation")
 
 
 # ======================================================================
