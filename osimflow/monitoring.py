@@ -202,8 +202,8 @@ class RunTrace:
             "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
-            "status": self.status,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
+            # NOTE: This is the only status key in this dict - do not duplicate (issue #6241b5d)
             "config": self.config_summary,
             "summary": {
                 "n_samples": len(self.per_sample),
