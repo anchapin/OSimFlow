@@ -120,7 +120,6 @@ class RunTrace:
         self.campaign_id = campaign_id
         self.started_at = time.time()
         self.finished_at: float | None = None
-        self.status: str | None = None  # "ok", "cancelled", "failed"
         self.config_summary = config_summary
         self.steps: list[StepTrace] = []
         self.per_sample: list[SampleTrace] = []
