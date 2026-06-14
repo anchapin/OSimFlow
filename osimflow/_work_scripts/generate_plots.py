@@ -2,6 +2,9 @@
 """generate_plots.py — Render 1–3 static summary plots from aggregated results.
 
 See docs/OSimFlow.md §4.2 (PROCESS_GENERATE_BASIC_PLOTS) for the contract.
+
+Also generates interactive HTML reports using Plotly (issue #388) for
+stakeholder exploration of results.
 """
 
 import argparse
@@ -19,6 +22,18 @@ import seaborn as sns
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_plots")
+
+# Plotly is optional — graceful degradation if not installed (issue #388).
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    px = None  # type: ignore[assignment, misc]
+    go = None  # type: ignore[assignment, misc]
+    PLOTLY_AVAILABLE = False
+    log.warning("plotly not installed; interactive HTML reports will not be generated")
 
 
 def main() -> int:
@@ -127,6 +142,9 @@ def main() -> int:
     # 4. Pareto front plots (issue #124)
     pareto_dir = args.pareto_dir or (args.outdir / "pareto")
     _generate_pareto_plots(pareto_dir, args.outdir)
+
+    # 5. Interactive HTML report (issue #388)
+    _generate_interactive_report(args.outdir, results, failed, baseline_eui, pareto_dir)
 
     return 0
 
@@ -282,6 +300,261 @@ def _hypervolume_2d_simple(points: np.ndarray, ref_point: np.ndarray) -> float:
         dy = ref[1] - pts[i, 1]
         hv += max(0.0, dx) * max(0.0, dy)
     return hv
+
+
+def _generate_interactive_report(
+    outdir: Path,
+    results: pd.DataFrame,
+    failed: pd.DataFrame,
+    baseline_eui: float | None,
+    pareto_dir: Path,
+) -> list[Path]:
+    """Generate interactive HTML report using Plotly (issue #388).
+
+    Creates a standalone interactive HTML report that stakeholders can
+    open in any browser for exploration of campaign results.
+
+    Returns list of generated HTML file paths.
+    """
+    plots: list[Path] = []
+    if not PLOTLY_AVAILABLE:
+        return plots
+
+    # Build a multi-section HTML report with interactive Plotly charts.
+    sections: list[str] = []
+
+    # ── Campaign Overview ────────────────────────────────────────────────
+    if not results.empty:
+        n_samples = len(results)
+        eui_col = _find_eui_column(results)
+        mean_eui = results[eui_col].mean() if eui_col else None
+        std_eui = results[eui_col].std() if eui_col else None
+
+        overview_html = f"""
+        <div class="section">
+        <h2>Campaign Overview</h2>
+        <table>
+            <tr><th>Total Samples</th><td>{n_samples}</td></tr>
+            <tr><th>Mean EUI</th><td>{mean_eui:.2f} kWh/m²/yr</td></tr>
+            <tr><th>Std Dev EUI</th><td>{std_eui:.2f} kWh/m²/yr</td></tr>
+        </table>
+        </div>
+        """
+        sections.append(overview_html)
+
+    # ── EUI Distribution ────────────────────────────────────────────────
+    if not results.empty and "eui_kwh_m2_yr" in results.columns:
+        eui_col = "eui_kwh_m2_yr"
+        fig_eui = px.histogram(
+            results,
+            x=eui_col,
+            nbins=30,
+            title="EUI Distribution (kWh/m²/yr)",
+            labels={eui_col: "EUI (kWh/m²/yr)", "count": "Count"},
+        )
+        if baseline_eui is not None:
+            fig_eui.add_vline(
+                x=baseline_eui,
+                line_color="red",
+                line_dash="dash",
+                annotation_text=f"Baseline: {baseline_eui:.1f}",
+            )
+        fig_eui.update_layout(template="plotly_white")
+        sections.append(f'<div class="section"><h2>EUI Distribution</h2>{fig_eui.to_html(full_html=False, include_plotlyjs="cdn")}</div>')
+
+    # ── Parameter vs EUI Scatter ─────────────────────────────────────
+    if not results.empty:
+        numeric_cols = results.select_dtypes(include="number").columns
+        design_vars = [c for c in numeric_cols if c not in ("sample_id", "eui_kwh_m2_yr")]
+        if design_vars:
+            variances = results[design_vars].var()
+            if not variances.isna().all() and variances.sum() > 0:
+                top_var = variances.idxmax()
+                fig_scatter = px.scatter(
+                    results,
+                    x=top_var,
+                    y="eui_kwh_m2_yr",
+                    title=f"EUI vs {top_var}",
+                    labels={top_var: top_var, "eui_kwh_m2_yr": "EUI (kWh/m²/yr)"},
+                    hover_data=results.columns.tolist(),
+                )
+                fig_scatter.update_layout(template="plotly_white")
+                sections.append(
+                    f'<div class="section"><h2>Parameter vs EUI</h2>{fig_scatter.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+                )
+
+    # ── Parallel Coordinates (all numeric vars) ─────────────────────
+    if not results.empty:
+        numeric_df = results.select_dtypes(include="number")
+        if len(numeric_df.columns) > 1:
+            cols_for_parallel = [c for c in numeric_df.columns if c != "sample_id"]
+            if len(cols_for_parallel) > 1:
+                fig_parallel = px.parallel_coordinates(
+                    results[[c for c in cols_for_parallel if c in results.columns]],
+                    color="eui_kwh_m2_yr" if "eui_kwh_m2_yr" in results.columns else None,
+                    title="Parallel Coordinates (all numeric parameters)",
+                )
+                fig_parallel.update_layout(template="plotly_white")
+                sections.append(
+                    f'<div class="section"><h2>Parallel Coordinates</h2>{fig_parallel.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+                )
+
+    # ── Failure Summary ───────────────────────────────────────────────
+    if not failed.empty and "error_summary" in failed.columns:
+        counts = failed["error_summary"].value_counts()
+        if not counts.empty:
+            fig_fail = px.bar(
+                x=counts.values,
+                y=counts.index,
+                orientation="h",
+                title="Failure Reasons",
+                labels={"x": "Count", "y": "Error Summary"},
+            )
+            fig_fail.update_layout(template="plotly_white")
+            sections.append(
+                f'<div class="section"><h2>Failure Summary</h2>{fig_fail.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+            )
+
+    # ── Pareto Front (if available) ─────────────────────────────────
+    if pareto_dir.is_dir():
+        pareto_html = _generate_interactive_pareto_report(pareto_dir)
+        if pareto_html:
+            sections.append(pareto_html)
+
+    # Assemble the full HTML report.
+    if sections:
+        html_report = _assemble_html_report(sections)
+        report_path = outdir / "interactive_report.html"
+        report_path.write_text(html_report)
+        plots.append(report_path)
+        log.info("Generated interactive HTML report: %s", report_path)
+
+    return plots
+
+
+def _find_eui_column(df: pd.DataFrame) -> str | None:
+    """Find the EUI column name in the DataFrame."""
+    for candidate in ("eui_kwh_m2_yr", "eui", "EUI", "eui_kbtu_ft2_yr"):
+        if candidate in df.columns:
+            return candidate
+    for col in df.columns:
+        if "eui" in col.lower():
+            return str(col)
+    return None
+
+
+def _generate_interactive_pareto_report(pareto_dir: Path) -> str | None:
+    """Generate interactive Pareto front HTML section.
+
+    Returns HTML string for the Pareto section, or None if no data.
+    """
+    if not PLOTLY_AVAILABLE:
+        return None
+
+    gen_files = sorted(pareto_dir.glob("gen_*.json"))
+    if not gen_files:
+        return None
+
+    all_gen_data: list[tuple[int, list[dict[str, Any]]]] = []
+    for gf in gen_files:
+        try:
+            data = json.loads(gf.read_text())
+            gen_num = data.get("generation", 0)
+            solutions = data.get("solutions", [])
+            if solutions:
+                all_gen_data.append((gen_num, solutions))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if not all_gen_data:
+        return None
+
+    first_objs = all_gen_data[0][1][0].get("objectives", {})
+    obj_names = list(first_objs.keys())
+    if len(obj_names) < 2:
+        return None
+
+    # Pareto front scatter colored by generation.
+    all_x: list[float] = []
+    all_y: list[float] = []
+    all_gen: list[int] = []
+    for gen_num, solutions in all_gen_data:
+        for s in solutions:
+            all_x.append(s.get("objectives", {}).get(obj_names[0], 0))
+            all_y.append(s.get("objectives", {}).get(obj_names[1], 0))
+            all_gen.append(gen_num)
+
+    df_pareto = pd.DataFrame({"generation": all_gen, obj_names[0]: all_x, obj_names[1]: all_y})
+
+    fig_pareto = px.scatter(
+        df_pareto,
+        x=obj_names[0],
+        y=obj_names[1],
+        color="generation",
+        title="Pareto Front (colored by generation)",
+        labels={obj_names[0]: obj_names[0], obj_names[1]: obj_names[1]},
+        hover_data=[obj_names[0], obj_names[1], "generation"],
+    )
+    fig_pareto.update_layout(template="plotly_white")
+    return f'<div class="section"><h2>Pareto Front</h2>{fig_pareto.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+
+
+def _assemble_html_report(sections: list[str]) -> str:
+    """Assemble a complete standalone HTML report from section HTML strings."""
+    sections_html = "\n".join(sections)
+    return f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSimFlow Interactive Report</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }}
+        .section {{
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #1a1a2e;
+            border-bottom: 2px solid #0066cc;
+            padding-bottom: 10px;
+        }}
+        h2 {{
+            color: #2d2d44;
+            margin-top: 0;
+        }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            max-width: 400px;
+        }}
+        th, td {{
+            text-align: left;
+            padding: 8px 12px;
+            border-bottom: 1px solid #eee;
+        }}
+        th {{
+            color: #666;
+            font-weight: normal;
+        }}
+    </style>
+</head>
+<body>
+    <h1>OSimFlow Interactive Report</h1>
+    {sections_html}
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":
