@@ -808,6 +808,26 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         help="Rate limit string for slowapi (default: 60/minute).",
     )
     serve.add_argument(
+        "--tls-cert",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a PEM-encoded TLS certificate file. "
+            "When provided, --tls-key is also required and HTTPS is enabled. "
+            "SEC-004: TLS is required for production deployments."
+        ),
+    )
+    serve.add_argument(
+        "--tls-key",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a PEM-encoded TLS private key file. "
+            "Required when --tls-cert is provided. "
+            "SEC-004: TLS is required for production deployments."
+        ),
+    )
+    serve.add_argument(
         "--read-write",
         dest="read_only",
         action="store_false",
@@ -1029,7 +1049,28 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
-    uvicorn.run(app, host=args.host, port=args.port)
+
+    tls_cert: Path | None = args.tls_cert if args.tls_cert else None
+    tls_key: Path | None = args.tls_key if args.tls_key else None
+
+    if tls_cert is not None and tls_key is None:
+        print("Error: --tls-key is required when --tls-cert is provided.", file=sys.stderr)
+        return 1
+    if tls_key is not None and tls_cert is None:
+        print("Error: --tls-cert is required when --tls-key is provided.", file=sys.stderr)
+        return 1
+
+    if tls_cert is not None and tls_key is not None:
+        log.warning("TLS enabled: serving on https://%s:%d", args.host, args.port)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            ssl_certfile=tls_cert,
+            ssl_keyfile=tls_key,
+        )
+    else:
+        uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
 
