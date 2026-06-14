@@ -52,6 +52,12 @@ class BaseAlgorithm(abc.ABC):
     _objective: dict[str, Any] | None = None
     _constraints: list[dict[str, Any]] | None = None
 
+    # Explicit feedback-loop slot: observe() writes proposed samples here,
+    # generate_samples() reads from here first (issue #332).
+    # This makes the contract visible and validatable rather than relying
+    # on opaque internal state (_proposed_samples, _positions, _population_X).
+    _pending_proposed_samples: list[dict[str, Any]] = []
+
     def _configure_from_variables(self, variables: dict[str, Any]) -> None:
         """Extract objective and constraints from the variables dict.
 
