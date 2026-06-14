@@ -353,15 +353,11 @@ class TestRateLimiting:
 
     def test_rate_limit_blocks_over_limit(self, tmp_path: Path) -> None:
         """Exceeding the rate limit should return 429."""
-        import time
-
         (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
         app = create_app(outdir=tmp_path, rate_limit="2/minute")
         client = TestClient(app)
         assert client.get("/health").status_code == 200
-        time.sleep(0.05)
         assert client.get("/health").status_code == 200
-        time.sleep(0.05)
         resp = client.get("/health")
         assert resp.status_code == 429, f"Expected 429 but got {resp.status_code}"
 
