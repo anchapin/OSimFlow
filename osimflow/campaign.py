@@ -2752,9 +2752,9 @@ class Campaign:
         indices_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            indices_path = algo.compute_sensitivity_indices(  # type: ignore[attr-defined]
+            indices_path = algo.compute_sensitivity_indices(
                 variables=variables,
-                samples=samples,
+                samples=samples,  # type: ignore[arg-type]
                 kpi_values=kpi_values,
                 outdir=indices_dir,
             )
