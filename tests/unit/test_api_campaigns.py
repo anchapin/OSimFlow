@@ -508,9 +508,7 @@ class TestCancelCampaign:
 class TestCompareCampaigns:
     """Tests for campaign comparison (issue #386)."""
 
-    def test_compare_both_found(
-        self, client_ro: TestClient, campaigns_base: Path
-    ) -> None:
+    def test_compare_both_found(self, client_ro: TestClient, campaigns_base: Path) -> None:
         """When both campaigns exist, return both details."""
         resp = client_ro.get(
             "/api/v1/campaigns/compare",
@@ -567,9 +565,7 @@ class TestCompareCampaigns:
 
     def test_compare_missing_id2(self, client_ro: TestClient) -> None:
         """When id2 is not provided, return 422 validation error."""
-        resp = client_ro.get(
-            "/api/v1/campaigns/compare", params={"id1": "campaign-aaa"}
-        )
+        resp = client_ro.get("/api/v1/campaigns/compare", params={"id1": "campaign-aaa"})
         assert resp.status_code == 422
 
 
