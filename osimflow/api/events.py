@@ -39,6 +39,7 @@ def diff_events(
     Event types:
       - ``sample.started``  — new sample appeared in per_sample
       - ``sample.completed`` — sample status changed to ok/failed/cached
+      - ``sample.error``     — sample failed with error summary (issue #385)
       - ``step.completed``   — new step in steps list
       - ``campaign.completed`` — finished_at became non-null
     """
@@ -79,6 +80,18 @@ def diff_events(
             status = sample.get("status")
             if status in ("ok", "failed", "cached"):
                 events.append({"event": "sample.completed", "data": sample})
+                # Emit error event for failed samples (issue #385)
+                if status == "failed":
+                    error_summary = sample.get("error_summary")
+                    events.append(
+                        {
+                            "event": "sample.error",
+                            "data": {
+                                "sample_id": sid,
+                                "error_summary": error_summary,
+                            },
+                        }
+                    )
             else:
                 events.append({"event": "sample.started", "data": sample})
         else:
@@ -91,6 +104,18 @@ def diff_events(
                 "cached",
             ):
                 events.append({"event": "sample.completed", "data": sample})
+                # Emit error event when sample transitions to failed (issue #385)
+                if new_status == "failed":
+                    error_summary = sample.get("error_summary")
+                    events.append(
+                        {
+                            "event": "sample.error",
+                            "data": {
+                                "sample_id": sid,
+                                "error_summary": error_summary,
+                            },
+                        }
+                    )
 
     return events
 
