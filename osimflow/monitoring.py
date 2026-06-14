@@ -136,6 +136,7 @@ class RunTrace:
         # Per-campaign cost tracking (issue #126).
         self.total_cost_usd: float = 0.0
         self.spot_savings_usd: float = 0.0
+        self.status: str = "running"  # "running", "success", "cancelled", "failed"
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -198,6 +199,7 @@ class RunTrace:
         d: dict[str, object] = {
             "schema_version": self.SCHEMA_VERSION,
             "campaign_id": self.campaign_id,
+            "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "status": self.status,
