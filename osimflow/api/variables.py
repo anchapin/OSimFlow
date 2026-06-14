@@ -139,7 +139,7 @@ def _var_to_summary(var: dict[str, Any]) -> VariableSummary:
 # ---------------------------------------------------------------------------
 
 
-@variables_router.get("/api/v1/variables", response_model=VariableListResponse)
+@variables_router.get("/api/v1/variables", response_model=VariableListResponse)  # type: ignore[untyped-decorator]
 async def list_variables(request: Request) -> VariableListResponse:
     """List all variables from the campaign's variables.yml.
 
@@ -156,7 +156,7 @@ async def list_variables(request: Request) -> VariableListResponse:
 # ---------------------------------------------------------------------------
 
 
-@variables_router.get("/api/v1/variables/{var_name}", response_model=VariableDetailResponse)
+@variables_router.get("/api/v1/variables/{var_name}", response_model=VariableDetailResponse)  # type: ignore[untyped-decorator]
 async def get_variable(var_name: str, request: Request) -> VariableDetailResponse:
     """Get full details for a single variable by name.
 
@@ -190,7 +190,7 @@ async def get_variable(var_name: str, request: Request) -> VariableDetailRespons
 # ---------------------------------------------------------------------------
 
 
-@variables_router.post(
+@variables_router.post(  # type: ignore[untyped-decorator]
     "/api/v1/variables",
     response_model=VariableDetailResponse,
     status_code=201,
@@ -281,7 +281,7 @@ async def create_variable(
 # ---------------------------------------------------------------------------
 
 
-@variables_router.put("/api/v1/variables/{var_name}", response_model=VariableDetailResponse)
+@variables_router.put("/api/v1/variables/{var_name}", response_model=VariableDetailResponse)  # type: ignore[untyped-decorator]
 async def update_variable(
     var_name: str,
     body: VariableUpdateRequest,
@@ -346,7 +346,7 @@ async def update_variable(
 # ---------------------------------------------------------------------------
 
 
-@variables_router.delete("/api/v1/variables/{var_name}", response_model=VariableDeleteResponse)
+@variables_router.delete("/api/v1/variables/{var_name}", response_model=VariableDeleteResponse)  # type: ignore[untyped-decorator]
 async def delete_variable(
     var_name: str,
     request: Request,
