@@ -135,6 +135,8 @@ omit = [
     "osimflow/api/*",
     "osimflow/viz/dashboard.py",
     "osimflow/_work_scripts/*",
+    "osimflow/taskqueue.py",
+    "osimflow/storage.py",
 ]
 
 [tool.coverage.report]

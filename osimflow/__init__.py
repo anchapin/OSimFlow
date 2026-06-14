@@ -25,7 +25,7 @@ from .executors import (
     SlurmExecutor,
 )
 from .jobqueue import JobQueue
-from .logging import LogAggregator, get_logger, setup_logging
+from .logging import get_logger, setup_logging
 from .monitoring import RunTrace, StepTrace
 from .observability import (
     CloudWatchBackend,
@@ -44,6 +44,14 @@ from .storage import (
     ResultStorageUploader,
     S3Storage,
     build_result_storage,
+)
+from .taskqueue import (
+    DaskTaskQueue,
+    NoOpTaskQueue,
+    TaskHandle,
+    TaskQueue,
+    TaskQueueStatus,
+    build_task_queue,
 )
 from .validation import ValidationError
 from .weather import (
@@ -108,7 +116,12 @@ __all__ = [
     "AzureBlobStorage",
     "ResultStorageUploader",
     "build_result_storage",
-    "LogAggregator",
+    "TaskQueue",
+    "DaskTaskQueue",
+    "NoOpTaskQueue",
+    "TaskHandle",
+    "TaskQueueStatus",
+    "build_task_queue",
 ]
 
 setup_logging()

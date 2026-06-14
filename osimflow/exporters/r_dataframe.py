@@ -147,6 +147,9 @@ class RDataFrameExporter:
 
         # --- Write primary format ---
         if self.format == "parquet":
+            if "sample_id" in df.columns:
+                df = df.copy()
+                df["sample_id"] = df["sample_id"].astype(str).str.zfill(4)
             out_path = self.outdir / "campaign_results.parquet"
             df.to_parquet(out_path, index=False)
             log.info(
@@ -280,19 +283,27 @@ class RDataFrameExporter:
         agg_parquet = work_dir / "aggregated_results.parquet"
         agg_csv = work_dir / "aggregated_results.csv"
         if agg_parquet.exists():
-            outputs.update(self.export_results(aggregated_parquet=agg_parquet))
+            result = self.export_results(aggregated_parquet=agg_parquet)
+            outputs["aggregated_parquet"] = result["parquet"]
+            outputs["aggregated_csv"] = result["csv"]
         elif agg_csv.exists():
-            outputs.update(self.export_results(aggregated_csv=agg_csv))
+            result = self.export_results(aggregated_csv=agg_csv)
+            outputs["aggregated_parquet"] = result["parquet"]
+            outputs["aggregated_csv"] = result["csv"]
 
         # Failed simulations
         failed_csv = work_dir / "failed_simulations.csv"
         if failed_csv.exists():
-            outputs.update(self.export_failures(failed_csv=failed_csv))
+            result = self.export_failures(failed_csv=failed_csv)
+            outputs["failures_parquet"] = result["parquet"]
+            outputs["failures_csv"] = result["csv"]
 
         # Time-series
         ts_parquet = work_dir / "timeseries_aggregated.parquet"
         if ts_parquet.exists():
-            outputs.update(self.export_timeseries(timeseries_parquet=ts_parquet))
+            result = self.export_timeseries(timeseries_parquet=ts_parquet)
+            outputs["timeseries_parquet"] = result["parquet"]
+            outputs["timeseries_csv"] = result["csv"]
 
         return outputs
 

@@ -62,7 +62,6 @@ from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .jobqueue import JobQueue
-from .logging import LogAggregator
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -81,6 +80,8 @@ from .observability import (
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
+from .taskqueue import TaskHandle as TQHandle
+from .taskqueue import TaskQueue
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .webhook import WebhookClient
 from .work import (
@@ -170,10 +171,12 @@ class Campaign:
         apply_fn: Callable[..., Path] | None = None,
         extract_fn: Callable[..., Path] | None = None,
         max_workers: int = 1,
+        task_queue: TaskQueue | None = None,
     ):
         self.cfg = cfg
         self.executor = executor
         self.max_workers = max_workers
+        self.task_queue = task_queue
         # Resolve apply_fn: explicit param > cfg.custom_apply_script > default.
         if apply_fn is not None:
             self.apply_fn = apply_fn
@@ -234,11 +237,6 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
-        # Log aggregator for distributed CloudWatch Logs (issue #340).
-        # When log_aggregation_url is set, per-sample stdout/stderr files
-        # are collected and published to CloudWatch Logs after the
-        # RUN_OPENSTUDIO_SIM step completes.
-        self._log_aggregator = LogAggregator(cfg.log_aggregation_url)
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -503,7 +501,7 @@ class Campaign:
 
     def _submit_and_await_all(
         self,
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]],
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
         step_name: str,
     ) -> None:
         """Submit all samples to the executor, then await all results concurrently.
@@ -547,7 +545,7 @@ class Campaign:
             )
 
         def _await_one(
-            item: tuple[str, tuple[Handle, Callable[[Any], None]]],
+            item: tuple[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
         ) -> str:
             """Await one handle. Returns the sample_id."""
             sid, (handle, on_success) = item
@@ -2211,20 +2209,30 @@ class Campaign:
             }
 
         # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
-            handle = self.executor.submit(
-                self.apply_fn,
-                self.cfg.template_sim_package,
-                ctx["resolved_params"],
-                sid,
-                ctx["out_dir"],
-                name=f"apply_{sid}",
-                cpus=1,
-                memory_mb=512,
-                time_min=5,
-                container=CONTAINER_PY,
-            )
+            handle: Handle | TQHandle
+            if self.task_queue is not None:
+                handle = self.task_queue.submit(
+                    self.apply_fn,
+                    self.cfg.template_sim_package,
+                    ctx["resolved_params"],
+                    sid,
+                    ctx["out_dir"],
+                )
+            else:
+                handle = self.executor.submit(
+                    self.apply_fn,
+                    self.cfg.template_sim_package,
+                    ctx["resolved_params"],
+                    sid,
+                    ctx["out_dir"],
+                    name=f"apply_{sid}",
+                    cpus=1,
+                    memory_mb=512,
+                    time_min=5,
+                    container=CONTAINER_PY,
+                )
 
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
@@ -2360,25 +2368,40 @@ class Campaign:
             }
 
         # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
-            handle = self.executor.submit(
-                run_openstudio_sim,
-                ctx["mod_pkg"],
-                sid,
-                os_version,
-                ctx["out_dir"],
-                name=f"sim_{sid}",
-                cpus=4,
-                memory_mb=8 * 1024,
-                time_min=240,
-                container=CONTAINER_OS.format(version=os_version),
-                openstudio_version=os_version,
-                stdout_path=ctx["stdout_log"],
-                stderr_path=ctx["stderr_log"],
-                max_retries=self.cfg.max_sample_retries,
-                worker_id="local",
-            )
+            handle: Handle | TQHandle
+            if self.task_queue is not None:
+                handle = self.task_queue.submit(
+                    run_openstudio_sim,
+                    ctx["mod_pkg"],
+                    sid,
+                    os_version,
+                    ctx["out_dir"],
+                    openstudio_version=os_version,
+                    stdout_path=ctx["stdout_log"],
+                    stderr_path=ctx["stderr_log"],
+                    max_retries=self.cfg.max_sample_retries,
+                    worker_id="local",
+                )
+            else:
+                handle = self.executor.submit(
+                    run_openstudio_sim,
+                    ctx["mod_pkg"],
+                    sid,
+                    os_version,
+                    ctx["out_dir"],
+                    name=f"sim_{sid}",
+                    cpus=4,
+                    memory_mb=8 * 1024,
+                    time_min=240,
+                    container=CONTAINER_OS.format(version=os_version),
+                    openstudio_version=os_version,
+                    stdout_path=ctx["stdout_log"],
+                    stderr_path=ctx["stderr_log"],
+                    max_retries=self.cfg.max_sample_retries,
+                    worker_id="local",
+                )
 
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
@@ -2392,7 +2415,7 @@ class Campaign:
                 _key: CacheKey = key,
                 _state: dict[str, object] = state,
                 _archive: bool = archive,
-                _handle: Handle = h,
+                _handle: Handle | TQHandle = h,
             ) -> None:
                 # Intermediate-file optimization (PRD §1.4): drop empty
                 # `.err` (the eplusout.err from the OpenStudio run). The
@@ -2414,12 +2437,15 @@ class Campaign:
                 _state["sim_status"] = "ok"
                 _state["eplusout_sql"] = str(result_path / "eplusout.sql")
                 # Worker tracking (issue #105): capture from the sim handle.
+                # TaskHandle only has worker_id; Handle has full worker tracking.
                 _state["worker_id"] = _handle.worker_id
-                _state["worker_ip"] = _handle.worker_ip
-                _state["worker_region"] = _handle.worker_region
+                _state["worker_ip"] = getattr(_handle, "worker_ip", None)
+                _state["worker_region"] = getattr(_handle, "worker_region", None)
                 # Cost tracking (issue #126): capture from the sim handle.
-                _state["cost_usd"] = _handle.cost_usd
-                _state["billed_duration_seconds"] = _handle.billed_duration_seconds
+                _state["cost_usd"] = getattr(_handle, "cost_usd", None)
+                _state["billed_duration_seconds"] = getattr(
+                    _handle, "billed_duration_seconds", None
+                )
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                 # Archive eplusout.sql when flag is set
                 if _archive:
@@ -2470,27 +2496,9 @@ class Campaign:
         self._obs.record_step_duration(
             "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
         )
-        self._publish_sample_logs()
         return out
 
-    def _publish_sample_logs(self) -> None:
-        """Collect per-sample stdout/stderr logs and publish to CloudWatch Logs.
-
-        Iterates over all sample states accumulated during the
-        RUN_OPENSTUDIO_SIM fan-out and registers each sample's log files
-        with the LogAggregator. Called after the fan-out completes so all
-        log file paths are known.
-        """
-        for _sid, state in self._sample_state.items():
-            stdout = state.get("stdout_log")
-            stderr = state.get("stderr_log")
-            if stdout:
-                self._log_aggregator.add_log_file(Path(str(stdout)))
-            if stderr:
-                self._log_aggregator.add_log_file(Path(str(stderr)))
-        self._log_aggregator.publish()
-
-    def step_extract_kpis(
+    def step_extract_kpis(  # noqa: PLR0915
         self,
         simulated: SampleDict,
         generation: int = 0,
@@ -2536,19 +2544,28 @@ class Campaign:
             }
 
         # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
-            handle = self.executor.submit(
-                self.extract_fn,
-                ctx["sim_dir"],
-                sid,
-                ctx["kpi_dir"],
-                name=f"kpi_{sid}",
-                cpus=1,
-                memory_mb=1024,
-                time_min=10,
-                container=CONTAINER_PY,
-            )
+            handle: Handle | TQHandle
+            if self.task_queue is not None:
+                handle = self.task_queue.submit(
+                    self.extract_fn,
+                    ctx["sim_dir"],
+                    sid,
+                    ctx["kpi_dir"],
+                )
+            else:
+                handle = self.executor.submit(
+                    self.extract_fn,
+                    ctx["sim_dir"],
+                    sid,
+                    ctx["kpi_dir"],
+                    name=f"kpi_{sid}",
+                    cpus=1,
+                    memory_mb=1024,
+                    time_min=10,
+                    container=CONTAINER_PY,
+                )
 
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
