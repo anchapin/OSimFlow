@@ -25,11 +25,16 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 log = logging.getLogger("osimflow.monitoring")
+
+HEARTBEAT_INTERVAL_SEC = 30
+STALE_THRESHOLD_SEC = 60
 
 # Soft dependency: tqdm is preferred but not required.
 try:
@@ -322,3 +327,107 @@ def sample_log_paths(outdir: Path, sample_id: str) -> tuple[Path, Path]:
     d = outdir / "work" / "sim" / sample_id
     d.mkdir(parents=True, exist_ok=True)
     return d / "stdout.log", d / "stderr.log"
+
+
+# ---------------------------------------------------------------------------
+# Worker heartbeat (issue #341)
+# ---------------------------------------------------------------------------
+
+
+class WorkerHeartbeat:
+    """Writes a heartbeat file every HEARTBEAT_INTERVAL_SEC while a job runs.
+
+    The heartbeat file is written to
+    ``${outdir}/work/sim/<sample_id>/heartbeat.json`` and contains:
+    ``worker_id``, ``sample_id``, ``last_seen`` (ISO timestamp), and
+    ``job_handle`` state. A watchdog can use this to detect stale workers.
+    """
+
+    def __init__(
+        self,
+        outdir: Path,
+        sample_id: str,
+        worker_id: str,
+        job_handle_state: str = "running",
+    ) -> None:
+        self.outdir = outdir
+        self.sample_id = sample_id
+        self.worker_id = worker_id
+        self.job_handle_state = job_handle_state
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._path: Path | None = None
+
+    def _heartbeat_path(self) -> Path:
+        if self._path is None:
+            d = self.outdir / "work" / "sim" / self.sample_id
+            d.mkdir(parents=True, exist_ok=True)
+            self._path = d / "heartbeat.json"
+        return self._path
+
+    def _write(self) -> None:
+        data = {
+            "worker_id": self.worker_id,
+            "sample_id": self.sample_id,
+            "last_seen": datetime.now(UTC).isoformat(),
+            "job_handle": self.job_handle_state,
+        }
+        path = self._heartbeat_path()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str))
+        tmp.rename(path)
+
+    def start(self) -> None:
+        """Start the background heartbeat writer thread."""
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name=f"heartbeat-{self.sample_id}"
+        )
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while not self._stop_event.wait(HEARTBEAT_INTERVAL_SEC):
+            try:
+                self._write()
+            except Exception as exc:
+                log.warning("heartbeat write failed for %s: %s", self.sample_id, exc)
+
+    def stop(self) -> None:
+        """Stop the heartbeat writer and write a final 'stopped' entry."""
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+        self.job_handle_state = "stopped"
+        try:
+            self._write()
+        except Exception as exc:
+            log.warning("final heartbeat write failed for %s: %s", self.sample_id, exc)
+
+    def update_state(self, state: str) -> None:
+        """Update the job_handle state (e.g. 'completed', 'failed')."""
+        self.job_handle_state = state
+        try:
+            self._write()
+        except Exception as exc:
+            log.warning("heartbeat state update failed for %s: %s", self.sample_id, exc)
+
+
+def check_heartbeat(outdir: Path, sample_id: str) -> bool:
+    """Return True if the heartbeat for *sample_id* is stale (> STALE_THRESHOLD_SEC old).
+
+    A stale heartbeat indicates the worker has not updated it in the
+    expected interval, suggesting the job is hung or the worker crashed.
+    """
+    path = outdir / "work" / "sim" / sample_id / "heartbeat.json"
+    if not path.is_file():
+        return True
+    try:
+        data = json.loads(path.read_text())
+        last_seen_str = data.get("last_seen")
+        if not last_seen_str:
+            return True
+        last_seen = datetime.fromisoformat(last_seen_str)
+        age = time.time() - last_seen.timestamp()
+        return age > STALE_THRESHOLD_SEC
+    except (json.JSONDecodeError, OSError, ValueError):
+        return True
