@@ -51,7 +51,7 @@ class BaseAlgorithm(abc.ABC):
     # Set by _configure_from_variables() called from generate_samples().
     _objective: dict[str, Any] | None = None
     _constraints: list[dict[str, Any]] | None = None
-
+    # Explicit feedback loop storage (issue #332). Iterative algorithms
     # Explicit feedback-loop slot: observe() writes proposed samples here,
     # generate_samples() reads from here first (issue #332).
     # This makes the contract visible and validatable rather than relying
@@ -556,6 +556,15 @@ try:
 except ImportError:
     # pymoo is an optional dependency — NSGA-II, PSO, and SPEA-II are only
     # available when the [optimization] extra is installed.
+    pass
+
+try:
+    from osimflow.algorithms.ga import GeneticAlgorithm  # noqa: F401, E402
+
+    AlgorithmRegistry.register("ga", GeneticAlgorithm)
+except ImportError:
+    # deap is a required dependency for GeneticAlgorithm — only available
+    # when the [ga] extra is installed.
     pass
 
 from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402

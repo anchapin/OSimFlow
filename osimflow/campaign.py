@@ -1576,11 +1576,22 @@ class Campaign:
                 )
                 return None
             # observe() reads KPI history and updates optimizer state.
-            # The returned samples are also stored in internal state
-            # so generate_samples() can use them (issue #270).
+            # The returned samples are also stored in the explicit
+            # _pending_proposed_samples slot for verifiable contract
+            # (issue #332).
             new_samples = algo.observe(history)
             if new_samples:
                 cast_samples(new_samples)
+                # Verify observe() return matches the explicit slot
+                # (issue #332). This catches bugs where an algorithm
+                # sets internal state but fails to return.
+                pending = getattr(algo, "_pending_proposed_samples", None)
+                if pending is not None and pending != new_samples:
+                    log.error(
+                        "observe() return value does not match "
+                        "_pending_proposed_samples for algorithm %s",
+                        algo.name(),
+                    )
             else:
                 log.warning(
                     "observe() returned empty samples at generation %d; reusing previous",

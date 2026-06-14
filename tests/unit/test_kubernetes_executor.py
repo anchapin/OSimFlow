@@ -14,9 +14,18 @@ import pytest
 from osimflow.executors import KubernetesExecutor
 from osimflow.executors.kubernetes_executor import _KubernetesHandle
 
+try:
+    from kubernetes import client  # noqa: F401
+
+    _HAS_KUBERNETES = True
+except ImportError:
+    _HAS_KUBERNETES = False
+
 
 class TestKubernetesExecutor:
     """KubernetesExecutor wraps the K8s BatchV1Api."""
+
+    pytestmark = pytest.mark.skipif(not _HAS_KUBERNETES, reason="kubernetes not installed")
 
     def _make_mock_client(self) -> MagicMock:
         mock_client = MagicMock()

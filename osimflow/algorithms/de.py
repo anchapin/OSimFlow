@@ -332,7 +332,9 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         new_samples = _propose_samples_around(center, n_new, self._bounds, var_names, width=0.1)
 
         # Store proposed samples so generate_samples() can use them
-        # on the next call (issue #270).
+        # on the next call (issue #270). Dual-write: internal state +
+        # explicit slot for verifiable observe→generateSamples contract
+        # (issue #332).
         self._proposed_samples = new_samples
         # Explicit feedback-loop slot for Campaign validation (issue #332).
         self._pending_proposed_samples = list(new_samples)

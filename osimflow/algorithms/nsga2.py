@@ -232,8 +232,6 @@ class NSGA2Algorithm(BaseAlgorithm):
             log.info("NSGA-II proposed %d samples from explicit slot", len(samples))
             return samples_path
 
-        # If we have a population from a previous observe() call,
-        # use the NSGA-II selected individuals.
         if self._population_X.size > 0:
             var_names = [v["name"] for v in self._independent_vars]
             samples = self._array_to_samples(self._population_X, var_names)

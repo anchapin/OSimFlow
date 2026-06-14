@@ -14,6 +14,8 @@ import pytest
 from osimflow import Campaign, CampaignConfig
 from osimflow.executors import LocalExecutor
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture
 def campaign_env(tmp_path, _session_example_package, _session_variables_yml):

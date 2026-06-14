@@ -22,9 +22,13 @@ from osimflow.apply_params import (
     MappedParameter,
     UnmappedParameterError,
     _mutate_osw,
+    _resolve_dir_template,
+    _select_template_file,
     apply_parameters,
+    detect_template_type,
     parse_osw_arguments,
     preflight_check,
+    resolve_template_file,
 )
 
 
@@ -561,3 +565,60 @@ class TestPreflightFuzzyMatch:
             preflight_check({"wall_r_valu": 3.0}, mappings)
         msg = str(exc_info.value)
         assert "wall_r_value" in msg
+
+
+# ===========================================================================
+# Error-path tests for template-resolution helpers
+# ===========================================================================
+
+
+class TestDetectTemplateType:
+    """Error paths in detect_template_type (lines 204-209)."""
+
+    def test_unsupported_extension_raises(self, tmp_path: Path) -> None:
+        """Line 209: unsupported extension raises ValueError."""
+        bad = tmp_path / "model.txt"
+        bad.write_text("not an osm or osw file")
+        with pytest.raises(ValueError, match="Unsupported template type"):
+            detect_template_type(bad)
+
+
+class TestResolveDirTemplate:
+    """Error paths in _resolve_dir_template (lines 225-226)."""
+
+    def test_file_instead_of_directory_raises(self, tmp_path: Path) -> None:
+        """Line 226: passing a file instead of a directory raises ValueError."""
+        file_path = tmp_path / "not_a_dir.txt"
+        file_path.write_text("hello")
+        with pytest.raises(ValueError, match="_resolve_dir_template requires a directory"):
+            _resolve_dir_template(file_path)
+
+    def test_empty_directory_returns_none_none(self, tmp_path: Path) -> None:
+        """Empty directory returns (None, None) - valid, not an error."""
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        osw, osm = _resolve_dir_template(empty_dir)
+        assert osw is None
+        assert osm is None
+
+
+class TestResolveTemplateFile:
+    """Error paths in resolve_template_file (line 275)."""
+
+    def test_empty_directory_raises(self, tmp_path: Path) -> None:
+        """Line 275: directory with no .osw and no .osm raises ValueError."""
+        empty_dir = tmp_path / "empty_template"
+        empty_dir.mkdir()
+        with pytest.raises(ValueError, match="contains neither workflow.osw nor model.osm"):
+            resolve_template_file(empty_dir)
+
+
+class TestSelectTemplateFile:
+    """Error paths in _select_template_file (line 317)."""
+
+    def test_empty_directory_raises(self, tmp_path: Path) -> None:
+        """Line 317: directory with no .osw and no .osm raises ValueError."""
+        empty_dir = tmp_path / "empty_template"
+        empty_dir.mkdir()
+        with pytest.raises(ValueError, match="contains neither workflow.osw nor model.osm"):
+            _select_template_file(empty_dir)
