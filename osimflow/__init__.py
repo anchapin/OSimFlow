@@ -13,6 +13,14 @@ from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
 from .config import CampaignConfig, load_config
 from .distributed_cache import DistributedCache, build_cache
+from .document_store import (
+    DocumentNotFoundError,
+    DocumentStore,
+    DocumentStoreError,
+    DuplicateDocumentError,
+    SQLiteDocumentStore,
+    build_document_store,
+)
 from .executors import (
     AWSBatchExecutor,
     AzureBatchExecutor,
@@ -125,6 +133,12 @@ __all__ = [
     "TaskHandle",
     "TaskQueueStatus",
     "build_task_queue",
+    "DocumentStore",
+    "DocumentStoreError",
+    "DocumentNotFoundError",
+    "DuplicateDocumentError",
+    "SQLiteDocumentStore",
+    "build_document_store",
 ]
 
 setup_logging()
