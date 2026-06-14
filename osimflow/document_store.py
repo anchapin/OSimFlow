@@ -707,7 +707,7 @@ class SQLiteDocumentStore(DocumentStore):
         with self._lock:
             c = self.connection
             cursor = c.execute(
-                f"DELETE FROM {table} WHERE {where_clause} LIMIT 1",
+                f"DELETE FROM {table} WHERE rowid = (SELECT rowid FROM {table} WHERE {where_clause} LIMIT 1)",
                 params,
             )
 
