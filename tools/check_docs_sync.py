@@ -51,6 +51,10 @@ PATH_SKIP_SUBSTRINGS = (
     "importlib.util",  # stdlib module, not a file
     "openstudio.cli",  # CLI binary shipped inside container, not a local path
     "containerOverride",  # AWS Batch API field, not a local path
+    "requests.cpu",  # Kubernetes API field path, not a local path
+    "limits.cpu",  # Kubernetes API field path, not a local path
+    "requests.memory",  # Kubernetes API field path, not a local path
+    "limits.memory",  # Kubernetes API field path, not a local path
     ".egg-info",
     "measure.rb",  # OpenStudio measure pattern (example in docs)
     "measure.py",  # OpenStudio measure pattern (example in docs)

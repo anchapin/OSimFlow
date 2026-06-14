@@ -212,9 +212,16 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
         self._independent_vars = independent_vars
         self._bounds = _extract_bounds(independent_vars)
 
-        # If observe() has proposed new samples from the optimizer state,
-        # use those instead of generating a fresh LHS population
-        # (issue #270).
+        # Check the explicit feedback-loop slot first (issue #332).
+        if self._pending_proposed_samples:
+            samples = self._pending_proposed_samples
+            self._pending_proposed_samples = []  # consume
+            self._proposed_samples = []  # also consume the redundant slot
+            samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+            log.info("Dual annealing proposed %d samples from explicit slot", len(samples))
+            return samples_path
+
+        # Fallback to internal _proposed_samples state (legacy path).
         if self._proposed_samples:
             samples = self._proposed_samples
             self._proposed_samples = []  # consume
@@ -310,8 +317,12 @@ class DualAnnealingAlgorithm(BaseAlgorithm):
         new_samples = _propose_samples_around(center, n_new, self._bounds, var_names, width=0.15)
 
         # Store proposed samples so generate_samples() can use them
-        # on the next call (issue #270).
+        # on the next call (issue #270). Dual-write: internal state +
+        # explicit slot for verifiable observe→generateSamples contract
+        # (issue #332).
         self._proposed_samples = new_samples
+        # Explicit feedback-loop slot for Campaign validation (issue #332).
+        self._pending_proposed_samples = list(new_samples)
 
         log.info(
             "Dual annealing observe(): best_value=%.4f, proposed %d new samples",

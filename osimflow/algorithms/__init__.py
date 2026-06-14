@@ -51,6 +51,12 @@ class BaseAlgorithm(abc.ABC):
     # Set by _configure_from_variables() called from generate_samples().
     _objective: dict[str, Any] | None = None
     _constraints: list[dict[str, Any]] | None = None
+    # Explicit feedback loop storage (issue #332). Iterative algorithms
+    # Explicit feedback-loop slot: observe() writes proposed samples here,
+    # generate_samples() reads from here first (issue #332).
+    # This makes the contract visible and validatable rather than relying
+    # on opaque internal state (_proposed_samples, _positions, _population_X).
+    _pending_proposed_samples: list[dict[str, Any]] = []
 
     def _configure_from_variables(self, variables: dict[str, Any]) -> None:
         """Extract objective and constraints from the variables dict.
@@ -170,13 +176,16 @@ class BaseAlgorithm(abc.ABC):
         samples: list[dict[str, Any]],
         kpi_values: dict[str, dict[str, float]],
         outdir: Path,
+        calc_second_order: bool = False,
     ) -> Path:
-        """Compute sensitivity indices for the algorithm.
+        """Compute sensitivity indices (Sobol). Raises NotImplementedError by default.
 
-        Only implemented for sensitivity analysis algorithms (Sobol, Morris, FAST99).
-        The default implementation raises ``NotImplementedError``.
+        Only ``SobolAlgorithm`` implements this method. Other algorithms
+        that do not support sensitivity analysis will raise ``NotImplementedError``.
         """
-        raise NotImplementedError(f"{self.name()} does not support sensitivity index computation")
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement compute_sensitivity_indices"
+        )
 
 
 # ======================================================================
@@ -550,11 +559,11 @@ except ImportError:
     pass
 
 try:
-    from osimflow.algorithms.ga import GeneticAlgorithm  # noqa: E402
+    from osimflow.algorithms.ga import GeneticAlgorithm  # noqa: F401, E402
 
     AlgorithmRegistry.register("ga", GeneticAlgorithm)
 except ImportError:
-    # DEAP is an optional dependency — GeneticAlgorithm is only available
+    # deap is a required dependency for GeneticAlgorithm — only available
     # when the [ga] extra is installed.
     pass
 

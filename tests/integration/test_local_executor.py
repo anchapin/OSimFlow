@@ -35,6 +35,9 @@ import yaml
 from osimflow import Campaign, CampaignConfig
 from osimflow.executors import LocalExecutor
 
+# Mark as slow: runs a real 3-sample campaign (30-60s). Excluded by `make test-fast`.
+pytestmark = pytest.mark.slow
+
 # ---------------------------------------------------------------------------
 # Fixtures: a copy of the example_package in tmp_path so the test does not
 # pollute the canonical example. The variables.yml is also copied and

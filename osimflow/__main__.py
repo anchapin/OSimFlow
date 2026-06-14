@@ -34,6 +34,7 @@ from osimflow import (
     NomadExecutor,
     PBSExecutor,
     SlurmExecutor,
+    build_task_queue,
     load_config,
 )
 from osimflow.byos import ByosTrustLevel, load_user_function
@@ -447,6 +448,28 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         default=None,
         help="HPC project/account for Dask workers.",
     )
+    run.add_argument(
+        "--task-queue",
+        choices=["none", "dask"],
+        default="none",
+        help=(
+            "Distributed task queue backend for fan-out steps "
+            "(APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS). "
+            "When 'none' (default), work is submitted directly to the "
+            "configured --executor. When 'dask', work is submitted to "
+            "a Dask scheduler (requires --dask-scheduler-address unless "
+            "a local embedded cluster is acceptable)."
+        ),
+    )
+    run.add_argument(
+        "--dask-scheduler-address",
+        default=None,
+        help=(
+            "Dask scheduler address (e.g. tcp://scheduler:8786). "
+            "When omitted and --task-queue is 'dask', an embedded "
+            "single-process LocalCluster is started automatically."
+        ),
+    )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)
@@ -785,10 +808,36 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         help="Rate limit string for slowapi (default: 60/minute).",
     )
     serve.add_argument(
+        "--tls-cert",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a PEM-encoded TLS certificate file. "
+            "When provided, --tls-key is also required and HTTPS is enabled. "
+            "SEC-004: TLS is required for production deployments."
+        ),
+    )
+    serve.add_argument(
+        "--tls-key",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a PEM-encoded TLS private key file. "
+            "Required when --tls-cert is provided. "
+            "SEC-004: TLS is required for production deployments."
+        ),
+    )
+    serve.add_argument(
         "--read-write",
         dest="read_only",
         action="store_false",
         help="Allow campaign control (stop, live events). Disables --read-only.",
+    )
+    serve.add_argument(
+        "--ui",
+        action="store_true",
+        default=False,
+        help="Enable the campaign setup web UI at /ui/ (issue #337).",
     )
     serve.add_argument("--log_level", default="INFO")
     serve.set_defaults(func=_cmd_serve)
@@ -996,10 +1045,32 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         api_key=api_key,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
+        ui_enabled=args.ui,
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
-    uvicorn.run(app, host=args.host, port=args.port)
+
+    tls_cert: Path | None = args.tls_cert if args.tls_cert else None
+    tls_key: Path | None = args.tls_key if args.tls_key else None
+
+    if tls_cert is not None and tls_key is None:
+        print("Error: --tls-key is required when --tls-cert is provided.", file=sys.stderr)
+        return 1
+    if tls_key is not None and tls_cert is None:
+        print("Error: --tls-cert is required when --tls-key is provided.", file=sys.stderr)
+        return 1
+
+    if tls_cert is not None and tls_key is not None:
+        log.warning("TLS enabled: serving on https://%s:%d", args.host, args.port)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            ssl_certfile=tls_cert,
+            ssl_keyfile=tls_key,
+        )
+    else:
+        uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
 
@@ -1428,12 +1499,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         if args.custom_kpi_extractor
         else None
     )
+    task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+    if cfg.task_queue != "none":
+        log.info("task queue enabled: backend=%s", cfg.task_queue)
     campaign = Campaign(
         cfg,
         executor,
         apply_fn=apply_fn,
         extract_fn=extract_fn,
         max_workers=args.max_workers,
+        task_queue=task_queue,
     )
     # TUI: wrap campaign execution with Rich TUI when available.
     # The TUI is a passive observer (reads run.json) and does not

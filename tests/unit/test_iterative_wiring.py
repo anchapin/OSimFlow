@@ -8,6 +8,9 @@ Tests cover:
   * DE (single-objective) — observe() feeds KPIs back, generate_samples()
     uses proposed samples instead of always LHS.
   * DA (single-objective) — same pattern as DE.
+  * PSO (single-objective) — same pattern.
+  * NSGA-II (multi-objective) — same pattern.
+  * Explicit _pending_proposed_samples slot (issue #332).
   * Mock iterative algorithm with real KPI files.
   * Per-generation monitoring in run.json.
   * Convergence stops the loop correctly.
@@ -15,6 +18,7 @@ Tests cover:
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -177,13 +181,17 @@ class TestDEFeedbackLoop:
         path1 = algo.generate_samples(variables, 3, seed=42, outdir=outdir1)
         samples1 = json.loads(path1.read_text())["samples"]
         assert len(samples1) == len(proposed)
-        # Verify the samples match what observe() proposed.
+        # verify the samples match what observe() proposed.
         for orig, loaded in zip(proposed, samples1, strict=False):
             assert orig["sample_id"] == loaded["sample_id"]
             assert orig["values"] == loaded["values"]
 
-        # After generate_samples(), proposed_samples should be consumed.
-        assert algo._proposed_samples == []
+        # After generate_samples(), _pending_proposed_samples must be cleared
+        # (issue #332). _proposed_samples is the fallback path and is NOT
+        # consumed when the explicit slot is set.  Uses [] (falsy) as sentinel.
+        assert not algo._pending_proposed_samples, (
+            "_pending_proposed_samples must be cleared after generate_samples() (issue #332)"
+        )
 
     def test_de_two_generation_campaign(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Run a 2-generation DE campaign and verify feedback loop."""
@@ -273,8 +281,16 @@ class TestDAFeedbackLoop:
             assert orig["sample_id"] == loaded["sample_id"]
             assert orig["values"] == loaded["values"]
 
-        # Proposed samples should be consumed.
-        assert algo._proposed_samples == []
+        # _pending_proposed_samples must be cleared after use (issue #332).
+        # Uses [] (falsy) as sentinel.
+        assert not algo._pending_proposed_samples, (
+            "_pending_proposed_samples must be cleared after generate_samples()"
+        )
+        # _proposed_samples is also cleared when the explicit slot is used
+        # (issue #332) — both slots are consumed together.
+        assert not algo._proposed_samples, (
+            "_proposed_samples must be cleared when explicit slot is consumed"
+        )
 
     def test_da_two_generation_campaign(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Run a 2-generation DA campaign and verify feedback loop."""
@@ -423,3 +439,327 @@ class TestIterativeConvergence:
                 pass
         finally:
             AlgorithmRegistry._registry.pop("loose_de", None)
+
+
+# ---------------------------------------------------------------------------
+# Explicit _pending_proposed_samples slot (issue #332)
+# ---------------------------------------------------------------------------
+
+
+class TestExplicitPendingSamplesSlot:
+    """Verify observe() → generate_samples() contract via explicit slot (issue #332).
+
+    The explicit slot makes the feedback loop verifiable: observe() sets
+    _pending_proposed_samples AND returns the same value; generate_samples()
+    checks the slot first and clears it on use.
+    """
+
+    def test_de_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """DE.observe() must set _pending_proposed_samples to the same value it returns."""
+        from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
+
+        algo = DifferentialEvolutionAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        # Gen 0: LHS.
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        # Fake KPI history.
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+
+        # observe() sets _pending_proposed_samples to the same value it returns.
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None, "observe() must return proposed samples"
+        assert pending is not None, "_pending_proposed_samples must be set after observe()"
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples "
+            "(verifiable contract, issue #332)"
+        )
+
+    def test_de_generate_samples_consumes_pending_first(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """DE.generate_samples() must check _pending_proposed_samples before internal state."""
+        from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
+
+        algo = DifferentialEvolutionAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        # Gen 0: LHS.
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        # Fake KPI history.
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        algo.observe(history)
+
+        # Clear the internal state so only _pending_proposed_samples is set.
+        algo._proposed_samples = []
+
+        # generate_samples() must still return the pending samples.
+        outdir1 = tmp_dirs[2] / "gen1"
+        path1 = algo.generate_samples(variables, 3, seed=42, outdir=outdir1)
+        samples1 = json.loads(path1.read_text())["samples"]
+
+        pending = algo._pending_proposed_samples
+        assert not pending, "_pending_proposed_samples must be cleared after use"
+        assert len(samples1) == len(algo.observe(history)), (
+            "generate_samples() must use _pending_proposed_samples when only that is set"
+        )
+
+    def test_da_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """DA.observe() must set _pending_proposed_samples to the same value it returns."""
+        from osimflow.algorithms.da import DualAnnealingAlgorithm
+
+        algo = DualAnnealingAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None
+        assert pending is not None
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples (issue #332)"
+        )
+
+    def test_pso_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """PSO.observe() must set _pending_proposed_samples to the same value it returns."""
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None
+        assert pending is not None
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples (issue #332)"
+        )
+
+    def test_nsga2_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """NSGA2.observe() must set _pending_proposed_samples to the same value it returns."""
+        pytest.importorskip("pymoo", reason="pymoo not installed")
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["eui"], maximize=[False], pop_size=3)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(
+                json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0, "cost": 50.0}})
+            )
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None
+        assert pending is not None
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples (issue #332)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Observe validation error path (issue #332)
+# ---------------------------------------------------------------------------
+
+
+class TestObserveValidation:
+    """Verify observe() return vs _pending_proposed_samples mismatch logging (issue #332).
+
+    The mismatch check lives in Campaign._run_generation_loop() (campaign.py
+    lines 1588-1594). It fires when an algorithm sets _pending_proposed_samples
+    to one value but observe() returns a different value. A well-behaved
+    algorithm never triggers this — the check is a defensive guard for
+    algorithm bugs. The test below deliberately creates a buggy algorithm to
+    exercise the code path.
+    """
+
+    def test_observe_mismatch_detected_in_campaign_run(
+        self, caplog: pytest.LogCaptureFixture, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When observe() return != _pending_proposed_samples, Campaign logs an error.
+
+        This test exercises the real Campaign._run_generation_loop() code path
+        (campaign.py lines 1588-1594), not a inline simulation.
+        """
+        from osimflow.algorithms import AlgorithmRegistry
+        from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
+
+        # A buggy DE subclass that sets _pending_proposed_samples to a different
+        # value than what observe() returns. This simulates an algorithm author
+        # who updated internal state but forgot to return the right value.
+        class MismatchedDE(DifferentialEvolutionAlgorithm):
+            _corruption: list[dict[str, Any]] = []
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                # Pre-seed the corruption that will be injected after observe().
+                self._corruption = [{"sample_id": "corrupted", "values": {"wall_r": 999.0}}]
+
+            def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                result = super().observe(history)
+                # Corrupt the slot immediately after super().observe() sets it
+                # to match the return. Now _pending_proposed_samples != return.
+                self._pending_proposed_samples = self._corruption  # type: ignore[list-item]
+                return result
+
+        AlgorithmRegistry.register("mismatched_de", MismatchedDE)
+
+        try:
+            template, variables, outdir = tmp_dirs
+            cfg = _make_cfg(
+                template,
+                variables,
+                outdir / "mismatch_campaign_test",
+                n_samples=2,
+                max_generations=2,
+                algorithm="mismatched_de",
+            )
+            campaign = _run_campaign(cfg)
+
+            # The mismatch should have been logged at least once.
+            mismatch_records = [
+                r for r in caplog.records if "observe() return value does not match" in r.message
+            ]
+            assert len(mismatch_records) >= 1, (
+                "Campaign should log error when observe() return != "
+                "_pending_proposed_samples (campaign.py lines 1588-1594)"
+            )
+            # The campaign should still have completed (error is logged, not raised).
+            assert len(campaign.trace.generations) >= 1, "Campaign should still run"
+        finally:
+            AlgorithmRegistry._registry.pop("mismatched_de", None)
+
+
+# ---------------------------------------------------------------------------
+# step_validate_measure_variables coverage (GAP-003)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateMeasureVariables:
+    """Cover step_validate_measure_variables (GAP-003)."""
+
+    def test_validate_measure_variables_no_preflight(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When skip_preflight=True, validate_measure_variables returns early."""
+        template, variables_yml, outdir = tmp_dirs
+        cfg = _make_cfg(
+            template,
+            variables_yml,
+            outdir / "novalidate_test",
+            n_samples=2,
+            max_generations=1,
+            algorithm="lhs",
+        )
+        # skip_preflight=True is set by _make_cfg — validate should be a no-op.
+        executor = LocalExecutor(max_workers=1)
+        campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
+        # This should not raise even if variables.yml references non-existent measures.
+        campaign.step_validate_measure_variables(generation=0)
+
+    def test_validate_measure_variables_no_variables_file(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When input_variables does not exist, validate returns early."""
+        template, _, outdir = tmp_dirs
+        variables_yml = tmp_dirs[1]
+        # Remove variables.yml
+        variables_yml.unlink()
+        cfg = _make_cfg(
+            template,
+            variables_yml,
+            outdir / "novars_test",
+            n_samples=2,
+            max_generations=1,
+            algorithm="lhs",
+        )
+        executor = LocalExecutor(max_workers=1)
+        campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
+        campaign.step_validate_measure_variables(generation=0)
+
+    def test_validate_measure_variables_empty_variables(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """When variables.yml has empty variables list, validate returns early."""
+        template, variables_yml, outdir = tmp_dirs
+        # Write empty variables
+        variables_yml.write_text(yaml.dump({"variables": []}))
+        cfg = _make_cfg(
+            template,
+            variables_yml,
+            outdir / "emptyvars_test",
+            n_samples=2,
+            max_generations=1,
+            algorithm="lhs",
+        )
+        executor = LocalExecutor(max_workers=1)
+        campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
+        campaign.step_validate_measure_variables(generation=0)

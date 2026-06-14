@@ -9,6 +9,7 @@ from osimflow.exporters.r_dataframe import (
     R_CODE_SNIPPETS,
     SUPPORTED_FORMATS,
     RDataFrameExporter,
+    _validate_paths,
     get_r_code_snippet,
 )
 
@@ -38,7 +39,7 @@ class TestExportResults:
 
         # Create a source CSV (simulating aggregated_results.csv)
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_csv.parent.mkdir()
+        src_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame({"sample_id": ["0001", "0002"], "eui": [150.5, 200.0]})
         df.to_csv(src_csv, index=False)
 
@@ -55,7 +56,7 @@ class TestExportResults:
         exporter = RDataFrameExporter(outdir=tmp_path, format="csv")
 
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_csv.parent.mkdir()
+        src_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame({"sample_id": ["0001"], "eui": [150.5]})
         df.to_csv(src_csv, index=False)
 
@@ -70,8 +71,8 @@ class TestExportResults:
 
         src_parquet = tmp_path / "in" / "aggregated_results.parquet"
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_parquet.parent.mkdir()
-        src_csv.parent.mkdir()
+        src_parquet.parent.mkdir(exist_ok=True)
+        src_csv.parent.mkdir(exist_ok=True)
 
         df = pd.DataFrame({"sample_id": ["0001"], "eui": [150.5]})
         df.to_parquet(src_parquet, index=False)
@@ -94,7 +95,7 @@ class TestExportResults:
         exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
 
         src_csv = tmp_path / "in" / "aggregated_results.csv"
-        src_csv.parent.mkdir()
+        src_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame(
             {
                 "sample_id": ["0001", "0002"],
@@ -117,7 +118,7 @@ class TestExportFailures:
         exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
 
         failed_csv = tmp_path / "in" / "failed_simulations.csv"
-        failed_csv.parent.mkdir()
+        failed_csv.parent.mkdir(exist_ok=True)
         df = pd.DataFrame(
             {
                 "sample_id": ["0003"],
@@ -144,7 +145,7 @@ class TestExportTimeseries:
         exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
 
         ts_parquet = tmp_path / "in" / "timeseries_aggregated.parquet"
-        ts_parquet.parent.mkdir()
+        ts_parquet.parent.mkdir(exist_ok=True)
         df = pd.DataFrame(
             {
                 "sample_id": ["0001", "0001"],
@@ -172,7 +173,7 @@ class TestExportAll:
 
         # Create standard OSimFlow output files
         work_dir = tmp_path / "campaign"
-        work_dir.mkdir()
+        work_dir.mkdir(exist_ok=True)
         agg = work_dir / "aggregated_results.csv"
         df_agg = pd.DataFrame({"sample_id": ["0001"], "eui": [150.0]})
         df_agg.to_csv(agg, index=False)
@@ -188,6 +189,57 @@ class TestExportAll:
         outputs = exporter.export_all(work_dir=work_dir)
 
         assert len(outputs) >= 3  # at least one output per input type
+
+    def test_export_all_with_only_aggregated_parquet(self, tmp_path: Path) -> None:
+        """Lines 286-288: only aggregated parquet exists (not CSV)."""
+        exporter = RDataFrameExporter(outdir=tmp_path / "r_out", format="parquet")
+
+        work_dir = tmp_path / "campaign"
+        work_dir.mkdir(exist_ok=True)
+
+        # Only aggregated_results.parquet exists, not CSV
+        agg_pq = work_dir / "aggregated_results.parquet"
+        df = pd.DataFrame({"sample_id": ["0001"], "eui": [150.0]})
+        df.to_parquet(agg_pq, index=False)
+
+        outputs = exporter.export_all(work_dir=work_dir)
+
+        assert "aggregated_parquet" in outputs
+        assert "aggregated_csv" in outputs
+
+    def test_export_all_with_only_aggregated_csv_no_failures_no_ts(self, tmp_path: Path) -> None:
+        """Lines 289-295: only aggregated CSV exists (parquet missing)."""
+        exporter = RDataFrameExporter(outdir=tmp_path / "r_out", format="parquet")
+
+        work_dir = tmp_path / "campaign"
+        work_dir.mkdir(exist_ok=True)
+
+        # Only CSV exists
+        agg_csv = work_dir / "aggregated_results.csv"
+        df = pd.DataFrame({"sample_id": ["0001"], "eui": [150.0]})
+        df.to_csv(agg_csv, index=False)
+
+        outputs = exporter.export_all(work_dir=work_dir)
+
+        assert "aggregated_parquet" in outputs
+        assert "aggregated_csv" in outputs
+
+    def test_export_all_only_failed_simulations(self, tmp_path: Path) -> None:
+        """Lines 303-308: only failed_simulations.csv exists."""
+        exporter = RDataFrameExporter(outdir=tmp_path / "r_out", format="parquet")
+
+        work_dir = tmp_path / "campaign"
+        work_dir.mkdir(exist_ok=True)
+
+        # Only failed_simulations.csv
+        failed_csv = work_dir / "failed_simulations.csv"
+        df_fail = pd.DataFrame({"sample_id": ["0002"], "failure_category": ["convergence"]})
+        df_fail.to_csv(failed_csv, index=False)
+
+        outputs = exporter.export_all(work_dir=work_dir)
+
+        assert "failures_parquet" in outputs
+        assert "failures_csv" in outputs
 
 
 class TestGetRCodeSnippet:
@@ -229,3 +281,117 @@ class TestSupportedFormats:
     def test_supported_formats_contains_csv_and_parquet(self) -> None:
         assert "csv" in SUPPORTED_FORMATS
         assert "parquet" in SUPPORTED_FORMATS
+
+
+class TestValidatePaths:
+    """Tests for _validate_paths (lines 72-83)."""
+
+    def test_raises_when_no_files_exist(self, tmp_path: Path) -> None:
+        """Lines 72-83: FileNotFoundError when no input files exist."""
+        with pytest.raises(FileNotFoundError, match="No result files found"):
+            _validate_paths(
+                aggregated_csv=None,
+                aggregated_parquet=None,
+                failed_csv=None,
+                timeseries_parquet=None,
+            )
+
+    def test_passes_when_aggregated_csv_exists(self, tmp_path: Path) -> None:
+        """No error when aggregated_csv exists."""
+        csv_path = tmp_path / "results.csv"
+        csv_path.write_text("sample_id,eui\n0001,150\n")
+        # Should not raise
+        _validate_paths(
+            aggregated_csv=csv_path,
+            aggregated_parquet=None,
+            failed_csv=None,
+            timeseries_parquet=None,
+        )
+
+
+class TestExportResultsCorruptedSource:
+    """Tests for _load_aggregated error paths (lines 322-324, 329-330)."""
+
+    def test_load_aggregated_parquet_error_falls_back_to_csv(self, tmp_path: Path) -> None:
+        """Lines 322-324: pd.read_parquet error falls back to CSV."""
+        exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
+
+        # Create a corrupted parquet file that exists but can't be read
+        bad_parquet = tmp_path / "bad.parquet"
+        bad_parquet.write_bytes(b"this is not a parquet file")
+
+        good_csv = tmp_path / "good.csv"
+        df = pd.DataFrame({"sample_id": ["0001"], "eui": [150.0]})
+        df.to_csv(good_csv, index=False)
+
+        # Should not raise — falls back to CSV
+        result = exporter._load_aggregated(csv=good_csv, parquet=bad_parquet)
+        assert result is not None
+        assert len(result) == 1
+
+    def test_load_aggregated_csv_error_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lines 329-330: pd.read_csv error returns None."""
+        import pandas as pd
+
+        exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
+
+        bad_csv = tmp_path / "bad.csv"
+        bad_csv.write_text("sample_id,eui\n0001,150\n")
+
+        def _raise_csv_error(*args: object, **kwargs: object):
+            raise pd.errors.ParserError("simulated CSV parse error")
+
+        monkeypatch.setattr(pd, "read_csv", _raise_csv_error)
+        result = exporter._load_aggregated(csv=bad_csv, parquet=None)
+        assert result is None
+
+
+class TestExportFailuresCorruptedSource:
+    """Tests for export_failures error paths (lines 203-205)."""
+
+    def test_export_failures_csv_read_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Lines 203-205: pd.read_csv error is logged and returns empty outputs."""
+        import logging
+
+        import pandas as pd
+
+        exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
+
+        bad_csv = tmp_path / "bad_failed.csv"
+        bad_csv.write_text("sample_id,error\n0001,fail\n")
+
+        def _raise_csv_error(*args: object, **kwargs: object):
+            raise pd.errors.ParserError("simulated CSV parse error")
+
+        monkeypatch.setattr(pd, "read_csv", _raise_csv_error)
+
+        with caplog.at_level(logging.WARNING, logger="osimflow.exporters.r_dataframe"):
+            outputs = exporter.export_failures(failed_csv=bad_csv)
+
+        assert outputs == {}
+        assert any("Could not read failed_simulations.csv" in r.message for r in caplog.records)
+
+
+class TestExportTimeseriesCorruptedSource:
+    """Tests for export_timeseries error paths (lines 244-246)."""
+
+    def test_export_timeseries_parquet_read_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Lines 244-246: pd.read_parquet error is logged and returns empty outputs."""
+        import logging
+
+        exporter = RDataFrameExporter(outdir=tmp_path, format="parquet")
+
+        bad_parquet = tmp_path / "bad_ts.parquet"
+        bad_parquet.write_bytes(b"not a parquet file")
+
+        with caplog.at_level(logging.WARNING, logger="osimflow.exporters.r_dataframe"):
+            outputs = exporter.export_timeseries(timeseries_parquet=bad_parquet)
+
+        assert outputs == {}
+        assert any("Could not read timeseries" in r.message for r in caplog.records)
