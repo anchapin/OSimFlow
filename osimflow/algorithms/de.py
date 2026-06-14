@@ -222,6 +222,7 @@ class DifferentialEvolutionAlgorithm(BaseAlgorithm):
         if self._pending_proposed_samples:
             samples = self._pending_proposed_samples
             self._pending_proposed_samples = []  # consume
+            self._proposed_samples = []  # also consume the redundant slot
             samples_path.write_text(json.dumps({"samples": samples}, indent=2))
             log.info("DE proposed %d samples from explicit slot", len(samples))
             return samples_path
