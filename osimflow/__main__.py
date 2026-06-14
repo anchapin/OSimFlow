@@ -44,6 +44,130 @@ from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_o
 
 log = logging.getLogger("osimflow.__main__")
 
+# Preset configurations for common use cases (issue #384).
+# Each preset bundles a set of flags that reduce the 50+ CLI surface
+# to a few sensible choices for a specific environment/scale.
+# Individual flags always override preset values.
+PRESETS: dict[str, dict[str, object]] = {
+    # local-quick: small local campaign for learning/testing
+    "local-quick": {
+        "executor": "local",
+        "max_workers": 2,
+        "openstudio_version": "3.11.0",
+        "algorithm": "lhs",
+        "max_generations": 1,
+    },
+    # local-large: larger local campaign with more parallelism
+    "local-large": {
+        "executor": "local",
+        "max_workers": 8,
+        "openstudio_version": "3.11.0",
+        "algorithm": "lhs",
+        "max_generations": 1,
+    },
+    # slurm-hpc: production campaign on a real Slurm cluster
+    "slurm-hpc": {
+        "executor": "slurm",
+        "slurm_real": True,
+        "slurm_partition": "short",
+        "openstudio_version": "3.11.0",
+        "algorithm": "lhs",
+        "max_generations": 1,
+    },
+    # slurm-gpu: GPU-enabled Slurm campaign
+    "slurm-gpu": {
+        "executor": "slurm",
+        "slurm_real": True,
+        "slurm_partition": "gpu",
+        "slurm_qos": "high",
+        "slurm_constraint": "gpu",
+        "slurm_gres": "gpu:1",
+        "openstudio_version": "3.11.0",
+        "algorithm": "lhs",
+        "max_generations": 1,
+    },
+    # aws-batch-cloud: large-scale campaign on AWS Batch
+    "aws-batch-cloud": {
+        "executor": "aws_batch",
+        "aws_batch_queue": "osimflow-batch-queue",
+        "aws_batch_fallback_to_on_demand": True,
+        "aws_batch_max_retries": 3,
+        "openstudio_version": "3.11.0",
+        "algorithm": "lhs",
+        "max_generations": 1,
+    },
+    # sensitivity-morris: Morris sensitivity analysis (SALib)
+    "sensitivity-morris": {
+        "executor": "local",
+        "max_workers": 4,
+        "openstudio_version": "3.11.0",
+        "algorithm": "morris",
+        "max_generations": 1,
+    },
+    # sensitivity-fast99: FAST99 sensitivity analysis (SALib)
+    "sensitivity-fast99": {
+        "executor": "local",
+        "max_workers": 4,
+        "openstudio_version": "3.11.0",
+        "algorithm": "fast99",
+        "max_generations": 1,
+    },
+    # optimization-de: Differential evolution optimization
+    "optimization-de": {
+        "executor": "slurm",
+        "slurm_real": True,
+        "slurm_partition": "short",
+        "openstudio_version": "3.11.0",
+        "algorithm": "de",
+        "max_generations": 50,
+    },
+    # optimization-nsga2: NSGA-II multi-objective optimization
+    "optimization-nsga2": {
+        "executor": "slurm",
+        "slurm_real": True,
+        "slurm_partition": "short",
+        "openstudio_version": "3.11.0",
+        "algorithm": "nsga2",
+        "max_generations": 50,
+    },
+}
+
+
+def _apply_preset(args: argparse.Namespace) -> None:
+    """Apply preset values to ``args`` in-place.
+
+    Individual flags that were explicitly set on the command line
+    always take precedence over preset values.
+
+    A flag is considered "explicitly set" when its current value differs
+    from the parser default.  For string/int/enum flags this works cleanly.
+    For boolean store_true flags where the default is False, argparse sets
+    the value to False both when the user passes ``--no-flag`` and when the
+    user passes nothing at all.  Since we cannot distinguish these two
+    cases, any False value (the argparse default) is treated as "not
+    explicitly overridden" and the preset value is applied.
+    """
+    preset_name = getattr(args, "preset", None)
+    if not preset_name:
+        return
+
+    if preset_name not in PRESETS:
+        return  # validated by argparse choice
+
+    preset_defaults = _PresetDefaultCache.get()
+    current = vars(args)
+    for key, preset_value in PRESETS[preset_name].items():
+        current_value = current.get(key)
+        default_value = preset_defaults.get(key)
+        # Apply preset when:
+        # - current is None (flag not touched on command line), OR
+        # - current equals the parser default (user did not change it from default)
+        # For store_true booleans with default False, this means the preset
+        # overrides False (the argparse default) since we cannot distinguish
+        # "user passed --no-flag" from "user passed nothing".
+        if current_value is None or current_value == default_value:
+            setattr(args, key, preset_value)
+
 
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
     """Dispatch to the correct executor based on ``args.executor``."""
@@ -138,6 +262,21 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
 
 def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
+        "--preset",
+        choices=list(PRESETS.keys()),
+        default=None,
+        help=(
+            "Apply a named preset of recommended flags for a specific use case. "
+            "Individual CLI flags override preset values. "
+            "Presets: " + ", ".join(PRESETS.keys()) + ". "
+            "Use 'local-quick' for a fast 2-sample local test. "
+            "Use 'slurm-hpc' for a real Slurm cluster. "
+            "Use 'aws-batch-cloud' for AWS Batch. "
+            "Use 'optimization-de' or 'optimization-nsga2' for optimization. "
+            "(issue #384)"
+        ),
+    )
+    run.add_argument(
         "--executor",
         choices=[
             "local",
@@ -151,6 +290,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "dask_jobqueue",
         ],
         default="local",
+        help="Executor backend (default: local). See --preset for quick-start bundles.",
     )
     run.add_argument("--max-workers", type=int, default=4, help="Local executor parallelism")
     run.add_argument("--slurm-partition", default="short")
@@ -1023,6 +1163,36 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _get_arg_defaults() -> dict[str, object]:
+    """Return a dict of {dest: default} for the run subcommand.
+
+    Used by _apply_preset to determine which values are parser defaults
+    (and thus safe to override) vs user-provided values.
+    """
+    # Build only the run subparser without triggering the full parser
+    # construction that requires all command handlers to be defined.
+    p = argparse.ArgumentParser()
+    run = p.add_subparsers().add_parser("run")
+    _add_run_args(run)
+    defaults: dict[str, object] = {}
+    for action in run._actions:
+        if hasattr(action, "dest") and action.dest:
+            defaults[action.dest] = action.default
+    return defaults
+
+
+class _PresetDefaultCache:
+    """Lazily built on first use by _apply_preset."""
+
+    _cache: dict[str, object] | None = None
+
+    @classmethod
+    def get(cls) -> dict[str, object]:
+        if cls._cache is None:
+            cls._cache = _get_arg_defaults()
+        return cls._cache
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Start the REST API server."""
     try:
@@ -1492,6 +1662,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         return handler(args)
     if args.command != "run":
         return 1
+
+    # Apply preset before load_config so preset values are in place.
+    _apply_preset(args)
+
     cfg: CampaignConfig = load_config(vars(args))
     executor: BaseExecutor
     if cfg.dry_run:

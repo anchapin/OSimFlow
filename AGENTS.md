@@ -212,6 +212,7 @@ The 7-step DAG that the `Campaign` class drives:
 ### CLI flags (referenced from `osimflow/__main__.py`)
 
 - `--executor` (local / slurm / aws_batch / azure_batch / google_batch / dask_jobqueue / nomad)
+- `--preset` (named preset of recommended flags; reduces 50+ CLI surface for common use cases. Individual flags override preset values. Issue #384)
 - `--max-workers` (local executor parallelism)
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
 - `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
