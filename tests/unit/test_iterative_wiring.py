@@ -8,6 +8,9 @@ Tests cover:
   * DE (single-objective) — observe() feeds KPIs back, generate_samples()
     uses proposed samples instead of always LHS.
   * DA (single-objective) — same pattern as DE.
+  * PSO (single-objective) — same pattern.
+  * NSGA-II (multi-objective) — same pattern.
+  * Explicit _pending_proposed_samples slot (issue #332).
   * Mock iterative algorithm with real KPI files.
   * Per-generation monitoring in run.json.
   * Convergence stops the loop correctly.
@@ -177,13 +180,17 @@ class TestDEFeedbackLoop:
         path1 = algo.generate_samples(variables, 3, seed=42, outdir=outdir1)
         samples1 = json.loads(path1.read_text())["samples"]
         assert len(samples1) == len(proposed)
-        # Verify the samples match what observe() proposed.
+        # verify the samples match what observe() proposed.
         for orig, loaded in zip(proposed, samples1, strict=False):
             assert orig["sample_id"] == loaded["sample_id"]
             assert orig["values"] == loaded["values"]
 
-        # After generate_samples(), proposed_samples should be consumed.
-        assert algo._proposed_samples == []
+        # After generate_samples(), _pending_proposed_samples must be cleared
+        # (issue #332). _proposed_samples is the fallback path and is NOT
+        # consumed when the explicit slot is set.
+        assert algo._pending_proposed_samples is None, (
+            "_pending_proposed_samples must be cleared after generate_samples() (issue #332)"
+        )
 
     def test_de_two_generation_campaign(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Run a 2-generation DE campaign and verify feedback loop."""
@@ -273,8 +280,15 @@ class TestDAFeedbackLoop:
             assert orig["sample_id"] == loaded["sample_id"]
             assert orig["values"] == loaded["values"]
 
-        # Proposed samples should be consumed.
-        assert algo._proposed_samples == []
+        # _pending_proposed_samples must be cleared after use (issue #332).
+        assert algo._pending_proposed_samples is None, (
+            "_pending_proposed_samples must be cleared after generate_samples()"
+        )
+        # _proposed_samples (fallback path) is also set by observe() dual-write
+        # and is NOT cleared when the explicit slot is used (issue #332).
+        assert len(algo._proposed_samples) > 0, (
+            "_proposed_samples (fallback) must be set by observe() dual-write"
+        )
 
     def test_da_two_generation_campaign(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Run a 2-generation DA campaign and verify feedback loop."""
@@ -423,3 +437,187 @@ class TestIterativeConvergence:
                 pass
         finally:
             AlgorithmRegistry._registry.pop("loose_de", None)
+
+
+# ---------------------------------------------------------------------------
+# Explicit _pending_proposed_samples slot (issue #332)
+# ---------------------------------------------------------------------------
+
+
+class TestExplicitPendingSamplesSlot:
+    """Verify observe() → generate_samples() contract via explicit slot (issue #332).
+
+    The explicit slot makes the feedback loop verifiable: observe() sets
+    _pending_proposed_samples AND returns the same value; generate_samples()
+    checks the slot first and clears it on use.
+    """
+
+    def test_de_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """DE.observe() must set _pending_proposed_samples to the same value it returns."""
+        from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
+
+        algo = DifferentialEvolutionAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        # Gen 0: LHS.
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        # Fake KPI history.
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+
+        # observe() sets _pending_proposed_samples to the same value it returns.
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None, "observe() must return proposed samples"
+        assert pending is not None, "_pending_proposed_samples must be set after observe()"
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples "
+            "(verifiable contract, issue #332)"
+        )
+
+    def test_de_generate_samples_consumes_pending_first(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """DE.generate_samples() must check _pending_proposed_samples before internal state."""
+        from osimflow.algorithms.de import DifferentialEvolutionAlgorithm
+
+        algo = DifferentialEvolutionAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        # Gen 0: LHS.
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        # Fake KPI history.
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        algo.observe(history)
+
+        # Clear the internal state so only _pending_proposed_samples is set.
+        algo._proposed_samples = []
+
+        # generate_samples() must still return the pending samples.
+        outdir1 = tmp_dirs[2] / "gen1"
+        path1 = algo.generate_samples(variables, 3, seed=42, outdir=outdir1)
+        samples1 = json.loads(path1.read_text())["samples"]
+
+        pending = algo._pending_proposed_samples
+        assert pending is None, "_pending_proposed_samples must be cleared after use"
+        assert len(samples1) == len(algo.observe(history)), (
+            "generate_samples() must use _pending_proposed_samples when only that is set"
+        )
+
+    def test_da_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """DA.observe() must set _pending_proposed_samples to the same value it returns."""
+        from osimflow.algorithms.da import DualAnnealingAlgorithm
+
+        algo = DualAnnealingAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None
+        assert pending is not None
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples (issue #332)"
+        )
+
+    def test_pso_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """PSO.observe() must set _pending_proposed_samples to the same value it returns."""
+        from osimflow.algorithms.pso import PSOAlgorithm
+
+        algo = PSOAlgorithm(objective_kpi="eui", tol=1e-10)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0}}))
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None
+        assert pending is not None
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples (issue #332)"
+        )
+
+    def test_nsga2_observe_sets_pending_slot(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """NSGA2.observe() must set _pending_proposed_samples to the same value it returns."""
+        pytest.importorskip("pymoo", reason="pymoo not installed")
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["eui"], maximize=[False], pop_size=3)
+        variables = {
+            "variables": [{"name": "wall_r", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        }
+
+        outdir = tmp_dirs[2] / "gen0"
+        path0 = algo.generate_samples(variables, 3, seed=42, outdir=outdir)
+        samples0 = json.loads(path0.read_text())["samples"]
+
+        kpi_dir = tmp_dirs[2] / "kpis"
+        kpi_dir.mkdir(parents=True, exist_ok=True)
+        kpi_files = []
+        for s in samples0:
+            kpi_path = kpi_dir / f"kpi_{s['sample_id']}.json"
+            kpi_path.write_text(
+                json.dumps({"sample_id": s["sample_id"], "kpis": {"eui": 80.0, "cost": 50.0}})
+            )
+            kpi_files.append(str(kpi_path))
+
+        history = [{"generation": 0, "samples": samples0, "kpi_files": kpi_files}]
+        returned = algo.observe(history)
+        pending = algo._pending_proposed_samples
+        assert returned is not None
+        assert pending is not None
+        assert returned == pending, (
+            "observe() return must match _pending_proposed_samples (issue #332)"
+        )

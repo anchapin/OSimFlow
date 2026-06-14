@@ -181,6 +181,9 @@ class NSGA2Algorithm(BaseAlgorithm):
         self._hv_history: list[float] = []
         self._population_X: npt.NDArray[np.float64] = np.array([])
         self._population_F: npt.NDArray[np.float64] = np.array([])
+        # Explicit feedback slot — set by observe(), consumed by generate_samples()
+        # (issue #332).
+        self._pending_proposed_samples: list[dict[str, Any]] | None = None
 
     def generate_samples(
         self,
@@ -234,6 +237,14 @@ class NSGA2Algorithm(BaseAlgorithm):
 
         # If we have a population from a previous observe() call,
         # use the NSGA-II selected individuals.
+        # Explicit slot takes priority; internal state is the fallback
+        # (issue #332).
+        if self._pending_proposed_samples is not None:
+            samples = self._pending_proposed_samples
+            self._pending_proposed_samples = None
+            samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+            log.info("NSGA-II proposed %d samples via explicit feedback slot", len(samples))
+            return samples_path
         if self._population_X.size > 0:
             var_names = [v["name"] for v in self._independent_vars]
             samples = self._array_to_samples(self._population_X, var_names)
@@ -382,6 +393,9 @@ class NSGA2Algorithm(BaseAlgorithm):
             len(new_samples),
             self._hv_history[-1] if self._hv_history else 0.0,
         )
+        # Explicit slot for verifiable observe→generateSamples contract
+        # (issue #332).
+        self._pending_proposed_samples = new_samples
         return new_samples
 
     def _update_hypervolume(self, F: npt.NDArray[np.float64]) -> None:
