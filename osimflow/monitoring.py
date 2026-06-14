@@ -27,7 +27,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 log = logging.getLogger("osimflow.monitoring")
 
@@ -115,6 +115,7 @@ class RunTrace:
         self.campaign_id = campaign_id
         self.started_at = time.time()
         self.finished_at: float | None = None
+        self.status: str | None = None  # "ok", "cancelled", "failed"
         self.config_summary = config_summary
         self.steps: list[StepTrace] = []
         self.per_sample: list[SampleTrace] = []
@@ -194,6 +195,7 @@ class RunTrace:
             "campaign_id": self.campaign_id,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "status": self.status,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
             "config": self.config_summary,
             "summary": {
@@ -272,11 +274,11 @@ class RunTrace:
             return
 
         try:
-            data = json.loads(path.read_text())
+            data = cast(dict[str, Any], json.loads(path.read_text()))
         except (json.JSONDecodeError, OSError):
             return
 
-        samples: list[dict[str, object]] = data.get("per_sample", [])
+        samples: list[dict[str, object]] = data.get("per_sample", [])  # type: ignore[assignment]
         replaced = False
         for i, s in enumerate(samples):
             if s.get("sample_id") == trace.sample_id:
@@ -287,13 +289,13 @@ class RunTrace:
             samples.append(trace.to_dict())
         data["per_sample"] = samples
 
-        n_succeeded = sum(1 for s in data.get("per_sample", []) if s.get("status") == "ok")
-        n_failed = sum(1 for s in data.get("per_sample", []) if s.get("status") == "failed")
+        n_succeeded = sum(1 for s in samples if s.get("status") == "ok")
+        n_failed = sum(1 for s in samples if s.get("status") == "failed")
         if "summary" not in data:
             data["summary"] = {}
-        data["summary"]["n_succeeded"] = n_succeeded
-        data["summary"]["n_failed"] = n_failed
-        data["summary"]["n_samples"] = len(data["per_sample"])
+        data["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
+        data["summary"]["n_failed"] = n_failed  # type: ignore[index]
+        data["summary"]["n_samples"] = len(samples)  # type: ignore[index]
 
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, default=str))
