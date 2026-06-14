@@ -52,12 +52,6 @@ class BaseAlgorithm(abc.ABC):
     _objective: dict[str, Any] | None = None
     _constraints: list[dict[str, Any]] | None = None
     # Explicit feedback loop storage (issue #332). Iterative algorithms
-    # set this in ``observe()`` so ``generate_samples()`` can consume
-    # the proposed samples directly rather than relying on internal
-    # state alone. This makes the observe → generateSamples contract
-    # explicit and verifiable.
-    _pending_proposed_samples: list[dict[str, Any]] | None = None
-
     # Explicit feedback-loop slot: observe() writes proposed samples here,
     # generate_samples() reads from here first (issue #332).
     # This makes the contract visible and validatable rather than relying
