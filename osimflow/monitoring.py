@@ -25,7 +25,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -131,12 +130,8 @@ class RunTrace:
         # Per-campaign cost tracking (issue #126).
         self.total_cost_usd: float = 0.0
         self.spot_savings_usd: float = 0.0
-        # Campaign status: "success", "failure", "cancelled" (issue #255).
-        self.status: str = "failure"
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
-        self._checkpoint_path: str | None = None
-        self._checkpoint_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Step hooks (called by the Campaign)
@@ -200,7 +195,6 @@ class RunTrace:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "elapsed_s": (self.finished_at or time.time()) - self.started_at,
-            "status": self.status,
             "config": self.config_summary,
             "summary": {
                 "n_samples": len(self.per_sample),
@@ -238,44 +232,72 @@ class RunTrace:
         Used by the Campaign to checkpoint per-sample progress after each
         step completes so SSE clients see live updates without waiting for
         campaign end.
+
+        If run.json does not exist yet (campaign just started but the file
+        was not yet written), creates a minimal run.json with the sample
+        entry so monitoring tools always have something to read.
         """
-        path = Path(self._checkpoint_path) if self._checkpoint_path is not None else None
+        path = Path(self._checkpoint_path) if hasattr(self, "_checkpoint_path") else None
         if path is None:
             return
+
         if not path.exists():
-            return
-
-        with self._checkpoint_lock:
-            try:
-                data = json.loads(path.read_text())
-            except (json.JSONDecodeError, OSError):
-                return
-
-            samples: list[dict[str, object]] = data.get("per_sample", [])
-            # Replace existing entry or append.
-            replaced = False
-            for i, s in enumerate(samples):
-                if s.get("sample_id") == trace.sample_id:
-                    samples[i] = trace.to_dict()
-                    replaced = True
-                    break
-            if not replaced:
-                samples.append(trace.to_dict())
-            data["per_sample"] = samples
-
-            # Update summary counts.
-            n_succeeded = sum(1 for s in data.get("per_sample", []) if s.get("status") == "ok")
-            n_failed = sum(1 for s in data.get("per_sample", []) if s.get("status") == "failed")
-            if "summary" not in data:
-                data["summary"] = {}
-            data["summary"]["n_succeeded"] = n_succeeded
-            data["summary"]["n_failed"] = n_failed
-            data["summary"]["n_samples"] = len(data["per_sample"])
-
-            # Atomic write: temp file + rename.
+            data: dict[str, object] = {
+                "schema_version": self.SCHEMA_VERSION,
+                "campaign_id": self.campaign_id,
+                "started_at": self.started_at,
+                "finished_at": None,
+                "elapsed_s": time.time() - self.started_at,
+                "config": self.config_summary,
+                "summary": {
+                    "n_samples": 1,
+                    "n_succeeded": 1 if trace.status == "ok" else 0,
+                    "n_failed": 1 if trace.status == "failed" else 0,
+                },
+                "quality_summary": {
+                    "n_quality_failures": 0,
+                    "n_quality_warnings": 0,
+                    "n_quality_ok": 1 if trace.status == "ok" else 0,
+                },
+                "steps": [],
+                "per_sample": [trace.to_dict()],
+                "total_cost_usd": 0.0,
+                "spot_savings_usd": 0.0,
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, indent=2, default=str))
             tmp.rename(path)
+            log.info("created incremental run.json at %s", path)
+            return
+
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+
+        samples: list[dict[str, object]] = data.get("per_sample", [])
+        replaced = False
+        for i, s in enumerate(samples):
+            if s.get("sample_id") == trace.sample_id:
+                samples[i] = trace.to_dict()
+                replaced = True
+                break
+        if not replaced:
+            samples.append(trace.to_dict())
+        data["per_sample"] = samples
+
+        n_succeeded = sum(1 for s in data.get("per_sample", []) if s.get("status") == "ok")
+        n_failed = sum(1 for s in data.get("per_sample", []) if s.get("status") == "failed")
+        if "summary" not in data:
+            data["summary"] = {}
+        data["summary"]["n_succeeded"] = n_succeeded
+        data["summary"]["n_failed"] = n_failed
+        data["summary"]["n_samples"] = len(data["per_sample"])
+
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str))
+        tmp.rename(path)
 
     def write(self, path: Path) -> None:
         """Write the run.json trace to disk. Idempotent."""

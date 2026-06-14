@@ -198,8 +198,8 @@ class TestExtractKpisFromSql:
         result = ek.extract_kpis_from_sql(full_sql)
 
         # EUI
-        assert "eui_kwh_per_m2" in result
-        assert result["eui_kwh_per_m2"] == pytest.approx(433.8 / 3.6, abs=0.01)
+        assert "eui_kwh_m2_yr" in result
+        assert result["eui_kwh_m2_yr"] == pytest.approx(433.8 / 3.6, abs=0.01)
         assert "eui_kbtu_per_ft2" in result
 
         # Floor area
@@ -223,7 +223,7 @@ class TestExtractKpisFromSql:
 
     def test_minimal_extraction(self, minimal_sql: Path) -> None:
         result = ek.extract_kpis_from_sql(minimal_sql)
-        assert result["eui_kwh_per_m2"] == pytest.approx(200.0 / 3.6, abs=0.01)
+        assert result["eui_kwh_m2_yr"] == pytest.approx(200.0 / 3.6, abs=0.01)
         assert "end_uses" not in result
         assert "peak_demand_kw" not in result
 
@@ -269,9 +269,9 @@ class TestExtractEui:
         result = ek._extract_eui(cur, 100.0)
         conn.close()
 
-        assert result["eui_kwh_per_m2"] == pytest.approx(100.0, abs=0.01)
+        assert result["eui_kwh_m2_yr"] == pytest.approx(100.0, abs=0.01)
         assert result["total_site_energy_kwh"] == pytest.approx(43380.0 / 3.6, abs=1.0)
-        assert "net_eui_kwh_per_m2" in result
+        assert "net_eui_kwh_m2_yr" in result
 
 
 class TestExtractEndUses:
@@ -375,10 +375,10 @@ class TestValidateKpis:
 
     def _normal_kpis(self) -> dict:
         return {
-            "eui_kwh_per_m2": 120.0,
+            "eui_kwh_m2_yr": 120.0,
             "eui_kbtu_per_ft2": 38.0,
             "total_site_energy_kwh": 12000.0,
-            "net_eui_kwh_per_m2": 110.0,
+            "net_eui_kwh_m2_yr": 110.0,
             "floor_area_m2": 100.0,
             "end_uses": {
                 "heating_electricity_kwh": 3000.0,
@@ -399,14 +399,14 @@ class TestValidateKpis:
 
     def test_eui_below_minimum(self) -> None:
         kpis = self._normal_kpis()
-        kpis["eui_kwh_per_m2"] = 5.0
+        kpis["eui_kwh_m2_yr"] = 5.0
         result = ek.validate_kpis(kpis)
         assert result["valid"] is False
         assert any("below minimum" in f for f in result["failures"])
 
     def test_eui_above_maximum(self) -> None:
         kpis = self._normal_kpis()
-        kpis["eui_kwh_per_m2"] = 1500.0
+        kpis["eui_kwh_m2_yr"] = 1500.0
         result = ek.validate_kpis(kpis)
         assert result["valid"] is False
         assert any("exceeds maximum" in f for f in result["failures"])
@@ -464,16 +464,16 @@ class TestValidateKpis:
     def test_missing_critical_kpis(self) -> None:
         result = ek.validate_kpis({})
         assert result["valid"] is False
-        assert any("eui_kwh_per_m2" in f for f in result["failures"])
+        assert any("eui_kwh_m2_yr" in f for f in result["failures"])
         assert any("total_site_energy_kwh" in f for f in result["failures"])
 
     def test_custom_thresholds_override(self) -> None:
         kpis = self._normal_kpis()
-        kpis["eui_kwh_per_m2"] = 50.0
+        kpis["eui_kwh_m2_yr"] = 50.0
         result_default = ek.validate_kpis(kpis)
         assert result_default["valid"] is True
 
-        result_strict = ek.validate_kpis(kpis, thresholds={"eui_min_kwh_per_m2": 100.0})
+        result_strict = ek.validate_kpis(kpis, thresholds={"eui_min_kwh_m2_yr": 100.0})
         assert result_strict["valid"] is False
         assert any("below minimum" in f for f in result_strict["failures"])
 
@@ -532,7 +532,7 @@ class TestCliMain:
         assert data["sample_id"] == "test"
         assert "kpis" in data
         kpis = data["kpis"]
-        assert "eui_kwh_per_m2" in kpis
+        assert "eui_kwh_m2_yr" in kpis
         assert "quality" in data
         assert "valid" in data["quality"]
         assert "warnings" in data["quality"]

@@ -1,0 +1,61 @@
+# Default values for OSimFlow Helm chart.
+
+# Image pull policy.
+image:
+  pullPolicy: IfNotPresent
+
+# OpenStudio container image.
+openstudio:
+  # Container image tag (version). Maps to docker tag nrel/openstudio:<version>.
+  version: "3.11.0"
+  repository: nrel/openstudio
+
+# Kubernetes Job configuration.
+job:
+  # Default job TTL after completion (seconds).
+  ttl_seconds_after_finish: 300
+  # Default backoff limit for job retries.
+  backoff_limit: 3
+  # Default active deadline seconds (max runtime per job).
+  active_deadline_seconds: 14400  # 4 hours
+
+# Resource defaults for per-sample jobs.
+resources:
+  # CPU request/limit per task (cores).
+  cpu: "1"
+  # Memory request/limit per task (MiB).
+  memory: "2048Mi"
+
+# Executor configuration.
+executor:
+  # Kubernetes namespace for jobs.
+  namespace: default
+  # Service account name (must exist in namespace).
+  service_account: default
+  # Poll interval for job status (seconds).
+  poll_interval_s: 5.0
+  # Max poll interval (seconds).
+  max_poll_interval_s: 60.0
+
+# Ingress configuration (optional — for REST API server).
+ingress:
+  enabled: false
+  class_name: nginx
+  host: osimflow.example.com
+  path: /
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+# REST API server (optional — issue #138).
+api:
+  enabled: false
+  replica_count: 1
+  service_type: ClusterIP
+  port: 8000
+  # Read-only mode (no campaign start/stop).
+  read_only: true
+
+# MLflow integration (optional — issue #7).
+mlflow:
+  enabled: false
+  tracking_uri: ""

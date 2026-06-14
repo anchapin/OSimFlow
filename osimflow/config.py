@@ -106,15 +106,21 @@ class CampaignConfig:
     ecr_repository: str | None = (
         None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
     )
-    # Azure Batch configuration (issue #254).
+    # Azure Batch configuration (issue #254, issue #352).
     azure_batch_account_name: str | None = None
     azure_batch_account_url: str | None = None
     azure_batch_pool_id: str = "osimflow-pool"
     azure_batch_location: str = "eastus"
-    # Google Cloud Batch configuration (issue #254).
+    azure_use_spot: bool = False
+    azure_fallback_to_on_demand: bool = False
+    azure_max_retries: int = 3
+    # Google Cloud Batch configuration (issue #254, issue #352).
     google_batch_project_id: str | None = None
     google_batch_region: str = "us-central1"
     google_batch_service_account: str | None = None
+    google_use_spot: bool = False
+    google_fallback_to_on_demand: bool = False
+    google_max_retries: int = 3
     # BYOS trust level (issue #269). Controls how user-supplied scripts
     # are executed. Default is SUBPROCESS (isolated child process) for
     # security. INPROCESS (legacy) loads the script directly into the
@@ -128,6 +134,7 @@ class CampaignConfig:
     # CloudWatch backend options (issue #132).
     cloudwatch_namespace: str = "OSimFlow"
     cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
     # Prometheus backend options (issue #132).
     prometheus_port: int = 9090
     # OpenTelemetry backend options (issue #132).
@@ -162,6 +169,43 @@ class CampaignConfig:
     # scripts/bundle_offline.py. When set alongside --offline, the campaign
     # uses this path instead of reaching out to the internet.
     offline_bundle: Path | None = None
+    # Webhook URL for campaign completion callbacks (issue #283).
+    # When set, OSimFlow POSTs a JSON summary to this URL after the
+    # GENERATE_BASIC_PLOTS step completes. Best-effort: delivery failures
+    # are logged but do not affect campaign status.
+    webhook_url: str | None = None
+    # Nomad TLS configuration (issue #344). When nomad_tls is True, the
+    # NomadExecutor uses HTTPS to connect to the Nomad cluster. The
+    # nomad_cert, nomad_key, and nomad_ca_cert fields specify client
+    # certificate, key, and CA certificate paths for mTLS authentication.
+    nomad_tls: bool = False
+    nomad_cert: Path | None = None
+    nomad_key: Path | None = None
+    nomad_ca_cert: Path | None = None
+    # BYOS resource limits (issue #343). A dict mapping rlimit names to
+    # integer values (e.g. {"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}).
+    # Applied via resource.setrlimit before the BYOS subprocess is
+    # spawned. resource.error from impossible limits is caught and
+    # logged as a warning (non-fatal).
+    byos_resource_limits: dict[str, int] | None = None
+    # Result storage backend (issue #339). When set to a non-local value
+    # (s3/gs/azure), simulation outputs (eplusout.sql) and KPI JSONs are
+    # uploaded to the configured bucket after each successful step.
+    result_storage_backend: str = "local"
+    # Bucket/container name for result storage (issue #339).
+    # For S3: the bucket name. For GCS: the bucket name. For Azure: the container.
+    # Ignored when result_storage_backend is "local".
+    result_storage_bucket: str = ""
+    # S3-compatible endpoint URL for result storage (issue #339).
+    # Used for MinIO, Cloudflare R2, and other S3-compatible stores.
+    result_storage_endpoint: str | None = None
+    # Distributed task queue backend (issue #335). When "none" (default),
+    # fan-out steps submit directly to the configured executor. When
+    # "dask", work is submitted to a Dask scheduler via DaskTaskQueue.
+    task_queue: str = "none"
+    # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
+    # When None and task_queue="dask", an embedded LocalCluster is used.
+    dask_scheduler_address: str | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -384,6 +428,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         ),
         azure_batch_pool_id=str(args.get("azure_batch_pool_id", "osimflow-pool")),
         azure_batch_location=str(args.get("azure_batch_location", "eastus")),
+        azure_use_spot=bool(args.get("azure_use_spot", False)),
+        azure_fallback_to_on_demand=bool(args.get("azure_fallback_to_on_demand", False)),
+        azure_max_retries=int(str(args.get("azure_max_retries", 3))),
         google_batch_project_id=(
             str(args["google_batch_project_id"]) if args.get("google_batch_project_id") else None
         ),
@@ -393,6 +440,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             if args.get("google_batch_service_account")
             else None
         ),
+        google_use_spot=bool(args.get("google_use_spot", False)),
+        google_fallback_to_on_demand=bool(args.get("google_fallback_to_on_demand", False)),
+        google_max_retries=int(str(args.get("google_max_retries", 3))),
         byos_trust_level=(
             ByosTrustLevel(str(args["byos_trust_level"]))
             if args.get("byos_trust_level")
@@ -403,6 +453,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         cloudwatch_log_group=(
             str(args["cloudwatch_log_group"]) if args.get("cloudwatch_log_group") else None
         ),
+        log_aggregation_url=(
+            str(args["log_aggregation_url"]) if args.get("log_aggregation_url") else None
+        ),
         prometheus_port=int(str(args.get("prometheus_port", 9090))),
         otel_endpoint=str(args["otel_endpoint"]) if args.get("otel_endpoint") else None,
         registry_path=(Path(str(args["registry"])).resolve() if args.get("registry") else None),
@@ -412,5 +465,24 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         offline=bool(args.get("offline", False)),
         offline_bundle=(
             Path(str(args["offline_bundle"])).resolve() if args.get("offline_bundle") else None
+        ),
+        webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
+        nomad_tls=bool(args.get("nomad_tls", False)),
+        nomad_cert=(Path(str(args["nomad_cert"])).resolve() if args.get("nomad_cert") else None),
+        nomad_key=(Path(str(args["nomad_key"])).resolve() if args.get("nomad_key") else None),
+        nomad_ca_cert=(
+            Path(str(args["nomad_ca_cert"])).resolve() if args.get("nomad_ca_cert") else None
+        ),
+        byos_resource_limits=(
+            args["byos_resource_limits"] if args.get("byos_resource_limits") else None  # type: ignore[arg-type]
+        ),
+        result_storage_backend=str(args.get("result_storage_backend", "local")),
+        result_storage_bucket=str(args.get("result_storage_bucket", "")),
+        result_storage_endpoint=(
+            str(args["result_storage_endpoint"]) if args.get("result_storage_endpoint") else None
+        ),
+        task_queue=str(args.get("task_queue", "none")),
+        dask_scheduler_address=(
+            str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
     )

@@ -109,18 +109,126 @@ class CampaignCreateRequest(BaseModel):
     Mirrors the subset of ``CampaignConfig`` fields that are sensible to
     set via the API.  Paths are relative to the server's working directory
     or absolute.
+
+    Executor selection is controlled by the ``executor`` field.  When
+    ``executor`` is not ``"local"``, the corresponding executor-specific
+    fields must also be provided.
     """
 
     input_variables: str = Field(description="Path to variables.yml")
     template_sim_package: str = Field(description="Path to the template simulation package")
     n_samples: int = Field(ge=1, description="Number of LHS samples")
     openstudio_version: str = Field(default="3.11.0")
-    executor: str = Field(default="local")
+    executor: str = Field(
+        default="local",
+        description="Executor type: local | slurm | aws_batch | azure_batch | google_batch | dask_jobqueue | nomad | pbs | kubernetes",
+    )
     algorithm: str = Field(default="lhs")
     outdir: str | None = Field(default=None, description="Output dir (auto-generated if omitted)")
     archive_intermediates: bool = False
     auto_start: bool = Field(
         default=False, description="Launch campaign immediately after creation"
+    )
+    max_workers: int = Field(
+        default=4, description="Parallelism for local executor (ignored for remote executors)"
+    )
+    # Slurm parameters (used when executor="slurm")
+    slurm_partition: str | None = Field(
+        default=None, description="Slurm partition (e.g. short, gpu)"
+    )
+    slurm_account: str | None = Field(default=None, description="Slurm account/project")
+    slurm_qos: str | None = Field(default=None, description="Slurm QoS (requires submitit >= 1.5)")
+    slurm_constraint: str | None = Field(default=None, description="Slurm constraint (e.g. gpu)")
+    slurm_gres: str | None = Field(default=None, description="Slurm generic resources (e.g. gpu:1)")
+    slurm_real: bool = Field(
+        default=False, description="Submit to real Slurm cluster (default: debug mode)"
+    )
+    # AWS Batch parameters (used when executor="aws_batch")
+    aws_batch_queue: str | None = Field(default=None, description="AWS Batch job queue")
+    aws_batch_job_definition: str | None = Field(
+        default=None, description="AWS Batch job definition name"
+    )
+    aws_batch_max_spot_price_usd: float | None = Field(
+        default=None, description="Spot price ceiling (USD/vCPU-hour)"
+    )
+    aws_batch_fallback_to_on_demand: bool = Field(
+        default=False, description="Fall back to on-demand when Spot price exceeds ceiling"
+    )
+    aws_batch_max_retries: int = Field(default=3, description="Max Spot interruption retries")
+    ecr_repository: str | None = Field(
+        default=None, description="ECR repository URI for OpenStudio images"
+    )
+    # Azure Batch parameters (used when executor="azure_batch")
+    azure_batch_account_name: str | None = Field(
+        default=None, description="Azure Batch account name"
+    )
+    azure_batch_account_url: str | None = Field(default=None, description="Azure Batch account URL")
+    azure_batch_pool_id: str | None = Field(default=None, description="Azure Batch pool ID")
+    azure_batch_location: str | None = Field(default=None, description="Azure region/location")
+    azure_use_spot: bool = Field(default=False, description="Use Azure Spot/low-priority VMs")
+    azure_fallback_to_on_demand: bool = Field(
+        default=False, description="Fall back to on-demand when Spot retries exhausted"
+    )
+    azure_max_retries: int = Field(default=3, description="Max Azure Spot VM retries")
+    # Google Cloud Batch parameters (used when executor="google_batch")
+    google_batch_project_id: str | None = Field(default=None, description="Google Cloud project ID")
+    google_batch_region: str | None = Field(default=None, description="Google Cloud region")
+    google_batch_service_account: str | None = Field(
+        default=None, description="Google Cloud service account email"
+    )
+    google_use_spot: bool = Field(default=False, description="Use Google Spot/preemptible VMs")
+    google_fallback_to_on_demand: bool = Field(
+        default=False, description="Fall back to on-demand when preemptible retries exhausted"
+    )
+    google_max_retries: int = Field(default=3, description="Max Google preemptible VM retries")
+    # Kubernetes parameters (used when executor="kubernetes")
+    kubernetes_namespace: str | None = Field(default=None, description="Kubernetes namespace")
+    kubernetes_poll_interval_s: float | None = Field(
+        default=None, description="K8s Job poll interval (seconds)"
+    )
+    kubernetes_max_poll_interval_s: float | None = Field(
+        default=None, description="K8s Job max poll interval (seconds)"
+    )
+    # Nomad parameters (used when executor="nomad")
+    nomad_address: str | None = Field(default=None, description="Nomad cluster HTTP address")
+    nomad_datacentre: str | None = Field(
+        default=None, description="Nomad datacentre (default: dc1)"
+    )
+    nomad_tls: bool = Field(default=False, description="Enable TLS for Nomad HTTP API")
+    nomad_tls_verify: bool = Field(
+        default=True, description="Verify TLS certificates for Nomad (default: True)"
+    )
+    nomad_cert: str | None = Field(
+        default=None, description="Path to client certificate PEM for Nomad mTLS"
+    )
+    nomad_key: str | None = Field(
+        default=None, description="Path to client private key PEM for Nomad mTLS"
+    )
+    nomad_ca_cert: str | None = Field(
+        default=None, description="Path to CA certificate PEM for Nomad mTLS"
+    )
+    # PBS parameters (used when executor="pbs")
+    pbs_server: str | None = Field(default=None, description="PBS server/cluster address")
+    pbs_queue: str | None = Field(default=None, description="PBS queue name")
+    pbs_real: bool = Field(
+        default=False, description="Submit to real PBS cluster (default: debug mode)"
+    )
+    # Dask-JobQueue parameters (used when executor="dask_jobqueue")
+    dask_cluster_type: str | None = Field(
+        default=None, description="Dask cluster backend: slurm | pbs | kubernetes"
+    )
+    dask_min_workers: int | None = Field(default=None, description="Minimum Dask workers")
+    dask_max_workers: int | None = Field(default=None, description="Maximum Dask workers")
+    dask_cpus_per_worker: int | None = Field(default=None, description="CPUs per Dask worker")
+    dask_memory_per_worker: str | None = Field(
+        default=None, description="Memory per Dask worker (e.g. 4GiB)"
+    )
+    dask_walltime: str | None = Field(
+        default=None, description="Walltime for Dask cluster jobs (e.g. 02:00:00)"
+    )
+    dask_queue: str | None = Field(default=None, description="HPC queue/partition for Dask workers")
+    dask_project: str | None = Field(
+        default=None, description="HPC project/account for Dask workers"
     )
 
 
@@ -249,3 +357,53 @@ class VariableDeleteResponse(BaseModel):
 
     name: str
     status: str = Field(description="deleted")
+
+
+# Measure management (issue #348)
+# ---------------------------------------------------------------------------
+
+
+class MeasureArgument(BaseModel):
+    """A single argument accepted by a measure."""
+
+    name: str = Field(description="Argument variable name")
+    display_name: str = Field(description="Human-readable argument name")
+    description: str | None = Field(default=None, description="What this argument controls")
+    argument_type: str = Field(
+        default="String",
+        description="OpenStudio argument type: String | Double | Integer | Boolean | Choice",
+    )
+    default_value: Any = Field(default=None, description="Default value in the workflow")
+    required: bool = Field(default=False, description="Whether this argument is required")
+    valid_choices: list[str] | None = Field(
+        default=None, description="Valid choices for Choice arguments"
+    )
+    units: str | None = Field(default=None, description="Physical units, if applicable")
+    measure_dir_name: str = Field(
+        default="", description="Measure directory name this argument belongs to"
+    )
+
+
+class MeasureInfo(BaseModel):
+    """Summary information for a single measure."""
+
+    measure_dir_name: str = Field(description="Directory name of the measure")
+    display_name: str = Field(description="Human-readable measure name")
+    description: str | None = Field(default=None, description="What the measure does")
+    measure_type: str = Field(
+        default="Model",
+        description="OpenStudio measure type: Model | EnergyPlus | Reporting",
+    )
+    arguments: list[MeasureArgument] = Field(
+        default_factory=list, description="Arguments accepted by this measure"
+    )
+
+
+class MeasureListResponse(BaseModel):
+    """Envelope for the measure list endpoint."""
+
+    measures: list[MeasureInfo] = Field(default_factory=list)
+    total: int
+    source: str = Field(
+        description="Source of measure information: workflow.osw | template_package"
+    )

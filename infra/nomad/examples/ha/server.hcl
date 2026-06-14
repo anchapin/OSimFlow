@@ -25,3 +25,19 @@ telemetry {
   publish_allocation_metrics = true
   publish_node_metrics       = true
 }
+
+# TLS configuration (issue #344)
+# Uncomment and configure for production deployments with mTLS.
+# Generate certificates with: consul tls cert create -dc=dc1 -domain=nomad
+#
+# tls {
+#   http = true
+#   rpc  = true
+#
+#   ca_file   = "/etc/nomad/tls/nomad-ca.pem"
+#   cert_file = "/etc/nomad/tls/nomad-server.pem"
+#   key_file  = "/etc/nomad/tls/nomad-server-key.pem"
+#
+#   verify_server_hostname = true
+#   verify_https_client    = true
+# }

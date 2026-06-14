@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .executors import run_subprocess  # local helper (issue #6)
+from .monitoring import WorkerHeartbeat
 from .weather import EPWValidationError, discover_epw_files, validate_epw_header
 
 log = logging.getLogger("osimflow.work")
@@ -397,6 +398,7 @@ def _run_openstudio_sim_impl(
     stdout_path: Path | None = None,
     stderr_path: Path | None = None,
     max_retries: int = 3,
+    worker_id: str = "local",
 ) -> Path:
     """Internal implementation — wrapped with retry by ``run_openstudio_sim``."""
     sim_out = out / sample_id
@@ -423,40 +425,50 @@ def _run_openstudio_sim_impl(
 
     use_real_cli = _is_openstudio_available() and not _is_stub_mode()
 
-    if use_real_cli:
-        return _run_real_openstudio(
-            modified_sim_package=modified_sim_package,
-            sample_id=sample_id,
-            sim_out=sim_out,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-        )
+    heartbeat: WorkerHeartbeat | None = None
+    if not use_real_cli:
+        heartbeat = WorkerHeartbeat(outdir=out, sample_id=sample_id, worker_id=worker_id)
+        heartbeat.start()
 
-    cmd = [
-        sys.executable,
-        "-c",
-        (
-            "import sys, time;"
-            f" print('openstudio CLI stub v{openstudio_version} sample={sample_id}');"
-            f" time.sleep({simulate_work_s});"
-            " print('-- eplusout.sql placeholder --');"
-            " sys.exit(0)"
-        ),
-    ]
     try:
-        run_subprocess(
-            cmd,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-            cwd=sim_out,
-        )
-    except subprocess.SubprocessError as e:
-        log.error("run_openstudio_sim failed for %s: %s", sample_id, e)
-        raise
+        if use_real_cli:
+            return _run_real_openstudio(
+                modified_sim_package=modified_sim_package,
+                sample_id=sample_id,
+                sim_out=sim_out,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
 
-    (sim_out / "eplusout.sql").write_text("-- placeholder sql")
-    (sim_out / "eplusout.err").write_text("")
-    return sim_out
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import sys, time;"
+                f" print('openstudio CLI stub v{openstudio_version} sample={sample_id}');"
+                f" time.sleep({simulate_work_s});"
+                " print('-- eplusout.sql placeholder --');"
+                " sys.exit(0)"
+            ),
+        ]
+        try:
+            run_subprocess(
+                cmd,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                cwd=sim_out,
+            )
+        except subprocess.SubprocessError as e:
+            log.error("run_openstudio_sim failed for %s: %s", sample_id, e)
+            raise
+
+        (sim_out / "eplusout.sql").write_text("-- placeholder sql")
+        (sim_out / "eplusout.err").write_text("")
+        return sim_out
+    finally:
+        if heartbeat is not None:
+            heartbeat.update_state("completed")
+            heartbeat.stop()
 
 
 def run_openstudio_sim(
@@ -469,6 +481,7 @@ def run_openstudio_sim(
     stdout_path: Path | None = None,
     stderr_path: Path | None = None,
     max_retries: int = 3,
+    worker_id: str = "local",
 ) -> Path:
     """Run the OpenStudio simulation with exponential-backoff retry.
 
@@ -508,6 +521,8 @@ def run_openstudio_sim(
         stderr_path: optional path to the per-sample stderr log file.
         max_retries: maximum retry attempts for transient failures
             (default 3). Set to 0 to disable retries.
+        worker_id: identifier for the worker running this simulation
+            (issue #341). Written to the heartbeat file for liveness tracking.
 
     Returns:
         Path to the simulation output directory (eplusout.sql inside).
@@ -527,6 +542,7 @@ def run_openstudio_sim(
         stdout_path=stdout_path,
         stderr_path=stderr_path,
         max_retries=max_retries,
+        worker_id=worker_id,
     )
 
 

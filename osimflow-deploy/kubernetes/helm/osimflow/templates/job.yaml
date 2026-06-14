@@ -1,0 +1,45 @@
+# Job template for OSimFlow per-sample Kubernetes Jobs.
+# Each `osimflow run` sample becomes one Job created by the KubernetesExecutor.
+# This template is used as a base; the executor generates per-sample manifests.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osimflow.fullname" . }}-{{ .Values.executor.namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "osimflow.name" . }}
+    app.kubernetes.io/component: job
+    app.kubernetes.io/part-of: osimflow
+spec:
+  ttlSecondsAfterFinish: {{ .Values.job.ttl_seconds_after_finish }}
+  backoffLimit: {{ .Values.job.backoff_limit }}
+  activeDeadlineSeconds: {{ .Values.job.active_deadline_seconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "osimflow.name" . }}
+        app.kubernetes.io/component: job
+        app.kubernetes.io/part-of: osimflow
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.executor.service_account }}
+      containers:
+        - name: osimflow
+          image: "{{ .Values.openstudio.repository }}:{{ .Values.openstudio.version }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - sleep infinity
+          resources:
+            requests:
+              cpu: {{ .Values.resources.cpu }}
+              memory: {{ .Values.resources.memory }}
+            limits:
+              cpu: {{ .Values.resources.cpu }}
+              memory: {{ .Values.resources.memory }}
+          env:
+            - name: OSIMFLOW_OS_VERSION
+              value: {{ .Values.openstudio.version | quote }}
+            - name: OSIMFLOW_CONTAINER
+              value: "{{ .Values.openstudio.repository }}:{{ .Values.openstudio.version }}"

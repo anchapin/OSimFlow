@@ -18,9 +18,12 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+
+if TYPE_CHECKING:
+    from osimflow.executors.base import BaseExecutor
 
 from osimflow.api.schemas import (
     CampaignCancelResponse,
@@ -218,6 +221,126 @@ async def create_campaign(
     )
 
 
+def _build_executor_from_request(body: CampaignCreateRequest) -> BaseExecutor:
+    """Build the correct executor from a campaign creation request body.
+
+    Mirrors the CLI ``_build_executor`` logic in ``osimflow.__main__``.
+    """
+    from osimflow.executors import (  # noqa: PLC0415
+        AWSBatchExecutor,
+        AzureBatchExecutor,
+        DaskJobQueueExecutor,
+        GoogleBatchExecutor,
+        KubernetesExecutor,
+        LocalExecutor,
+        NomadExecutor,
+        PBSExecutor,
+        SlurmExecutor,
+    )
+
+    _executors: dict[str, tuple[type[BaseExecutor], dict[str, object]]] = {
+        "local": (
+            LocalExecutor,
+            {"max_workers": body.max_workers},
+        ),
+        "slurm": (
+            SlurmExecutor,
+            {
+                "partition": body.slurm_partition or "short",
+                "account": body.slurm_account,
+                "cpus_per_task": 2,
+                "mem_gb": 4,
+                "time_h": 2,
+                "debug": not body.slurm_real,
+                "qos": body.slurm_qos,
+                "constraint": body.slurm_constraint,
+                "gres": body.slurm_gres,
+            },
+        ),
+        "aws_batch": (
+            AWSBatchExecutor,
+            {
+                "job_queue": body.aws_batch_queue or "osimflow-batch-queue",
+                "job_definition": body.aws_batch_job_definition,
+                "max_spot_price_usd": body.aws_batch_max_spot_price_usd,
+                "fallback_to_on_demand": body.aws_batch_fallback_to_on_demand,
+                "max_retries": body.aws_batch_max_retries,
+                "ecr_repository": body.ecr_repository,
+            },
+        ),
+        "azure_batch": (
+            AzureBatchExecutor,
+            {
+                "account_name": body.azure_batch_account_name,
+                "account_url": body.azure_batch_account_url,
+                "pool_id": body.azure_batch_pool_id or "osimflow-pool",
+                "location": body.azure_batch_location or "eastus",
+                "use_spot": body.azure_use_spot,
+                "fallback_to_on_demand": body.azure_fallback_to_on_demand,
+                "max_retries": body.azure_max_retries,
+            },
+        ),
+        "google_batch": (
+            GoogleBatchExecutor,
+            {
+                "project_id": body.google_batch_project_id,
+                "region": body.google_batch_region or "us-central1",
+                "batch_service_account": body.google_batch_service_account,
+                "use_spot": body.google_use_spot,
+                "fallback_to_on_demand": body.google_fallback_to_on_demand,
+                "max_retries": body.google_max_retries,
+            },
+        ),
+        "kubernetes": (
+            KubernetesExecutor,
+            {
+                "namespace": body.kubernetes_namespace or "default",
+                "poll_interval_s": body.kubernetes_poll_interval_s or 5.0,
+                "max_poll_interval_s": body.kubernetes_max_poll_interval_s or 60.0,
+            },
+        ),
+        "nomad": (
+            NomadExecutor,
+            {
+                "address": body.nomad_address,
+                "datacentre": body.nomad_datacentre or "dc1",
+                "verify_tls": body.nomad_tls_verify,
+                "tls": body.nomad_tls,
+                "cert": Path(body.nomad_cert) if body.nomad_cert else None,
+                "key": Path(body.nomad_key) if body.nomad_key else None,
+                "ca_cert": Path(body.nomad_ca_cert) if body.nomad_ca_cert else None,
+            },
+        ),
+        "pbs": (
+            PBSExecutor,
+            {
+                "server": body.pbs_server,
+                "queue": body.pbs_queue,
+                "debug": not body.pbs_real,
+            },
+        ),
+        "dask_jobqueue": (
+            DaskJobQueueExecutor,
+            {
+                "cluster_type": body.dask_cluster_type or "slurm",
+                "min_workers": body.dask_min_workers or 0,
+                "max_workers": body.dask_max_workers or 10,
+                "cpus_per_worker": body.dask_cpus_per_worker or 2,
+                "memory_per_worker": body.dask_memory_per_worker or "4GiB",
+                "walltime": body.dask_walltime or "02:00:00",
+                "queue": body.dask_queue,
+                "project": body.dask_project,
+            },
+        ),
+    }
+
+    entry = _executors.get(body.executor)
+    if entry is None:
+        raise ValueError(f"unknown executor: {body.executor}")
+    executor_cls, kwargs = entry
+    return executor_cls(**kwargs)
+
+
 def _launch_campaign_background(
     request: Request,
     campaign_id: str,
@@ -232,7 +355,7 @@ def _launch_campaign_background(
 
     def _run() -> None:
         try:
-            from osimflow import Campaign, LocalExecutor  # noqa: PLC0415
+            from osimflow import Campaign  # noqa: PLC0415
             from osimflow.config import CampaignConfig  # noqa: PLC0415
 
             cfg = CampaignConfig(
@@ -243,9 +366,32 @@ def _launch_campaign_background(
                 openstudio_version=body.openstudio_version,
                 archive_intermediates=body.archive_intermediates,
                 algorithm=body.algorithm,
+                slurm_qos=body.slurm_qos,
+                slurm_constraint=body.slurm_constraint,
+                slurm_gres=body.slurm_gres,
+                aws_batch_max_spot_price_usd=body.aws_batch_max_spot_price_usd,
+                aws_batch_fallback_to_on_demand=body.aws_batch_fallback_to_on_demand,
+                aws_batch_max_retries=body.aws_batch_max_retries,
+                ecr_repository=body.ecr_repository,
+                azure_batch_account_name=body.azure_batch_account_name,
+                azure_batch_account_url=body.azure_batch_account_url,
+                azure_batch_pool_id=body.azure_batch_pool_id or "osimflow-pool",
+                azure_batch_location=body.azure_batch_location or "eastus",
+                azure_use_spot=body.azure_use_spot,
+                azure_fallback_to_on_demand=body.azure_fallback_to_on_demand,
+                azure_max_retries=body.azure_max_retries,
+                google_batch_project_id=body.google_batch_project_id,
+                google_batch_region=body.google_batch_region or "us-central1",
+                google_batch_service_account=body.google_batch_service_account,
+                google_use_spot=body.google_use_spot,
+                google_fallback_to_on_demand=body.google_fallback_to_on_demand,
+                google_max_retries=body.google_max_retries,
+                nomad_tls=body.nomad_tls,
+                nomad_cert=Path(body.nomad_cert) if body.nomad_cert else None,
+                nomad_key=Path(body.nomad_key) if body.nomad_key else None,
+                nomad_ca_cert=Path(body.nomad_ca_cert) if body.nomad_ca_cert else None,
             )
-            # For the API we only use LocalExecutor for simplicity.
-            executor = LocalExecutor(max_workers=1)
+            executor = _build_executor_from_request(body)
             campaign = Campaign(cfg, executor=executor)
             campaign.run()
         except Exception:

@@ -27,10 +27,14 @@ from osimflow import (
     CampaignConfig,
     CampaignRecord,
     CampaignRegistry,
+    DaskJobQueueExecutor,
     GoogleBatchExecutor,
+    KubernetesExecutor,
     LocalExecutor,
     NomadExecutor,
+    PBSExecutor,
     SlurmExecutor,
+    build_task_queue,
     load_config,
 )
 from osimflow.byos import ByosTrustLevel, load_user_function
@@ -40,9 +44,12 @@ from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_o
 log = logging.getLogger("osimflow.__main__")
 
 
-def _build_executor(args: argparse.Namespace) -> BaseExecutor:
+def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
+    """Dispatch to the correct executor based on ``args.executor``."""
+    # Local executor — no extra config needed.
     if args.executor == "local":
         return LocalExecutor(max_workers=args.max_workers)
+    # Slurm executor — partition, account, and submitit debug flag.
     if args.executor == "slurm":
         return SlurmExecutor(
             partition=args.slurm_partition,
@@ -55,6 +62,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             constraint=args.slurm_constraint,
             gres=args.slurm_gres,
         )
+    # AWS Batch executor — job queue, job definition, and Spot handling.
     if args.executor == "aws_batch":
         return AWSBatchExecutor(
             job_queue=args.aws_batch_queue,
@@ -67,23 +75,62 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
             fallback_to_on_demand=args.aws_batch_fallback_to_on_demand,
             max_retries=args.aws_batch_max_retries,
         )
+    # Nomad executor — address and datacentre.
     if args.executor == "nomad":
         return NomadExecutor(
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
+            verify_tls=args.nomad_tls_verify,
+            tls=args.nomad_tls,
+            cert=args.nomad_cert,
+            key=args.nomad_key,
+            ca_cert=args.nomad_ca_cert,
         )
+    # Azure Batch executor — account credentials, pool, and Spot handling.
     if args.executor == "azure_batch":
         return AzureBatchExecutor(
             account_name=args.azure_batch_account_name,
             account_url=args.azure_batch_account_url,
             pool_id=args.azure_batch_pool_id,
             location=args.azure_batch_location,
+            use_spot=args.azure_use_spot,
+            fallback_to_on_demand=args.azure_fallback_to_on_demand,
+            max_retries=args.azure_max_retries,
         )
+    # Google Cloud Batch executor — project, region, service account, and Spot handling.
     if args.executor == "google_batch":
         return GoogleBatchExecutor(
             project_id=args.google_batch_project_id,
             region=args.google_batch_region,
             batch_service_account=args.google_batch_service_account,
+            use_spot=args.google_use_spot,
+            fallback_to_on_demand=args.google_fallback_to_on_demand,
+            max_retries=args.google_max_retries,
+        )
+    # Kubernetes executor — namespace and polling config.
+    if args.executor == "kubernetes":
+        return KubernetesExecutor(
+            namespace=args.kubernetes_namespace,
+            poll_interval_s=args.kubernetes_poll_interval_s,
+            max_poll_interval_s=args.kubernetes_max_poll_interval_s,
+        )
+    # PBS executor — server, queue, and debug flag.
+    if args.executor == "pbs":
+        return PBSExecutor(
+            server=args.pbs_server,
+            queue=args.pbs_queue,
+            debug=not args.pbs_real,  # debug unless --pbs-real
+        )
+    if args.executor == "dask_jobqueue":
+        return DaskJobQueueExecutor(
+            cluster_type=args.dask_cluster_type,
+            min_workers=args.dask_min_workers,
+            max_workers=args.dask_max_workers,
+            cpus_per_worker=args.dask_cpus_per_worker,
+            memory_per_worker=args.dask_memory_per_worker,
+            walltime=args.dask_walltime,
+            queue=args.dask_queue,
+            project=args.dask_project,
         )
     raise ValueError(f"unknown executor: {args.executor}")
 
@@ -91,7 +138,17 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
 def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--executor",
-        choices=["local", "slurm", "aws_batch", "nomad", "azure_batch", "google_batch"],
+        choices=[
+            "local",
+            "slurm",
+            "aws_batch",
+            "nomad",
+            "azure_batch",
+            "google_batch",
+            "kubernetes",
+            "pbs",
+            "dask_jobqueue",
+        ],
         default="local",
     )
     run.add_argument("--max-workers", type=int, default=4, help="Local executor parallelism")
@@ -173,6 +230,52 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help="Nomad datacentre to target (default: dc1).",
     )
     run.add_argument(
+        "--nomad-tls-verify",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Enable (default) or disable TLS certificate verification for the "
+            "Nomad HTTP API. Disable with --nomad-tls-verify=false for "
+            "development with self-signed certificates. "
+            "SEC-009: protects NOMAD_TOKEN from interception."
+        ),
+    )
+    run.add_argument(
+        "--nomad-tls",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable TLS for the Nomad HTTP API connection. "
+            "When enabled, use --nomad-cert, --nomad-key, and --nomad-ca-cert "
+            "to specify client certificate files for mTLS authentication."
+        ),
+    )
+    run.add_argument(
+        "--nomad-cert",
+        default=None,
+        help=(
+            "Path to the client certificate file (PEM) for mTLS authentication "
+            "with the Nomad cluster. Required when --nomad-tls is enabled."
+        ),
+    )
+    run.add_argument(
+        "--nomad-key",
+        default=None,
+        help=(
+            "Path to the client private key file (PEM) for mTLS authentication "
+            "with the Nomad cluster. Required when --nomad-tls is enabled."
+        ),
+    )
+    run.add_argument(
+        "--nomad-ca-cert",
+        default=None,
+        help=(
+            "Path to the CA certificate file (PEM) to verify the Nomad server's "
+            "certificate when --nomad-tls is enabled. If not specified, the "
+            "system default CA certificates are used."
+        ),
+    )
+    run.add_argument(
         "--azure-batch-account-name",
         default=None,
         help="Azure Batch account name (e.g. osimflowbatch).",
@@ -193,6 +296,35 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help="Azure region/location for the Batch account (default: eastus).",
     )
     run.add_argument(
+        "--azure-use-spot",
+        action="store_true",
+        help=(
+            "Use Azure Spot VMs (low-priority) for Batch tasks (issue #352). "
+            "When a Spot interruption occurs, the executor retries up to "
+            "--azure-max-retries times before falling back to on-demand "
+            "(if --azure-fallback-to-on-demand is set) or failing."
+        ),
+    )
+    run.add_argument(
+        "--azure-fallback-to-on-demand",
+        action="store_true",
+        help=(
+            "When Azure Spot retries are exhausted, fall back to on-demand "
+            "VMs instead of failing (issue #352). Requires --azure-use-spot."
+        ),
+    )
+    run.add_argument(
+        "--azure-max-retries",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of retries on Azure Spot VM interruption "
+            "(default: 3). Each retry uses exponential backoff. After "
+            "exhausting retries, the job fails unless "
+            "--azure-fallback-to-on-demand is set."
+        ),
+    )
+    run.add_argument(
         "--google-batch-project-id",
         default=None,
         help="Google Cloud project ID (e.g. my-project).",
@@ -206,6 +338,137 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--google-batch-service-account",
         default=None,
         help="Google Cloud service account email for Batch jobs.",
+    )
+    run.add_argument(
+        "--google-use-spot",
+        action="store_true",
+        help=(
+            "Use Google Spot VMs (preemptible) for Batch jobs (issue #352). "
+            "When a preemptible VM is interrupted, the executor retries up to "
+            "--google-max-retries times before falling back to on-demand "
+            "(if --google-fallback-to-on-demand is set) or failing."
+        ),
+    )
+    run.add_argument(
+        "--google-fallback-to-on-demand",
+        action="store_true",
+        help=(
+            "When Google Spot/preemptible retries are exhausted, fall back to "
+            "on-demand VMs instead of failing (issue #352). "
+            "Requires --google-use-spot."
+        ),
+    )
+    run.add_argument(
+        "--google-max-retries",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of retries on Google preemptible VM interruption "
+            "(default: 3). Each retry uses exponential backoff. After "
+            "exhausting retries, the job fails unless "
+            "--google-fallback-to-on-demand is set."
+        ),
+    )
+    run.add_argument(
+        "--kubernetes-namespace",
+        default="default",
+        help="Kubernetes namespace for jobs (default: default).",
+    )
+    run.add_argument(
+        "--kubernetes-poll-interval-s",
+        type=float,
+        default=5.0,
+        help="Poll interval for Job status (seconds, default: 5.0).",
+    )
+    run.add_argument(
+        "--kubernetes-max-poll-interval-s",
+        type=float,
+        default=60.0,
+        help="Max poll interval for Job status (seconds, default: 60.0).",
+    )
+    run.add_argument(
+        "--pbs-server",
+        default=None,
+        help=(
+            "PBS server/cluster address (e.g. pbsserver). "
+            "Defaults to the PBS_DEFAULT env var or system default."
+        ),
+    )
+    run.add_argument(
+        "--pbs-queue",
+        default=None,
+        help="PBS queue to submit jobs to (e.g. batch).",
+    )
+    run.add_argument(
+        "--pbs-real",
+        action="store_true",
+        help="Submit to real PBS (default: debug mode runs locally).",
+    )
+    run.add_argument(
+        "--dask-cluster-type",
+        choices=["slurm", "pbs", "kubernetes"],
+        default="slurm",
+        help="Dask-JobQueue cluster backend (default: slurm).",
+    )
+    run.add_argument(
+        "--dask-min-workers",
+        type=int,
+        default=0,
+        help="Minimum number of Dask workers to keep alive (default: 0).",
+    )
+    run.add_argument(
+        "--dask-max-workers",
+        type=int,
+        default=10,
+        help="Maximum number of Dask workers to scale up to (default: 10).",
+    )
+    run.add_argument(
+        "--dask-cpus-per-worker",
+        type=int,
+        default=2,
+        help="CPUs per Dask worker (default: 2).",
+    )
+    run.add_argument(
+        "--dask-memory-per-worker",
+        default="4GiB",
+        help="Memory per Dask worker (default: 4GiB).",
+    )
+    run.add_argument(
+        "--dask-walltime",
+        default="02:00:00",
+        help="Walltime for Dask cluster jobs (default: 02:00:00).",
+    )
+    run.add_argument(
+        "--dask-queue",
+        default=None,
+        help=" HPC queue/partition for Dask workers (e.g. short, gpu).",
+    )
+    run.add_argument(
+        "--dask-project",
+        default=None,
+        help="HPC project/account for Dask workers.",
+    )
+    run.add_argument(
+        "--task-queue",
+        choices=["none", "dask"],
+        default="none",
+        help=(
+            "Distributed task queue backend for fan-out steps "
+            "(APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS). "
+            "When 'none' (default), work is submitted directly to the "
+            "configured --executor. When 'dask', work is submitted to "
+            "a Dask scheduler (requires --dask-scheduler-address unless "
+            "a local embedded cluster is acceptable)."
+        ),
+    )
+    run.add_argument(
+        "--dask-scheduler-address",
+        default=None,
+        help=(
+            "Dask scheduler address (e.g. tcp://scheduler:8786). "
+            "When omitted and --task-queue is 'dask', an embedded "
+            "single-process LocalCluster is started automatically."
+        ),
     )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
@@ -332,6 +595,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--byos-resource-limits",
+        default=None,
+        help=(
+            "JSON dict of rlimit names to values applied to the BYOS "
+            "subprocess (issue #343). Example: "
+            '\'{"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}\'. '
+            "resource.error from impossible limits is caught and logged "
+            "as a warning (non-fatal)."
+        ),
+    )
+    run.add_argument(
         "--observability",
         choices=["none", "cloudwatch", "prometheus", "opentelemetry"],
         default="none",
@@ -399,6 +673,47 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Path to the offline bundle directory created by "
             "scripts/bundle_offline.py. Contains pip/, docker/, and weather/ subdirectories. "
             "Required when --offline is set."
+        ),
+    )
+    run.add_argument(
+        "--webhook-url",
+        default=None,
+        help=(
+            "URL to POST a campaign completion summary to. "
+            "The POST contains a JSON payload with campaign_id, status, "
+            "elapsed_s, n_samples, n_succeeded, n_failed, total_cost_usd, "
+            "and outdir. Best-effort: delivery failures are logged but do "
+            "not affect campaign status. (issue #283)"
+        ),
+    )
+    run.add_argument(
+        "--result-storage-backend",
+        choices=["local", "s3", "gs", "azure"],
+        default="local",
+        help=(
+            "Result storage backend for multi-node campaigns (issue #339). "
+            "local = no remote upload (default). "
+            "s3 = Amazon S3 (or S3-compatible like MinIO/R2). "
+            "gs = Google Cloud Storage. "
+            "azure = Azure Blob Storage."
+        ),
+    )
+    run.add_argument(
+        "--result-storage-bucket",
+        default=None,
+        help=(
+            "Bucket/container name for result storage (issue #339). "
+            "For S3/gs this is the bucket name; for Azure it is the container name. "
+            "Required when --result-storage-backend is not 'local'."
+        ),
+    )
+    run.add_argument(
+        "--result-storage-endpoint",
+        default=None,
+        help=(
+            "Custom S3-compatible endpoint URL for result storage (issue #339). "
+            "Use for MinIO, Cloudflare R2, or other S3-compatible stores. "
+            "Only valid when --result-storage-backend is 's3'."
         ),
     )
 
@@ -493,10 +808,36 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         help="Rate limit string for slowapi (default: 60/minute).",
     )
     serve.add_argument(
+        "--tls-cert",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a PEM-encoded TLS certificate file. "
+            "When provided, --tls-key is also required and HTTPS is enabled. "
+            "SEC-004: TLS is required for production deployments."
+        ),
+    )
+    serve.add_argument(
+        "--tls-key",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a PEM-encoded TLS private key file. "
+            "Required when --tls-cert is provided. "
+            "SEC-004: TLS is required for production deployments."
+        ),
+    )
+    serve.add_argument(
         "--read-write",
         dest="read_only",
         action="store_false",
         help="Allow campaign control (stop, live events). Disables --read-only.",
+    )
+    serve.add_argument(
+        "--ui",
+        action="store_true",
+        default=False,
+        help="Enable the campaign setup web UI at /ui/ (issue #337).",
     )
     serve.add_argument("--log_level", default="INFO")
     serve.set_defaults(func=_cmd_serve)
@@ -605,6 +946,15 @@ def _add_download_args(dl: argparse.ArgumentParser) -> None:
     dl.add_argument("--log_level", default="INFO")
 
 
+def _add_cancel_args(cancel: argparse.ArgumentParser) -> None:
+    cancel.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json",
+    )
+    cancel.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -655,6 +1005,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Download results from a completed campaign",
     )
     _add_download_args(dl)
+    cncl = sub.add_parser(
+        "cancel",
+        help="Request graceful cancellation of a running campaign",
+    )
+    _add_cancel_args(cncl)
     return p
 
 
@@ -690,10 +1045,32 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         api_key=api_key,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
+        ui_enabled=args.ui,
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
-    uvicorn.run(app, host=args.host, port=args.port)
+
+    tls_cert: Path | None = args.tls_cert if args.tls_cert else None
+    tls_key: Path | None = args.tls_key if args.tls_key else None
+
+    if tls_cert is not None and tls_key is None:
+        print("Error: --tls-key is required when --tls-cert is provided.", file=sys.stderr)
+        return 1
+    if tls_key is not None and tls_cert is None:
+        print("Error: --tls-cert is required when --tls-key is provided.", file=sys.stderr)
+        return 1
+
+    if tls_cert is not None and tls_key is not None:
+        log.warning("TLS enabled: serving on https://%s:%d", args.host, args.port)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            ssl_certfile=tls_cert,
+            ssl_keyfile=tls_key,
+        )
+    else:
+        uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
 
@@ -1013,6 +1390,55 @@ def _format_field(record: CampaignRecord, key: str) -> str:
     return str(getattr(record, key, ""))
 
 
+def _cmd_cancel(args: argparse.Namespace) -> int:
+    """Request graceful cancellation of a running campaign.
+
+    Writes a ``.stop`` flag file to the campaign's output directory.
+    The campaign orchestrator checks for this file between steps and
+    initiates a graceful shutdown that stops accepting new samples and
+    waits for in-flight samples to complete before writing the final
+    ``run.json``.
+    """
+    import json as json_mod  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    # Check if campaign has already completed
+    if run_data.get("finished_at") is not None:
+        print(
+            f"error: campaign '{run_data.get('campaign_id', 'unknown')}' "
+            f"has already completed (finished_at is set)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check if .stop file already exists
+    stop_file = outdir / ".stop"
+    if stop_file.exists():
+        print(f"cancellation already requested (--outdir={outdir})")
+        return 0
+
+    # Write the .stop flag
+    stop_file.write_text(json_mod.dumps({"requested_at": time.time()}))
+    campaign_id = run_data.get("campaign_id", outdir.name)
+    print(f"cancellation requested for campaign '{campaign_id}'")
+    print(f"  outdir:  {outdir}")
+    print(f"  stop file: {stop_file}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -1029,6 +1455,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "compare": _cmd_compare,
         "status": _cmd_status,
         "download": _cmd_download,
+        "cancel": _cmd_cancel,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
@@ -1043,22 +1470,45 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     else:
         executor = _build_executor(args)
     trust_level = ByosTrustLevel(args.byos_trust_level)
+    byos_resource_limits: dict[str, int] | None = None
+    if args.byos_resource_limits:
+        try:
+            import json as json_mod  # noqa: PLC0415
+
+            byos_resource_limits = json_mod.loads(args.byos_resource_limits)
+        except (json_mod.JSONDecodeError, TypeError) as exc:
+            print(
+                f"error: --byos-resource-limits must be a valid JSON dict: {exc}", file=sys.stderr
+            )
+            return 1
     apply_fn = (
-        load_user_function(Path(args.custom_apply_script), trust_level=trust_level)
+        load_user_function(
+            Path(args.custom_apply_script),
+            trust_level=trust_level,
+            resource_limits=byos_resource_limits,
+        )
         if args.custom_apply_script
         else None
     )
     extract_fn = (
-        load_user_function(Path(args.custom_kpi_extractor), trust_level=trust_level)
+        load_user_function(
+            Path(args.custom_kpi_extractor),
+            trust_level=trust_level,
+            resource_limits=byos_resource_limits,
+        )
         if args.custom_kpi_extractor
         else None
     )
+    task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+    if cfg.task_queue != "none":
+        log.info("task queue enabled: backend=%s", cfg.task_queue)
     campaign = Campaign(
         cfg,
         executor,
         apply_fn=apply_fn,
         extract_fn=extract_fn,
         max_workers=args.max_workers,
+        task_queue=task_queue,
     )
     # TUI: wrap campaign execution with Rich TUI when available.
     # The TUI is a passive observer (reads run.json) and does not

@@ -71,6 +71,9 @@ sensitivity = [
 optimization = [
     "pymoo>=0.6",
 ]
+ga = [
+    "deap>=1.4",
+]
 api = [
     "fastapi>=0.110",
     "pydantic>=2.0",
@@ -83,6 +86,9 @@ viz = [
 ]
 tui = [
     "rich>=13.0",
+]
+r = [
+    "pyarrow>=12",
 ]
 
 [project.scripts]
@@ -125,9 +131,12 @@ omit = [
     "osimflow/algorithms/morris.py",
     "osimflow/algorithms/nsga2.py",
     "osimflow/algorithms/pso.py",
+    "osimflow/algorithms/ga.py",
     "osimflow/api/*",
     "osimflow/viz/dashboard.py",
     "osimflow/_work_scripts/*",
+    "osimflow/taskqueue.py",
+    "osimflow/storage.py",
 ]
 
 [tool.coverage.report]
@@ -181,6 +190,8 @@ fixable = ["ALL"]
 # base.py defines shared primitives; import order here is intentional to
 # avoid circular deps (azure/google_batch_executor import from base).
 "osimflow/executors/__init__.py" = ["I001"]
+# campaign.py: SIM108 if-else block is more readable with explanatory comment.
+"osimflow/campaign.py" = ["SIM108"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["osimflow"]
@@ -234,6 +245,10 @@ disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]
 module = "osimflow.api.timeseries"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.measures"
 disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]

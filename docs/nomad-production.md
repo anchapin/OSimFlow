@@ -69,7 +69,7 @@ is attached to the anonymous token.
 - [x] `NOMAD_TOKEN` sourced from environment (same pattern as AWS IAM roles)
 - [x] Docker socket mounted read-write only on client nodes (not servers)
 - [x] `allow_privileged = false` in Docker plugin config
-- [ ] **Production**: Enable TLS for HTTP/RPC/Serf (not done in Docker Compose example)
+- [x] **Production**: TLS enabled for HTTP API (issue #344)
 - [ ] **Production**: Enable Gossip encryption with a pre-shared key
 - [ ] **Production**: Store management token in Vault or a secrets manager
 - [ ] **Production**: Set worker token `ExpiryTTL` to match your rotation schedule
@@ -99,22 +99,107 @@ credentials come from the environment, not from code.
 | `infra/nomad/acl/policies/worker.hcl` | Least-privilege job submission policy |
 | `infra/nomad/acl/tokens/` | Generated tokens (git-ignored) |
 
-## Production TLS (out of scope for this recipe)
+## Production TLS (issue #344)
 
-For real deployments, add to each `server*.hcl` and `infra/nomad/examples/ha/client.hcl`: <!-- docs-skip -->
+Nomad supports TLS for all HTTP, RPC, and Serf communications. For production
+deployments, enable TLS with mTLS (mutual TLS) so that both the client and
+server present certificates to each other.
+
+### Certificate generation
+
+Generate certificates using HashiCorp Consul's TLS cert commands:
+
+```bash
+# Create the CA
+consul tls ca create
+
+# Create server certificates (for each server)
+consul tls cert create -dc=dc1 -server -domain=nomad
+
+# Create client certificates (for the NomadExecutor)
+consul tls cert create -dc=dc1 -client -domain=nomad
+```
+
+Alternatively, use your organization's internal PKI.
+
+### Server configuration
+
+Add to each `server*.hcl` and `infra/nomad/examples/ha/client.hcl` in `infra/nomad/examples/ha/`:
 
 ```hcl
 tls {
   http = true
   rpc  = true
 
-  ca_file   = "/etc/nomad/tls/ca.pem"
-  cert_file = "/etc/nomad/tls/server.pem"
-  key_file  = "/etc/nomad/tls/server-key.pem"
+  ca_file   = "/etc/nomad/tls/nomad-ca.pem"
+  cert_file = "/etc/nomad/tls/nomad-server.pem"
+  key_file  = "/etc/nomad/tls/nomad-server-key.pem"
 
   verify_server_hostname = true
   verify_https_client    = true
 }
 ```
 
-Generate certificates with `consul tls create` or your organization's PKI.
+For clients, use client certificates instead of server certificates:
+
+```hcl
+tls {
+  http = true
+  rpc  = true
+
+  ca_file   = "/etc/nomad/tls/nomad-ca.pem"
+  cert_file = "/etc/nomad/tls/nomad-client.pem"
+  key_file  = "/etc/nomad/tls/nomad-client-key.pem"
+
+  verify_server_hostname = true
+  verify_https_client    = true
+}
+```
+
+### NomadExecutor TLS configuration
+
+The `NomadExecutor` supports TLS with the following CLI flags:
+
+| Flag | Description |
+|---|---|
+| `--nomad-tls` | Enable TLS for the Nomad connection |
+| `--nomad-tls-verify` | Enable/disable certificate verification (default: true) |
+| `--nomad-cert` | Path to client certificate PEM file (for mTLS) |
+| `--nomad-key` | Path to client private key PEM file (for mTLS) |
+| `--nomad-ca-cert` | Path to CA certificate PEM file (to verify server cert) |
+
+Example usage with mTLS:
+
+```bash
+osimflow run \
+  --executor nomad \
+  --nomad-address https://nomad.example.com:4646 \
+  --nomad-tls \
+  --nomad-cert /path/to/nomad-client.pem \
+  --nomad-key /path/to/nomad-client-key.pem \
+  --nomad-ca-cert /path/to/nomad-ca.pem \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 100 \
+  --outdir ./results
+```
+
+For development with self-signed certificates, disable verification:
+
+```bash
+osimflow run \
+  --executor nomad \
+  --nomad-address https://localhost:4646 \
+  --nomad-tls \
+  --nomad-tls-verify=false \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 5 \
+  --outdir ./results
+```
+
+### Security notes
+
+- **mTLS protects NOMAD_TOKEN**: When TLS is enabled, the ACL token is encrypted in transit, preventing interception (SEC-009)
+- **Certificate verification**: Always verify server certificates in production to prevent MITM attacks
+- **Client certificates**: For high-security environments, use mTLS so both client and server authenticate each other

@@ -1,0 +1,71 @@
+# REST API server deployment (optional — issue #138).
+# Only created when api.enabled=true.
+
+{{- if .Values.api.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osimflow.api.name" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "osimflow.name" . }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: osimflow
+spec:
+  replicas: {{ .Values.api.replica_count }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "osimflow.name" . }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "osimflow.name" . }}
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: {{ .Values.executor.service_account }}
+      containers:
+        - name: api
+          image: "{{ .Values.openstudio.repository }}:{{ .Values.openstudio.version }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - osimflow.api.app
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+              protocol: TCP
+          env:
+            - name: OSIMFLOW_API_READ_ONLY
+              value: {{ .Values.api.read_only | quote }}
+            - name: OSIMFLOW_OUTDIR
+              value: /app/results
+            {{- if .Values.mlflow.enabled }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .Values.mlflow.tracking_uri | quote }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "osimflow.api.name" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "osimflow.name" . }}
+    app.kubernetes.io/component: api
+spec:
+  type: {{ .Values.api.service_type }}
+  ports:
+    - name: http
+      port: {{ .Values.api.port }}
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: {{ include "osimflow.name" . }}
+    app.kubernetes.io/component: api
+{{- end }}

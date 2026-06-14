@@ -63,6 +63,7 @@ from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .jobqueue import JobQueue
+from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
     log_mlflow_artifacts,
     log_mlflow_metrics,
@@ -80,7 +81,11 @@ from .observability import (
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
+from .storage import ResultStorageUploader, build_result_storage
+from .taskqueue import TaskHandle as TQHandle
+from .taskqueue import TaskQueue
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
+from .webhook import WebhookClient
 from .work import (
     SevereEnergyPlusError,
     aggregate_results,
@@ -168,10 +173,12 @@ class Campaign:
         apply_fn: Callable[..., Path] | None = None,
         extract_fn: Callable[..., Path] | None = None,
         max_workers: int = 1,
+        task_queue: TaskQueue | None = None,
     ):
         self.cfg = cfg
         self.executor = executor
         self.max_workers = max_workers
+        self.task_queue = task_queue
         # Resolve apply_fn: explicit param > cfg.custom_apply_script > default.
         if apply_fn is not None:
             self.apply_fn = apply_fn
@@ -241,6 +248,34 @@ class Campaign:
         except Exception as exc:
             log.warning("could not open campaign registry: %s (continuing without)", exc)
 
+        # Result storage uploader for distributed campaigns (issue #339).
+        # Built here so the correct backend is always used.  LocalStorage
+        # is a no-op so there is zero overhead when result_storage_backend
+        # is "local" (the default).
+        self._result_storage: ResultStorageUploader | None = None
+        if cfg.result_storage_backend != "local" and cfg.result_storage_bucket:
+            try:
+                store = build_result_storage(
+                    backend=cfg.result_storage_backend,
+                    bucket=cfg.result_storage_bucket,
+                    prefix=str(cfg.outdir.name),
+                    endpoint_url=cfg.result_storage_endpoint,
+                )
+                self._result_storage = ResultStorageUploader(store)
+                log.info(
+                    "result storage enabled: backend=%s bucket=%s prefix=%s",
+                    cfg.result_storage_backend,
+                    cfg.result_storage_bucket,
+                    cfg.outdir.name,
+                )
+            except Exception as exc:
+                log.warning(
+                    "could not initialize result storage (%s:%s): %s — continuing without",
+                    cfg.result_storage_backend,
+                    cfg.result_storage_bucket,
+                    exc,
+                )
+
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
         self._cancel_lock = threading.Lock()
@@ -285,7 +320,7 @@ class Campaign:
 
         # Resolve the work-scripts directory.
         scripts_dir = Path(__file__).resolve().parent / "_work_scripts"
-        if not scripts_dir.is_dir():
+        if not scripts_dir.is_dir():  # noqa: SIM108
             # Development fallback: repo root bin/ directory.
             scripts_dir = Path(__file__).resolve().parent.parent / "bin"
         files = sorted(scripts_dir.glob("*.py"))
@@ -468,7 +503,7 @@ class Campaign:
 
     def _submit_and_await_all(
         self,
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]],
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
         step_name: str,
     ) -> None:
         """Submit all samples to the executor, then await all results concurrently.
@@ -512,7 +547,7 @@ class Campaign:
             )
 
         def _await_one(
-            item: tuple[str, tuple[Handle, Callable[[Any], None]]],
+            item: tuple[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
         ) -> str:
             """Await one handle. Returns the sample_id."""
             sid, (handle, on_success) = item
@@ -1342,11 +1377,19 @@ class Campaign:
             # Update registry status (issue #266).
             self._update_registry_status(campaign_status)
 
+            # Fire webhook callback (issue #283). Best-effort: delivery
+            # failures are logged but do not affect campaign status.
+            self._maybe_fire_webhook(campaign_status, duration)
+
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
             # parallel teardown does not see "FileNotFoundError" on those
             # files. Safe to call multiple times (close() is idempotent).
             self.cache.close()
+
+            # Close the result storage uploader (issue #339).
+            if self._result_storage is not None:
+                self._result_storage.close()
 
     def _run_dry_run(self, t0: float) -> dict[str, object]:
         """Dry-run mode: 1 sample, local executor, steps 1-4 only."""
@@ -1553,8 +1596,21 @@ class Campaign:
             self.step_preflight_run_model()
 
         parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
+        self.step_validate_measure_variables(generation=generation)
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
+
+        # Sobol sensitivity indices (issue #346): compute after KPI extraction.
+        if self.cfg.algorithm == "sobol":
+            variables: dict[str, Any] = {}
+            if self.cfg.input_variables.exists():
+                with self.cfg.input_variables.open() as fh:
+                    raw = yaml.safe_load(fh)
+                    if isinstance(raw, dict):
+                        variables = raw
+            self.step_compute_sensitivity_indices(
+                samples, kpi_files, variables, generation=generation
+            )
 
         # Per-generation Pareto front persistence for multi-objective
         # algorithms (issue #141).  When the algorithm reports
@@ -1789,6 +1845,42 @@ class Campaign:
         shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
         log.info("archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name)
 
+    def _maybe_fire_webhook(self, campaign_status: str, elapsed_s: float) -> None:
+        """Fire a webhook callback if ``cfg.webhook_url`` is configured (issue #283).
+
+        Best-effort: delivery failures are logged but do not propagate.
+        The webhook is sent after the GENERATE_BASIC_PLOTS step, in the
+        ``finally`` block of ``run()``, so it fires regardless of success
+        or failure — ``campaign_status`` will be ``"success"``,
+        ``"failure"``, or ``"cancelled"``.
+        """
+        if not self.cfg.webhook_url:
+            return
+
+        n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
+        n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+
+        client = WebhookClient(url=self.cfg.webhook_url)
+        payload = client.build_payload(
+            campaign_id=self.trace.campaign_id,
+            status=campaign_status,
+            elapsed_s=elapsed_s,
+            n_samples=self.cfg.n_samples,
+            n_succeeded=n_succeeded,
+            n_failed=n_failed,
+            total_cost_usd=self.trace.total_cost_usd if self.trace.total_cost_usd > 0 else None,
+            outdir=str(self.cfg.outdir),
+        )
+
+        log.info("firing webhook to %s (status=%s)", self.cfg.webhook_url, campaign_status)
+        ok = client.deliver(payload)
+        if not ok:
+            log.warning(
+                "webhook delivery to %s failed (campaign_status=%s)",
+                self.cfg.webhook_url,
+                campaign_status,
+            )
+
     # ------------------------------------------------------------------
     # Steps
     # ------------------------------------------------------------------
@@ -2006,6 +2098,61 @@ class Campaign:
         )
         self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
 
+    def step_validate_measure_variables(self, generation: int = 0) -> None:
+        """Validate variables.yml against discovered measure arguments.
+
+        Runs before ``RUN_OPENSTUDIO_SIM`` as a pre-flight check (GAP-003).
+        Raises ``UnmappedVariableError`` if any variable name in
+        ``variables.yml`` does not correspond to a discovered measure
+        argument.
+        """
+        if self.cfg.skip_preflight:
+            return
+
+        if not self.cfg.input_variables.exists():
+            return
+
+        t0 = time.time()
+        try:
+            with self.cfg.input_variables.open() as fh:
+                raw = yaml.safe_load(fh)
+            variables: list[dict[str, Any]]
+            if isinstance(raw, dict):
+                variables = raw.get("variables", [])
+            else:
+                variables = []
+        except Exception:
+            return
+
+        if not variables:
+            return
+
+        registry = MeasureRegistry()
+        registry.index_measures(self.cfg.template_sim_package)
+
+        if not registry._measures:
+            return
+
+        try:
+            registry.validate_variables_mapping(variables, registry)
+        except UnmappedVariableError:
+            self.trace.step_finished(
+                "VALIDATE_MEASURE_VARIABLES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
+            )
+            self._obs.record_step_duration("VALIDATE_MEASURE_VARIABLES", time.time() - t0)
+            raise
+
+        self.trace.step_finished(
+            "VALIDATE_MEASURE_VARIABLES",
+            cache="MISS",
+            elapsed_s=time.time() - t0,
+            exit_code=0,
+        )
+        self._obs.record_step_duration("VALIDATE_MEASURE_VARIABLES", time.time() - t0)
+
     def step_apply_parameters(  # noqa: PLR0915
         self,
         samples: list[SampleSpec],
@@ -2116,20 +2263,30 @@ class Campaign:
             }
 
         # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
-            handle = self.executor.submit(
-                self.apply_fn,
-                self.cfg.template_sim_package,
-                ctx["resolved_params"],
-                sid,
-                ctx["out_dir"],
-                name=f"apply_{sid}",
-                cpus=1,
-                memory_mb=512,
-                time_min=5,
-                container=CONTAINER_PY,
-            )
+            handle: Handle | TQHandle
+            if self.task_queue is not None:
+                handle = self.task_queue.submit(
+                    self.apply_fn,
+                    self.cfg.template_sim_package,
+                    ctx["resolved_params"],
+                    sid,
+                    ctx["out_dir"],
+                )
+            else:
+                handle = self.executor.submit(
+                    self.apply_fn,
+                    self.cfg.template_sim_package,
+                    ctx["resolved_params"],
+                    sid,
+                    ctx["out_dir"],
+                    name=f"apply_{sid}",
+                    cpus=1,
+                    memory_mb=512,
+                    time_min=5,
+                    container=CONTAINER_PY,
+                )
 
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
@@ -2265,24 +2422,40 @@ class Campaign:
             }
 
         # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
-            handle = self.executor.submit(
-                run_openstudio_sim,
-                ctx["mod_pkg"],
-                sid,
-                os_version,
-                ctx["out_dir"],
-                name=f"sim_{sid}",
-                cpus=4,
-                memory_mb=8 * 1024,
-                time_min=240,
-                container=CONTAINER_OS.format(version=os_version),
-                openstudio_version=os_version,
-                stdout_path=ctx["stdout_log"],
-                stderr_path=ctx["stderr_log"],
-                max_retries=self.cfg.max_sample_retries,
-            )
+            handle: Handle | TQHandle
+            if self.task_queue is not None:
+                handle = self.task_queue.submit(
+                    run_openstudio_sim,
+                    ctx["mod_pkg"],
+                    sid,
+                    os_version,
+                    ctx["out_dir"],
+                    openstudio_version=os_version,
+                    stdout_path=ctx["stdout_log"],
+                    stderr_path=ctx["stderr_log"],
+                    max_retries=self.cfg.max_sample_retries,
+                    worker_id="local",
+                )
+            else:
+                handle = self.executor.submit(
+                    run_openstudio_sim,
+                    ctx["mod_pkg"],
+                    sid,
+                    os_version,
+                    ctx["out_dir"],
+                    name=f"sim_{sid}",
+                    cpus=4,
+                    memory_mb=8 * 1024,
+                    time_min=240,
+                    container=CONTAINER_OS.format(version=os_version),
+                    openstudio_version=os_version,
+                    stdout_path=ctx["stdout_log"],
+                    stderr_path=ctx["stderr_log"],
+                    max_retries=self.cfg.max_sample_retries,
+                    worker_id="local",
+                )
 
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
@@ -2296,7 +2469,7 @@ class Campaign:
                 _key: CacheKey = key,
                 _state: dict[str, object] = state,
                 _archive: bool = archive,
-                _handle: Handle = h,
+                _handle: Handle | TQHandle = h,
             ) -> None:
                 # Intermediate-file optimization (PRD §1.4): drop empty
                 # `.err` (the eplusout.err from the OpenStudio run). The
@@ -2318,17 +2491,40 @@ class Campaign:
                 _state["sim_status"] = "ok"
                 _state["eplusout_sql"] = str(result_path / "eplusout.sql")
                 # Worker tracking (issue #105): capture from the sim handle.
+                # TaskHandle only has worker_id; Handle has full worker tracking.
                 _state["worker_id"] = _handle.worker_id
-                _state["worker_ip"] = _handle.worker_ip
-                _state["worker_region"] = _handle.worker_region
+                _state["worker_ip"] = getattr(_handle, "worker_ip", None)
+                _state["worker_region"] = getattr(_handle, "worker_region", None)
                 # Cost tracking (issue #126): capture from the sim handle.
-                _state["cost_usd"] = _handle.cost_usd
-                _state["billed_duration_seconds"] = _handle.billed_duration_seconds
+                _state["cost_usd"] = getattr(_handle, "cost_usd", None)
+                _state["billed_duration_seconds"] = getattr(
+                    _handle, "billed_duration_seconds", None
+                )
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                 # Archive eplusout.sql when flag is set
                 if _archive:
                     archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
                     self._archive_sample_artifacts(Path(result_path), archive_dst, ["eplusout.sql"])
+                # Result storage upload (issue #339): upload eplusout.sql after
+                # successful simulation when a remote backend is configured.
+                if self._result_storage is not None:
+                    sql_path = result_path / "eplusout.sql"
+                    if sql_path.is_file():
+                        try:
+                            self._result_storage.upload_file(
+                                sql_path,
+                                f"sim/{_sid}/eplusout.sql",
+                            )
+                            log.debug(
+                                "result storage: uploaded eplusout.sql for sample %s",
+                                _sid,
+                            )
+                        except OSError as exc:
+                            log.warning(
+                                "result storage: upload failed for sample %s: %s",
+                                _sid,
+                                exc,
+                            )
 
             submissions[sid] = (handle, _on_success)
 
@@ -2356,7 +2552,7 @@ class Campaign:
         )
         return out
 
-    def step_extract_kpis(
+    def step_extract_kpis(  # noqa: PLR0915
         self,
         simulated: SampleDict,
         generation: int = 0,
@@ -2402,19 +2598,28 @@ class Campaign:
             }
 
         # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
+        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
-            handle = self.executor.submit(
-                self.extract_fn,
-                ctx["sim_dir"],
-                sid,
-                ctx["kpi_dir"],
-                name=f"kpi_{sid}",
-                cpus=1,
-                memory_mb=1024,
-                time_min=10,
-                container=CONTAINER_PY,
-            )
+            handle: Handle | TQHandle
+            if self.task_queue is not None:
+                handle = self.task_queue.submit(
+                    self.extract_fn,
+                    ctx["sim_dir"],
+                    sid,
+                    ctx["kpi_dir"],
+                )
+            else:
+                handle = self.executor.submit(
+                    self.extract_fn,
+                    ctx["sim_dir"],
+                    sid,
+                    ctx["kpi_dir"],
+                    name=f"kpi_{sid}",
+                    cpus=1,
+                    memory_mb=1024,
+                    time_min=10,
+                    container=CONTAINER_PY,
+                )
 
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
@@ -2431,6 +2636,26 @@ class Campaign:
                 _state["extract_exit_code"] = 0
                 _state["extract_status"] = "ok"
                 self.trace.step_item_done("EXTRACT_KPIS", status="ok")
+                # Result storage upload (issue #339): upload KPI JSON after
+                # successful extraction when a remote backend is configured.
+                if self._result_storage is not None:
+                    kpi_path = Path(result_path)
+                    if kpi_path.is_file():
+                        try:
+                            self._result_storage.upload_file(
+                                kpi_path,
+                                f"kpis/{kpi_path.name}",
+                            )
+                            log.debug(
+                                "result storage: uploaded KPI for sample %s",
+                                _sid,
+                            )
+                        except OSError as exc:
+                            log.warning(
+                                "result storage: upload failed for KPI sample %s: %s",
+                                _sid,
+                                exc,
+                            )
 
             submissions[sid] = (handle, _on_success)
 
@@ -2454,6 +2679,111 @@ class Campaign:
         )
         self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
         return sorted(out)
+
+    def step_compute_sensitivity_indices(
+        self,
+        samples: list[SampleSpec],
+        kpi_files: list[Path],
+        variables: dict[str, Any],
+        generation: int = 0,
+    ) -> Path | None:
+        """Compute Sobol sensitivity indices after KPI extraction.
+
+        This step runs only when ``cfg.algorithm == "sobol"``. It reads
+        the per-sample KPI values, passes them to
+        :meth:`SobolAlgorithm.compute_sensitivity_indices`, and stores
+        the resulting ``sensitivity_indices.json`` in the campaign
+        output directory.
+
+        The step is not cached — sensitivity index computation is cheap
+        relative to simulation and the user may want to re-run with
+        different KPI selections.
+
+        Parameters
+        ----------
+        samples
+            Sample specs from ``step_generate_samples``.
+        kpi_files
+            Per-sample KPI JSON files from ``step_extract_kpis``.
+        variables
+            Parsed ``variables.yml`` dict.
+        generation
+            Generation number (included for consistency; Sobol is
+            single-shot so this is always 0).
+
+        Returns
+        -------
+        Path | None
+            Path to ``sensitivity_indices.json``, or ``None`` if the
+            algorithm is not ``"sobol"`` or no KPI files are available.
+        """
+        if self.cfg.algorithm != "sobol":
+            return None
+
+        t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before COMPUTE_SENSITIVITY_INDICES")
+
+        if not kpi_files:
+            log.warning("COMPUTE_SENSITIVITY_INDICES: no KPI files — skipping")
+            self.trace.step_finished(
+                "COMPUTE_SENSITIVITY_INDICES",
+                cache="SKIPPED",
+                elapsed_s=0.0,
+                exit_code=0,
+            )
+            return None
+
+        # Build {sample_id: {kpi_name: value}} mapping from KPI files.
+        kpi_values: dict[str, dict[str, float]] = {}
+        for kpi_path in kpi_files:
+            try:
+                data = json.loads(kpi_path.read_text())
+                sid = str(data.get("sample_id", kpi_path.stem.replace("kpi_", "")))
+                kpis = data.get("kpis", {})
+                numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
+                kpi_values[sid] = numeric_kpis
+            except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                log.warning("could not read KPI file %s: %s", kpi_path, exc)
+
+        algo = AlgorithmRegistry.get("sobol")
+        indices_dir = self.cfg.outdir / "sensitivity"
+        indices_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            indices_path = algo.compute_sensitivity_indices(
+                variables=variables,
+                samples=samples,  # type: ignore[arg-type]
+                kpi_values=kpi_values,
+                outdir=indices_dir,
+            )
+        except Exception as exc:
+            log.error(
+                "COMPUTE_SENSITIVITY_INDICES failed: %s",
+                exc,
+                exc_info=True,
+            )
+            self.trace.step_finished(
+                "COMPUTE_SENSITIVITY_INDICES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
+            )
+            raise RuntimeError("compute_sensitivity_indices failed") from exc
+
+        elapsed = time.time() - t0
+        self.trace.step_finished(
+            "COMPUTE_SENSITIVITY_INDICES",
+            cache="MISS",
+            elapsed_s=elapsed,
+            exit_code=0,
+        )
+        self._obs.record_step_duration(
+            "COMPUTE_SENSITIVITY_INDICES", elapsed, generation=generation
+        )
+        log.info("COMPUTE_SENSITIVITY_INDICES: wrote %s", indices_path)
+        return indices_path
 
     def step_aggregate_results(
         self,

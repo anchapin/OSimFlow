@@ -30,7 +30,10 @@ from typing import Any, Optional, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
+from osimflow.executors.dask_jobqueue_executor import DaskJobQueueExecutor as DaskJobQueueExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor as GoogleBatchExecutor
+from osimflow.executors.kubernetes_executor import KubernetesExecutor as KubernetesExecutor
+from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
 
 log = logging.getLogger("osimflow.executors")
 
@@ -38,10 +41,13 @@ __all__ = [
     "AWSBatchExecutor",
     "AzureBatchExecutor",
     "BaseExecutor",
+    "DaskJobQueueExecutor",
     "GoogleBatchExecutor",
     "Handle",
+    "KubernetesExecutor",
     "LocalExecutor",
     "NomadExecutor",
+    "PBSExecutor",
     "SlurmExecutor",
 ]
 
@@ -961,20 +967,77 @@ class _NomadClient:
     The client is lazy-imported (``urllib.request`` is stdlib, so this
     is mostly about deferring the import out of ``__init__.py``). No
     third-party HTTP library is required.
+
+    TLS verification: when ``verify_tls`` is ``True`` (the default),
+    the client delegates to ``urllib.request.urlopen`` (the stdlib
+    default, which uses system CA certs and verifies the server cert).
+    When ``False``, the client builds a custom opener with an SSL
+    context that skips certificate verification (for development with
+    self-signed certs). Tests patch ``urllib.request.urlopen`` to
+    intercept the wire format; this works because the
+    ``verify_tls=True`` path calls ``self.urlopen`` directly.
     """
 
-    def __init__(self, address: str, token: str | None) -> None:
-        # urllib.request is stdlib; the import is cheap but we keep it
-        # lazy so the local / slurm / aws paths do not pay even the
-        # import cost. Tests patch ``urllib.request.urlopen`` so they
-        # can intercept every request. The attribute is named
-        # ``urlopen`` (no leading underscore) so tests can reach the
-        # patched mock via ``executor._client.urlopen.call_args``.
+    def __init__(
+        self,
+        address: str,
+        token: str | None,
+        verify_tls: bool = True,
+        tls: bool = False,
+        cert: str | None = None,
+        key: str | None = None,
+        ca_cert: str | None = None,
+    ) -> None:
+        import ssl  # noqa: PLC0415
         import urllib.request  # noqa: PLC0415
 
-        self.urlopen = urllib.request.urlopen
         self.address = address.rstrip("/")
         self.token = token
+        self.verify_tls = verify_tls
+        self.tls = tls
+        self.cert = cert
+        self.key = key
+        self.ca_cert = ca_cert
+
+        # Store urlopen so tests can patch ``urllib.request.urlopen``
+        # and intercept every request through ``self.urlopen``.
+        self.urlopen = urllib.request.urlopen
+
+        # Build custom opener based on TLS configuration:
+        # - tls=False: plain HTTP (no TLS)
+        # - tls=True, verify_tls=True, cert+key: mTLS with custom client certs
+        # - tls=True, verify_tls=True: TLS with system CA certs
+        # - tls=True, verify_tls=False: TLS with CERT_NONE (skip verification)
+        # - verify_tls=False alone (tls=False): legacy behavior for dev with
+        #   self-signed certs - uses HTTPSHandler with CERT_NONE even without tls=True
+        self._opener: urllib.request.OpenerDirector | None = None
+        self._ssl_context: ssl.SSLContext | None = None
+
+        if not tls and verify_tls:
+            # Plain HTTP, no TLS
+            pass
+        elif verify_tls and cert and key:
+            # mTLS: custom SSL context with client cert + CA verification.
+            # Defer loading cert/key/ca until first request so tests can
+            # verify parameters without requiring real certificate files.
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = True
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+            self._ssl_context = ssl_context
+            self._opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=ssl_context),
+            )
+        elif verify_tls:
+            # TLS with system CA certs (no client cert)
+            self._opener = None  # use stdlib urlopen
+        else:
+            # verify_tls=False: skip cert verification (legacy dev mode)
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            self._opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=ssl_context),
+            )
 
     def _request(
         self,
@@ -1008,8 +1071,22 @@ class _NomadClient:
             method=method,
         )
         try:
-            with self.urlopen(request) as resp:
-                payload = resp.read()
+            # Lazily load certificates on first mTLS request.
+            if self._ssl_context is not None:
+                if self.ca_cert:
+                    self._ssl_context.load_verify_locations(cafile=self.ca_cert)
+                if self.cert and self.key:
+                    self._ssl_context.load_cert_chain(certfile=self.cert, keyfile=self.key)
+                self._ssl_context = None  # only load once
+
+            if self._opener is not None:
+                # verify_tls=False or mTLS: use the custom opener.
+                with self._opener.open(request) as resp:
+                    payload = resp.read()
+            else:
+                # verify_tls=True: use stdlib urlopen (system CA certs, test-mockable).
+                with self.urlopen(request) as resp:
+                    payload = resp.read()
         except urllib.error.HTTPError as exc:  # pragma: no cover — error path
             body_text = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(
@@ -1262,6 +1339,11 @@ class NomadExecutor(BaseExecutor):
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
         use_dispatch: bool = False,
+        verify_tls: bool = True,
+        tls: bool = False,
+        cert: str | None = None,
+        key: str | None = None,
+        ca_cert: str | None = None,
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -1273,10 +1355,20 @@ class NomadExecutor(BaseExecutor):
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
         self.use_dispatch = use_dispatch
+        self.verify_tls = verify_tls
+        self.tls = tls
+        self.cert = cert
+        self.key = key
+        self.ca_cert = ca_cert
         self._dispatch_job_registered = False
         self._client = _NomadClient(
             address=self.address,
             token=os.environ.get("NOMAD_TOKEN"),
+            verify_tls=verify_tls,
+            tls=tls,
+            cert=cert,
+            key=key,
+            ca_cert=ca_cert,
         )
 
     def _build_job_spec(
@@ -1526,261 +1618,4 @@ class NomadExecutor(BaseExecutor):
         pass
 
 
-# ---------------------------------------------------------------------------
-# Kubernetes executor (issue #250)
-# ---------------------------------------------------------------------------
 
-
-class _KubernetesHandle(Handle):
-    """Handle that polls Kubernetes Job status on ``.result()``.
-
-    Mirrors ``_NomadHandle`` and ``_AWSBatchHandle``: the work runs in a
-    remote K8s Job (not a thread or submitit job), so we cannot back the
-    Future with a local completion. The handle carries a reference to
-    its executor and the K8s Job name; ``result()`` blocks on
-    ``_wait_for_terminal`` and ``done()`` does a single non-blocking
-    Job status lookup.
-
-    The handle's ``_future`` is set when ``result()`` reaches a
-    terminal state so concurrent callers don't re-poll.
-    """
-
-    def __init__(self, job_name: str, executor: "KubernetesExecutor") -> None:
-        self.job_name = job_name
-        self._executor = executor
-        self._future: Future[Any] = Future()
-        self.worker_id: str | None = job_name
-        self.worker_ip: str | None = None
-        self.worker_region: str | None = executor.namespace
-
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
-        try:
-            job = self._executor._wait_for_terminal(self.job_name)
-        except BaseException as exc:  # noqa: BLE001
-            self._future.set_exception(exc)
-            raise
-        status = job.get("status", {})
-        conditions = status.get("conditions", []) or []
-        for cond in conditions:
-            if cond.get("type") == "Complete":
-                self._future.set_result(None)
-                return None
-        # Check for failure.
-        failed = status.get("failed", 0)
-        if failed and failed > 0:
-            msg = f"Kubernetes Job {self.job_name!r} failed (failed={failed})"
-            self._future.set_exception(RuntimeError(msg))
-            raise RuntimeError(msg)
-        self._future.set_result(None)
-        return None
-
-    def done(self) -> bool:
-        if self._future.done():
-            return True
-        try:
-            job = self._executor._client.get_job(self.job_name)
-        except Exception:  # noqa: BLE001
-            return False
-        status = job.get("status", {})
-        conditions = status.get("conditions", []) or []
-        for cond in conditions:
-            if cond.get("type") == "Complete":
-                return True
-        failed = status.get("failed", 0)
-        return bool(failed and failed > 0)
-
-
-class KubernetesExecutor(BaseExecutor):
-    """Kubernetes batch executor (issue #250).
-
-    Wraps the ``kubernetes`` Python client to launch one K8s Job per
-    ``submit()`` call, then polls the Job status with exponential
-    backoff until the task reaches a terminal state. The returned
-    ``Handle`` carries the Job name and blocks on ``.result()`` until
-    the task succeeds; on failure it re-raises a ``RuntimeError``.
-
-    Resource directives (``cpus``, ``memory_mb``, ``time_min``) are
-    mapped to K8s ``resources`` (``cpu`` in cores, ``memory`` in MiB).
-    Per-sample ``OSIMFLOW_OS_VERSION`` and ``OSIMFLOW_CONTAINER`` are
-    carried as container environment variables — the same env vars
-    ``SlurmExecutor``, ``AWSBatchExecutor``, and ``NomadExecutor``
-    export, so downstream work scripts can be substrate-agnostic.
-
-    Security: credentials are sourced from the in-cluster service
-    account token (the standard K8s pattern for Pods). The constructor
-    does **not** accept ``kubeconfig`` or ``api_key`` kwargs; using
-    ``kubeconfig`` would hard-code a deployment path.
-    """
-
-    name = "kubernetes"
-
-    def __init__(
-        self,
-        namespace: str = "default",
-        job_template: str | None = None,
-        poll_interval_s: float = 5.0,
-        max_poll_interval_s: float = 60.0,
-    ):
-        import kubernetes  # noqa: PLC0415
-        from kubernetes.client import (  # noqa: PLC0415
-            BatchV1Api,
-            CoreV1Api,
-        )
-        from kubernetes.config import load_incluster_config  # noqa: PLC0415
-
-        self._kubernetes = kubernetes
-        self._core_v1 = CoreV1Api()
-        self._batch_v1 = BatchV1Api()
-        self.namespace = namespace
-        self.job_template = job_template
-        self.poll_interval_s = poll_interval_s
-        self.max_poll_interval_s = max_poll_interval_s
-        self._client = _KubernetesClient(
-            batch_v1=self._batch_v1,
-            namespace=namespace,
-        )
-
-    def _build_job_spec(
-        self,
-        *,
-        name: str,
-        cpus: int,
-        memory_mb: int,
-        container: str | None,
-        openstudio_version: str | None,
-    ) -> dict[str, Any]:
-        """Build a K8s Job manifest for one OpenStudio task.
-
-        Uses the standard NREL OpenStudio container (or a custom tag if
-        the caller passed one). ``cpu`` is in cores (fractional is
-        accepted by K8s). ``memory`` is in MiB.
-        """
-        image = container or "nrel/openstudio:latest"
-        env: list[dict[str, str]] = []
-        if openstudio_version is not None:
-            env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
-        if container is not None:
-            env.append({"name": "OSIMFLOW_CONTAINER", "value": container})
-
-        return {
-            "api_version": "batch/v1",
-            "kind": "Job",
-            "metadata": {"name": f"osimflow-{name}"},
-            "spec": {
-                "ttl_seconds_after_finish": 300,
-                "template": {
-                    "spec": {
-                        "containers": [
-                            {
-                                "name": "osimflow",
-                                "image": image,
-                                "command": ["/bin/sh", "-c", "sleep infinity"],
-                                "resources": {
-                                    "cpu": str(cpus),
-                                    "memory": f"{memory_mb}Mi",
-                                },
-                                "env": env,
-                            }
-                        ],
-                        "restart_policy": "Never",
-                    }
-                },
-            },
-        }
-
-    def _wait_for_terminal(self, job_name: str) -> dict[str, Any]:
-        """Poll Job status with exponential backoff until terminal.
-
-        Returns the final Job dict.
-        """
-        delay = self.poll_interval_s
-        while True:
-            job = self._client.get_job(job_name)
-            status = job.get("status", {})
-            conditions = status.get("conditions", []) or []
-            for cond in conditions:
-                if cond.get("type") == "Complete":
-                    return job
-            failed = status.get("failed", 0)
-            if failed and failed > 0:
-                return job
-            log.info(
-                "kubernetes poll job=%s (sleeping %.1fs)",
-                job_name,
-                delay,
-            )
-            time.sleep(delay)
-            delay = min(delay * 2, self.max_poll_interval_s)
-
-    def submit(
-        self,
-        fn: Callable[..., Any],
-        *args: Any,
-        name: str = "task",
-        cpus: int = 1,
-        memory_mb: int = 1024,
-        time_min: int = 60,
-        container: str | None = None,
-        **kwargs: Any,
-    ) -> Handle:
-        openstudio_version = kwargs.get("openstudio_version")
-
-        log.info(
-            "kubernetes submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
-            name,
-            cpus,
-            memory_mb,
-            time_min,
-            container,
-        )
-
-        spec = self._build_job_spec(
-            name=name,
-            cpus=cpus,
-            memory_mb=memory_mb,
-            container=container,
-            openstudio_version=openstudio_version,
-        )
-        self._client.create_job(spec)
-        job_name = f"osimflow-{name}"
-        log.info("kubernetes create_job -> job=%s", job_name)
-
-        del fn, args  # noqa: ARG002
-
-        return _KubernetesHandle(
-            job_name=job_name,
-            executor=self,
-        )
-
-    def shutdown(self) -> None:
-        pass
-
-
-class _KubernetesClient:
-    """Thin wrapper around the K8s BatchV1Api for testing."""
-
-    def __init__(self, batch_v1: Any, namespace: str) -> None:
-        self._batch_v1 = batch_v1
-        self.namespace = namespace
-
-    def create_job(self, manifest: dict[str, Any]) -> None:
-        from kubernetes.client import V1Job  # noqa: PLC0415
-        from kubernetes.utils import create_from_dict  # noqa: PLC0415
-
-        job = create_from_dict(manifest)
-        self._batch_v1.create_namespaced_job(
-            namespace=self.namespace,
-            body=job,
-        )
-
-    def get_job(self, name: str) -> dict[str, Any]:
-        import kubernetes.client  # noqa: PLC0415
-        from kubernetes.client import V1Job  # noqa: PLC0415
-
-        job = self._batch_v1.read_namespaced_job(
-            name=name,
-            namespace=self.namespace,
-        )
-        return cast(
-            dict[str, Any], kubernetes.client.ApiClient().api_client.sanitize_for_serialization(job)
-        )
