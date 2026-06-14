@@ -22,8 +22,8 @@ from osimflow.document_store import (
     DocumentStoreError,
     DuplicateDocumentError,
     SQLiteDocumentStore,
-    build_document_store,
     _build_where_clause,
+    build_document_store,
 )
 
 
