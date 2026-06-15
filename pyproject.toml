@@ -80,6 +80,7 @@ api = [
     "uvicorn[standard]>=0.29",
     "sse-starlette>=2.0",
     "slowapi>=0.1.9",
+    "httpx>=0.27",
 ]
 viz = [
     "streamlit>=1.30",

@@ -153,7 +153,10 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
 | `osimflow/exporters/osa.py` | `OSAExporter` — export campaign config to PAT-compatible analysis.json (issue #142) and ``.osa`` ZIP archives (issue #134). ``pack_osa()`` bundles analysis.json + seed model + measures + weather into a portable ``.osa`` file. Reverse of `importers/osa.py`. |
 | `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
+| `osimflow/client.py` | Typed async Python client for the REST API (issue #433): `OSimFlowClient` (httpx-based), Pydantic response models (`HealthResponse`, `CampaignResponse`, `StepsResponse`, `SamplesResponse`, etc.), and typed exception hierarchy (`AuthenticationError`, `NotFoundError`, `RateLimitError`, `ServerError`). Optional `[api]` extra (httpx). |
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
+| `scripts/generate_openapi.py` | Export the OpenAPI spec from the FastAPI app to `docs/openapi.json` (issue #433). Run: `python scripts/generate_openapi.py --output docs/openapi.json`. |
+| `docs/openapi.json` | Auto-generated OpenAPI 3.1 spec for the OSimFlow REST API (issue #433). Regenerate after adding/modifying API endpoints. Consumable by code generators (openapi-generator, etc.). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats). |
 | `bin/apply_params_to_model.py` | Default parameter-application logic. |
 | `bin/extract_kpis.py` | Default KPI extractor. |
@@ -589,7 +592,7 @@ Use these patterns to decide where to make a change.
 | Add an export format | New module in `osimflow/exporters/` (e.g. `osa.py` for PAT) **and** add the `--target` choice to `osimflow/__main__.py` export subcommand. |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
 | Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/` — modify the Terraform module. IAM roles are in `iam.tf`, job definition in `job-definition.tf`. Run `terraform validate` to check. CI validates on `infra/` path changes. |
-| Add a REST API endpoint | New route in `osimflow/api/app.py` **and** a test in `tests/unit/test_api_core.py`. Requires `pip install osimflow[api]`. |
+| Add a REST API endpoint | New route in `osimflow/api/app.py` **and** a test in `tests/unit/test_api_core.py`. Requires `pip install osimflow[api]`. After adding endpoints, re-run `python scripts/generate_openapi.py` to regenerate `docs/openapi.json`, and add a typed method + test in `osimflow/client.py` / `tests/unit/test_client.py` (issue #433). |
 | Add or modify a health check | `osimflow/health.py` (add/modify a `_check_*` function, register it in `run_health_checks`) **and** a test in `tests/unit/test_health_check.py`. |
 
 ### 9.1 Tool selection decision tree

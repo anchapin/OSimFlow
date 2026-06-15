@@ -1,0 +1,3301 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OSimFlow API",
+    "description": "REST API for monitoring OSimFlow campaigns",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "description": "Liveness probe.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Ready",
+        "description": "Readiness probe \u2014 checks if run.json is accessible.",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Ready Ready Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaign": {
+      "get": {
+        "summary": "Get Campaign",
+        "description": "Get campaign metadata from run.json.",
+        "operationId": "get_campaign_api_v1_campaign_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Campaign Api V1 Campaign Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/steps": {
+      "get": {
+        "summary": "Get Steps",
+        "description": "Get step traces from run.json.",
+        "operationId": "get_steps_api_v1_steps_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Steps Api V1 Steps Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/samples": {
+      "get": {
+        "summary": "Get Samples",
+        "description": "Get paginated per-sample traces from run.json.",
+        "operationId": "get_samples_api_v1_samples_get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number (1-indexed)",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number (1-indexed)"
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "description": "Items per page (max 500)",
+              "default": 50,
+              "title": "Per Page"
+            },
+            "description": "Items per page (max 500)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Samples Api V1 Samples Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/samples/{sid}": {
+      "get": {
+        "summary": "Get Sample Detail",
+        "description": "Get detail for a single sample, including KPIs and log files.",
+        "operationId": "get_sample_detail_api_v1_samples__sid__get",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Sample Detail Api V1 Samples  Sid  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/samples/{sid}/logs/{log_name}": {
+      "get": {
+        "summary": "Get Sample Log",
+        "description": "Get the content of a sample's log file.\n\nReturns the raw log file content with appropriate content-type.",
+        "operationId": "get_sample_log_api_v1_samples__sid__logs__log_name__get",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "log_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Log Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results": {
+      "get": {
+        "summary": "Get Results",
+        "description": "Read aggregated_results.csv and return as JSON array.",
+        "operationId": "get_results_api_v1_results_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Results Api V1 Results Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/failures": {
+      "get": {
+        "summary": "Get Failures",
+        "description": "Read failed_simulations.csv and return as JSON array.",
+        "operationId": "get_failures_api_v1_failures_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Failures Api V1 Failures Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pareto": {
+      "get": {
+        "summary": "Get Pareto",
+        "description": "Read pareto front data from outdir/pareto/gen_*.json files.",
+        "operationId": "get_pareto_api_v1_pareto_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Pareto Api V1 Pareto Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plots": {
+      "get": {
+        "summary": "Get Plots",
+        "description": "List available PNG plot files from the campaign outdir.",
+        "operationId": "get_plots_api_v1_plots_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Plots Api V1 Plots Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plots/{filename}": {
+      "get": {
+        "summary": "Get Plot File",
+        "description": "Serve a single PNG plot file.",
+        "operationId": "get_plot_file_api_v1_plots__filename__get",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Root Redirect",
+        "description": "Redirect root to the web GUI.",
+        "operationId": "root_redirect__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "summary": "Sse Events",
+        "description": "SSE endpoint streaming live campaign events.\n\nPolls ``run.json`` at ~1 Hz and emits structured events:\n``sample.started``, ``sample.completed``, ``step.completed``,\n``campaign.completed``.  Sends ``: ping`` heartbeat comments when\nthe campaign has not started yet (no run.json).\n\nAvailable in both read-only and read-write modes (issue #275).",
+        "operationId": "sse_events_api_v1_events_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaign/stop": {
+      "post": {
+        "summary": "Campaign Stop",
+        "description": "Write a ``.stop`` flag file to request campaign cancellation.\n\nThe campaign orchestrator checks for ``${outdir}/.stop`` between steps.\nReturns 403 in read-only mode.",
+        "operationId": "campaign_stop_api_v1_campaign_stop_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Campaign Stop Api V1 Campaign Stop Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns": {
+      "get": {
+        "summary": "List Campaigns",
+        "description": "List all campaigns by scanning the campaigns base directory for run.json files.",
+        "operationId": "list_campaigns_api_v1_campaigns_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Campaign",
+        "description": "Create a new campaign directory and optionally launch it.\n\nWhen ``auto_start`` is ``True`` the campaign is launched in a\nbackground thread.  The server must be running with\n``read_only=False`` (``--enable-writes``) to use auto_start.",
+        "operationId": "create_campaign_api_v1_campaigns_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignCreateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}": {
+      "get": {
+        "summary": "Get Campaign Status",
+        "description": "Get detailed status for a specific campaign.",
+        "operationId": "get_campaign_status_api_v1_campaigns__campaign_id__get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/samples": {
+      "get": {
+        "summary": "List Campaign Samples",
+        "description": "Get paginated per-sample results for a campaign.",
+        "operationId": "list_campaign_samples_api_v1_campaigns__campaign_id__samples_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number (1-indexed)",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number (1-indexed)"
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "description": "Items per page (max 500)",
+              "default": 50,
+              "title": "Per Page"
+            },
+            "description": "Items per page (max 500)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}": {
+      "get": {
+        "summary": "Get Campaign Sample",
+        "description": "Get detailed results for a single sample, including KPIs and log paths.",
+        "operationId": "get_campaign_sample_api_v1_campaigns__campaign_id__samples__sample_id__get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/cancel": {
+      "post": {
+        "summary": "Cancel Campaign",
+        "description": "Cancel a running campaign by writing a ``.stop`` flag file.\n\nReturns 403 in read-only mode.  Returns 409 if the campaign is not\ncurrently running.",
+        "operationId": "cancel_campaign_api_v1_campaigns__campaign_id__cancel_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignCancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pat/analyses": {
+      "post": {
+        "tags": [
+          "PAT Compatibility"
+        ],
+        "summary": "Create Pat Analysis",
+        "description": "Create a PAT-style analysis (maps to an OSimFlow campaign).\n\nAccepts an OSA file path or inline analysis JSON, converts it to\nOSimFlow's ``variables.yml`` format, and optionally starts the\ncampaign.",
+        "operationId": "create_pat_analysis_api_v1_pat_analyses_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PATAnalysisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PATAnalysisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pat/analyses/{analysis_id}/status": {
+      "get": {
+        "tags": [
+          "PAT Compatibility"
+        ],
+        "summary": "Get Pat Analysis Status",
+        "description": "Get PAT-style analysis status with data-point counts.",
+        "operationId": "get_pat_analysis_status_api_v1_pat_analyses__analysis_id__status_get",
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PATStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pat/analyses/{analysis_id}/data_points": {
+      "get": {
+        "tags": [
+          "PAT Compatibility"
+        ],
+        "summary": "Get Pat Data Points",
+        "description": "List PAT-style data points (samples) for an analysis.",
+        "operationId": "get_pat_data_points_api_v1_pat_analyses__analysis_id__data_points_get",
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PATDataPointResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/upload": {
+      "post": {
+        "summary": "Upload File",
+        "description": "Upload a file to the server.\n\nAccepts seed models (``.osm``), measures (``.rb``/``.py``), weather\nfiles (``.epw``), and config files (``.yml``/``.yaml``).  Maximum\nfile size: 100 MB.\n\nThe ``category`` query parameter determines the storage subdirectory\nand which extensions are accepted.\n\nReturns the file ID, path, and metadata.",
+        "operationId": "upload_file_api_v1_files_upload_post",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "File category: seed_model | measure | weather | config",
+              "title": "Category"
+            },
+            "description": "File category: seed_model | measure | weather | config"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_file_api_v1_files_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files": {
+      "get": {
+        "summary": "List Files",
+        "description": "List all uploaded files, optionally filtered by category.",
+        "operationId": "list_files_api_v1_files_get",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by category",
+              "title": "Category"
+            },
+            "description": "Filter by category"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{file_id}": {
+      "get": {
+        "summary": "Download File",
+        "description": "Download a file by ID.\n\nSupports HTTP Range requests for large file downloads.",
+        "operationId": "download_file_api_v1_files__file_id__get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete File",
+        "description": "Delete an uploaded file by ID.\n\nRequires ``--enable-writes`` mode.",
+        "operationId": "delete_file_api_v1_files__file_id__delete",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileDeleteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries": {
+      "get": {
+        "summary": "Get Timeseries",
+        "description": "Return time-series data for a variable from a sample's eplusout.sql.\n\nThe response is a JSON object with::\n\n    {\n      \"variable\": \"Zone Air Temperature\",\n      \"frequency\": \"hourly\",\n      \"units\": \"C\",\n      \"n_points\": 8760,\n      \"data\": [\n        {\"timestamp\": \"2024-01-01 01:00:00\", \"value\": 20.5, \"units\": \"C\", \"key\": \"Zone 1\"},\n        ...\n      ]\n    }\n\nTimestamps are ISO 8601 strings.  Values are averaged over the\naggregation period for ``daily`` and ``monthly`` frequencies.\n\n**Storage note**: each per-sample ``eplusout.sql`` can be 5\u2013200+ MB.\nRetrieve only the variables you need to avoid transferring large files.",
+        "operationId": "get_timeseries_api_v1_campaigns__campaign_id__samples__sample_id__timeseries_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "variable",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Variable name to retrieve (e.g. 'Zone Air Temperature')",
+              "title": "Variable"
+            },
+            "description": "Variable name to retrieve (e.g. 'Zone Air Temperature')"
+          },
+          {
+            "name": "freq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Aggregation frequency: hourly (default), daily, or monthly",
+              "default": "hourly",
+              "title": "Freq"
+            },
+            "description": "Aggregation frequency: hourly (default), daily, or monthly"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Timeseries Api V1 Campaigns  Campaign Id  Samples  Sample Id  Timeseries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries/variables": {
+      "get": {
+        "summary": "List Timeseries Variables",
+        "description": "List all available time-series variables for a sample's eplusout.sql.\n\nReturns a JSON object with::\n\n    {\n      \"variables\": [\n        {\"VariableName\": \"Zone Air Temperature\", \"KeyName\": \"Zone 1\", \"Units\": \"C\"},\n        ...\n      ],\n      \"total\": 42\n    }\n\nUse this endpoint to discover valid ``variable`` values before calling\n``GET .../timeseries``.",
+        "operationId": "list_timeseries_variables_api_v1_campaigns__campaign_id__samples__sample_id__timeseries_variables_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Timeseries Variables Api V1 Campaigns  Campaign Id  Samples  Sample Id  Timeseries Variables Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/variables": {
+      "get": {
+        "summary": "List Variables",
+        "description": "List all variables from the campaign's variables.yml.\n\nReturns an empty list if no variables.yml exists yet.",
+        "operationId": "list_variables_api_v1_variables_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Variable",
+        "description": "Add a new variable to the campaign's variables.yml.\n\nValidates the variable definition against the same schema used by\n``validate_variables_yml``.  Returns 403 in read-only mode.",
+        "operationId": "create_variable_api_v1_variables_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/variables/{var_name}": {
+      "get": {
+        "summary": "Get Variable",
+        "description": "Get full details for a single variable by name.\n\nRaises 404 if the variable is not found.",
+        "operationId": "get_variable_api_v1_variables__var_name__get",
+        "parameters": [
+          {
+            "name": "var_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Var Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Variable",
+        "description": "Update an existing variable in the campaign's variables.yml.\n\nRaises 404 if the variable does not exist.  Raises 403 in read-only mode.",
+        "operationId": "update_variable_api_v1_variables__var_name__put",
+        "parameters": [
+          {
+            "name": "var_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Var Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Variable",
+        "description": "Delete a variable from the campaign's variables.yml.\n\nRaises 404 if the variable does not exist.  Raises 403 in read-only mode.",
+        "operationId": "delete_variable_api_v1_variables__var_name__delete",
+        "parameters": [
+          {
+            "name": "var_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Var Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableDeleteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/measures": {
+      "get": {
+        "summary": "List Measures",
+        "description": "List all measures referenced in the campaign's ``workflow.osw``.\n\nMeasures are discovered from the workflow steps.  For each measure,\nargument details are introspected from ``measure.rb`` (Ruby) or\n``measure.py`` (Python) source files when they are accessible on disk.\n\nReturns an empty list if no ``workflow.osw`` is found.",
+        "operationId": "list_measures_api_v1_measures_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/measures/{measure_name}": {
+      "get": {
+        "summary": "Get Measure",
+        "description": "Get detailed information for a single measure, including its arguments.\n\nThe *measure_name* is the ``measure_dir_name`` from ``workflow.osw``.\nReturns 404 if the measure is not found in the workflow.",
+        "operationId": "get_measure_api_v1_measures__measure_name__get",
+        "parameters": [
+          {
+            "name": "measure_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measure Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_upload_file_api_v1_files_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_file_api_v1_files_upload_post"
+      },
+      "CampaignCancelResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "stopping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "status"
+        ],
+        "title": "CampaignCancelResponse",
+        "description": "Response for campaign cancellation."
+      },
+      "CampaignCreateRequest": {
+        "properties": {
+          "input_variables": {
+            "type": "string",
+            "title": "Input Variables",
+            "description": "Path to variables.yml"
+          },
+          "template_sim_package": {
+            "type": "string",
+            "title": "Template Sim Package",
+            "description": "Path to the template simulation package"
+          },
+          "n_samples": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "N Samples",
+            "description": "Number of LHS samples"
+          },
+          "openstudio_version": {
+            "type": "string",
+            "title": "Openstudio Version",
+            "default": "3.11.0"
+          },
+          "executor": {
+            "type": "string",
+            "title": "Executor",
+            "description": "Executor type: local | slurm | aws_batch | azure_batch | google_batch | dask_jobqueue | nomad | pbs | kubernetes",
+            "default": "local"
+          },
+          "algorithm": {
+            "type": "string",
+            "title": "Algorithm",
+            "default": "lhs"
+          },
+          "outdir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdir",
+            "description": "Output dir (auto-generated if omitted)"
+          },
+          "archive_intermediates": {
+            "type": "boolean",
+            "title": "Archive Intermediates",
+            "default": false
+          },
+          "auto_start": {
+            "type": "boolean",
+            "title": "Auto Start",
+            "description": "Launch campaign immediately after creation",
+            "default": false
+          },
+          "max_workers": {
+            "type": "integer",
+            "title": "Max Workers",
+            "description": "Parallelism for local executor (ignored for remote executors)",
+            "default": 4
+          },
+          "slurm_partition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Partition",
+            "description": "Slurm partition (e.g. short, gpu)"
+          },
+          "slurm_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Account",
+            "description": "Slurm account/project"
+          },
+          "slurm_qos": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Qos",
+            "description": "Slurm QoS (requires submitit >= 1.5)"
+          },
+          "slurm_constraint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Constraint",
+            "description": "Slurm constraint (e.g. gpu)"
+          },
+          "slurm_gres": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Gres",
+            "description": "Slurm generic resources (e.g. gpu:1)"
+          },
+          "slurm_real": {
+            "type": "boolean",
+            "title": "Slurm Real",
+            "description": "Submit to real Slurm cluster (default: debug mode)",
+            "default": false
+          },
+          "aws_batch_queue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch Queue",
+            "description": "AWS Batch job queue"
+          },
+          "aws_batch_job_definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch Job Definition",
+            "description": "AWS Batch job definition name"
+          },
+          "aws_batch_max_spot_price_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch Max Spot Price Usd",
+            "description": "Spot price ceiling (USD/vCPU-hour)"
+          },
+          "aws_batch_fallback_to_on_demand": {
+            "type": "boolean",
+            "title": "Aws Batch Fallback To On Demand",
+            "description": "Fall back to on-demand when Spot price exceeds ceiling",
+            "default": false
+          },
+          "aws_batch_max_retries": {
+            "type": "integer",
+            "title": "Aws Batch Max Retries",
+            "description": "Max Spot interruption retries",
+            "default": 3
+          },
+          "ecr_repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ecr Repository",
+            "description": "ECR repository URI for OpenStudio images"
+          },
+          "azure_batch_account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Azure Batch Account Name",
+            "description": "Azure Batch account name"
+          },
+          "azure_batch_account_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Azure Batch Account Url",
+            "description": "Azure Batch account URL"
+          },
+          "azure_batch_pool_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Azure Batch Pool Id",
+            "description": "Azure Batch pool ID"
+          },
+          "azure_batch_location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Azure Batch Location",
+            "description": "Azure region/location"
+          },
+          "azure_use_spot": {
+            "type": "boolean",
+            "title": "Azure Use Spot",
+            "description": "Use Azure Spot/low-priority VMs",
+            "default": false
+          },
+          "azure_fallback_to_on_demand": {
+            "type": "boolean",
+            "title": "Azure Fallback To On Demand",
+            "description": "Fall back to on-demand when Spot retries exhausted",
+            "default": false
+          },
+          "azure_max_retries": {
+            "type": "integer",
+            "title": "Azure Max Retries",
+            "description": "Max Azure Spot VM retries",
+            "default": 3
+          },
+          "google_batch_project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Batch Project Id",
+            "description": "Google Cloud project ID"
+          },
+          "google_batch_region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Batch Region",
+            "description": "Google Cloud region"
+          },
+          "google_batch_service_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Batch Service Account",
+            "description": "Google Cloud service account email"
+          },
+          "google_use_spot": {
+            "type": "boolean",
+            "title": "Google Use Spot",
+            "description": "Use Google Spot/preemptible VMs",
+            "default": false
+          },
+          "google_fallback_to_on_demand": {
+            "type": "boolean",
+            "title": "Google Fallback To On Demand",
+            "description": "Fall back to on-demand when preemptible retries exhausted",
+            "default": false
+          },
+          "google_max_retries": {
+            "type": "integer",
+            "title": "Google Max Retries",
+            "description": "Max Google preemptible VM retries",
+            "default": 3
+          },
+          "kubernetes_namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubernetes Namespace",
+            "description": "Kubernetes namespace"
+          },
+          "kubernetes_poll_interval_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubernetes Poll Interval S",
+            "description": "K8s Job poll interval (seconds)"
+          },
+          "kubernetes_max_poll_interval_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubernetes Max Poll Interval S",
+            "description": "K8s Job max poll interval (seconds)"
+          },
+          "nomad_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Address",
+            "description": "Nomad cluster HTTP address"
+          },
+          "nomad_datacentre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Datacentre",
+            "description": "Nomad datacentre (default: dc1)"
+          },
+          "nomad_tls": {
+            "type": "boolean",
+            "title": "Nomad Tls",
+            "description": "Enable TLS for Nomad HTTP API",
+            "default": false
+          },
+          "nomad_tls_verify": {
+            "type": "boolean",
+            "title": "Nomad Tls Verify",
+            "description": "Verify TLS certificates for Nomad (default: True)",
+            "default": true
+          },
+          "nomad_cert": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Cert",
+            "description": "Path to client certificate PEM for Nomad mTLS"
+          },
+          "nomad_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Key",
+            "description": "Path to client private key PEM for Nomad mTLS"
+          },
+          "nomad_ca_cert": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Ca Cert",
+            "description": "Path to CA certificate PEM for Nomad mTLS"
+          },
+          "pbs_server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pbs Server",
+            "description": "PBS server/cluster address"
+          },
+          "pbs_queue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pbs Queue",
+            "description": "PBS queue name"
+          },
+          "pbs_real": {
+            "type": "boolean",
+            "title": "Pbs Real",
+            "description": "Submit to real PBS cluster (default: debug mode)",
+            "default": false
+          },
+          "dask_cluster_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Cluster Type",
+            "description": "Dask cluster backend: slurm | pbs | kubernetes"
+          },
+          "dask_min_workers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Min Workers",
+            "description": "Minimum Dask workers"
+          },
+          "dask_max_workers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Max Workers",
+            "description": "Maximum Dask workers"
+          },
+          "dask_cpus_per_worker": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Cpus Per Worker",
+            "description": "CPUs per Dask worker"
+          },
+          "dask_memory_per_worker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Memory Per Worker",
+            "description": "Memory per Dask worker (e.g. 4GiB)"
+          },
+          "dask_walltime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Walltime",
+            "description": "Walltime for Dask cluster jobs (e.g. 02:00:00)"
+          },
+          "dask_queue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Queue",
+            "description": "HPC queue/partition for Dask workers"
+          },
+          "dask_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Project",
+            "description": "HPC project/account for Dask workers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_variables",
+          "template_sim_package",
+          "n_samples"
+        ],
+        "title": "CampaignCreateRequest",
+        "description": "Request body for ``POST /api/v1/campaigns``.\n\nMirrors the subset of ``CampaignConfig`` fields that are sensible to\nset via the API.  Paths are relative to the server's working directory\nor absolute.\n\nExecutor selection is controlled by the ``executor`` field.  When\n``executor`` is not ``\"local\"``, the corresponding executor-specific\nfields must also be provided."
+      },
+      "CampaignCreateResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "outdir": {
+            "type": "string",
+            "title": "Outdir"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "created | running"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "outdir",
+          "status"
+        ],
+        "title": "CampaignCreateResponse",
+        "description": "Response for campaign creation."
+      },
+      "CampaignDetailResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "elapsed_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed S"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config",
+            "description": "config_summary from run.json"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary",
+            "description": "n_samples / n_succeeded / n_failed"
+          },
+          "quality_summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Summary"
+          },
+          "baseline_comparison": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Comparison"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          },
+          "spot_savings_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spot Savings Usd"
+          },
+          "steps": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Steps"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "status"
+        ],
+        "title": "CampaignDetailResponse",
+        "description": "Full campaign status returned by ``GET /api/v1/campaigns/{id}``."
+      },
+      "CampaignListResponse": {
+        "properties": {
+          "campaigns": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignSummary"
+            },
+            "type": "array",
+            "title": "Campaigns"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaigns",
+          "total"
+        ],
+        "title": "CampaignListResponse",
+        "description": "Envelope for the campaign list endpoint."
+      },
+      "CampaignSummary": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "running | completed | unknown"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "n_samples": {
+            "type": "integer",
+            "title": "N Samples",
+            "default": 0
+          },
+          "n_succeeded": {
+            "type": "integer",
+            "title": "N Succeeded",
+            "default": 0
+          },
+          "n_failed": {
+            "type": "integer",
+            "title": "N Failed",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "status"
+        ],
+        "title": "CampaignSummary",
+        "description": "Lightweight campaign entry returned by ``GET /api/v1/campaigns``."
+      },
+      "FileDeleteResponse": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_id",
+          "status"
+        ],
+        "title": "FileDeleteResponse",
+        "description": "Response for file deletion."
+      },
+      "FileInfo": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id",
+            "description": "Unique file identifier (UUID)"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename",
+            "description": "Original filename"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "File category: seed_model | measure | weather | config"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "description": "File size in bytes"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Relative storage path under uploads/"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_id",
+          "filename",
+          "category",
+          "size_bytes",
+          "path"
+        ],
+        "title": "FileInfo",
+        "description": "Metadata for a single uploaded file."
+      },
+      "FileListResponse": {
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/FileInfo"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files",
+          "total"
+        ],
+        "title": "FileListResponse",
+        "description": "Envelope for the file listing endpoint."
+      },
+      "FileUploadResponse": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_id",
+          "filename",
+          "category",
+          "size_bytes",
+          "path"
+        ],
+        "title": "FileUploadResponse",
+        "description": "Response for a successful file upload."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MeasureArgument": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Argument variable name"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name",
+            "description": "Human-readable argument name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "What this argument controls"
+          },
+          "argument_type": {
+            "type": "string",
+            "title": "Argument Type",
+            "description": "OpenStudio argument type: String | Double | Integer | Boolean | Choice",
+            "default": "String"
+          },
+          "default_value": {
+            "title": "Default Value",
+            "description": "Default value in the workflow"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "description": "Whether this argument is required",
+            "default": false
+          },
+          "valid_choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Choices",
+            "description": "Valid choices for Choice arguments"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units",
+            "description": "Physical units, if applicable"
+          },
+          "measure_dir_name": {
+            "type": "string",
+            "title": "Measure Dir Name",
+            "description": "Measure directory name this argument belongs to",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "display_name"
+        ],
+        "title": "MeasureArgument",
+        "description": "A single argument accepted by a measure."
+      },
+      "MeasureInfo": {
+        "properties": {
+          "measure_dir_name": {
+            "type": "string",
+            "title": "Measure Dir Name",
+            "description": "Directory name of the measure"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name",
+            "description": "Human-readable measure name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "What the measure does"
+          },
+          "measure_type": {
+            "type": "string",
+            "title": "Measure Type",
+            "description": "OpenStudio measure type: Model | EnergyPlus | Reporting",
+            "default": "Model"
+          },
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/MeasureArgument"
+            },
+            "type": "array",
+            "title": "Arguments",
+            "description": "Arguments accepted by this measure"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measure_dir_name",
+          "display_name"
+        ],
+        "title": "MeasureInfo",
+        "description": "Summary information for a single measure."
+      },
+      "MeasureListResponse": {
+        "properties": {
+          "measures": {
+            "items": {
+              "$ref": "#/components/schemas/MeasureInfo"
+            },
+            "type": "array",
+            "title": "Measures"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "Source of measure information: workflow.osw | template_package"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "source"
+        ],
+        "title": "MeasureListResponse",
+        "description": "Envelope for the measure list endpoint."
+      },
+      "PATAnalysisRequest": {
+        "properties": {
+          "osa_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Osa Path",
+            "description": "Path to a .osa or analysis.json file to import"
+          },
+          "analysis": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis",
+            "description": "Inline OSA analysis JSON object (alternative to osa_path)"
+          },
+          "template_sim_package": {
+            "type": "string",
+            "title": "Template Sim Package",
+            "description": "Path to the template simulation package directory"
+          },
+          "n_samples": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "N Samples",
+            "description": "Number of samples (overrides OSA value if provided)",
+            "default": 10
+          },
+          "openstudio_version": {
+            "type": "string",
+            "title": "Openstudio Version",
+            "description": "OpenStudio CLI version for container tag",
+            "default": "3.11.0"
+          },
+          "outdir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdir",
+            "description": "Output directory (auto-generated if omitted)"
+          },
+          "auto_start": {
+            "type": "boolean",
+            "title": "Auto Start",
+            "description": "Launch the campaign immediately after creation",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_sim_package"
+        ],
+        "title": "PATAnalysisRequest",
+        "description": "PAT-style analysis creation request.\n\nSupports two modes:\n\n1. **OSA import mode**: provide ``osa_path`` and\n   ``template_sim_package``.  The OSA file is parsed and converted\n   to a ``variables.yml`` in the campaign output directory.\n\n2. **Inline mode**: provide ``analysis`` (the raw OSA analysis JSON\n   object) and ``template_sim_package``.  The analysis is converted\n   inline without reading a file from disk."
+      },
+      "PATAnalysisResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "created | running"
+          },
+          "osimflow_campaign_id": {
+            "type": "string",
+            "title": "Osimflow Campaign Id",
+            "description": "The underlying OSimFlow campaign ID"
+          },
+          "outdir": {
+            "type": "string",
+            "title": "Outdir"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "status",
+          "osimflow_campaign_id",
+          "outdir"
+        ],
+        "title": "PATAnalysisResponse",
+        "description": "Response for PAT-style analysis creation."
+      },
+      "PATDataPointResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "data_points": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Data Points"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "data_points",
+          "total"
+        ],
+        "title": "PATDataPointResponse",
+        "description": "PAT-style data point listing."
+      },
+      "PATStatusResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "not_started | running | completed | unknown"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "elapsed_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed S"
+          },
+          "data_points": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Data Points",
+            "description": "Counts: total, completed, failed, pending"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "status",
+          "data_points"
+        ],
+        "title": "PATStatusResponse",
+        "description": "PAT-style status response."
+      },
+      "SampleDetailResponse": {
+        "properties": {
+          "sample_id": {
+            "type": "string",
+            "title": "Sample Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "elapsed_s": {
+            "type": "number",
+            "title": "Elapsed S"
+          },
+          "kpis": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kpis"
+          },
+          "log_files": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Log Files"
+          },
+          "apply_exit_code": {
+            "type": "integer",
+            "title": "Apply Exit Code",
+            "default": 0
+          },
+          "sim_exit_code": {
+            "type": "integer",
+            "title": "Sim Exit Code",
+            "default": 0
+          },
+          "extract_exit_code": {
+            "type": "integer",
+            "title": "Extract Exit Code",
+            "default": 0
+          },
+          "eplusout_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eplusout Sql"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sample_id",
+          "status",
+          "elapsed_s"
+        ],
+        "title": "SampleDetailResponse",
+        "description": "Full per-sample detail including KPIs and log file paths."
+      },
+      "SampleListResponse": {
+        "properties": {
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/SampleSummary"
+            },
+            "type": "array",
+            "title": "Samples"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "per_page": {
+            "type": "integer",
+            "title": "Per Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "samples",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "title": "SampleListResponse",
+        "description": "Paginated envelope for sample list endpoint."
+      },
+      "SampleSummary": {
+        "properties": {
+          "sample_id": {
+            "type": "string",
+            "title": "Sample Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "elapsed_s": {
+            "type": "number",
+            "title": "Elapsed S"
+          },
+          "error_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Summary"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sample_id",
+          "status",
+          "elapsed_s"
+        ],
+        "title": "SampleSummary",
+        "description": "One row in the per-sample results list."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VariableDeleteResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "VariableDeleteResponse",
+        "description": "Response for variable deletion."
+      },
+      "VariableDetailResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "distribution": {
+            "type": "string",
+            "title": "Distribution"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "sigma": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sigma"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          },
+          "alpha": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alpha"
+          },
+          "beta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beta"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "mapping": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "distribution"
+        ],
+        "title": "VariableDetailResponse",
+        "description": "Full variable detail returned by ``GET /api/v1/variables/{name}``."
+      },
+      "VariableListResponse": {
+        "properties": {
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/VariableSummary"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "variables",
+          "total"
+        ],
+        "title": "VariableListResponse",
+        "description": "Envelope for the variable list endpoint."
+      },
+      "VariableSummary": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "distribution": {
+            "type": "string",
+            "title": "Distribution"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "distribution"
+        ],
+        "title": "VariableSummary",
+        "description": "Lightweight variable entry returned by ``GET /api/v1/variables``."
+      },
+      "VariableUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "New variable name"
+          },
+          "distribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distribution",
+            "description": "Distribution type"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "sigma": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sigma"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          },
+          "alpha": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alpha"
+          },
+          "beta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beta"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "mapping": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "title": "VariableUpdateRequest",
+        "description": "Request body for ``PUT /api/v1/variables/{name}``.\n\nAll fields are optional \u2014 only provided fields are updated."
+      }
+    }
+  }
+}

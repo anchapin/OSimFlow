@@ -1,0 +1,578 @@
+"""Typed async Python client for the OSimFlow REST API (issue #433).
+
+This module provides a high-level, fully-typed async client wrapper around
+the OSimFlow REST API using ``httpx``.  It is designed for external
+integrators who want to monitor campaigns programmatically without
+manually constructing HTTP calls.
+
+Key features:
+
+* **Async-first** — all methods are ``async`` and use ``httpx.AsyncClient``.
+* **Typed responses** — Pydantic models mirror the server schemas, giving
+  IDE autocompletion and static-type safety.
+* **API-key auth** — pass ``api_key=`` and the client adds the
+  ``X-API-Key`` header to every request automatically.
+* **Sensible error mapping** — HTTP 4xx/5xx responses are mapped to
+  :class:`OSimFlowAPIError` subclasses (authentication, not-found,
+  rate-limit, server error) so callers can ``except`` precisely.
+
+Quickstart::
+
+    import asyncio
+    from osimflow.client import OSimFlowClient
+
+    async def main():
+        async with OSimFlowClient("http://localhost:8000") as client:
+            health = await client.health()
+            print(health.status)
+
+    asyncio.run(main())
+
+See :class:`OSimFlowClient` for the full method catalogue.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+from pydantic import BaseModel, Field
+
+log = logging.getLogger("osimflow.client")
+
+__all__ = [
+    "OSimFlowClient",
+    "OSimFlowAPIError",
+    "AuthenticationError",
+    "NotFoundError",
+    "RateLimitError",
+    "ServerError",
+    # Response models
+    "HealthResponse",
+    "ReadyResponse",
+    "CampaignResponse",
+    "StepsResponse",
+    "SamplesResponse",
+    "SampleDetailResponse",
+    "ResultRow",
+    "PlotFile",
+    "PlotsResponse",
+    "ParetoGeneration",
+    "ParetoResponse",
+    "CampaignStopResponse",
+    "Event",
+]
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class OSimFlowAPIError(Exception):
+    """Base exception for all API errors.
+
+    Carries the HTTP status code and the response body (if any).
+    """
+
+    def __init__(self, message: str, *, status_code: int, body: str = "") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
+
+class AuthenticationError(OSimFlowAPIError):
+    """Raised on HTTP 401 — invalid or missing API key."""
+
+
+class NotFoundError(OSimFlowAPIError):
+    """Raised on HTTP 404 — resource not found."""
+
+
+class RateLimitError(OSimFlowAPIError):
+    """Raised on HTTP 429 — rate limit exceeded.
+
+    ``retry_after`` is parsed from the ``Retry-After`` header when present.
+    """
+
+    def __init__(
+        self, message: str, *, status_code: int, body: str = "", retry_after: int | None = None
+    ) -> None:
+        super().__init__(message, status_code=status_code, body=body)
+        self.retry_after = retry_after
+
+
+class ServerError(OSimFlowAPIError):
+    """Raised on HTTP 5xx — server-side failure."""
+
+
+# ---------------------------------------------------------------------------
+# Pydantic response models
+# ---------------------------------------------------------------------------
+
+
+class HealthResponse(BaseModel):
+    """Response from ``GET /health``."""
+
+    status: str = Field(description="Always 'alive' for a healthy server.")
+
+
+class ReadyResponse(BaseModel):
+    """Response from ``GET /ready``."""
+
+    status: str = Field(description="'ready' or 'not_ready'")
+    campaign_id: str | None = None
+    reason: str | None = Field(default=None, description="Present when status is 'not_ready'")
+
+
+class CampaignResponse(BaseModel):
+    """Response from ``GET /api/v1/campaign`` — campaign metadata from run.json."""
+
+    campaign_id: str | None = None
+    config_summary: dict[str, Any] = Field(default_factory=dict)
+    started_at: float | None = None
+    finished_at: float | None = None
+    baseline_comparison: dict[str, Any] | None = None
+
+
+class StepTrace(BaseModel):
+    """A single DAG step trace entry."""
+
+    step: str | None = None
+    cache: str | None = None
+    elapsed_s: float | None = None
+    exit_code: int | None = None
+
+
+class StepsResponse(BaseModel):
+    """Response from ``GET /api/v1/steps``."""
+
+    steps: list[StepTrace] = Field(default_factory=list)
+    total_steps: int = 0
+
+
+class SampleSummary(BaseModel):
+    """A single per-sample summary row."""
+
+    sample_id: str | None = None
+    status: str | None = None
+    elapsed_s: float | None = None
+    error_summary: str | None = None
+    generation: int | None = None
+    worker_id: str | None = None
+    cost_usd: float | None = None
+
+
+class SamplesResponse(BaseModel):
+    """Response from ``GET /api/v1/samples``."""
+
+    samples: list[SampleSummary] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    per_page: int = 50
+
+
+class SampleDetailResponse(BaseModel):
+    """Response from ``GET /api/v1/samples/{sample_id}`` — full sample detail."""
+
+    sample_id: str
+    status: str | None = None
+    elapsed_s: float | None = None
+    kpis: dict[str, Any] | None = None
+    log_files: dict[str, str] = Field(default_factory=dict)
+    error_summary: str | None = None
+    generation: int | None = None
+    worker_id: str | None = None
+    cost_usd: float | None = None
+    apply_exit_code: int = 0
+    sim_exit_code: int = 0
+    extract_exit_code: int = 0
+    eplusout_sql: str | None = None
+
+
+class ResultRow(BaseModel):
+    """A single row from ``GET /api/v1/results`` (aggregated_results.csv).
+
+    The schema is intentionally permissive — columns vary by campaign.
+    """
+
+    model_config = {"extra": "allow"}
+
+    sample_id: str | None = None
+
+
+class PlotFile(BaseModel):
+    """Metadata for a single plot file."""
+
+    name: str
+    size: int = 0
+
+
+class PlotsResponse(BaseModel):
+    """Response from ``GET /api/v1/plots``."""
+
+    plots: list[PlotFile] = Field(default_factory=list)
+    total: int = 0
+
+
+class ParetoGeneration(BaseModel):
+    """A single Pareto front generation entry."""
+
+    model_config = {"extra": "allow"}
+
+    _file: str | None = None
+
+
+class ParetoResponse(BaseModel):
+    """Response from ``GET /api/v1/pareto``."""
+
+    generations: list[ParetoGeneration] = Field(default_factory=list)
+    total_generations: int = 0
+
+
+class CampaignStopResponse(BaseModel):
+    """Response from ``POST /api/v1/campaign/stop``."""
+
+    status: str = Field(description="Always 'stopping' on success.")
+
+
+class Event(BaseModel):
+    """A single SSE event from ``GET /api/v1/events``.
+
+    ``data`` is parsed as JSON when possible, otherwise kept as a string.
+    """
+
+    event: str
+    data: Any = None
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+_DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+_DEFAULT_USER_AGENT = "osimflow-client/0.1"
+
+
+class OSimFlowClient:
+    """Typed async client for the OSimFlow REST API.
+
+    Parameters
+    ----------
+    base_url
+        Base URL of the OSimFlow API server, e.g. ``"http://localhost:8000"``.
+    api_key
+        Optional API key for authentication.  When set, the ``X-API-Key``
+        header is added to every request.  Ignored when the server has
+        no API keys configured.
+    timeout
+        Request timeout.  Defaults to 30s connect+read.
+    **kwargs
+        Additional keyword arguments forwarded to :class:`httpx.AsyncClient`.
+
+    Examples
+    --------
+    As a context manager (recommended)::
+
+        async with OSimFlowClient("http://localhost:8000", api_key="secret") as c:
+            data = await c.get_campaign()
+
+    Manual lifecycle::
+
+        client = OSimFlowClient("http://localhost:8000")
+        await client.connect()
+        try:
+            data = await client.get_campaign()
+        finally:
+            await client.close()
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        api_key: str | None = None,
+        timeout: httpx.Timeout | float = _DEFAULT_TIMEOUT,
+        **kwargs: Any,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._timeout = timeout
+        self._kwargs = kwargs
+        self._client: httpx.AsyncClient | None = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def _build_headers(self) -> dict[str, str]:
+        """Construct the default headers (API key + user-agent)."""
+        headers: dict[str, str] = {"User-Agent": _DEFAULT_USER_AGENT}
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        return headers
+
+    async def connect(self) -> None:
+        """Create the underlying :class:`httpx.AsyncClient`.
+
+        Called automatically when used as an async context manager.
+        Safe to call multiple times — subsequent calls are no-ops.
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self._base_url,
+                headers=self._build_headers(),
+                timeout=self._timeout,
+                **self._kwargs,
+            )
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client and release resources."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def __aenter__(self) -> OSimFlowClient:
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        await self.close()
+
+    @property
+    def http_client(self) -> httpx.AsyncClient:
+        """Return the underlying httpx client, connecting lazily if needed."""
+        if self._client is None:
+            raise RuntimeError(
+                "Client is not connected. Use 'async with OSimFlowClient(...)' "
+                "or call 'await client.connect()' first."
+            )
+        return self._client
+
+    # ------------------------------------------------------------------
+    # Internal request helper
+    # ------------------------------------------------------------------
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Execute an HTTP request and map errors to Python exceptions."""
+        client = self.http_client
+        try:
+            resp = await client.request(method, path, params=params, json=json_body)
+        except httpx.ConnectError as exc:
+            raise OSimFlowAPIError(f"Connection failed: {exc}", status_code=0, body="") from exc
+        except httpx.TimeoutException as exc:
+            raise OSimFlowAPIError(f"Request timed out: {exc}", status_code=0, body="") from exc
+
+        if resp.status_code >= 400:
+            self._raise_for_status(resp)
+        return resp
+
+    @staticmethod
+    def _raise_for_status(resp: httpx.Response) -> None:
+        """Map an HTTP error response to the appropriate exception."""
+        body_text = resp.text
+        try:
+            detail_json = resp.json()
+            detail = detail_json.get("detail", body_text)
+        except Exception:
+            detail = body_text
+
+        status = resp.status_code
+        msg = f"HTTP {status}: {detail}"
+
+        if status == 401:
+            raise AuthenticationError(msg, status_code=status, body=body_text)
+        if status == 403:
+            raise AuthenticationError(msg, status_code=status, body=body_text)
+        if status == 404:
+            raise NotFoundError(msg, status_code=status, body=body_text)
+        if status == 429:
+            retry_after = resp.headers.get("Retry-After")
+            retry_val: int | None = None
+            if retry_after:
+                try:
+                    retry_val = int(retry_after)
+                except ValueError:
+                    retry_val = None
+            raise RateLimitError(msg, status_code=status, body=body_text, retry_after=retry_val)
+        if status >= 500:
+            raise ServerError(msg, status_code=status, body=body_text)
+        # Other 4xx errors
+        raise OSimFlowAPIError(msg, status_code=status, body=body_text)
+
+    # ------------------------------------------------------------------
+    # Health & readiness
+    # ------------------------------------------------------------------
+
+    async def health(self) -> HealthResponse:
+        """``GET /health`` — liveness probe."""
+        resp = await self._request("GET", "/health")
+        return HealthResponse.model_validate(resp.json())
+
+    async def ready(self) -> ReadyResponse:
+        """``GET /ready`` — readiness probe."""
+        resp = await self._request("GET", "/ready")
+        return ReadyResponse.model_validate(resp.json())
+
+    # ------------------------------------------------------------------
+    # Campaign metadata
+    # ------------------------------------------------------------------
+
+    async def get_campaign(self) -> CampaignResponse:
+        """``GET /api/v1/campaign`` — campaign metadata from run.json."""
+        resp = await self._request("GET", "/api/v1/campaign")
+        return CampaignResponse.model_validate(resp.json())
+
+    async def get_steps(self) -> StepsResponse:
+        """``GET /api/v1/steps`` — DAG step traces."""
+        resp = await self._request("GET", "/api/v1/steps")
+        return StepsResponse.model_validate(resp.json())
+
+    async def stop_campaign(self) -> CampaignStopResponse:
+        """``POST /api/v1/campaign/stop`` — request campaign cancellation.
+
+        Requires read-write permission on the server.
+        """
+        resp = await self._request("POST", "/api/v1/campaign/stop")
+        return CampaignStopResponse.model_validate(resp.json())
+
+    # ------------------------------------------------------------------
+    # Samples
+    # ------------------------------------------------------------------
+
+    async def get_samples(self, *, page: int = 1, per_page: int = 50) -> SamplesResponse:
+        """``GET /api/v1/samples`` — paginated per-sample traces.
+
+        Parameters
+        ----------
+        page
+            Page number (1-indexed).
+        per_page
+            Items per page (1–500).
+        """
+        resp = await self._request(
+            "GET", "/api/v1/samples", params={"page": page, "per_page": per_page}
+        )
+        return SamplesResponse.model_validate(resp.json())
+
+    async def get_sample(self, sample_id: str) -> SampleDetailResponse:
+        """``GET /api/v1/samples/{sample_id}`` — single sample detail."""
+        resp = await self._request("GET", f"/api/v1/samples/{sample_id}")
+        return SampleDetailResponse.model_validate(resp.json())
+
+    async def get_sample_log(self, sample_id: str, log_name: str) -> str:
+        """``GET /api/v1/samples/{sample_id}/logs/{log_name}`` — raw log content.
+
+        *log_name* must be ``"stdout.log"`` or ``"stderr.log"``.
+        Returns the log file content as a string.
+        """
+        resp = await self._request("GET", f"/api/v1/samples/{sample_id}/logs/{log_name}")
+        return resp.text
+
+    # ------------------------------------------------------------------
+    # Results & failures
+    # ------------------------------------------------------------------
+
+    async def get_results(self) -> list[ResultRow]:
+        """``GET /api/v1/results`` — aggregated results as a list of rows."""
+        resp = await self._request("GET", "/api/v1/results")
+        return [ResultRow.model_validate(row) for row in resp.json()]
+
+    async def get_failures(self) -> list[ResultRow]:
+        """``GET /api/v1/failures`` — failed simulations as a list of rows."""
+        resp = await self._request("GET", "/api/v1/failures")
+        return [ResultRow.model_validate(row) for row in resp.json()]
+
+    # ------------------------------------------------------------------
+    # Pareto & plots
+    # ------------------------------------------------------------------
+
+    async def get_pareto(self) -> ParetoResponse:
+        """``GET /api/v1/pareto`` — Pareto front generations."""
+        resp = await self._request("GET", "/api/v1/pareto")
+        return ParetoResponse.model_validate(resp.json())
+
+    async def get_plots(self) -> PlotsResponse:
+        """``GET /api/v1/plots`` — list available plot files."""
+        resp = await self._request("GET", "/api/v1/plots")
+        return PlotsResponse.model_validate(resp.json())
+
+    async def get_plot(self, filename: str) -> bytes:
+        """``GET /api/v1/plots/{filename}`` — download a plot PNG.
+
+        Returns the raw image bytes.
+        """
+        resp = await self._request("GET", f"/api/v1/plots/{filename}")
+        return resp.content
+
+    # ------------------------------------------------------------------
+    # Error diagnosis
+    # ------------------------------------------------------------------
+
+    async def get_sample_error(self, sample_id: str) -> dict[str, Any]:
+        """``GET /api/v1/errors/{sample_id}`` — error diagnosis for a failed sample.
+
+        Returns the raw JSON dict.  Keys vary by failure category.
+        """
+        resp = await self._request("GET", f"/api/v1/errors/{sample_id}")
+        data: dict[str, Any] = resp.json()
+        return data
+
+    # ------------------------------------------------------------------
+    # SSE events stream
+    # ------------------------------------------------------------------
+
+    async def events(self) -> AsyncIterator[Event]:
+        """``GET /api/v1/events`` — Server-Sent Events stream.
+
+        Yields :class:`Event` objects as they arrive.  This is an
+        asynchronous generator — iterate with ``async for``.
+
+        The stream stays open until the server closes it or the client
+        disconnects.  Use ``break`` or cancel the task to stop.
+
+        Example::
+
+            async for evt in client.events():
+                if evt.event == "campaign.completed":
+                    print("Done!")
+                    break
+        """
+        client = self.http_client
+        async with client.stream("GET", "/api/v1/events") as resp:
+            if resp.status_code >= 400:
+                await resp.aread()
+                self._raise_for_status(resp)
+
+            current_event: str | None = None
+            data_lines: list[str] = []
+
+            async for line in resp.aiter_lines():
+                if line == "":
+                    # Blank line = event delimiter
+                    if current_event is not None:
+                        raw_data = "\n".join(data_lines) if data_lines else None
+                        parsed: Any = raw_data
+                        if raw_data:
+                            try:
+                                parsed = json.loads(raw_data)
+                            except (json.JSONDecodeError, TypeError):
+                                parsed = raw_data
+                        yield Event(event=current_event, data=parsed)
+                    current_event = None
+                    data_lines = []
+                    continue
+                if line.startswith("event:"):
+                    current_event = line[len("event:") :].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[len("data:") :].strip())
+                # Ignore comments (lines starting with ':') and other fields
