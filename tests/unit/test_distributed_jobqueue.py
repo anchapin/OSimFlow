@@ -36,9 +36,7 @@ def mock_redis():
 class TestBuildJobQueue:
     """build_job_queue factory function."""
 
-    def test_returns_plain_jobqueue_when_redis_url_is_none(
-        self, queue_dir: Path
-    ) -> None:
+    def test_returns_plain_jobqueue_when_redis_url_is_none(self, queue_dir: Path) -> None:
         """When redis_url is None, a plain JobQueue is returned."""
         queue = build_job_queue(
             queue_dir=queue_dir,
@@ -48,9 +46,7 @@ class TestBuildJobQueue:
         assert isinstance(queue, JobQueue)
         assert not isinstance(queue, DistributedJobQueue)
 
-    def test_returns_distributed_jobqueue_when_redis_url_set(
-        self, queue_dir: Path
-    ) -> None:
+    def test_returns_distributed_jobqueue_when_redis_url_set(self, queue_dir: Path) -> None:
         """When redis_url is set, a DistributedJobQueue is returned."""
         queue = build_job_queue(
             queue_dir=queue_dir,
