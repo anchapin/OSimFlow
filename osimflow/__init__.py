@@ -13,6 +13,7 @@ from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
 from .config import CampaignConfig, load_config
 from .distributed_cache import DistributedCache, build_cache
+from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
     DocumentNotFoundError,
     DocumentStore,
@@ -87,6 +88,8 @@ __all__ = [
     "load_config",
     "DistributedCache",
     "build_cache",
+    "DistributedJobQueue",
+    "build_job_queue",
     "BaseExecutor",
     "LocalExecutor",
     "SlurmExecutor",
