@@ -209,7 +209,7 @@ osimflow run \
 The Nomad cluster itself is highly available (3-server Raft quorum handles
 server-side failures automatically). However, the OSimFlow **coordinator**
 (`Campaign` class) is a single-instance process. See
-[ADR-0003](.agents/results/architecture/0003-coordinator-high-availability.md)
+[ADR-0003](../.agents/results/architecture/0003-coordinator-high-availability.md)
 for the full analysis and supported HA patterns.
 
 Two patterns are supported for coordinator HA with Nomad:
