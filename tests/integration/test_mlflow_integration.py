@@ -86,7 +86,16 @@ class _FakeMlflowRecorder:
 def fake_mlflow(monkeypatch: pytest.MonkeyPatch) -> _FakeMlflowRecorder:
     """Inject a fake `mlflow` module into sys.modules for the duration of
     one test. Returns the recorder so the test can assert on call order.
+
+    Also sets ``_ACTIVE_URI`` so that ``log_mlflow_*`` helpers do not
+    short-circuit (they check ``_ACTIVE_URI is None`` before importing
+    mlflow).  Without this, tests are dependent on execution order —
+    a prior test must have called ``maybe_start_mlflow_run`` for the
+    log helpers to actually log.  ``monkeypatch`` automatically restores
+    the original value on teardown.
     """
+    import osimflow.mlflow_hook as hook
+
     recorder = _FakeMlflowRecorder()
     fake = ModuleType("mlflow")
     fake.set_tracking_uri = recorder.set_tracking_uri  # type: ignore[attr-defined]
@@ -98,6 +107,7 @@ def fake_mlflow(monkeypatch: pytest.MonkeyPatch) -> _FakeMlflowRecorder:
     fake.log_metrics = recorder.log_metrics  # type: ignore[attr-defined]
     fake.log_artifact = recorder.log_artifact  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "mlflow", fake)
+    monkeypatch.setattr(hook, "_ACTIVE_URI", "http://localhost:5000")
     return recorder
 
 

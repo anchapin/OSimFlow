@@ -220,7 +220,7 @@ jobs:
       - name: Install (editable + all extras + pytest-xdist)
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
           uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
 
       - name: pytest with coverage gate

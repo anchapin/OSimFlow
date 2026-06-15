@@ -16,9 +16,12 @@ Workflow
 3. ``is_converged()`` returns ``True`` when the relative improvement
    in the best objective over the last two generations drops below
    ``tol`` (default 1e-3), or when ``max_generations`` is reached.
-"""
 
-from __future__ import annotations
+DEAP is an optional dependency — install with ``pip install osimflow[ga]``.
+The module loads successfully without DEAP; the DEAP-specific operators
+(selection, crossover, mutation) are only invoked inside ``observe()``
+when DEAP is available.
+"""
 
 import json
 import logging
@@ -39,16 +42,17 @@ from osimflow.algorithms import (
 
 log = logging.getLogger("osimflow.algorithms.ga")
 
-# DEAP is a required dependency for this module — it is listed in
-# pyproject.toml [project.optional-dependencies] under the "ga" extra.
+# DEAP is an optional dependency — import lazily so the module can be
+# loaded for static analysis even when DEAP is not installed (same
+# pattern as nsga2.py for pymoo).
 try:
     from deap import base as deap_base
     from deap import creator as deap_creator
     from deap import tools as deap_tools
-except ImportError as exc:
-    raise ImportError(
-        "osimflow[ga] is required for GeneticAlgorithm. Install with: pip install osimflow[ga]"
-    ) from exc
+
+    _HAS_DEAP = True
+except ImportError:
+    _HAS_DEAP = False
 
 
 def _extract_bounds(independent_vars: list[dict[str, Any]]) -> list[tuple[float, float]]:
@@ -446,6 +450,10 @@ class GeneticAlgorithm(BaseAlgorithm):
 
     def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Extract KPI values from history, run one GA generation, propose new samples."""
+        if not _HAS_DEAP:
+            log.warning("deap not installed; GA observe() is a no-op")
+            return []
+
         if not history or not self._independent_vars:
             return []
 

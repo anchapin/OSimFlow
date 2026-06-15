@@ -132,6 +132,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
 | `osimflow/algorithms/de.py` | `DifferentialEvolutionAlgorithm` — Differential evolution optimizer using `scipy.optimize.differential_evolution` (issue #125). Iterative. |
 | `osimflow/algorithms/da.py` | `DualAnnealingAlgorithm` — Dual annealing optimizer using `scipy.optimize.dual_annealing` (issue #125). Iterative. |
+| `osimflow/algorithms/ga.py` | `GeneticAlgorithm` — canonical Genetic Algorithm using DEAP with tournament selection, SBX crossover, and polynomial mutation (issue #345). Iterative. Optional `[ga]` extra. |
 | `osimflow/algorithms/nsga2.py` | `NSGA2Algorithm` — NSGA-II multi-objective optimizer using `pymoo` (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
