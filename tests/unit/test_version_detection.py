@@ -173,9 +173,7 @@ class TestCheckDockerContainerLabel:
 
 class TestDetectOpenstudioVersion:
     def test_from_env_variable(self) -> None:
-        with patch.object(
-            osimflow.version_detection, "_check_env_variable", return_value="3.11.0"
-        ):
+        with patch.object(osimflow.version_detection, "_check_env_variable", return_value="3.11.0"):
             with patch.object(
                 osimflow.version_detection, "_check_openstudio_cli", return_value=None
             ):
@@ -187,9 +185,7 @@ class TestDetectOpenstudioVersion:
                     assert detect_openstudio_version() == "3.11.0"
 
     def test_from_cli(self) -> None:
-        with patch.object(
-            osimflow.version_detection, "_check_env_variable", return_value=None
-        ):
+        with patch.object(osimflow.version_detection, "_check_env_variable", return_value=None):
             with patch.object(
                 osimflow.version_detection, "_check_openstudio_cli", return_value="3.7.0"
             ):
@@ -201,9 +197,7 @@ class TestDetectOpenstudioVersion:
                     assert detect_openstudio_version() == "3.7.0"
 
     def test_from_docker_label(self) -> None:
-        with patch.object(
-            osimflow.version_detection, "_check_env_variable", return_value=None
-        ):
+        with patch.object(osimflow.version_detection, "_check_env_variable", return_value=None):
             with patch.object(
                 osimflow.version_detection, "_check_openstudio_cli", return_value=None
             ):
@@ -215,9 +209,7 @@ class TestDetectOpenstudioVersion:
                     assert detect_openstudio_version() == "3.5.1"
 
     def test_not_found(self) -> None:
-        with patch.object(
-            osimflow.version_detection, "_check_env_variable", return_value=None
-        ):
+        with patch.object(osimflow.version_detection, "_check_env_variable", return_value=None):
             with patch.object(
                 osimflow.version_detection, "_check_openstudio_cli", return_value=None
             ):
