@@ -31,6 +31,10 @@ class CampaignConfig:
     n_samples: int
     outdir: Path
     openstudio_version: str
+    # Project hierarchy support (issue #390). Groups campaigns under a named
+    # project, enabling multi-campaign organization. When set, the campaign
+    # is associated with the given project name in the registry.
+    project: str = ""
     archive_intermediates: bool = False
     custom_apply_script: Path | None = None
     custom_kpi_extractor: Path | None = None
@@ -399,6 +403,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         n_samples=int(str(args["n_samples"])),
         outdir=outdir,
         openstudio_version=str(args["openstudio_version"]),
+        project=str(args.get("project", "")),
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,
         custom_kpi_extractor=Path(str(custom_kpi)).resolve() if custom_kpi else None,

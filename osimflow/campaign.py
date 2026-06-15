@@ -1138,6 +1138,7 @@ class Campaign:
             self._registry.register(
                 self.trace.campaign_id,
                 name=self.trace.campaign_id,
+                project=self.cfg.project,
                 outdir=str(self.cfg.outdir),
                 status="running",
                 algorithm=self.cfg.algorithm,
