@@ -202,7 +202,10 @@ class TestStepsContract:
 class TestSamplesQueryParams:
     """Property-based tests for GET /api/v1/samples query parameters."""
 
-    @given(page=st.integers(min_value=1, max_value=1000), per_page=st.integers(min_value=1, max_value=500))
+    @given(
+        page=st.integers(min_value=1, max_value=1000),
+        per_page=st.integers(min_value=1, max_value=500),
+    )
     @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_samples_pagination_bounds(self, client: TestClient, page: int, per_page: int) -> None:
         """page >= 1 and per_page in [1, 500] must return HTTP 200."""
@@ -307,19 +310,27 @@ class TestOpenAPISpecCompleteness:
     def test_spec_defines_samples(self, api_schema: schemathesis.openapi.OpenApiSchema) -> None:
         assert "/api/v1/samples" in api_schema
 
-    def test_health_get_has_200_response(self, api_schema: schemathesis.openapi.OpenApiSchema) -> None:
+    def test_health_get_has_200_response(
+        self, api_schema: schemathesis.openapi.OpenApiSchema
+    ) -> None:
         operation = api_schema["/health"]["GET"]
         assert "200" in operation.definition.raw["responses"]
 
-    def test_campaign_get_has_200_response(self, api_schema: schemathesis.openapi.OpenApiSchema) -> None:
+    def test_campaign_get_has_200_response(
+        self, api_schema: schemathesis.openapi.OpenApiSchema
+    ) -> None:
         operation = api_schema["/api/v1/campaign"]["GET"]
         assert "200" in operation.definition.raw["responses"]
 
-    def test_steps_get_has_200_response(self, api_schema: schemathesis.openapi.OpenApiSchema) -> None:
+    def test_steps_get_has_200_response(
+        self, api_schema: schemathesis.openapi.OpenApiSchema
+    ) -> None:
         operation = api_schema["/api/v1/steps"]["GET"]
         assert "200" in operation.definition.raw["responses"]
 
-    def test_events_get_has_200_response(self, api_schema: schemathesis.openapi.OpenApiSchema) -> None:
+    def test_events_get_has_200_response(
+        self, api_schema: schemathesis.openapi.OpenApiSchema
+    ) -> None:
         operation = api_schema["/api/v1/events"]["GET"]
         assert "200" in operation.definition.raw["responses"]
 
