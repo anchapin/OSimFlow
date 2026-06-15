@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
 
@@ -42,10 +43,10 @@ def _get_real_remote_address(request: Request) -> str:
     """Extract the real client IP for rate limiting.
 
     When OSimFlow is deployed behind a load balancer (for horizontal
-    scaling), ``request.client.host`` returns the load balancer's IP instead
+    scaling), ``get_remote_address`` returns the load balancer's IP instead
     of the client's IP.  This function checks the ``X-Forwarded-For`` header
     first (set by most HTTP load balancers) and falls back to
-    ``request.client.host`` when the header is not present.
+    ``get_remote_address`` when the header is not present.
 
     Horizontal scaling with multiple API instances behind a load balancer
     requires that all instances share the same ``X-Forwarded-For`` header
@@ -57,10 +58,8 @@ def _get_real_remote_address(request: Request) -> str:
         # The first IP is the original client.
         client_ip = forwarded_for.split(",")[0].strip()
         if client_ip:
-            return client_ip  # type: ignore[no-any-return]
-    if request.client and request.client.host:
-        return str(request.client.host)  # type: ignore[no-any-return]
-    return "127.0.0.1"  # type: ignore[no-any-return]
+            return client_ip
+    return get_remote_address(request)
 
 
 router = APIRouter()
