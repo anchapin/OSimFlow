@@ -82,7 +82,7 @@ def _make_workspace(tmp_path: Path) -> Path:
     (template / "model.osm").write_text(
         json.dumps({"attributes": {"u1": 0.0, "u2": 10.0, "ln1": 1.0}})
     )
-    (template / "workflow.osw").write_text(json.dumps({"name": "stub"}))
+    (template / "workflow.osw").write_text(json.dumps({"name": "stub", "steps": []}))
     return wd
 
 
