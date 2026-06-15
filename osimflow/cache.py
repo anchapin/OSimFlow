@@ -37,6 +37,16 @@ from pathlib import Path
 
 log = logging.getLogger("osimflow.cache")
 
+
+@dataclasses.dataclass
+class CacheStats:
+    """Cache hit/miss and invalidation statistics."""
+
+    hits: int = 0
+    misses: int = 0
+    invalidations: int = 0
+    total_keys: int = 0
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache_entries (
     step              TEXT NOT NULL,
@@ -121,6 +131,7 @@ class SQLiteCache:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
+        self._stats = CacheStats()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         log.info("cache opened at %s", db_path)
@@ -206,14 +217,18 @@ class SQLiteCache:
                 ),
             ).fetchone()
         if row is None:
+            self._stats.misses += 1
             return None
         if row["exit_code"] != 0:
+            self._stats.misses += 1
             return None
         out = Path(row["output_path"])
         if not out.exists():
             # Stale cache entry: the output was deleted out from under us.
             log.warning("cache hit but output missing on disk: %s", out)
+            self._stats.misses += 1
             return None
+        self._stats.hits += 1
         log.info("cache HIT  step=%s sample=%s -> %s", key.step, key.sample_id, out)
         return out
 
@@ -254,6 +269,7 @@ class SQLiteCache:
             c = self.connection
             cur = c.execute("DELETE FROM cache_entries WHERE step=?", (step,))
             n = cur.rowcount
+        self._stats.invalidations += n
         log.warning("cache INVALIDATE step=%s (%d rows)", step, n)
         return n
 
@@ -265,6 +281,7 @@ class SQLiteCache:
                 (step, sample_id),
             )
             n = cur.rowcount
+        self._stats.invalidations += n
         log.info("cache INVALIDATE step=%s sample=%s (%d rows)", step, sample_id, n)
         return n
 
@@ -276,3 +293,22 @@ class SQLiteCache:
                 c.execute("SELECT step, COUNT(*) FROM cache_entries GROUP BY step").fetchall()
             )
         return {"total": n_total, "by_step": by_step}
+
+    def get_stats(self) -> CacheStats:
+        """Return current cache statistics."""
+        with self._lock:
+            c = self.connection
+            n_total = c.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
+        return CacheStats(
+            hits=self._stats.hits,
+            misses=self._stats.misses,
+            invalidations=self._stats.invalidations,
+            total_keys=n_total,
+        )
+
+    def get_cache_hit_rate(self) -> float:
+        """Return cache hit rate as a float between 0.0 and 1.0."""
+        total = self._stats.hits + self._stats.misses
+        if total == 0:
+            return 0.0
+        return self._stats.hits / total

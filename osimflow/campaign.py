@@ -1374,6 +1374,7 @@ class Campaign:
             log.warning("campaign cancelled by user or signal")
             self.trace.status = "cancelled"
             self._cancel_active_jobs()
+            self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
             self.trace.finalize()
             # Always write the trace on cancellation so callers can inspect
             # the partial state.  The file may not exist yet when
@@ -1445,6 +1446,7 @@ class Campaign:
         t1 = time.time()
 
         self._finalize_samples()
+        self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
@@ -1508,6 +1510,7 @@ class Campaign:
         t1 = time.time()
 
         self._finalize_samples()
+        self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
@@ -1826,6 +1829,7 @@ class Campaign:
             log.warning("cancellation requested before aggregation — writing partial trace")
             self._finalize_samples()
             self.trace.status = "cancelled"
+            self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
             self.trace.finalize()
             self.trace.write(self.cfg.outdir / "run.json")
             return {
@@ -1848,6 +1852,7 @@ class Campaign:
         self._maybe_archive_inputs()
 
         self._finalize_samples()
+        self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 

@@ -9,7 +9,7 @@ API; everything else is an implementation detail.
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
-from .cache import CacheKey, SQLiteCache
+from .cache import CacheKey, CacheStats, SQLiteCache
 from .campaign import Campaign
 from .config import CampaignConfig, coerce_variable_type, load_config
 from .distributed_cache import DistributedCache, build_cache
@@ -83,6 +83,7 @@ __all__ = [
     "SobolAlgorithm",
     "HaltonAlgorithm",
     "CacheKey",
+    "CacheStats",
     "SQLiteCache",
     "Campaign",
     "CampaignConfig",

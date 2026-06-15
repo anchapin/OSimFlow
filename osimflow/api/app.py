@@ -283,6 +283,23 @@ async def get_campaign(request: Request) -> dict[str, Any]:
     }
 
 
+@router.get("/api/v1/cache/stats")  # type: ignore[untyped-decorator]
+async def get_cache_stats(request: Request) -> dict[str, Any]:
+    """Get cache hit/miss statistics from the campaign cache."""
+    cache = getattr(request.app.state, "cache", None)
+    if cache is None:
+        raise HTTPException(status_code=503, detail="Cache not available")
+    stats = cache.get_stats()
+    hit_rate = cache.get_cache_hit_rate()
+    return {
+        "hits": stats.hits,
+        "misses": stats.misses,
+        "invalidations": stats.invalidations,
+        "total_keys": stats.total_keys,
+        "hit_rate": hit_rate,
+    }
+
+
 @router.get("/api/v1/steps")  # type: ignore[untyped-decorator]
 async def get_steps(request: Request) -> dict[str, Any]:
     """Get step traces from run.json."""
@@ -780,6 +797,7 @@ def create_app(
     rate_limit: str = "60/minute",
     ui_enabled: bool = False,
     registry_path: Path | None = None,
+    cache_db_path: Path | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -874,6 +892,18 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             log.error("Failed to load registry from %s: %s", registry_path, exc)
     app.state.registry = registry
+
+    # --- Cache for hit rate statistics (issue #426) ---
+    cache: Any = None
+    if cache_db_path is not None:
+        try:
+            from osimflow.cache import SQLiteCache  # noqa: PLC0415
+
+            cache = SQLiteCache(cache_db_path)
+            log.info("cache loaded from %s", cache_db_path)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Failed to load cache from %s: %s", cache_db_path, exc)
+    app.state.cache = cache
 
     # --- CORS middleware ---
     if cors_origins:
