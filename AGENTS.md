@@ -243,6 +243,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
 - `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
 - `--byos-resource-limits` (CPU/memory limits for BYOS subprocess wrapper; issue #343)
+- `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)

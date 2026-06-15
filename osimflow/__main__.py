@@ -939,9 +939,22 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         "--api-key",
         default=None,
         help=(
-            "API key for authentication. Required when --enable-writes is set "
+            "API key for authentication (single-key mode). "
+            "Required when --enable-writes is set "
             "(auto-generated and logged if not provided). When read-only, "
-            "authentication is disabled unless this is set."
+            "authentication is disabled unless this is set. "
+            "Use --api-keys-file for multi-user authentication (issue #395)."
+        ),
+    )
+    serve.add_argument(
+        "--api-keys-file",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a JSON file containing multiple API keys with per-user "
+            "roles (issue #395). When set, --api-key is ignored. "
+            'File format: {"users": [{"key": "...", "user_id": "...", "role": "..."}]}. '
+            "Roles: readonly, readwrite, admin."
         ),
     )
     serve.add_argument(
@@ -1222,7 +1235,14 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     # Resolve the API key.
     api_key = args.api_key
-    if args.enable_writes and not api_key:
+    api_keys_file = args.api_keys_file
+
+    # When using multi-user mode, don't auto-generate a key
+    if api_keys_file is not None:
+        if api_key is not None:
+            log.warning("--api-key is ignored when --api-keys-file is set")
+        api_key = None
+    elif args.enable_writes and not api_key:
         # Auto-generate a key when writes are enabled but none was provided.
         api_key = generate_api_key()
         log.warning("No --api-key provided; auto-generated key for write access: %s", api_key)
@@ -1237,6 +1257,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         outdir=args.outdir,
         read_only=read_only,
         api_key=api_key,
+        api_keys_file=api_keys_file,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
         ui_enabled=args.ui,
