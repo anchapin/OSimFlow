@@ -186,6 +186,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/offline-deployment-guide.md` | Offline/air-gapped deployment guide: bundling the Python environment, OpenStudio CLI, and weather data for air-gapped HPC (issue #399). |
 | `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
 | `docs/observability.md` | Pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry): configuration, usage, and extension guide (issue #145, #127). |
+| `docs/cli-lifecycle-management.md` | CLI lifecycle management guide (issue #413): OpenStudio CLI invocation patterns, process supervision gap, restart-on-failure wrappers, and executor-specific considerations for LocalExecutor, SlurmExecutor, AWSBatchExecutor, KubernetesExecutor, and NomadExecutor. |
 | `infra/nomad/examples/ha/` | Docker Compose HA cluster for Nomad (3 server + 2 client) with ACL bootstrap (issue #123). |
 | `infra/nomad/examples/ha/docker-compose.yml` | 3-server + 2-client Docker Compose with named volumes and bridge networking. |
 | `infra/nomad/examples/ha/server*.hcl` | Per-server HCL configs with `bootstrap_expect=3` and `retry_join`. |
@@ -643,6 +644,7 @@ generic role prompt's tool guidance when they disagree).
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
 - [Observability guide (docs/observability.md)](docs/observability.md) — pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry).
+- [CLI lifecycle management guide (docs/cli-lifecycle-management.md)](docs/cli-lifecycle-management.md) — OpenStudio CLI invocation patterns, process supervision gap, restart-on-failure wrappers, and executor-specific considerations (issue #413).
 - [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
 - [Offline deployment guide (docs/offline-deployment-guide.md)](docs/offline-deployment-guide.md) — offline/air-gapped deployment guide (issue #399).
 - [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
