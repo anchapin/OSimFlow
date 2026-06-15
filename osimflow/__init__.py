@@ -12,7 +12,7 @@ from .algorithms.doe_analysis import DOEAnalysis
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, CacheStats, SQLiteCache
-from .campaign import Campaign
+from .campaign import Campaign, QuotaExceededError
 from .chaos import (
     ChaosEngine,
     ChaosResult,
@@ -25,7 +25,7 @@ from .chaos import (
     NetworkDelayInjector,
     run_chaos_scenario,
 )
-from .config import CampaignConfig, coerce_variable_type, load_config
+from .config import CampaignConfig, ResourceQuota, coerce_variable_type, load_config
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
@@ -79,12 +79,6 @@ from .taskqueue import (
     build_task_queue,
 )
 from .validation import ValidationError
-from .version_detection import (
-    VersionDetectionError,
-    detect_openstudio_version,
-    get_compatible_container_tag,
-    verify_version_compatibility,
-)
 from .weather import (
     EPWDownloadError,
     EPWValidationError,
@@ -108,6 +102,7 @@ __all__ = [
     "SQLiteCache",
     "Campaign",
     "CampaignConfig",
+    "ResourceQuota",
     "coerce_variable_type",
     "load_config",
     "DistributedCache",
@@ -138,11 +133,8 @@ __all__ = [
     "CampaignRegistry",
     "CampaignRecord",
     "SevereEnergyPlusError",
+    "QuotaExceededError",
     "ValidationError",
-    "VersionDetectionError",
-    "detect_openstudio_version",
-    "get_compatible_container_tag",
-    "verify_version_compatibility",
     "EPWValidationError",
     "EPWDownloadError",
     "discover_epw_files",
@@ -152,8 +144,6 @@ __all__ = [
     "validate_epw_header",
     "get_logger",
     "setup_logging",
-    "AlertManager",
-    "build_alert_manager",
     "ResultStorage",
     "LocalStorage",
     "S3Storage",
@@ -173,6 +163,11 @@ __all__ = [
     "DuplicateDocumentError",
     "SQLiteDocumentStore",
     "build_document_store",
+    # Version detection (from origin/main)
+    "VersionDetectionError",
+    "detect_openstudio_version",
+    "get_compatible_container_tag",
+    "verify_version_compatibility",
 ]
 
 setup_logging()

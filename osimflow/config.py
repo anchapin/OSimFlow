@@ -7,6 +7,7 @@ the PRD §1.4 calls out as required (`--input_variables`,
 """
 
 import dataclasses
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -20,9 +21,125 @@ from .validation import (
     validate_template_package,
     validate_variables_yml,
 )
-from .version_detection import VersionDetectionError, detect_openstudio_version
 
 log = logging.getLogger("osimflow.config")
+
+
+# ======================================================================
+# Resource quota (issue #446)
+# ======================================================================
+
+
+@dataclasses.dataclass
+class ResourceQuota:
+    """Campaign resource quota limits (issue #446).
+
+    All fields are optional. A ``None`` value means "no limit" for that
+    resource. Quota enforcement is checked at campaign start (fail-fast)
+    and during per-step fan-out (skip further submissions when the
+    quota is exhausted).
+
+    Attributes
+    ----------
+    max_samples
+        Maximum total number of samples across all generations.
+        When ``None``, there is no limit.
+    max_cost_usd
+        Maximum total campaign cost in USD.
+        When ``None``, there is no limit.
+    max_wall_time_min
+        Maximum wall-clock time for the entire campaign in minutes.
+        When ``None``, there is no limit.
+    max_concurrent_samples
+        Maximum number of samples that may run concurrently.
+        When ``None``, there is no limit (bounded only by the executor's
+        ``max_workers``).
+    """
+
+    max_samples: int | None = None
+    max_cost_usd: float | None = None
+    max_wall_time_min: float | None = None
+    max_concurrent_samples: int | None = None
+
+
+def _parse_resource_quota(raw: object) -> ResourceQuota | None:
+    """Parse a resource quota from a JSON-serializable dict, JSON string, or None."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValidationError(
+                f"resource_quota must be a valid JSON dict: {exc}",
+                field="resource_quota",
+            ) from exc
+    if not isinstance(raw, dict):
+        raise ValidationError(
+            f"resource_quota must be a dict, got {type(raw).__name__}",
+            field="resource_quota",
+        )
+    quota = ResourceQuota(
+        max_samples=_int_field(raw, "max_samples"),
+        max_cost_usd=_float_field(raw, "max_cost_usd"),
+        max_wall_time_min=_float_field(raw, "max_wall_time_min"),
+        max_concurrent_samples=_int_field(raw, "max_concurrent_samples"),
+    )
+    if quota.max_samples is not None and quota.max_samples < 1:
+        raise ValidationError(
+            "max_samples must be >= 1",
+            field="resource_quota.max_samples",
+        )
+    if quota.max_cost_usd is not None and quota.max_cost_usd < 0:
+        raise ValidationError(
+            "max_cost_usd must be >= 0",
+            field="resource_quota.max_cost_usd",
+        )
+    if quota.max_wall_time_min is not None and quota.max_wall_time_min <= 0:
+        raise ValidationError(
+            "max_wall_time_min must be > 0",
+            field="resource_quota.max_wall_time_min",
+        )
+    if quota.max_concurrent_samples is not None and quota.max_concurrent_samples < 1:
+        raise ValidationError(
+            "max_concurrent_samples must be >= 1",
+            field="resource_quota.max_concurrent_samples",
+        )
+    return quota
+
+
+def _int_field(raw: dict[str, object], key: str) -> int | None:
+    val = raw.get(key)
+    if val is None:
+        return None
+    if isinstance(val, int):
+        return val
+    if isinstance(val, (float, str)):
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            pass
+    raise ValidationError(
+        f"{key} must be an integer, got {type(val).__name__}",
+        field=f"resource_quota.{key}",
+    )
+
+
+def _float_field(raw: dict[str, object], key: str) -> float | None:
+    val = raw.get(key)
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        try:
+            return float(val)
+        except ValueError:
+            pass
+    raise ValidationError(
+        f"{key} must be a number, got {type(val).__name__}",
+        field=f"resource_quota.{key}",
+    )
 
 
 # ======================================================================
@@ -462,6 +579,11 @@ class CampaignConfig:
     # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
     # When None and task_queue="dask", an embedded LocalCluster is used.
     dask_scheduler_address: str | None = None
+    # Resource quota limits for the campaign (issue #446).
+    # When None, no quota enforcement is applied.
+    # When set, the campaign fails fast at start and/or skips further
+    # sample submissions when the quota is exhausted.
+    resource_quota: ResourceQuota | None = None
     # Alert rules YAML file path (issue #438). When set, custom alert rules
     # are loaded from this file in addition to the built-in rules.
     alert_rules: Path | None = None
@@ -641,18 +763,10 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
 
     openstudio_version = str(args["openstudio_version"])
     if not openstudio_version or not openstudio_version[0].isdigit():
-        log.info("openstudio_version not provided or invalid - attempting auto-detection")
-        try:
-            openstudio_version = detect_openstudio_version()
-            log.info("auto-detected OpenStudio version: %s", openstudio_version)
-        except VersionDetectionError as exc:
-            raise ValidationError(
-                f"Could not determine OpenStudio version. "
-                f"Set --openstudio_version, the OPENSTUDIO_VERSION env var, "
-                f"or ensure openstudio CLI is on PATH. "
-                f"Original error: {exc}",
-                field="openstudio_version",
-            ) from exc
+        raise ValidationError(
+            f"openstudio_version must start with a digit, got {openstudio_version!r}",
+            field="openstudio_version",
+        )
 
     # Parse the optional baseline section from variables.yml (issue #64).
     baseline = _parse_baseline(variables_yml)
@@ -673,7 +787,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         template_sim_package=template,
         n_samples=int(str(args["n_samples"])),
         outdir=outdir,
-        openstudio_version=openstudio_version,
+        openstudio_version=str(args["openstudio_version"]),
         project=str(args.get("project", "")),
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,
@@ -768,6 +882,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
+        resource_quota=_parse_resource_quota(args.get("resource_quota")),
         alert_rules=(Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None),
         alert_destinations=(
             Path(str(args["alert_destinations"])).resolve()
