@@ -304,9 +304,7 @@ async def get_metrics(request: Request) -> str:
                         campaign_duration_sum += dur
                         campaign_duration_count += 1
                 per_sample = run_data.get("per_sample", [])
-                samples_completed = sum(
-                    1 for s in per_sample if s.get("status") == "completed"
-                )
+                samples_completed = sum(1 for s in per_sample if s.get("status") == "completed")
                 samples_failed = sum(1 for s in per_sample if s.get("status") == "failed")
             except (json.JSONDecodeError, OSError):
                 pass
@@ -1132,8 +1130,7 @@ def create_app(
     app.state.metrics_campaign_duration_sum = 0.0
     app.state.metrics_campaign_duration_count = 0
 
-
-# --- CORS middleware ---
+    # --- CORS middleware ---
 
     if cors_origins:
         app.add_middleware(
