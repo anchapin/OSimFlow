@@ -148,6 +148,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
+| `osimflow/version_detection.py` | Automatic OpenStudio version detection (issue #412): `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`, and `VersionDetectionError`. Detects version from environment variable, CLI path, or Docker container labels. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
 | `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
