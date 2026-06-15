@@ -62,6 +62,7 @@ from .apply_params import (
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .distributed_jobqueue import build_job_queue
+from .event_log import CampaignEventLog
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
@@ -262,6 +263,10 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+
+        # Append-only event log for auditing and state replay (issue #396).
+        # Written to {outdir}/events.jsonl for the campaign duration.
+        self._event_log = CampaignEventLog(outdir=cfg.outdir)
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -707,6 +712,13 @@ class Campaign:
                 self._job_queue.mark_completed(f"{sid}_{step_name}")
             except Exception as e:
                 log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
+                # Event log: sample failed (issue #396).
+                self._event_log.sample_failed(
+                    campaign_id=self.trace.campaign_id,
+                    step=step_name,
+                    sample_id=sid,
+                    reason=str(e)[:500],
+                )
                 # Mark failed in the job queue (issue #263).
                 self._job_queue.mark_failed(
                     f"{sid}_{step_name}",
@@ -1462,6 +1474,15 @@ class Campaign:
         # Auto-register campaign in registry (issue #266).
         self._register_campaign()
 
+        # Event log: campaign start (issue #396).
+        self._event_log.campaign_started(
+            campaign_id=self.trace.campaign_id,
+            executor=self.executor.name,
+            n_samples=self.cfg.n_samples,
+            algorithm=self.cfg.algorithm,
+            openstudio_version=self.cfg.openstudio_version,
+        )
+
         # Write campaign metadata manifest at start (issue #277).
         self._write_campaign_meta()
 
@@ -1538,6 +1559,26 @@ class Campaign:
             # Observability: record campaign duration and flush backend.
             self._obs.record_campaign_duration(duration)
             self._obs.flush()
+
+            # Event log: campaign completion (issue #396).  Emitted before
+            # _run_finalize_script so the event records the raw duration.
+            n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
+            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+            if campaign_status == "success":
+                self._event_log.campaign_completed(
+                    campaign_id=self.trace.campaign_id,
+                    elapsed_s=duration,
+                    n_succeeded=n_succeeded,
+                    n_failed=n_failed,
+                )
+            else:
+                self._event_log.campaign_failed(
+                    campaign_id=self.trace.campaign_id,
+                    reason=campaign_status,
+                    elapsed_s=duration,
+                )
+            self._event_log.flush()
+
             self._run_finalize_script(campaign_status, duration)
             # Re-write run.json to include finalize hook timing
             if (self.cfg.outdir / "run.json").exists():
@@ -2096,6 +2137,8 @@ class Campaign:
         algo_name = algo.name().upper()
         step_label = f"GENERATE_{algo_name}_SAMPLES"
 
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step=step_label)
+
         # Read variables.yml once for the algorithm.
         variables: dict[str, Any] = {}
         if self.cfg.input_variables.exists():
@@ -2125,6 +2168,12 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
+            self._event_log.step_completed(
+                campaign_id=self.trace.campaign_id,
+                step=step_label,
+                elapsed_s=time.time() - t0,
+                cache_hit=True,
+            )
             return samples_from_cache
 
         out_dir = self.cfg.work_dir / algo.name()
@@ -2173,6 +2222,12 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
+            self._event_log.step_completed(
+                campaign_id=self.trace.campaign_id,
+                step=step_label,
+                elapsed_s=time.time() - t0,
+                cache_hit=False,
+            )
             return samples
         except Exception as e:
             log.error("%s failed: %s", step_label, e)
@@ -2181,6 +2236,12 @@ class Campaign:
                 cache="MISS",
                 elapsed_s=time.time() - t0,
                 exit_code=1,
+            )
+            self._event_log.step_completed(
+                campaign_id=self.trace.campaign_id,
+                step=step_label,
+                elapsed_s=time.time() - t0,
+                cache_hit=False,
             )
             raise
 
@@ -2234,6 +2295,8 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before PREFLIGHT_RUN_MODEL")
 
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="PREFLIGHT_RUN_MODEL")
+
         t0 = time.time()
         os_version = self.cfg.openstudio_version
         inputs_hash = sha256_of_files(sorted(self.cfg.template_sim_package.rglob("*")))
@@ -2256,6 +2319,12 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
+            self._event_log.step_completed(
+                campaign_id=self.trace.campaign_id,
+                step="PREFLIGHT_RUN_MODEL",
+                elapsed_s=elapsed,
+                cache_hit=True,
+            )
             return
 
         try:
@@ -2270,6 +2339,12 @@ class Campaign:
                 cache="MISS",
                 elapsed_s=time.time() - t0,
                 exit_code=1,
+            )
+            self._event_log.step_completed(
+                campaign_id=self.trace.campaign_id,
+                step="PREFLIGHT_RUN_MODEL",
+                elapsed_s=time.time() - t0,
+                cache_hit=False,
             )
             raise
 
@@ -2286,6 +2361,12 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
+        self._event_log.step_completed(
+            campaign_id=self.trace.campaign_id,
+            step="PREFLIGHT_RUN_MODEL",
+            elapsed_s=elapsed,
+            cache_hit=False,
+        )
 
     def step_validate_measure_variables(self, generation: int = 0) -> None:
         """Validate variables.yml against discovered measure arguments.
@@ -2496,6 +2577,12 @@ class Campaign:
                 _state["apply_exit_code"] = 0
                 _state["apply_status"] = "ok"
                 self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
+                # Event log: sample completed (issue #396).
+                self._event_log.sample_completed(
+                    campaign_id=self.trace.campaign_id,
+                    step="APPLY_PARAMETERS",
+                    sample_id=_sid,
+                )
                 # Archive modified .osw/.osm when flag is set
                 if _archive:
                     archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
@@ -2504,6 +2591,13 @@ class Campaign:
                     )
 
             submissions[sid] = (handle, _on_success)
+
+            # Event log: sample started (issue #396).
+            self._event_log.sample_started(
+                campaign_id=self.trace.campaign_id,
+                step="APPLY_PARAMETERS",
+                sample_id=sid,
+            )
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
@@ -2553,6 +2647,7 @@ class Campaign:
         os_version = self.cfg.openstudio_version
         n = len(parameterized)
         self.trace.step_started("RUN_OPENSTUDIO_SIM", total=n)
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="RUN_OPENSTUDIO_SIM")
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
@@ -2690,6 +2785,12 @@ class Campaign:
                     _handle, "billed_duration_seconds", None
                 )
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
+                # Event log: sample completed (issue #396).
+                self._event_log.sample_completed(
+                    campaign_id=self.trace.campaign_id,
+                    step="RUN_OPENSTUDIO_SIM",
+                    sample_id=_sid,
+                )
                 # Archive eplusout.sql when flag is set
                 if _archive:
                     archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
@@ -2717,6 +2818,13 @@ class Campaign:
 
             submissions[sid] = (handle, _on_success)
 
+            # Event log: sample started (issue #396).
+            self._event_log.sample_started(
+                campaign_id=self.trace.campaign_id,
+                step="RUN_OPENSTUDIO_SIM",
+                sample_id=sid,
+            )
+
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "RUN_OPENSTUDIO_SIM")
 
@@ -2739,6 +2847,12 @@ class Campaign:
         self._obs.record_step_duration(
             "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
         )
+        self._event_log.step_completed(
+            campaign_id=self.trace.campaign_id,
+            step="RUN_OPENSTUDIO_SIM",
+            elapsed_s=time.time() - t0,
+            cache_hit=False,
+        )
         return out
 
     def step_extract_kpis(  # noqa: PLR0915
@@ -2755,6 +2869,7 @@ class Campaign:
         out: list[Path] = []
         n = len(simulated)
         self.trace.step_started("EXTRACT_KPIS", total=n)
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="EXTRACT_KPIS")
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
@@ -2825,6 +2940,12 @@ class Campaign:
                 _state["extract_exit_code"] = 0
                 _state["extract_status"] = "ok"
                 self.trace.step_item_done("EXTRACT_KPIS", status="ok")
+                # Event log: sample completed (issue #396).
+                self._event_log.sample_completed(
+                    campaign_id=self.trace.campaign_id,
+                    step="EXTRACT_KPIS",
+                    sample_id=_sid,
+                )
                 # Result storage upload (issue #339): upload KPI JSON after
                 # successful extraction when a remote backend is configured.
                 if self._result_storage is not None:
@@ -2848,6 +2969,13 @@ class Campaign:
 
             submissions[sid] = (handle, _on_success)
 
+            # Event log: sample started (issue #396).
+            self._event_log.sample_started(
+                campaign_id=self.trace.campaign_id,
+                step="EXTRACT_KPIS",
+                sample_id=sid,
+            )
+
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "EXTRACT_KPIS")
 
@@ -2867,6 +2995,12 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
+        self._event_log.step_completed(
+            campaign_id=self.trace.campaign_id,
+            step="EXTRACT_KPIS",
+            elapsed_s=time.time() - t0,
+            cache_hit=False,
+        )
         return sorted(out)
 
     def step_compute_sensitivity_indices(
@@ -2993,6 +3127,8 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before AGGREGATE_RESULTS")
 
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="AGGREGATE_RESULTS")
+
         sim_dirs = list(simulated.values())
         inputs_hash = sha256_of_dict(
             {
@@ -3018,6 +3154,12 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
+            self._event_log.step_completed(
+                campaign_id=self.trace.campaign_id,
+                step="AGGREGATE_RESULTS",
+                elapsed_s=elapsed,
+                cache_hit=True,
+            )
             return {
                 "csv": cached,
                 "parquet": cached.parent / "aggregated_results.parquet",
@@ -3047,6 +3189,12 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
+        self._event_log.step_completed(
+            campaign_id=self.trace.campaign_id,
+            step="AGGREGATE_RESULTS",
+            elapsed_s=elapsed,
+            cache_hit=False,
+        )
         return result
 
     def step_generate_plots(
@@ -3067,6 +3215,10 @@ class Campaign:
 
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before GENERATE_BASIC_PLOTS")
+
+        self._event_log.step_started(
+            campaign_id=self.trace.campaign_id, step="GENERATE_BASIC_PLOTS"
+        )
 
         plots_dir = self.cfg.outdir / "plots"
         handle = self.executor.submit(
@@ -3091,6 +3243,12 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("GENERATE_BASIC_PLOTS", elapsed)
+        self._event_log.step_completed(
+            campaign_id=self.trace.campaign_id,
+            step="GENERATE_BASIC_PLOTS",
+            elapsed_s=elapsed,
+            cache_hit=False,
+        )
         return result
 
 
