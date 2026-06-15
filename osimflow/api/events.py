@@ -1,4 +1,4 @@
-"""SSE live events and campaign stop endpoints (issue #143).
+"""SSE live events and campaign stop endpoints (issue #143, #395).
 
 Provides:
   - GET /api/v1/events  — Server-Sent Events stream that watches run.json
@@ -16,6 +16,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
+
+from osimflow.api.auth import get_user_permission
 
 log = logging.getLogger("osimflow.api.events")
 
@@ -215,12 +217,12 @@ async def campaign_stop(request: Request) -> dict[str, str]:
     """Write a ``.stop`` flag file to request campaign cancellation.
 
     The campaign orchestrator checks for ``${outdir}/.stop`` between steps.
-    Returns 403 in read-only mode.
+    Returns 403 if the user lacks write permission (issue #395).
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Stop not available in read-only mode",
+            detail="Write permission required",
         )
     outdir: Path | None = request.app.state.outdir
     if outdir is None:

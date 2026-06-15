@@ -1,4 +1,4 @@
-"""Campaign CRUD and per-sample result endpoints (issue #267).
+"""Campaign CRUD and per-sample result endpoints (issue #267, #395).
 
 Provides:
   - GET  /api/v1/campaigns                     — list all campaigns
@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 if TYPE_CHECKING:
     from osimflow.executors.base import BaseExecutor
 
+from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
     CampaignCancelResponse,
     CampaignComparisonResponse,
@@ -163,13 +164,12 @@ async def create_campaign(
     """Create a new campaign directory and optionally launch it.
 
     When ``auto_start`` is ``True`` the campaign is launched in a
-    background thread.  The server must be running with
-    ``read_only=False`` (``--enable-writes``) to use auto_start.
+    background thread.  The user must have admin role (issue #395).
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "admin"):
         raise HTTPException(
             status_code=403,
-            detail="Campaign creation requires --enable-writes mode",
+            detail="Admin permission required for campaign creation",
         )
 
     base = _campaigns_base_dir(request)
@@ -624,13 +624,13 @@ async def cancel_campaign(
 ) -> CampaignCancelResponse:
     """Cancel a running campaign by writing a ``.stop`` flag file.
 
-    Returns 403 in read-only mode.  Returns 409 if the campaign is not
-    currently running.
+    Returns 403 if the user lacks write permission (issue #395).
+    Returns 409 if the campaign is not currently running.
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Campaign cancellation requires --enable-writes mode",
+            detail="Write permission required for campaign cancellation",
         )
 
     base = _campaigns_base_dir(request)

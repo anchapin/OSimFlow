@@ -1,12 +1,15 @@
 """FastAPI application for OSimFlow campaign monitoring.
 
-Security features (issue #268):
+Security features (issue #268, #395):
 - API key authentication (``X-API-Key`` header or ``api_key`` query param)
+- Multi-user support with per-user permission levels (issue #395)
 - CORS middleware with configurable origins
 - Rate limiting via slowapi (default 60/minute)
 - Read-only mode by default; ``--enable-writes`` required for mutations
 - ``/health`` remains unauthenticated for load balancer probes
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -26,6 +29,12 @@ from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
 
+from osimflow.api.auth import (
+    APIKeyUser,
+    MultiUserAPIKeyStore,
+    extract_api_key,
+    validate_api_key,
+)
 from osimflow.api.campaigns import campaigns_router
 from osimflow.api.events import events_router
 from osimflow.api.files import files_router
@@ -67,52 +76,24 @@ router = APIRouter()
 
 PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/", "/static/index.html", ""})
 
-
-# ---------------------------------------------------------------------------
-# Auth helpers (issue #268)
-# ---------------------------------------------------------------------------
-
-
-def generate_api_key() -> str:
-    """Generate a cryptographically secure API key.
-
-    Returns a URL-safe base64 string (~43 characters of entropy).
-    """
-    return secrets.token_urlsafe(32)
-
-
-def extract_api_key(request: Request) -> str | None:
-    """Extract the API key from a request.
-
-    Checks the ``X-API-Key`` header first, then the ``api_key`` query
-    parameter.  Returns ``None`` if neither is present.
-    """
-    header_key = request.headers.get("X-API-Key")
-    if header_key:
-        return str(header_key)
-    query_key = request.query_params.get("api_key")
-    if query_key:
-        return str(query_key)
-    return None
-
-
-def validate_api_key(provided: str | None, expected: str) -> bool:
-    """Validate *provided* against *expected* using constant-time comparison.
-
-    Returns ``True`` if the keys match, ``False`` otherwise (including when
-    *provided* is ``None``).
-    """
-    if provided is None:
-        return False
-    return secrets.compare_digest(provided, expected)
+# Re-export permission constants for convenience
+_ADMIN = "admin"
+_READONLY = "readonly"
+_READWRITE = "readwrite"
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
     """HTTP middleware that enforces API key authentication.
 
     Requests to paths in :data:`PUBLIC_PATHS` always pass through.
-    When ``app.state.api_key`` is ``None``, authentication is disabled
+    When no API keys are configured, authentication is disabled
     (backward-compatible with pre-#268 callers).
+
+    Supports two modes (issue #395):
+    - Single key mode: ``app.state.api_key_store`` is a single key string.
+      All authenticated users get server-level read_only permission.
+    - Multi-user mode: ``app.state.api_key_store`` is a
+      ``MultiUserAPIKeyStore`` with per-user roles.
     """
 
     async def dispatch(
@@ -124,16 +105,41 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if normalised in PUBLIC_PATHS:
             return cast(Response, await call_next(request))
 
-        expected_key: str | None = getattr(request.app.state, "api_key", None)
-        if expected_key is None:
+        key_store: MultiUserAPIKeyStore | str | None = getattr(
+            request.app.state, "api_key_store", None
+        )
+        # Backward compat: if it's a plain string, wrap it
+        if isinstance(key_store, str):
+            key_store = MultiUserAPIKeyStore.from_single_key(key_store)
+        if key_store is None:
             return cast(Response, await call_next(request))
 
         provided = extract_api_key(request)
-        if not validate_api_key(provided, expected_key):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or missing API key"},
+
+        # Single key mode (backward compat)
+        if isinstance(key_store, MultiUserAPIKeyStore) and key_store.single_key is not None:
+            if not validate_api_key(provided, key_store.single_key):
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or missing API key"},
+                )
+            # Store user in request state for downstream checks
+            request.state.api_user = APIKeyUser(
+                key=provided or "", user_id="default", role=_ADMIN
             )
+            return cast(Response, await call_next(request))
+
+        # Multi-user mode
+        if isinstance(key_store, MultiUserAPIKeyStore):
+            user = key_store.validate(provided)
+            if user is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or missing API key"},
+                )
+            request.state.api_user = user
+            return cast(Response, await call_next(request))
+
         return cast(Response, await call_next(request))
 
 
@@ -687,6 +693,7 @@ def create_app(
     campaigns_base_dir: Path | None = None,
     read_only: bool = True,
     api_key: str | None = None,
+    api_keys_file: Path | None = None,
     cors_origins: list[str] | None = None,
     rate_limit: str = "60/minute",
     ui_enabled: bool = False,
@@ -706,10 +713,27 @@ def create_app(
         ``run.json`` to be discoverable.
     read_only
         If ``True`` (default), only GET endpoints are available.
+        This is the server-level default for users without explicit roles.
     api_key
-        API key for authentication.  When ``None``, authentication is
-        disabled.  When set, all non-public endpoints require the
+        Single API key for authentication (backward-compatible mode).
+        When ``None`` and ``api_keys_file`` is not set, authentication
+        is disabled.  When set, all non-public endpoints require the
         ``X-API-Key`` header or ``api_key`` query parameter to match.
+        In single-key mode, all authenticated users get admin access.
+    api_keys_file
+        Path to a JSON file containing multiple API keys with per-user
+        roles (issue #395).  When set, ``api_key`` is ignored.
+        File format::
+
+            {
+                "users": [
+                    {"key": "api-key-1", "user_id": "alice", "role": "admin"},
+                    {"key": "api-key-2", "user_id": "bob", "role": "readonly"}
+                ]
+            }
+
+        Roles: ``readonly`` (GET only), ``readwrite`` (GET + POST for
+        stop/cancel), ``admin`` (full access including campaign creation).
     cors_origins
         List of allowed CORS origins.  When ``None`` or empty, CORS is
         not configured (same-origin only).  Use ``["*"]`` for all
@@ -723,10 +747,29 @@ def create_app(
         description="REST API for monitoring OSimFlow campaigns",
     )
 
+    # --- Build API key store (issue #395) ---
+    key_store: MultiUserAPIKeyStore | None = None
+    if api_keys_file is not None:
+        try:
+            keys_data = json.loads(api_keys_file.read_text())
+            users = keys_data.get("users", [])
+            if not users:
+                raise ValueError("No users found in api_keys_file")
+            key_store = MultiUserAPIKeyStore.from_users(users)
+            log.info("Loaded %d API keys from %s", len(users), api_keys_file)
+        except Exception as exc:
+            log.error("Failed to load API keys from %s: %s", api_keys_file, exc)
+            raise ValueError(f"Invalid api_keys_file: {exc}") from exc
+    elif api_key is not None:
+        key_store = MultiUserAPIKeyStore.from_single_key(api_key)
+
     # --- Application state ---
     app.state.outdir = outdir
     app.state.campaigns_base_dir = campaigns_base_dir
     app.state.read_only = read_only
+    # Store the key store for the middleware
+    app.state.api_key_store = key_store
+    # Keep api_key for backward compat
     app.state.api_key = api_key
 
     # --- CORS middleware ---
