@@ -11,7 +11,7 @@ from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
-from .config import CampaignConfig, load_config
+from .config import CampaignConfig, coerce_variable_type, load_config
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
@@ -86,6 +86,7 @@ __all__ = [
     "SQLiteCache",
     "Campaign",
     "CampaignConfig",
+    "coerce_variable_type",
     "load_config",
     "DistributedCache",
     "build_cache",
