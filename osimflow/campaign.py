@@ -1487,6 +1487,58 @@ class Campaign:
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
 
+            # Alert: campaign completed or failed (issue #438).
+            # Compute cache hit rate for cache.miss_rate_low rule.
+            cache_stats = self.cache.stats()
+            cache_hit_rate: float = 1.0
+            hits = float(cache_stats.get("hits", 0))  # type: ignore[arg-type]
+            misses = float(cache_stats.get("misses", 0))  # type: ignore[arg-type]
+            total = hits + misses
+            if total > 0:
+                cache_hit_rate = hits / total
+            self._alert_manager.update_cache_stats(cache_stats)
+            self._alert_manager.notify(
+                "cache.miss_rate_low",
+                {
+                    "campaign_id": self.trace.campaign_id,
+                    "cache_hit_rate": cache_hit_rate * 100.0,
+                    "cache_stats": cache_stats,
+                },
+            )
+            if campaign_status == "success":
+                self._alert_manager.notify(
+                    "campaign.completed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "elapsed_s": duration,
+                        "n_samples": self.cfg.n_samples,
+                        "n_succeeded": sum(1 for s in self.trace.per_sample if s.status == "ok"),
+                        "n_failed": sum(1 for s in self.trace.per_sample if s.status == "failed"),
+                        "total_cost_usd": self.trace.total_cost_usd,
+                    },
+                )
+            else:
+                self._alert_manager.notify(
+                    "campaign.failed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "status": campaign_status,
+                        "error": getattr(self, "_last_error", "unknown"),
+                    },
+                )
+            # Audit log: record campaign outcome (issue #439).
+            n_ok = sum(1 for s in self.trace.per_sample if s.status == "ok")
+            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+            self._audit_logger.log_campaign_outcome(
+                campaign_id=self.trace.campaign_id,
+                status=campaign_status,
+                n_samples=self.cfg.n_samples,
+                n_succeeded=n_ok,
+                n_failed=n_failed,
+                elapsed_s=duration,
+                total_cost_usd=getattr(self.trace, "total_cost_usd", None),
+            )
+
             # Finalize cost tracking and write summary to run.json (issue #447).
             self._finalize_costs()
 

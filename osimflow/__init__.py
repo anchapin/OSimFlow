@@ -6,11 +6,24 @@ in `.agents/results/decision-verdict.md`. This is the canonical public
 API; everything else is an implementation detail.
 """
 
+from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
-from .cache import CacheKey, SQLiteCache
+from .cache import CacheKey, CacheStats, SQLiteCache
 from .campaign import Campaign
+from .chaos import (
+    ChaosEngine,
+    ChaosResult,
+    ChaosScenario,
+    CPUSpikeInjector,
+    FaultInjector,
+    FaultType,
+    KillSwitchInjector,
+    MemoryPressureInjector,
+    NetworkDelayInjector,
+    run_chaos_scenario,
+)
 from .config import CampaignConfig, coerce_variable_type, load_config
 from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
 from .distributed_cache import DistributedCache, build_cache
@@ -84,6 +97,7 @@ __all__ = [
     "SobolAlgorithm",
     "HaltonAlgorithm",
     "CacheKey",
+    "CacheStats",
     "SQLiteCache",
     "Campaign",
     "CampaignConfig",
@@ -118,6 +132,15 @@ __all__ = [
     "CampaignRecord",
     "SevereEnergyPlusError",
     "ValidationError",
+    # Version detection (from origin/main)
+    "VersionDetectionError",
+    "detect_openstudio_version",
+    "get_compatible_container_tag",
+    "verify_version_compatibility",
+    # Alerting (from origin/main)
+    "AlertManager",
+    "build_alert_manager",
+    # Cost tracking (from this PR)
     "CostEstimate",
     "CostTracker",
     "CampaignCostSummary",

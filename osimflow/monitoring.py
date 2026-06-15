@@ -242,6 +242,9 @@ class RunTrace:
         # Cost summary (issue #447). Present when enable_cost_tracking is True.
         if self.cost_summary is not None:
             d["cost_summary"] = self.cost_summary
+        # Cache hit rate (issue #426).
+        if self.cache_hit_rate is not None:
+            d["cache_hit_rate"] = self.cache_hit_rate
         return d
 
     def update_sample(self, trace: SampleTrace) -> None:

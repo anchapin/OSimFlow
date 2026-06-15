@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .executors import run_subprocess  # local helper (issue #6)
+from .version_detection import VersionDetectionError, detect_openstudio_version
 from .weather import EPWValidationError, discover_epw_files, validate_epw_header
 
 log = logging.getLogger("osimflow.work")
@@ -522,10 +523,31 @@ def run_openstudio_sim(
         subprocess.CalledProcessError: when ``openstudio.cli`` exits
             with a non-zero code that is not transient.
     """
+    # Auto-detect version if not provided or invalid
+    resolved_version = openstudio_version
+    if not resolved_version or not resolved_version[0].isdigit():
+        log.debug(
+            "run_openstudio_sim: version %r is empty/invalid - attempting auto-detection",
+            openstudio_version,
+        )
+        try:
+            resolved_version = detect_openstudio_version()
+            log.info(
+                "run_openstudio_sim: auto-detected OpenStudio version %s for sample %s",
+                resolved_version,
+                sample_id,
+            )
+        except VersionDetectionError:
+            log.warning(
+                "run_openstudio_sim: could not auto-detect version for sample %s - using stub",
+                sample_id,
+            )
+            resolved_version = "unknown"
+
     return _run_openstudio_sim_impl(
         modified_sim_package=modified_sim_package,
         sample_id=sample_id,
-        openstudio_version=openstudio_version,
+        openstudio_version=resolved_version,
         out=out,
         simulate_work_s=simulate_work_s,
         stdout_path=stdout_path,
