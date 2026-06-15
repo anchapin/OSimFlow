@@ -1548,7 +1548,7 @@ class Campaign:
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
 
-# Alert: campaign completed or failed (issue #438).
+            # Alert: campaign completed or failed (issue #438).
             # Compute cache hit rate for cache.miss_rate_low rule.
             cache_stats = self.cache.stats()
             cache_hit_rate: float = 1.0
