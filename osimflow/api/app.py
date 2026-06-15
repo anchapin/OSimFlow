@@ -381,6 +381,90 @@ async def ready(request: Request) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Campaign health dashboard (issue #437)
+# ---------------------------------------------------------------------------
+
+
+def _compute_campaign_status(data: dict[str, Any]) -> str:
+    """Derive an overall health status from run.json data.
+
+    Returns ``"healthy"``, ``"degraded"``, ``"unhealthy"``, or ``"unknown"``.
+    """
+    status = data.get("status", "unknown")
+    per_sample: list[dict[str, Any]] = data.get("per_sample", [])
+    n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+
+    if status == "running":
+        return "degraded" if n_failed > 0 else "healthy"
+    if status in ("success", "completed"):
+        if not per_sample:
+            return "healthy"
+        if n_failed == 0:
+            return "healthy"
+        return "degraded" if n_failed < len(per_sample) else "unhealthy"
+    if status in ("failed", "cancelled"):
+        return "unhealthy"
+    return "unknown"
+
+
+@router.get("/api/v1/health")  # type: ignore[untyped-decorator]
+async def get_campaign_health(request: Request) -> dict[str, Any]:
+    """Campaign health dashboard — overall status + per-step summary.
+
+    Returns:
+        overall status (healthy/degraded/unknown), per-step status list,
+        sample counts (total/success/failed/running), and key timestamps.
+    """
+    data = _load_run_json(request)
+
+    per_sample = data.get("per_sample", [])
+    n_total = len(per_sample)
+    n_success = sum(1 for s in per_sample if s.get("status") == "ok")
+    n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+    n_cached = sum(1 for s in per_sample if s.get("status") == "cached")
+    n_running = n_total - n_success - n_failed - n_cached
+
+    steps: list[dict[str, Any]] = data.get("steps", [])
+    step_statuses: list[dict[str, str]] = [
+        {
+            "step": s.get("step", ""),
+            "cache": s.get("cache", ""),
+            "status": "ok" if s.get("exit_code", 1) == 0 else "failed",
+            "elapsed_s": s.get("elapsed_s", 0.0),
+        }
+        for s in steps
+    ]
+
+    return {
+        "campaign_id": data.get("campaign_id"),
+        "overall_status": _compute_campaign_status(data),
+        "campaign_status": data.get("status", "unknown"),
+        "steps": step_statuses,
+        "samples": {
+            "total": n_total,
+            "success": n_success,
+            "failed": n_failed,
+            "cached": n_cached,
+            "running": n_running,
+        },
+        "started_at": data.get("started_at"),
+        "finished_at": data.get("finished_at"),
+        "elapsed_s": data.get("elapsed_s"),
+    }
+
+
+@router.get("/api/v1/health/details")  # type: ignore[untyped-decorator]
+async def get_campaign_health_details(request: Request) -> dict[str, Any]:
+    """Full run.json contents for the campaign health dashboard.
+
+    Returns the complete run.json for clients that need per-sample details,
+    error summaries, worker info, or any field not surfaced in
+    ``GET /api/v1/health``.
+    """
+    return _load_run_json(request)
+
+
+# ---------------------------------------------------------------------------
 # Campaign / steps
 # ---------------------------------------------------------------------------
 
@@ -395,6 +479,23 @@ async def get_campaign(request: Request) -> dict[str, Any]:
         "started_at": data.get("started_at"),
         "finished_at": data.get("finished_at"),
         "baseline_comparison": data.get("baseline_comparison"),
+    }
+
+
+@router.get("/api/v1/cache/stats")  # type: ignore[untyped-decorator]
+async def get_cache_stats(request: Request) -> dict[str, Any]:
+    """Get cache hit/miss statistics from the campaign cache."""
+    cache = getattr(request.app.state, "cache", None)
+    if cache is None:
+        raise HTTPException(status_code=503, detail="Cache not available")
+    stats = cache.get_stats()
+    hit_rate = cache.get_cache_hit_rate()
+    return {
+        "hits": stats.hits,
+        "misses": stats.misses,
+        "invalidations": stats.invalidations,
+        "total_keys": stats.total_keys,
+        "hit_rate": hit_rate,
     }
 
 
@@ -884,6 +985,58 @@ async def root_redirect() -> RedirectResponse:
 # ---------------------------------------------------------------------------
 
 
+def _build_key_store(
+    api_key: str | None,
+    api_keys_file: Path | None,
+) -> MultiUserAPIKeyStore | None:
+    """Build the API key store from file or single key (issue #395)."""
+    if api_keys_file is not None:
+        try:
+            keys_data = json.loads(api_keys_file.read_text())
+            users = keys_data.get("users", [])
+            if not users:
+                raise ValueError("No users found in api_keys_file")
+            key_store = MultiUserAPIKeyStore.from_users(users)
+            log.info("Loaded %d API keys from %s", len(users), api_keys_file)
+            return key_store
+        except Exception as exc:
+            log.error("Failed to load API keys from %s: %s", api_keys_file, exc)
+            raise ValueError(f"Invalid api_keys_file: {exc}") from exc
+    elif api_key is not None:
+        return MultiUserAPIKeyStore.from_single_key(api_key)
+    return None
+
+
+def _load_registry(registry_path: Path | None) -> Any:
+    """Load the campaign registry from path (issue #404)."""
+    if registry_path is None:
+        return None
+    try:
+        from osimflow.registry import CampaignRegistry  # noqa: PLC0415
+
+        registry = CampaignRegistry(db_path=registry_path)
+        log.info("registry loaded from %s", registry_path)
+        return registry
+    except Exception as exc:  # noqa: BLE001
+        log.error("Failed to load registry from %s: %s", registry_path, exc)
+        return None
+
+
+def _load_cache(cache_db_path: Path | None) -> Any:
+    """Load the cache from path (issue #426)."""
+    if cache_db_path is None:
+        return None
+    try:
+        from osimflow.cache import SQLiteCache  # noqa: PLC0415
+
+        cache = SQLiteCache(cache_db_path)
+        log.info("cache loaded from %s", cache_db_path)
+        return cache
+    except Exception as exc:  # noqa: BLE001
+        log.error("Failed to load cache from %s: %s", cache_db_path, exc)
+        return None
+
+
 def create_app(
     outdir: Path | None = None,
     *,
@@ -895,6 +1048,7 @@ def create_app(
     rate_limit: str = "60/minute",
     ui_enabled: bool = False,
     registry_path: Path | None = None,
+    cache_db_path: Path | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -953,42 +1107,16 @@ def create_app(
         description="REST API for monitoring OSimFlow campaigns",
     )
 
-    # --- Build API key store (issue #395) ---
-    key_store: MultiUserAPIKeyStore | None = None
-    if api_keys_file is not None:
-        try:
-            keys_data = json.loads(api_keys_file.read_text())
-            users = keys_data.get("users", [])
-            if not users:
-                raise ValueError("No users found in api_keys_file")
-            key_store = MultiUserAPIKeyStore.from_users(users)
-            log.info("Loaded %d API keys from %s", len(users), api_keys_file)
-        except Exception as exc:
-            log.error("Failed to load API keys from %s: %s", api_keys_file, exc)
-            raise ValueError(f"Invalid api_keys_file: {exc}") from exc
-    elif api_key is not None:
-        key_store = MultiUserAPIKeyStore.from_single_key(api_key)
+    key_store = _build_key_store(api_key, api_keys_file)
 
-    # --- Application state ---
     app.state.outdir = outdir
     app.state.campaigns_base_dir = campaigns_base_dir
     app.state.read_only = read_only
-    # Store the key store for the middleware
     app.state.api_key_store = key_store
-    # Keep api_key for backward compat
     app.state.api_key = api_key
 
-    # --- Registry for campaign ID resolution (issue #404) ---
-    registry: Any = None
-    if registry_path is not None:
-        try:
-            from osimflow.registry import CampaignRegistry  # noqa: PLC0415
-
-            registry = CampaignRegistry(db_path=registry_path)
-            log.info("registry loaded from %s", registry_path)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Failed to load registry from %s: %s", registry_path, exc)
-    app.state.registry = registry
+    app.state.registry = _load_registry(registry_path)
+    app.state.cache = _load_cache(cache_db_path)
 
     # --- In-memory metrics counters for /metrics endpoint ---
     app.state.metrics_campaigns_total = 0
@@ -1004,7 +1132,9 @@ def create_app(
     app.state.metrics_campaign_duration_sum = 0.0
     app.state.metrics_campaign_duration_count = 0
 
-    # --- CORS middleware ---
+
+# --- CORS middleware ---
+
     if cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -1014,32 +1144,15 @@ def create_app(
             allow_headers=["X-API-Key", "Content-Type"],
         )
 
-    # --- Rate limiting (issue #454) ---
-    # Custom in-process middleware replaces slowapi's SlowAPIMiddleware,
-    # which did not reliably maintain its counter between sequential
-    # TestClient requests under pytest-xdist in CI.
-    #
-    # Middleware ordering (add_middleware inserts at front → last added
-    # is outermost):
-    #   1. add CORS (if configured)
-    #   2. add RateLimitMiddleware   ← runs after auth
-    #   3. add APIKeyMiddleware      ← outermost, runs first
-    # Result: APIKey(RateLimit(CORS(router)))
     app.add_middleware(
         RateLimitMiddleware,
         rate_limit=rate_limit,
         key_func=_get_real_remote_address,
     )
-
-    # Store a reference for tests / introspection.  The actual
-    # middleware instance is created lazily by Starlette's
-    # add_middleware, so we expose the configured rate-limit string.
     app.state.limiter = rate_limit  # type: ignore[assignment]
 
-    # --- Authentication middleware (outermost — runs first) ---
     app.add_middleware(APIKeyMiddleware)
 
-    # --- Routes ---
     app.include_router(router)
     app.include_router(events_router)
     app.include_router(campaigns_router)
@@ -1049,12 +1162,10 @@ def create_app(
     app.include_router(variables_router)
     app.include_router(measures_router)
 
-    # --- Web UI router (issue #337) ---
     if ui_enabled:
         app.include_router(ui_router)
         log.info("web UI enabled at /ui/")
 
-    # --- Static files for the web GUI (issue #264) ---
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

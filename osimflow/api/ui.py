@@ -24,6 +24,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from osimflow.audit import AuditLogger
 from osimflow.campaign import Campaign
 from osimflow.config import CampaignConfig
 from osimflow.executors import LocalExecutor
@@ -290,6 +291,10 @@ async def stop_campaign(campaign_id: str) -> JSONResponse:
 
     stop_file = Path(outdir) / ".stop"
     stop_file.write_text(json.dumps({"requested_at": 0}))  # placeholder
+
+    # Audit log: campaign stopped via UI (issue #439)
+    audit = AuditLogger(outdir=Path(outdir))
+    audit.api_campaign_cancelled(campaign_id=campaign_id, actor="ui")
 
     data["status"] = "stopping"
     return JSONResponse(content={"campaign_id": campaign_id, "status": "stopping"})
