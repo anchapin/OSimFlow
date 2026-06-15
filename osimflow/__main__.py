@@ -627,6 +627,36 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "single-process LocalCluster is started automatically."
         ),
     )
+    # Cost tracking flags (issue #447)
+    run.add_argument(
+        "--enable-cost-tracking",
+        action="store_true",
+        help=(
+            "Enable campaign cost tracking for cloud/HPC resources (issue #447). "
+            "When set, estimated and actual costs are recorded per-sample and "
+            "a cost summary is written to run.json at campaign completion."
+        ),
+    )
+    run.add_argument(
+        "--cost-on-demand-price",
+        type=float,
+        default=None,
+        help=(
+            "On-demand price per vCPU-hour for cost estimation (USD). "
+            "Used when cloud provider APIs are unavailable. "
+            "Default: 0.05 (i.e., $0.05/vCPU·hour)."
+        ),
+    )
+    run.add_argument(
+        "--cost-spot-price",
+        type=float,
+        default=None,
+        help=(
+            "Spot price per vCPU-hour for cost estimation (USD). "
+            "Used to estimate potential savings vs on-demand. "
+            "Default: 0.03 (i.e., $0.03/vCPU·hour, ~40%% savings)."
+        ),
+    )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)
@@ -880,6 +910,39 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Custom S3-compatible endpoint URL for result storage (issue #339). "
             "Use for MinIO, Cloudflare R2, or other S3-compatible stores. "
             "Only valid when --result-storage-backend is 's3'."
+        ),
+    )
+    run.add_argument(
+        "--resource-quota",
+        default=None,
+        help=(
+            "JSON dict of resource quota limits for the campaign (issue #446). "
+            'Example: \'{"max_samples": 100, "max_cost_usd": 5000.0, '
+            '"max_wall_time_min": 240, "max_concurrent_samples": 10}\'. '
+            "All fields are optional. The campaign fails fast at start if "
+            "a quota is already exceeded, and skips further sample submissions "
+            "when the quota is exhausted during fan-out steps."
+        ),
+    )
+    run.add_argument(
+        "--alert-rules",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a YAML file defining alert rules (issue #438). "
+            "Each rule specifies an event_type, severity, message_template, "
+            "and condition. Built-in rules are always included; custom rules "
+            "from this file are added alongside them."
+        ),
+    )
+    run.add_argument(
+        "--alert-destinations",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a YAML file defining alert destinations (issue #438). "
+            "Supported destination types: webhook (url), email (smtp_host, recipients), "
+            "and log (level). When not set, alerts are only logged."
         ),
     )
 

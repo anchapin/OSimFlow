@@ -98,6 +98,22 @@ from .work import (
 )
 
 
+class QuotaExceededError(RuntimeError):
+    """Raised when a campaign resource quota is exceeded (issue #446)."""
+
+    def __init__(
+        self,
+        message: str,
+        quota_type: str,
+        limit: int | float,
+        current: int | float,
+    ) -> None:
+        super().__init__(message)
+        self.quota_type = quota_type
+        self.limit = limit
+        self.current = current
+
+
 def _osimflow_version() -> str:
     """Return the installed OSimFlow version, or 'unknown'."""
     try:
@@ -285,6 +301,7 @@ class Campaign:
 
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
+        self._quota_exceeded = False
         self._cancel_lock = threading.Lock()
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
@@ -312,6 +329,101 @@ class Campaign:
             endpoint = cfg.otel_endpoint or "http://localhost:4317"
             return OpenTelemetryBackend(endpoint=endpoint)
         raise ValueError(f"unknown observability backend: {backend_type}")
+
+    # ------------------------------------------------------------------
+    # Resource quota tracking (issue #446)
+    # ------------------------------------------------------------------
+
+    def _enforce_start_quota(self) -> None:
+        """Fail fast if the campaign's resource quota is already exceeded at start.
+
+        Called at the beginning of ``run()`` before any work is dispatched.
+        Raises ``QuotaExceededError`` with a descriptive message if any quota
+        is already violated.
+        """
+        quota = self.cfg.resource_quota
+        if quota is None:
+            return
+
+        if quota.max_samples is not None and self.cfg.n_samples > quota.max_samples:
+            raise QuotaExceededError(
+                f"n_samples={self.cfg.n_samples} exceeds resource_quota.max_samples="
+                f"{quota.max_samples}",
+                quota_type="max_samples",
+                limit=quota.max_samples,
+                current=self.cfg.n_samples,
+            )
+
+        log.info(
+            "resource quota active: max_samples=%s, max_cost_usd=%s, "
+            "max_wall_time_min=%s, max_concurrent_samples=%s",
+            quota.max_samples,
+            quota.max_cost_usd,
+            quota.max_wall_time_min,
+            quota.max_concurrent_samples,
+        )
+
+    def _check_quota_exceeded(self) -> bool:
+        """Return True if any hard quota limit has been reached.
+
+        Checks:
+        - ``max_samples``: total samples submitted so far vs. the limit.
+        - ``max_cost_usd``: accumulated campaign cost vs. the limit.
+        - ``max_wall_time_min``: elapsed campaign time vs. the limit.
+
+        Does NOT check ``max_concurrent_samples`` — that is enforced
+        by bounding ``max_workers`` at construction time.
+        """
+        quota = self.cfg.resource_quota
+        if quota is None:
+            return False
+
+        if quota.max_samples is not None:
+            # Count samples that have been submitted (all entries in _sample_state
+            # that have at least one step recorded).
+            submitted = sum(
+                1
+                for state in self._sample_state.values()
+                if any(k.endswith("_exit_code") or k.endswith("_status") for k in state)
+            )
+            if submitted >= quota.max_samples:
+                log.warning(
+                    "max_samples quota reached (%d >= %d) — skipping further submissions",
+                    submitted,
+                    quota.max_samples,
+                )
+                return True
+
+        if quota.max_cost_usd is not None and self.trace.total_cost_usd >= quota.max_cost_usd:
+            log.warning(
+                "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
+                self.trace.total_cost_usd,
+                quota.max_cost_usd,
+            )
+            return True
+
+        elapsed_min = (time.time() - self.trace.started_at) / 60.0
+        if quota.max_wall_time_min is not None and elapsed_min >= quota.max_wall_time_min:
+            log.warning(
+                "max_wall_time_min quota reached (%.1f >= %.1f min) — skipping further submissions",
+                elapsed_min,
+                quota.max_wall_time_min,
+            )
+            return True
+
+        return False
+
+    def _effective_max_workers(self) -> int:
+        """Return the effective max_workers bounded by max_concurrent_samples quota.
+
+        If a ``max_concurrent_samples`` quota is set, the fan-out parallelism
+        is capped to that value. Otherwise, ``self.max_workers`` is returned
+        unchanged.
+        """
+        quota = self.cfg.resource_quota
+        if quota is not None and quota.max_concurrent_samples is not None:
+            return min(self.max_workers, quota.max_concurrent_samples)
+        return self.max_workers
 
     def _compute_code_hashes(self) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
@@ -611,7 +723,22 @@ class Campaign:
             # Incremental checkpoint: update run.json after each sample
             # completes so SSE clients see live progress (issue #275).
             self._checkpoint_sample(sid)
+
+            # Mid-batch quota check: stop the campaign when a hard quota
+            # (max_samples, max_cost_usd, max_wall_time_min) is reached
+            # (issue #446).  The flag is set here and read by the outer
+            # loop below to cancel pending work.
+            if self._check_quota_exceeded():
+                self._quota_exceeded = True
+                log.warning(
+                    "quota exceeded during %s — cancelling remaining submissions", step_name
+                )
+
             return sid
+
+        # Flag cleared at the start of each step's fan-out so each step
+        # starts with a clean slate.
+        self._quota_exceeded = False
 
         # When max_workers == 1, use a sequential loop to avoid the
         # overhead of spinning up a ThreadPoolExecutor.  This preserves
@@ -620,6 +747,9 @@ class Campaign:
             for item in submissions.items():
                 if self._check_cancel_requested():
                     log.warning("cancellation requested during %s — stopping fan-out", step_name)
+                    break
+                if self._quota_exceeded:
+                    log.warning("quota exceeded — stopping further submissions in %s", step_name)
                     break
                 _await_one(item)
             if self._cancel_requested:
@@ -631,7 +761,7 @@ class Campaign:
         # so the pool parallelism effectively controls how many samples
         # we wait for at the same time.
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.max_workers,
+            max_workers=self._effective_max_workers(),
             thread_name_prefix="osimflow-fanout",
         ) as pool:
             futures = {
@@ -641,6 +771,13 @@ class Campaign:
                 if self._check_cancel_requested():
                     log.warning("cancellation requested during %s — stopping fan-out", step_name)
                     # Cancel remaining futures.
+                    for f in futures:
+                        f.cancel()
+                    break
+                if self._quota_exceeded:
+                    log.warning(
+                        "quota exceeded — cancelling remaining submissions in %s", step_name
+                    )
                     for f in futures:
                         f.cancel()
                     break
@@ -1311,6 +1448,9 @@ class Campaign:
 
         # Setup signal handlers for graceful shutdown.
         self._setup_signal_handlers()
+
+        # Fail-fast quota check before any work is dispatched (issue #446).
+        self._enforce_start_quota()
 
         run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
         if run_name is not None:
