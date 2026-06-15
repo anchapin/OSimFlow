@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy import stats
+from statsmodels.formula.api import ols
 
 log = logging.getLogger("osimflow.algorithms.doe")
 
@@ -113,6 +114,7 @@ class DOEAnalysis:
         """
         if self._df is None:
             self.load()
+        assert self._df is not None
 
         effects: list[MainEffect] = []
         for factor in self._factors:
@@ -124,11 +126,12 @@ class DOEAnalysis:
 
     def _compute_single_main_effect(self, factor: str) -> MainEffect | None:
         """Compute main effect for a single factor."""
+        assert self._df is not None
         df = self._df.dropna(subset=[factor, self.response_col])
         if len(df) < self.min_samples_per_level:
             return None
 
-        groups: list[np.ndarray] = []
+        groups: list[np.ndarray[Any, np.dtype[Any]]] = []
         levels: list[float] = []
         for level, group in df.groupby(factor, sort=True):
             if len(group) >= self.min_samples_per_level:
@@ -153,7 +156,7 @@ class DOEAnalysis:
 
         pooled_std = float(
             np.sqrt(
-                sum((n - 1) * sd**2 for n, sd in zip(counts, std_devs))
+                sum((n - 1) * sd**2 for n, sd in zip(counts, std_devs, strict=True))
                 / sum(counts)
             )
         )
@@ -179,6 +182,7 @@ class DOEAnalysis:
         """
         if self._df is None:
             self.load()
+        assert self._df is not None
 
         interactions: list[InteractionEffect] = []
         n = len(self._factors)
@@ -196,15 +200,13 @@ class DOEAnalysis:
         self, factor_a: str, factor_b: str
     ) -> InteractionEffect | None:
         """Compute 2-way interaction effect for a factor pair."""
+        assert self._df is not None
         df = self._df.dropna(subset=[factor_a, factor_b, self.response_col])
         if len(df) < self.min_samples_per_level * 2:
             return None
 
         try:
             formula = f"{self.response_col} ~ C({factor_a}) * C({factor_b})"
-            from statsmodels.api import OLS
-            from statsmodels.formula.api import ols
-
             model = ols(formula, data=df).fit()
             anova_table = stats.anova_lm(model, typ=2)
 
@@ -257,7 +259,7 @@ class DOEAnalysis:
             interaction_sse = sum(
                 ie.sse_interaction
                 for ie in self._interaction_effects
-                if ie.factor_a == me.factor or ie.factor_b == me.factor
+                if me.factor in {ie.factor_a, ie.factor_b}
             )
             total_effect = me.effect_size**2 + interaction_sse
             sensitivity.append(

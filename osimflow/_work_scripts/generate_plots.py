@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from osimflow.algorithms.doe_analysis import DOEAnalysis, run_doe_analysis
+from osimflow.algorithms.doe_analysis import DOEAnalysis
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_plots")
@@ -390,7 +390,7 @@ def _plot_main_effects(
             markersize=6,
         )
         ax.set_xticks(range(len(levels)))
-        ax.set_xticklabels([f"{l:.2g}" for l in levels], rotation=45, ha="right")
+        ax.set_xticklabels([f"{level:.2g}" for level in levels], rotation=45, ha="right")
         ax.set_xlabel(me.factor)
         ax.set_ylabel("Response Mean")
         sig_marker = "**" if me.p_value < 0.01 else ("*" if me.p_value < 0.05 else "")
@@ -492,7 +492,7 @@ def _plot_factor_sensitivity(
     ax.set_title("DOE Factor Sensitivity (Pareto Chart)")
     ax.invert_yaxis()
 
-    for bar, contrib in zip(bars, contributions):
+    for bar, contrib in zip(bars, contributions, strict=True):
         ax.text(
             bar.get_width() + 0.5,
             bar.get_y() + bar.get_height() / 2,
