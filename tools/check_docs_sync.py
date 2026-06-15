@@ -63,6 +63,8 @@ PATH_SKIP_SUBSTRINGS = (
     "requirements.txt",  # Python deps file (example in docs, not in repo)
     "/Users/",  # example absolute path in docs
     "vendor/",  # bundled deps dir (example in docs)
+    "supervisord.conf",  # example config file (illustrative, not a repo file)
+    "osimflow_work.py",  # example script name (illustrative, not a repo file)
     "shutil.which",  # stdlib API, not a file
     "pypi.org",  # domain name, not a path
     "tar.gz",  # generated archive artifact, not a repo file
