@@ -183,6 +183,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `infra/aws/terraform/ecr.tf` | ECR repository + lifecycle policy for mirrored OpenStudio images (issue #129). Keeps last 5 tagged `3.*` images. |
 | `docs/container-image-strategy.md` | Container image strategy: why we mirror to ECR, how to use the sync script, lifecycle policy, multi-region replication, and cost considerations (issue #129). |
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
+| `docs/offline-deployment-guide.md` | Offline/air-gapped deployment guide: bundling the Python environment, OpenStudio CLI, and weather data for air-gapped HPC (issue #399). |
 | `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
 | `docs/observability.md` | Pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry): configuration, usage, and extension guide (issue #145, #127). |
 | `infra/nomad/examples/ha/` | Docker Compose HA cluster for Nomad (3 server + 2 client) with ACL bootstrap (issue #123). |
@@ -643,6 +644,7 @@ generic role prompt's tool guidance when they disagree).
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
 - [Observability guide (docs/observability.md)](docs/observability.md) — pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry).
 - [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
+- [Offline deployment guide (docs/offline-deployment-guide.md)](docs/offline-deployment-guide.md) — offline/air-gapped deployment guide (issue #399).
 - [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding.
 - [GOVERNANCE.md](docs/GOVERNANCE.md) — community governance model.

@@ -63,6 +63,9 @@ PATH_SKIP_SUBSTRINGS = (
     "requirements.txt",  # Python deps file (example in docs, not in repo)
     "/Users/",  # example absolute path in docs
     "vendor/",  # bundled deps dir (example in docs)
+    "shutil.which",  # stdlib API, not a file
+    "pypi.org",  # domain name, not a path
+    "tar.gz",  # generated archive artifact, not a repo file
 )
 # Extension classes that look like file refs but are documented file
 # *patterns*, not real on-disk files we can resolve.
@@ -103,6 +106,11 @@ def _is_documented_pattern(token: str) -> bool:
     ext = token.rsplit(".", 1)[-1]
     if ext not in DOCUMENTED_PATTERNS:
         return False
+    # `.md` cross-references (e.g. `deployment/slurm.md` inside a markdown
+    # link) are validated by `_check_markdown_links` relative to the doc's
+    # directory. Skip them here to avoid false REPO_ROOT-relative misses.
+    if ext == "md":
+        return True
     # Files at the repo root or in known ignored dirs (examples in the PRD
     # are typically not checked in).
     if "/" not in token:
@@ -118,7 +126,7 @@ def _is_documented_pattern(token: str) -> bool:
 def _is_skipped(token: str) -> bool:
     if token.startswith(("http://", "https://")):
         return True
-    if token.startswith(("*", "/usr", "/bin")):
+    if token.startswith(("*", "/usr", "/bin", "/etc")):
         return True
     for sub in PATH_SKIP_SUBSTRINGS:
         if sub in token:
