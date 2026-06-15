@@ -1148,6 +1148,50 @@ def _add_cancel_args(cancel: argparse.ArgumentParser) -> None:
     cancel.add_argument("--log_level", default="INFO")
 
 
+def _add_backup_args(bk: argparse.ArgumentParser) -> None:
+    bk.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Output path for the backup file. "
+            "Default: auto-generated timestamped file in <registry_dir>/backups/. "
+            "(issue #440)"
+        ),
+    )
+    bk.add_argument(
+        "--registry",
+        default=None,
+        type=Path,
+        help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
+    )
+    bk.add_argument("--log_level", default="INFO")
+
+
+def _add_restore_args(rs: argparse.ArgumentParser) -> None:
+    rs.add_argument(
+        "backup_file",
+        type=Path,
+        help="Path to the backup SQLite database to restore from",
+    )
+    rs.add_argument(
+        "--registry",
+        default=None,
+        type=Path,
+        help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
+    )
+    rs.add_argument(
+        "--merge",
+        action="store_true",
+        help=(
+            "Merge backup records into the existing registry instead of "
+            "replacing all records. Existing records with the same id "
+            "are overwritten; new records are inserted. (issue #440)"
+        ),
+    )
+    rs.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -1203,6 +1247,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Request graceful cancellation of a running campaign",
     )
     _add_cancel_args(cncl)
+    bk = sub.add_parser(
+        "backup",
+        help="Create a backup of the campaign registry (issue #440)",
+    )
+    _add_backup_args(bk)
+    rs = sub.add_parser(
+        "restore",
+        help="Restore/import the campaign registry from a backup (issue #440)",
+    )
+    _add_restore_args(rs)
     return p
 
 
@@ -1691,6 +1745,39 @@ def _cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_backup(args: argparse.Namespace) -> int:
+    """Create a backup of the campaign registry database (issue #440)."""
+    registry_path = args.registry if args.registry else None
+    reg = CampaignRegistry(db_path=registry_path)
+    if args.output:
+        backup_path = Path(args.output)
+        reg.export_registry(backup_path)
+    else:
+        backup_path = reg.backup()
+    print(f"Backup created: {backup_path}")
+    return 0
+
+
+def _cmd_restore(args: argparse.Namespace) -> int:
+    """Restore/import the campaign registry from a backup file (issue #440)."""
+    backup_file: Path = Path(args.backup_file)
+    if not backup_file.exists():
+        print(f"error: backup file not found: {backup_file}", file=sys.stderr)
+        return 1
+
+    registry_path = args.registry if args.registry else None
+    reg = CampaignRegistry(db_path=registry_path)
+    try:
+        count = reg.import_registry(backup_file, merge=args.merge)
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    mode = "merged" if args.merge else "replaced"
+    print(f"Registry {mode} with {count} campaign(s) from {backup_file}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -1708,6 +1795,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "status": _cmd_status,
         "download": _cmd_download,
         "cancel": _cmd_cancel,
+        "backup": _cmd_backup,
+        "restore": _cmd_restore,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
