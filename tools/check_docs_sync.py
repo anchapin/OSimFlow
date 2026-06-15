@@ -63,6 +63,8 @@ PATH_SKIP_SUBSTRINGS = (
     "requirements.txt",  # Python deps file (example in docs, not in repo)
     "/Users/",  # example absolute path in docs
     "vendor/",  # bundled deps dir (example in docs)
+    "supervisord.conf",  # example config file (illustrative, not a repo file)
+    "osimflow_work.py",  # example script name (illustrative, not a repo file)
 )
 # Extension classes that look like file refs but are documented file
 # *patterns*, not real on-disk files we can resolve.
