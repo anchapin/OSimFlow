@@ -59,6 +59,7 @@ from .apply_params import (
     _build_mappings,
     preflight_check,
 )
+from .audit import AuditLogger
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .distributed_jobqueue import build_job_queue
@@ -247,6 +248,9 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+        # Audit logger (issue #439). Writes an immutable JSONL trail to
+        # ${outdir}/audit.jsonl for forensics and compliance.
+        self._audit: AuditLogger = AuditLogger(outdir=cfg.outdir)
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -1170,6 +1174,12 @@ class Campaign:
     # ------------------------------------------------------------------
     def _register_campaign(self) -> None:
         """Register this campaign in the campaign registry at start."""
+        self._audit.campaign_created(
+            campaign_id=self.trace.campaign_id,
+            executor=self.executor.name,
+            n_samples=self.cfg.n_samples,
+            openstudio_version=self.cfg.openstudio_version,
+        )
         if self._registry is None:
             return
         try:
@@ -1322,6 +1332,7 @@ class Campaign:
 
         # Auto-register campaign in registry (issue #266).
         self._register_campaign()
+        self._audit.campaign_started(campaign_id=self.trace.campaign_id)
 
         # Write campaign metadata manifest at start (issue #277).
         self._write_campaign_meta()
@@ -1388,6 +1399,14 @@ class Campaign:
             # status. Re-raising would crash the worker in concurrent mode
             # and cause test_cancel_during_generation_loop_stops to fail.
             return {"status": "cancelled", "trace": self.trace}
+        except Exception as exc:
+            campaign_status = "failure"
+            log.error("campaign failed unexpectedly: %s", exc)
+            self.trace.status = "failure"
+            self.trace.finalize()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            raise
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
             self._restore_signal_handlers()
@@ -1420,6 +1439,24 @@ class Campaign:
             # Fire webhook callback (issue #283). Best-effort: delivery
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
+
+            # Audit log: record campaign outcome (issue #439).
+            n_ok = sum(1 for s in self.trace.per_sample if s.status == "ok")
+            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+            if campaign_status == "success":
+                self._audit.campaign_completed(
+                    campaign_id=self.trace.campaign_id,
+                    duration_s=duration,
+                    n_succeeded=n_ok,
+                    n_failed=n_failed,
+                )
+            elif campaign_status == "cancelled":
+                self._audit.campaign_stopped(campaign_id=self.trace.campaign_id)
+            else:
+                self._audit.campaign_failed(
+                    campaign_id=self.trace.campaign_id,
+                    reason="unexpected failure",
+                )
 
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
