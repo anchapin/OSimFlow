@@ -5,9 +5,11 @@ Covers:
 - Path traversal protection (validate_path_within)
 - variables.yml schema validation (validate_variables_yml)
 - Template package validation (validate_template_package)
+- OSW schema validation (validate_osw)
 - API input sanitization (sanitize_sample_id, sanitize_filename)
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from osimflow.validation import (
     ValidationError,
     sanitize_filename,
     sanitize_sample_id,
+    validate_osw,
     validate_path_within,
     validate_path_within_base,
     validate_template_package,
@@ -538,3 +541,171 @@ class TestSanitizeFilename:
     def test_spaces_blocked(self) -> None:
         with pytest.raises(ValidationError, match="invalid characters"):
             sanitize_filename("has space.png")
+
+
+# ======================================================================
+# OSW schema validation
+# ======================================================================
+
+_MINIMAL_VALID_OSW = {
+    "steps": [
+        {
+            "measure_dir_name": "SetThermostatSchedule",
+            "arguments": {"heating_setpoint": 20.0, "cooling_setpoint": 25.0},
+        },
+    ],
+}
+
+
+class TestValidateOsw:
+    def test_valid_minimal_osw(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text(json.dumps(_MINIMAL_VALID_OSW))
+        assert validate_osw(osw) is True
+
+    def test_valid_osw_with_workflow_type_complete(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "workflow_type": "Complete"}
+        osw.write_text(json.dumps(data))
+        assert validate_osw(osw) is True
+
+    def test_valid_osw_with_workflow_type_singleton(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "workflow_type": "Singleton"}
+        osw.write_text(json.dumps(data))
+        assert validate_osw(osw) is True
+
+    def test_valid_osw_with_file_paths(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "file_paths": ["model.osm", "weather.epw"]}
+        osw.write_text(json.dumps(data))
+        assert validate_osw(osw) is True
+
+    def test_valid_osw_with_optional_seed_file(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "seed_file": "model.osm", "weather_file": ""}
+        osw.write_text(json.dumps(data))
+        assert validate_osw(osw) is True
+
+    def test_valid_osw_multiple_steps(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {
+            "steps": [
+                {"measure_dir_name": "Step1", "arguments": {"arg1": 1}},
+                {"measure_dir_name": "Step2", "arguments": {"arg2": "two"}},
+            ],
+        }
+        osw.write_text(json.dumps(data))
+        assert validate_osw(osw) is True
+
+    def test_missing_required_steps(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text(json.dumps({"workflow_type": "Complete"}))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_steps_not_array(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text(json.dumps({"steps": "not an array"}))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_steps_empty_array(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text(json.dumps({"steps": []}))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_step_missing_measure_dir_name(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {"steps": [{"arguments": {"heating_setpoint": 20.0}}]}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_step_missing_arguments(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {"steps": [{"measure_dir_name": "SetThermostatSchedule"}]}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_step_measure_dir_name_not_string(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {"steps": [{"measure_dir_name": 123, "arguments": {}}]}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_step_arguments_not_object(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {"steps": [{"measure_dir_name": "Measure", "arguments": ["not", "an", "object"]}]}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_workflow_type_invalid_value(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "workflow_type": "InvalidType"}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_workflow_type_not_string(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "workflow_type": 123}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_file_paths_not_array(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "file_paths": "not an array"}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_file_paths_items_not_strings(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "file_paths": [123, "string"]}
+        osw.write_text(json.dumps(data))
+        with pytest.raises(ValidationError, match="validation failed"):
+            validate_osw(osw)
+
+    def test_invalid_json(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text("not valid json {{{")
+        with pytest.raises(ValidationError, match="not valid JSON"):
+            validate_osw(osw)
+
+    def test_non_dict_top_level(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text('["not", "a", "dict"]')
+        with pytest.raises(ValidationError, match="must be a JSON object"):
+            validate_osw(osw)
+
+    def test_non_utf8_file(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_bytes(b"\xff\xfe invalid utf-8")
+        with pytest.raises(ValidationError, match="not valid UTF-8"):
+            validate_osw(osw)
+
+    def test_validation_error_field_is_osw(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text(json.dumps({"steps": "not array"}))
+        try:
+            validate_osw(osw)
+        except ValidationError as exc:
+            assert exc.field == "workflow.osw"
+
+    def test_validation_error_message_indicates_failed_field(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        osw.write_text(json.dumps({"steps": []}))
+        with pytest.raises(ValidationError, match="steps"):
+            validate_osw(osw)
+
+    def test_additional_properties_allowed(self, tmp_path: Path) -> None:
+        osw = tmp_path / "workflow.osw"
+        data = {**_MINIMAL_VALID_OSW, "extra_field": "allowed", "another": 123}
+        osw.write_text(json.dumps(data))
+        assert validate_osw(osw) is True

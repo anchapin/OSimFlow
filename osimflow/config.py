@@ -584,6 +584,19 @@ class CampaignConfig:
     # When set, the campaign fails fast at start and/or skips further
     # sample submissions when the quota is exhausted.
     resource_quota: ResourceQuota | None = None
+    # Alert rules YAML file path (issue #438). When set, custom alert rules
+    # are loaded from this file in addition to the built-in rules.
+    alert_rules: Path | None = None
+    # Alert destinations YAML file path (issue #438). When set, alert
+    # destinations are loaded from this file.
+    alert_destinations: Path | None = None
+    # Cross-step retry configuration (issue #416). When a fan-out step
+    # (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS) fails with a
+    # transient error, retry that specific step up to max_step_retries
+    # times before aborting the campaign. A value of 0 disables retries.
+    # Only transient errors trigger retry; permanent errors (invalid input,
+    # missing files) abort immediately.
+    max_step_retries: int = 2
 
     @property
     def work_dir(self) -> Path:
@@ -870,4 +883,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
         resource_quota=_parse_resource_quota(args.get("resource_quota")),
+        alert_rules=(Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None),
+        alert_destinations=(
+            Path(str(args["alert_destinations"])).resolve()
+            if args.get("alert_destinations")
+            else None
+        ),
+        max_step_retries=int(str(args.get("max_step_retries", 2))),
     )

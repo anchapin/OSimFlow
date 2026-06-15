@@ -6,11 +6,24 @@ in `.agents/results/decision-verdict.md`. This is the canonical public
 API; everything else is an implementation detail.
 """
 
+from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
-from .cache import CacheKey, SQLiteCache
+from .cache import CacheKey, CacheStats, SQLiteCache
 from .campaign import Campaign, QuotaExceededError
+from .chaos import (
+    ChaosEngine,
+    ChaosResult,
+    ChaosScenario,
+    CPUSpikeInjector,
+    FaultInjector,
+    FaultType,
+    KillSwitchInjector,
+    MemoryPressureInjector,
+    NetworkDelayInjector,
+    run_chaos_scenario,
+)
 from .config import CampaignConfig, ResourceQuota, coerce_variable_type, load_config
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
@@ -83,6 +96,7 @@ __all__ = [
     "SobolAlgorithm",
     "HaltonAlgorithm",
     "CacheKey",
+    "CacheStats",
     "SQLiteCache",
     "Campaign",
     "CampaignConfig",
@@ -147,6 +161,11 @@ __all__ = [
     "DuplicateDocumentError",
     "SQLiteDocumentStore",
     "build_document_store",
+    # Version detection (from origin/main)
+    "VersionDetectionError",
+    "detect_openstudio_version",
+    "get_compatible_container_tag",
+    "verify_version_compatibility",
 ]
 
 setup_logging()

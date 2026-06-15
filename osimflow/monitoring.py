@@ -142,6 +142,8 @@ class RunTrace:
         self.total_cost_usd: float = 0.0
         self.spot_savings_usd: float = 0.0
         self.status: str = "running"  # "running", "success", "cancelled", "failed"
+        # Cache hit rate (issue #426).
+        self.cache_hit_rate: float | None = None
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -236,6 +238,9 @@ class RunTrace:
         # Cost summary (issue #126). Always present; defaults to 0.0.
         d["total_cost_usd"] = self.total_cost_usd
         d["spot_savings_usd"] = self.spot_savings_usd
+        # Cache hit rate (issue #426).
+        if self.cache_hit_rate is not None:
+            d["cache_hit_rate"] = self.cache_hit_rate
         return d
 
     def update_sample(self, trace: SampleTrace) -> None:
