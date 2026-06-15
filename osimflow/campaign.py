@@ -1604,7 +1604,6 @@ class Campaign:
                     campaign_id=self.trace.campaign_id,
                     reason="unexpected failure",
                 )
-                )
 
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
