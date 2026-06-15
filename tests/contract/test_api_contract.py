@@ -16,16 +16,16 @@ from pathlib import Path
 
 import pytest
 
-schemathesis = pytest.importorskip("schemathesis", reason="schemathesis>=3.19 required")
+schemathesis = pytest.importorskip("schemathesis", reason="schemathesis>=3.19 required")  # noqa: E402
+pytest.importorskip("fastapi", reason="osimflow[api] extra required")  # noqa: E402
+pytest.importorskip("slowapi", reason="osimflow[api] extra required")  # noqa: E402
+pytest.importorskip("sse_starlette", reason="osimflow[api] extra required")  # noqa: E402
 
-pytest.importorskip("fastapi", reason="osimflow[api] extra required")
-pytest.importorskip("slowapi", reason="osimflow[api] extra required")
-pytest.importorskip("sse_starlette", reason="osimflow[api] extra required")
+from fastapi.testclient import TestClient  # noqa: E402
+from hypothesis import HealthCheck, given, settings  # noqa: E402
+from hypothesis import strategies as st  # noqa: E402
 
-from fastapi.testclient import TestClient
-from hypothesis import given, settings, HealthCheck, strategies as st
-
-from osimflow.api import create_app
+from osimflow.api import create_app  # noqa: E402
 
 
 @pytest.fixture
@@ -259,7 +259,7 @@ class TestEventsContract:
 
     def test_events_returns_200(self, client: TestClient) -> None:
         """The SSE endpoint must return HTTP 200 (EventSourceResponse)."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         async def finite_generator(request, poll_interval=1.0, max_iterations=1):
             yield {"event": "campaign.completed", "data": "{}"}
