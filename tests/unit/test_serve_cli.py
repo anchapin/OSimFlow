@@ -94,6 +94,7 @@ class TestServeCLI:
             cors_origins=None,
             rate_limit="60/minute",
             ui_enabled=False,
+            registry_path=None,
         )
 
     def test_serve_read_only_default(self, tmp_path: Path) -> None:
@@ -124,6 +125,7 @@ class TestServeCLI:
             cors_origins=None,
             rate_limit="60/minute",
             ui_enabled=False,
+            registry_path=None,
         )
 
     def test_serve_import_error_returns_1(self, tmp_path: Path) -> None:
