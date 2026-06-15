@@ -59,7 +59,7 @@ def _get_real_remote_address(request: Request) -> str:
         client_ip = forwarded_for.split(",")[0].strip()
         if client_ip:
             return client_ip
-    return str(get_remote_address(request))
+    return cast(str, get_remote_address(request))
 
 
 router = APIRouter()
