@@ -1192,6 +1192,28 @@ def _add_restore_args(rs: argparse.ArgumentParser) -> None:
     rs.add_argument("--log_level", default="INFO")
 
 
+def _add_health_args(health: argparse.ArgumentParser) -> None:
+    health.add_argument(
+        "--outdir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory to check write permissions and disk space in (default: current directory)."
+        ),
+    )
+    health.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as machine-readable JSON instead of a table.",
+    )
+    health.add_argument(
+        "--offline",
+        action="store_true",
+        help="Skip the network connectivity check.",
+    )
+    health.add_argument("--log_level", default="ERROR")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -1257,6 +1279,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restore/import the campaign registry from a backup (issue #440)",
     )
     _add_restore_args(rs)
+    health = sub.add_parser(
+        "health",
+        help="Verify system health before starting a campaign (issue #411)",
+    )
+    _add_health_args(health)
     return p
 
 
@@ -1696,6 +1723,26 @@ def _format_field(record: CampaignRecord, key: str) -> str:
     return str(getattr(record, key, ""))
 
 
+def _cmd_health(args: argparse.Namespace) -> int:
+    """Run system health checks (issue #411)."""
+    from osimflow.health import (  # noqa: PLC0415
+        format_results,
+        get_exit_code,
+        run_health_checks,
+        to_json,
+    )
+
+    outdir = args.outdir if args.outdir else Path.cwd()
+    report = run_health_checks(outdir=outdir, skip_network=args.offline)
+
+    if args.json:
+        print(to_json(report))
+    else:
+        print(format_results(report))
+
+    return get_exit_code(report)
+
+
 def _cmd_cancel(args: argparse.Namespace) -> int:
     """Request graceful cancellation of a running campaign.
 
@@ -1797,6 +1844,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "cancel": _cmd_cancel,
         "backup": _cmd_backup,
         "restore": _cmd_restore,
+        "health": _cmd_health,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
