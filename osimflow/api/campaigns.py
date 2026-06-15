@@ -45,6 +45,7 @@ from osimflow.api.schemas import (
     SampleListResponse,
     SampleSummary,
 )
+from osimflow.audit import AuditLogger, api_actor_from_request
 
 log = logging.getLogger("osimflow.api.campaigns")
 
@@ -187,6 +188,16 @@ async def create_campaign(
     outdir = Path(body.outdir).resolve() if body.outdir is not None else base / campaign_id
 
     outdir.mkdir(parents=True, exist_ok=True)
+
+    # Audit log: campaign created via API (issue #439)
+    audit = AuditLogger(outdir=outdir)
+    actor = api_actor_from_request(request)
+    audit.api_campaign_created(
+        campaign_id=campaign_id,
+        actor=actor,
+        executor=body.executor or "local",
+        n_samples=body.n_samples,
+    )
 
     # Write a config stub so the campaign is discoverable
     config_stub: dict[str, Any] = {
@@ -935,6 +946,11 @@ async def cancel_campaign(
     stop_file = campaign_dir / ".stop"
     stop_file.write_text(json.dumps({"requested_at": time.time()}))
     log.info("stop flag written to %s", stop_file)
+
+    # Audit log: campaign cancelled via API (issue #439)
+    audit = AuditLogger(outdir=campaign_dir)
+    actor = api_actor_from_request(request)
+    audit.api_campaign_cancelled(campaign_id=campaign_id, actor=actor)
 
     return CampaignCancelResponse(
         campaign_id=campaign_id,
