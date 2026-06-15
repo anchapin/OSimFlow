@@ -200,8 +200,16 @@ def _check_package(name: str) -> tuple[bool, str | None]:
 
     Returns ``(found, version_string_or_none)``.
     """
-    spec = importlib.util.find_spec(name)
-    if spec is None:
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ValueError, ModuleNotFoundError):
+        # find_spec raises ValueError when a module is in sys.modules
+        # but has a missing/corrupted __spec__ (e.g., after moto or
+        # other test frameworks manipulate sys.modules). Fall back to
+        # checking sys.modules directly.
+        spec = None
+
+    if spec is None and name not in sys.modules:
         return (False, None)
     # Try to get version from importlib.metadata.
     version: str | None = None
