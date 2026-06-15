@@ -57,10 +57,10 @@ def _get_real_remote_address(request: Request) -> str:
         # The first IP is the original client.
         client_ip = forwarded_for.split(",")[0].strip()
         if client_ip:
-            return client_ip
+            return client_ip  # type: ignore[no-any-return]
     if request.client and request.client.host:
         return str(request.client.host)  # type: ignore[no-any-return]
-    return "127.0.0.1"
+    return "127.0.0.1"  # type: ignore[no-any-return]
 
 
 router = APIRouter()
