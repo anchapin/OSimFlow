@@ -69,6 +69,8 @@ class TestJSONFormatter:
 
 class TestSetupLogging:
     def test_console_handler_added(self, tmp_path):
+        logger = logging.getLogger("osimflow")
+        logger.handlers.clear()
         setup_logging(log_file=None, console=True)
         logger = logging.getLogger("osimflow")
         assert any(
