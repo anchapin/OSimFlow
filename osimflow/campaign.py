@@ -53,6 +53,7 @@ from typing import Any, TypedDict
 
 import yaml
 
+from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
     EPW_FILE_KEY,
@@ -289,6 +290,16 @@ class Campaign:
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
+        # Last error captured for alerting (issue #438).
+        self._last_error: str = "unknown"
+        # Alert manager (issue #438). Built from cfg so the correct rules
+        # and destinations are always used. Includes built-in rules for
+        # campaign events, sample failures, cache miss rate, and worker death.
+        self._alert_manager: AlertManager = build_alert_manager(
+            rules_path=getattr(cfg, "alert_rules", None),
+            destinations_path=getattr(cfg, "alert_destinations", None),
+            include_builtin=True,
+        )
 
     @staticmethod
     def _build_observability_backend(cfg: CampaignConfig) -> ObservabilityBackend:
@@ -607,6 +618,16 @@ class Campaign:
                 state[f"{step_name.lower}_status"] = "failed"
                 state["error_summary"] = str(e)[:500]
                 self._checkpoint_sample(sid)
+                # Alert: sample failed after max retries (issue #438).
+                self._alert_manager.notify(
+                    "sample.failed",
+                    {
+                        "sample_id": sid,
+                        "step": step_name,
+                        "error": str(e)[:500],
+                        "max_retries": self.cfg.max_sample_retries,
+                    },
+                )
                 return sid
             # Incremental checkpoint: update run.json after each sample
             # completes so SSE clients see live progress (issue #275).
@@ -1325,6 +1346,19 @@ class Campaign:
         # Write campaign metadata manifest at start (issue #277).
         self._write_campaign_meta()
 
+        # Alert: campaign started (issue #438).
+        self._alert_manager.notify(
+            "campaign.started",
+            {
+                "campaign_id": self.trace.campaign_id,
+                "n_samples": self.cfg.n_samples,
+                "algorithm": self.cfg.algorithm,
+                "executor": self.executor.name,
+                "openstudio_version": self.cfg.openstudio_version,
+                "outdir": str(self.cfg.outdir),
+            },
+        )
+
         try:
             # Pre-campaign cancellation check: if cancellation is requested
             # BEFORE the campaign starts, the except/finally blocks below
@@ -1386,6 +1420,15 @@ class Campaign:
             # status. Re-raising would crash the worker in concurrent mode
             # and cause test_cancel_during_generation_loop_stops to fail.
             return {"status": "cancelled", "trace": self.trace}
+        except Exception as exc:
+            campaign_status = "failure"
+            log.error("campaign failed: %s", exc, exc_info=True)
+            self.trace.status = "failure"
+            self._last_error = str(exc)[:500]
+            self.trace.finalize()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            raise
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
             self._restore_signal_handlers()
@@ -1418,6 +1461,46 @@ class Campaign:
             # Fire webhook callback (issue #283). Best-effort: delivery
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
+
+            # Alert: campaign completed or failed (issue #438).
+            # Compute cache hit rate for cache.miss_rate_low rule.
+            cache_stats = self.cache.stats()
+            cache_hit_rate: float = 1.0
+            hits = float(cache_stats.get("hits", 0))  # type: ignore[arg-type]
+            misses = float(cache_stats.get("misses", 0))  # type: ignore[arg-type]
+            total = hits + misses
+            if total > 0:
+                cache_hit_rate = hits / total
+            self._alert_manager.update_cache_stats(cache_stats)
+            self._alert_manager.notify(
+                "cache.miss_rate_low",
+                {
+                    "campaign_id": self.trace.campaign_id,
+                    "cache_hit_rate": cache_hit_rate * 100.0,
+                    "cache_stats": cache_stats,
+                },
+            )
+            if campaign_status == "success":
+                self._alert_manager.notify(
+                    "campaign.completed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "elapsed_s": duration,
+                        "n_samples": self.cfg.n_samples,
+                        "n_succeeded": sum(1 for s in self.trace.per_sample if s.status == "ok"),
+                        "n_failed": sum(1 for s in self.trace.per_sample if s.status == "failed"),
+                        "total_cost_usd": self.trace.total_cost_usd,
+                    },
+                )
+            else:
+                self._alert_manager.notify(
+                    "campaign.failed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "status": campaign_status,
+                        "error": getattr(self, "_last_error", "unknown"),
+                    },
+                )
 
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist

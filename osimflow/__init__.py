@@ -6,6 +6,7 @@ in `.agents/results/decision-verdict.md`. This is the canonical public
 API; everything else is an implementation detail.
 """
 
+from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
@@ -126,6 +127,8 @@ __all__ = [
     "validate_epw_header",
     "get_logger",
     "setup_logging",
+    "AlertManager",
+    "build_alert_manager",
     "ResultStorage",
     "LocalStorage",
     "S3Storage",

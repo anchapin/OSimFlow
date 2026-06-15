@@ -882,6 +882,27 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Only valid when --result-storage-backend is 's3'."
         ),
     )
+    run.add_argument(
+        "--alert-rules",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a YAML file defining alert rules (issue #438). "
+            "Each rule specifies an event_type, severity, message_template, "
+            "and condition. Built-in rules are always included; custom rules "
+            "from this file are added alongside them."
+        ),
+    )
+    run.add_argument(
+        "--alert-destinations",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a YAML file defining alert destinations (issue #438). "
+            "Supported destination types: webhook (url), email (smtp_host, recipients), "
+            "and log (level). When not set, alerts are only logged."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:

@@ -461,6 +461,12 @@ class CampaignConfig:
     # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
     # When None and task_queue="dask", an embedded LocalCluster is used.
     dask_scheduler_address: str | None = None
+    # Alert rules YAML file path (issue #438). When set, custom alert rules
+    # are loaded from this file in addition to the built-in rules.
+    alert_rules: Path | None = None
+    # Alert destinations YAML file path (issue #438). When set, alert
+    # destinations are loaded from this file.
+    alert_destinations: Path | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -745,5 +751,13 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         task_queue=str(args.get("task_queue", "none")),
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
+        ),
+        alert_rules=(
+            Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None
+        ),
+        alert_destinations=(
+            Path(str(args["alert_destinations"])).resolve()
+            if args.get("alert_destinations")
+            else None
         ),
     )
