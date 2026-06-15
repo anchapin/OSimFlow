@@ -628,9 +628,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
 
     openstudio_version = str(args["openstudio_version"])
     if not openstudio_version or not openstudio_version[0].isdigit():
-        log.info(
-            "openstudio_version not provided or invalid - attempting auto-detection"
-        )
+        log.info("openstudio_version not provided or invalid - attempting auto-detection")
         try:
             openstudio_version = detect_openstudio_version()
             log.info("auto-detected OpenStudio version: %s", openstudio_version)
