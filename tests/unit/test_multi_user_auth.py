@@ -147,12 +147,14 @@ class TestMultiUserAuth:
         """Test loading API keys from a file."""
         keys_file = tmp_outdir / "api_keys.json"
         keys_file.write_text(
-            json.dumps({
-                "users": [
-                    {"key": "admin-key", "user_id": "alice", "role": "admin"},
-                    {"key": "readonly-key", "user_id": "bob", "role": "readonly"},
-                ]
-            })
+            json.dumps(
+                {
+                    "users": [
+                        {"key": "admin-key", "user_id": "alice", "role": "admin"},
+                        {"key": "readonly-key", "user_id": "bob", "role": "readonly"},
+                    ]
+                }
+            )
         )
         app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
         client = TestClient(app)
