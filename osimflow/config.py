@@ -20,6 +20,7 @@ from .validation import (
     validate_template_package,
     validate_variables_yml,
 )
+from .version_detection import VersionDetectionError, detect_openstudio_version
 
 log = logging.getLogger("osimflow.config")
 
@@ -627,10 +628,18 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
 
     openstudio_version = str(args["openstudio_version"])
     if not openstudio_version or not openstudio_version[0].isdigit():
-        raise ValidationError(
-            f"openstudio_version must start with a digit, got {openstudio_version!r}",
-            field="openstudio_version",
-        )
+        log.info("openstudio_version not provided or invalid - attempting auto-detection")
+        try:
+            openstudio_version = detect_openstudio_version()
+            log.info("auto-detected OpenStudio version: %s", openstudio_version)
+        except VersionDetectionError as exc:
+            raise ValidationError(
+                f"Could not determine OpenStudio version. "
+                f"Set --openstudio_version, the OPENSTUDIO_VERSION env var, "
+                f"or ensure openstudio CLI is on PATH. "
+                f"Original error: {exc}",
+                field="openstudio_version",
+            ) from exc
 
     # Parse the optional baseline section from variables.yml (issue #64).
     baseline = _parse_baseline(variables_yml)
@@ -651,7 +660,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         template_sim_package=template,
         n_samples=int(str(args["n_samples"])),
         outdir=outdir,
-        openstudio_version=str(args["openstudio_version"]),
+        openstudio_version=openstudio_version,
         project=str(args.get("project", "")),
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,
