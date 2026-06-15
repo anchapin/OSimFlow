@@ -120,6 +120,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
 | `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger`, `setup_logging`, and `LogAggregator`. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend` + `new_trace_id` (per-sample trace-ID helper); plug-in metrics backends (issue #145, #127). |
+| `osimflow/alerting.py` | `AlertManager` + `Alert` + `AlertSeverity` — rule-based alerting engine for campaign events (campaign.started, campaign.completed, campaign.failed, sample.failed, worker.dead, cache.miss_rate_low). `build_alert_manager` factory loads rules from YAML (`--alert-rules`) and destinations from YAML (`--alert-destinations`). Supports webhook, email, and log destinations (issue #438). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, `osimflow compare`, `osimflow backup`, and `osimflow restore` subcommands. Registry backup/export/import methods: `export_registry()`, `import_registry()`, `backup()` (issue #440). |
 | `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, plus `EPWValidationError` / `EPWDownloadError`. |
@@ -166,6 +167,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `bin/excel_to_variables.py` | PAT/Analysis Gem Excel spreadsheet to ``variables.yml`` converter. Reads a PAT-style ``.xlsx`` and produces a OSimFlow ``variables.yml`` with support for uniform, normal, lognormal, triangular, discrete, categorical, and static distributions. |
 | `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
+| `tests/unit/test_alerting.py` | Unit tests for alerting module: `AlertManager`, `Alert`, `AlertSeverity`, destination factories (webhook, email, log), `load_alert_rules_from_yaml`, `load_alert_destinations_from_yaml`, and `build_alert_manager` (issue #438). |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
@@ -256,6 +258,8 @@ The 7-step DAG that the `Campaign` class drives:
 - `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
+- `--alert-rules` (YAML file defining alerting rules; issue #438)
+- `--alert-destinations` (YAML file defining alert destinations (webhook, email, log); issue #438)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
 - `--cloudwatch-namespace` (CloudWatch metric namespace; used when `--observability cloudwatch`)
 - `--prometheus-port` (Prometheus metrics HTTP port; used when `--observability prometheus`)
