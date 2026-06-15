@@ -61,8 +61,8 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
+from .distributed_jobqueue import build_job_queue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
-from .jobqueue import JobQueue
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
     log_mlflow_artifacts,
@@ -230,11 +230,17 @@ class Campaign:
         # we emit SampleTrace rows in _finalize_samples().
         self._sample_state: dict[str, dict[str, object]] = {}
         log.info("max_workers=%d (fan-out parallelism)", self.max_workers)
-        # Filesystem-based job queue for crash recovery (issue #263).
-        # Pending work items are persisted as JSON files so they survive
-        # orchestrator crashes. The queue is a lightweight single-process
-        # persistence layer — not a distributed message broker.
-        self._job_queue = JobQueue(cfg.work_dir / "queue")
+        # Job queue for crash recovery (issue #263) + distributed coordination
+        # (issue #393). When redis_url is set, build_job_queue returns a
+        # DistributedJobQueue that broadcasts state changes via Redis pub/sub,
+        # enabling coherent job state across multi-node Slurm/AWS Batch
+        # campaigns.  When redis_url is None, a plain JobQueue is used (single-
+        # process crash recovery only).
+        self._job_queue = build_job_queue(
+            queue_dir=cfg.work_dir / "queue",
+            redis_url=cfg.redis_url,
+            campaign_id=self.trace.campaign_id,
+        )
         # Observability backend (issue #132). Built from cfg so the
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
