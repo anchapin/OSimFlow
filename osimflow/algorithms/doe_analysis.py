@@ -21,7 +21,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy import stats
-from statsmodels.formula.api import ols
+
+try:
+    from statsmodels.formula.api import ols
+
+    _STATSMOELS_AVAILABLE = True
+except ImportError:
+    _STATSMOELS_AVAILABLE = False
 
 log = logging.getLogger("osimflow.algorithms.doe")
 
@@ -205,6 +211,13 @@ class DOEAnalysis:
             return None
 
         try:
+            if not _STATSMOELS_AVAILABLE:
+                log.warning(
+                    "statsmodels not available, skipping 2-way interaction for %s x %s",
+                    factor_a,
+                    factor_b,
+                )
+                return None
             formula = f"{self.response_col} ~ C({factor_a}) * C({factor_b})"
             model = ols(formula, data=df).fit()
             anova_table = stats.anova_lm(model, typ=2)
