@@ -444,7 +444,7 @@ class TestLoadConfigValidation:
 
         args = _base_args(variables_yml, template_pkg, outdir, openstudio_version="v3.11.0")
         with patch(
-            "osimflow.config.detect_openstudio_version",
+            "osimflow.version_detection.detect_openstudio_version",
             side_effect=VersionDetectionError("no version"),
         ):
             with pytest.raises(ValidationError, match="Could not determine OpenStudio version"):
@@ -460,7 +460,7 @@ class TestLoadConfigValidation:
 
         args = _base_args(variables_yml, template_pkg, outdir, openstudio_version="")
         with patch(
-            "osimflow.config.detect_openstudio_version",
+            "osimflow.version_detection.detect_openstudio_version",
             side_effect=VersionDetectionError("no version"),
         ):
             with pytest.raises(ValidationError, match="Could not determine OpenStudio version"):

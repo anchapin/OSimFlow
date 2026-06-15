@@ -111,6 +111,20 @@ def outdir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def tmp_dirs(
+    tmp_path: Path, _session_example_package: Path, _session_variables_yml: Path
+) -> tuple[Path, Path, Path]:
+    """Convenience fixture: (variables_yml, template_pkg, outdir) in one tuple."""
+    template_pkg = tmp_path / "template"
+    shutil.copytree(_session_example_package, template_pkg)
+    vyml = tmp_path / "variables.yml"
+    shutil.copy2(_session_variables_yml, vyml)
+    out = tmp_path / "out"
+    out.mkdir()
+    return vyml, template_pkg, out
+
+
+@pytest.fixture
 def workdir(tmp_path: Path, _session_variables_yml: Path) -> Path:
     """Work directory with variables.yml pre-populated.
 
