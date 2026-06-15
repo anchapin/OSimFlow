@@ -112,9 +112,7 @@ class TestDOEAnalysisInteractionEffects:
         effects = analyzer.compute_interaction_effects()
         assert isinstance(effects, list)
 
-    def test_interaction_effects_are_interaction_effect(
-        self, synthetic_results_csv: Path
-    ) -> None:
+    def test_interaction_effects_are_interaction_effect(self, synthetic_results_csv: Path) -> None:
         analyzer = DOEAnalysis(synthetic_results_csv)
         analyzer.load()
         effects = analyzer.compute_interaction_effects()
@@ -137,9 +135,7 @@ class TestDOEAnalysisFactorSensitivity:
         assert isinstance(sensitivity, list)
         assert len(sensitivity) == 2
 
-    def test_factor_sensitivity_are_factor_sensitivity(
-        self, synthetic_results_csv: Path
-    ) -> None:
+    def test_factor_sensitivity_are_factor_sensitivity(self, synthetic_results_csv: Path) -> None:
         analyzer = DOEAnalysis(synthetic_results_csv)
         analyzer.load()
         analyzer.compute_main_effects()
@@ -150,9 +146,7 @@ class TestDOEAnalysisFactorSensitivity:
             assert hasattr(fs, "percent_contribution")
             assert fs.percent_contribution >= 0
 
-    def test_factor_sensitivity_sorted_descending(
-        self, synthetic_results_csv: Path
-    ) -> None:
+    def test_factor_sensitivity_sorted_descending(self, synthetic_results_csv: Path) -> None:
         analyzer = DOEAnalysis(synthetic_results_csv)
         analyzer.load()
         analyzer.compute_main_effects()
@@ -199,7 +193,9 @@ class TestDOEAnalysisSerialization:
 class TestRunDOEAnalysis:
     """Tests for run_doe_analysis() convenience function."""
 
-    def test_run_doe_analysis_returns_path(self, synthetic_results_csv: Path, tmp_path: Path) -> None:
+    def test_run_doe_analysis_returns_path(
+        self, synthetic_results_csv: Path, tmp_path: Path
+    ) -> None:
         path = run_doe_analysis(synthetic_results_csv, tmp_path)
         assert isinstance(path, Path)
         assert path.exists()
