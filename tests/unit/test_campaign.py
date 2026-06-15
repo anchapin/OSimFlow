@@ -30,7 +30,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from osimflow import Campaign, CampaignConfig, SevereEnergyPlusError
-from osimflow.work import TransientError
 from osimflow.algorithms import LHSAlgorithm
 from osimflow.cache import CacheKey, sha256_of_files
 from osimflow.campaign import (
@@ -45,6 +44,7 @@ from osimflow.campaign import (
 from osimflow.executors import BaseExecutor, Handle, LocalExecutor
 from osimflow.monitoring import RunTrace
 from osimflow.weather import EPWValidationError
+from osimflow.work import TransientError
 
 # Fixtures (variables_yml, template_pkg, outdir) come from conftest.py.
 
