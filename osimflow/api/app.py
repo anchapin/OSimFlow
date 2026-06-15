@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import secrets
 from pathlib import Path
 from typing import Any, cast
 
@@ -108,7 +107,6 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         key_store: MultiUserAPIKeyStore | str | None = getattr(
             request.app.state, "api_key_store", None
         )
-        # Backward compat: if it's a plain string, wrap it
         if isinstance(key_store, str):
             key_store = MultiUserAPIKeyStore.from_single_key(key_store)
         if key_store is None:
@@ -116,21 +114,16 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
         provided = extract_api_key(request)
 
-        # Single key mode (backward compat)
         if isinstance(key_store, MultiUserAPIKeyStore) and key_store.single_key is not None:
             if not validate_api_key(provided, key_store.single_key):
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid or missing API key"},
                 )
-            # Store user in request state for downstream checks
             request.state.api_user = APIKeyUser(
                 key=provided or "", user_id="default", role=_ADMIN
             )
-            return cast(Response, await call_next(request))
-
-        # Multi-user mode
-        if isinstance(key_store, MultiUserAPIKeyStore):
+        elif isinstance(key_store, MultiUserAPIKeyStore):
             user = key_store.validate(provided)
             if user is None:
                 return JSONResponse(
@@ -138,6 +131,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                     content={"detail": "Invalid or missing API key"},
                 )
             request.state.api_user = user
+        else:
             return cast(Response, await call_next(request))
 
         return cast(Response, await call_next(request))
