@@ -155,7 +155,12 @@ class CampaignEventLog:
     ) -> None:
         self._emit(
             EventType.SAMPLE_STARTED,
-            {"campaign_id": campaign_id, "sample_id": sample_id, "step": step, "generation": generation},
+            {
+                "campaign_id": campaign_id,
+                "sample_id": sample_id,
+                "step": step,
+                "generation": generation,
+            },
             trace_id=trace_id,
         )
 
@@ -284,4 +289,3 @@ def read_event_log(path: Path) -> list[dict[str, Any]]:
                 log.warning("skipped unparseable line in %s", path)
                 continue
     return events
-

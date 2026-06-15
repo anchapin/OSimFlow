@@ -2137,9 +2137,7 @@ class Campaign:
         algo_name = algo.name().upper()
         step_label = f"GENERATE_{algo_name}_SAMPLES"
 
-        self._event_log.step_started(
-            campaign_id=self.trace.campaign_id, step=step_label
-        )
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step=step_label)
 
         # Read variables.yml once for the algorithm.
         variables: dict[str, Any] = {}
@@ -2297,9 +2295,7 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before PREFLIGHT_RUN_MODEL")
 
-        self._event_log.step_started(
-            campaign_id=self.trace.campaign_id, step="PREFLIGHT_RUN_MODEL"
-        )
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="PREFLIGHT_RUN_MODEL")
 
         t0 = time.time()
         os_version = self.cfg.openstudio_version
@@ -2651,9 +2647,7 @@ class Campaign:
         os_version = self.cfg.openstudio_version
         n = len(parameterized)
         self.trace.step_started("RUN_OPENSTUDIO_SIM", total=n)
-        self._event_log.step_started(
-            campaign_id=self.trace.campaign_id, step="RUN_OPENSTUDIO_SIM"
-        )
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="RUN_OPENSTUDIO_SIM")
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
@@ -2875,9 +2869,7 @@ class Campaign:
         out: list[Path] = []
         n = len(simulated)
         self.trace.step_started("EXTRACT_KPIS", total=n)
-        self._event_log.step_started(
-            campaign_id=self.trace.campaign_id, step="EXTRACT_KPIS"
-        )
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="EXTRACT_KPIS")
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
@@ -3135,9 +3127,7 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before AGGREGATE_RESULTS")
 
-        self._event_log.step_started(
-            campaign_id=self.trace.campaign_id, step="AGGREGATE_RESULTS"
-        )
+        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="AGGREGATE_RESULTS")
 
         sim_dirs = list(simulated.values())
         inputs_hash = sha256_of_dict(
