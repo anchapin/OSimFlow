@@ -266,3 +266,129 @@ class CampaignRegistry:
             "left": self.get_campaign(id1),
             "right": self.get_campaign(id2),
         }
+
+    # ------------------------------------------------------------------ #
+    # Backup / export / import  (issue #440)
+    # ------------------------------------------------------------------ #
+
+    def export_registry(self, path: Path) -> None:
+        """Export the entire registry database to ``path``.
+
+        Uses SQLite's built-in online ``backup()`` API so the copy is
+        consistent even when the registry is in use by a running
+        campaign.
+
+        Parameters
+        ----------
+        path
+            Destination file path.  Parent directories are created.
+            If the file already exists it is overwritten.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the source registry database does not exist yet.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            path.unlink()
+        with self._conn() as source:
+            dest = sqlite3.connect(str(path))
+            try:
+                source.backup(dest)
+            finally:
+                dest.close()
+        log.info("exported registry to %s", path)
+
+    def import_registry(self, path: Path, merge: bool = False) -> int:
+        """Import campaign records from a backup file.
+
+        Parameters
+        ----------
+        path
+            Path to a backup SQLite database (created by
+            :meth:`export_registry` or :meth:`backup`).
+        merge
+            When ``False`` (default) the current registry contents are
+            **replaced** entirely by the backup.  When ``True`` the
+            backup records are merged in using ``INSERT OR REPLACE`` —
+            existing records with the same id are overwritten, and new
+            records are inserted.
+
+        Returns
+        -------
+        int
+            The number of campaign records imported.
+
+        Raises
+        ------
+        FileNotFoundError
+            If *path* does not exist.
+        ValueError
+            If the backup file does not contain a ``campaigns`` table.
+        sqlite3.DatabaseError
+            If *path* is not a valid SQLite database.
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Backup file not found: {path}")
+
+        # Read all rows + column names from the backup database.
+        backup_conn = sqlite3.connect(str(path))
+        backup_conn.row_factory = sqlite3.Row
+        try:
+            info = backup_conn.execute("PRAGMA table_info(campaigns)").fetchall()
+            if not info:
+                raise ValueError(f"Backup file does not contain a 'campaigns' table: {path}")
+            backup_cols = [col[1] for col in info]
+            rows = backup_conn.execute("SELECT * FROM campaigns").fetchall()
+        finally:
+            backup_conn.close()
+
+        # Determine which columns from the backup exist in the current
+        # schema so we can import across minor schema differences.
+        with self._conn() as c:
+            current_info = c.execute("PRAGMA table_info(campaigns)").fetchall()
+            current_cols = {col[1] for col in current_info}
+            insert_cols = [col for col in backup_cols if col in current_cols]
+            col_names = ", ".join(insert_cols)
+            placeholders = ", ".join("?" * len(insert_cols))
+
+            if not merge:
+                c.execute("DELETE FROM campaigns")
+
+            for row in rows:
+                values = [row[col] for col in insert_cols]
+                c.execute(
+                    f"INSERT OR REPLACE INTO campaigns ({col_names}) VALUES ({placeholders})",
+                    values,
+                )
+
+        count = len(rows)
+        log.info("imported %d campaign(s) from %s (merge=%s)", count, path, merge)
+        return count
+
+    def backup(self, output_dir: Path | None = None) -> Path:
+        """Create a timestamped backup of the registry.
+
+        Parameters
+        ----------
+        output_dir
+            Directory for the backup file.  Defaults to a
+            ``backups/`` subdirectory next to the registry database.
+
+        Returns
+        -------
+        Path
+            The path to the created backup file
+            (``registry_backup_YYYYMMDD_HHMMSS.db``).
+        """
+        output_dir = self.db_path.parent / "backups" if output_dir is None else Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_path = output_dir / f"registry_backup_{timestamp}.db"
+        self.export_registry(backup_path)
+        log.info("backup created at %s", backup_path)
+        return backup_path
