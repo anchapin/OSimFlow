@@ -97,6 +97,31 @@ kubernetes = [
 [project.scripts]
 osimflow = "osimflow.__main__:main"
 
+# ---------------------------------------------------------------------------
+# Entry-point groups for third-party plug-ins (issue #432)
+# ---------------------------------------------------------------------------
+# Third-party packages can register custom algorithms or executors by
+# declaring entry points in these groups.  Discovery is automatic — the
+# AlgorithmRegistry.discover_plugins() and ExecutorRegistry.discover_plugins()
+# methods scan these groups at import time.
+#
+# Example for a third-party ``pyproject.toml``:
+#
+#   [project.entry-points."osimflow.algorithms"]
+#   bayesian_opt = "my_pkg.algorithms:BayesianOptAlgorithm"
+#
+#   [project.entry-points."osimflow.executors"]
+#   k8s_gpu = "my_pkg.executors:K8sGpuExecutor"
+#
+# The entry-point ``name`` becomes the name used on the CLI
+# (--algorithm bayesian_opt / --executor k8s_gpu).  The value must point
+# to a BaseAlgorithm or BaseExecutor subclass respectively.
+# ---------------------------------------------------------------------------
+# The built-in algorithms and executors are registered programmatically
+# (not as entry points) so the tables below are intentionally empty.
+[project.entry-points."osimflow.algorithms"]
+[project.entry-points."osimflow.executors"]
+
 [project.urls]
 Homepage = "https://github.com/anchapin/OSimFlow"
 Issues = "https://github.com/anchapin/OSimFlow/issues"

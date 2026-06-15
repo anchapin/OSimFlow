@@ -125,7 +125,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/api/app.py` | FastAPI application factory with `/health`, `/ready`, `/api/v1/campaign`, `/api/v1/steps` endpoints (issue #138, G23a). |
 | `osimflow/api/events.py` | SSE live events and campaign stop endpoints (issue #143): `GET /api/v1/events` (Server-Sent Events stream watching `run.json`), `POST /api/v1/campaign/stop` (writes `.stop` flag to halt a running campaign). |
 | `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
-| `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. |
+| `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. `AlgorithmRegistry.discover_plugins()` auto-discovers third-party algorithms via `entry_points` group `osimflow.algorithms` (issue #432). |
 | `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
 | `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
 | `osimflow/algorithms/de.py` | `DifferentialEvolutionAlgorithm` — Differential evolution optimizer using `scipy.optimize.differential_evolution` (issue #125). Iterative. |
@@ -134,7 +134,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
-| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor`. |
+| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
 | `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
 | `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
@@ -567,7 +567,9 @@ Use these patterns to decide where to make a change.
 |---|---|
 | Add a new KPI | `bin/extract_kpis.py` (and the schema doc in `osimflow/monitoring.py:SampleTrace`). |
 | Add a new sampling distribution | `osimflow/algorithms/` package (subclass `BaseAlgorithm` in a new module, register via `AlgorithmRegistry.register` in `__init__.py`) **and** update the `variables.yml` example in `docs/`. |
-| Add a new execution platform | New class in `osimflow/executors/__init__.py` (subclass `BaseExecutor`) **and** add the executor choice to `osimflow/__main__.py:_build_executor`. |
+| Add a new execution platform | New class in `osimflow/executors/__init__.py` (subclass `BaseExecutor`) **and** register via `ExecutorRegistry.register` in `__init__.py` **and** add the executor choice to `osimflow/__main__.py:_build_executor`. |
+| Add a third-party algorithm plug-in | Declare an entry point in the external package's `pyproject.toml` under `[project.entry-points."osimflow.algorithms"]`. Discovery is automatic via `AlgorithmRegistry.discover_plugins()` — no code change in `osimflow/` needed (issue #432). |
+| Add a third-party executor plug-in | Declare an entry point in the external package's `pyproject.toml` under `[project.entry-points."osimflow.executors"]`. Discovery is automatic via `ExecutorRegistry.discover_plugins()` — no code change in `osimflow/` needed (issue #432). |
 | Add a new step to the DAG | A new method on `Campaign` in `osimflow/campaign.py` **and** call it from `Campaign.run` **and** emit `StepTrace` hooks. Update the directory map in this file. |
 | Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py`. |
 | Add a user-facing CLI flag | `osimflow/__main__.py:_build_parser` (add the `add_argument` call) **and** the `CampaignConfig` dataclass in `osimflow/config.py` **and** the `load_config` parser. |
