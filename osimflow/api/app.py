@@ -277,23 +277,16 @@ def _compute_campaign_status(data: dict[str, Any]) -> str:
     """
     status = data.get("status", "unknown")
     per_sample: list[dict[str, Any]] = data.get("per_sample", [])
+    n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
 
     if status == "running":
-        if not per_sample:
-            return "healthy"
-        n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
-        if n_failed > 0:
-            return "degraded"
-        return "healthy"
+        return "degraded" if n_failed > 0 else "healthy"
     if status in ("success", "completed"):
         if not per_sample:
             return "healthy"
-        n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
         if n_failed == 0:
             return "healthy"
-        if n_failed < len(per_sample):
-            return "degraded"
-        return "unhealthy"
+        return "degraded" if n_failed < len(per_sample) else "unhealthy"
     if status in ("failed", "cancelled"):
         return "unhealthy"
     return "unknown"

@@ -474,7 +474,7 @@ class OSimFlowClient:
     async def get_campaign_health_details(self) -> dict[str, Any]:
         """``GET /api/v1/health/details`` — full run.json contents."""
         resp = await self._request("GET", "/api/v1/health/details")
-        return resp.json()
+        return dict[str, Any](resp.json())
 
     # ------------------------------------------------------------------
     # Campaign metadata
