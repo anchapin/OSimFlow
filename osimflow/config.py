@@ -462,6 +462,13 @@ class CampaignConfig:
     # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
     # When None and task_queue="dask", an embedded LocalCluster is used.
     dask_scheduler_address: str | None = None
+    # Cross-step retry configuration (issue #416). When a fan-out step
+    # (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS) fails with a
+    # transient error, retry that specific step up to max_step_retries
+    # times before aborting the campaign. A value of 0 disables retries.
+    # Only transient errors trigger retry; permanent errors (invalid input,
+    # missing files) abort immediately.
+    max_step_retries: int = 2
 
     @property
     def work_dir(self) -> Path:
@@ -755,4 +762,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
+        max_step_retries=int(str(args.get("max_step_retries", 2))),
     )
