@@ -202,9 +202,7 @@ class TestEnforceStartQuota:
         # Should not raise
         campaign._enforce_start_quota()
 
-    def test_max_samples_exceeded_raises(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_samples_exceeded_raises(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
@@ -227,9 +225,7 @@ class TestEnforceStartQuota:
         assert exc_info.value.limit == 50
         assert exc_info.value.current == 100
 
-    def test_max_samples_equal_passes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_samples_equal_passes(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
@@ -269,9 +265,7 @@ class TestCheckQuotaExceeded:
         campaign = Campaign(cfg, executor=_NoOpExecutor())
         assert campaign._check_quota_exceeded() is False
 
-    def test_max_samples_not_reached_returns_false(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_samples_not_reached_returns_false(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
@@ -280,16 +274,12 @@ class TestCheckQuotaExceeded:
         out = tmp_path / "out"
         out.mkdir()
 
-        cfg = _cfg(
-            var_file, pkg, out, resource_quota=ResourceQuota(max_samples=100)
-        )
+        cfg = _cfg(var_file, pkg, out, resource_quota=ResourceQuota(max_samples=100))
         campaign = Campaign(cfg, executor=_NoOpExecutor())
         # No samples submitted yet
         assert campaign._check_quota_exceeded() is False
 
-    def test_max_samples_reached_returns_true(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_samples_reached_returns_true(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
@@ -311,9 +301,7 @@ class TestCheckQuotaExceeded:
             campaign._sample_state[f"s{i}"] = {"apply_exit_code": 0}
         assert campaign._check_quota_exceeded() is True
 
-    def test_max_cost_exceeded_returns_true(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_cost_exceeded_returns_true(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
@@ -332,9 +320,7 @@ class TestCheckQuotaExceeded:
         campaign.trace.total_cost_usd = 15.0
         assert campaign._check_quota_exceeded() is True
 
-    def test_max_wall_time_exceeded_returns_true(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_wall_time_exceeded_returns_true(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
@@ -374,9 +360,7 @@ class TestEffectiveMaxWorkers:
         campaign = Campaign(cfg, executor=_NoOpExecutor(), max_workers=8)
         assert campaign._effective_max_workers() == 8
 
-    def test_max_concurrent_samples_below_max_workers(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_concurrent_samples_below_max_workers(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
@@ -394,9 +378,7 @@ class TestEffectiveMaxWorkers:
         campaign = Campaign(cfg, executor=_NoOpExecutor(), max_workers=8)
         assert campaign._effective_max_workers() == 4
 
-    def test_max_concurrent_samples_above_max_workers(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_concurrent_samples_above_max_workers(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "workflow.osw").write_text("{}")
