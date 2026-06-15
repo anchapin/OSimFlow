@@ -65,6 +65,12 @@ from .taskqueue import (
     build_task_queue,
 )
 from .validation import ValidationError
+from .version_detection import (
+    VersionDetectionError,
+    detect_openstudio_version,
+    get_compatible_container_tag,
+    verify_version_compatibility,
+)
 from .weather import (
     EPWDownloadError,
     EPWValidationError,
@@ -117,6 +123,10 @@ __all__ = [
     "CampaignRecord",
     "SevereEnergyPlusError",
     "ValidationError",
+    "VersionDetectionError",
+    "detect_openstudio_version",
+    "get_compatible_container_tag",
+    "verify_version_compatibility",
     "EPWValidationError",
     "EPWDownloadError",
     "discover_epw_files",
