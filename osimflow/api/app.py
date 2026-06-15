@@ -4,7 +4,7 @@ Security features (issue #268, #395):
 - API key authentication (``X-API-Key`` header or ``api_key`` query param)
 - Multi-user support with per-user permission levels (issue #395)
 - CORS middleware with configurable origins
-- Rate limiting via slowapi (default 60/minute)
+- Rate limiting via a custom sliding-window middleware (default 60/minute)
 - Read-only mode by default; ``--enable-writes`` required for mutations
 - ``/health`` remains unauthenticated for load balancer probes
 """
@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,9 +24,6 @@ import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
@@ -69,6 +69,96 @@ def _get_real_remote_address(request: Request) -> str:
         if client_ip:
             return client_ip  # type: ignore[no-any-return]
     return get_remote_address(request)  # type: ignore[no-any-return]
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (issue #454 — replaces slowapi middleware)
+# ---------------------------------------------------------------------------
+
+
+# Maps rate-limit unit strings to seconds.
+_RATE_UNIT_SECONDS: dict[str, int] = {
+    "second": 1,
+    "seconds": 1,
+    "minute": 60,
+    "minutes": 60,
+    "hour": 3600,
+    "hours": 3600,
+    "day": 86400,
+    "days": 86400,
+}
+
+_RATE_RE: re.Pattern[str] = re.compile(r"^\s*(\d+)\s*/\s*(\w+)\s*$")
+
+
+def _parse_rate_limit(rate_limit: str) -> tuple[int, int]:
+    """Parse a rate-limit string like ``"2/minute"`` into ``(count, window_s)``.
+
+    Raises ``ValueError`` on malformed input.
+    """
+    match = _RATE_RE.match(rate_limit)
+    if not match:
+        raise ValueError(f"Invalid rate limit string: {rate_limit!r}")
+    count = int(match.group(1))
+    unit = match.group(2).lower()
+    if unit not in _RATE_UNIT_SECONDS:
+        raise ValueError(f"Unknown rate limit unit: {unit!r}")
+    return count, _RATE_UNIT_SECONDS[unit]
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """In-process sliding-window rate limiter.
+
+    Replaces slowapi's ``SlowAPIMiddleware`` which did not reliably
+    maintain its in-memory counter between sequential ``TestClient``
+    requests under pytest-xdist in CI (issue #454).
+
+    Each ``create_app()`` call creates a **fresh** middleware instance
+    so the counter is isolated per app — critical for tests that each
+    build their own app.
+
+    The limiter uses a sliding-window counter: every request appends
+    a monotonic timestamp to a per-key bucket; entries older than the
+    window are pruned on each check.
+    """
+
+    def __init__(
+        self,
+        app: Any,  # noqa: ANN401 (Starlette ASGI app)
+        *,
+        rate_limit: str,
+        key_func: Callable[[Request], str] = _get_real_remote_address,
+    ) -> None:
+        super().__init__(app)
+        self.max_requests, self.window_seconds = _parse_rate_limit(rate_limit)
+        self.key_func = key_func
+        # Per-key list of monotonic timestamps of accepted requests.
+        self._hits: dict[str, list[float]] = defaultdict(list)
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Any,  # noqa: ANN401 (Starlette callable)
+    ) -> Response:
+        key = self.key_func(request)
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+
+        # Prune expired entries for this key.
+        bucket = self._hits[key]
+        fresh = [t for t in bucket if t > cutoff]
+        self._hits[key] = fresh
+
+        if len(fresh) >= self.max_requests:
+            retry_after = max(1, int(self.window_seconds - (now - fresh[0])) + 1)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Try again later."},
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        fresh.append(now)
+        return cast(Response, await call_next(request))
 
 
 router = APIRouter()
@@ -731,7 +821,7 @@ def create_app(
         not configured (same-origin only).  Use ``["*"]`` for all
         origins.
     rate_limit
-        Rate limit string for slowapi (default ``"60/minute"``).
+        Rate limit string, e.g. ``"60/minute"`` (default ``"60/minute"``).
     """
     app = FastAPI(
         title="OSimFlow API",
@@ -774,13 +864,29 @@ def create_app(
             allow_headers=["X-API-Key", "Content-Type"],
         )
 
-    # --- Rate limiting (slowapi) ---
-    limiter = Limiter(key_func=_get_real_remote_address, default_limits=[rate_limit])
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
-    app.add_middleware(SlowAPIMiddleware)
+    # --- Rate limiting (issue #454) ---
+    # Custom in-process middleware replaces slowapi's SlowAPIMiddleware,
+    # which did not reliably maintain its counter between sequential
+    # TestClient requests under pytest-xdist in CI.
+    #
+    # Middleware ordering (add_middleware inserts at front → last added
+    # is outermost):
+    #   1. add CORS (if configured)
+    #   2. add RateLimitMiddleware   ← runs after auth
+    #   3. add APIKeyMiddleware      ← outermost, runs first
+    # Result: APIKey(RateLimit(CORS(router)))
+    app.add_middleware(
+        RateLimitMiddleware,
+        rate_limit=rate_limit,
+        key_func=_get_real_remote_address,
+    )
 
-    # --- Authentication middleware (innermost user middleware) ---
+    # Store a reference for tests / introspection.  The actual
+    # middleware instance is created lazily by Starlette's
+    # add_middleware, so we expose the configured rate-limit string.
+    app.state.limiter = rate_limit  # type: ignore[assignment]
+
+    # --- Authentication middleware (outermost — runs first) ---
     app.add_middleware(APIKeyMiddleware)
 
     # --- Routes ---

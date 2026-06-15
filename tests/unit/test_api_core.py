@@ -341,7 +341,7 @@ class TestCORSMiddleware:
 
 
 class TestRateLimiting:
-    """Tests for rate limiting via slowapi."""
+    """Tests for rate limiting via the custom middleware (issue #454)."""
 
     def test_rate_limit_allows_under_limit(self, tmp_outdir: Path) -> None:
         """A few requests under the limit should succeed."""
@@ -351,9 +351,6 @@ class TestRateLimiting:
             resp = client.get("/health")
             assert resp.status_code == 200
 
-    @pytest.mark.xfail(
-        reason="Flaky in CI: rate limit counter not incremented between sequential TestClient requests in pytest-xdist gw0 worker (Python 3.12.9)"
-    )
     def test_rate_limit_blocks_over_limit(self, tmp_path: Path) -> None:
         """Exceeding the rate limit should return 429."""
         (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
@@ -364,9 +361,6 @@ class TestRateLimiting:
         resp = client.get("/health")
         assert resp.status_code == 429, f"Expected 429 but got {resp.status_code}"
 
-    @pytest.mark.xfail(
-        reason="Flaky in CI: rate limit counter not incremented between sequential TestClient requests in pytest-xdist gw0 worker (Python 3.12.9)"
-    )
     def test_rate_limit_uses_x_forwarded_for(self, tmp_path: Path) -> None:
         """X-Forwarded-For header should be used for per-client rate limiting.
 
@@ -393,9 +387,6 @@ class TestRateLimiting:
         resp4 = client.get("/health", headers={"X-Forwarded-For": "10.0.0.1"})
         assert resp4.status_code == 200
 
-    @pytest.mark.xfail(
-        reason="Flaky in CI: rate limit counter not incremented between sequential TestClient requests in pytest-xdist gw0 worker (Python 3.12.9)"
-    )
     def test_rate_limit_x_forwarded_for_with_port(self, tmp_path: Path) -> None:
         """X-Forwarded-For may contain port numbers; only the IP is used."""
         (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
