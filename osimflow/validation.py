@@ -11,6 +11,7 @@ Provides:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -18,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import yaml
 
 log = logging.getLogger("osimflow.validation")
@@ -594,3 +596,104 @@ def validate_path_within_base(
             field="path",
         )
     return resolved_path
+
+
+# ======================================================================
+# OSW (OpenStudio Workflow) schema validation
+# ======================================================================
+
+OSW_SCHEMA: dict[str, Any] = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "OpenStudio Workflow",
+    "type": "object",
+    "additionalProperties": True,
+    "required": ["steps"],
+    "properties": {
+        "workflow_type": {
+            "type": "string",
+            "enum": ["Complete", "Singleton"],
+        },
+        "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["measure_dir_name", "arguments"],
+                "properties": {
+                    "measure_dir_name": {
+                        "type": "string",
+                    },
+                    "arguments": {
+                        "type": "object",
+                    },
+                },
+            },
+        },
+        "file_paths": {
+            "type": "array",
+            "items": {
+                "type": "string",
+            },
+        },
+    },
+}
+
+
+def validate_osw(path: Path) -> bool:
+    """Validate an OpenStudio Workflow (.osw) file against the schema.
+
+    Parameters
+    ----------
+    path
+        Path to the ``.osw`` JSON file.
+
+    Returns
+    -------
+    bool
+        ``True`` if the file is valid.
+
+    Raises
+    ------
+    ValidationError
+        When the file is not a valid JSON, is not a dict, or fails
+        schema validation. The error message indicates which field
+        failed.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValidationError(
+            f"workflow.osw is not valid UTF-8: {exc}",
+            field="workflow.osw",
+        ) from exc
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            f"workflow.osw is not valid JSON: {exc}",
+            field="workflow.osw",
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise ValidationError(
+            f"workflow.osw must be a JSON object, got {type(data).__name__}",
+            field="workflow.osw",
+        )
+
+    try:
+        jsonschema.validate(instance=data, schema=OSW_SCHEMA)
+    except jsonschema.ValidationError as exc:
+        field_path = ".".join(str(p) for p in exc.absolute_path) if exc.absolute_path else "root"
+        message = exc.message
+        raise ValidationError(
+            f"workflow.osw validation failed at '{field_path}': {message}",
+            field="workflow.osw",
+        ) from exc
+    except jsonschema.SchemaError as exc:
+        raise ValidationError(
+            f"workflow.osw schema is invalid: {exc}",
+            field="workflow.osw",
+        ) from exc
+
+    return True

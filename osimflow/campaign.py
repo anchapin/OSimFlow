@@ -53,12 +53,14 @@ from typing import Any, TypedDict
 
 import yaml
 
+from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
     EPW_FILE_KEY,
     _build_mappings,
     preflight_check,
 )
+from .audit import AuditLogger
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .distributed_jobqueue import build_job_queue
@@ -85,10 +87,12 @@ from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import TaskHandle as TQHandle
 from .taskqueue import TaskQueue
+from .validation import ValidationError, validate_osw
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .webhook import WebhookClient
 from .work import (
     SevereEnergyPlusError,
+    TransientError,
     aggregate_results,
     default_apply_parameters,
     extract_kpis,
@@ -246,6 +250,9 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+        # Audit logger (issue #439). Writes an immutable JSONL trail to
+        # ${outdir}/audit.jsonl for forensics and compliance.
+        self._audit: AuditLogger = AuditLogger(outdir=cfg.outdir)
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -289,6 +296,16 @@ class Campaign:
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
+        # Last error captured for alerting (issue #438).
+        self._last_error: str = "unknown"
+        # Alert manager (issue #438). Built from cfg so the correct rules
+        # and destinations are always used. Includes built-in rules for
+        # campaign events, sample failures, cache miss rate, and worker death.
+        self._alert_manager: AlertManager = build_alert_manager(
+            rules_path=getattr(cfg, "alert_rules", None),
+            destinations_path=getattr(cfg, "alert_destinations", None),
+            include_builtin=True,
+        )
 
     @staticmethod
     def _build_observability_backend(cfg: CampaignConfig) -> ObservabilityBackend:
@@ -607,6 +624,16 @@ class Campaign:
                 state[f"{step_name.lower}_status"] = "failed"
                 state["error_summary"] = str(e)[:500]
                 self._checkpoint_sample(sid)
+                # Alert: sample failed after max retries (issue #438).
+                self._alert_manager.notify(
+                    "sample.failed",
+                    {
+                        "sample_id": sid,
+                        "step": step_name,
+                        "error": str(e)[:500],
+                        "max_retries": self.cfg.max_sample_retries,
+                    },
+                )
                 return sid
             # Incremental checkpoint: update run.json after each sample
             # completes so SSE clients see live progress (issue #275).
@@ -649,6 +676,78 @@ class Campaign:
                 # cancelled via f.cancel() during a cancellation sweep.
                 with contextlib.suppress(Exception, concurrent.futures.CancelledError):
                     future.result()
+
+    def _run_step_with_retries(
+        self,
+        step_name: str,
+        step_fn: Callable[..., Any],
+        generation: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Run a step with exponential-backoff retry for transient failures.
+
+        This is the cross-step retry mechanism for issue #416. When a fan-out
+        step (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS) fails with a
+        transient error, this method retries that specific step without re-running
+        previous steps. Cache state is preserved because the SQLiteCache lookup
+        already handles completed work.
+
+        Parameters
+        ----------
+        step_name
+            The step name for logging (e.g., "APPLY_PARAMETERS").
+        step_fn
+            The step method to call.
+        generation
+            The generation number for observability tracking.
+        *args
+            Positional arguments forwarded to *step_fn*.
+        **kwargs
+            Keyword arguments forwarded to *step_fn*.
+
+        Returns
+        -------
+        The return value of *step_fn* on success.
+
+        Raises
+        ------
+        The last transient exception when all retries are exhausted.
+        """
+        max_retries = self.cfg.max_step_retries
+        if max_retries <= 0:
+            return step_fn(*args, generation=generation, **kwargs)
+
+        last_exc: BaseException | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                return step_fn(*args, generation=generation, **kwargs)
+            except TransientError as exc:
+                last_exc = exc
+                if attempt == max_retries:
+                    log.error(
+                        "%s failed after %d attempts (all transient): %s",
+                        step_name,
+                        max_retries + 1,
+                        exc,
+                    )
+                    break
+                delay = min(2.0 * (2**attempt), 30.0)
+                log.warning(
+                    "%s transient failure (attempt %d/%d), retrying in %.1fs: %s",
+                    step_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+            except Exception:
+                raise
+
+        if last_exc is not None:
+            raise last_exc from None
+        raise RuntimeError(f"{step_name}: unexpected code path")
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -1169,6 +1268,12 @@ class Campaign:
     # ------------------------------------------------------------------
     def _register_campaign(self) -> None:
         """Register this campaign in the campaign registry at start."""
+        self._audit.campaign_created(
+            campaign_id=self.trace.campaign_id,
+            executor=self.executor.name,
+            n_samples=self.cfg.n_samples,
+            openstudio_version=self.cfg.openstudio_version,
+        )
         if self._registry is None:
             return
         try:
@@ -1321,9 +1426,23 @@ class Campaign:
 
         # Auto-register campaign in registry (issue #266).
         self._register_campaign()
+        self._audit.campaign_started(campaign_id=self.trace.campaign_id)
 
         # Write campaign metadata manifest at start (issue #277).
         self._write_campaign_meta()
+
+        # Alert: campaign started (issue #438).
+        self._alert_manager.notify(
+            "campaign.started",
+            {
+                "campaign_id": self.trace.campaign_id,
+                "n_samples": self.cfg.n_samples,
+                "algorithm": self.cfg.algorithm,
+                "executor": self.executor.name,
+                "openstudio_version": self.cfg.openstudio_version,
+                "outdir": str(self.cfg.outdir),
+            },
+        )
 
         try:
             # Pre-campaign cancellation check: if cancellation is requested
@@ -1374,6 +1493,7 @@ class Campaign:
             log.warning("campaign cancelled by user or signal")
             self.trace.status = "cancelled"
             self._cancel_active_jobs()
+            self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
             self.trace.finalize()
             # Always write the trace on cancellation so callers can inspect
             # the partial state.  The file may not exist yet when
@@ -1386,6 +1506,15 @@ class Campaign:
             # status. Re-raising would crash the worker in concurrent mode
             # and cause test_cancel_during_generation_loop_stops to fail.
             return {"status": "cancelled", "trace": self.trace}
+        except Exception as exc:
+            campaign_status = "failure"
+            log.error("campaign failed: %s", exc, exc_info=True)
+            self.trace.status = "failure"
+            self._last_error = str(exc)[:500]
+            self.trace.finalize()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            raise
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
             self._restore_signal_handlers()
@@ -1419,6 +1548,63 @@ class Campaign:
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
 
+# Alert: campaign completed or failed (issue #438).
+            # Compute cache hit rate for cache.miss_rate_low rule.
+            cache_stats = self.cache.stats()
+            cache_hit_rate: float = 1.0
+            hits = float(cache_stats.get("hits", 0))  # type: ignore[arg-type]
+            misses = float(cache_stats.get("misses", 0))  # type: ignore[arg-type]
+            total = hits + misses
+            if total > 0:
+                cache_hit_rate = hits / total
+            self._alert_manager.update_cache_stats(cache_stats)
+            self._alert_manager.notify(
+                "cache.miss_rate_low",
+                {
+                    "campaign_id": self.trace.campaign_id,
+                    "cache_hit_rate": cache_hit_rate * 100.0,
+                    "cache_stats": cache_stats,
+                },
+            )
+            if campaign_status == "success":
+                self._alert_manager.notify(
+                    "campaign.completed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "elapsed_s": duration,
+                        "n_samples": self.cfg.n_samples,
+                        "n_succeeded": sum(1 for s in self.trace.per_sample if s.status == "ok"),
+                        "n_failed": sum(1 for s in self.trace.per_sample if s.status == "failed"),
+                        "total_cost_usd": self.trace.total_cost_usd,
+                    },
+                )
+            else:
+                self._alert_manager.notify(
+                    "campaign.failed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "status": campaign_status,
+                        "error": getattr(self, "_last_error", "unknown"),
+                    },
+                )
+            # Audit log: record campaign outcome (issue #439).
+            n_ok = sum(1 for s in self.trace.per_sample if s.status == "ok")
+            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
+            if campaign_status == "success":
+                self._audit.campaign_completed(
+                    campaign_id=self.trace.campaign_id,
+                    duration_s=duration,
+                    n_succeeded=n_ok,
+                    n_failed=n_failed,
+                )
+            elif campaign_status == "cancelled":
+                self._audit.campaign_stopped(campaign_id=self.trace.campaign_id)
+            else:
+                self._audit.campaign_failed(
+                    campaign_id=self.trace.campaign_id,
+                    reason="unexpected failure",
+                )
+
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
             # parallel teardown does not see "FileNotFoundError" on those
@@ -1445,6 +1631,7 @@ class Campaign:
         t1 = time.time()
 
         self._finalize_samples()
+        self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
@@ -1502,12 +1689,19 @@ class Campaign:
         target = all_samples[sample_idx]
         log.info("SINGLE SAMPLE: running sample %d (id=%s)", sample_idx, target["sample_id"])
 
-        parameterized: SampleDict = self.step_apply_parameters([target])
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+        parameterized: SampleDict = self._run_step_with_retries(
+            "APPLY_PARAMETERS", self.step_apply_parameters, 0, [target]
+        )
+        simulated: SampleDict = self._run_step_with_retries(
+            "RUN_OPENSTUDIO_SIM", self.step_run_openstudio_sim, 0, parameterized
+        )
+        kpi_files: list[Path] = self._run_step_with_retries(
+            "EXTRACT_KPIS", self.step_extract_kpis, 0, simulated
+        )
         t1 = time.time()
 
         self._finalize_samples()
+        self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
@@ -1644,10 +1838,16 @@ class Campaign:
         if generation == 0:
             self.step_preflight_run_model()
 
-        parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
+        parameterized: SampleDict = self._run_step_with_retries(
+            "APPLY_PARAMETERS", self.step_apply_parameters, generation, samples
+        )
         self.step_validate_measure_variables(generation=generation)
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
+        simulated: SampleDict = self._run_step_with_retries(
+            "RUN_OPENSTUDIO_SIM", self.step_run_openstudio_sim, generation, parameterized
+        )
+        kpi_files: list[Path] = self._run_step_with_retries(
+            "EXTRACT_KPIS", self.step_extract_kpis, generation, simulated
+        )
 
         # Sobol sensitivity indices (issue #346): compute after KPI extraction.
         if self.cfg.algorithm == "sobol":
@@ -1826,6 +2026,7 @@ class Campaign:
             log.warning("cancellation requested before aggregation — writing partial trace")
             self._finalize_samples()
             self.trace.status = "cancelled"
+            self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
             self.trace.finalize()
             self.trace.write(self.cfg.outdir / "run.json")
             return {
@@ -1848,6 +2049,7 @@ class Campaign:
         self._maybe_archive_inputs()
 
         self._finalize_samples()
+        self.trace.cache_hit_rate = self.cache.get_cache_hit_rate()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
@@ -2063,11 +2265,15 @@ class Campaign:
     def step_preflight_run_model(self) -> None:
         """Single-shot: run a throwaway simulation of the seed model.
 
-        Makes a temporary copy of the ``template_sim_package`` and runs
+        Validates the ``workflow.osw`` schema first (issue #422), then
+        makes a temporary copy of the ``template_sim_package`` and runs
         ``openstudio.cli run -w workflow.osw`` (or the stub when the CLI
         is not available).  If the run encounters severe errors, raises
         :class:`SevereEnergyPlusError` to abort the campaign before
         spending cloud budget.
+
+        OSW schema validation runs unconditionally (even when
+        ``--skip-preflight`` is set) to catch malformed workflows early.
 
         This step is cached: a successful preflight result is stored in
         the cache so a re-run with the same template and version does not
@@ -2078,9 +2284,23 @@ class Campaign:
         ``--skip-preflight`` CLI flag).
 
         Raises:
+            ValidationError: the ``workflow.osw`` file is invalid.
             SevereEnergyPlusError: the seed model has errors that would
                 cause every sample to fail.
         """
+        osw_path = self.cfg.template_sim_package / "workflow.osw"
+        try:
+            validate_osw(osw_path)
+        except ValidationError as exc:
+            log.error("PREFLIGHT_RUN_MODEL: invalid workflow.osw: %s", exc)
+            self.trace.step_finished(
+                "PREFLIGHT_RUN_MODEL",
+                cache="MISS",
+                elapsed_s=0.0,
+                exit_code=1,
+            )
+            raise
+
         if self.cfg.skip_preflight:
             log.info("PREFLIGHT_RUN_MODEL: skipped (--skip-preflight)")
             self.trace.step_finished(
