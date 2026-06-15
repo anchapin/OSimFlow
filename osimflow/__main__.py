@@ -984,7 +984,7 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
     serve.add_argument(
         "--rate-limit",
         default="60/minute",
-        help="Rate limit string for slowapi (default: 60/minute).",
+        help="Rate limit string, e.g. '60/minute' (default: 60/minute).",
     )
     serve.add_argument(
         "--tls-cert",
