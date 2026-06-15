@@ -1,3 +1,4 @@
+<!-- docs-skip -->
 # Secret Management
 
 > **Audience:** Engineers and administrators running OSimFlow campaigns across local, HPC, and cloud environments. Covers credential handling for every executor backend, Vault/Secrets Manager integration patterns, and API server authentication.
