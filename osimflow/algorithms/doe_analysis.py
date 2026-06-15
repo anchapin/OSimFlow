@@ -126,7 +126,8 @@ class DOEAnalysis:
 
     def _compute_single_main_effect(self, factor: str) -> MainEffect | None:
         """Compute main effect for a single factor."""
-        assert self._df is not None
+        if self._df is None:
+            return None
         df = self._df.dropna(subset=[factor, self.response_col])
         if len(df) < self.min_samples_per_level:
             return None
@@ -200,7 +201,8 @@ class DOEAnalysis:
         self, factor_a: str, factor_b: str
     ) -> InteractionEffect | None:
         """Compute 2-way interaction effect for a factor pair."""
-        assert self._df is not None
+        if self._df is None:
+            return None
         df = self._df.dropna(subset=[factor_a, factor_b, self.response_col])
         if len(df) < self.min_samples_per_level * 2:
             return None
