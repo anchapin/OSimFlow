@@ -570,6 +570,355 @@ class TestCompareCampaigns:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/compare — multi-campaign comparison (issue #404)
+# ---------------------------------------------------------------------------
+
+
+def _make_csv(base: Path, campaign_id: str, rows: list[dict]) -> Path:
+    """Write an aggregated_results.csv in a campaign directory."""
+    import csv
+
+    csv_path = base / campaign_id / "aggregated_results.csv"
+    if not rows:
+        return csv_path
+    fieldnames = list(rows[0].keys())
+    with csv_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return csv_path
+
+
+@pytest.fixture
+def campaigns_base_with_kpis(tmp_path: Path) -> Path:
+    """Base directory with campaigns that have aggregated_results.csv."""
+    base = tmp_path / "campaigns"
+    base.mkdir()
+
+    _setup_campaign_dir(
+        base,
+        "campaign-aaa",
+        _make_run_json(
+            campaign_id="campaign-aaa",
+            finished_at=2000.0,
+            samples=[
+                {"sample_id": "s0", "status": "ok", "elapsed_s": 10.0},
+                {"sample_id": "s1", "status": "ok", "elapsed_s": 12.0},
+            ],
+        ),
+    )
+    _make_csv(
+        base,
+        "campaign-aaa",
+        [
+            {"sample_id": "s0", "eui": 120.5, "total_energy": 50000},
+            {"sample_id": "s1", "eui": 118.2, "total_energy": 48000},
+        ],
+    )
+
+    _setup_campaign_dir(
+        base,
+        "campaign-bbb",
+        _make_run_json(
+            campaign_id="campaign-bbb",
+            finished_at=3000.0,
+            samples=[
+                {"sample_id": "s0", "status": "ok", "elapsed_s": 8.0},
+                {"sample_id": "s1", "status": "failed", "elapsed_s": 3.0},
+                {"sample_id": "s2", "status": "ok", "elapsed_s": 9.0},
+            ],
+        ),
+    )
+    _make_csv(
+        base,
+        "campaign-bbb",
+        [
+            {"sample_id": "s0", "eui": 135.0, "total_energy": 55000},
+            {"sample_id": "s2", "eui": 132.3, "total_energy": 53000},
+        ],
+    )
+
+    return base
+
+
+@pytest.fixture
+def client_kpis(campaigns_base_with_kpis: Path) -> TestClient:
+    """TestClient with campaigns that have KPI data."""
+    return TestClient(create_app(campaigns_base_dir=campaigns_base_with_kpis))
+
+
+class TestCompareCampaignsPost:
+    """Tests for POST /api/v1/campaigns/compare (issue #404)."""
+
+    def test_compare_two_campaigns_by_id(self, client_kpis: TestClient) -> None:
+        """Compare two campaigns by campaign_id with full metadata."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["campaigns"]) == 2
+
+        c0 = data["campaigns"][0]
+        assert c0["found"] is True
+        assert c0["campaign_id"] == "campaign-aaa"
+        assert c0["status"] == "completed"
+        assert c0["started_at"] == 1000.0
+        assert c0["finished_at"] == 2000.0
+
+    def test_compare_step_timing(self, client_kpis: TestClient) -> None:
+        """Step timing traces are included."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                ]
+            },
+        )
+        data = resp.json()
+        for entry in data["campaigns"]:
+            assert "step_timing" in entry
+            assert isinstance(entry["step_timing"], list)
+            assert len(entry["step_timing"]) >= 1
+
+    def test_compare_sample_summary(self, client_kpis: TestClient) -> None:
+        """Sample counts and success rates are computed."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                ]
+            },
+        )
+        data = resp.json()
+
+        # campaign-aaa: 2 samples, 2 succeeded
+        s0 = data["campaigns"][0]["sample_summary"]
+        assert s0["n_samples"] == 2
+        assert s0["n_succeeded"] == 2
+        assert s0["n_failed"] == 0
+        assert s0["success_rate"] == 1.0
+
+        # campaign-bbb: 3 samples, 2 succeeded, 1 failed
+        s1 = data["campaigns"][1]["sample_summary"]
+        assert s1["n_samples"] == 3
+        assert s1["n_succeeded"] == 2
+        assert s1["n_failed"] == 1
+
+    def test_compare_kpi_stats(self, client_kpis: TestClient) -> None:
+        """Per-campaign KPI statistics are computed from aggregated_results.csv."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                ]
+            },
+        )
+        data = resp.json()
+
+        kpi0 = data["campaigns"][0]["kpi_stats"]
+        assert "eui" in kpi0
+        assert "total_energy" in kpi0
+        # mean of [120.5, 118.2] = 119.35
+        assert abs(kpi0["eui"]["mean"] - 119.35) < 0.01
+        assert kpi0["eui"]["count"] == 2
+
+    def test_compare_kpi_comparison_alignment(self, client_kpis: TestClient) -> None:
+        """KPI comparison rows align means across campaigns."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                ]
+            },
+        )
+        data = resp.json()
+        kpi_comp = data["kpi_comparison"]
+        assert len(kpi_comp) > 0
+
+        # Find the EUI comparison row
+        eui_row = next(r for r in kpi_comp if r["metric"] == "eui")
+        assert len(eui_row["values"]) == 2
+        assert eui_row["values"][0] is not None
+        assert eui_row["values"][1] is not None
+        assert abs(eui_row["values"][0] - 119.35) < 0.01
+
+    def test_compare_by_outdir(self, campaigns_base_with_kpis: Path) -> None:
+        """Compare campaigns by explicit outdir paths."""
+        client = TestClient(create_app(outdir=campaigns_base_with_kpis))
+        resp = client.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"outdir": str(campaigns_base_with_kpis / "campaign-aaa")},
+                    {"outdir": str(campaigns_base_with_kpis / "campaign-bbb")},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["campaigns"][0]["found"] is True
+        assert data["campaigns"][0]["campaign_id"] == "campaign-aaa"
+        assert data["campaigns"][1]["found"] is True
+        assert data["campaigns"][1]["campaign_id"] == "campaign-bbb"
+
+    def test_compare_mixed_id_and_outdir(
+        self, client_kpis: TestClient, campaigns_base_with_kpis: Path
+    ) -> None:
+        """Compare using campaign_id for one and outdir for the other."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"outdir": str(campaigns_base_with_kpis / "campaign-bbb")},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert data["campaigns"][0]["found"] is True
+        assert data["campaigns"][1]["found"] is True
+
+    def test_compare_not_found(self, client_kpis: TestClient) -> None:
+        """Missing campaign is returned with found=False and an error."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "nonexistent"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["campaigns"][0]["found"] is True
+        assert data["campaigns"][1]["found"] is False
+        assert data["campaigns"][1]["error"] is not None
+
+    def test_compare_three_campaigns(self, campaigns_base_with_kpis: Path) -> None:
+        """Compare more than two campaigns."""
+        # Add a third campaign
+        _setup_campaign_dir(
+            campaigns_base_with_kpis,
+            "campaign-ccc",
+            _make_run_json(
+                campaign_id="campaign-ccc",
+                finished_at=4000.0,
+            ),
+        )
+        client = TestClient(create_app(campaigns_base_dir=campaigns_base_with_kpis))
+        resp = client.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                    {"campaign_id": "campaign-ccc"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 3
+        assert all(c["found"] for c in data["campaigns"])
+
+    def test_compare_min_two_required(self, client_kpis: TestClient) -> None:
+        """At least two campaigns are required."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={"campaigns": [{"campaign_id": "campaign-aaa"}]},
+        )
+        assert resp.status_code == 422
+
+    def test_compare_empty_campaigns_list(self, client_kpis: TestClient) -> None:
+        """Empty campaigns list is rejected."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={"campaigns": []},
+        )
+        assert resp.status_code == 422
+
+    def test_compare_no_identifier_provided(self, client_kpis: TestClient) -> None:
+        """When neither campaign_id nor outdir is given, entry has error."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["campaigns"][1]["found"] is False
+        assert data["campaigns"][1]["error"] is not None
+
+    def test_compare_no_kpi_data(self, campaigns_base: Path) -> None:
+        """When campaigns have no aggregated_results.csv, kpi_stats is empty."""
+        client = TestClient(create_app(campaigns_base_dir=campaigns_base))
+        resp = client.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        for entry in data["campaigns"]:
+            assert entry["kpi_stats"] == {}
+        assert data["kpi_comparison"] == []
+
+    def test_compare_config_metadata(self, client_kpis: TestClient) -> None:
+        """Config summary is included in the comparison."""
+        resp = client_kpis.post(
+            "/api/v1/campaigns/compare",
+            json={
+                "campaigns": [
+                    {"campaign_id": "campaign-aaa"},
+                    {"campaign_id": "campaign-bbb"},
+                ]
+            },
+        )
+        data = resp.json()
+        for entry in data["campaigns"]:
+            assert entry["config"] is not None
+            assert "executor" in entry["config"]
+
+    def test_compare_get_endpoint_still_works(self, client_ro: TestClient) -> None:
+        """The existing GET /compare endpoint remains backward compatible."""
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={"id1": "campaign-aaa", "id2": "campaign-bbb"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "left" in data
+        assert "right" in data
+
+
+# ---------------------------------------------------------------------------
 # Backward compatibility — existing endpoints still work
 # ---------------------------------------------------------------------------
 

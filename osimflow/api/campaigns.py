@@ -3,6 +3,8 @@
 Provides:
   - GET  /api/v1/campaigns                     — list all campaigns
   - POST /api/v1/campaigns                     — create (and optionally launch) a campaign
+  - GET  /api/v1/campaigns/compare             — compare two campaigns (legacy, issue #386)
+  - POST /api/v1/campaigns/compare             — multi-campaign comparison (issue #404)
   - GET  /api/v1/campaigns/{campaign_id}       — campaign status
   - GET  /api/v1/campaigns/{campaign_id}/samples    — per-sample results
   - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id} — individual sample
@@ -28,12 +30,17 @@ if TYPE_CHECKING:
 from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
     CampaignCancelResponse,
+    CampaignComparisonEntry,
     CampaignComparisonResponse,
     CampaignCreateRequest,
     CampaignCreateResponse,
     CampaignDetailResponse,
     CampaignListResponse,
     CampaignSummary,
+    CompareCampaignsPostRequest,
+    KpiComparisonRow,
+    KpiMetricStats,
+    MultiCampaignComparisonResponse,
     SampleDetailResponse,
     SampleListResponse,
     SampleSummary,
@@ -470,6 +477,284 @@ async def compare_campaigns(
         pass  # Campaign not found — return None
 
     return CampaignComparisonResponse(left=left, right=right)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/compare — multi-campaign comparison (issue #404)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_by_outdir(outdir: str) -> Path | None:
+    """Resolve an explicit outdir path to a campaign directory."""
+    path = Path(outdir)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path if path.is_dir() else None
+
+
+def _resolve_by_campaign_id(request: Request, campaign_id: str) -> Path | None:
+    """Resolve a campaign_id via the registry, then campaigns base dir.
+
+    Resolution order:
+    1. Campaign registry (if configured in ``app.state.registry``).
+    2. ``campaigns_base_dir / campaign_id``.
+    3. ``outdir / campaign_id`` (single-campaign fallback).
+    """
+    # Try the registry first (if configured).
+    registry: Any = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        try:
+            record = registry.get_campaign(campaign_id)
+            if record is not None and record.outdir:
+                reg_outdir = Path(record.outdir)
+                if reg_outdir.is_dir():
+                    return reg_outdir
+        except Exception:  # noqa: BLE001
+            log.debug("registry lookup failed for %s", campaign_id, exc_info=True)
+
+    # Fall back to campaigns base directory lookup.
+    candidates: list[Path] = []
+    base: Path | None = getattr(request.app.state, "campaigns_base_dir", None)
+    if base is not None:
+        candidates.append(base / campaign_id)
+    outdir_state: Path | None = request.app.state.outdir
+    if outdir_state is not None:
+        candidates.append(outdir_state / campaign_id)
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+
+    return None
+
+
+def _resolve_campaign_dir(
+    request: Request,
+    campaign_id: str | None,
+    outdir: str | None,
+) -> Path | None:
+    """Resolve a campaign identifier to its on-disk directory.
+
+    If ``outdir`` is given, resolve that path directly.
+    If ``campaign_id`` is given, look it up via the registry or the
+    campaigns base directory.
+
+    Returns ``None`` when the campaign cannot be found.
+    """
+    # Outdir takes precedence — direct path resolution.
+    if outdir is not None:
+        return _resolve_by_outdir(outdir)
+
+    if campaign_id is None:
+        return None
+
+    # Prevent directory traversal in campaign_id.
+    if "/" in campaign_id or "\\" in campaign_id or ".." in campaign_id:
+        return None
+
+    return _resolve_by_campaign_id(request, campaign_id)
+
+
+def _extract_sample_summary(data: dict[str, Any]) -> dict[str, Any]:
+    """Extract sample counts and success rate from run.json data.
+
+    When ``per_sample`` is present and non-empty, counts are derived
+    from it (authoritative source).  Otherwise the ``summary`` field
+    is used.
+    """
+    per_sample: list[dict[str, Any]] = data.get("per_sample", [])
+    if per_sample:
+        n_total = len(per_sample)
+        n_succeeded = sum(1 for s in per_sample if s.get("status") == "ok")
+        n_failed = n_total - n_succeeded
+    else:
+        summary = data.get("summary") or {}
+        n_total = summary.get("n_samples", 0)
+        n_succeeded = summary.get("n_succeeded", 0)
+        n_failed = summary.get("n_failed", 0)
+
+    success_rate: float | None = None
+    if n_total > 0:
+        success_rate = round(n_succeeded / n_total, 4)
+    return {
+        "n_samples": n_total,
+        "n_succeeded": n_succeeded,
+        "n_failed": n_failed,
+        "success_rate": success_rate,
+    }
+
+
+def _compute_kpi_stats(campaign_dir: Path) -> dict[str, KpiMetricStats]:
+    """Read aggregated_results.csv and compute per-column statistics.
+
+    Only numeric columns are included.  Non-numeric columns (e.g.
+    ``sample_id``) are skipped.
+    """
+    csv_path = campaign_dir / "aggregated_results.csv"
+    if not csv_path.exists():
+        return {}
+
+    try:
+        import pandas as pd  # noqa: PLC0415
+    except ImportError:
+        return {}
+
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception:  # noqa: BLE001
+        log.debug("failed to read %s", csv_path, exc_info=True)
+        return {}
+
+    stats: dict[str, KpiMetricStats] = {}
+    for col in df.columns:
+        if col.lower() in ("sample_id", "sample", "id", "Unnamed: 0"):
+            continue
+        series = df[col]
+        if not pd.api.types.is_numeric_dtype(series):
+            continue
+        clean = series.dropna()
+        if clean.empty:
+            continue
+        stats[col] = KpiMetricStats(
+            mean=round(float(clean.mean()), 6),
+            min=round(float(clean.min()), 6),
+            max=round(float(clean.max()), 6),
+            std=round(float(clean.std()), 6) if len(clean) > 1 else 0.0,
+            count=int(len(clean)),
+        )
+    return stats
+
+
+def _build_kpi_comparison(
+    entries: list[CampaignComparisonEntry],
+) -> list[KpiComparisonRow]:
+    """Align KPI means across campaigns for easy comparison.
+
+    Collects the union of all KPI metric names across all campaigns and
+    produces one ``KpiComparisonRow`` per metric.  ``values[i]`` is the
+    mean of that KPI in ``entries[i]``, or ``None`` if not available.
+    """
+    all_metrics: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        for metric in entry.kpi_stats:
+            if metric not in seen:
+                seen.add(metric)
+                all_metrics.append(metric)
+
+    rows: list[KpiComparisonRow] = []
+    for metric in all_metrics:
+        values: list[float | None] = []
+        for entry in entries:
+            stat = entry.kpi_stats.get(metric)
+            values.append(stat.mean if stat is not None else None)
+        rows.append(KpiComparisonRow(metric=metric, values=values))
+    return rows
+
+
+@campaigns_router.post(
+    "/api/v1/campaigns/compare",
+    response_model=MultiCampaignComparisonResponse,
+)
+async def compare_campaigns_post(
+    body: CompareCampaignsPostRequest,
+    request: Request,
+) -> MultiCampaignComparisonResponse:
+    """Compare two or more campaigns by registry ID, campaign directory name,
+    or explicit outdir path (issue #404).
+
+    Each entry in the request body may specify ``campaign_id`` (resolved
+    via the registry or campaigns base directory) **or** ``outdir`` (a
+    direct filesystem path to the campaign output directory).
+
+    The response includes per-campaign metadata, step timing, sample
+    counts and success rates, per-KPI aggregated statistics, and an
+    aligned KPI comparison table for easy charting.
+
+    Campaigns that cannot be found are included in the response with
+    ``found=False`` and an ``error`` message — the endpoint never raises
+    404 so callers can compare even when some campaigns are missing.
+    """
+    entries: list[CampaignComparisonEntry] = []
+
+    for identifier in body.campaigns:
+        label = identifier.campaign_id or identifier.outdir or "<empty>"
+
+        if identifier.campaign_id is None and identifier.outdir is None:
+            entries.append(
+                CampaignComparisonEntry(
+                    identifier=label,
+                    found=False,
+                    error="No campaign_id or outdir provided",
+                )
+            )
+            continue
+
+        campaign_dir = _resolve_campaign_dir(
+            request,
+            identifier.campaign_id,
+            identifier.outdir,
+        )
+
+        if campaign_dir is None:
+            entries.append(
+                CampaignComparisonEntry(
+                    identifier=label,
+                    found=False,
+                    error=f"Campaign '{label}' not found",
+                )
+            )
+            continue
+
+        # Load run.json.
+        run_json_path = campaign_dir / "run.json"
+        if not run_json_path.exists():
+            entries.append(
+                CampaignComparisonEntry(
+                    identifier=label,
+                    found=False,
+                    error=f"run.json not found in {campaign_dir}",
+                )
+            )
+            continue
+
+        try:
+            data: dict[str, Any] = json.loads(run_json_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            entries.append(
+                CampaignComparisonEntry(
+                    identifier=label,
+                    found=True,
+                    error=f"Failed to read run.json: {exc}",
+                )
+            )
+            continue
+
+        kpi_stats = _compute_kpi_stats(campaign_dir)
+
+        entries.append(
+            CampaignComparisonEntry(
+                identifier=label,
+                found=True,
+                campaign_id=data.get("campaign_id", identifier.campaign_id),
+                status=_derive_status(data),
+                started_at=data.get("started_at"),
+                finished_at=data.get("finished_at"),
+                elapsed_s=data.get("elapsed_s"),
+                config=data.get("config") or data.get("config_summary"),
+                step_timing=data.get("steps", []),
+                sample_summary=_extract_sample_summary(data),
+                kpi_stats=kpi_stats,
+            )
+        )
+
+    kpi_comparison = _build_kpi_comparison(entries)
+
+    return MultiCampaignComparisonResponse(
+        campaigns=entries,
+        kpi_comparison=kpi_comparison,
+        total=len(entries),
+    )
 
 
 # ---------------------------------------------------------------------------

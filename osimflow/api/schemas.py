@@ -271,6 +271,106 @@ class CampaignComparisonResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Multi-campaign comparison (issue #404)
+# ---------------------------------------------------------------------------
+
+
+class CompareCampaignIdentifier(BaseModel):
+    """Identifies a single campaign to include in a comparison.
+
+    Provide **either** ``campaign_id`` (resolved via the campaigns base
+    directory or the campaign registry) **or** ``outdir`` (an absolute
+    or relative path to a campaign output directory).
+    """
+
+    campaign_id: str | None = Field(
+        default=None,
+        description="Campaign ID to look up in the registry or campaigns base dir",
+    )
+    outdir: str | None = Field(
+        default=None,
+        description="Direct path to a campaign output directory",
+    )
+
+
+class CompareCampaignsPostRequest(BaseModel):
+    """Request body for ``POST /api/v1/campaigns/compare`` (issue #404).
+
+    Accepts two or more campaign identifiers.  Each identifier may
+    reference a campaign by registry ID, by campaign directory name
+    (under the campaigns base directory), or by explicit ``outdir``
+    path.
+    """
+
+    campaigns: list[CompareCampaignIdentifier] = Field(
+        min_length=2,
+        description="Two or more campaign identifiers to compare",
+    )
+
+
+class KpiMetricStats(BaseModel):
+    """Aggregated statistics for a single numeric KPI metric."""
+
+    mean: float | None = None
+    min: float | None = None
+    max: float | None = None
+    std: float | None = None
+    count: int = 0
+
+
+class CampaignComparisonEntry(BaseModel):
+    """One campaign's data within a multi-campaign comparison."""
+
+    identifier: str = Field(description="The campaign_id or outdir used for lookup")
+    found: bool = Field(default=False, description="Whether the campaign was located")
+    campaign_id: str | None = None
+    status: str | None = None
+    started_at: float | None = None
+    finished_at: float | None = None
+    elapsed_s: float | None = None
+    config: dict[str, Any] | None = Field(
+        default=None, description="Config summary (executor, n_samples, etc.)"
+    )
+    step_timing: list[dict[str, Any]] = Field(
+        default_factory=list, description="Per-step timing traces"
+    )
+    sample_summary: dict[str, Any] | None = Field(
+        default=None,
+        description="n_samples, n_succeeded, n_failed, success_rate",
+    )
+    kpi_stats: dict[str, KpiMetricStats] = Field(
+        default_factory=dict,
+        description="Per-KPI aggregated statistics keyed by metric name",
+    )
+    error: str | None = Field(
+        default=None, description="Error message if the campaign could not be loaded"
+    )
+
+
+class KpiComparisonRow(BaseModel):
+    """One KPI metric compared across all campaigns.
+
+    The ``values`` list is aligned with the ``campaigns`` list in the
+    parent response — ``values[i]`` is the mean of this KPI in
+    ``campaigns[i]``, or ``None`` if that campaign has no data for it.
+    """
+
+    metric: str
+    values: list[float | None]
+
+
+class MultiCampaignComparisonResponse(BaseModel):
+    """Response for ``POST /api/v1/campaigns/compare`` (issue #404)."""
+
+    campaigns: list[CampaignComparisonEntry]
+    kpi_comparison: list[KpiComparisonRow] = Field(
+        default_factory=list,
+        description="KPI mean values aligned across campaigns for easy charting",
+    )
+    total: int
+
+
+# ---------------------------------------------------------------------------
 # File management (issue #273)
 # ---------------------------------------------------------------------------
 
