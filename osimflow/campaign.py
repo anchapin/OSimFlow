@@ -89,6 +89,7 @@ from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .webhook import WebhookClient
 from .work import (
     SevereEnergyPlusError,
+    TransientError,
     aggregate_results,
     default_apply_parameters,
     extract_kpis,
@@ -649,6 +650,78 @@ class Campaign:
                 # cancelled via f.cancel() during a cancellation sweep.
                 with contextlib.suppress(Exception, concurrent.futures.CancelledError):
                     future.result()
+
+    def _run_step_with_retries(
+        self,
+        step_name: str,
+        step_fn: Callable[..., Any],
+        generation: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Run a step with exponential-backoff retry for transient failures.
+
+        This is the cross-step retry mechanism for issue #416. When a fan-out
+        step (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS) fails with a
+        transient error, this method retries that specific step without re-running
+        previous steps. Cache state is preserved because the SQLiteCache lookup
+        already handles completed work.
+
+        Parameters
+        ----------
+        step_name
+            The step name for logging (e.g., "APPLY_PARAMETERS").
+        step_fn
+            The step method to call.
+        generation
+            The generation number for observability tracking.
+        *args
+            Positional arguments forwarded to *step_fn*.
+        **kwargs
+            Keyword arguments forwarded to *step_fn*.
+
+        Returns
+        -------
+        The return value of *step_fn* on success.
+
+        Raises
+        ------
+        The last transient exception when all retries are exhausted.
+        """
+        max_retries = self.cfg.max_step_retries
+        if max_retries <= 0:
+            return step_fn(*args, generation=generation, **kwargs)
+
+        last_exc: BaseException | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                return step_fn(*args, generation=generation, **kwargs)
+            except TransientError as exc:
+                last_exc = exc
+                if attempt == max_retries:
+                    log.error(
+                        "%s failed after %d attempts (all transient): %s",
+                        step_name,
+                        max_retries + 1,
+                        exc,
+                    )
+                    break
+                delay = min(2.0 * (2**attempt), 30.0)
+                log.warning(
+                    "%s transient failure (attempt %d/%d), retrying in %.1fs: %s",
+                    step_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+            except Exception:
+                raise
+
+        if last_exc is not None:
+            raise last_exc from None
+        raise RuntimeError(f"{step_name}: unexpected code path")
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -1502,9 +1575,15 @@ class Campaign:
         target = all_samples[sample_idx]
         log.info("SINGLE SAMPLE: running sample %d (id=%s)", sample_idx, target["sample_id"])
 
-        parameterized: SampleDict = self.step_apply_parameters([target])
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+        parameterized: SampleDict = self._run_step_with_retries(
+            "APPLY_PARAMETERS", self.step_apply_parameters, 0, [target]
+        )
+        simulated: SampleDict = self._run_step_with_retries(
+            "RUN_OPENSTUDIO_SIM", self.step_run_openstudio_sim, 0, parameterized
+        )
+        kpi_files: list[Path] = self._run_step_with_retries(
+            "EXTRACT_KPIS", self.step_extract_kpis, 0, simulated
+        )
         t1 = time.time()
 
         self._finalize_samples()
@@ -1644,10 +1723,16 @@ class Campaign:
         if generation == 0:
             self.step_preflight_run_model()
 
-        parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
+        parameterized: SampleDict = self._run_step_with_retries(
+            "APPLY_PARAMETERS", self.step_apply_parameters, generation, samples
+        )
         self.step_validate_measure_variables(generation=generation)
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
+        simulated: SampleDict = self._run_step_with_retries(
+            "RUN_OPENSTUDIO_SIM", self.step_run_openstudio_sim, generation, parameterized
+        )
+        kpi_files: list[Path] = self._run_step_with_retries(
+            "EXTRACT_KPIS", self.step_extract_kpis, generation, simulated
+        )
 
         # Sobol sensitivity indices (issue #346): compute after KPI extraction.
         if self.cfg.algorithm == "sobol":
