@@ -59,7 +59,7 @@ def _get_real_remote_address(request: Request) -> str:
         if client_ip:
             return client_ip
     if request.client and request.client.host:
-        return request.client.host
+        return str(request.client.host)
     return "127.0.0.1"
 
 
