@@ -78,6 +78,7 @@ from .observability import (
     ObservabilityBackend,
     OpenTelemetryBackend,
     PrometheusBackend,
+    new_trace_id,
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
@@ -330,6 +331,24 @@ class Campaign:
             "work": sha256_of_files([work_file]),
         }
 
+    def _trace_id_for(self, sample_id: str) -> str:
+        """Return the per-sample trace ID, minting one on first access.
+
+        The trace ID is stored in ``_sample_state[sample_id]["trace_id"]``
+        so every observability call for this sample (cost, status,
+        per-step fan-out events) shares the same correlation key.  Minted
+        lazily via :func:`osimflow.observability.new_trace_id` — short
+        (8 hex chars) and stable across cache hits, retries, and
+        incremental checkpoints (issue #436).
+        """
+        state = self._sample_state.setdefault(sample_id, {})
+        tid_obj = state.get("trace_id")
+        if isinstance(tid_obj, str):
+            return tid_obj
+        tid = new_trace_id()
+        state["trace_id"] = tid
+        return tid
+
     def _finalize_samples(self) -> None:
         """Emit one SampleTrace per sample based on accumulated per-step state.
 
@@ -378,8 +397,11 @@ class Campaign:
                 None if billed_duration_obj is None else float(str(billed_duration_obj))
             )
             # Observability: record per-sample cost metric (issue #132).
+            # Forward the per-sample trace_id so the metric can be joined
+            # to a distributed trace (issue #436).
+            trace_id = self._trace_id_for(sid)
             if cost_usd is not None:
-                self._obs.record_sample_metric(sid, "cost_usd", cost_usd)
+                self._obs.record_sample_metric(sid, "cost_usd", cost_usd, trace_id=trace_id)
             trace = SampleTrace(
                 sample_id=sid,
                 status=status,
@@ -396,6 +418,7 @@ class Campaign:
                 worker_region=worker_region,
                 cost_usd=cost_usd,
                 billed_duration_seconds=billed_duration_seconds,
+                trace_id=trace_id,
             )
             # Deduplicate: replace existing entry from incremental checkpoint.
             if sid in existing_ids:
@@ -407,8 +430,15 @@ class Campaign:
                 self.trace.per_sample.append(trace)
                 existing_ids.add(sid)
             # Observability: record per-sample status metric (issue #132).
-            # status="ok" → 1.0, status="failed" → 0.0.
-            self._obs.record_sample_metric(sid, "status", 1.0 if status == "ok" else 0.0)
+            # status="ok" → 1.0, status="failed" → 0.0.  Forward the
+            # trace_id so the status metric joins the cost metric under
+            # the same per-sample trace (issue #436).
+            self._obs.record_sample_metric(
+                sid,
+                "status",
+                1.0 if status == "ok" else 0.0,
+                trace_id=trace_id,
+            )
 
         # Accumulate campaign-level cost totals (issue #126).
         self._accumulate_cost_summary()
@@ -498,6 +528,7 @@ class Campaign:
             worker_region=worker_region,
             cost_usd=cost_usd,
             billed_duration_seconds=billed_duration_seconds,
+            trace_id=self._trace_id_for(sid),
         )
         self.trace.update_sample(trace)
 
