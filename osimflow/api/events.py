@@ -222,7 +222,7 @@ async def campaign_stop(request: Request) -> dict[str, str]:
     if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Write permission required",
+            detail="read-only mode: write permission required",
         )
     outdir: Path | None = request.app.state.outdir
     if outdir is None:

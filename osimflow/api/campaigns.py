@@ -630,7 +630,7 @@ async def cancel_campaign(
     if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Write permission required for campaign cancellation",
+            detail="read-only mode: write permission required for campaign cancellation",
         )
 
     base = _campaigns_base_dir(request)
