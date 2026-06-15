@@ -8,6 +8,7 @@ API; everything else is an implementation detail.
 
 from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
+from .algorithms.doe_analysis import DOEAnalysis
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, CacheStats, SQLiteCache
@@ -99,6 +100,7 @@ __all__ = [
     "AlgorithmRegistry",
     "BaseAlgorithm",
     "LHSAlgorithm",
+    "DOEAnalysis",
     "SobolAlgorithm",
     "HaltonAlgorithm",
     "CacheKey",

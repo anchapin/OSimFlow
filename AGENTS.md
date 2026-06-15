@@ -109,7 +109,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Path | Purpose |
 |---|---|
-| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `DistributedCache`, `build_cache`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, `CacheStats`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), and logging setup (`get_logger`, `setup_logging`). |
+| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `DistributedCache`, `build_cache`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, `CacheStats`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`, `DOEAnalysis`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), and logging setup (`get_logger`, `setup_logging`). |
 | `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` + `CacheStats` — explicit, testable resume semantics and hit rate statistics (issue #426). |
 | `osimflow/document_store.py` | `DocumentStore` ABC + `SQLiteDocumentStore` — MongoDB-equivalent document store using SQLite JSON1; provides `insert_one`, `find_one`, `find_many`, `update_one`, `delete_one`, `create_index`, and `aggregate` for campaign data persistence (issue #389). |
@@ -120,7 +120,6 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
 | `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger`, `setup_logging`, and `LogAggregator`. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend` + `new_trace_id` (per-sample trace-ID helper); plug-in metrics backends (issue #145, #127). |
-| `osimflow/alerting.py` | `AlertManager` + `Alert` + `AlertSeverity` — rule-based alerting engine for campaign events (campaign.started, campaign.completed, campaign.failed, sample.failed, worker.dead, cache.miss_rate_low). `build_alert_manager` factory loads rules from YAML (`--alert-rules`) and destinations from YAML (`--alert-destinations`). Supports webhook, email, and log destinations (issue #438). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, `osimflow compare`, `osimflow backup`, and `osimflow restore` subcommands. Registry backup/export/import methods: `export_registry()`, `import_registry()`, `backup()` (issue #440). |
 | `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, plus `EPWValidationError` / `EPWDownloadError`. |
@@ -139,6 +138,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
+| `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
 | `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
@@ -149,7 +149,6 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
-| `osimflow/version_detection.py` | Automatic OpenStudio version detection (issue #412): `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`, and `VersionDetectionError`. Detects version from environment variable, CLI path, or Docker container labels. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
 | `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
@@ -167,7 +166,6 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `bin/excel_to_variables.py` | PAT/Analysis Gem Excel spreadsheet to ``variables.yml`` converter. Reads a PAT-style ``.xlsx`` and produces a OSimFlow ``variables.yml`` with support for uniform, normal, lognormal, triangular, discrete, categorical, and static distributions. |
 | `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
-| `tests/unit/test_alerting.py` | Unit tests for alerting module: `AlertManager`, `Alert`, `AlertSeverity`, destination factories (webhook, email, log), `load_alert_rules_from_yaml`, `load_alert_destinations_from_yaml`, and `build_alert_manager` (issue #438). |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
@@ -185,13 +183,9 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `infra/aws/scripts/sync-openstudio-to-ecr.sh` | ECR mirror script (issue #129): pulls `nrel/openstudio` from Docker Hub with exponential-backoff retry, pushes to ECR in one or more regions. Avoids Docker Hub rate limits for production Batch jobs. |
 | `infra/aws/terraform/ecr.tf` | ECR repository + lifecycle policy for mirrored OpenStudio images (issue #129). Keeps last 5 tagged `3.*` images. |
 | `docs/container-image-strategy.md` | Container image strategy: why we mirror to ECR, how to use the sync script, lifecycle policy, multi-region replication, and cost considerations (issue #129). |
-| `docs/mongodb-storage.md` | MongoDB and distributed storage guide: SQLite limitations at scale, document store alternatives (MongoDB, PostgreSQL JSONB), results database options, cache alternatives, and migration guide (issue #421). |
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
-| `docs/offline-deployment-guide.md` | Offline/air-gapped deployment guide: bundling the Python environment, OpenStudio CLI, and weather data for air-gapped HPC (issue #399). |
 | `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
 | `docs/observability.md` | Pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry): configuration, usage, and extension guide (issue #145, #127). |
-| `docs/cli-lifecycle-management.md` | CLI lifecycle management guide (issue #413): OpenStudio CLI invocation patterns, process supervision gap, restart-on-failure wrappers, and executor-specific considerations for LocalExecutor, SlurmExecutor, AWSBatchExecutor, KubernetesExecutor, and NomadExecutor. |
-| `docs/measure-runner-guide.md` | Measure runner practical guide: BYOS script structure, MeasureRegistry usage, running single measures, and worked examples (issue #435). |
 | `infra/nomad/examples/ha/` | Docker Compose HA cluster for Nomad (3 server + 2 client) with ACL bootstrap (issue #123). |
 | `infra/nomad/examples/ha/docker-compose.yml` | 3-server + 2-client Docker Compose with named volumes and bridge networking. |
 | `infra/nomad/examples/ha/server*.hcl` | Per-server HCL configs with `bootstrap_expect=3` and `retry_join`. |
@@ -258,8 +252,6 @@ The 7-step DAG that the `Campaign` class drives:
 - `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
-- `--alert-rules` (YAML file defining alerting rules; issue #438)
-- `--alert-destinations` (YAML file defining alert destinations (webhook, email, log); issue #438)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
 - `--cloudwatch-namespace` (CloudWatch metric namespace; used when `--observability cloudwatch`)
 - `--prometheus-port` (Prometheus metrics HTTP port; used when `--observability prometheus`)
@@ -271,7 +263,6 @@ The 7-step DAG that the `Campaign` class drives:
 - `--skip-preflight` (skip the PREFLIGHT_RUN_MODEL step that validates the seed model; issue #107)
 - `--max-generations` (maximum number of DAG generations; default 1 for single-shot LHS. Issue #122)
 - `--max-sample-retries` (maximum retry attempts for transient per-sample failures; default 3. Issue #252)
-- `--max-step-retries` (maximum retry attempts for transient cross-step failures; default 2. Issue #416)
 - `--webhook-url` (campaign completion webhook callback URL; issue #283)
 - `--result-storage-backend` (result storage backend: `local` (default), `s3`, `gs`, `azure`; issue #339)
 - `--result-storage-bucket` (bucket/container name for result storage; issue #339)
@@ -651,12 +642,9 @@ generic role prompt's tool guidance when they disagree).
 - [ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md) — the decision record for adopting `nrel/openstudio` directly.
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
-- [MongoDB/distributed storage guide (docs/mongodb-storage.md)](docs/mongodb-storage.md) — SQLite limitations, distributed storage alternatives (MongoDB, PostgreSQL, Redis), results database options, and migration guide (issue #421).
-- [CLI lifecycle management guide (docs/cli-lifecycle-management.md)](docs/cli-lifecycle-management.md) — OpenStudio CLI invocation patterns, process supervision gap, restart-on-failure wrappers, and executor-specific considerations (issue #413).
+- [Observability guide (docs/observability.md)](docs/observability.md) — pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry).
 - [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
-- [Offline deployment guide (docs/offline-deployment-guide.md)](docs/offline-deployment-guide.md) — offline/air-gapped deployment guide (issue #399).
 - [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
-- [Measure Runner Guide (docs/measure-runner-guide.md)](docs/measure-runner-guide.md) — practical guide to running OpenStudio measures programmatically and writing custom BYOS KPI extractors (issue #435).
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding.
 - [GOVERNANCE.md](docs/GOVERNANCE.md) — community governance model.
 - [`submitit` documentation](https://github.com/facebookincubator/submitit) — the Slurm executor backend.
