@@ -131,9 +131,10 @@ class CustomDOEAlgorithm(BaseAlgorithm):
                     if i >= n_samples:
                         break
                     values: dict[str, Any] = {}
+                    row_stripped = {k.strip(): v for k, v in row.items()}
                     for var_def in var_list:
                         var_name = var_def["name"]
-                        raw = row.get(var_name, "").strip()
+                        raw = row_stripped.get(var_name, "").strip()
                         if raw == "":
                             raise ValueError(
                                 f"CustomDOEAlgorithm: empty value for '{var_name}' "

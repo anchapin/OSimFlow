@@ -20,7 +20,6 @@ Covers:
 - Empty algorithm config returns empty samples
 """
 
-import csv
 import json
 from pathlib import Path
 from typing import Any
@@ -29,7 +28,6 @@ import pytest
 
 from osimflow.algorithms import AlgorithmRegistry
 from osimflow.algorithms.custom import CustomDOEAlgorithm
-
 
 # ======================================================================
 # Registry tests
@@ -103,7 +101,10 @@ class TestCustomFileMode:
         csv_file.write_text("wall_r,window_shgc\n5.0,0.5\n3.0,0.3\n")
 
         algo = CustomDOEAlgorithm()
-        variables = {**_VARIABLES_2D, "algorithm": {"type": "custom", "samples_file": str(csv_file)}}
+        variables = {
+            **_VARIABLES_2D,
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+        }
         result = algo.generate_samples(variables, n_samples=2, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         assert len(data["samples"]) == 2
@@ -115,7 +116,10 @@ class TestCustomFileMode:
         csv_file.write_text("wall_r,window_shgc\n5.0,0.5\n")
 
         algo = CustomDOEAlgorithm()
-        variables = {**_VARIABLES_2D, "algorithm": {"type": "custom", "samples_file": str(csv_file)}}
+        variables = {
+            **_VARIABLES_2D,
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+        }
         nested = tmp_path / "deep" / "nested"
         algo.generate_samples(variables, n_samples=1, seed=None, outdir=nested)
         assert nested.is_dir()
@@ -134,7 +138,10 @@ class TestCustomFileMode:
         csv_file.write_text("wall_r\n5.0\n")
 
         algo = CustomDOEAlgorithm()
-        variables = {**_VARIABLES_2D, "algorithm": {"type": "custom", "samples_file": str(csv_file)}}
+        variables = {
+            **_VARIABLES_2D,
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+        }
         with pytest.raises(ValueError, match="missing.*window_shgc"):
             algo.generate_samples(variables, n_samples=1, seed=None, outdir=tmp_path)
 
@@ -143,7 +150,10 @@ class TestCustomFileMode:
         csv_file.write_text("wall_r,window_shgc\n5.0,0.5\n")
 
         algo = CustomDOEAlgorithm()
-        variables = {**_VARIABLES_2D, "algorithm": {"type": "custom", "samples_file": str(csv_file)}}
+        variables = {
+            **_VARIABLES_2D,
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+        }
         with pytest.raises(ValueError, match="has only 1 row"):
             algo.generate_samples(variables, n_samples=5, seed=None, outdir=tmp_path)
 
@@ -152,7 +162,10 @@ class TestCustomFileMode:
         csv_file.write_text("wall_r,window_shgc\n5.0,\n")
 
         algo = CustomDOEAlgorithm()
-        variables = {**_VARIABLES_2D, "algorithm": {"type": "custom", "samples_file": str(csv_file)}}
+        variables = {
+            **_VARIABLES_2D,
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+        }
         with pytest.raises(ValueError, match="empty value"):
             algo.generate_samples(variables, n_samples=1, seed=None, outdir=tmp_path)
 
@@ -161,7 +174,10 @@ class TestCustomFileMode:
         csv_file.write_text("wall_r,window_shgc\n5.0,high\n")
 
         algo = CustomDOEAlgorithm()
-        variables = {**_VARIABLES_2D, "algorithm": {"type": "custom", "samples_file": str(csv_file)}}
+        variables = {
+            **_VARIABLES_2D,
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+        }
         result = algo.generate_samples(variables, n_samples=1, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         assert data["samples"][0]["values"]["window_shgc"] == "high"
@@ -171,7 +187,10 @@ class TestCustomFileMode:
         csv_file.write_text(" wall_r , window_shgc \n5.0,0.5\n")
 
         algo = CustomDOEAlgorithm()
-        variables = {**_VARIABLES_2D, "algorithm": {"type": "custom", "samples_file": str(csv_file)}}
+        variables = {
+            **_VARIABLES_2D,
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+        }
         result = algo.generate_samples(variables, n_samples=1, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         assert "wall_r" in data["samples"][0]["values"]
@@ -185,7 +204,9 @@ class TestCustomFileMode:
 class TestCustomFunctionMode:
     """Tests for callable function mode."""
 
-    def test_calls_function_and_loads_result(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_calls_function_and_loads_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import sys
 
         def fake_func(**kwargs: Any) -> list[dict[str, Any]]:
@@ -195,8 +216,9 @@ class TestCustomFunctionMode:
             ]
 
         import types
+
         fake_module = types.ModuleType("fake")
-        fake_module.custom_func = fake_func
+        fake_module.custom_func = fake_func  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "fake", fake_module)
 
         algo = CustomDOEAlgorithm()
@@ -231,7 +253,9 @@ class TestCustomFunctionMode:
         with pytest.raises(TypeError, match="not callable"):
             algo.generate_samples(variables, n_samples=1, seed=None, outdir=tmp_path)
 
-    def test_wrong_return_type_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_wrong_return_type_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import sys
 
         fake_module = type("fake_module", (), {"bad_func": lambda *a: "not a list"})()
@@ -244,7 +268,9 @@ class TestCustomFunctionMode:
         with pytest.raises(TypeError, match="must return list\\[dict\\]"):
             algo.generate_samples(variables, n_samples=1, seed=None, outdir=tmp_path)
 
-    def test_list_containing_non_dict_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_list_containing_non_dict_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import sys
 
         fake_module = type("fake_module", (), {"bad_func": lambda *a: ["not a dict"]})()
@@ -261,7 +287,9 @@ class TestCustomFunctionMode:
         import sys
 
         fake_module = type(
-            "fake_module", (), {"bad_func": lambda *a: [{"sample_id": "0001", "values": "not a dict"}]}
+            "fake_module",
+            (),
+            {"bad_func": lambda *a: [{"sample_id": "0001", "values": "not a dict"}]},
         )()
         monkeypatch.setitem(sys.modules, "fake", fake_module)
         algo = CustomDOEAlgorithm()
@@ -278,10 +306,14 @@ class TestCustomFunctionMode:
         import sys
 
         fake_module = type(
-            "fake_module", (),
+            "fake_module",
+            (),
             {
                 "bad_func": lambda *a: [
-                    {"sample_id": "0001", "values": {"wall_r": 5.0, "window_shgc": 0.5, "extra_var": 99.0}}
+                    {
+                        "sample_id": "0001",
+                        "values": {"wall_r": 5.0, "window_shgc": 0.5, "extra_var": 99.0},
+                    }
                 ]
             },
         )()
@@ -296,7 +328,9 @@ class TestCustomFunctionMode:
         assert "extra_var" not in data["samples"][0]["values"]
         assert "unknown variable" in caplog.text.lower()
 
-    def test_falls_back_to_positional_args(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_falls_back_to_positional_args(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import sys
 
         called = {}
@@ -307,8 +341,9 @@ class TestCustomFunctionMode:
             return [{"sample_id": "0001", "values": {"wall_r": 5.0, "window_shgc": 0.5}}]
 
         import types
+
         fake_module = types.ModuleType("fake")
-        fake_module.pos_func = positional_func
+        fake_module.pos_func = positional_func  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "fake", fake_module)
 
         algo = CustomDOEAlgorithm()
@@ -329,7 +364,9 @@ class TestCustomFunctionMode:
 class TestCustomEdgeCases:
     """Edge case tests for CustomDOEAlgorithm."""
 
-    def test_no_file_or_function_logs_error(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_no_file_or_function_logs_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         algo = CustomDOEAlgorithm()
         variables = {**_VARIABLES_2D, "algorithm": {"type": "custom"}}
         result = algo.generate_samples(variables, n_samples=1, seed=None, outdir=tmp_path)
@@ -362,7 +399,10 @@ class TestCustomEdgeCases:
         csv_file = tmp_path / "samples.csv"
         csv_file.write_text("wall_r,window_shgc\n5.0,0.5\n")
         algo = CustomDOEAlgorithm()
-        variables = {"algorithm": {"type": "custom", "samples_file": str(csv_file)}, "variables": []}
+        variables = {
+            "algorithm": {"type": "custom", "samples_file": str(csv_file)},
+            "variables": [],
+        }
         result = algo.generate_samples(variables, n_samples=5, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         assert data["samples"] == []
