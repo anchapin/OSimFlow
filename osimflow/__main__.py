@@ -627,6 +627,36 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "single-process LocalCluster is started automatically."
         ),
     )
+    # Cost tracking flags (issue #447)
+    run.add_argument(
+        "--enable-cost-tracking",
+        action="store_true",
+        help=(
+            "Enable campaign cost tracking for cloud/HPC resources (issue #447). "
+            "When set, estimated and actual costs are recorded per-sample and "
+            "a cost summary is written to run.json at campaign completion."
+        ),
+    )
+    run.add_argument(
+        "--cost-on-demand-price",
+        type=float,
+        default=None,
+        help=(
+            "On-demand price per vCPU-hour for cost estimation (USD). "
+            "Used when cloud provider APIs are unavailable. "
+            "Default: 0.05 (i.e., $0.05/vCPU·hour)."
+        ),
+    )
+    run.add_argument(
+        "--cost-spot-price",
+        type=float,
+        default=None,
+        help=(
+            "Spot price per vCPU-hour for cost estimation (USD). "
+            "Used to estimate potential savings vs on-demand. "
+            "Default: 0.03 (i.e., $0.03/vCPU·hour, ~40%% savings)."
+        ),
+    )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)

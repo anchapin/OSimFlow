@@ -461,6 +461,17 @@ class CampaignConfig:
     # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
     # When None and task_queue="dask", an embedded LocalCluster is used.
     dask_scheduler_address: str | None = None
+    # Cost tracking configuration (issue #447). When True, the campaign
+    # tracks estimated and actual costs for cloud/HPC resources and writes
+    # a cost summary to run.json. When False (default), cost tracking
+    # is disabled for backward compatibility.
+    enable_cost_tracking: bool = False
+    # On-demand price per vCPU-hour for cost estimation. Used when cloud
+    # provider APIs are unavailable. Default $0.05/vCPU·h.
+    cost_on_demand_price: float = 0.05
+    # Spot price per vCPU-hour for cost estimation. Default $0.03/vCPU·h
+    # (40% savings vs on-demand).
+    cost_spot_price: float = 0.03
 
     @property
     def work_dir(self) -> Path:
@@ -746,4 +757,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
+        enable_cost_tracking=bool(args.get("enable_cost_tracking", False)),
+        cost_on_demand_price=float(str(args.get("cost_on_demand_price", 0.05))),
+        cost_spot_price=float(str(args.get("cost_spot_price", 0.03))),
     )

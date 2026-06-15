@@ -61,6 +61,7 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
+from .cost_tracking import CostTracker
 from .distributed_jobqueue import build_job_queue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .measures import MeasureRegistry, UnmappedVariableError
@@ -283,6 +284,23 @@ class Campaign:
                     exc,
                 )
 
+        # Cost tracking (issue #447): initialize tracker when enabled.
+        self._cost_tracker: CostTracker | None = None
+        if cfg.enable_cost_tracking:
+            self._cost_tracker = CostTracker(
+                n_samples=cfg.n_samples,
+                executor=self.executor.name,
+                on_demand_price=cfg.cost_on_demand_price,
+                spot_price=cfg.cost_spot_price,
+            )
+            log.info(
+                "cost tracking enabled: n_samples=%d executor=%s on_demand=%.4f spot=%.4f",
+                cfg.n_samples,
+                self.executor.name,
+                cfg.cost_on_demand_price,
+                cfg.cost_spot_price,
+            )
+
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
         self._cancel_lock = threading.Lock()
@@ -402,6 +420,17 @@ class Campaign:
             billed_duration_seconds: float | None = (
                 None if billed_duration_obj is None else float(str(billed_duration_obj))
             )
+            # Cost tracking (issue #447): record actual cost from this sample.
+            # Also estimates spot savings using the same ratio as _accumulate_cost_summary.
+            if cost_usd is not None:
+                spot_savings = 0.0
+                if cost_usd > 0:
+                    savings_ratio = (
+                        AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+                        - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+                    ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+                    spot_savings = round(cost_usd * savings_ratio, 6)
+                self._record_costs(sid, cost_usd, spot_savings)
             # Observability: record per-sample cost metric (issue #132).
             # Forward the per-sample trace_id so the metric can be joined
             # to a distributed trace (issue #436).
@@ -476,6 +505,45 @@ class Campaign:
             self.trace.spot_savings_usd = round(total * savings_ratio, 6)
         else:
             self.trace.spot_savings_usd = 0.0
+
+    def _record_costs(self, sample_id: str, cost_usd: float, spot_savings_usd: float = 0.0) -> None:
+        """Record actual cost for a completed sample (issue #447).
+
+        Called after each fan-out step completes to accumulate per-sample costs
+        into the CostTracker. When cost tracking is disabled, this is a no-op.
+
+        Parameters
+        ----------
+        sample_id : str
+            Sample identifier.
+        cost_usd : float
+            Actual on-demand cost in USD.
+        spot_savings_usd : float
+            Spot savings (difference between on-demand and spot).
+        """
+        if self._cost_tracker is None:
+            return
+        self._cost_tracker.record_actual(sample_id, cost_usd, spot_savings_usd)
+
+    def _finalize_costs(self) -> None:
+        """Finalize cost tracking and write summary to run.json (issue #447).
+
+        Called in the ``finally`` block of ``Campaign.run()`` to ensure cost
+        summary is written even if the campaign fails or is cancelled.
+        When cost tracking is disabled, this is a no-op.
+        """
+        if self._cost_tracker is None:
+            return
+        summary = self._cost_tracker.finalize()
+        # Write cost summary to run.json via the trace.
+        # The trace.to_dict() will include cost_summary if set.
+        self.trace.cost_summary = summary.to_dict()
+        log.info(
+            "cost tracking finalized: estimated=$%.4f actual=$%.4f savings=$%.4f",
+            summary.total_estimated_cost_usd,
+            summary.total_actual_cost_usd,
+            summary.total_spot_savings_usd,
+        )
 
     def _checkpoint_sample(self, sid: str) -> None:
         """Write an incremental run.json checkpoint for a single sample.
@@ -1418,6 +1486,9 @@ class Campaign:
             # Fire webhook callback (issue #283). Best-effort: delivery
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
+
+            # Finalize cost tracking and write summary to run.json (issue #447).
+            self._finalize_costs()
 
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
