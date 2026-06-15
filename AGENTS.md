@@ -182,6 +182,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `infra/aws/scripts/sync-openstudio-to-ecr.sh` | ECR mirror script (issue #129): pulls `nrel/openstudio` from Docker Hub with exponential-backoff retry, pushes to ECR in one or more regions. Avoids Docker Hub rate limits for production Batch jobs. |
 | `infra/aws/terraform/ecr.tf` | ECR repository + lifecycle policy for mirrored OpenStudio images (issue #129). Keeps last 5 tagged `3.*` images. |
 | `docs/container-image-strategy.md` | Container image strategy: why we mirror to ECR, how to use the sync script, lifecycle policy, multi-region replication, and cost considerations (issue #129). |
+| `docs/mongodb-storage.md` | MongoDB and distributed storage guide: SQLite limitations at scale, document store alternatives (MongoDB, PostgreSQL JSONB), results database options, cache alternatives, and migration guide (issue #421). |
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
 | `docs/offline-deployment-guide.md` | Offline/air-gapped deployment guide: bundling the Python environment, OpenStudio CLI, and weather data for air-gapped HPC (issue #399). |
 | `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
@@ -643,7 +644,7 @@ generic role prompt's tool guidance when they disagree).
 - [ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md) — the decision record for adopting `nrel/openstudio` directly.
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
-- [Observability guide (docs/observability.md)](docs/observability.md) — pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry).
+- [MongoDB/distributed storage guide (docs/mongodb-storage.md)](docs/mongodb-storage.md) — SQLite limitations, distributed storage alternatives (MongoDB, PostgreSQL, Redis), results database options, and migration guide (issue #421).
 - [CLI lifecycle management guide (docs/cli-lifecycle-management.md)](docs/cli-lifecycle-management.md) — OpenStudio CLI invocation patterns, process supervision gap, restart-on-failure wrappers, and executor-specific considerations (issue #413).
 - [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
 - [Offline deployment guide (docs/offline-deployment-guide.md)](docs/offline-deployment-guide.md) — offline/air-gapped deployment guide (issue #399).
