@@ -266,6 +266,90 @@ async def ready(request: Request) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Campaign health dashboard (issue #437)
+# ---------------------------------------------------------------------------
+
+
+def _compute_campaign_status(data: dict[str, Any]) -> str:
+    """Derive an overall health status from run.json data.
+
+    Returns ``"healthy"``, ``"degraded"``, ``"unhealthy"``, or ``"unknown"``.
+    """
+    status = data.get("status", "unknown")
+    per_sample: list[dict[str, Any]] = data.get("per_sample", [])
+    n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+
+    if status == "running":
+        return "degraded" if n_failed > 0 else "healthy"
+    if status in ("success", "completed"):
+        if not per_sample:
+            return "healthy"
+        if n_failed == 0:
+            return "healthy"
+        return "degraded" if n_failed < len(per_sample) else "unhealthy"
+    if status in ("failed", "cancelled"):
+        return "unhealthy"
+    return "unknown"
+
+
+@router.get("/api/v1/health")  # type: ignore[untyped-decorator]
+async def get_campaign_health(request: Request) -> dict[str, Any]:
+    """Campaign health dashboard — overall status + per-step summary.
+
+    Returns:
+        overall status (healthy/degraded/unknown), per-step status list,
+        sample counts (total/success/failed/running), and key timestamps.
+    """
+    data = _load_run_json(request)
+
+    per_sample = data.get("per_sample", [])
+    n_total = len(per_sample)
+    n_success = sum(1 for s in per_sample if s.get("status") == "ok")
+    n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+    n_cached = sum(1 for s in per_sample if s.get("status") == "cached")
+    n_running = n_total - n_success - n_failed - n_cached
+
+    steps: list[dict[str, Any]] = data.get("steps", [])
+    step_statuses: list[dict[str, str]] = [
+        {
+            "step": s.get("step", ""),
+            "cache": s.get("cache", ""),
+            "status": "ok" if s.get("exit_code", 1) == 0 else "failed",
+            "elapsed_s": s.get("elapsed_s", 0.0),
+        }
+        for s in steps
+    ]
+
+    return {
+        "campaign_id": data.get("campaign_id"),
+        "overall_status": _compute_campaign_status(data),
+        "campaign_status": data.get("status", "unknown"),
+        "steps": step_statuses,
+        "samples": {
+            "total": n_total,
+            "success": n_success,
+            "failed": n_failed,
+            "cached": n_cached,
+            "running": n_running,
+        },
+        "started_at": data.get("started_at"),
+        "finished_at": data.get("finished_at"),
+        "elapsed_s": data.get("elapsed_s"),
+    }
+
+
+@router.get("/api/v1/health/details")  # type: ignore[untyped-decorator]
+async def get_campaign_health_details(request: Request) -> dict[str, Any]:
+    """Full run.json contents for the campaign health dashboard.
+
+    Returns the complete run.json for clients that need per-sample details,
+    error summaries, worker info, or any field not surfaced in
+    ``GET /api/v1/health``.
+    """
+    return _load_run_json(request)
+
+
+# ---------------------------------------------------------------------------
 # Campaign / steps
 # ---------------------------------------------------------------------------
 
