@@ -85,6 +85,7 @@ from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import TaskHandle as TQHandle
 from .taskqueue import TaskQueue
+from .validation import ValidationError, validate_osw
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .webhook import WebhookClient
 from .work import (
@@ -2063,11 +2064,15 @@ class Campaign:
     def step_preflight_run_model(self) -> None:
         """Single-shot: run a throwaway simulation of the seed model.
 
-        Makes a temporary copy of the ``template_sim_package`` and runs
+        Validates the ``workflow.osw`` schema first (issue #422), then
+        makes a temporary copy of the ``template_sim_package`` and runs
         ``openstudio.cli run -w workflow.osw`` (or the stub when the CLI
         is not available).  If the run encounters severe errors, raises
         :class:`SevereEnergyPlusError` to abort the campaign before
         spending cloud budget.
+
+        OSW schema validation runs unconditionally (even when
+        ``--skip-preflight`` is set) to catch malformed workflows early.
 
         This step is cached: a successful preflight result is stored in
         the cache so a re-run with the same template and version does not
@@ -2078,9 +2083,23 @@ class Campaign:
         ``--skip-preflight`` CLI flag).
 
         Raises:
+            ValidationError: the ``workflow.osw`` file is invalid.
             SevereEnergyPlusError: the seed model has errors that would
                 cause every sample to fail.
         """
+        osw_path = self.cfg.template_sim_package / "workflow.osw"
+        try:
+            validate_osw(osw_path)
+        except ValidationError as exc:
+            log.error("PREFLIGHT_RUN_MODEL: invalid workflow.osw: %s", exc)
+            self.trace.step_finished(
+                "PREFLIGHT_RUN_MODEL",
+                cache="MISS",
+                elapsed_s=0.0,
+                exit_code=1,
+            )
+            raise
+
         if self.cfg.skip_preflight:
             log.info("PREFLIGHT_RUN_MODEL: skipped (--skip-preflight)")
             self.trace.step_finished(
