@@ -61,6 +61,7 @@ CAMPAIGN_STARTED = "campaign.started"
 CAMPAIGN_STOPPED = "campaign.stopped"
 CAMPAIGN_COMPLETED = "campaign.completed"
 CAMPAIGN_FAILED = "campaign.failed"
+CAMPAIGN_OUTCOME = "campaign.outcome"
 SAMPLE_CREATED = "sample.created"
 SAMPLE_COMPLETED = "sample.completed"
 SAMPLE_FAILED = "sample.failed"
@@ -361,6 +362,39 @@ class AuditLogger:
                 resource=campaign_id,
                 details={"reason": reason},
                 outcome=AuditOutcome.FAILURE,
+            )
+        )
+
+    def log_campaign_outcome(
+        self,
+        campaign_id: str,
+        status: str,
+        n_samples: int,
+        n_succeeded: int,
+        n_failed: int,
+        elapsed_s: float,
+        total_cost_usd: float | None,
+        actor: str | None = None,
+    ) -> None:
+        """Log a campaign.outcome event (issue #439).
+
+        *status* is the campaign status string: "success", "failed", or "cancelled".
+        """
+        outcome = AuditOutcome.SUCCESS if status == "success" else AuditOutcome.FAILURE
+        self.log(
+            AuditEvent(
+                actor=actor or cli_actor(),
+                action=CAMPAIGN_OUTCOME,
+                resource=campaign_id,
+                details={
+                    "status": status,
+                    "n_samples": n_samples,
+                    "n_succeeded": n_succeeded,
+                    "n_failed": n_failed,
+                    "elapsed_s": round(elapsed_s, 2),
+                    "total_cost_usd": total_cost_usd,
+                },
+                outcome=outcome,
             )
         )
 

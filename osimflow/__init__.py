@@ -26,6 +26,7 @@ from .chaos import (
     run_chaos_scenario,
 )
 from .config import CampaignConfig, ResourceQuota, coerce_variable_type, load_config
+from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
@@ -135,6 +136,19 @@ __all__ = [
     "SevereEnergyPlusError",
     "QuotaExceededError",
     "ValidationError",
+    # Version detection
+    "VersionDetectionError",
+    "detect_openstudio_version",
+    "get_compatible_container_tag",
+    "verify_version_compatibility",
+    # Alerting
+    "AlertManager",
+    "build_alert_manager",
+    # Cost tracking
+    "CostEstimate",
+    "CostTracker",
+    "CampaignCostSummary",
+    # EPW validation
     "EPWValidationError",
     "EPWDownloadError",
     "discover_epw_files",
@@ -142,8 +156,10 @@ __all__ = [
     "validate_all_epw_files",
     "validate_epw",
     "validate_epw_header",
+    # Logging
     "get_logger",
     "setup_logging",
+    # Storage
     "ResultStorage",
     "LocalStorage",
     "S3Storage",
@@ -151,23 +167,20 @@ __all__ = [
     "AzureBlobStorage",
     "ResultStorageUploader",
     "build_result_storage",
+    # Task queue
     "TaskQueue",
     "DaskTaskQueue",
     "NoOpTaskQueue",
     "TaskHandle",
     "TaskQueueStatus",
     "build_task_queue",
+    # Document store
     "DocumentStore",
     "DocumentStoreError",
     "DocumentNotFoundError",
     "DuplicateDocumentError",
     "SQLiteDocumentStore",
     "build_document_store",
-    # Version detection (from origin/main)
-    "VersionDetectionError",
-    "detect_openstudio_version",
-    "get_compatible_container_tag",
-    "verify_version_compatibility",
 ]
 
 setup_logging()
