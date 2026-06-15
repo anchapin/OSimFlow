@@ -47,6 +47,7 @@ class CacheStats:
     invalidations: int = 0
     total_keys: int = 0
 
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache_entries (
     step              TEXT NOT NULL,
