@@ -200,6 +200,73 @@ curl http://localhost:8000/api/v1/failures
 ]
 ```
 
+## Campaign Comparison (issue #404)
+
+### POST /api/v1/campaigns/compare
+
+Compare two or more campaigns side by side by registry ID, campaign
+directory name, or explicit outdir path.  Returns per-campaign metadata,
+step timing, sample counts and success rates, per-KPI aggregated
+statistics, and an aligned KPI comparison table.
+
+Each entry in the request body may specify `campaign_id` (resolved via
+the registry or campaigns base directory) **or** `outdir` (a direct
+filesystem path).
+
+Campaigns that cannot be found are included with `found: false` and an
+`error` message — the endpoint never raises 404 so callers can compare
+even when some campaigns are missing.
+
+```bash
+# Compare by campaign IDs
+curl -X POST http://localhost:8000/api/v1/campaigns/compare \
+  -H "Content-Type: application/json" \
+  -d '{"campaigns": [{"campaign_id": "campaign-aaa"}, {"campaign_id": "campaign-bbb"}]}'
+
+# Compare by outdir paths
+curl -X POST http://localhost:8000/api/v1/campaigns/compare \
+  -H "Content-Type: application/json" \
+  -d '{"campaigns": [{"outdir": "/path/to/run1"}, {"outdir": "/path/to/run2"}]}'
+
+# Compare 3+ campaigns
+curl -X POST http://localhost:8000/api/v1/campaigns/compare \
+  -H "Content-Type: application/json" \
+  -d '{"campaigns": [{"campaign_id": "a"}, {"campaign_id": "b"}, {"campaign_id": "c"}]}'
+```
+
+Example response:
+
+```json
+{
+  "campaigns": [
+    {
+      "identifier": "campaign-aaa",
+      "found": true,
+      "campaign_id": "campaign-aaa",
+      "status": "completed",
+      "started_at": 1000.0,
+      "finished_at": 2000.0,
+      "elapsed_s": 1000.0,
+      "config": {"executor": "local", "n_samples": 2},
+      "step_timing": [{"step": "GENERATE_LHS_SAMPLES", "cache": "MISS", "elapsed_s": 0.5}],
+      "sample_summary": {"n_samples": 2, "n_succeeded": 2, "n_failed": 0, "success_rate": 1.0},
+      "kpi_stats": {
+        "eui": {"mean": 119.35, "min": 118.2, "max": 120.5, "std": 1.15, "count": 2}
+      },
+      "error": null
+    }
+  ],
+  "kpi_comparison": [
+    {"metric": "eui", "values": [119.35, 133.65]}
+  ],
+  "total": 2
+}
+```
+
+> **Note:** When the server is started with `--registry`, campaign IDs
+> are resolved via the campaign registry database first, then fall back
+> to the campaigns base directory.
+
 ## Pareto Front
 
 ### GET /api/v1/pareto

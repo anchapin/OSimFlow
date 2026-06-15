@@ -779,6 +779,7 @@ def create_app(
     cors_origins: list[str] | None = None,
     rate_limit: str = "60/minute",
     ui_enabled: bool = False,
+    registry_path: Path | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -822,6 +823,14 @@ def create_app(
         origins.
     rate_limit
         Rate limit string, e.g. ``"60/minute"`` (default ``"60/minute"``).
+    ui_enabled
+        Enable the web UI router (issue #337).
+    registry_path
+        Path to the campaign registry database (issue #404).  When set,
+        the ``POST /api/v1/campaigns/compare`` endpoint can resolve
+        campaign IDs via the registry.  When ``None``, registry-based
+        lookups are disabled and campaign IDs are resolved solely via
+        ``campaigns_base_dir``.
     """
     app = FastAPI(
         title="OSimFlow API",
@@ -853,6 +862,18 @@ def create_app(
     app.state.api_key_store = key_store
     # Keep api_key for backward compat
     app.state.api_key = api_key
+
+    # --- Registry for campaign ID resolution (issue #404) ---
+    registry: Any = None
+    if registry_path is not None:
+        try:
+            from osimflow.registry import CampaignRegistry  # noqa: PLC0415
+
+            registry = CampaignRegistry(db_path=registry_path)
+            log.info("registry loaded from %s", registry_path)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Failed to load registry from %s: %s", registry_path, exc)
+    app.state.registry = registry
 
     # --- CORS middleware ---
     if cors_origins:

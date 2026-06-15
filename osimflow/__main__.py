@@ -1028,6 +1028,17 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         ),
     )
     serve.add_argument("--log_level", default="INFO")
+    serve.add_argument(
+        "--registry",
+        default=None,
+        type=Path,
+        help=(
+            "Path to the campaign registry database (issue #404). "
+            "When set, the POST /api/v1/campaigns/compare endpoint "
+            "can resolve campaign IDs via the registry. "
+            "Default: ~/.osimflow/registry.db"
+        ),
+    )
     serve.set_defaults(func=_cmd_serve)
 
 
@@ -1358,6 +1369,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
         ui_enabled=args.ui,
+        registry_path=args.registry,
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
