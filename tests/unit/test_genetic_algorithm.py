@@ -473,3 +473,64 @@ class TestGAConvergenceEdgeCases:
         result = algo.generate_samples({"variables": []}, n_samples=5, seed=None, outdir=tmp_path)
         data = json.loads(result.read_text())
         assert data["samples"] == []
+
+
+# ======================================================================
+# Lazy import tests — these run regardless of whether DEAP is installed
+# ======================================================================
+
+
+class TestGALazyImport:
+    """Verify the module loads and operates gracefully without DEAP.
+
+    The module uses a ``_HAS_DEAP`` flag (same pattern as nsga2's
+    ``_HAS_PYMOO``) so it can always be imported.  When DEAP is absent,
+    ``observe()`` returns an empty list instead of raising.
+    """
+
+    def test_module_always_importable(self) -> None:
+        """The ga module must be importable even without DEAP."""
+        import osimflow.algorithms.ga as ga_mod
+
+        assert hasattr(ga_mod, "_HAS_DEAP")
+        assert isinstance(ga_mod._HAS_DEAP, bool)
+
+    def test_genetic_algorithm_always_instantiable(self) -> None:
+        """GeneticAlgorithm must be instantiable without DEAP."""
+        from osimflow.algorithms.ga import GeneticAlgorithm
+
+        algo = GeneticAlgorithm()
+        assert algo.name() == "ga"
+        assert algo.is_iterative() is True
+
+    def test_generate_samples_works_without_deap(self, tmp_path: Path) -> None:
+        """generate_samples uses LHS (no DEAP) — must work even if _HAS_DEAP is False."""
+        from osimflow.algorithms.ga import GeneticAlgorithm
+
+        algo = GeneticAlgorithm()
+        result = algo.generate_samples(_VARIABLES_2D, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 5
+
+    def test_observe_noop_when_deap_disabled(self, tmp_path: Path) -> None:
+        """observe() returns [] when _HAS_DEAP is False (monkeypatched)."""
+        import osimflow.algorithms.ga as ga_mod
+        from osimflow.algorithms.ga import GeneticAlgorithm
+
+        algo = GeneticAlgorithm()
+        algo._independent_vars = _VARIABLES_2D["variables"]  # type: ignore[attr-defined]
+        algo._bounds = [(1.0, 10.0), (0.1, 0.9)]  # type: ignore[attr-defined]
+
+        original = ga_mod._HAS_DEAP
+        ga_mod._HAS_DEAP = False
+        try:
+            result = algo.observe([{"generation": 0, "samples": [], "kpi_files": []}])
+            assert result == []
+        finally:
+            ga_mod._HAS_DEAP = original
+
+    def test_clear_error_message_for_missing_deap(self) -> None:
+        """The module docstring and error path should mention osimflow[ga]."""
+        import osimflow.algorithms.ga as ga_mod
+
+        assert "osimflow[ga]" in ga_mod.__doc__ or "deap" in ga_mod.__doc__.lower()
