@@ -11,6 +11,18 @@ from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
 from .campaign import Campaign
+from .chaos import (
+    ChaosEngine,
+    ChaosResult,
+    ChaosScenario,
+    CPUSpikeInjector,
+    FaultInjector,
+    FaultType,
+    KillSwitchInjector,
+    MemoryPressureInjector,
+    NetworkDelayInjector,
+    run_chaos_scenario,
+)
 from .config import CampaignConfig, coerce_variable_type, load_config
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
