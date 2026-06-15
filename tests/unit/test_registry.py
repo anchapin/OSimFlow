@@ -28,6 +28,7 @@ class TestCampaignRegistry:
         registry.register(
             "test-campaign-001",
             name="Test Campaign",
+            project="Test Project",
             outdir="/tmp/results",
             algorithm="lhs",
             n_samples=10,
@@ -38,6 +39,7 @@ class TestCampaignRegistry:
         assert record is not None
         assert record.id == "test-campaign-001"
         assert record.name == "Test Campaign"
+        assert record.project == "Test Project"
         assert record.outdir == "/tmp/results"
         assert record.status == "running"
         assert record.algorithm == "lhs"
@@ -74,6 +76,24 @@ class TestCampaignRegistry:
         successes = registry.list_campaigns(status="success")
         assert len(successes) == 1
         assert successes[0].id == "c1"
+
+    def test_list_campaigns_filter_by_project(self, registry: CampaignRegistry) -> None:
+        registry.register("p1-c1", outdir="/tmp/1", project="Project A")
+        registry.register("p1-c2", outdir="/tmp/2", project="Project A")
+        registry.register("p2-c1", outdir="/tmp/3", project="Project B")
+        registry.register("p3-c1", outdir="/tmp/4", project="")
+
+        project_a = registry.list_campaigns(project="Project A")
+        assert len(project_a) == 2
+        assert all(r.project == "Project A" for r in project_a)
+
+        project_b = registry.list_campaigns(project="Project B")
+        assert len(project_b) == 1
+        assert project_b[0].id == "p2-c1"
+
+        no_project = registry.list_campaigns(project="")
+        assert len(no_project) == 1
+        assert no_project[0].id == "p3-c1"
 
     def test_update_status_to_success(self, registry: CampaignRegistry) -> None:
         registry.register("c1", outdir="/tmp/1", status="running")
@@ -151,6 +171,7 @@ class TestCampaignRecord:
         record = CampaignRecord(
             id="test",
             name="Test",
+            project="My Project",
             outdir="/tmp",
             status="success",
             algorithm="lhs",

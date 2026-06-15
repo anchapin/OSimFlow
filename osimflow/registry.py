@@ -29,6 +29,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL DEFAULT '',
+    project         TEXT NOT NULL DEFAULT '',
     outdir          TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'running',
     algorithm       TEXT NOT NULL DEFAULT 'lhs',
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
 );
 CREATE INDEX IF NOT EXISTS ix_campaigns_status ON campaigns(status);
 CREATE INDEX IF NOT EXISTS ix_campaigns_created ON campaigns(created_at);
+CREATE INDEX IF NOT EXISTS ix_campaigns_project ON campaigns(project);
 """
 
 
@@ -51,6 +53,7 @@ class CampaignRecord:
 
     id: str
     name: str
+    project: str
     outdir: str
     status: str
     algorithm: str
@@ -78,6 +81,7 @@ class CampaignRecord:
         return cls(
             id=row["id"],
             name=row["name"],
+            project=row["project"],
             outdir=row["outdir"],
             status=row["status"],
             algorithm=row["algorithm"],
@@ -114,6 +118,12 @@ class CampaignRegistry:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
+            # Migration: add project column if it doesn't exist (issue #390)
+            try:
+                c.execute("SELECT project FROM campaigns LIMIT 1")
+            except sqlite3.OperationalError:
+                c.execute("ALTER TABLE campaigns ADD COLUMN project TEXT NOT NULL DEFAULT ''")
+                c.execute("CREATE INDEX IF NOT EXISTS ix_campaigns_project ON campaigns(project)")
         log.debug("registry opened at %s", self.db_path)
 
     def _conn(self) -> sqlite3.Connection:
@@ -126,6 +136,7 @@ class CampaignRegistry:
         campaign_id: str,
         *,
         name: str = "",
+        project: str = "",
         outdir: str = "",
         status: str = "running",
         algorithm: str = "lhs",
@@ -144,13 +155,14 @@ class CampaignRegistry:
         with self._conn() as c:
             c.execute(
                 """INSERT OR REPLACE INTO campaigns
-                   (id, name, outdir, status, algorithm, n_samples,
+                   (id, name, project, outdir, status, algorithm, n_samples,
                     executor, openstudio_version, config_hash,
                     created_at, completed_at, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     campaign_id,
                     name,
+                    project,
                     outdir,
                     status,
                     algorithm,
@@ -169,6 +181,7 @@ class CampaignRegistry:
         self,
         *,
         status: str | None = None,
+        project: str | None = None,
         limit: int = 100,
     ) -> list[CampaignRecord]:
         """Return all registered campaigns, newest first.
@@ -178,14 +191,25 @@ class CampaignRegistry:
         status
             Filter by status (e.g. ``"success"``, ``"failure"``,
             ``"running"``).  ``None`` returns all.
+        project
+            Filter by project name. ``None`` returns all projects.
         limit
             Maximum number of records to return.
         """
         with self._conn() as c:
+            conditions: list[str] = []
+            params: list[str | int] = []
             if status is not None:
+                conditions.append("status=?")
+                params.append(status)
+            if project is not None:
+                conditions.append("project=?")
+                params.append(project)
+            if conditions:
+                where_clause = " WHERE " + " AND ".join(conditions)
                 rows = c.execute(
-                    "SELECT * FROM campaigns WHERE status=? ORDER BY created_at DESC LIMIT ?",
-                    (status, limit),
+                    f"SELECT * FROM campaigns{where_clause} ORDER BY created_at DESC LIMIT ?",
+                    [*params, limit],
                 ).fetchall()
             else:
                 rows = c.execute(

@@ -616,6 +616,15 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument("--n_samples", type=int, required=True)
     run.add_argument("--outdir", required=True)
     run.add_argument("--openstudio_version", default="3.11.0")
+    run.add_argument(
+        "--project",
+        default="",
+        help=(
+            "Project name to group this campaign under (issue #390). "
+            "Used for organizing campaigns in the registry. "
+            "Example: --project 'Building Energy Analysis Q1 2026'."
+        ),
+    )
     run.add_argument("--archive_intermediates", action="store_true")
     run.add_argument(
         "--custom_apply_script",
@@ -1015,6 +1024,11 @@ def _add_list_args(lst: argparse.ArgumentParser) -> None:
         help="Filter by campaign status (running, success, failure)",
     )
     lst.add_argument(
+        "--project",
+        default=None,
+        help="Filter by project name (issue #390)",
+    )
+    lst.add_argument(
         "--limit",
         type=int,
         default=50,
@@ -1335,7 +1349,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
     registry_path = args.registry if args.registry else None
     reg = CampaignRegistry(db_path=registry_path)
-    campaigns = reg.list_campaigns(status=args.status, limit=args.limit)
+    campaigns = reg.list_campaigns(status=args.status, project=args.project, limit=args.limit)
 
     if not campaigns:
         print("No campaigns registered.")
@@ -1353,14 +1367,15 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
     # table format (default)
     print(
-        f"{'ID':<25} {'STATUS':<10} {'ALGO':<8} {'N':<6} {'EXECUTOR':<10} {'OS VER':<10} {'CREATED'}"
+        f"{'ID':<25} {'PROJECT':<20} {'STATUS':<10} {'ALGO':<8} {'N':<6} {'EXECUTOR':<10} {'CREATED'}"
     )
-    print("-" * 95)
+    print("-" * 100)
     for c in campaigns:
         created = time.strftime("%Y-%m-%d %H:%M", time.localtime(c.created_at))
+        project = c.project[:18] + ".." if len(c.project) > 20 else c.project
         print(
-            f"{c.id:<25} {c.status:<10} {c.algorithm:<8} {c.n_samples:<6} "
-            f"{c.executor:<10} {c.openstudio_version:<10} {created}"
+            f"{c.id:<25} {project:<20} {c.status:<10} {c.algorithm:<8} {c.n_samples:<6} "
+            f"{c.executor:<10} {created}"
         )
     print(f"\nTotal: {len(campaigns)} campaign(s)")
     return 0
