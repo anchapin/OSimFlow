@@ -23,7 +23,13 @@ from typing import Any, cast
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
@@ -163,7 +169,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 router = APIRouter()
 
-PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/", "/static/index.html", ""})
+PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/", "/static/index.html", "", "/metrics"})
 
 # Re-export permission constants for convenience
 _ADMIN = "admin"
@@ -253,6 +259,113 @@ def _load_run_json(request: Request) -> dict[str, Any]:
 async def health() -> dict[str, str]:
     """Liveness probe."""
     return {"status": "alive"}
+
+
+@router.get("/metrics", response_class=PlainTextResponse)  # type: ignore[untyped-decorator]
+async def get_metrics(request: Request) -> str:
+    """Prometheus-format metrics endpoint.
+
+    Exposes infrastructure metrics in Prometheus text format for integration
+    with Grafana, Datadog, or any Prometheus-compatible scraper.
+
+    Metrics are sourced from:
+    - In-memory counters (reset on server restart)
+    - Campaign registry (total completed/running campaigns)
+    - Active campaign run.json (per-run stats when available)
+    """
+    state = request.app.state
+
+    campaigns_total = getattr(state, "metrics_campaigns_total", 0)
+    campaigns_completed = getattr(state, "metrics_campaigns_completed", 0)
+    campaigns_failed = getattr(state, "metrics_campaigns_failed", 0)
+    campaigns_running = getattr(state, "metrics_campaigns_running", 0)
+    samples_total = getattr(state, "metrics_samples_total", 0)
+    samples_completed = getattr(state, "metrics_samples_completed", 0)
+    samples_failed = getattr(state, "metrics_samples_failed", 0)
+    executor_errors_total = getattr(state, "metrics_executor_errors_total", 0)
+    cache_hits = getattr(state, "metrics_cache_hits", 0)
+    cache_misses = getattr(state, "metrics_cache_misses", 0)
+
+    campaign_duration_sum = getattr(state, "metrics_campaign_duration_sum", 0.0)
+    campaign_duration_count = getattr(state, "metrics_campaign_duration_count", 0)
+
+    outdir = getattr(state, "outdir", None)
+
+    if outdir is not None:
+        run_path = Path(outdir) / "run.json"
+        if run_path.exists():
+            try:
+                run_data: dict[str, Any] = json.loads(run_path.read_text())
+                steps = run_data.get("steps", [])
+                if steps:
+                    last_step = steps[-1]
+                    dur = last_step.get("duration_s", 0.0)
+                    if dur > 0:
+                        campaign_duration_sum += dur
+                        campaign_duration_count += 1
+                per_sample = run_data.get("per_sample", [])
+                samples_completed = sum(1 for s in per_sample if s.get("status") == "completed")
+                samples_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    registry = getattr(state, "registry", None)
+    if registry is not None:
+        try:
+            total_rows = registry._con.execute("SELECT COUNT(*) FROM campaigns").fetchone()
+            if total_rows:
+                campaigns_total = max(campaigns_total, total_rows[0])
+            completed_rows = registry._con.execute(
+                "SELECT COUNT(*) FROM campaigns WHERE status = 'completed'"
+            ).fetchone()
+            if completed_rows:
+                campaigns_completed = max(campaigns_completed, completed_rows[0])
+            running_rows = registry._con.execute(
+                "SELECT COUNT(*) FROM campaigns WHERE status = 'running'"
+            ).fetchone()
+            if running_rows:
+                campaigns_running = max(campaigns_running, running_rows[0])
+        except Exception:  # noqa: BLE001
+            pass
+
+    lines: list[str] = [
+        "# HELP osimflow_campaigns_total Total number of campaigns tracked",
+        "# TYPE osimflow_campaigns_total gauge",
+        f"osimflow_campaigns_total {campaigns_total}",
+        "# HELP osimflow_campaigns_completed Total number of completed campaigns",
+        "# TYPE osimflow_campaigns_completed gauge",
+        f"osimflow_campaigns_completed {campaigns_completed}",
+        "# HELP osimflow_campaigns_failed Total number of failed campaigns",
+        "# TYPE osimflow_campaigns_failed gauge",
+        f"osimflow_campaigns_failed {campaigns_failed}",
+        "# HELP osimflow_campaigns_running Total number of currently running campaigns",
+        "# TYPE osimflow_campaigns_running gauge",
+        f"osimflow_campaigns_running {campaigns_running}",
+        "# HELP osimflow_samples_total Total samples simulated",
+        "# TYPE osimflow_samples_total gauge",
+        f"osimflow_samples_total {samples_total}",
+        "# HELP osimflow_samples_completed Total completed samples",
+        "# TYPE osimflow_samples_completed gauge",
+        f"osimflow_samples_completed {samples_completed}",
+        "# HELP osimflow_samples_failed Total failed samples",
+        "# TYPE osimflow_samples_failed gauge",
+        f"osimflow_samples_failed {samples_failed}",
+        "# HELP osimflow_campaign_duration_seconds Campaign wall-clock duration",
+        "# TYPE osimflow_campaign_duration_seconds histogram",
+        f"osimflow_campaign_duration_seconds_sum {campaign_duration_sum:.3f}",
+        f"osimflow_campaign_duration_seconds_count {campaign_duration_count}",
+        "# HELP osimflow_executor_errors_total Total executor errors",
+        "# TYPE osimflow_executor_errors_total counter",
+        f"osimflow_executor_errors_total {executor_errors_total}",
+        "# HELP osimflow_cache_hits_total Total cache hits",
+        "# TYPE osimflow_cache_hits_total counter",
+        f"osimflow_cache_hits_total {cache_hits}",
+        "# HELP osimflow_cache_misses_total Total cache misses",
+        "# TYPE osimflow_cache_misses_total counter",
+        f"osimflow_cache_misses_total {cache_misses}",
+    ]
+
+    return "\n".join(lines)
 
 
 @router.get("/ready")  # type: ignore[untyped-decorator]
@@ -1002,6 +1115,22 @@ def create_app(
 
     app.state.registry = _load_registry(registry_path)
     app.state.cache = _load_cache(cache_db_path)
+
+    # --- In-memory metrics counters for /metrics endpoint ---
+    app.state.metrics_campaigns_total = 0
+    app.state.metrics_campaigns_completed = 0
+    app.state.metrics_campaigns_failed = 0
+    app.state.metrics_campaigns_running = 0
+    app.state.metrics_samples_total = 0
+    app.state.metrics_samples_completed = 0
+    app.state.metrics_samples_failed = 0
+    app.state.metrics_executor_errors_total = 0
+    app.state.metrics_cache_hits = 0
+    app.state.metrics_cache_misses = 0
+    app.state.metrics_campaign_duration_sum = 0.0
+    app.state.metrics_campaign_duration_count = 0
+
+    # --- CORS middleware ---
 
     if cors_origins:
         app.add_middleware(
