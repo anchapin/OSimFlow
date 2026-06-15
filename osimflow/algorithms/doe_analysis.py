@@ -153,12 +153,11 @@ class DOEAnalysis:
             t_stat, p_value = stats.ttest_ind(groups[0], groups[1])
         else:
             f_stat, p_value = stats.f_oneway(*groups)
-            t_stat = float(f_stat ** 0.5) if f_stat > 0 else 0.0
+            t_stat = float(f_stat**0.5) if f_stat > 0 else 0.0
 
         pooled_std = float(
             np.sqrt(
-                sum((n - 1) * sd**2 for n, sd in zip(counts, std_devs, strict=True))
-                / sum(counts)
+                sum((n - 1) * sd**2 for n, sd in zip(counts, std_devs, strict=True)) / sum(counts)
             )
         )
         std_error = pooled_std * np.sqrt(sum(1 / n for n in counts if n > 0))
@@ -197,9 +196,7 @@ class DOEAnalysis:
         self._interaction_effects = interactions
         return interactions
 
-    def _compute_2way_interaction(
-        self, factor_a: str, factor_b: str
-    ) -> InteractionEffect | None:
+    def _compute_2way_interaction(self, factor_a: str, factor_b: str) -> InteractionEffect | None:
         """Compute 2-way interaction effect for a factor pair."""
         if self._df is None:
             return None
