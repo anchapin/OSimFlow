@@ -882,6 +882,18 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Only valid when --result-storage-backend is 's3'."
         ),
     )
+    run.add_argument(
+        "--resource-quota",
+        default=None,
+        help=(
+            "JSON dict of resource quota limits for the campaign (issue #446). "
+            "Example: '{\"max_samples\": 100, \"max_cost_usd\": 5000.0, "
+            "\"max_wall_time_min\": 240, \"max_concurrent_samples\": 10}'. "
+            "All fields are optional. The campaign fails fast at start if "
+            "a quota is already exceeded, and skips further sample submissions "
+            "when the quota is exhausted during fan-out steps."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
