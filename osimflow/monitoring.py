@@ -86,6 +86,12 @@ class SampleTrace:
     billed_duration_seconds: float | None = None  # wall time billed
     # runner.registerValue outputs captured from OpenStudio CLI (issue #251).
     register_values: dict[str, object] | None = None
+    # Per-sample trace ID for distributed observability correlation
+    # (issue #436). Minted via ``osimflow.observability.new_trace_id``
+    # and forwarded to every ObservabilityBackend call for this sample
+    # so CloudWatch / Prometheus / OTel metrics can be joined to a
+    # single sample's execution.
+    trace_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}

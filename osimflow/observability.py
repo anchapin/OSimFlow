@@ -9,6 +9,14 @@ Four built-in implementations:
 * :class:`PrometheusBackend` — Prometheus pushgateway with lazy ``prometheus_client``.
 * :class:`OpenTelemetryBackend` — OTLP exporter with lazy ``opentelemetry-sdk``.
 
+Per-sample trace IDs (issue #436): every per-sample operation can be
+correlated across backends via a short, UUID-derived *trace_id*.  Use
+:func:`new_trace_id` to mint one, then forward it through
+:meth:`ObservabilityBackend.record_sample_metric` (and the convenience
+:meth:`ObservabilityBackend.record_sample_event`).  Each backend stamps
+the trace ID as a dimension / label / attribute so distributed traces
+can join metrics back to a single sample's execution.
+
 Third-party backends (Datadog, etc.) can be added by subclassing
 :class:`ObservabilityBackend` and passing the instance to the Campaign
 constructor.
@@ -25,10 +33,24 @@ Usage::
 from __future__ import annotations
 
 import logging
+import uuid
 from abc import ABC, abstractmethod
 from typing import Any
 
 log = logging.getLogger("osimflow.observability")
+
+
+def new_trace_id() -> str:
+    """Generate a short, per-sample trace ID for distributed debugging.
+
+    Returns the first 8 hex characters of a UUID4 (e.g. ``"a1b2c3d4"``).
+    That namespace gives ~4 billion IDs, which is collision-resistant for
+    the per-campaign sample counts OSimFlow targets (hundreds to
+    thousands of samples).  Callers that need a full UUID (e.g. to map
+    onto an OpenTelemetry 128-bit trace-id) may call ``uuid.uuid4()``
+    directly and pass the string as the ``trace_id`` argument.
+    """
+    return uuid.uuid4().hex[:8]
 
 
 class ObservabilityBackend(ABC):
@@ -36,19 +58,76 @@ class ObservabilityBackend(ABC):
 
     Subclass this to add new backends (Prometheus, Datadog, etc.).
     The Campaign calls these methods at key lifecycle points.
+
+    Per-sample trace correlation (issue #436): the per-sample methods
+    accept an optional ``trace_id`` keyword.  When supplied, backends
+    attach it as a dimension/tag/attribute so a single sample's metrics
+    can be joined across systems.  Omitting ``trace_id`` is always
+    valid — backends simply omit the correlation key.
     """
 
     @abstractmethod
-    def record_step_duration(self, step_name: str, duration_s: float, generation: int = 0) -> None:
-        """Record a DAG step duration."""
+    def record_step_duration(
+        self,
+        step_name: str,
+        duration_s: float,
+        generation: int = 0,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        """Record a DAG step duration.
+
+        When *trace_id* is provided it correlates the step with a
+        specific per-sample trace (useful for fan-out steps where a
+        single sample's work is timed in isolation).
+        """
 
     @abstractmethod
-    def record_sample_metric(self, sample_id: str, metric_name: str, value: float) -> None:
-        """Record a per-sample metric (e.g., EUI, simulation time)."""
+    def record_sample_metric(
+        self,
+        sample_id: str,
+        metric_name: str,
+        value: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        """Record a per-sample metric (e.g., EUI, simulation time).
+
+        When *trace_id* is provided it is forwarded to the backend as a
+        dimension / tag / attribute so the metric can be joined to a
+        per-sample distributed trace.
+        """
 
     @abstractmethod
-    def record_campaign_duration(self, duration_s: float) -> None:
+    def record_campaign_duration(
+        self,
+        duration_s: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
         """Record total campaign wall-clock time."""
+
+    def record_sample_event(
+        self,
+        sample_id: str,
+        event: str,
+        value: float = 1.0,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        """Record a discrete per-sample event correlated by *trace_id*.
+
+        Examples: ``apply_started``, ``sim_done``, ``extract_failed``.
+        This is a convenience wrapper around :meth:`record_sample_metric`
+        for boolean / counter-style events.  Concrete backends may
+        override it for richer event handling (e.g. emitting a log
+        record or an OTel span event).
+
+        This method is **not** abstract, so subclasses are not required
+        to override it — the default implementation delegates to
+        :meth:`record_sample_metric`.
+        """
+        self.record_sample_metric(sample_id, event, value, trace_id=trace_id)
 
     @abstractmethod
     def flush(self) -> None:
@@ -58,13 +137,32 @@ class ObservabilityBackend(ABC):
 class NullBackend(ObservabilityBackend):
     """No-op backend — default when no observability is configured."""
 
-    def record_step_duration(self, step_name: str, duration_s: float, generation: int = 0) -> None:
+    def record_step_duration(
+        self,
+        step_name: str,
+        duration_s: float,
+        generation: int = 0,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
         pass
 
-    def record_sample_metric(self, sample_id: str, metric_name: str, value: float) -> None:
+    def record_sample_metric(
+        self,
+        sample_id: str,
+        metric_name: str,
+        value: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
         pass
 
-    def record_campaign_duration(self, duration_s: float) -> None:
+    def record_campaign_duration(
+        self,
+        duration_s: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
         pass
 
     def flush(self) -> None:
@@ -132,25 +230,45 @@ class CloudWatchBackend(ObservabilityBackend):
         if len(self._buffer) >= self._FLUSH_SIZE:
             self.flush()
 
-    def record_step_duration(self, step_name: str, duration_s: float, generation: int = 0) -> None:
-        self._add_metric(
-            "StepDuration",
-            duration_s,
-            [
-                {"Name": "StepName", "Value": step_name},
-                {"Name": "Generation", "Value": str(generation)},
-            ],
-        )
+    def record_step_duration(
+        self,
+        step_name: str,
+        duration_s: float,
+        generation: int = 0,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        dims: list[dict[str, str]] = [
+            {"Name": "StepName", "Value": step_name},
+            {"Name": "Generation", "Value": str(generation)},
+        ]
+        if trace_id is not None:
+            dims.append({"Name": "TraceId", "Value": trace_id})
+        self._add_metric("StepDuration", duration_s, dims)
 
-    def record_sample_metric(self, sample_id: str, metric_name: str, value: float) -> None:
-        self._add_metric(
-            metric_name,
-            value,
-            [{"Name": "SampleId", "Value": sample_id}],
-        )
+    def record_sample_metric(
+        self,
+        sample_id: str,
+        metric_name: str,
+        value: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        dims: list[dict[str, str]] = [{"Name": "SampleId", "Value": sample_id}]
+        if trace_id is not None:
+            dims.append({"Name": "TraceId", "Value": trace_id})
+        self._add_metric(metric_name, value, dims)
 
-    def record_campaign_duration(self, duration_s: float) -> None:
-        self._add_metric("CampaignDuration", duration_s)
+    def record_campaign_duration(
+        self,
+        duration_s: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        dims: list[dict[str, str]] | None = None
+        if trace_id is not None:
+            dims = [{"Name": "TraceId", "Value": trace_id}]
+        self._add_metric("CampaignDuration", duration_s, dims)
 
     def flush(self) -> None:
         if not self._buffer:
@@ -227,22 +345,42 @@ class PrometheusBackend(ObservabilityBackend):
         if len(self._buffer) >= self._FLUSH_SIZE:
             self.flush()
 
-    def record_step_duration(self, step_name: str, duration_s: float, generation: int = 0) -> None:
-        self._add_metric(
-            "osimflow_step_duration_seconds",
-            {"step": step_name, "generation": str(generation)},
-            duration_s,
-        )
+    def record_step_duration(
+        self,
+        step_name: str,
+        duration_s: float,
+        generation: int = 0,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        labels: dict[str, str] = {"step": step_name, "generation": str(generation)}
+        if trace_id is not None:
+            labels["trace_id"] = trace_id
+        self._add_metric("osimflow_step_duration_seconds", labels, duration_s)
 
-    def record_sample_metric(self, sample_id: str, metric_name: str, value: float) -> None:
-        self._add_metric(
-            f"osimflow_{metric_name}",
-            {"sample_id": sample_id},
-            value,
-        )
+    def record_sample_metric(
+        self,
+        sample_id: str,
+        metric_name: str,
+        value: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        labels: dict[str, str] = {"sample_id": sample_id}
+        if trace_id is not None:
+            labels["trace_id"] = trace_id
+        self._add_metric(f"osimflow_{metric_name}", labels, value)
 
-    def record_campaign_duration(self, duration_s: float) -> None:
-        self._add_metric("osimflow_campaign_duration_seconds", {}, duration_s)
+    def record_campaign_duration(
+        self,
+        duration_s: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        labels: dict[str, str] = {}
+        if trace_id is not None:
+            labels["trace_id"] = trace_id
+        self._add_metric("osimflow_campaign_duration_seconds", labels, duration_s)
 
     def flush(self) -> None:
         if not self._buffer:
@@ -266,6 +404,10 @@ class OpenTelemetryBackend(ObservabilityBackend):
     Metrics are batched and exported via the OTLP gRPC exporter on
     :meth:`flush`.  Requires ``pip install opentelemetry-api opentelemetry-sdk
     opentelemetry-exporter-otlp-proto-grpc``.
+
+    Per-sample trace IDs (issue #436) are forwarded as metric attributes
+    under the ``trace_id`` key, so OTel backends (Tempo, Jaeger, Honeycomb)
+    can join metrics to traces by attribute filter.
 
     Parameters
     ----------
@@ -334,22 +476,42 @@ class OpenTelemetryBackend(ObservabilityBackend):
         if len(self._buffer) >= self._FLUSH_SIZE:
             self.flush()
 
-    def record_step_duration(self, step_name: str, duration_s: float, generation: int = 0) -> None:
-        self._add_metric(
-            "osimflow.step.duration",
-            {"step": step_name, "generation": str(generation)},
-            duration_s,
-        )
+    def record_step_duration(
+        self,
+        step_name: str,
+        duration_s: float,
+        generation: int = 0,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        labels: dict[str, str] = {"step": step_name, "generation": str(generation)}
+        if trace_id is not None:
+            labels["trace_id"] = trace_id
+        self._add_metric("osimflow.step.duration", labels, duration_s)
 
-    def record_sample_metric(self, sample_id: str, metric_name: str, value: float) -> None:
-        self._add_metric(
-            f"osimflow.sample.{metric_name}",
-            {"sample_id": sample_id},
-            value,
-        )
+    def record_sample_metric(
+        self,
+        sample_id: str,
+        metric_name: str,
+        value: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        labels: dict[str, str] = {"sample_id": sample_id}
+        if trace_id is not None:
+            labels["trace_id"] = trace_id
+        self._add_metric(f"osimflow.sample.{metric_name}", labels, value)
 
-    def record_campaign_duration(self, duration_s: float) -> None:
-        self._add_metric("osimflow.campaign.duration", {}, duration_s)
+    def record_campaign_duration(
+        self,
+        duration_s: float,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
+        labels: dict[str, str] = {}
+        if trace_id is not None:
+            labels["trace_id"] = trace_id
+        self._add_metric("osimflow.campaign.duration", labels, duration_s)
 
     def flush(self) -> None:
         if not self._buffer:

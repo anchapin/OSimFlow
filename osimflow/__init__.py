@@ -43,6 +43,7 @@ from .observability import (
     ObservabilityBackend,
     OpenTelemetryBackend,
     PrometheusBackend,
+    new_trace_id,
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
@@ -108,6 +109,7 @@ __all__ = [
     "CloudWatchBackend",
     "PrometheusBackend",
     "OpenTelemetryBackend",
+    "new_trace_id",
     "ParetoFront",
     "ParetoSolution",
     "CampaignRegistry",
