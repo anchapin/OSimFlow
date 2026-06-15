@@ -7,6 +7,7 @@ API; everything else is an implementation detail.
 """
 
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
+from .algorithms.doe_analysis import DOEAnalysis
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
 from .cache import CacheKey, SQLiteCache
@@ -80,6 +81,7 @@ __all__ = [
     "AlgorithmRegistry",
     "BaseAlgorithm",
     "LHSAlgorithm",
+    "DOEAnalysis",
     "SobolAlgorithm",
     "HaltonAlgorithm",
     "CacheKey",

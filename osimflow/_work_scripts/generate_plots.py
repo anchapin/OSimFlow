@@ -20,6 +20,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from osimflow.algorithms.doe_analysis import DOEAnalysis, run_doe_analysis
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_plots")
 
@@ -143,7 +145,10 @@ def main() -> int:
     pareto_dir = args.pareto_dir or (args.outdir / "pareto")
     _generate_pareto_plots(pareto_dir, args.outdir)
 
-    # 5. Interactive HTML report (issue #388)
+    # 5. DOE analysis and visualization (issue #405)
+    _generate_doe_plots(args.results_csv, args.outdir)
+
+    # 6. Interactive HTML report (issue #388)
     _generate_interactive_report(args.outdir, results, failed, baseline_eui, pareto_dir)
 
     return 0
@@ -300,6 +305,210 @@ def _hypervolume_2d_simple(points: np.ndarray, ref_point: np.ndarray) -> float:
         dy = ref[1] - pts[i, 1]
         hv += max(0.0, dx) * max(0.0, dy)
     return hv
+
+
+# ---------------------------------------------------------------------------
+# DOE Analysis Plots (issue #405)
+# ---------------------------------------------------------------------------
+
+
+def _generate_doe_plots(results_csv: Path, outdir: Path) -> list[Path]:
+    """Generate DOE analysis plots: main effects, interaction matrix, sensitivity.
+
+    Returns list of generated plot file paths.
+    """
+    plots: list[Path] = []
+    if not results_csv.exists():
+        log.warning("Results CSV not found for DOE plots: %s", results_csv)
+        return plots
+
+    try:
+        analyzer = DOEAnalysis(results_csv)
+        analyzer.compute_main_effects()
+        analyzer.compute_interaction_effects()
+        analyzer.compute_factor_sensitivity()
+        analyzer.write_json(outdir)
+
+        main_effects = analyzer._main_effects
+        interaction_effects = analyzer._interaction_effects
+        factor_sensitivity = analyzer._factor_sensitivity
+
+        if main_effects:
+            main_path = _plot_main_effects(main_effects, outdir)
+            if main_path:
+                plots.append(main_path)
+
+        if len(interaction_effects) > 0:
+            interaction_path = _plot_interaction_matrix(interaction_effects, outdir)
+            if interaction_path:
+                plots.append(interaction_path)
+
+        if factor_sensitivity:
+            sensitivity_path = _plot_factor_sensitivity(factor_sensitivity, outdir)
+            if sensitivity_path:
+                plots.append(sensitivity_path)
+
+    except Exception as exc:
+        log.warning("DOE analysis failed: %s", exc)
+
+    return plots
+
+
+def _plot_main_effects(
+    main_effects: list,
+    outdir: Path,
+) -> Path | None:
+    """Generate main effects plot (factor levels vs. response mean).
+
+    One subplot per factor showing the response mean at each level.
+    """
+    if not main_effects:
+        return None
+
+    n_factors = len(main_effects)
+    n_cols = min(3, n_factors)
+    n_rows = (n_factors + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4 * n_rows))
+    if n_factors == 1:
+        axes = np.array([axes])
+    axes = np.asarray(axes).flatten()
+
+    for idx, me in enumerate(main_effects):
+        ax = axes[idx]
+        levels = me.levels
+        means = me.means
+        std_devs = me.std_devs
+
+        ax.errorbar(
+            range(len(levels)),
+            means,
+            yerr=std_devs,
+            fmt="o-",
+            capsize=4,
+            color="steelblue",
+            markersize=6,
+        )
+        ax.set_xticks(range(len(levels)))
+        ax.set_xticklabels([f"{l:.2g}" for l in levels], rotation=45, ha="right")
+        ax.set_xlabel(me.factor)
+        ax.set_ylabel("Response Mean")
+        sig_marker = "**" if me.p_value < 0.01 else ("*" if me.p_value < 0.05 else "")
+        ax.set_title(f"{me.factor} {sig_marker} (p={me.p_value:.3f})")
+        ax.grid(True, alpha=0.3)
+
+    for idx in range(n_factors, len(axes)):
+        axes[idx].set_visible(False)
+
+    plt.suptitle("DOE Main Effects", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    path = outdir / "doe_main_effects.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info("Generated DOE main effects plot: %s", path)
+    return path
+
+
+def _plot_interaction_matrix(
+    interaction_effects: list,
+    outdir: Path,
+) -> Path | None:
+    """Generate 2-way interaction effects matrix heatmap.
+
+    Shows F-statistic or p-value for each factor pair interaction.
+    """
+    if not interaction_effects:
+        return None
+
+    factors: set[str] = set()
+    for ie in interaction_effects:
+        factors.add(ie.factor_a)
+        factors.add(ie.factor_b)
+
+    factor_list = sorted(factors)
+    n = len(factor_list)
+    if n < 2:
+        return None
+
+    f_matrix = np.full((n, n), np.nan)
+    p_matrix = np.full((n, n), np.nan)
+
+    for ie in interaction_effects:
+        i = factor_list.index(ie.factor_a)
+        j = factor_list.index(ie.factor_b)
+        f_matrix[i, j] = ie.f_statistic
+        f_matrix[j, i] = ie.f_statistic
+        p_matrix[i, j] = ie.p_value
+        p_matrix[j, i] = ie.p_value
+
+    fig, ax = plt.subplots(figsize=(max(8, n), max(6, n * 0.8)))
+    mask = np.isnan(f_matrix)
+    f_display = np.ma.array(f_matrix, mask=mask)
+
+    im = ax.imshow(f_display, cmap="YlOrRd", aspect="auto")
+    cbar = plt.colorbar(im, ax=ax, label="F-statistic")
+    cbar.ax.tick_params(labelsize=8)
+
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels(factor_list, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(factor_list, fontsize=8)
+
+    for i in range(n):
+        for j in range(n):
+            if not mask[i, j]:
+                p_val = p_matrix[i, j]
+                text = f"{f_matrix[i, j]:.1f}\n(p={p_val:.2f})"
+                color = "white" if f_matrix[i, j] > f_matrix.max() * 0.6 else "black"
+                ax.text(j, i, text, ha="center", va="center", fontsize=7, color=color)
+
+    ax.set_title("DOE 2-Way Interaction Effects\n(F-statistic, p-value)")
+    plt.tight_layout()
+    path = outdir / "doe_interaction_matrix.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info("Generated DOE interaction matrix: %s", path)
+    return path
+
+
+def _plot_factor_sensitivity(
+    factor_sensitivity: list,
+    outdir: Path,
+) -> Path | None:
+    """Generate factor sensitivity Pareto chart (bar chart of percent contribution)."""
+    if not factor_sensitivity:
+        return None
+
+    factors = [fs.factor for fs in factor_sensitivity]
+    contributions = [fs.percent_contribution for fs in factor_sensitivity]
+
+    fig, ax = plt.subplots(figsize=(max(8, len(factors) * 0.6), 5))
+    colors = plt.cm.RdYlGn_r(np.linspace(0.2, 0.8, len(factors)))
+    bars = ax.barh(range(len(factors)), contributions, color=colors)
+
+    ax.set_yticks(range(len(factors)))
+    ax.set_yticklabels(factors, fontsize=9)
+    ax.set_xlabel("Percent Contribution to Variance (%)")
+    ax.set_title("DOE Factor Sensitivity (Pareto Chart)")
+    ax.invert_yaxis()
+
+    for bar, contrib in zip(bars, contributions):
+        ax.text(
+            bar.get_width() + 0.5,
+            bar.get_y() + bar.get_height() / 2,
+            f"{contrib:.1f}%",
+            va="center",
+            fontsize=8,
+        )
+
+    ax.set_xlim(0, max(contributions) * 1.15)
+    ax.grid(True, axis="x", alpha=0.3)
+    plt.tight_layout()
+    path = outdir / "doe_factor_sensitivity.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info("Generated DOE factor sensitivity chart: %s", path)
+    return path
 
 
 def _generate_interactive_report(
