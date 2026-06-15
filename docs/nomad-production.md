@@ -203,3 +203,25 @@ osimflow run \
 - **mTLS protects NOMAD_TOKEN**: When TLS is enabled, the ACL token is encrypted in transit, preventing interception (SEC-009)
 - **Certificate verification**: Always verify server certificates in production to prevent MITM attacks
 - **Client certificates**: For high-security environments, use mTLS so both client and server authenticate each other
+
+## Coordinator High Availability
+
+The Nomad cluster itself is highly available (3-server Raft quorum handles
+server-side failures automatically). However, the OSimFlow **coordinator**
+(`Campaign` class) is a single-instance process. See
+[ADR-0003](.agents/results/architecture/0003-coordinator-high-availability.md)
+for the full analysis and supported HA patterns.
+
+Two patterns are supported for coordinator HA with Nomad:
+
+**Pattern 1 — Shared filesystem**: Mount a shared network storage (NFS,
+etc.) as the `--outdir` on all Nomad client nodes running coordinator
+jobs. The `JobQueue.recover()` mechanism handles crash recovery
+automatically. See ADR-0003 §Pattern 1 for details.
+
+**Pattern 2 — Campaign-per-worker (recommended)**: Launch multiple
+coordinator jobs via Nomad, each processing a disjoint subset of samples
+with its own `--outdir`. The Nomad job spec can use `spread` to distribute
+coordinator jobs across availability zones. Sample partitioning is handled
+by an external script or Airflow DAG that submits N coordinator jobs with
+non-overlapping sample ranges. See ADR-0003 §Pattern 2 for details.
