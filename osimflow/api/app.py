@@ -51,9 +51,7 @@ def _get_real_remote_address(request: Request) -> str:
     requires that all instances share the same ``X-Forwarded-For`` header
     handling so that per-client rate limits are correctly enforced.
     """
-    forwarded_for = request.headers.get("X-Forwarded-For") or request.headers.get(
-        "X_FORWARDED_FOR"
-    )
+    forwarded_for = request.headers.get("X-Forwarded-For") or request.headers.get("X_FORWARDED_FOR")
     if forwarded_for:
         # X-Forwarded-For can contain multiple IPs: client, proxy1, proxy2...
         # The first IP is the original client.
