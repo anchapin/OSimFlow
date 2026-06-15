@@ -401,10 +401,7 @@ class Campaign:
             submitted = sum(
                 1
                 for state in self._sample_state.values()
-                if any(
-                    k.endswith("_exit_code") or k.endswith("_status")
-                    for k in state
-                )
+                if any(k.endswith("_exit_code") or k.endswith("_status") for k in state)
             )
             if submitted >= quota.max_samples:
                 log.warning(
@@ -414,10 +411,7 @@ class Campaign:
                 )
                 return True
 
-        if (
-            quota.max_cost_usd is not None
-            and self.trace.total_cost_usd >= quota.max_cost_usd
-        ):
+        if quota.max_cost_usd is not None and self.trace.total_cost_usd >= quota.max_cost_usd:
             log.warning(
                 "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
                 self.trace.total_cost_usd,
@@ -426,10 +420,7 @@ class Campaign:
             return True
 
         elapsed_min = (time.time() - self.trace.started_at) / 60.0
-        if (
-            quota.max_wall_time_min is not None
-            and elapsed_min >= quota.max_wall_time_min
-        ):
+        if quota.max_wall_time_min is not None and elapsed_min >= quota.max_wall_time_min:
             log.warning(
                 "max_wall_time_min quota reached (%.1f >= %.1f min) — skipping further submissions",
                 elapsed_min,
@@ -766,7 +757,9 @@ class Campaign:
             # loop below to cancel pending work.
             if self._check_quota_exceeded():
                 self._quota_exceeded = True
-                log.warning("quota exceeded during %s — cancelling remaining submissions", step_name)
+                log.warning(
+                    "quota exceeded during %s — cancelling remaining submissions", step_name
+                )
 
             return sid
 
@@ -809,7 +802,9 @@ class Campaign:
                         f.cancel()
                     break
                 if self._quota_exceeded:
-                    log.warning("quota exceeded — cancelling remaining submissions in %s", step_name)
+                    log.warning(
+                        "quota exceeded — cancelling remaining submissions in %s", step_name
+                    )
                     for f in futures:
                         f.cancel()
                     break
