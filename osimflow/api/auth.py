@@ -230,6 +230,7 @@ def require_permission(required: str) -> Any:
         async def endpoint(request: Request) -> dict[str, str]:
             ...
     """
+
     def decorator(func: Any) -> Any:
         async def wrapper(*args: Any, **kwargs: Any) -> Response:
             # Assume request is the last positional arg or in kwargs
@@ -254,5 +255,7 @@ def require_permission(required: str) -> Any:
                 )
 
             return await func(*args, **kwargs)  # type: ignore[no-any-return]
+
         return wrapper
+
     return decorator

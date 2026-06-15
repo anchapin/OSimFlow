@@ -953,7 +953,7 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         help=(
             "Path to a JSON file containing multiple API keys with per-user "
             "roles (issue #395). When set, --api-key is ignored. "
-            "File format: {\"users\": [{\"key\": \"...\", \"user_id\": \"...\", \"role\": \"...\"}]}. "
+            'File format: {"users": [{"key": "...", "user_id": "...", "role": "..."}]}. '
             "Roles: readonly, readwrite, admin."
         ),
     )

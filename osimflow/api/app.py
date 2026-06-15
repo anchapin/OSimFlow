@@ -120,9 +120,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     content={"detail": "Invalid or missing API key"},
                 )
-            request.state.api_user = APIKeyUser(
-                key=provided or "", user_id="default", role=_ADMIN
-            )
+            request.state.api_user = APIKeyUser(key=provided or "", user_id="default", role=_ADMIN)
         elif isinstance(key_store, MultiUserAPIKeyStore):
             user = key_store.validate(provided)
             if user is None:
