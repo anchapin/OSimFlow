@@ -752,9 +752,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
-        alert_rules=(
-            Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None
-        ),
+        alert_rules=(Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None),
         alert_destinations=(
             Path(str(args["alert_destinations"])).resolve()
             if args.get("alert_destinations")

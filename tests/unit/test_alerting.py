@@ -240,12 +240,7 @@ class TestLoadAlertDestinationsFromYaml:
 
     def test_load_log_destination(self, tmp_path):
         dests_file = tmp_path / "dests.yml"
-        dests_file.write_text(
-            "destinations:\n"
-            "  - name: console\n"
-            "    type: log\n"
-            "    level: ERROR\n"
-        )
+        dests_file.write_text("destinations:\n  - name: console\n    type: log\n    level: ERROR\n")
         dests = load_alert_destinations_from_yaml(dests_file)
         assert len(dests) == 1
         assert isinstance(dests[0], LogDestination)
@@ -286,11 +281,7 @@ class TestBuildAlertManager:
 
     def test_build_with_destinations_file_adds_destinations(self, tmp_path):
         dests_file = tmp_path / "dests.yml"
-        dests_file.write_text(
-            "destinations:\n"
-            "  - type: log\n"
-            "    level: ERROR\n"
-        )
+        dests_file.write_text("destinations:\n  - type: log\n    level: ERROR\n")
         manager = build_alert_manager(None, dests_file)
         # One LogDestination from the file
         assert len(manager._destinations) == 1
