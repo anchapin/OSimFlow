@@ -61,7 +61,6 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
-from .cost_tracking import CostTracker
 from .distributed_jobqueue import build_job_queue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .measures import MeasureRegistry, UnmappedVariableError
@@ -83,8 +82,6 @@ from .observability import (
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
-from .alerting import AlertManager, build_alert_manager
-from .audit import AuditLogger
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import TaskHandle as TQHandle
 from .taskqueue import TaskQueue
@@ -286,34 +283,6 @@ class Campaign:
                     exc,
                 )
 
-        # Cost tracking (issue #447): initialize tracker when enabled.
-        self._cost_tracker: CostTracker | None = None
-        if cfg.enable_cost_tracking:
-            self._cost_tracker = CostTracker(
-                n_samples=cfg.n_samples,
-                executor=self.executor.name,
-                on_demand_price=cfg.cost_on_demand_price,
-                spot_price=cfg.cost_spot_price,
-            )
-            log.info(
-                "cost tracking enabled: n_samples=%d executor=%s on_demand=%.4f spot=%.4f",
-                cfg.n_samples,
-                self.executor.name,
-                cfg.cost_on_demand_price,
-                cfg.cost_spot_price,
-            )
-
-        # Alerting (issues #446, #447): initialize alert manager and audit logger
-        # when alert rules or destinations are configured, or always when cost tracking
-        # is enabled (cost tracking emits alerts on cache miss rate and campaign
-        # completion/failure).
-        self._alert_manager: AlertManager = build_alert_manager(
-            rules_path=cfg.alert_rules,
-            destinations_path=cfg.alert_destinations,
-            include_builtin=True,
-        )
-        self._audit_logger: AuditLogger = AuditLogger(outdir=cfg.outdir)
-
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
         self._cancel_lock = threading.Lock()
@@ -433,17 +402,6 @@ class Campaign:
             billed_duration_seconds: float | None = (
                 None if billed_duration_obj is None else float(str(billed_duration_obj))
             )
-            # Cost tracking (issue #447): record actual cost from this sample.
-            # Also estimates spot savings using the same ratio as _accumulate_cost_summary.
-            if cost_usd is not None:
-                spot_savings = 0.0
-                if cost_usd > 0:
-                    savings_ratio = (
-                        AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-                        - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
-                    ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-                    spot_savings = round(cost_usd * savings_ratio, 6)
-                self._record_costs(sid, cost_usd, spot_savings)
             # Observability: record per-sample cost metric (issue #132).
             # Forward the per-sample trace_id so the metric can be joined
             # to a distributed trace (issue #436).
@@ -518,45 +476,6 @@ class Campaign:
             self.trace.spot_savings_usd = round(total * savings_ratio, 6)
         else:
             self.trace.spot_savings_usd = 0.0
-
-    def _record_costs(self, sample_id: str, cost_usd: float, spot_savings_usd: float = 0.0) -> None:
-        """Record actual cost for a completed sample (issue #447).
-
-        Called after each fan-out step completes to accumulate per-sample costs
-        into the CostTracker. When cost tracking is disabled, this is a no-op.
-
-        Parameters
-        ----------
-        sample_id : str
-            Sample identifier.
-        cost_usd : float
-            Actual on-demand cost in USD.
-        spot_savings_usd : float
-            Spot savings (difference between on-demand and spot).
-        """
-        if self._cost_tracker is None:
-            return
-        self._cost_tracker.record_actual(sample_id, cost_usd, spot_savings_usd)
-
-    def _finalize_costs(self) -> None:
-        """Finalize cost tracking and write summary to run.json (issue #447).
-
-        Called in the ``finally`` block of ``Campaign.run()`` to ensure cost
-        summary is written even if the campaign fails or is cancelled.
-        When cost tracking is disabled, this is a no-op.
-        """
-        if self._cost_tracker is None:
-            return
-        summary = self._cost_tracker.finalize()
-        # Write cost summary to run.json via the trace.
-        # The trace.to_dict() will include cost_summary if set.
-        self.trace.cost_summary = summary.to_dict()
-        log.info(
-            "cost tracking finalized: estimated=$%.4f actual=$%.4f savings=$%.4f",
-            summary.total_estimated_cost_usd,
-            summary.total_actual_cost_usd,
-            summary.total_spot_savings_usd,
-        )
 
     def _checkpoint_sample(self, sid: str) -> None:
         """Write an incremental run.json checkpoint for a single sample.
@@ -1499,61 +1418,6 @@ class Campaign:
             # Fire webhook callback (issue #283). Best-effort: delivery
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
-
-            # Alert: campaign completed or failed (issue #438).
-            # Compute cache hit rate for cache.miss_rate_low rule.
-            cache_stats = self.cache.stats()
-            cache_hit_rate: float = 1.0
-            hits = float(cache_stats.get("hits", 0))  # type: ignore[arg-type]
-            misses = float(cache_stats.get("misses", 0))  # type: ignore[arg-type]
-            total = hits + misses
-            if total > 0:
-                cache_hit_rate = hits / total
-            self._alert_manager.update_cache_stats(cache_stats)
-            self._alert_manager.notify(
-                "cache.miss_rate_low",
-                {
-                    "campaign_id": self.trace.campaign_id,
-                    "cache_hit_rate": cache_hit_rate * 100.0,
-                    "cache_stats": cache_stats,
-                },
-            )
-            if campaign_status == "success":
-                self._alert_manager.notify(
-                    "campaign.completed",
-                    {
-                        "campaign_id": self.trace.campaign_id,
-                        "elapsed_s": duration,
-                        "n_samples": self.cfg.n_samples,
-                        "n_succeeded": sum(1 for s in self.trace.per_sample if s.status == "ok"),
-                        "n_failed": sum(1 for s in self.trace.per_sample if s.status == "failed"),
-                        "total_cost_usd": self.trace.total_cost_usd,
-                    },
-                )
-            else:
-                self._alert_manager.notify(
-                    "campaign.failed",
-                    {
-                        "campaign_id": self.trace.campaign_id,
-                        "status": campaign_status,
-                        "error": getattr(self, "_last_error", "unknown"),
-                    },
-                )
-            # Audit log: record campaign outcome (issue #439).
-            n_ok = sum(1 for s in self.trace.per_sample if s.status == "ok")
-            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
-            self._audit_logger.log_campaign_outcome(
-                campaign_id=self.trace.campaign_id,
-                status=campaign_status,
-                n_samples=self.cfg.n_samples,
-                n_succeeded=n_ok,
-                n_failed=n_failed,
-                elapsed_s=duration,
-                total_cost_usd=getattr(self.trace, "total_cost_usd", None),
-            )
-
-            # Finalize cost tracking and write summary to run.json (issue #447).
-            self._finalize_costs()
 
             # Close the SQLite cache: checkpoints the WAL and removes the
             # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
