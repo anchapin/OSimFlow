@@ -25,6 +25,7 @@ import subprocess
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Optional, cast
 
@@ -37,11 +38,15 @@ from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
 
 log = logging.getLogger("osimflow.executors")
 
+#: Entry-point group for third-party executor plug-ins (issue #432).
+EXECUTOR_ENTRY_POINT_GROUP = "osimflow.executors"
+
 __all__ = [
     "AWSBatchExecutor",
     "AzureBatchExecutor",
     "BaseExecutor",
     "DaskJobQueueExecutor",
+    "ExecutorRegistry",
     "GoogleBatchExecutor",
     "Handle",
     "KubernetesExecutor",
@@ -1616,3 +1621,129 @@ class NomadExecutor(BaseExecutor):
         # urllib's HTTP handler is closed by the underlying
         # http.client on GC; nothing actionable here.
         pass
+
+
+# ======================================================================
+# Executor registry + entry-point plug-in discovery (issue #432)
+# ======================================================================
+
+
+class ExecutorRegistry:
+    """Global registry that maps executor names to their classes.
+
+    Mirrors the ``AlgorithmRegistry`` pattern: built-in executors are
+    registered explicitly at import time, and third-party executors can be
+    auto-discovered via ``entry_points`` by calling :meth:`discover_plugins`.
+
+    The registry enables introspection (``list_available()``) and a uniform
+    lookup path (``get(name)``) so that the CLI and Campaign can validate
+    executor names without hard-coding a choices list.
+
+    Typical usage::
+
+        cls = ExecutorRegistry.get("local")
+        executor = cls(max_workers=4)
+
+    For third-party executor packages, add this to ``pyproject.toml``::
+
+        [project.entry-points."osimflow.executors"]
+        my_exec = "my_package.executors:MyExecutor"
+    """
+
+    _registry: dict[str, type[BaseExecutor]] = {}
+
+    @classmethod
+    def register(cls, name: str, executor_cls: type[BaseExecutor]) -> None:
+        """Register *executor_cls* under *name*."""
+        cls._registry[name] = executor_cls
+        log.debug("registered executor %s -> %s", name, executor_cls.__qualname__)
+
+    @classmethod
+    def get(cls, name: str) -> type[BaseExecutor]:
+        """Return the executor class registered under *name*.
+
+        Raises
+        ------
+        ValueError
+            If *name* is not registered, with a helpful message listing
+            available executors.
+        """
+        if name not in cls._registry:
+            available = ", ".join(sorted(cls._registry)) or "(none)"
+            raise ValueError(f"unknown executor '{name}'. Available executors: {available}")
+        return cls._registry[name]
+
+    @classmethod
+    def list_available(cls) -> list[str]:
+        """Return the sorted list of registered executor names."""
+        return sorted(cls._registry)
+
+    @classmethod
+    def discover_plugins(cls) -> int:
+        """Discover and auto-register executors from installed entry points.
+
+        Scans the ``osimflow.executors`` entry point group and loads each
+        entry point.  Loaded objects that are ``BaseExecutor`` subclasses are
+        registered under the entry-point ``name``.
+
+        The method is **safe** — if no plug-ins are found it silently returns
+        ``0``.  Import or type errors for individual plug-ins are logged at
+        ``WARNING`` level and skipped so a single broken plug-in never breaks
+        the registry.
+
+        Returns
+        -------
+        int
+            The number of plug-ins successfully registered.
+        """
+        try:
+            eps = list(entry_points(group=EXECUTOR_ENTRY_POINT_GROUP))
+        except Exception:  # noqa: BLE001 — never crash on metadata issues
+            return 0
+
+        if not eps:
+            return 0
+
+        count = 0
+        for ep in eps:
+            try:
+                obj = ep.load()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "failed to load executor plug-in '%s' (%s): %s",
+                    ep.name,
+                    ep.value,
+                    exc,
+                )
+                continue
+
+            if not (isinstance(obj, type) and issubclass(obj, BaseExecutor)):
+                log.warning(
+                    "executor plug-in '%s' (%s) is not a BaseExecutor subclass — skipping",
+                    ep.name,
+                    ep.value,
+                )
+                continue
+
+            cls.register(ep.name, obj)
+            log.info("discovered executor plug-in '%s' -> %s", ep.name, ep.value)
+            count += 1
+
+        return count
+
+
+# ======================================================================
+# Register built-in executors
+# ======================================================================
+ExecutorRegistry.register("local", LocalExecutor)
+ExecutorRegistry.register("slurm", SlurmExecutor)
+ExecutorRegistry.register("aws_batch", AWSBatchExecutor)
+ExecutorRegistry.register("nomad", NomadExecutor)
+ExecutorRegistry.register("azure_batch", AzureBatchExecutor)
+ExecutorRegistry.register("google_batch", GoogleBatchExecutor)
+ExecutorRegistry.register("kubernetes", KubernetesExecutor)
+ExecutorRegistry.register("pbs", PBSExecutor)
+ExecutorRegistry.register("dask_jobqueue", DaskJobQueueExecutor)
+
+# Discover third-party executor plug-ins (no-op when none installed).
+ExecutorRegistry.discover_plugins()

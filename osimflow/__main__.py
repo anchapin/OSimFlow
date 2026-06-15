@@ -257,6 +257,22 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             queue=args.dask_queue,
             project=args.dask_project,
         )
+
+    # Fall back to the ExecutorRegistry for plugin-discovered executors
+    # (issue #432).  Third-party executors registered via entry_points
+    # are available here.  They must accept no required constructor args
+    # (or accept the same kwargs the built-ins do).
+    from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+    if args.executor in ExecutorRegistry.list_available():
+        executor_cls = ExecutorRegistry.get(args.executor)
+        log.info(
+            "instantiating executor '%s' from registry (class=%s)",
+            args.executor,
+            executor_cls.__qualname__,
+        )
+        return executor_cls()
+
     raise ValueError(f"unknown executor: {args.executor}")
 
 

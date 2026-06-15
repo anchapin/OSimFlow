@@ -15,6 +15,18 @@ Adding a new algorithm (Bayesian optimisation, …) requires only:
     time (typically at the bottom of this module or in a separate plugin
     module under ``osimflow/algorithms/``).
 
+**Third-party plug-ins (issue #432):** packages can also register
+algorithms via ``entry_points`` so they are auto-discovered without
+importing them manually.  Add this to your ``pyproject.toml``::
+
+    [project.entry-points."osimflow.algorithms"]
+    my_algo = "my_package.algorithms:MyAlgoClass"
+
+The entry-point ``name`` becomes the algorithm name registered in the
+``AlgorithmRegistry``.  Discovery runs automatically at module import
+time via ``AlgorithmRegistry.discover_plugins()``; import errors in
+individual plug-ins are logged and skipped.
+
 The ``Campaign`` class dispatches through the registry via
 ``AlgorithmRegistry.get(config.algorithm)`` so the orchestration layer
 stays decoupled from the sampling strategy.
@@ -24,6 +36,7 @@ import abc
 import json
 import logging
 import math
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +44,9 @@ import scipy.stats
 import scipy.stats.qmc
 
 log = logging.getLogger("osimflow.algorithms")
+
+#: Entry-point group for third-party algorithm plug-ins (issue #432).
+ALGORITHM_ENTRY_POINT_GROUP = "osimflow.algorithms"
 
 
 # ======================================================================
@@ -229,6 +245,63 @@ class AlgorithmRegistry:
     def list_available(cls) -> list[str]:
         """Return the sorted list of registered algorithm names."""
         return sorted(cls._registry)
+
+    # ------------------------------------------------------------------
+    # Entry-point plug-in discovery (issue #432)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def discover_plugins(cls) -> int:
+        """Discover and auto-register algorithms from installed entry points.
+
+        Scans the ``osimflow.algorithms`` entry point group and loads each
+        entry point.  Loaded objects that are ``BaseAlgorithm`` subclasses are
+        registered under the entry-point ``name``.
+
+        The method is **safe** — if no plug-ins are found it silently returns
+        ``0``.  Import or type errors for individual plug-ins are logged at
+        ``WARNING`` level and skipped so a single broken plug-in never breaks
+        the registry.
+
+        Returns
+        -------
+        int
+            The number of plug-ins successfully registered.
+        """
+        try:
+            eps = list(entry_points(group=ALGORITHM_ENTRY_POINT_GROUP))
+        except Exception:  # noqa: BLE001 — never crash on metadata issues
+            return 0
+
+        if not eps:
+            return 0
+
+        count = 0
+        for ep in eps:
+            try:
+                obj = ep.load()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "failed to load algorithm plug-in '%s' (%s): %s",
+                    ep.name,
+                    ep.value,
+                    exc,
+                )
+                continue
+
+            if not (isinstance(obj, type) and issubclass(obj, BaseAlgorithm)):
+                log.warning(
+                    "algorithm plug-in '%s' (%s) is not a BaseAlgorithm subclass — skipping",
+                    ep.name,
+                    ep.value,
+                )
+                continue
+
+            cls.register(ep.name, obj)
+            log.info("discovered algorithm plug-in '%s' -> %s", ep.name, ep.value)
+            count += 1
+
+        return count
 
 
 # ======================================================================
@@ -572,3 +645,12 @@ from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("repeat_all", RepeatAllAlgorithm)
 AlgorithmRegistry.register("random", RandomSamplingAlgorithm)
+
+# ======================================================================
+# Entry-point plug-in discovery (issue #432)
+# ======================================================================
+# Discover and register third-party algorithm plug-ins that declare an
+# entry point in the ``osimflow.algorithms`` group.  This is a no-op
+# when no plug-ins are installed.  Import errors are caught and logged
+# so a broken plug-in never blocks the registry.
+AlgorithmRegistry.discover_plugins()
