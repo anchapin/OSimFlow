@@ -1,4 +1,5 @@
 # MongoDB and Distributed Storage
+<!-- docs-skip -->
 
 OSimFlow uses SQLite as its default storage backend for three distinct subsystems: the campaign cache (`SQLiteCache`), the document store (`SQLiteDocumentStore`), and the results database (`ResultsDatabase`). SQLite is ideal for single-node, single-writer workloads, but scales poorly beyond that. This guide covers the limitations of the SQLite-based defaults, available alternatives, the architecture for plugging in distributed backends, and a practical migration path.
 
@@ -120,7 +121,7 @@ def insert_result(conn, sample_id: str, kpis: dict) -> None:
 
 ### PostgreSQL / TimescaleDB
 
-Replace the `results_db.py` SQLite backend with `psycopg2` or `asyncpg` for a network-accessible, concurrent-writer results store. TimescaleDB (a PostgreSQL extension) adds time-series optimization (chunking, compression, continuous aggregates) which is useful if you run hundreds of campaigns and query across time ranges.
+Replace the `osimflow/results_db.py` SQLite backend with `psycopg2` or `asyncpg` for a network-accessible, concurrent-writer results store. TimescaleDB (a PostgreSQL extension) adds time-series optimization (chunking, compression, continuous aggregates) which is useful if you run hundreds of campaigns and query across time ranges.
 
 ```python
 import psycopg2
