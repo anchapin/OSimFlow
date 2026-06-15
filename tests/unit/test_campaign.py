@@ -1205,9 +1205,7 @@ class TestRunStepWithRetries:
     def test_success_no_retry(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """When the step succeeds on the first call, no retry occurs."""
         variables_yml, template_pkg, outdir = tmp_dirs
-        cfg = _cfg(
-            variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2
-        )
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2)
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
         call_count = 0
 
@@ -1220,14 +1218,10 @@ class TestRunStepWithRetries:
         assert result == "ok"
         assert call_count == 1
 
-    def test_transient_error_retries_and_succeeds(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_transient_error_retries_and_succeeds(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """A TransientError triggers one retry which succeeds."""
         variables_yml, template_pkg, outdir = tmp_dirs
-        cfg = _cfg(
-            variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2
-        )
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2)
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
         call_count = 0
 
@@ -1247,9 +1241,7 @@ class TestRunStepWithRetries:
     ) -> None:
         """When all retry attempts fail with TransientError, the last one is raised."""
         variables_yml, template_pkg, outdir = tmp_dirs
-        cfg = _cfg(
-            variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2
-        )
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2)
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
         call_count = 0
 
@@ -1263,14 +1255,10 @@ class TestRunStepWithRetries:
         # 1 initial + 2 retries = 3 calls
         assert call_count == 3
 
-    def test_zero_max_step_retries_disables_retry(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_zero_max_step_retries_disables_retry(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """max_step_retries=0 bypasses retry and propagates TransientError immediately."""
         variables_yml, template_pkg, outdir = tmp_dirs
-        cfg = _cfg(
-            variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=0
-        )
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=0)
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
         call_count = 0
 
@@ -1283,14 +1271,10 @@ class TestRunStepWithRetries:
             campaign._run_step_with_retries("TEST_STEP", step_fn, generation=0)
         assert call_count == 1
 
-    def test_non_transient_error_not_retried(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_non_transient_error_not_retried(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Non-TransientError exceptions are not retried and propagate immediately."""
         variables_yml, template_pkg, outdir = tmp_dirs
-        cfg = _cfg(
-            variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2
-        )
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=2)
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
         call_count = 0
 
@@ -1303,14 +1287,10 @@ class TestRunStepWithRetries:
             campaign._run_step_with_retries("TEST_STEP", step_fn, generation=0)
         assert call_count == 1
 
-    def test_step_args_and_kwargs_forwarded(
-        self, tmp_dirs: tuple[Path, Path, Path]
-    ) -> None:
+    def test_step_args_and_kwargs_forwarded(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """Positional and keyword arguments are forwarded to the step function."""
         variables_yml, template_pkg, outdir = tmp_dirs
-        cfg = _cfg(
-            variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=1
-        )
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, max_step_retries=1)
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
 
         received_args: tuple[Any, ...] = ()
