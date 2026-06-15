@@ -11,12 +11,11 @@ Covers:
 
 import os
 import subprocess
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from osimflow.version_detection import (
+from osimflow.version_detection import (  # noqa: E402
     VersionDetectionError,
     _check_docker_container_label,
     _check_env_variable,
@@ -27,7 +26,7 @@ from osimflow.version_detection import (
     detect_openstudio_version,
     get_compatible_container_tag,
     verify_version_compatibility,
-)
+)  # noqa: E402
 
 
 class TestVersionDetectionError:
@@ -261,4 +260,4 @@ class TestVerifyVersionCompatibility:
 
 
 # Import osimflow.version_detection for mocking internal functions
-import osimflow.version_detection
+import osimflow.version_detection  # noqa: E402
