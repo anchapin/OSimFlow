@@ -103,3 +103,26 @@ osimflow run --executor kubernetes --kubernetes-namespace osimflow ...
 ```
 
 The same `--input_variables`, `--template_sim_package`, and `--n_samples` work across all providers.
+
+## Coordinator High Availability
+
+The Kubernetes cluster provides high availability for the **executor layer**
+(pods running simulation work are rescheduled automatically on node
+failure). However, the OSimFlow **coordinator** (`Campaign` class) is a
+single-instance process. See
+[ADR-0003](.agents/results/architecture/0003-coordinator-high-availability.md)
+for the full analysis and supported HA patterns.
+
+Two patterns are supported for coordinator HA on Kubernetes:
+
+**Pattern 1 — Shared filesystem**: Mount a shared PersistentVolume (NFS,
+Azure Files, GCS FUSE, etc.) as the `--outdir` on all coordinator pods.
+The `JobQueue.recover()` mechanism handles crash recovery automatically.
+See ADR-0003 §Pattern 1 for details.
+
+**Pattern 2 — Campaign-per-worker (recommended)**: Deploy multiple
+coordinator Jobs via Kubernetes, each processing a disjoint subset of
+samples with its own `--outdir`. Use a `JobSet` or `Flux` to manage the
+coordinator pool. Sample partitioning is handled by an external script
+or Apache Airflow DAG that submits N coordinator Jobs with
+non-overlapping sample ranges. See ADR-0003 §Pattern 2 for details.
