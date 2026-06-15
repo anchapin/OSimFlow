@@ -786,6 +786,58 @@ async def root_redirect() -> RedirectResponse:
 # ---------------------------------------------------------------------------
 
 
+def _build_key_store(
+    api_key: str | None,
+    api_keys_file: Path | None,
+) -> MultiUserAPIKeyStore | None:
+    """Build the API key store from file or single key (issue #395)."""
+    if api_keys_file is not None:
+        try:
+            keys_data = json.loads(api_keys_file.read_text())
+            users = keys_data.get("users", [])
+            if not users:
+                raise ValueError("No users found in api_keys_file")
+            key_store = MultiUserAPIKeyStore.from_users(users)
+            log.info("Loaded %d API keys from %s", len(users), api_keys_file)
+            return key_store
+        except Exception as exc:
+            log.error("Failed to load API keys from %s: %s", api_keys_file, exc)
+            raise ValueError(f"Invalid api_keys_file: {exc}") from exc
+    elif api_key is not None:
+        return MultiUserAPIKeyStore.from_single_key(api_key)
+    return None
+
+
+def _load_registry(registry_path: Path | None) -> Any:
+    """Load the campaign registry from path (issue #404)."""
+    if registry_path is None:
+        return None
+    try:
+        from osimflow.registry import CampaignRegistry  # noqa: PLC0415
+
+        registry = CampaignRegistry(db_path=registry_path)
+        log.info("registry loaded from %s", registry_path)
+        return registry
+    except Exception as exc:  # noqa: BLE001
+        log.error("Failed to load registry from %s: %s", registry_path, exc)
+        return None
+
+
+def _load_cache(cache_db_path: Path | None) -> Any:
+    """Load the cache from path (issue #426)."""
+    if cache_db_path is None:
+        return None
+    try:
+        from osimflow.cache import SQLiteCache  # noqa: PLC0415
+
+        cache = SQLiteCache(cache_db_path)
+        log.info("cache loaded from %s", cache_db_path)
+        return cache
+    except Exception as exc:  # noqa: BLE001
+        log.error("Failed to load cache from %s: %s", cache_db_path, exc)
+        return None
+
+
 def create_app(
     outdir: Path | None = None,
     *,
@@ -856,56 +908,17 @@ def create_app(
         description="REST API for monitoring OSimFlow campaigns",
     )
 
-    # --- Build API key store (issue #395) ---
-    key_store: MultiUserAPIKeyStore | None = None
-    if api_keys_file is not None:
-        try:
-            keys_data = json.loads(api_keys_file.read_text())
-            users = keys_data.get("users", [])
-            if not users:
-                raise ValueError("No users found in api_keys_file")
-            key_store = MultiUserAPIKeyStore.from_users(users)
-            log.info("Loaded %d API keys from %s", len(users), api_keys_file)
-        except Exception as exc:
-            log.error("Failed to load API keys from %s: %s", api_keys_file, exc)
-            raise ValueError(f"Invalid api_keys_file: {exc}") from exc
-    elif api_key is not None:
-        key_store = MultiUserAPIKeyStore.from_single_key(api_key)
+    key_store = _build_key_store(api_key, api_keys_file)
 
-    # --- Application state ---
     app.state.outdir = outdir
     app.state.campaigns_base_dir = campaigns_base_dir
     app.state.read_only = read_only
-    # Store the key store for the middleware
     app.state.api_key_store = key_store
-    # Keep api_key for backward compat
     app.state.api_key = api_key
 
-    # --- Registry for campaign ID resolution (issue #404) ---
-    registry: Any = None
-    if registry_path is not None:
-        try:
-            from osimflow.registry import CampaignRegistry  # noqa: PLC0415
+    app.state.registry = _load_registry(registry_path)
+    app.state.cache = _load_cache(cache_db_path)
 
-            registry = CampaignRegistry(db_path=registry_path)
-            log.info("registry loaded from %s", registry_path)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Failed to load registry from %s: %s", registry_path, exc)
-    app.state.registry = registry
-
-    # --- Cache for hit rate statistics (issue #426) ---
-    cache: Any = None
-    if cache_db_path is not None:
-        try:
-            from osimflow.cache import SQLiteCache  # noqa: PLC0415
-
-            cache = SQLiteCache(cache_db_path)
-            log.info("cache loaded from %s", cache_db_path)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Failed to load cache from %s: %s", cache_db_path, exc)
-    app.state.cache = cache
-
-    # --- CORS middleware ---
     if cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -915,32 +928,15 @@ def create_app(
             allow_headers=["X-API-Key", "Content-Type"],
         )
 
-    # --- Rate limiting (issue #454) ---
-    # Custom in-process middleware replaces slowapi's SlowAPIMiddleware,
-    # which did not reliably maintain its counter between sequential
-    # TestClient requests under pytest-xdist in CI.
-    #
-    # Middleware ordering (add_middleware inserts at front → last added
-    # is outermost):
-    #   1. add CORS (if configured)
-    #   2. add RateLimitMiddleware   ← runs after auth
-    #   3. add APIKeyMiddleware      ← outermost, runs first
-    # Result: APIKey(RateLimit(CORS(router)))
     app.add_middleware(
         RateLimitMiddleware,
         rate_limit=rate_limit,
         key_func=_get_real_remote_address,
     )
-
-    # Store a reference for tests / introspection.  The actual
-    # middleware instance is created lazily by Starlette's
-    # add_middleware, so we expose the configured rate-limit string.
     app.state.limiter = rate_limit  # type: ignore[assignment]
 
-    # --- Authentication middleware (outermost — runs first) ---
     app.add_middleware(APIKeyMiddleware)
 
-    # --- Routes ---
     app.include_router(router)
     app.include_router(events_router)
     app.include_router(campaigns_router)
@@ -950,12 +946,10 @@ def create_app(
     app.include_router(variables_router)
     app.include_router(measures_router)
 
-    # --- Web UI router (issue #337) ---
     if ui_enabled:
         app.include_router(ui_router)
         log.info("web UI enabled at /ui/")
 
-    # --- Static files for the web GUI (issue #264) ---
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
