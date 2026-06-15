@@ -267,6 +267,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--skip-preflight` (skip the PREFLIGHT_RUN_MODEL step that validates the seed model; issue #107)
 - `--max-generations` (maximum number of DAG generations; default 1 for single-shot LHS. Issue #122)
 - `--max-sample-retries` (maximum retry attempts for transient per-sample failures; default 3. Issue #252)
+- `--max-step-retries` (maximum retry attempts for transient cross-step failures; default 2. Issue #416)
 - `--webhook-url` (campaign completion webhook callback URL; issue #283)
 - `--result-storage-backend` (result storage backend: `local` (default), `s3`, `gs`, `azure`; issue #339)
 - `--result-storage-bucket` (bucket/container name for result storage; issue #339)

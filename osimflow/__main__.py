@@ -750,6 +750,21 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--max-step-retries",
+        type=int,
+        default=2,
+        help=(
+            "Maximum retry attempts for transient cross-step failures "
+            "(issue #416). When a fan-out step (APPLY_PARAMETERS, "
+            "RUN_OPENSTUDIO_SIM, EXTRACT_KPIS) fails with a transient "
+            "error, retry that specific step before aborting. Default: 2. "
+            "Set to 0 to disable cross-step retries. Only transient errors "
+            "(network timeout, resource exhaustion, container crashes) trigger "
+            "retry; permanent errors (invalid input, missing files) "
+            "abort immediately."
+        ),
+    )
+    run.add_argument(
         "--byos-trust-level",
         choices=["subprocess", "inprocess"],
         default="subprocess",
