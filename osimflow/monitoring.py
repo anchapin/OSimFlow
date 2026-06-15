@@ -144,6 +144,9 @@ class RunTrace:
         # Campaign-level cost summary (issue #447). Set by CostTracker.finalize()
         # when enable_cost_tracking is True.
         self.cost_summary: dict[str, object] | None = None
+        # Cache hit rate (issue #426). Set by Campaign._finalize_samples() after
+        # AGGREGATE_RESULTS so the value is available in run.json.
+        self.cache_hit_rate: float | None = None
         self.status: str = "running"  # "running", "success", "cancelled", "failed"
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}

@@ -83,6 +83,8 @@ from .observability import (
 )
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
+from .alerting import AlertManager, build_alert_manager
+from .audit import AuditLogger
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import TaskHandle as TQHandle
 from .taskqueue import TaskQueue
@@ -300,6 +302,17 @@ class Campaign:
                 cfg.cost_on_demand_price,
                 cfg.cost_spot_price,
             )
+
+        # Alerting (issues #446, #447): initialize alert manager and audit logger
+        # when alert rules or destinations are configured, or always when cost tracking
+        # is enabled (cost tracking emits alerts on cache miss rate and campaign
+        # completion/failure).
+        self._alert_manager: AlertManager = build_alert_manager(
+            rules_path=cfg.alert_rules,
+            destinations_path=cfg.alert_destinations,
+            include_builtin=True,
+        )
+        self._audit_logger: AuditLogger = AuditLogger(outdir=cfg.outdir)
 
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
