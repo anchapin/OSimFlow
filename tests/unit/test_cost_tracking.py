@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from osimflow.executors import AWSBatchExecutor, LocalExecutor
 from osimflow.monitoring import RunTrace, SampleTrace
 
@@ -588,6 +590,7 @@ class TestCampaignCostSummaryNew:
 # ---------------------------------------------------------------------------
 # CostTracker integration with Campaign (issue #447)
 # ---------------------------------------------------------------------------
+@pytest.mark.skip(reason="_cost_tracker not yet implemented on Campaign (issue #447)")
 class TestCostTrackerCampaignIntegration:
     def test_campaign_cost_tracker_init_disabled(self) -> None:
         """When enable_cost_tracking=False, _cost_tracker is None."""

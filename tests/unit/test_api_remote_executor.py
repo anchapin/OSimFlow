@@ -37,6 +37,13 @@ try:
 except ImportError:
     _HAS_KUBERNETES = False
 
+try:
+    import submitit  # noqa: F401
+
+    _HAS_SUBMITIT = True
+except ImportError:
+    _HAS_SUBMITIT = False
+
 
 def _req(
     executor: str,
@@ -122,6 +129,7 @@ class TestBuildExecutorFromRequest:
         executor = _build_executor_from_request(req)
         assert isinstance(executor, LocalExecutor)
 
+    @pytest.mark.skipif(not _HAS_SUBMITIT, reason="submitit not installed")
     def test_slurm_executor(self) -> None:
         from osimflow import SlurmExecutor
 
@@ -139,6 +147,7 @@ class TestBuildExecutorFromRequest:
         assert executor.qos == "high"
         assert executor.debug is False  # slurm_real=True → debug=False
 
+    @pytest.mark.skipif(not _HAS_SUBMITIT, reason="submitit not installed")
     def test_slurm_executor_debug_by_default(self) -> None:
         from osimflow import SlurmExecutor
 
