@@ -132,7 +132,7 @@ full working example.
 ### 2.3 Handling `eplusout.err`
 
 The error file is the first place to look when a simulation fails.  OSimFlow's
-own `aggregate_results.py` uses this pattern to extract a one-line summary:
+own `bin/aggregate_results.py` uses this pattern to extract a one-line summary:
 
 ```python
 import re
