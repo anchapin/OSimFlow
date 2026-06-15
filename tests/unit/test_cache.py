@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from osimflow.cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
+from osimflow.cache import CacheKey, CacheStats, SQLiteCache, sha256_of_dict, sha256_of_files
 
 
 class TestCacheKey:
@@ -425,3 +425,77 @@ class TestSQLiteCache:
                 f.result()
 
         assert not errors, f"Concurrent access errors: {errors}"
+
+    def test_get_stats_empty(self, cache: SQLiteCache) -> None:
+        stats = cache.get_stats()
+        assert stats.hits == 0
+        assert stats.misses == 0
+        assert stats.invalidations == 0
+        assert stats.total_keys == 0
+
+    def test_get_stats_after_miss(self, cache: SQLiteCache) -> None:
+        key = self._key()
+        cache.lookup(key)
+        stats = cache.get_stats()
+        assert stats.hits == 0
+        assert stats.misses == 1
+        assert stats.total_keys == 0
+
+    def test_get_stats_after_hit(self, cache: SQLiteCache, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        key = self._key()
+        cache.store(key, out, exit_code=0)
+        cache.lookup(key)
+        stats = cache.get_stats()
+        assert stats.hits == 1
+        assert stats.misses == 0
+        assert stats.total_keys == 1
+
+    def test_get_stats_after_invalidate(self, cache: SQLiteCache, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        cache.store(self._key(step="STEP_A"), out, exit_code=0)
+        cache.store(self._key(step="STEP_A", sample_id="s2"), out, exit_code=0)
+        cache.invalidate_step("STEP_A")
+        stats = cache.get_stats()
+        assert stats.invalidations == 2
+        assert stats.total_keys == 0
+
+    def test_get_cache_hit_rate_no_lookups(self, cache: SQLiteCache) -> None:
+        rate = cache.get_cache_hit_rate()
+        assert rate == 0.0
+
+    def test_get_cache_hit_rate_all_misses(self, cache: SQLiteCache) -> None:
+        key = self._key()
+        cache.lookup(key)
+        cache.lookup(key)
+        rate = cache.get_cache_hit_rate()
+        assert rate == 0.0
+
+    def test_get_cache_hit_rate_all_hits(self, cache: SQLiteCache, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        key = self._key()
+        cache.store(key, out, exit_code=0)
+        cache.lookup(key)
+        cache.lookup(key)
+        rate = cache.get_cache_hit_rate()
+        assert rate == 1.0
+
+    def test_get_cache_hit_rate_mixed(self, cache: SQLiteCache, tmp_path: Path) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        key = self._key()
+        cache.store(key, out, exit_code=0)
+        cache.lookup(key)
+        cache.lookup(self._key(sample_id="other"))
+        rate = cache.get_cache_hit_rate()
+        assert rate == 0.5
+
+    def test_cache_stats_dataclass(self) -> None:
+        stats = CacheStats(hits=10, misses=5, invalidations=3, total_keys=20)
+        assert stats.hits == 10
+        assert stats.misses == 5
+        assert stats.invalidations == 3
+        assert stats.total_keys == 20
