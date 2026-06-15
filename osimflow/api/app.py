@@ -39,6 +39,30 @@ from osimflow.validation import sanitize_filename, sanitize_sample_id, validate_
 
 log = logging.getLogger("osimflow.api")
 
+
+def _get_real_remote_address(request: Request) -> str:
+    """Extract the real client IP for rate limiting.
+
+    When OSimFlow is deployed behind a load balancer (for horizontal
+    scaling), ``get_remote_address`` returns the load balancer's IP instead
+    of the client's IP.  This function checks the ``X-Forwarded-For`` header
+    first (set by most HTTP load balancers) and falls back to
+    ``get_remote_address`` when the header is not present.
+
+    Horizontal scaling with multiple API instances behind a load balancer
+    requires that all instances share the same ``X-Forwarded-For`` header
+    handling so that per-client rate limits are correctly enforced.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For") or request.headers.get("X_FORWARDED_FOR")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs: client, proxy1, proxy2...
+        # The first IP is the original client.
+        client_ip = forwarded_for.split(",")[0].strip()
+        if client_ip:
+            return client_ip  # type: ignore[no-any-return]
+    return get_remote_address(request)  # type: ignore[no-any-return]
+
+
 router = APIRouter()
 
 PUBLIC_PATHS: frozenset[str] = frozenset({"/health", "/", "/static/index.html", ""})
@@ -716,7 +740,7 @@ def create_app(
         )
 
     # --- Rate limiting (slowapi) ---
-    limiter = Limiter(key_func=get_remote_address, default_limits=[rate_limit])
+    limiter = Limiter(key_func=_get_real_remote_address, default_limits=[rate_limit])
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
     app.add_middleware(SlowAPIMiddleware)
