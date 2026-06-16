@@ -22,6 +22,7 @@ from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
@@ -439,12 +440,16 @@ class ValidateConfigResponse(BaseModel):  # type: ignore[no-redef]
     """Response for ``POST /api/v1/validate``."""
 
     valid: bool = Field(description="True when all validation checks passed")
-    errors: list[str] = Field(default_factory=list, description="Critical validation errors")
-    warnings: list[str] = Field(default_factory=list, description="Non-critical warnings")
+    errors: list[str] = Field(
+        default_factory=list, description="Critical validation errors"
+    )
+    warnings: list[str] = Field(
+        default_factory=list, description="Non-critical warnings"
+    )
 
 
 @router.post("/api/v1/validate")  # type: ignore[untyped-decorator]
-async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:  # noqa: PLR0912
+async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
     """Pre-flight configuration validation (issue #398).
 
     Validates the supplied config fields without running a campaign.
