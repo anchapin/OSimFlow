@@ -232,3 +232,87 @@ async def campaign_stop(request: Request) -> dict[str, str]:
     stop_file.write_text(json.dumps({"requested_at": time.time()}))
     log.info("stop flag written to %s", stop_file)
     return {"status": "stopping"}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaign/pause
+# ---------------------------------------------------------------------------
+
+
+@events_router.post("/api/v1/campaign/pause")  # type: ignore[untyped-decorator]
+async def campaign_pause(request: Request) -> dict[str, str]:
+    """Write a ``.pause`` flag file to request campaign pause.
+
+    The campaign orchestrator checks for ``${outdir}/.pause`` during fan-out,
+    waits for in-flight work to complete, and writes a "paused" status
+    to run.json. Unlike stop, pause allows subsequent resume.
+    Returns 403 if the user lacks write permission (issue #395).
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required",
+        )
+    outdir: Path | None = request.app.state.outdir
+    if outdir is None:
+        raise HTTPException(status_code=503, detail="No output directory configured")
+
+    run_json_path = outdir / "run.json"
+    if run_json_path.exists():
+        try:
+            run_data = json.loads(run_json_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            run_data = {}
+        if run_data.get("finished_at") is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="campaign has already completed",
+            )
+        if run_data.get("status") == "paused":
+            return {"status": "already_paused"}
+
+    pause_file = outdir / ".pause"
+    pause_file.write_text(json.dumps({"requested_at": time.time()}))
+    log.info("pause flag written to %s", pause_file)
+    return {"status": "pausing"}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/campaign/pause
+# ---------------------------------------------------------------------------
+
+
+@events_router.delete("/api/v1/campaign/pause")  # type: ignore[untyped-decorator]
+async def campaign_resume(request: Request) -> dict[str, str]:
+    """Remove the ``.pause`` flag file to request campaign resume.
+
+    The campaign orchestrator detects the cleared pause condition and
+    continues processing pending samples. Returns 403 if the user lacks
+    write permission (issue #395).
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required",
+        )
+    outdir: Path | None = request.app.state.outdir
+    if outdir is None:
+        raise HTTPException(status_code=503, detail="No output directory configured")
+
+    run_json_path = outdir / "run.json"
+    if run_json_path.exists():
+        try:
+            run_data = json.loads(run_json_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            run_data = {}
+        if run_data.get("status") != "paused":
+            raise HTTPException(
+                status_code=409,
+                detail=f"campaign is not paused (status={run_data.get('status')})",
+            )
+
+    pause_file = outdir / ".pause"
+    if pause_file.exists():
+        pause_file.unlink()
+        log.info("pause flag removed from %s", pause_file)
+    return {"status": "resuming"}
