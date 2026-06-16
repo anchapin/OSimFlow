@@ -207,7 +207,8 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "PL"]
 # B008: function call in default argument (used by Pydantic-style contracts).
 # PLR0913: too many arguments (Campaign.__init__ legitimately has many).
 # PLR2004: magic value (energy-modeling domain has many "magic" constants).
-ignore = ["B008", "PLR0913", "PLR2004", "E501"]
+# PLR0915: too many statements (auto-recovery block in _submit_and_await_all).
+ignore = ["B008", "PLR0913", "PLR2004", "E501", "PLR0915"]
 fixable = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]

@@ -71,7 +71,13 @@ from .mlflow_hook import (
     maybe_end_mlflow_run,
     maybe_start_mlflow_run,
 )
-from .monitoring import GenerationTrace, RunTrace, SampleTrace, sample_log_paths
+from .monitoring import (
+    GenerationTrace,
+    RunTrace,
+    SampleTrace,
+    WorkerRecoveryManager,
+    sample_log_paths,
+)
 from .observability import (
     CloudWatchBackend,
     NullBackend,
@@ -647,6 +653,8 @@ class Campaign:
         self,
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
         step_name: str,
+        recovery_manager: WorkerRecoveryManager | None = None,
+        resubmit_callback: Callable[[str], Handle | TQHandle | None] | None = None,
     ) -> None:
         """Submit all samples to the executor, then await all results concurrently.
 
@@ -662,6 +670,15 @@ class Campaign:
             ``_sample_state``, cache, and monitoring.
         step_name
             The step name for logging.
+        recovery_manager
+            Optional worker recovery manager for auto-recovery (issue #443).
+            When provided and a job fails, the manager is consulted to check
+            if the heartbeat is stale. If so and auto-recovery is enabled,
+            the job is automatically resubmitted via resubmit_callback.
+        resubmit_callback
+            Optional callback to resubmit a failed job. Called with the
+            sample_id when auto-recovery is triggered. Must return a new
+            handle. Only used when recovery_manager is also provided.
 
         The method submits no new work — all submissions are already
         dispatched.  It awaits results using a
@@ -677,6 +694,10 @@ class Campaign:
         before awaiting and marked completed/failed after.  The enqueue
         is idempotent — a sample that was already queued from a previous
         interrupted run is silently skipped.
+
+        Worker auto-recovery (issue #443): when a job fails and
+        recovery_manager is provided, the heartbeat is checked. If stale,
+        the job is resubmitted automatically up to max_sample_retries.
         """
         if not submissions:
             return
@@ -698,8 +719,63 @@ class Campaign:
                 on_success(result)
                 # Mark completed in the job queue (issue #263).
                 self._job_queue.mark_completed(f"{sid}_{step_name}")
+                # Reset recovery attempts on successful completion (issue #443).
+                if recovery_manager is not None:
+                    recovery_manager.reset(sid)
             except Exception as e:
                 log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
+
+                # Worker auto-recovery (issue #443): check if heartbeat is stale.
+                # If stale and auto-recovery is enabled, attempt resubmission.
+                if recovery_manager is not None and resubmit_callback is not None:
+                    can_recover, attempt = recovery_manager.check_and_recover(
+                        sid, self.cfg.max_sample_retries
+                    )
+                    if can_recover:
+                        log.info(
+                            "%s %s: stale heartbeat detected (attempt %d/%d), auto-recovering",
+                            step_name,
+                            sid,
+                            attempt,
+                            self.cfg.max_sample_retries,
+                        )
+                        # Clear the failed state so recovery doesn't show as failed.
+                        state = self._sample_state.setdefault(sid, {})
+                        state.pop(f"{step_name.lower}_exit_code", None)
+                        state.pop(f"{step_name.lower}_status", None)
+                        state.pop("error_summary", None)
+                        # Resubmit and await the new handle.
+                        new_handle = resubmit_callback(sid)
+                        if new_handle is not None:
+                            # Capture sid for use in the resubmit logic.
+                            recovery_sid = sid
+                            # Create a new on_success callback wrapper for the resubmit.
+                            def _on_success_resubmit(
+                                result_path: Any,
+                                _recovery_sid: str = recovery_sid,
+                                _on_success: Callable[[Any], None] = on_success,
+                            ) -> None:
+                                _on_success(result_path)
+                                if recovery_manager is not None:
+                                    recovery_manager.reset(_recovery_sid)
+
+                            # Await the resubmitted handle.
+                            try:
+                                result = new_handle.result()
+                                _on_success_resubmit(result)
+                                self._job_queue.mark_completed(f"{recovery_sid}_{step_name}")
+                                self._checkpoint_sample(recovery_sid)
+                                return recovery_sid
+                            except Exception as resubmit_error:
+                                log.error(
+                                    "%s %s auto-recovery failed: %s",
+                                    step_name,
+                                    sid,
+                                    resubmit_error,
+                                    exc_info=True,
+                                )
+                                # Fall through to mark as failed.
+
                 # Mark failed in the job queue (issue #263).
                 self._job_queue.mark_failed(
                     f"{sid}_{step_name}",
@@ -2683,7 +2759,63 @@ class Campaign:
             submissions[sid] = (handle, _on_success)
 
         # --- Phase 3: await all results concurrently ---
-        self._submit_and_await_all(submissions, "RUN_OPENSTUDIO_SIM")
+        # Worker auto-recovery (issue #443): set up recovery manager and resubmit
+        # callback when auto-recovery is enabled.
+        recovery_manager: WorkerRecoveryManager | None = None
+        resubmit_callback: Callable[[str], Handle | TQHandle | None] | None = None
+
+        if self.cfg.worker_auto_recovery:
+            recovery_manager = WorkerRecoveryManager(self.cfg.outdir)
+
+            def resubmit_callback(sid: str) -> Handle | TQHandle | None:
+                """Resubmit a failed job for auto-recovery."""
+                ctx = pending.get(sid)
+                if ctx is None:
+                    log.error("auto-recovery: no pending context for sample %s", sid)
+                    return None
+                log.info(
+                    "auto-recovery: resubmitting sample %s (outdir=%s)",
+                    sid,
+                    ctx["out_dir"],
+                )
+                if self.task_queue is not None:
+                    return self.task_queue.submit(
+                        run_openstudio_sim,
+                        ctx["mod_pkg"],
+                        sid,
+                        os_version,
+                        ctx["out_dir"],
+                        openstudio_version=os_version,
+                        stdout_path=ctx["stdout_log"],
+                        stderr_path=ctx["stderr_log"],
+                        max_retries=self.cfg.max_sample_retries,
+                        worker_id="local",
+                    )
+                else:
+                    return self.executor.submit(
+                        run_openstudio_sim,
+                        ctx["mod_pkg"],
+                        sid,
+                        os_version,
+                        ctx["out_dir"],
+                        name=f"sim_{sid}",
+                        cpus=4,
+                        memory_mb=8 * 1024,
+                        time_min=240,
+                        container=CONTAINER_OS.format(version=os_version),
+                        openstudio_version=os_version,
+                        stdout_path=ctx["stdout_log"],
+                        stderr_path=ctx["stderr_log"],
+                        max_retries=self.cfg.max_sample_retries,
+                        worker_id="local",
+                    )
+
+        self._submit_and_await_all(
+            submissions,
+            "RUN_OPENSTUDIO_SIM",
+            recovery_manager=recovery_manager,
+            resubmit_callback=resubmit_callback,
+        )
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():

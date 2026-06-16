@@ -532,6 +532,12 @@ class CampaignConfig:
     # disables retries. Each retry uses exponential backoff starting at
     # base_delay seconds (default 1.0), doubling each attempt up to 60s cap.
     max_sample_retries: int = 3
+    # Worker auto-recovery (issue #443). When True and a job fails, OSimFlow
+    # checks if the worker's heartbeat is stale (no update for 60+ seconds).
+    # If stale, the job is automatically resubmitted (up to max_sample_retries).
+    # This handles worker crashes without manual intervention. When False,
+    # failed jobs are marked as failed without auto-recovery.
+    worker_auto_recovery: bool = True
     # Air-gapped / offline mode (issue #261). When True, OSimFlow skips
     # Docker Hub pulls, PyPI version checks, and online weather downloads.
     # It reads pip wheels from --offline_bundle/pip/ and uses pre-loaded
