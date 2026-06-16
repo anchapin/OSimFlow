@@ -398,6 +398,7 @@ class TestDistributedCacheAutoRecovery:
         self, dist_cache: DistributedCache, tmp_path: Path
     ) -> None:
         """Reconnect delay doubles after each error, capped at 60s."""
+
         async def mock_get_message(timeout: float = 1.0, ignore_subscribe_messages: bool = True):
             raise ConnectionError("Redis connection lost")
 
