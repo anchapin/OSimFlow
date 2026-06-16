@@ -1419,6 +1419,27 @@ def _add_health_args(health: argparse.ArgumentParser) -> None:
     health.add_argument("--log_level", default="ERROR")
 
 
+def _add_measure_args(measure: argparse.ArgumentParser) -> None:
+    measure.add_argument(
+        "action",
+        choices=["list"],
+        help="Action to perform (only 'list' is currently supported).",
+    )
+    measure.add_argument(
+        "--template",
+        type=Path,
+        required=True,
+        help="Path to the template simulation package (must contain a measures/ directory).",
+    )
+    measure.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table).",
+    )
+    measure.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -1517,6 +1538,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Verify system health before starting a campaign (issue #411)",
     )
     _add_health_args(health)
+    measure = sub.add_parser(
+        "measure",
+        help="Discover and inspect measures from a template simulation package (issue #532)",
+    )
+    _add_measure_args(measure)
     return p
 
 
@@ -2243,6 +2269,57 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_measure_list(args: argparse.Namespace) -> int:
+    """List available measures in a template simulation package (issue #532)."""
+    import json as json_mod  # noqa: PLC0415
+
+    from osimflow import MeasureRegistry  # noqa: PLC0415
+
+    template_path: Path = args.template
+    if not template_path.exists():
+        print(f"error: template path not found: {template_path}", file=sys.stderr)
+        return 1
+    if not template_path.is_dir():
+        print(f"error: template path is not a directory: {template_path}", file=sys.stderr)
+        return 1
+
+    registry = MeasureRegistry()
+    registry.index_measures(template_path)
+    measures = registry.list_available_measures()
+
+    if not measures:
+        measures_dir = template_path / "measures"
+        if measures_dir.is_dir():
+            print(f"No measures found in {measures_dir}")
+        else:
+            print(f"No measures/ directory found in {template_path}")
+        return 0
+
+    if args.format == "json":
+        print(json_mod.dumps(measures, indent=2, default=str))
+        return 0
+
+    # table format (default)
+    print(f"Available Measures in {template_path / 'measures/'}:")
+    print()
+    for m in measures:
+        print(f"  - {m['name']} ({m['language']})")
+        for arg in m.get("arguments", []):
+            default_str = ""
+            if arg.get("default") is not None:
+                default_str = f", default: {arg['default']}"
+            required_str = " [required]" if arg.get("required") else ""
+            print(
+                f"    Args: {arg['name']} [{arg['type']}]{default_str}{required_str}"
+            )
+        if not m.get("arguments"):
+            print("    (no arguments discovered)")
+        print()
+
+    print(f"Total: {len(measures)} measure(s)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -2268,6 +2345,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "restore": _cmd_restore,
         "health": _cmd_health,
         "warm-cache": _cmd_warm_cache,
+        "measure": _cmd_measure_list,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
