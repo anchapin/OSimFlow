@@ -395,6 +395,10 @@
         </div>
         <div class="yaml-preview" id="yaml-preview">variables: []</div>
         <div id="copy-msg" class="success-msg" style="display:none; margin-top:0.5rem;">Copied!</div>
+        <div style="margin-top:1rem; display:flex; gap:0.5rem;">
+          <button class="success small" onclick="useVariablesInCampaign()">Use These Variables</button>
+          <span id="use-msg" class="success-msg" style="display:none;">Variables ready to import! Switch to Campaign Setup tab.</span>
+        </div>
       </div>
     </div>
   </div>
@@ -783,6 +787,21 @@ function copyYaml() {
     msg.style.display = '';
     setTimeout(() => msg.style.display = 'none', 2000);
   });
+}
+
+function useVariablesInCampaign() {
+  const yaml = document.getElementById('yaml-preview').textContent;
+  if (yaml === 'variables: []') {
+    alert('No variables defined yet. Add variables before using them.');
+    return;
+  }
+  const encoded = encodeURIComponent(yaml);
+  // Open the campaign setup page with variables passed via URL hash
+  const setupUrl = '/ui/#variables=' + encoded;
+  window.open(setupUrl, '_blank');
+  const msg = document.getElementById('use-msg');
+  msg.style.display = '';
+  setTimeout(() => msg.style.display = 'none', 4000);
 }
 
 function escapeHtml(str) {
