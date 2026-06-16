@@ -24,13 +24,17 @@ and fetches data from these endpoints, rendering:
 
 from __future__ import annotations
 
+import contextlib
 import io
-import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
@@ -82,7 +86,7 @@ def _numeric_columns(df: pd.DataFrame) -> list[str]:
         for c in df.columns
         if df[c].dtype in ("float64", "int64", "float32", "int32")
         and "sample_id" not in c.lower()
-        and "id" != c.lower()
+        and c.lower() != "id"
     ]
 
 
@@ -135,12 +139,12 @@ def _eui_column(df: pd.DataFrame) -> str | None:
         if candidate in df.columns:
             return candidate
     for col in df.columns:
-        if "eui" in col.lower():
-            return col
+        if "eui" in str(col).lower():
+            return str(col)
     return None
 
 
-def _classify_failure(error_text: str) -> str:
+def _classify_failure(error_text: str) -> str:  # noqa: PLR0911
     """Classify a failure based on error text content."""
     error_lower = error_text.lower()
     if "convergence" in error_lower or "did not converge" in error_lower:
@@ -167,7 +171,7 @@ def _classify_failure(error_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}")  # type: ignore[untyped-decorator]
+@results_viewer_router.get("/results/{campaign_id}")
 async def results_campaign_summary(
     campaign_id: str,
     request: Request,
@@ -195,10 +199,8 @@ async def results_campaign_summary(
     n_cached = sum(1 for s in per_sample if s.get("status") == "cached")
 
     results_df: pd.DataFrame | None = None
-    try:
+    with contextlib.suppress(HTTPException):
         results_df = _load_results_df(campaign_dir)
-    except HTTPException:
-        pass
 
     lhs_columns: list[str] = []
     kpi_columns: list[str] = []
@@ -252,7 +254,7 @@ async def results_campaign_summary(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/scatter")  # type: ignore[untyped-decorator]
+@results_viewer_router.get("/results/{campaign_id}/scatter")
 async def results_scatter(
     campaign_id: str,
     request: Request,
@@ -314,7 +316,7 @@ async def results_scatter(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/histogram")  # type: ignore[untyped-decorator]
+@results_viewer_router.get("/results/{campaign_id}/histogram")
 async def results_histogram(
     campaign_id: str,
     request: Request,
@@ -380,8 +382,8 @@ async def results_histogram(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/timeseries")  # type: ignore[untyped-decorator]
-async def results_timeseries(
+@results_viewer_router.get("/results/{campaign_id}/timeseries")
+async def results_timeseries(  # noqa: PLR0912,PLR0915
     campaign_id: str,
     request: Request,
     variable: str = Query(..., description="Variable name to aggregate across samples"),
@@ -424,10 +426,8 @@ async def results_timeseries(
     if not sim_dirs:
         raise HTTPException(status_code=404, detail="No completed samples with simulation data found")
 
-    import sqlite3
-
     all_series: list[dict[str, Any]] = []
-    for sid, sim_dir in sim_dirs:
+    for _sid, sim_dir in sim_dirs:
         sql_path = sim_dir / "eplusout.sql"
         if not sql_path.exists():
             continue
@@ -451,7 +451,7 @@ async def results_timeseries(
             if not rows:
                 continue
             var_name = rows[0]["VariableName"]
-            units = rows[0]["Units"] or ""
+            rows[0]["Units"] or ""
 
             if resolution == "hourly":
                 group_fmt = "%Y-%m-%d %H:00"
@@ -508,9 +508,7 @@ async def results_timeseries(
     values_by_ts: dict[str, list[float]] = {ts: [] for ts in sorted_ts}
     for s in all_series:
         for ts in sorted_ts:
-            values_by_ts[ts].append(s.get(ts))
-
-    import numpy as np
+            values_by_ts[ts].append(float(s[ts]))
 
     mean_vals = [float(np.nanmean(values_by_ts[ts])) for ts in sorted_ts]
     std_vals = [float(np.nanstd(values_by_ts[ts])) for ts in sorted_ts]
@@ -535,7 +533,7 @@ async def results_timeseries(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/export")  # type: ignore[untyped-decorator]
+@results_viewer_router.get("/results/{campaign_id}/export")
 async def results_export(
     campaign_id: str,
     request: Request,
@@ -591,14 +589,11 @@ async def results_export(
             },
         )
     else:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
-        buf = io.BytesIO()
+        buf_parquet = io.BytesIO()
         table = pa.Table.from_pandas(df)
-        pq.write_table(table, buf)
+        pq.write_table(table, buf_parquet)
         return Response(
-            content=buf.getvalue(),
+            content=buf_parquet.getvalue(),
             media_type="application/octet-stream",
             headers={
                 "Content-Disposition": f'attachment; filename="{campaign_id}_results.parquet"',
@@ -611,7 +606,7 @@ async def results_export(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/failures")  # type: ignore[untyped-decorator]
+@results_viewer_router.get("/results/{campaign_id}/failures")
 async def results_failures(campaign_id: str, request: Request) -> dict[str, Any]:
     """Return the failed simulations table with error classifications."""
     from osimflow.api.campaigns import _campaigns_base_dir  # noqa: PLC0415
@@ -643,7 +638,7 @@ async def results_failures(campaign_id: str, request: Request) -> dict[str, Any]
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/parallel_coordinates")  # type: ignore[untyped-decorator]
+@results_viewer_router.get("/results/{campaign_id}/parallel_coordinates")
 async def results_parallel_coordinates(campaign_id: str, request: Request) -> dict[str, Any]:
     """Return data for a parallel coordinates plot.
 
@@ -693,6 +688,6 @@ async def results_parallel_coordinates(campaign_id: str, request: Request) -> di
 
     return {
         "dimensions": dimensions,
-        "samples": [{"sample_id": sid, "color_value": cv} for sid, cv in zip(sample_ids, color_values)],
+        "samples": [{"sample_id": sid, "color_value": cv} for sid, cv in zip(sample_ids, color_values, strict=False)],
         "color_column": color_col,
     }
