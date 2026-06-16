@@ -591,7 +591,7 @@ async def results_export(
     else:
         buf_parquet = io.BytesIO()
         table = pa.Table.from_pandas(df)
-        pq.write_table(table, buf_parquet)
+        pq.write_table(table, buf_parquet)  # type: ignore[no-untyped-call]
         return Response(
             content=buf_parquet.getvalue(),
             media_type="application/octet-stream",
