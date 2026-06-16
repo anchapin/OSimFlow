@@ -120,6 +120,19 @@ class AmbiguousParameterError(ValueError):
     """
 
 
+class CrossMeasureConflictError(ValueError):
+    """Raised when the same argument is specified for multiple measures.
+
+    When a user specifies both ``MeasureA.argument`` and ``MeasureB.argument``
+    (where both measures have an argument with the same name), this creates
+    a potential runtime conflict because both measures will receive different
+    values for what is effectively the same semantic parameter.
+
+    The error message lists which measures share the conflicting argument
+    and suggests using only one dotted specification.
+    """
+
+
 class OSMAttributeError(ValueError):
     """Raised when a dotted .osm attribute path cannot be resolved."""
 
@@ -610,6 +623,12 @@ def preflight_check(
     # more than one step's arguments in the same .osw. The caller must
     # disambiguate by switching to the dotted form.
     _check_ambiguous_parameters(parameters, mappings)
+    # Detect cross-measure conflicts: when the user specifies the same
+    # argument via two different measures (e.g. both
+    # SetThermostatSchedule.heating_setpoint AND
+    # SetEnvelopePerformance.heating_setpoint). Both are valid individually
+    # but together they represent a potential runtime conflict.
+    _check_cross_measure_conflicts(parameters, mappings)
 
 
 def _check_ambiguous_parameters(
@@ -659,6 +678,62 @@ def _check_ambiguous_parameters(
             "ambiguous (they appear in multiple measures). Use the dotted "
             "form 'MeasureName.argument_name' in variables.yml to "
             "disambiguate:\n" + "\n".join(ambiguous)
+        )
+
+
+def _check_cross_measure_conflicts(
+    parameters: dict[str, Any],
+    mappings: dict[str, MappedParameter],
+) -> None:
+    """Detect when the same argument is specified for multiple measures.
+
+    When a user specifies both ``MeasureA.argument`` AND
+    ``MeasureB.argument`` (where both measures have an argument with the
+    same name), this creates a potential runtime conflict because both
+    measures will receive different values for what is effectively the
+    same semantic parameter.
+
+    Only checks DOTTED keys that appear in *parameters* — we don't warn
+    about dotted names the user isn't actually varying.
+    """
+    # Build a map of dotted name -> (measure_name, plain_arg)
+    # This lets us detect when multiple dotted names share the same
+    # plain argument but target different measures.
+    dotted_params: dict[str, tuple[str, str]] = {}
+    for key in parameters:
+        if "." not in key:
+            continue  # Plain names handled by _check_ambiguous_parameters
+        mapping = mappings.get(key)
+        if mapping is None or mapping.kind != "measure_argument":
+            continue
+        if mapping.measure_name is None:
+            continue
+        # Extract the plain argument name from "MeasureName.arg"
+        _, _, plain_arg = key.rpartition(".")
+        if plain_arg:
+            dotted_params[key] = (mapping.measure_name, plain_arg)
+
+    # Group by plain argument name: arg_name -> list of (dotted_key, measure_name)
+    arg_to_dotted: dict[str, list[tuple[str, str]]] = {}
+    for dotted_key, (measure_name, plain_arg) in dotted_params.items():
+        arg_to_dotted.setdefault(plain_arg, []).append((dotted_key, measure_name))
+
+    conflicts: list[str] = []
+    for plain_arg, dotted_list in arg_to_dotted.items():
+        if len(dotted_list) > 1:
+            measures = sorted(set(measure_name for _, measure_name in dotted_list))
+            dotted_keys = sorted(set(dotted_key for dotted_key, _ in dotted_list))
+            conflicts.append(
+                f"  {plain_arg!r} specified for multiple measures: "
+                f"{', '.join(measures)}. Choose ONE dotted form "
+                f"(e.g. {dotted_keys[0]!r}) to avoid ambiguous runtime behavior."
+            )
+
+    if conflicts:
+        raise CrossMeasureConflictError(
+            "Pre-flight check failed: the same argument is specified for "
+            "multiple measures via dotted names, creating a potential runtime "
+            "conflict:\n" + "\n".join(conflicts)
         )
 
 

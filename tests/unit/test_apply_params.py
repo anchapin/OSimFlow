@@ -19,6 +19,7 @@ import pytest
 
 from osimflow.apply_params import (
     AmbiguousParameterError,
+    CrossMeasureConflictError,
     MappedParameter,
     UnmappedParameterError,
     _mutate_osw,
@@ -393,6 +394,96 @@ class TestPreflightAmbiguous:
             match=r"SetEnvelopePerformance.*SetThermostatSchedule|SetThermostatSchedule.*SetEnvelopePerformance",
         ):
             preflight_check({"heating_setpoint": 19.0}, mappings)
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight: cross-measure conflict detection (issue #431)
+# ---------------------------------------------------------------------------
+class TestPreflightCrossMeasureConflict:
+    """CrossMeasureConflictError fires when the same arg is set for multiple measures."""
+
+    def test_both_dotted_names_raises(self, tmp_path: Path) -> None:
+        """Specifying both dotted names for the same argument raises."""
+        osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
+        mappings = parse_osw_arguments(osw)
+        with pytest.raises(
+            CrossMeasureConflictError,
+            match="heating_setpoint.*SetThermostatSchedule.*SetEnvelopePerformance",
+        ):
+            preflight_check(
+                {
+                    "SetThermostatSchedule.heating_setpoint": 19.0,
+                    "SetEnvelopePerformance.heating_setpoint": 21.0,
+                },
+                mappings,
+            )
+
+    def test_single_dotted_name_no_conflict(self, tmp_path: Path) -> None:
+        """Specifying only one dotted name (even if arg exists in other measure) passes."""
+        osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
+        mappings = parse_osw_arguments(osw)
+        # Should not raise — only one measure is targeted
+        preflight_check(
+            {"SetThermostatSchedule.heating_setpoint": 19.0},
+            mappings,
+        )
+
+    def test_plain_ambiguous_vs_dotted_conflict(self, tmp_path: Path) -> None:
+        """Plain ambiguous name raises AmbiguousParameterError (not CrossMeasureConflictError).
+
+        The ambiguous check runs before the conflict check and catches plain names first.
+        """
+        osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
+        mappings = parse_osw_arguments(osw)
+        # Plain name heating_setpoint is ambiguous — AmbiguousParameterError
+        with pytest.raises(AmbiguousParameterError, match="heating_setpoint"):
+            preflight_check({"heating_setpoint": 19.0}, mappings)
+
+    def test_three_measure_all_specified(self, tmp_path: Path) -> None:
+        """When all three measures share an arg, specifying two dotted forms raises."""
+        osw = _write_osw(tmp_path, THREE_MEASURE_OSW)
+        mappings = parse_osw_arguments(osw)
+        with pytest.raises(
+            CrossMeasureConflictError,
+            match="shared.*MeasureA.*MeasureB",
+        ):
+            preflight_check(
+                {
+                    "MeasureA.shared": 10.0,
+                    "MeasureB.shared": 20.0,
+                },
+                mappings,
+            )
+
+    def test_conflict_error_message_suggests_single_measure(self, tmp_path: Path) -> None:
+        """Error message suggests using just one dotted form."""
+        osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
+        mappings = parse_osw_arguments(osw)
+        with pytest.raises(
+            CrossMeasureConflictError,
+            match=r"Choose ONE.*dotted form",
+        ):
+            preflight_check(
+                {
+                    "SetThermostatSchedule.heating_setpoint": 19.0,
+                    "SetEnvelopePerformance.heating_setpoint": 21.0,
+                },
+                mappings,
+            )
+
+    def test_no_conflict_mixed_dotted_unique_args(self, tmp_path: Path) -> None:
+        """Mixed dotted names for unique args (no overlap) passes."""
+        osw = _write_osw(tmp_path, TWO_MEASURE_OSW)
+        mappings = parse_osw_arguments(osw)
+        # No conflict: SetThermostatSchedule.cooling_setpoint and
+        # SetEnvelopePerformance.wwr are different args
+        preflight_check(
+            {
+                "SetThermostatSchedule.cooling_setpoint": 24.0,
+                "SetEnvelopePerformance.wwr": 0.45,
+            },
+            mappings,
+        )
 
 
 # ---------------------------------------------------------------------------
