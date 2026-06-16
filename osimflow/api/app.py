@@ -40,6 +40,7 @@ from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
+from osimflow.api.results_viewer import results_viewer_router
 from osimflow.api.timeseries import timeseries_router
 from osimflow.api.variables import variables_router
 from osimflow.validation import ValidationError as OsimflowValidationError
@@ -1174,6 +1175,7 @@ def create_app(
     rate_limit: str = "60/minute",
     rate_limit_key: str = "ip",
     ui_enabled: bool = False,
+    results_viewer: bool = False,
     registry_path: Path | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
@@ -1319,6 +1321,15 @@ def create_app(
     app.include_router(files_router)
     app.include_router(timeseries_router)
     app.include_router(variables_router)
+
+    if results_viewer:
+        app.include_router(results_viewer_router)
+
+        @router.get("/results/")  # type: ignore[untyped-decorator]
+        async def results_viewer_redirect() -> RedirectResponse:
+            """Redirect /results/ to the Results Viewer HTML page."""
+            return RedirectResponse(url="/static/results_viewer.html")
+
     app.include_router(measures_router)
 
     # --- Static files for the web GUI (issue #264) ---

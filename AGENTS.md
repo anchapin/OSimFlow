@@ -228,10 +228,13 @@ The 7-step DAG that the `Campaign` class drives:
 - `--max-workers` (local executor parallelism)
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
 - `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
+- `--slurm-cost-per-node-hour` (Slurm cost in USD per node-hour for cost tracking; issue #447)
 - `--aws-batch-queue`, `--aws-batch-job-definition`
 - `--aws-batch-max-spot-price-usd` (Spot price ceiling in USD/vCPU-hour. Issue #131)
 - `--aws-batch-fallback-to-on-demand` (fall back to on-demand when Spot exceeds ceiling or retries exhausted. Issue #131)
 - `--aws-batch-max-retries` (max Spot interruption retries; default 3. Issue #131)
+- `--aws-batch-spot-price` (AWS Batch Spot price in USD per vCPU-hour for cost tracking; issue #447)
+- `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
 - `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-pool-id`, `--azure-batch-location` (Azure Batch executor configuration)
 - `--azure-use-spot`, `--azure-fallback-to-on-demand`, `--azure-max-retries` (Azure spot/preemptible instance handling; issue #352)
 - `--google-batch-project-id`, `--google-batch-region`, `--google-batch-service-account` (Google Cloud Batch executor configuration)
@@ -254,6 +257,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
 - `--byos-resource-limits` (CPU/memory limits for BYOS subprocess wrapper; issue #343)
 - `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
+- `--rate-limit-key` (rate limit key type: `ip` (default), `user`, or `campaign`; issue #445)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
@@ -274,9 +278,13 @@ The 7-step DAG that the `Campaign` class drives:
 - `--log_level`
 - `--alert-destinations` (alert receiver endpoints for campaign events)
 - `--alert-rules` (alert routing rules for campaign events)
-- `--enable-cost-tracking` (enable cloud/HPC resource cost estimation)
-- `--cost-on-demand-price` (on-demand price for cost estimation)
-- `--cost-spot-price` (Spot price for cost estimation)
+- `--enable-cost-tracking` (enable cloud/HPC resource cost estimation; issue #447)
+- `--cost-on-demand-price` (on-demand price per vCPU-hour for cost estimation; issue #447)
+- `--cost-spot-price` (Spot price per vCPU-hour for cost estimation; issue #447)
+- `--track-costs` (enable campaign cost tracking; issue #447)
+- `--aws-batch-spot-price` (AWS Batch Spot price in USD per vCPU-hour for cost tracking; issue #447)
+- `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
+- `--slurm-cost-per-node-hour` (Slurm cost in USD per node-hour for cost tracking; issue #447)
 - `--resource-quota` (resource quota limits for campaign execution)
 
 **Backup subcommand flags** (issue #440):

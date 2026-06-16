@@ -492,9 +492,7 @@ class WorkerRecoveryManager:
         """Reset recovery state for *sample_id* after successful completion."""
         self._recovery_attempts.pop(sample_id, None)
 
-    def check_and_recover(
-        self, sample_id: str, max_retries: int
-    ) -> tuple[bool, int]:
+    def check_and_recover(self, sample_id: str, max_retries: int) -> tuple[bool, int]:
         """Check if *sample_id* is stale and can be recovered.
 
         Returns
