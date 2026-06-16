@@ -22,6 +22,7 @@ from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
