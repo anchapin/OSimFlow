@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from osimflow import (
     AWSBatchExecutor,
@@ -1820,8 +1821,8 @@ def _cmd_warm_cache(args: argparse.Namespace) -> int:
         max_workers=args.max_workers,
         task_queue=task_queue,
     )
-    result = campaign.warm_cache(n_warm=args.n_warm)
-    cache_stats = result["cache_stats"]
+    result: Any = campaign.warm_cache(n_warm=args.n_warm)
+    cache_stats: Any = result["cache_stats"]
     print(
         f"Cache warming complete: {result['n_samples']} samples warm, "
         f"{cache_stats['hits']} cache hits, {cache_stats['misses']} misses, "

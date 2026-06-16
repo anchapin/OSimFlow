@@ -3257,7 +3257,7 @@ class Campaign:
         Generates N pilot samples using the configured sampling algorithm,
         runs ``APPLY_PARAMETERS`` and ``RUN_OPENSTUDIO_SIM`` for each, and
         stores results in the SQLite cache.  When the real campaign starts
-        with the same configuration, those samples will hit the cache instead
+        with the same configuration, those steps will hit the cache instead
         of re-running the simulation.
 
         This method intentionally skips KPI extraction and result aggregation
@@ -3268,22 +3268,38 @@ class Campaign:
             n_warm: number of pilot samples to run (default 10).
 
         Returns:
-            dict with ``n_warmed``, ``n_samples``, and ``cache_stats``.
+            dict with ``n_samples`` and ``cache_stats``.
         """
         log.info("Cache warming: generating %d pilot samples", n_warm)
         algo = AlgorithmRegistry.get(self.cfg.algorithm)
         warm_dir = self.cfg.outdir / ".osimflow_warm"
         warm_dir.mkdir(parents=True, exist_ok=True)
-        pilot_specs = algo.generate_samples(
-            self.cfg.variables, n=n_warm, seed=None, outdir=warm_dir
+
+        # Read variables the same way step_generate_samples does.
+        variables: dict[str, Any] = {}
+        if self.cfg.input_variables.exists():
+            with self.cfg.input_variables.open() as fh:
+                raw = yaml.safe_load(fh)
+                if isinstance(raw, dict):
+                    variables = raw
+
+        # Generate pilot samples — algo.generate_samples returns a Path to samples.json.
+        result_path = algo.generate_samples(
+            variables=variables,
+            n_samples=n_warm,
+            seed=None,
+            outdir=warm_dir,
         )
+        samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
+        pilot_specs: list[SampleSpec] = cast_samples(samples_obj)
+
         log.info(
             "Cache warming: running apply + sim for %d pilot samples (populating cache)",
             len(pilot_specs),
         )
         # Apply parameters for pilot samples — submits to executor, waits,
         # and stores each result in the cache.
-        parameterized = self.step_apply_parameters(pilot_specs)
+        parameterized: SampleDict = self.step_apply_parameters(pilot_specs)
         # Run simulation for pilot samples — submits to executor, waits,
         # and stores each result in the cache.
         self.step_run_openstudio_sim(parameterized, generation=0)
@@ -3294,7 +3310,6 @@ class Campaign:
             stats.hits + stats.misses,
         )
         return {
-            "n_warmed": n_warm,
             "n_samples": len(pilot_specs),
             "cache_stats": {
                 "hits": stats.hits,
