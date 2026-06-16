@@ -381,6 +381,60 @@ class TestDistributedCacheHandleInvalidation:
         dist_cache._handle_invalidation({})
 
 
+class TestDistributedCacheAutoRecovery:
+    """Test auto-recovery of the Redis subscriber thread (issue #443)."""
+
+    @pytest.fixture
+    def dist_cache(self, tmp_path: Path) -> DistributedCache:
+        mock_ra = AsyncMock()
+        with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
+            return DistributedCache(
+                db_path=tmp_path / "dist_recovery.sqlite",
+                redis_url="redis://localhost:6379/0",
+                campaign_id="test-auto-recovery",
+            )
+
+    def test_subscriber_reconnect_delay_doubles_on_error(
+        self, dist_cache: DistributedCache, tmp_path: Path
+    ) -> None:
+        """Reconnect delay doubles after each error, capped at 60s."""
+
+        async def mock_get_message(timeout: float = 1.0, ignore_subscribe_messages: bool = True):
+            raise ConnectionError("Redis connection lost")
+
+        mock_pubsub = AsyncMock()
+        mock_pubsub.get_message = mock_get_message
+        mock_pubsub.subscribe = AsyncMock()
+
+        async def mock_pubsub_context():
+            return mock_pubsub
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.pubsub = mock_pubsub_context
+        mock_client_instance.aclose = AsyncMock()
+
+        sleep_delays: list[float] = []
+
+        async def mock_sleep(delay: float) -> None:
+            sleep_delays.append(delay)
+
+        mock_ra = MagicMock()
+        mock_ra.from_url.return_value = mock_client_instance
+
+        with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
+            with patch("asyncio.sleep", mock_sleep):
+                dist_cache.invalidate_step("STEP_A")
+                import time
+
+                time.sleep(0.3)
+                dist_cache.close()
+
+        assert len(sleep_delays) >= 2
+        assert sleep_delays[0] <= 2.0
+        assert sleep_delays[1] <= 4.0
+        assert sleep_delays[1] >= sleep_delays[0]
+
+
 class TestDistributedCacheConcurrent:
     """Test concurrent access to DistributedCache."""
 

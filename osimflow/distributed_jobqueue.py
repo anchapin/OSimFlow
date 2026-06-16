@@ -163,10 +163,10 @@ class DistributedJobQueue:
         return self._redis_client
 
     # ------------------------------------------------------------------
-    # Subscriber thread
+    # Subscriber thread with auto-recovery (issue #443)
     # ------------------------------------------------------------------
     def _start_subscriber(self) -> None:
-        """Start the background subscriber thread (idempotent)."""
+        """Start the background subscriber thread with auto-recovery (idempotent)."""
         if self._subscriber_thread is not None:
             return
 
@@ -176,50 +176,64 @@ class DistributedJobQueue:
             redis_async = _get_redis_asyncio()
 
             async def _main() -> None:
-                client = redis_async.from_url(
-                    self._redis_url,
-                    encoding="utf-8",
-                    decode_responses=True,
-                )
-                try:
-                    log.info(
-                        "DistributedJobQueue subscriber started for campaign=%s channel=%s",
-                        self._campaign_id,
-                        self._channel,
+                reconnect_delay = 1.0
+                max_reconnect_delay = 60.0
+
+                while not self._stop_subscriber.is_set():
+                    client = redis_async.from_url(
+                        self._redis_url,
+                        encoding="utf-8",
+                        decode_responses=True,
                     )
-                    async with client.pubsub() as pubsub:
-                        await pubsub.subscribe(self._channel)
-                        while not self._stop_subscriber.is_set():
-                            msg = await pubsub.get_message(
-                                timeout=1.0,
-                                ignore_subscribe_messages=True,
-                            )
-                            if msg is None:
-                                continue
-                            data = msg.get("data")
-                            if data is None:
-                                continue
-                            try:
-                                payload = json.loads(data)
-                            except (json.JSONDecodeError, TypeError):
-                                log.warning(
-                                    "DistributedJobQueue: received non-JSON message: %r",
-                                    data,
+                    try:
+                        log.info(
+                            "DistributedJobQueue subscriber started for campaign=%s channel=%s",
+                            self._campaign_id,
+                            self._channel,
+                        )
+                        async with client.pubsub() as pubsub:
+                            await pubsub.subscribe(self._channel)
+                            # Reset reconnect delay on successful subscription.
+                            reconnect_delay = 1.0
+                            while not self._stop_subscriber.is_set():
+                                msg = await pubsub.get_message(
+                                    timeout=1.0,
+                                    ignore_subscribe_messages=True,
                                 )
-                                continue
-                            self._handle_action(payload)
-                except Exception as exc:
-                    log.warning(
-                        "DistributedJobQueue subscriber error (campaign=%s): %s — re-connecting",
-                        self._campaign_id,
-                        exc,
-                    )
-                finally:
-                    await client.aclose()
-                    log.info(
-                        "DistributedJobQueue subscriber stopped for campaign=%s",
-                        self._campaign_id,
-                    )
+                                if msg is None:
+                                    continue
+                                data = msg.get("data")
+                                if data is None:
+                                    continue
+                                try:
+                                    payload = json.loads(data)
+                                except (json.JSONDecodeError, TypeError):
+                                    log.warning(
+                                        "DistributedJobQueue: received non-JSON message: %r",
+                                        data,
+                                    )
+                                    continue
+                                self._handle_action(payload)
+                    except Exception as exc:
+                        if self._stop_subscriber.is_set():
+                            break
+                        log.warning(
+                            "DistributedJobQueue subscriber error (campaign=%s): %s — reconnecting in %.1fs",
+                            self._campaign_id,
+                            exc,
+                            reconnect_delay,
+                        )
+                        await client.aclose()
+                        await asyncio.sleep(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+                        continue
+                    finally:
+                        if not self._stop_subscriber.is_set():
+                            await client.aclose()
+                        log.info(
+                            "DistributedJobQueue subscriber stopped for campaign=%s",
+                            self._campaign_id,
+                        )
 
             asyncio.run(_main())
 
