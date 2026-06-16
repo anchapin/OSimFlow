@@ -272,7 +272,9 @@ class TestRBACWriteOperations:
             json={"name": "wwr", "distribution": "uniform", "min": 0.1, "max": 0.6},
             headers={"X-API-Key": "rw-key"},
         )
-        assert resp.status_code == 201, f"Readwrite should be able to create variables: {resp.json()}"
+        assert resp.status_code == 201, (
+            f"Readwrite should be able to create variables: {resp.json()}"
+        )
 
     def test_readonly_cannot_create_variables(self, tmp_outdir: Path, tmp_path: Path) -> None:
         """Readonly users get 403 when creating variables."""
@@ -391,7 +393,9 @@ class TestRBACWriteOperations:
             json={"osa_path": "/some/path.osa", "template_sim_package": "/tmp/pkg"},
             headers={"X-API-Key": "admin-key"},
         )
-        assert resp.status_code in (201, 400, 422), f"Admin should be able to call PAT endpoint: {resp.json()}"
+        assert resp.status_code in (201, 400, 422), (
+            f"Admin should be able to call PAT endpoint: {resp.json()}"
+        )
 
     def test_single_key_admin_can_write(self, tmp_outdir: Path) -> None:
         """Single API key mode grants admin access for writes."""

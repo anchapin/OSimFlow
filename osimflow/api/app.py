@@ -517,7 +517,18 @@ async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
                 errors.append(f"{script_field} is not a file: {p}")
 
     # --- Algorithm sanity ---
-    valid_algorithms = {"lhs", "sobol", "halton", "morris", "fast99", "de", "da", "ga", "nsga2", "pso"}
+    valid_algorithms = {
+        "lhs",
+        "sobol",
+        "halton",
+        "morris",
+        "fast99",
+        "de",
+        "da",
+        "ga",
+        "nsga2",
+        "pso",
+    }
     if req.algorithm.lower() not in valid_algorithms:
         warnings.append(
             f"algorithm '{req.algorithm}' may not be recognised — "
