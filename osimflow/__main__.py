@@ -1592,6 +1592,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         rate_limit=args.rate_limit,
         rate_limit_key=args.rate_limit_key,
         ui_enabled=args.ui,
+        results_viewer=args.dashboard,
         registry_path=args.registry,
     )
     if args.host not in ("127.0.0.1", "localhost"):
