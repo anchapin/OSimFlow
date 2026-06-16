@@ -118,6 +118,22 @@ CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 
 
+class QuotaExceededError(RuntimeError):
+    """Raised when a campaign resource quota is exceeded (issue #446)."""
+
+    def __init__(
+        self,
+        message: str,
+        quota_type: str,
+        limit: int | float,
+        current: int | float,
+    ) -> None:
+        super().__init__(message)
+        self.quota_type = quota_type
+        self.limit = limit
+        self.current = current
+
+
 # Type aliases — these are the schemas of intermediate DAG outputs.
 class SampleSpec(TypedDict):
     sample_id: str
@@ -2953,10 +2969,70 @@ class Campaign:
         self._obs.record_step_duration("GENERATE_BASIC_PLOTS", elapsed)
         return result
 
+    def warm_cache(self, n_warm: int = 10) -> dict[str, object]:
+        """Run N pilot samples to pre-populate the cache before a campaign.
+
+        Generates N pilot samples using the configured sampling algorithm,
+        runs ``APPLY_PARAMETERS`` and ``RUN_OPENSTUDIO_SIM`` for each, and
+        stores results in the SQLite cache.  When the real campaign starts
+        with the same configuration, those steps will hit the cache instead
+        of re-running the simulation.
+
+        This method intentionally skips KPI extraction and result aggregation
+        — those steps are not cached and running them for pilot samples would
+        add latency for no cache benefit.
+
+        Args:
+            n_warm: number of pilot samples to run (default 10).
+
+        Returns:
+            dict with ``n_samples`` and ``cache_stats``.
+        """
+        log.info("Cache warming: generating %d pilot samples", n_warm)
+        algo = AlgorithmRegistry.get(self.cfg.algorithm)
+        warm_dir = self.cfg.outdir / ".osimflow_warm"
+        warm_dir.mkdir(parents=True, exist_ok=True)
+
+        variables: dict[str, Any] = {}
+        if self.cfg.input_variables.exists():
+            with self.cfg.input_variables.open() as fh:
+                raw = yaml.safe_load(fh)
+                if isinstance(raw, dict):
+                    variables = raw
+
+        result_path = algo.generate_samples(
+            variables=variables,
+            n_samples=n_warm,
+            seed=None,
+            outdir=warm_dir,
+        )
+        samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
+        pilot_specs: list[SampleSpec] = cast_samples(samples_obj)
+
+        log.info(
+            "Cache warming: running apply + sim for %d pilot samples (populating cache)",
+            len(pilot_specs),
+        )
+        parameterized: SampleDict = self.step_apply_parameters(pilot_specs)
+        self.step_run_openstudio_sim(parameterized, generation=0)
+        stats = self.cache.get_stats()
+        log.info(
+            "Cache warming complete: %d/%d steps cached",
+            stats.hits,
+            stats.hits + stats.misses,
+        )
+        return {
+            "n_samples": len(pilot_specs),
+            "cache_stats": {
+                "hits": stats.hits,
+                "misses": stats.misses,
+                "total_keys": stats.total_keys,
+            },
+        }
+
 
 # ---------------------------------------------------------------------------
 # MLflow param view (issue #7)
-# ---------------------------------------------------------------------------
 def _make_mlflow_param_view(cfg: CampaignConfig, executor_name: str) -> SimpleNamespace:
     """Build a small adapter for `log_mlflow_params`.
 
