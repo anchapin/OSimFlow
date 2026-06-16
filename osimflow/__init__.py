@@ -27,6 +27,7 @@ from .chaos import (
 )
 from .config import CampaignConfig, ResourceQuota, coerce_variable_type, load_config
 from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
+from .data_point_manager import DataPoint, DataPointManager, DataPointStatus
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
@@ -149,6 +150,10 @@ __all__ = [
     "CostEstimate",
     "CostTracker",
     "CampaignCostSummary",
+    # Data point lifecycle management (#418, #419, #420)
+    "DataPoint",
+    "DataPointManager",
+    "DataPointStatus",
     # EPW validation
     "EPWValidationError",
     "EPWDownloadError",
