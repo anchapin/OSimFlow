@@ -80,6 +80,107 @@ def _get_real_remote_address(request: Request) -> str:
     return get_remote_address(request)  # type: ignore[no-any-return]
 
 
+# Campaign ID extraction regex for per-campaign rate limiting (issue #445)
+_CAMPAIGN_ID_RE: re.Pattern[str] = re.compile(r"^/api/v1/campaigns/([^/]+)")
+
+
+def _get_api_key_from_request(request: Request) -> str | None:
+    """Extract the API key from a request for per-user rate limiting (issue #445).
+
+    Checks the ``X-API-Key`` header first, then the ``api_key`` query
+    parameter.  Returns ``None`` if neither is present.
+    """
+    header_key = request.headers.get("X-API-Key")
+    if header_key:
+        return str(header_key)
+    query_key = request.query_params.get("api_key")
+    if query_key:
+        return str(query_key)
+    return None
+
+
+def _get_campaign_id_from_request(request: Request) -> str | None:
+    """Extract the campaign ID from the request URL path for per-campaign rate limiting (issue #445).
+
+    Handles both legacy single-campaign mode (no campaign ID in path) and
+    multi-campaign mode where the path is like /api/v1/campaigns/{campaign_id}/...
+    """
+    match = _CAMPAIGN_ID_RE.match(request.url.path)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _make_per_user_key_func(
+    app_state_key_store_attr: str = "api_key_store",
+) -> Callable[[Request], str]:
+    """Create a key function that rate limits by authenticated user (issue #445).
+
+    Uses the API key to identify users.  Falls back to IP address when
+    no API key is provided or when per-user limiting is not applicable
+    (e.g., in single-key mode where all users are treated as "default").
+
+    The key store is read from ``request.app.state.{app_state_key_store_attr}``
+    at dispatch time to avoid capturing a reference at construction time.
+    """
+
+    def key_func(request: Request) -> str:
+        api_key = _get_api_key_from_request(request)
+        if api_key:
+            # Use the API key itself as the rate limit key.
+            # In multi-user mode, each key maps to a specific user.
+            return f"user:{api_key}"
+        # Fall back to IP address when no API key is provided.
+        return _get_real_remote_address(request)
+
+    return key_func
+
+
+def _make_per_campaign_key_func(
+    app_state_campaigns_base_dir_attr: str = "campaigns_base_dir",
+) -> Callable[[Request], str]:
+    """Create a key function that rate limits by campaign (issue #445).
+
+    Extracts the campaign ID from the URL path for multi-campaign mode.
+    Falls back to IP address when no campaign ID is available
+    (e.g., legacy single-campaign endpoints like /api/v1/campaign).
+    """
+
+    def key_func(request: Request) -> str:
+        campaign_id = _get_campaign_id_from_request(request)
+        if campaign_id:
+            return f"campaign:{campaign_id}"
+        # Fall back to IP address when no campaign ID is in the path.
+        return _get_real_remote_address(request)
+
+    return key_func
+
+
+def _get_rate_limit_key_func(
+    rate_limit_key: str,
+) -> Callable[[Request], str]:
+    """Get the appropriate rate limit key function based on the configured mode (issue #445).
+
+    Parameters
+    ----------
+    rate_limit_key
+        One of ``"ip"`` (default, per-IP limiting),
+        ``"user"`` (per-API-key limiting), or
+        ``"campaign"`` (per-campaign-ID limiting).
+
+    Returns
+    -------
+    Callable[[Request], str]
+        A key function that maps a request to a rate limit bucket key.
+    """
+    if rate_limit_key == "user":
+        return _make_per_user_key_func()
+    elif rate_limit_key == "campaign":
+        return _make_per_campaign_key_func()
+    else:
+        return _get_real_remote_address
+
+
 # ---------------------------------------------------------------------------
 # Rate limiting (issue #454 — replaces slowapi middleware)
 # ---------------------------------------------------------------------------
@@ -1071,6 +1172,7 @@ def create_app(
     api_keys_file: Path | None = None,
     cors_origins: list[str] | None = None,
     rate_limit: str = "60/minute",
+    rate_limit_key: str = "ip",
     ui_enabled: bool = False,
     registry_path: Path | None = None,
 ) -> FastAPI:
@@ -1116,6 +1218,10 @@ def create_app(
         origins.
     rate_limit
         Rate limit string, e.g. ``"60/minute"`` (default ``"60/minute"``).
+    rate_limit_key
+        Rate limit key type: ``"ip"`` (default, per-IP limiting),
+        ``"user"`` (per-API-key limiting, issue #445), or
+        ``"campaign"`` (per-campaign-ID limiting, issue #445).
     ui_enabled
         Enable the web UI router (issue #337).
     registry_path
@@ -1178,7 +1284,7 @@ def create_app(
             allow_headers=["X-API-Key", "Content-Type"],
         )
 
-    # --- Rate limiting (issue #454) ---
+    # --- Rate limiting (issue #454, #445) ---
     # Custom in-process middleware replaces slowapi's SlowAPIMiddleware,
     # which did not reliably maintain its counter between sequential
     # TestClient requests under pytest-xdist in CI.
@@ -1189,16 +1295,18 @@ def create_app(
     #   2. add RateLimitMiddleware   ← runs after auth
     #   3. add APIKeyMiddleware      ← outermost, runs first
     # Result: APIKey(RateLimit(CORS(router)))
+    key_func = _get_rate_limit_key_func(rate_limit_key)
     app.add_middleware(
         RateLimitMiddleware,
         rate_limit=rate_limit,
-        key_func=_get_real_remote_address,
+        key_func=key_func,
     )
 
     # Store a reference for tests / introspection.  The actual
     # middleware instance is created lazily by Starlette's
     # add_middleware, so we expose the configured rate-limit string.
     app.state.limiter = rate_limit  # type: ignore[assignment]
+    app.state.rate_limit_key = rate_limit_key  # type: ignore[assignment]
 
     # --- Authentication middleware (outermost — runs first) ---
     app.add_middleware(APIKeyMiddleware)

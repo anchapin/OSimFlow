@@ -946,6 +946,58 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "and log (level). When not set, alerts are only logged."
         ),
     )
+    run.add_argument(
+        "--track-costs",
+        action="store_true",
+        help=(
+            "Enable campaign cost tracking (issue #447). "
+            "Estimates cloud/HPC resource costs and writes a cost summary JSON "
+            "alongside campaign outputs. Supports AWS Batch (on-demand/Spot), "
+            "Slurm (per-node-hour), and Local (no cost) executors."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-spot-price",
+        type=float,
+        default=None,
+        help=(
+            "AWS Batch Spot price in USD per vCPU-hour for cost tracking "
+            "(issue #447). When set alongside --track-costs, this rate is used "
+            "instead of the default $0.0036/vCPU·hr to estimate Spot savings. "
+            "The on-demand rate is set via --aws-batch-on-demand-price."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-on-demand-price",
+        type=float,
+        default=None,
+        help=(
+            "AWS Batch on-demand price in USD per vCPU-hour for cost tracking "
+            "(issue #447). When set alongside --track-costs, this rate is used "
+            "instead of the default $0.0132/vCPU·hr to estimate job costs."
+        ),
+    )
+    run.add_argument(
+        "--slurm-cost-per-node-hour",
+        type=float,
+        default=None,
+        help=(
+            "Slurm cost in USD per node-hour for cost tracking (issue #447). "
+            "When set alongside --track-costs, this rate is used instead of the "
+            "default $0.10/node·hr to estimate job costs."
+        ),
+    )
+    run.add_argument(
+        "--rate-limit-key",
+        choices=["ip", "user", "campaign"],
+        default="ip",
+        help=(
+            "Rate limit key type for per-user or per-campaign rate limiting (issue #445). "
+            '"ip" = per-IP address limiting (default). '
+            '"user" = per-API-key limiting (requires --api-keys-file or API key in X-API-Key header). '
+            '"campaign" = per-campaign-ID limiting (uses campaign ID from URL path).'
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
@@ -1049,6 +1101,16 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         "--rate-limit",
         default="60/minute",
         help="Rate limit string, e.g. '60/minute' (default: 60/minute).",
+    )
+    serve.add_argument(
+        "--rate-limit-key",
+        default="ip",
+        choices=["ip", "user", "campaign"],
+        help=(
+            "Rate limit key type: 'ip' (default, per-IP limiting), "
+            "'user' (per-API-key limiting, issue #445), or "
+            "'campaign' (per-campaign-ID limiting, issue #445)."
+        ),
     )
     serve.add_argument(
         "--tls-cert",
@@ -1528,6 +1590,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         api_keys_file=api_keys_file,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
+        rate_limit_key=args.rate_limit_key,
         ui_enabled=args.ui,
         registry_path=args.registry,
     )
