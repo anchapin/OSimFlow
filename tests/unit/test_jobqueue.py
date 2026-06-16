@@ -298,3 +298,59 @@ class TestPayloadPreservation:
         recovered = q.recover()
         assert len(recovered) == 1
         assert recovered[0]["payload"] == payload
+
+
+class TestPriority:
+    """Priority support for job dequeue ordering."""
+
+    def test_default_priority_is_zero(self, q):
+        """Jobs without explicit priority default to 0."""
+        q.enqueue("job_1", {"step": "SIM"})
+        rec = q.dequeue()
+        assert rec is not None
+        assert rec["priority"] == 0
+
+    def test_higher_priority_dequeued_first(self, q):
+        """Jobs with higher priority values are dequeued first."""
+        q.enqueue("low", {"step": "SIM"}, priority=1)
+        time.sleep(0.01)
+        q.enqueue("high", {"step": "SIM"}, priority=10)
+        time.sleep(0.01)
+        q.enqueue("medium", {"step": "SIM"}, priority=5)
+        rec = q.dequeue()
+        assert rec is not None
+        assert rec["id"] == "high"
+
+    def test_equal_priority_fifo(self, q):
+        """Jobs with equal priority follow FIFO ordering by created_at."""
+        q.enqueue("first", {"step": "SIM"}, priority=5)
+        time.sleep(0.01)
+        q.enqueue("second", {"step": "SIM"}, priority=5)
+        rec = q.dequeue()
+        assert rec is not None
+        assert rec["id"] == "first"
+        rec = q.dequeue()
+        assert rec is not None
+        assert rec["id"] == "second"
+
+    def test_priority_in_job_record(self, q):
+        """Priority is preserved in the job record."""
+        q.enqueue("job_1", {"step": "SIM"}, priority=42)
+        jobs = q.pending_jobs()
+        assert len(jobs) == 1
+        assert jobs[0]["priority"] == 42
+
+    def test_priority_negative(self, q):
+        """Negative priority values are supported (lower than default)."""
+        q.enqueue("lowest", {"step": "SIM"}, priority=-5)
+        q.enqueue("normal", {"step": "SIM"}, priority=0)
+        q.enqueue("high", {"step": "SIM"}, priority=10)
+        rec = q.dequeue()
+        assert rec is not None
+        assert rec["id"] == "high"
+        rec = q.dequeue()
+        assert rec is not None
+        assert rec["id"] == "normal"
+        rec = q.dequeue()
+        assert rec is not None
+        assert rec["id"] == "lowest"
