@@ -24,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
+from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
     FileDeleteResponse,
     FileInfo,
@@ -208,10 +209,10 @@ async def upload_file(
 
     Returns the file ID, path, and metadata.
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="File upload requires --enable-writes mode",
+            detail="File upload requires readwrite permission",
         )
 
     if file.filename is None:
@@ -405,10 +406,10 @@ async def delete_file(
 
     Requires ``--enable-writes`` mode.
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="File deletion requires --enable-writes mode",
+            detail="File deletion requires readwrite permission",
         )
 
     uploads_dir = _uploads_base_dir(request)
