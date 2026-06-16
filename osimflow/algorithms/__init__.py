@@ -186,6 +186,24 @@ class BaseAlgorithm(abc.ABC):
         """
         return False
 
+    def configure(self, config: Any) -> None:  # noqa: B027
+        """Configure the algorithm with campaign-level settings (issue #529).
+
+        Called by ``Campaign`` after algorithm instantiation but before
+        the first ``generate_samples()`` call.  Algorithms that need
+        campaign-level configuration (e.g. R-NSGA-II reference points)
+        can override this method.
+
+        The default implementation is a no-op.
+
+        Parameters
+        ----------
+        config
+            The ``CampaignConfig`` instance containing algorithm-specific
+            settings (e.g. ``nsga2_ref_points``, ``nsga2_ref_dirs_strategy``).
+        """
+        pass  # noqa: B027
+
     def compute_sensitivity_indices(
         self,
         variables: dict[str, Any],

@@ -817,6 +817,170 @@ class TestPSOEdgeCases:
         assert len(new_samples2) > 0
 
 
+class TestRNSGA2:
+    """Tests for R-NSGA-II reference point adaptation (issue #529)."""
+
+    def test_parse_ref_points_string_two_obj_three_points(self) -> None:
+        """parse_ref_points_string correctly parses 3 ref points for 2-objective."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"])
+        ref = algo._parse_ref_points_string("0.25,0.75,0.5,0.5,0.75,0.25", n_obj=2)
+        assert ref.shape == (3, 2)
+        np.testing.assert_array_almost_equal(ref[0], [0.25, 0.75])
+        np.testing.assert_array_almost_equal(ref[1], [0.5, 0.5])
+        np.testing.assert_array_almost_equal(ref[2], [0.75, 0.25])
+
+    def test_parse_ref_points_string_single_point(self) -> None:
+        """parse_ref_points_string correctly parses a single ref point."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"])
+        ref = algo._parse_ref_points_string("0.3,0.7", n_obj=2)
+        assert ref.shape == (1, 2)
+        np.testing.assert_array_almost_equal(ref[0], [0.3, 0.7])
+
+    def test_parse_ref_points_string_empty(self) -> None:
+        """parse_ref_points_string handles empty input."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"])
+        ref = algo._parse_ref_points_string("", n_obj=2)
+        assert ref.shape == (0, 2)
+
+    def test_parse_ref_points_string_malformed_divisible(self) -> None:
+        """parse_ref_points_string handles length not divisible by n_obj."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"])
+        ref = algo._parse_ref_points_string("0.25,0.75,0.5", n_obj=2)
+        assert ref.shape == (1, 2)
+        np.testing.assert_array_almost_equal(ref[0], [0.25, 0.75])
+
+    def test_configure_no_ref_points(self) -> None:
+        """configure() with no ref_points leaves _ref_points as None."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        class FakeConfig:
+            nsga2_ref_points = None
+            nsga2_ref_dirs_strategy = None
+
+        algo = NSGA2Algorithm()
+        algo.configure(FakeConfig())
+        assert algo._ref_points is None
+
+    def test_configure_explicit_ref_points(self) -> None:
+        """configure() parses explicit comma-separated ref point coordinates."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        class FakeConfig:
+            nsga2_ref_points = "0.25,0.75,0.5,0.5"
+            nsga2_ref_dirs_strategy = None
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"])
+        algo.configure(FakeConfig())
+        assert algo._ref_points is not None
+        assert algo._ref_points.shape == (2, 2)
+        assert algo._ref_dirs_strategy is None
+
+    def test_configure_das_dennis_strategy(self) -> None:
+        """configure() with das_dennis strategy generates ref directions."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        class FakeConfig:
+            nsga2_ref_points = "3"
+            nsga2_ref_dirs_strategy = "das_dennis"
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"])
+        algo.configure(FakeConfig())
+        assert algo._ref_points is not None
+        assert algo._ref_points.shape[1] == 2
+        assert algo._ref_dirs_strategy == "das_dennis"
+
+    def test_configure_das_dennis_three_obj(self) -> None:
+        """configure() generates correct das_dennis ref dirs for 3 objectives."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        class FakeConfig:
+            nsga2_ref_points = "2"
+            nsga2_ref_dirs_strategy = "das_dennis"
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2", "f3"])
+        algo.configure(FakeConfig())
+        assert algo._ref_points is not None
+        assert algo._ref_points.shape[1] == 3
+
+    def test_observe_with_rnsga2_uses_ref_points(
+        self,
+        simple_variables: dict[str, Any],
+        tmp_outdir: Path,
+    ) -> None:
+        """observe() uses RNSGA2 when _ref_points is set (issue #529)."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        class FakeConfig:
+            nsga2_ref_points = "0.25,0.75,0.5,0.5,0.75,0.25"
+            nsga2_ref_dirs_strategy = None
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"], pop_size=10)
+        algo.configure(FakeConfig())
+        assert algo._ref_points is not None
+        assert algo._ref_points.shape == (3, 2)
+
+        samples_path = algo.generate_samples(
+            simple_variables, n_samples=10, seed=42, outdir=tmp_outdir
+        )
+        samples = json.loads(samples_path.read_text())["samples"]
+
+        kpi_files: list[str] = []
+        for s in samples:
+            x0 = s["values"]["wall_r"]
+            x0_norm = (x0 - 1.0) / 9.0
+            f1 = x0_norm
+            f2 = 1.0 - np.sqrt(max(x0_norm, 0.0))
+            kpi_path = _make_kpi_file(tmp_outdir, s["sample_id"], {"f1": f1, "f2": f2})
+            kpi_files.append(str(kpi_path))
+
+        history_entry: dict[str, Any] = {
+            "samples": samples,
+            "kpi_files": kpi_files,
+        }
+        new_samples = algo.observe([history_entry])
+        assert len(new_samples) > 0
+
+    def test_observe_falls_back_to_nsga2_without_ref_points(
+        self,
+        simple_variables: dict[str, Any],
+        tmp_outdir: Path,
+    ) -> None:
+        """observe() uses NSGA2 when _ref_points is None."""
+        from osimflow.algorithms.nsga2 import NSGA2Algorithm
+
+        algo = NSGA2Algorithm(objective_kpis=["f1", "f2"], pop_size=10)
+        assert algo._ref_points is None
+
+        samples_path = algo.generate_samples(
+            simple_variables, n_samples=10, seed=42, outdir=tmp_outdir
+        )
+        samples = json.loads(samples_path.read_text())["samples"]
+
+        kpi_files: list[str] = []
+        for s in samples:
+            x0 = s["values"]["wall_r"]
+            x0_norm = (x0 - 1.0) / 9.0
+            f1 = x0_norm
+            f2 = 1.0 - np.sqrt(max(x0_norm, 0.0))
+            kpi_path = _make_kpi_file(tmp_outdir, s["sample_id"], {"f1": f1, "f2": f2})
+            kpi_files.append(str(kpi_path))
+
+        history_entry: dict[str, Any] = {
+            "samples": samples,
+            "kpi_files": kpi_files,
+        }
+        new_samples = algo.observe([history_entry])
+        assert len(new_samples) > 0
+
+
 class TestPyprojectOptimizationExtra:
     """Verify that pyproject.toml declares the [optimization] extra."""
 

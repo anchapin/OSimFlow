@@ -625,6 +625,18 @@ class CampaignConfig:
     # Example: ['eui=150', 'cooling=5000']
     uq_failure_thresholds: list[str] | None = None
 
+    # R-NSGA-II reference points (issue #529). Comma-separated fractions
+    # along the Pareto front for 2-objective problems, or explicit reference
+    # point coordinates for higher dimensions. When set, the NSGA2Algorithm
+    # uses pymoo's RNSGA2 with these reference points instead of standard
+    # crowding distance. Example: "0.25,0.5,0.75" for three reference points.
+    nsga2_ref_points: str | None = None
+    # R-NSGA-II reference direction generation strategy (issue #529).
+    # When set alongside nsga2_ref_points, the specified reference direction
+    # strategy is used to generate reference points. Supported values:
+    # "das_dennis" (Das-Dennis decomposition), "wedge" (wedge pattern),
+    # "adaptive" (adaptive update during evolution).
+    nsga2_ref_dirs_strategy: str | None = None
     @property
     def work_dir(self) -> Path:
         return self.outdir / "work"
@@ -929,4 +941,6 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             if args.get("uq_failure_thresholds")
             else None
         ),
+        nsga2_ref_points=str(args["nsga2_ref_points"]) if args.get("nsga2_ref_points") else None,
+        nsga2_ref_dirs_strategy=str(args["nsga2_ref_dirs_strategy"]) if args.get("nsga2_ref_dirs_strategy") else None,
     )

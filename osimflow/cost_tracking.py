@@ -21,7 +21,7 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    pass
+    from .storage import ResultStorage, build_result_storage
 
 import logging
 
@@ -275,3 +275,77 @@ class CostTracker:
             "executor": self.executor,
             "estimates": {sid: est.to_dict() for sid, est in self._estimates.items()},
         }
+
+
+# Factory
+# ---------------------------------------------------------------------------
+
+
+def build_cost_tracker(
+    campaign_id: str,
+    executor_type: str,
+    result_storage_backend: str = "local",
+    result_storage_bucket: str = "",
+    result_storage_prefix: str = "",
+    result_storage_endpoint: str | None = None,
+    *,
+    track_costs: bool = False,
+    aws_on_demand_per_vcpu_hour: float = DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
+    aws_spot_per_vcpu_hour: float = DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
+    slurm_cost_per_node_hour: float = DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
+) -> "CostTracker | None":
+    """Factory: build a CostTracker if cost tracking is enabled.
+
+    Parameters
+    ----------
+    campaign_id
+        Unique campaign identifier.
+    executor_type
+        Name of the executor (e.g. ``"aws_batch"``, ``"slurm"``).
+    result_storage_backend
+        One of ``"local"``, ``"s3"``, ``"gs"``, ``"azure"``.
+    result_storage_bucket
+        Bucket/container name for remote backends.
+    result_storage_prefix
+        Prefix for remote paths.
+    result_storage_endpoint
+        S3-compatible endpoint URL (for MinIO, R2, etc.).
+    track_costs
+        If False, returns None (cost tracking disabled).
+    aws_on_demand_per_vcpu_hour
+        Custom AWS Batch on-demand price.
+    aws_spot_per_vcpu_hour
+        Custom AWS Batch Spot price.
+    slurm_cost_per_node_hour
+        Custom Slurm per-node-hour price.
+
+    Returns
+    -------
+    CostTracker or None
+        None when ``track_costs`` is False.
+    """
+    if not track_costs:
+        return None
+
+    from .storage import ResultStorage, build_result_storage
+
+    storage: ResultStorage | None = None
+    if result_storage_backend != "local":
+        try:
+            storage = build_result_storage(
+                backend=result_storage_backend,
+                bucket=result_storage_bucket,
+                prefix=result_storage_prefix,
+                endpoint_url=result_storage_endpoint,
+            )
+        except Exception as exc:
+            log.warning("could not build ResultStorage for cost tracking: %s", exc, exc_info=True)
+
+    return CostTracker(
+        campaign_id=campaign_id,
+        executor_type=executor_type,
+        result_storage=storage,
+        aws_on_demand_per_vcpu_hour=aws_on_demand_per_vcpu_hour,
+        aws_spot_per_vcpu_hour=aws_spot_per_vcpu_hour,
+        slurm_cost_per_node_hour=slurm_cost_per_node_hour,
+    )
