@@ -77,9 +77,7 @@ class TestScanPythonFile:
 
     def test_skips_builtins(self, tmp_path: Path) -> None:
         py = tmp_path / "measure.py"
-        py.write_text(
-            "import os\nimport sys\nimport re\nimport logging\nimport openstudio\n"
-        )
+        py.write_text("import os\nimport sys\nimport re\nimport logging\nimport openstudio\n")
         assert _scan_python_file(py) == set()
 
     def test_comment_not_extracted(self, tmp_path: Path) -> None:
@@ -183,9 +181,7 @@ class TestResolveMeasureDependencies:
         assert "nonexistent_python_pkg_xyz" in str(exc_info.value)
         assert exc_info.value.measure_name == "MissingDepsMeasure"
 
-    def test_auto_install_does_not_raise_when_successful(
-        self, tmp_path: Path
-    ) -> None:
+    def test_auto_install_does_not_raise_when_successful(self, tmp_path: Path) -> None:
         measure_dir = tmp_path / "AutoInstallMeasure"
         measure_dir.mkdir()
         # json is always available, but we test the structure
