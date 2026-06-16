@@ -481,7 +481,7 @@ async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
             errors.append(str(exc))
 
     # --- OpenStudio version format ---
-<    if req.openstudio_version:
+    if req.openstudio_version:
         if not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
             errors.append(
                 f"openstudio_version must start with a digit (e.g. 3.11.0), "
