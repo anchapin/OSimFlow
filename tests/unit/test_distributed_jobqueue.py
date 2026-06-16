@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -220,3 +220,54 @@ class TestDistributedJobQueueContextManager:
             q.enqueue("job_1", {"step": "SIM"})
         # After exiting, has_pending should still work (close was called)
         assert dq.has_pending() is True
+
+
+class TestDistributedJobQueueAutoRecovery:
+    """Test auto-recovery of the Redis subscriber thread (issue #443)."""
+
+    def test_subscriber_reconnect_delay_doubles_on_error(
+        self, queue_dir: Path, mock_redis: MagicMock
+    ) -> None:
+        """Reconnect delay doubles after each error, capped at 60s."""
+        from unittest.mock import AsyncMock, patch
+
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-backoff",
+        )
+
+        async def mock_get_message(timeout: float = 1.0, ignore_subscribe_messages: bool = True):
+            raise ConnectionError("Redis connection lost")
+
+        mock_pubsub = AsyncMock()
+        mock_pubsub.get_message = mock_get_message
+        mock_pubsub.subscribe = AsyncMock()
+
+        async def mock_pubsub_context():
+            return mock_pubsub
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.pubsub = mock_pubsub_context
+        mock_client_instance.aclose = AsyncMock()
+
+        sleep_delays: list[float] = []
+
+        async def mock_sleep(delay: float) -> None:
+            sleep_delays.append(delay)
+
+        mock_ra = MagicMock()
+        mock_ra.from_url.return_value = mock_client_instance
+
+        with patch("osimflow.distributed_jobqueue._get_redis_asyncio", return_value=mock_ra):
+            with patch("asyncio.sleep", mock_sleep):
+                dq.enqueue("job_1", {"step": "SIM"})
+                import time
+
+                time.sleep(0.3)
+                dq.close()
+
+        assert len(sleep_delays) >= 2
+        assert sleep_delays[0] <= 2.0
+        assert sleep_delays[1] <= 4.0
+        assert sleep_delays[1] >= sleep_delays[0]
