@@ -2466,6 +2466,10 @@ class Campaign:
             AmbiguousParameterError: a plain argument name appears in
                 multiple measure steps and must be disambiguated via the
                 dotted ``MeasureName.argument_name`` form.
+            CrossMeasureConflictError: the same argument is specified for
+                multiple measures via dotted names (e.g. both
+                ``MeasureA.wwr`` and ``MeasureB.wwr``), creating a
+                potential runtime conflict. Use only one dotted form.
             FileNotFoundError: an ``epw_file`` target references a
                 ``.epw`` file that does not exist in the template
                 simulation package.
