@@ -229,7 +229,7 @@ class TestDistributedJobQueueAutoRecovery:
         self, queue_dir: Path, mock_redis: MagicMock
     ) -> None:
         """Reconnect delay doubles after each error, capped at 60s."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         dq = DistributedJobQueue(
             queue_dir=queue_dir,
