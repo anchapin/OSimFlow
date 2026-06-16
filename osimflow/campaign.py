@@ -61,9 +61,7 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
-from .data_point_manager import DataPointManager, DataPointStatus
 from .distributed_jobqueue import build_job_queue
-from .event_log import CampaignEventLog
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
@@ -98,22 +96,6 @@ from .work import (
     preflight_run_model,
     run_openstudio_sim,
 )
-
-
-class QuotaExceededError(RuntimeError):
-    """Raised when a campaign resource quota is exceeded (issue #446)."""
-
-    def __init__(
-        self,
-        message: str,
-        quota_type: str,
-        limit: int | float,
-        current: int | float,
-    ) -> None:
-        super().__init__(message)
-        self.quota_type = quota_type
-        self.limit = limit
-        self.current = current
 
 
 def _osimflow_version() -> str:
@@ -264,10 +246,6 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
-
-        # Append-only event log for auditing and state replay (issue #396).
-        # Written to {outdir}/events.jsonl for the campaign duration.
-        self._event_log = CampaignEventLog(outdir=cfg.outdir)
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -305,21 +283,9 @@ class Campaign:
                     exc,
                 )
 
-        # Data point lifecycle manager for reanalysis and merge tracking
-        # (issues #418, #419, #420).  Persisted to {outdir}/.osimflow/data_points.json.
-        self._data_point_manager: DataPointManager = DataPointManager(outdir=cfg.outdir)
-
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
-        self._quota_exceeded = False
         self._cancel_lock = threading.Lock()
-        # Pause/resume (issue #444): pause flag, lock, and condition.
-        # Unlike cancellation, pausing waits for in-flight work to complete
-        # before stopping, and allows resume to continue from where the
-        # campaign left off.
-        self._pause_requested = False
-        self._pause_lock = threading.Lock()
-        self._pause_cond = threading.Condition(self._pause_lock)
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
@@ -346,101 +312,6 @@ class Campaign:
             endpoint = cfg.otel_endpoint or "http://localhost:4317"
             return OpenTelemetryBackend(endpoint=endpoint)
         raise ValueError(f"unknown observability backend: {backend_type}")
-
-    # ------------------------------------------------------------------
-    # Resource quota tracking (issue #446)
-    # ------------------------------------------------------------------
-
-    def _enforce_start_quota(self) -> None:
-        """Fail fast if the campaign's resource quota is already exceeded at start.
-
-        Called at the beginning of ``run()`` before any work is dispatched.
-        Raises ``QuotaExceededError`` with a descriptive message if any quota
-        is already violated.
-        """
-        quota = self.cfg.resource_quota
-        if quota is None:
-            return
-
-        if quota.max_samples is not None and self.cfg.n_samples > quota.max_samples:
-            raise QuotaExceededError(
-                f"n_samples={self.cfg.n_samples} exceeds resource_quota.max_samples="
-                f"{quota.max_samples}",
-                quota_type="max_samples",
-                limit=quota.max_samples,
-                current=self.cfg.n_samples,
-            )
-
-        log.info(
-            "resource quota active: max_samples=%s, max_cost_usd=%s, "
-            "max_wall_time_min=%s, max_concurrent_samples=%s",
-            quota.max_samples,
-            quota.max_cost_usd,
-            quota.max_wall_time_min,
-            quota.max_concurrent_samples,
-        )
-
-    def _check_quota_exceeded(self) -> bool:
-        """Return True if any hard quota limit has been reached.
-
-        Checks:
-        - ``max_samples``: total samples submitted so far vs. the limit.
-        - ``max_cost_usd``: accumulated campaign cost vs. the limit.
-        - ``max_wall_time_min``: elapsed campaign time vs. the limit.
-
-        Does NOT check ``max_concurrent_samples`` — that is enforced
-        by bounding ``max_workers`` at construction time.
-        """
-        quota = self.cfg.resource_quota
-        if quota is None:
-            return False
-
-        if quota.max_samples is not None:
-            # Count samples that have been submitted (all entries in _sample_state
-            # that have at least one step recorded).
-            submitted = sum(
-                1
-                for state in self._sample_state.values()
-                if any(k.endswith("_exit_code") or k.endswith("_status") for k in state)
-            )
-            if submitted >= quota.max_samples:
-                log.warning(
-                    "max_samples quota reached (%d >= %d) — skipping further submissions",
-                    submitted,
-                    quota.max_samples,
-                )
-                return True
-
-        if quota.max_cost_usd is not None and self.trace.total_cost_usd >= quota.max_cost_usd:
-            log.warning(
-                "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
-                self.trace.total_cost_usd,
-                quota.max_cost_usd,
-            )
-            return True
-
-        elapsed_min = (time.time() - self.trace.started_at) / 60.0
-        if quota.max_wall_time_min is not None and elapsed_min >= quota.max_wall_time_min:
-            log.warning(
-                "max_wall_time_min quota reached (%.1f >= %.1f min) — skipping further submissions",
-                elapsed_min,
-                quota.max_wall_time_min,
-            )
-            return True
-
-        return False
-
-    def _effective_max_workers(self) -> int:
-        """Return the effective max_workers bounded by max_concurrent_samples quota.
-
-        If a ``max_concurrent_samples`` quota is set, the fan-out parallelism
-        is capped to that value. Otherwise, ``self.max_workers`` is returned
-        unchanged.
-        """
-        quota = self.cfg.resource_quota
-        if quota is not None and quota.max_concurrent_samples is not None:
-            return min(self.max_workers, quota.max_concurrent_samples)
-        return self.max_workers
 
     def _compute_code_hashes(self) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
@@ -724,13 +595,6 @@ class Campaign:
                 self._job_queue.mark_completed(f"{sid}_{step_name}")
             except Exception as e:
                 log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
-                # Event log: sample failed (issue #396).
-                self._event_log.sample_failed(
-                    campaign_id=self.trace.campaign_id,
-                    step=step_name,
-                    sample_id=sid,
-                    reason=str(e)[:500],
-                )
                 # Mark failed in the job queue (issue #263).
                 self._job_queue.mark_failed(
                     f"{sid}_{step_name}",
@@ -742,31 +606,12 @@ class Campaign:
                 state[f"{step_name.lower}_exit_code"] = 1
                 state[f"{step_name.lower}_status"] = "failed"
                 state["error_summary"] = str(e)[:500]
-                # Data point lifecycle: mark FAILED (issue #419).
-                self._data_point_manager.update_status(
-                    sid, DataPointStatus.FAILED, error_summary=str(e)[:500]
-                )
                 self._checkpoint_sample(sid)
                 return sid
             # Incremental checkpoint: update run.json after each sample
             # completes so SSE clients see live progress (issue #275).
             self._checkpoint_sample(sid)
-
-            # Mid-batch quota check: stop the campaign when a hard quota
-            # (max_samples, max_cost_usd, max_wall_time_min) is reached
-            # (issue #446).  The flag is set here and read by the outer
-            # loop below to cancel pending work.
-            if self._check_quota_exceeded():
-                self._quota_exceeded = True
-                log.warning(
-                    "quota exceeded during %s — cancelling remaining submissions", step_name
-                )
-
             return sid
-
-        # Flag cleared at the start of each step's fan-out so each step
-        # starts with a clean slate.
-        self._quota_exceeded = False
 
         # When max_workers == 1, use a sequential loop to avoid the
         # overhead of spinning up a ThreadPoolExecutor.  This preserves
@@ -776,17 +621,6 @@ class Campaign:
                 if self._check_cancel_requested():
                     log.warning("cancellation requested during %s — stopping fan-out", step_name)
                     break
-                if self._quota_exceeded:
-                    log.warning("quota exceeded — stopping further submissions in %s", step_name)
-                    break
-                if self._check_pause_requested():
-                    log.warning("pause requested during %s — waiting for in-flight work", step_name)
-                    self._wait_while_paused()
-                    if self._is_paused():
-                        log.warning("still paused after waiting — stopping fan-out gracefully")
-                        self._write_pause_trace()
-                        return
-                    log.warning("resume detected — continuing fan-out")
                 _await_one(item)
             if self._cancel_requested:
                 raise KeyboardInterrupt("cancellation requested during fan-out")
@@ -797,7 +631,7 @@ class Campaign:
         # so the pool parallelism effectively controls how many samples
         # we wait for at the same time.
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._effective_max_workers(),
+            max_workers=self.max_workers,
             thread_name_prefix="osimflow-fanout",
         ) as pool:
             futures = {
@@ -810,29 +644,6 @@ class Campaign:
                     for f in futures:
                         f.cancel()
                     break
-                if self._quota_exceeded:
-                    log.warning(
-                        "quota exceeded — cancelling remaining submissions in %s", step_name
-                    )
-                    for f in futures:
-                        f.cancel()
-                    break
-                if self._check_pause_requested():
-                    log.warning("pause requested during %s — waiting for in-flight work", step_name)
-                    # Wait for in-flight work to complete before pausing.
-                    # We wait by letting remaining futures finish normally,
-                    # then signal pause.
-                    remaining = [f for f in futures if not f.done()]
-                    log.info("waiting for %d in-flight tasks to complete", len(remaining))
-                    for f in remaining:
-                        with contextlib.suppress(Exception, concurrent.futures.CancelledError):
-                            f.result()
-                    self._wait_while_paused()
-                    if self._is_paused():
-                        log.warning("still paused after waiting — stopping fan-out gracefully")
-                        self._write_pause_trace()
-                        return
-                    log.warning("resume detected — continuing fan-out")
                 # CancelledError is a BaseException (not Exception), so we must
                 # suppress it explicitly here — it is raised when a future was
                 # cancelled via f.cancel() during a cancellation sweep.
@@ -1479,81 +1290,6 @@ class Campaign:
             log.warning("could not write cancellation trace: %s", exc)
 
     # ------------------------------------------------------------------
-    # Pause / Resume (issue #444)
-    # ------------------------------------------------------------------
-    def request_pause(self) -> None:
-        """Request campaign pause.
-
-        Unlike cancellation, pausing waits for in-flight work to complete
-        before stopping and allows subsequent resume to continue from where
-        the campaign left off. Thread-safe and idempotent.
-        """
-        with self._pause_lock:
-            self._pause_requested = True
-        log.warning("campaign pause requested")
-
-    def request_resume(self) -> None:
-        """Request campaign resume from a paused state.
-
-        Clears the pause flag and condition, allowing the campaign to
-        continue processing pending samples. Thread-safe.
-        """
-        with self._pause_lock:
-            self._pause_requested = False
-            self._pause_cond.notify_all()
-        log.warning("campaign resume requested")
-
-    def _check_pause_requested(self) -> bool:
-        """Check if pause has been requested.
-
-        Checks both the in-memory flag and the ``.pause`` file in the
-        outdir. The ``.pause`` file is written by the CLI ``pause``
-        command or the REST API ``POST /api/v1/campaign/pause`` endpoint.
-
-        Returns:
-            ``True`` if pause is requested, ``False`` otherwise.
-        """
-        with self._pause_lock:
-            if self._pause_requested:
-                return True
-        pause_file = self.cfg.outdir / ".pause"
-        if pause_file.is_file():
-            log.warning(".pause file detected — requesting pause")
-            with self._pause_lock:
-                self._pause_requested = True
-            return True
-        return False
-
-    def _is_paused(self) -> bool:
-        """Return True if campaign is currently in a paused state."""
-        with self._pause_lock:
-            return self._pause_requested
-
-    def _wait_while_paused(self) -> None:
-        """Block until pause is cleared (resume or cancel).
-
-        Called during the fan-out loop to wait for a resume signal
-        without busy-waiting. Uses a Condition variable so the thread
-        wakes immediately on resume or cancel.
-        """
-        with self._pause_cond:
-            while self._pause_requested:
-                if self._check_cancel_requested():
-                    break
-                self._pause_cond.wait(timeout=1.0)
-                if self._check_cancel_requested():
-                    break
-
-    def _write_pause_trace(self) -> None:
-        """Write run.json with paused status at the outdir root."""
-        try:
-            self.trace.status = "paused"
-            self.trace.write(self.cfg.outdir / "run.json")
-            log.info("wrote paused trace to run.json")
-        except Exception as exc:
-            log.warning("could not write paused trace: %s", exc)
-
-    # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
     def run(self) -> dict[str, object]:  # noqa: PLR0912, PLR0915
@@ -1576,9 +1312,6 @@ class Campaign:
         # Setup signal handlers for graceful shutdown.
         self._setup_signal_handlers()
 
-        # Fail-fast quota check before any work is dispatched (issue #446).
-        self._enforce_start_quota()
-
         run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
         if run_name is not None:
             log_mlflow_params(_make_mlflow_param_view(self.cfg, self.executor.name))
@@ -1588,15 +1321,6 @@ class Campaign:
 
         # Auto-register campaign in registry (issue #266).
         self._register_campaign()
-
-        # Event log: campaign start (issue #396).
-        self._event_log.campaign_started(
-            campaign_id=self.trace.campaign_id,
-            executor=self.executor.name,
-            n_samples=self.cfg.n_samples,
-            algorithm=self.cfg.algorithm,
-            openstudio_version=self.cfg.openstudio_version,
-        )
 
         # Write campaign metadata manifest at start (issue #277).
         self._write_campaign_meta()
@@ -1674,26 +1398,6 @@ class Campaign:
             # Observability: record campaign duration and flush backend.
             self._obs.record_campaign_duration(duration)
             self._obs.flush()
-
-            # Event log: campaign completion (issue #396).  Emitted before
-            # _run_finalize_script so the event records the raw duration.
-            n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
-            n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
-            if campaign_status == "success":
-                self._event_log.campaign_completed(
-                    campaign_id=self.trace.campaign_id,
-                    elapsed_s=duration,
-                    n_succeeded=n_succeeded,
-                    n_failed=n_failed,
-                )
-            else:
-                self._event_log.campaign_failed(
-                    campaign_id=self.trace.campaign_id,
-                    reason=campaign_status,
-                    elapsed_s=duration,
-                )
-            self._event_log.flush()
-
             self._run_finalize_script(campaign_status, duration)
             # Re-write run.json to include finalize hook timing
             if (self.cfg.outdir / "run.json").exists():
@@ -2252,8 +1956,6 @@ class Campaign:
         algo_name = algo.name().upper()
         step_label = f"GENERATE_{algo_name}_SAMPLES"
 
-        self._event_log.step_started(campaign_id=self.trace.campaign_id, step=step_label)
-
         # Read variables.yml once for the algorithm.
         variables: dict[str, Any] = {}
         if self.cfg.input_variables.exists():
@@ -2283,12 +1985,6 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
-            self._event_log.step_completed(
-                campaign_id=self.trace.campaign_id,
-                step=step_label,
-                elapsed_s=time.time() - t0,
-                cache_hit=True,
-            )
             return samples_from_cache
 
         out_dir = self.cfg.work_dir / algo.name()
@@ -2337,12 +2033,6 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
-            self._event_log.step_completed(
-                campaign_id=self.trace.campaign_id,
-                step=step_label,
-                elapsed_s=time.time() - t0,
-                cache_hit=False,
-            )
             return samples
         except Exception as e:
             log.error("%s failed: %s", step_label, e)
@@ -2351,12 +2041,6 @@ class Campaign:
                 cache="MISS",
                 elapsed_s=time.time() - t0,
                 exit_code=1,
-            )
-            self._event_log.step_completed(
-                campaign_id=self.trace.campaign_id,
-                step=step_label,
-                elapsed_s=time.time() - t0,
-                cache_hit=False,
             )
             raise
 
@@ -2410,8 +2094,6 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before PREFLIGHT_RUN_MODEL")
 
-        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="PREFLIGHT_RUN_MODEL")
-
         t0 = time.time()
         os_version = self.cfg.openstudio_version
         inputs_hash = sha256_of_files(sorted(self.cfg.template_sim_package.rglob("*")))
@@ -2434,12 +2116,6 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
-            self._event_log.step_completed(
-                campaign_id=self.trace.campaign_id,
-                step="PREFLIGHT_RUN_MODEL",
-                elapsed_s=elapsed,
-                cache_hit=True,
-            )
             return
 
         try:
@@ -2454,12 +2130,6 @@ class Campaign:
                 cache="MISS",
                 elapsed_s=time.time() - t0,
                 exit_code=1,
-            )
-            self._event_log.step_completed(
-                campaign_id=self.trace.campaign_id,
-                step="PREFLIGHT_RUN_MODEL",
-                elapsed_s=time.time() - t0,
-                cache_hit=False,
             )
             raise
 
@@ -2476,12 +2146,6 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
-        self._event_log.step_completed(
-            campaign_id=self.trace.campaign_id,
-            step="PREFLIGHT_RUN_MODEL",
-            elapsed_s=elapsed,
-            cache_hit=False,
-        )
 
     def step_validate_measure_variables(self, generation: int = 0) -> None:
         """Validate variables.yml against discovered measure arguments.
@@ -2572,10 +2236,6 @@ class Campaign:
             AmbiguousParameterError: a plain argument name appears in
                 multiple measure steps and must be disambiguated via the
                 dotted ``MeasureName.argument_name`` form.
-            CrossMeasureConflictError: the same argument is specified for
-                multiple measures via dotted names (e.g. both
-                ``MeasureA.wwr`` and ``MeasureB.wwr``), creating a
-                potential runtime conflict. Use only one dotted form.
             FileNotFoundError: an ``epw_file`` target references a
                 ``.epw`` file that does not exist in the template
                 simulation package.
@@ -2696,12 +2356,6 @@ class Campaign:
                 _state["apply_exit_code"] = 0
                 _state["apply_status"] = "ok"
                 self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
-                # Event log: sample completed (issue #396).
-                self._event_log.sample_completed(
-                    campaign_id=self.trace.campaign_id,
-                    step="APPLY_PARAMETERS",
-                    sample_id=_sid,
-                )
                 # Archive modified .osw/.osm when flag is set
                 if _archive:
                     archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
@@ -2710,13 +2364,6 @@ class Campaign:
                     )
 
             submissions[sid] = (handle, _on_success)
-
-            # Event log: sample started (issue #396).
-            self._event_log.sample_started(
-                campaign_id=self.trace.campaign_id,
-                step="APPLY_PARAMETERS",
-                sample_id=sid,
-            )
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
@@ -2766,7 +2413,6 @@ class Campaign:
         os_version = self.cfg.openstudio_version
         n = len(parameterized)
         self.trace.step_started("RUN_OPENSTUDIO_SIM", total=n)
-        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="RUN_OPENSTUDIO_SIM")
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
@@ -2812,14 +2458,6 @@ class Campaign:
                 state["sim_status"] = "cached"
                 state["eplusout_sql"] = str(cached / "eplusout.sql")
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="cached")
-                # Cached samples are already COMPLETED in the data point manager
-                # from their original run; update status to reflect the cache hit.
-                try:
-                    self._data_point_manager.update_status(sid, DataPointStatus.COMPLETED)
-                except KeyError:
-                    # Not yet registered — register and mark completed.
-                    self._data_point_manager.register(sid, work_dir=cached)
-                    self._data_point_manager.update_status(sid, DataPointStatus.COMPLETED)
                 continue
             out_dir = self.cfg.work_dir / "sim"
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -2868,10 +2506,6 @@ class Campaign:
                     worker_id="local",
                 )
 
-            # Register and mark data point as RUNNING (issue #419).
-            self._data_point_manager.register(sid, work_dir=ctx["out_dir"])
-            self._data_point_manager.update_status(sid, DataPointStatus.RUNNING)
-
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
             state = ctx["state"]
@@ -2916,14 +2550,6 @@ class Campaign:
                     _handle, "billed_duration_seconds", None
                 )
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
-                # Data point lifecycle: mark COMPLETED (issue #419).
-                self._data_point_manager.update_status(_sid, DataPointStatus.COMPLETED)
-                # Event log: sample completed (issue #396).
-                self._event_log.sample_completed(
-                    campaign_id=self.trace.campaign_id,
-                    step="RUN_OPENSTUDIO_SIM",
-                    sample_id=_sid,
-                )
                 # Archive eplusout.sql when flag is set
                 if _archive:
                     archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
@@ -2951,13 +2577,6 @@ class Campaign:
 
             submissions[sid] = (handle, _on_success)
 
-            # Event log: sample started (issue #396).
-            self._event_log.sample_started(
-                campaign_id=self.trace.campaign_id,
-                step="RUN_OPENSTUDIO_SIM",
-                sample_id=sid,
-            )
-
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "RUN_OPENSTUDIO_SIM")
 
@@ -2980,12 +2599,6 @@ class Campaign:
         self._obs.record_step_duration(
             "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
         )
-        self._event_log.step_completed(
-            campaign_id=self.trace.campaign_id,
-            step="RUN_OPENSTUDIO_SIM",
-            elapsed_s=time.time() - t0,
-            cache_hit=False,
-        )
         return out
 
     def step_extract_kpis(  # noqa: PLR0915
@@ -3002,7 +2615,6 @@ class Campaign:
         out: list[Path] = []
         n = len(simulated)
         self.trace.step_started("EXTRACT_KPIS", total=n)
-        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="EXTRACT_KPIS")
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
@@ -3073,12 +2685,6 @@ class Campaign:
                 _state["extract_exit_code"] = 0
                 _state["extract_status"] = "ok"
                 self.trace.step_item_done("EXTRACT_KPIS", status="ok")
-                # Event log: sample completed (issue #396).
-                self._event_log.sample_completed(
-                    campaign_id=self.trace.campaign_id,
-                    step="EXTRACT_KPIS",
-                    sample_id=_sid,
-                )
                 # Result storage upload (issue #339): upload KPI JSON after
                 # successful extraction when a remote backend is configured.
                 if self._result_storage is not None:
@@ -3102,13 +2708,6 @@ class Campaign:
 
             submissions[sid] = (handle, _on_success)
 
-            # Event log: sample started (issue #396).
-            self._event_log.sample_started(
-                campaign_id=self.trace.campaign_id,
-                step="EXTRACT_KPIS",
-                sample_id=sid,
-            )
-
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "EXTRACT_KPIS")
 
@@ -3128,12 +2727,6 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
-        self._event_log.step_completed(
-            campaign_id=self.trace.campaign_id,
-            step="EXTRACT_KPIS",
-            elapsed_s=time.time() - t0,
-            cache_hit=False,
-        )
         return sorted(out)
 
     def step_compute_sensitivity_indices(
@@ -3260,8 +2853,6 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before AGGREGATE_RESULTS")
 
-        self._event_log.step_started(campaign_id=self.trace.campaign_id, step="AGGREGATE_RESULTS")
-
         sim_dirs = list(simulated.values())
         inputs_hash = sha256_of_dict(
             {
@@ -3287,12 +2878,6 @@ class Campaign:
                 exit_code=0,
             )
             self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
-            self._event_log.step_completed(
-                campaign_id=self.trace.campaign_id,
-                step="AGGREGATE_RESULTS",
-                elapsed_s=elapsed,
-                cache_hit=True,
-            )
             return {
                 "csv": cached,
                 "parquet": cached.parent / "aggregated_results.parquet",
@@ -3322,12 +2907,6 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("AGGREGATE_RESULTS", elapsed)
-        self._event_log.step_completed(
-            campaign_id=self.trace.campaign_id,
-            step="AGGREGATE_RESULTS",
-            elapsed_s=elapsed,
-            cache_hit=False,
-        )
         return result
 
     def step_generate_plots(
@@ -3348,10 +2927,6 @@ class Campaign:
 
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before GENERATE_BASIC_PLOTS")
-
-        self._event_log.step_started(
-            campaign_id=self.trace.campaign_id, step="GENERATE_BASIC_PLOTS"
-        )
 
         plots_dir = self.cfg.outdir / "plots"
         handle = self.executor.submit(
@@ -3376,80 +2951,7 @@ class Campaign:
             exit_code=0,
         )
         self._obs.record_step_duration("GENERATE_BASIC_PLOTS", elapsed)
-        self._event_log.step_completed(
-            campaign_id=self.trace.campaign_id,
-            step="GENERATE_BASIC_PLOTS",
-            elapsed_s=elapsed,
-            cache_hit=False,
-        )
         return result
-
-    def warm_cache(self, n_warm: int = 10) -> dict[str, object]:
-        """Run N pilot samples to pre-populate the cache before a campaign.
-
-        Generates N pilot samples using the configured sampling algorithm,
-        runs ``APPLY_PARAMETERS`` and ``RUN_OPENSTUDIO_SIM`` for each, and
-        stores results in the SQLite cache.  When the real campaign starts
-        with the same configuration, those steps will hit the cache instead
-        of re-running the simulation.
-
-        This method intentionally skips KPI extraction and result aggregation
-        — those steps are not cached and running them for pilot samples would
-        add latency for no cache benefit.
-
-        Args:
-            n_warm: number of pilot samples to run (default 10).
-
-        Returns:
-            dict with ``n_samples`` and ``cache_stats``.
-        """
-        log.info("Cache warming: generating %d pilot samples", n_warm)
-        algo = AlgorithmRegistry.get(self.cfg.algorithm)
-        warm_dir = self.cfg.outdir / ".osimflow_warm"
-        warm_dir.mkdir(parents=True, exist_ok=True)
-
-        # Read variables the same way step_generate_samples does.
-        variables: dict[str, Any] = {}
-        if self.cfg.input_variables.exists():
-            with self.cfg.input_variables.open() as fh:
-                raw = yaml.safe_load(fh)
-                if isinstance(raw, dict):
-                    variables = raw
-
-        # Generate pilot samples — algo.generate_samples returns a Path to samples.json.
-        result_path = algo.generate_samples(
-            variables=variables,
-            n_samples=n_warm,
-            seed=None,
-            outdir=warm_dir,
-        )
-        samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
-        pilot_specs: list[SampleSpec] = cast_samples(samples_obj)
-
-        log.info(
-            "Cache warming: running apply + sim for %d pilot samples (populating cache)",
-            len(pilot_specs),
-        )
-        # Apply parameters for pilot samples — submits to executor, waits,
-        # and stores each result in the cache.
-        parameterized: SampleDict = self.step_apply_parameters(pilot_specs)
-        # Run simulation for pilot samples — submits to executor, waits,
-        # and stores each result in the cache.
-        self.step_run_openstudio_sim(parameterized, generation=0)
-        stats = self.cache.get_stats()
-        log.info(
-            "Cache warming complete: %d/%d steps cached",
-            stats.hits,
-            stats.hits + stats.misses,
-        )
-        return {
-            "n_samples": len(pilot_specs),
-            "cache_stats": {
-                "hits": stats.hits,
-                "misses": stats.misses,
-                "total_keys": stats.total_keys,
-            },
-        }
 
 
 # ---------------------------------------------------------------------------
