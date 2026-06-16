@@ -646,6 +646,10 @@ from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
 AlgorithmRegistry.register("repeat_all", RepeatAllAlgorithm)
 AlgorithmRegistry.register("random", RandomSamplingAlgorithm)
 
+from osimflow.algorithms.custom import CustomDOEAlgorithm  # noqa: E402
+
+AlgorithmRegistry.register("custom", CustomDOEAlgorithm)
+
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)
 # ======================================================================
