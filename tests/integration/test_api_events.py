@@ -290,7 +290,9 @@ class TestCampaignPause:
 
     def test_pause_already_paused(self, client_rw: TestClient, outdir: Path) -> None:
         """Returns already_paused when campaign is already paused."""
-        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=None, status="paused")))
+        (outdir / "run.json").write_text(
+            json.dumps(_make_run_json(finished_at=None, status="paused"))
+        )
         resp = client_rw.post("/api/v1/campaign/pause")
         assert resp.status_code == 200
         assert resp.json()["status"] == "already_paused"
@@ -312,7 +314,9 @@ class TestCampaignResume:
 
     def test_resume_removes_flag_file(self, client_rw: TestClient, outdir: Path) -> None:
         """Resume endpoint removes .pause file and returns correct response."""
-        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=None, status="paused")))
+        (outdir / "run.json").write_text(
+            json.dumps(_make_run_json(finished_at=None, status="paused"))
+        )
         (outdir / ".pause").write_text(json.dumps({"requested_at": 1000.0}))
         resp = client_rw.delete("/api/v1/campaign/pause")
         assert resp.status_code == 200
@@ -336,7 +340,9 @@ class TestCampaignResume:
 
     def test_resume_no_flag_file_noop(self, client_rw: TestClient, outdir: Path) -> None:
         """Resume is a no-op when .pause file doesn't exist (safe to call)."""
-        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=None, status="paused")))
+        (outdir / "run.json").write_text(
+            json.dumps(_make_run_json(finished_at=None, status="paused"))
+        )
         assert not (outdir / ".pause").exists()
         resp = client_rw.delete("/api/v1/campaign/pause")
         assert resp.status_code == 200
