@@ -61,6 +61,7 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
+from .data_point_manager import DataPointManager, DataPointStatus
 from .distributed_jobqueue import build_job_queue
 from .event_log import CampaignEventLog
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
@@ -303,6 +304,10 @@ class Campaign:
                     cfg.result_storage_bucket,
                     exc,
                 )
+
+        # Data point lifecycle manager for reanalysis and merge tracking
+        # (issues #418, #419, #420).  Persisted to {outdir}/.osimflow/data_points.json.
+        self._data_point_manager: DataPointManager = DataPointManager(outdir=cfg.outdir)
 
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
@@ -730,6 +735,10 @@ class Campaign:
                 state[f"{step_name.lower}_exit_code"] = 1
                 state[f"{step_name.lower}_status"] = "failed"
                 state["error_summary"] = str(e)[:500]
+                # Data point lifecycle: mark FAILED (issue #419).
+                self._data_point_manager.update_status(
+                    sid, DataPointStatus.FAILED, error_summary=str(e)[:500]
+                )
                 self._checkpoint_sample(sid)
                 return sid
             # Incremental checkpoint: update run.json after each sample
@@ -2693,6 +2702,14 @@ class Campaign:
                 state["sim_status"] = "cached"
                 state["eplusout_sql"] = str(cached / "eplusout.sql")
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="cached")
+                # Cached samples are already COMPLETED in the data point manager
+                # from their original run; update status to reflect the cache hit.
+                try:
+                    self._data_point_manager.update_status(sid, DataPointStatus.COMPLETED)
+                except KeyError:
+                    # Not yet registered — register and mark completed.
+                    self._data_point_manager.register(sid, work_dir=cached)
+                    self._data_point_manager.update_status(sid, DataPointStatus.COMPLETED)
                 continue
             out_dir = self.cfg.work_dir / "sim"
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -2741,6 +2758,10 @@ class Campaign:
                     worker_id="local",
                 )
 
+            # Register and mark data point as RUNNING (issue #419).
+            self._data_point_manager.register(sid, work_dir=ctx["out_dir"])
+            self._data_point_manager.update_status(sid, DataPointStatus.RUNNING)
+
             # Build the on-success callback (captures per-sample context).
             key = ctx["key"]
             state = ctx["state"]
@@ -2785,6 +2806,8 @@ class Campaign:
                     _handle, "billed_duration_seconds", None
                 )
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
+                # Data point lifecycle: mark COMPLETED (issue #419).
+                self._data_point_manager.update_status(_sid, DataPointStatus.COMPLETED)
                 # Event log: sample completed (issue #396).
                 self._event_log.sample_completed(
                     campaign_id=self.trace.campaign_id,
