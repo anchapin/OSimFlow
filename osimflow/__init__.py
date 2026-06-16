@@ -83,6 +83,7 @@ from .validation import ValidationError
 from .weather import (
     EPWDownloadError,
     EPWValidationError,
+    detect_climate_zone_from_stat,
     discover_epw_files,
     download_epw,
     validate_all_epw_files,
@@ -151,6 +152,7 @@ __all__ = [
     # EPW validation
     "EPWValidationError",
     "EPWDownloadError",
+    "detect_climate_zone_from_stat",
     "discover_epw_files",
     "download_epw",
     "validate_all_epw_files",
