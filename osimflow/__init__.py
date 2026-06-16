@@ -6,12 +6,28 @@ in `.agents/results/decision-verdict.md`. This is the canonical public
 API; everything else is an implementation detail.
 """
 
+from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
+from .algorithms.doe_analysis import DOEAnalysis
 from .algorithms.halton import HaltonAlgorithm
 from .algorithms.sobol import SobolAlgorithm
-from .cache import CacheKey, SQLiteCache
-from .campaign import Campaign
-from .config import CampaignConfig, coerce_variable_type, load_config
+from .cache import CacheKey, CacheStats, SQLiteCache
+from .campaign import Campaign, QuotaExceededError
+from .chaos import (
+    ChaosEngine,
+    ChaosResult,
+    ChaosScenario,
+    CPUSpikeInjector,
+    FaultInjector,
+    FaultType,
+    KillSwitchInjector,
+    MemoryPressureInjector,
+    NetworkDelayInjector,
+    run_chaos_scenario,
+)
+from .config import CampaignConfig, ResourceQuota, coerce_variable_type, load_config
+from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
+from .data_point_manager import DataPoint, DataPointManager, DataPointStatus
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
@@ -36,6 +52,14 @@ from .executors import (
 )
 from .jobqueue import JobQueue
 from .logging import get_logger, setup_logging
+from .measures import (
+    AmbiguousVariableError,
+    DiscoveredMeasure,
+    MeasureArgument,
+    MeasureRegistry,
+    MeasureRegistryError,
+    UnmappedVariableError,
+)
 from .monitoring import RunTrace, StepTrace
 from .observability import (
     CloudWatchBackend,
@@ -68,6 +92,7 @@ from .validation import ValidationError
 from .weather import (
     EPWDownloadError,
     EPWValidationError,
+    detect_climate_zone_from_stat,
     discover_epw_files,
     download_epw,
     validate_all_epw_files,
@@ -80,12 +105,15 @@ __all__ = [
     "AlgorithmRegistry",
     "BaseAlgorithm",
     "LHSAlgorithm",
+    "DOEAnalysis",
     "SobolAlgorithm",
     "HaltonAlgorithm",
     "CacheKey",
+    "CacheStats",
     "SQLiteCache",
     "Campaign",
     "CampaignConfig",
+    "ResourceQuota",
     "coerce_variable_type",
     "load_config",
     "DistributedCache",
@@ -116,16 +144,37 @@ __all__ = [
     "CampaignRegistry",
     "CampaignRecord",
     "SevereEnergyPlusError",
+    "QuotaExceededError",
     "ValidationError",
+    # Version detection
+    "VersionDetectionError",
+    "detect_openstudio_version",
+    "get_compatible_container_tag",
+    "verify_version_compatibility",
+    # Alerting
+    "AlertManager",
+    "build_alert_manager",
+    # Cost tracking
+    "CostEstimate",
+    "CostTracker",
+    "CampaignCostSummary",
+    # Data point lifecycle management (#418, #419, #420)
+    "DataPoint",
+    "DataPointManager",
+    "DataPointStatus",
+    # EPW validation
     "EPWValidationError",
     "EPWDownloadError",
+    "detect_climate_zone_from_stat",
     "discover_epw_files",
     "download_epw",
     "validate_all_epw_files",
     "validate_epw",
     "validate_epw_header",
+    # Logging
     "get_logger",
     "setup_logging",
+    # Storage
     "ResultStorage",
     "LocalStorage",
     "S3Storage",
@@ -133,18 +182,27 @@ __all__ = [
     "AzureBlobStorage",
     "ResultStorageUploader",
     "build_result_storage",
+    # Task queue
     "TaskQueue",
     "DaskTaskQueue",
     "NoOpTaskQueue",
     "TaskHandle",
     "TaskQueueStatus",
     "build_task_queue",
+    # Document store
     "DocumentStore",
     "DocumentStoreError",
     "DocumentNotFoundError",
     "DuplicateDocumentError",
     "SQLiteDocumentStore",
     "build_document_store",
+    # Measure registry (issue #532)
+    "MeasureRegistry",
+    "MeasureArgument",
+    "DiscoveredMeasure",
+    "MeasureRegistryError",
+    "UnmappedVariableError",
+    "AmbiguousVariableError",
 ]
 
 setup_logging()

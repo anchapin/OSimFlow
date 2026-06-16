@@ -186,6 +186,24 @@ class BaseAlgorithm(abc.ABC):
         """
         return False
 
+    def configure(self, config: Any) -> None:  # noqa: B027
+        """Configure the algorithm with campaign-level settings (issue #529).
+
+        Called by ``Campaign`` after algorithm instantiation but before
+        the first ``generate_samples()`` call.  Algorithms that need
+        campaign-level configuration (e.g. R-NSGA-II reference points)
+        can override this method.
+
+        The default implementation is a no-op.
+
+        Parameters
+        ----------
+        config
+            The ``CampaignConfig`` instance containing algorithm-specific
+            settings (e.g. ``nsga2_ref_points``, ``nsga2_ref_dirs_strategy``).
+        """
+        pass  # noqa: B027
+
     def compute_sensitivity_indices(
         self,
         variables: dict[str, Any],
@@ -201,6 +219,24 @@ class BaseAlgorithm(abc.ABC):
         """
         raise NotImplementedError(
             f"{self.__class__.__name__} does not implement compute_sensitivity_indices"
+        )
+
+    def compute_uq_indices(
+        self,
+        variables: dict[str, Any],
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        outdir: Path,
+        failure_thresholds: dict[str, tuple[float, str]] | None = None,
+        confidence: float = 0.95,
+    ) -> Path:
+        """Compute UQ indices (POF, CIs). Raises NotImplementedError by default.
+
+        Only ``UncertaintyQuantification`` implements this method. Other algorithms
+        that do not support UQ analysis will raise ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement compute_uq_indices"
         )
 
 
@@ -654,6 +690,14 @@ from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("repeat_all", RepeatAllAlgorithm)
 AlgorithmRegistry.register("random", RandomSamplingAlgorithm)
+
+from osimflow.algorithms.custom import CustomDOEAlgorithm  # noqa: E402
+
+AlgorithmRegistry.register("custom", CustomDOEAlgorithm)
+
+from osimflow.algorithms.uq import UncertaintyQuantification  # noqa: E402
+
+AlgorithmRegistry.register("uq", UncertaintyQuantification)
 
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)

@@ -227,3 +227,195 @@ class TestPermissionLevels:
         assert not readonly.has_permission(_ADMIN)
         assert not readonly.has_permission(_READWRITE)
         assert readonly.has_permission(_READONLY)
+
+
+class TestRBACWriteOperations:
+    """Tests for RBAC enforcement on write operations (issue #442, #395)."""
+
+    def _make_keys_file(self, tmp_path: Path, users: list[dict[str, str]]) -> Path:
+        """Create an API keys file with the given users."""
+        keys_file = tmp_path / "api_keys.json"
+        keys_file.write_text(json.dumps({"users": users}))
+        return keys_file
+
+    def test_admin_can_create_variables(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Admin users can create variables via the API."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "admin-key", "user_id": "alice", "role": _ADMIN},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/variables",
+            json={"name": "wwr", "distribution": "uniform", "min": 0.1, "max": 0.6},
+            headers={"X-API-Key": "admin-key"},
+        )
+        assert resp.status_code == 201, f"Admin should be able to create variables: {resp.json()}"
+
+    def test_readwrite_can_create_variables(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Readwrite users can create variables via the API."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "rw-key", "user_id": "bob", "role": _READWRITE},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/variables",
+            json={"name": "wwr", "distribution": "uniform", "min": 0.1, "max": 0.6},
+            headers={"X-API-Key": "rw-key"},
+        )
+        assert resp.status_code == 201, (
+            f"Readwrite should be able to create variables: {resp.json()}"
+        )
+
+    def test_readonly_cannot_create_variables(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Readonly users get 403 when creating variables."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "readonly-key", "user_id": "charlie", "role": _READONLY},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/variables",
+            json={"name": "wwr", "distribution": "uniform", "min": 0.1, "max": 0.6},
+            headers={"X-API-Key": "readonly-key"},
+        )
+        assert resp.status_code == 403
+        assert "readwrite" in resp.json()["detail"].lower()
+
+    def test_readonly_can_read_variables(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Readonly users can read variables."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "readonly-key", "user_id": "charlie", "role": _READONLY},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.get("/api/v1/variables", headers={"X-API-Key": "readonly-key"})
+        assert resp.status_code == 200
+
+    def test_readonly_cannot_delete_variables(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Readonly users get 403 when deleting variables."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "readonly-key", "user_id": "charlie", "role": _READONLY},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.delete("/api/v1/variables/wwr", headers={"X-API-Key": "readonly-key"})
+        assert resp.status_code == 403
+        assert "readwrite" in resp.json()["detail"].lower()
+
+    def test_readonly_cannot_upload_files(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Readonly users get 403 when uploading files."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "readonly-key", "user_id": "charlie", "role": _READONLY},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/files/upload?category=seed_model",
+            headers={"X-API-Key": "readonly-key"},
+            files={"file": ("model.osm", b"seed model content", "application/json")},
+        )
+        assert resp.status_code == 403
+        assert "readwrite" in resp.json()["detail"].lower()
+
+    def test_readonly_cannot_delete_files(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Readonly users get 403 when deleting files."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "readonly-key", "user_id": "charlie", "role": _READONLY},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.delete("/api/v1/files/some-file-id", headers={"X-API-Key": "readonly-key"})
+        assert resp.status_code == 403
+        assert "readwrite" in resp.json()["detail"].lower()
+
+    def test_readonly_cannot_create_pat_analysis(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Readonly users get 403 when creating PAT analyses."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "readonly-key", "user_id": "charlie", "role": _READONLY},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/pat/analyses",
+            json={"osa_path": "/some/path.osa", "template_sim_package": "/tmp/pkg"},
+            headers={"X-API-Key": "readonly-key"},
+        )
+        assert resp.status_code == 403
+        assert "readwrite" in resp.json()["detail"].lower()
+
+    def test_admin_can_create_pat_analysis(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Admin users can create PAT analyses."""
+        keys_file = self._make_keys_file(
+            tmp_path,
+            [
+                {"key": "admin-key", "user_id": "alice", "role": _ADMIN},
+            ],
+        )
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/pat/analyses",
+            json={"osa_path": "/some/path.osa", "template_sim_package": "/tmp/pkg"},
+            headers={"X-API-Key": "admin-key"},
+        )
+        assert resp.status_code in (201, 400, 422), (
+            f"Admin should be able to call PAT endpoint: {resp.json()}"
+        )
+
+    def test_single_key_admin_can_write(self, tmp_outdir: Path) -> None:
+        """Single API key mode grants admin access for writes."""
+        app = create_app(outdir=tmp_outdir, api_key="single-secret", read_only=False)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/variables",
+            json={"name": "wwr", "distribution": "uniform", "min": 0.1, "max": 0.6},
+            headers={"X-API-Key": "single-secret"},
+        )
+        assert resp.status_code == 201, f"Single key admin should write: {resp.json()}"
+
+    def test_no_auth_no_writes(self, tmp_outdir: Path) -> None:
+        """When no auth is configured, writes should be denied (read_only=True by default)."""
+        app = create_app(outdir=tmp_outdir, api_key=None, read_only=True)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/v1/variables",
+            json={"name": "wwr", "distribution": "uniform", "min": 0.1, "max": 0.6},
+        )
+        assert resp.status_code == 403

@@ -22,9 +22,9 @@ from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
@@ -40,8 +40,8 @@ from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
+from osimflow.api.results_viewer import results_viewer_router
 from osimflow.api.timeseries import timeseries_router
-from osimflow.api.ui import ui_router
 from osimflow.api.variables import variables_router
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import (
@@ -79,6 +79,107 @@ def _get_real_remote_address(request: Request) -> str:
         if client_ip:
             return client_ip  # type: ignore[no-any-return]
     return get_remote_address(request)  # type: ignore[no-any-return]
+
+
+# Campaign ID extraction regex for per-campaign rate limiting (issue #445)
+_CAMPAIGN_ID_RE: re.Pattern[str] = re.compile(r"^/api/v1/campaigns/([^/]+)")
+
+
+def _get_api_key_from_request(request: Request) -> str | None:
+    """Extract the API key from a request for per-user rate limiting (issue #445).
+
+    Checks the ``X-API-Key`` header first, then the ``api_key`` query
+    parameter.  Returns ``None`` if neither is present.
+    """
+    header_key = request.headers.get("X-API-Key")
+    if header_key:
+        return str(header_key)
+    query_key = request.query_params.get("api_key")
+    if query_key:
+        return str(query_key)
+    return None
+
+
+def _get_campaign_id_from_request(request: Request) -> str | None:
+    """Extract the campaign ID from the request URL path for per-campaign rate limiting (issue #445).
+
+    Handles both legacy single-campaign mode (no campaign ID in path) and
+    multi-campaign mode where the path is like /api/v1/campaigns/{campaign_id}/...
+    """
+    match = _CAMPAIGN_ID_RE.match(request.url.path)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _make_per_user_key_func(
+    app_state_key_store_attr: str = "api_key_store",
+) -> Callable[[Request], str]:
+    """Create a key function that rate limits by authenticated user (issue #445).
+
+    Uses the API key to identify users.  Falls back to IP address when
+    no API key is provided or when per-user limiting is not applicable
+    (e.g., in single-key mode where all users are treated as "default").
+
+    The key store is read from ``request.app.state.{app_state_key_store_attr}``
+    at dispatch time to avoid capturing a reference at construction time.
+    """
+
+    def key_func(request: Request) -> str:
+        api_key = _get_api_key_from_request(request)
+        if api_key:
+            # Use the API key itself as the rate limit key.
+            # In multi-user mode, each key maps to a specific user.
+            return f"user:{api_key}"
+        # Fall back to IP address when no API key is provided.
+        return _get_real_remote_address(request)
+
+    return key_func
+
+
+def _make_per_campaign_key_func(
+    app_state_campaigns_base_dir_attr: str = "campaigns_base_dir",
+) -> Callable[[Request], str]:
+    """Create a key function that rate limits by campaign (issue #445).
+
+    Extracts the campaign ID from the URL path for multi-campaign mode.
+    Falls back to IP address when no campaign ID is available
+    (e.g., legacy single-campaign endpoints like /api/v1/campaign).
+    """
+
+    def key_func(request: Request) -> str:
+        campaign_id = _get_campaign_id_from_request(request)
+        if campaign_id:
+            return f"campaign:{campaign_id}"
+        # Fall back to IP address when no campaign ID is in the path.
+        return _get_real_remote_address(request)
+
+    return key_func
+
+
+def _get_rate_limit_key_func(
+    rate_limit_key: str,
+) -> Callable[[Request], str]:
+    """Get the appropriate rate limit key function based on the configured mode (issue #445).
+
+    Parameters
+    ----------
+    rate_limit_key
+        One of ``"ip"`` (default, per-IP limiting),
+        ``"user"`` (per-API-key limiting), or
+        ``"campaign"`` (per-campaign-ID limiting).
+
+    Returns
+    -------
+    Callable[[Request], str]
+        A key function that maps a request to a rate limit bucket key.
+    """
+    if rate_limit_key == "user":
+        return _make_per_user_key_func()
+    elif rate_limit_key == "campaign":
+        return _make_per_campaign_key_func()
+    else:
+        return _get_real_remote_address
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +377,90 @@ async def ready(request: Request) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Campaign health dashboard (issue #437)
+# ---------------------------------------------------------------------------
+
+
+def _compute_campaign_status(data: dict[str, Any]) -> str:
+    """Derive an overall health status from run.json data.
+
+    Returns ``"healthy"``, ``"degraded"``, ``"unhealthy"``, or ``"unknown"``.
+    """
+    status = data.get("status", "unknown")
+    per_sample: list[dict[str, Any]] = data.get("per_sample", [])
+    n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+
+    if status == "running":
+        return "degraded" if n_failed > 0 else "healthy"
+    if status in ("success", "completed"):
+        if not per_sample:
+            return "healthy"
+        if n_failed == 0:
+            return "healthy"
+        return "degraded" if n_failed < len(per_sample) else "unhealthy"
+    if status in ("failed", "cancelled"):
+        return "unhealthy"
+    return "unknown"
+
+
+@router.get("/api/v1/health")  # type: ignore[untyped-decorator]
+async def get_campaign_health(request: Request) -> dict[str, Any]:
+    """Campaign health dashboard — overall status + per-step summary.
+
+    Returns:
+        overall status (healthy/degraded/unknown), per-step status list,
+        sample counts (total/success/failed/running), and key timestamps.
+    """
+    data = _load_run_json(request)
+
+    per_sample = data.get("per_sample", [])
+    n_total = len(per_sample)
+    n_success = sum(1 for s in per_sample if s.get("status") == "ok")
+    n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
+    n_cached = sum(1 for s in per_sample if s.get("status") == "cached")
+    n_running = n_total - n_success - n_failed - n_cached
+
+    steps: list[dict[str, Any]] = data.get("steps", [])
+    step_statuses: list[dict[str, str]] = [
+        {
+            "step": s.get("step", ""),
+            "cache": s.get("cache", ""),
+            "status": "ok" if s.get("exit_code", 1) == 0 else "failed",
+            "elapsed_s": s.get("elapsed_s", 0.0),
+        }
+        for s in steps
+    ]
+
+    return {
+        "campaign_id": data.get("campaign_id"),
+        "overall_status": _compute_campaign_status(data),
+        "campaign_status": data.get("status", "unknown"),
+        "steps": step_statuses,
+        "samples": {
+            "total": n_total,
+            "success": n_success,
+            "failed": n_failed,
+            "cached": n_cached,
+            "running": n_running,
+        },
+        "started_at": data.get("started_at"),
+        "finished_at": data.get("finished_at"),
+        "elapsed_s": data.get("elapsed_s"),
+    }
+
+
+@router.get("/api/v1/health/details")  # type: ignore[untyped-decorator]
+async def get_campaign_health_details(request: Request) -> dict[str, Any]:
+    """Full run.json contents for the campaign health dashboard.
+
+    Returns the complete run.json for clients that need per-sample details,
+    error summaries, worker info, or any field not surfaced in
+    ``GET /api/v1/health``.
+    """
+    return _load_run_json(request)
+
+
+# ---------------------------------------------------------------------------
 # Pre-flight config validation (issue #398)
 # ---------------------------------------------------------------------------
 
@@ -356,16 +541,12 @@ class ValidateConfigResponse(BaseModel):  # type: ignore[no-redef]
     """Response for ``POST /api/v1/validate``."""
 
     valid: bool = Field(description="True when all validation checks passed")
-    errors: list[str] = Field(
-        default_factory=list, description="Critical validation errors"
-    )
-    warnings: list[str] = Field(
-        default_factory=list, description="Non-critical warnings"
-    )
+    errors: list[str] = Field(default_factory=list, description="Critical validation errors")
+    warnings: list[str] = Field(default_factory=list, description="Non-critical warnings")
 
 
 @router.post("/api/v1/validate")  # type: ignore[untyped-decorator]
-async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
+async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:  # noqa: PLR0912
     """Pre-flight configuration validation (issue #398).
 
     Validates the supplied config fields without running a campaign.
@@ -402,12 +583,11 @@ async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
             errors.append(str(exc))
 
     # --- OpenStudio version format ---
-    if req.openstudio_version:
-        if not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
-            errors.append(
-                f"openstudio_version must start with a digit (e.g. 3.11.0), "
-                f"got {req.openstudio_version!r}"
-            )
+    if req.openstudio_version and not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
+        errors.append(
+            f"openstudio_version must start with a digit (e.g. 3.11.0), "
+            f"got {req.openstudio_version!r}"
+        )
 
     # --- Sample count sanity ---
     if req.n_samples < 1:
@@ -982,7 +1162,9 @@ def create_app(
     api_keys_file: Path | None = None,
     cors_origins: list[str] | None = None,
     rate_limit: str = "60/minute",
+    rate_limit_key: str = "ip",
     ui_enabled: bool = False,
+    results_viewer: bool = False,
     registry_path: Path | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
@@ -1027,6 +1209,10 @@ def create_app(
         origins.
     rate_limit
         Rate limit string, e.g. ``"60/minute"`` (default ``"60/minute"``).
+    rate_limit_key
+        Rate limit key type: ``"ip"`` (default, per-IP limiting),
+        ``"user"`` (per-API-key limiting, issue #445), or
+        ``"campaign"`` (per-campaign-ID limiting, issue #445).
     ui_enabled
         Enable the web UI router (issue #337).
     registry_path
@@ -1089,7 +1275,7 @@ def create_app(
             allow_headers=["X-API-Key", "Content-Type"],
         )
 
-    # --- Rate limiting (issue #454) ---
+    # --- Rate limiting (issue #454, #445) ---
     # Custom in-process middleware replaces slowapi's SlowAPIMiddleware,
     # which did not reliably maintain its counter between sequential
     # TestClient requests under pytest-xdist in CI.
@@ -1100,16 +1286,18 @@ def create_app(
     #   2. add RateLimitMiddleware   ← runs after auth
     #   3. add APIKeyMiddleware      ← outermost, runs first
     # Result: APIKey(RateLimit(CORS(router)))
+    key_func = _get_rate_limit_key_func(rate_limit_key)
     app.add_middleware(
         RateLimitMiddleware,
         rate_limit=rate_limit,
-        key_func=_get_real_remote_address,
+        key_func=key_func,
     )
 
     # Store a reference for tests / introspection.  The actual
     # middleware instance is created lazily by Starlette's
     # add_middleware, so we expose the configured rate-limit string.
     app.state.limiter = rate_limit  # type: ignore[assignment]
+    app.state.rate_limit_key = rate_limit_key  # type: ignore[assignment]
 
     # --- Authentication middleware (outermost — runs first) ---
     app.add_middleware(APIKeyMiddleware)
@@ -1122,17 +1310,21 @@ def create_app(
     app.include_router(files_router)
     app.include_router(timeseries_router)
     app.include_router(variables_router)
-    app.include_router(measures_router)
 
-    # --- Web UI router (issue #337) ---
-    if ui_enabled:
-        app.include_router(ui_router)
-        log.info("web UI enabled at /ui/")
+    if results_viewer:
+        app.include_router(results_viewer_router)
+
+        @router.get("/results/")  # type: ignore[untyped-decorator]
+        async def results_viewer_redirect() -> RedirectResponse:
+            """Redirect /results/ to the Results Viewer HTML page."""
+            return RedirectResponse(url="/static/results_viewer.html")
+
+    app.include_router(measures_router)
 
     # --- Static files for the web GUI (issue #264) ---
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-        log.info("web GUI mounted at /static/ from %s", static_dir)
+        log.info("static files mounted at /static/ from %s", static_dir)
 
     return app

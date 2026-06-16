@@ -61,6 +61,7 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
+from .cost_tracking import build_cost_tracker
 from .distributed_jobqueue import build_job_queue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .measures import MeasureRegistry, UnmappedVariableError
@@ -71,7 +72,13 @@ from .mlflow_hook import (
     maybe_end_mlflow_run,
     maybe_start_mlflow_run,
 )
-from .monitoring import GenerationTrace, RunTrace, SampleTrace, sample_log_paths
+from .monitoring import (
+    GenerationTrace,
+    RunTrace,
+    SampleTrace,
+    WorkerRecoveryManager,
+    sample_log_paths,
+)
 from .observability import (
     CloudWatchBackend,
     NullBackend,
@@ -116,6 +123,22 @@ log = logging.getLogger("osimflow.campaign")
 # The scientific Python image remains a project-owned ghcr.io artifact.
 CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
+
+
+class QuotaExceededError(RuntimeError):
+    """Raised when a campaign resource quota is exceeded (issue #446)."""
+
+    def __init__(
+        self,
+        message: str,
+        quota_type: str,
+        limit: int | float,
+        current: int | float,
+    ) -> None:
+        super().__init__(message)
+        self.quota_type = quota_type
+        self.limit = limit
+        self.current = current
 
 
 # Type aliases — these are the schemas of intermediate DAG outputs.
@@ -283,6 +306,21 @@ class Campaign:
                     exc,
                 )
 
+        # Cost tracking (issue #447). Built here so the correct backend is
+        # always used.  None when track_costs is False (zero overhead).
+        self._cost_tracker = build_cost_tracker(
+            campaign_id=self.trace.campaign_id,
+            executor_type=executor.name,
+            result_storage_backend=cfg.result_storage_backend,
+            result_storage_bucket=cfg.result_storage_bucket,
+            result_storage_prefix=str(cfg.outdir.name),
+            result_storage_endpoint=cfg.result_storage_endpoint,
+            track_costs=cfg.track_costs,
+            aws_on_demand_per_vcpu_hour=cfg.aws_on_demand_per_vcpu_hour,
+            aws_spot_per_vcpu_hour=cfg.aws_spot_per_vcpu_hour,
+            slurm_cost_per_node_hour=cfg.slurm_cost_per_node_hour,
+        )
+
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
         self._cancel_lock = threading.Lock()
@@ -312,6 +350,95 @@ class Campaign:
             endpoint = cfg.otel_endpoint or "http://localhost:4317"
             return OpenTelemetryBackend(endpoint=endpoint)
         raise ValueError(f"unknown observability backend: {backend_type}")
+
+    def _enforce_start_quota(self) -> None:
+        """Fail fast if the campaign's resource quota is already exceeded at start.
+
+        Called at the beginning of ``run()`` before any work is dispatched.
+        Raises ``QuotaExceededError`` with a descriptive message if any quota
+        is already violated.
+        """
+        quota = self.cfg.resource_quota
+        if quota is None:
+            return
+
+        if quota.max_samples is not None and self.cfg.n_samples > quota.max_samples:
+            raise QuotaExceededError(
+                f"n_samples={self.cfg.n_samples} exceeds resource_quota.max_samples="
+                f"{quota.max_samples}",
+                quota_type="max_samples",
+                limit=quota.max_samples,
+                current=self.cfg.n_samples,
+            )
+
+        log.info(
+            "resource quota active: max_samples=%s, max_cost_usd=%s, "
+            "max_wall_time_min=%s, max_concurrent_samples=%s",
+            quota.max_samples,
+            quota.max_cost_usd,
+            quota.max_wall_time_min,
+            quota.max_concurrent_samples,
+        )
+
+    def _check_quota_exceeded(self) -> bool:
+        """Return True if any hard quota limit has been reached.
+
+        Checks:
+        - ``max_samples``: total samples submitted so far vs. the limit.
+        - ``max_cost_usd``: accumulated campaign cost vs. the limit.
+        - ``max_wall_time_min``: elapsed campaign time vs. the limit.
+
+        Does NOT check ``max_concurrent_samples`` — that is enforced
+        by bounding ``max_workers`` at construction time.
+        """
+        quota = self.cfg.resource_quota
+        if quota is None:
+            return False
+
+        if quota.max_samples is not None:
+            submitted = sum(
+                1
+                for state in self._sample_state.values()
+                if any(k.endswith("_exit_code") or k.endswith("_status") for k in state)
+            )
+            if submitted >= quota.max_samples:
+                log.warning(
+                    "max_samples quota reached (%d >= %d) — skipping further submissions",
+                    submitted,
+                    quota.max_samples,
+                )
+                return True
+
+        if quota.max_cost_usd is not None and self.trace.total_cost_usd >= quota.max_cost_usd:
+            log.warning(
+                "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
+                self.trace.total_cost_usd,
+                quota.max_cost_usd,
+            )
+            return True
+
+        elapsed_min = (time.time() - self.trace.started_at) / 60.0
+        if quota.max_wall_time_min is not None and elapsed_min >= quota.max_wall_time_min:
+            log.warning(
+                "max_wall_time_min quota reached (%.1f >= %.1f min) — skipping further submissions",
+                elapsed_min,
+                quota.max_wall_time_min,
+            )
+            return True
+
+        return False
+
+    def _effective_max_workers(self) -> int:
+        """Return the effective max_workers bounded by max_concurrent_samples quota.
+
+        If a ``max_concurrent_samples`` quota is set, the fan-out parallelism
+        is capped to that value. Otherwise, ``self.max_workers`` is returned
+        unchanged.
+        """
+        quota = self.cfg.resource_quota
+        if quota is not None and quota.max_concurrent_samples is not None:
+            return min(self.max_workers, quota.max_concurrent_samples)
+        return self.max_workers
 
     def _compute_code_hashes(self) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
@@ -542,6 +669,8 @@ class Campaign:
         self,
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
         step_name: str,
+        recovery_manager: WorkerRecoveryManager | None = None,
+        resubmit_callback: Callable[[str], Handle | TQHandle | None] | None = None,
     ) -> None:
         """Submit all samples to the executor, then await all results concurrently.
 
@@ -557,6 +686,15 @@ class Campaign:
             ``_sample_state``, cache, and monitoring.
         step_name
             The step name for logging.
+        recovery_manager
+            Optional worker recovery manager for auto-recovery (issue #443).
+            When provided and a job fails, the manager is consulted to check
+            if the heartbeat is stale. If so and auto-recovery is enabled,
+            the job is automatically resubmitted via resubmit_callback.
+        resubmit_callback
+            Optional callback to resubmit a failed job. Called with the
+            sample_id when auto-recovery is triggered. Must return a new
+            handle. Only used when recovery_manager is also provided.
 
         The method submits no new work — all submissions are already
         dispatched.  It awaits results using a
@@ -572,6 +710,10 @@ class Campaign:
         before awaiting and marked completed/failed after.  The enqueue
         is idempotent — a sample that was already queued from a previous
         interrupted run is silently skipped.
+
+        Worker auto-recovery (issue #443): when a job fails and
+        recovery_manager is provided, the heartbeat is checked. If stale,
+        the job is resubmitted automatically up to max_sample_retries.
         """
         if not submissions:
             return
@@ -593,8 +735,64 @@ class Campaign:
                 on_success(result)
                 # Mark completed in the job queue (issue #263).
                 self._job_queue.mark_completed(f"{sid}_{step_name}")
+                # Reset recovery attempts on successful completion (issue #443).
+                if recovery_manager is not None:
+                    recovery_manager.reset(sid)
             except Exception as e:
                 log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
+
+                # Worker auto-recovery (issue #443): check if heartbeat is stale.
+                # If stale and auto-recovery is enabled, attempt resubmission.
+                if recovery_manager is not None and resubmit_callback is not None:
+                    can_recover, attempt = recovery_manager.check_and_recover(
+                        sid, self.cfg.max_sample_retries
+                    )
+                    if can_recover:
+                        log.info(
+                            "%s %s: stale heartbeat detected (attempt %d/%d), auto-recovering",
+                            step_name,
+                            sid,
+                            attempt,
+                            self.cfg.max_sample_retries,
+                        )
+                        # Clear the failed state so recovery doesn't show as failed.
+                        state = self._sample_state.setdefault(sid, {})
+                        state.pop(f"{step_name.lower}_exit_code", None)
+                        state.pop(f"{step_name.lower}_status", None)
+                        state.pop("error_summary", None)
+                        # Resubmit and await the new handle.
+                        new_handle = resubmit_callback(sid)
+                        if new_handle is not None:
+                            # Capture sid for use in the resubmit logic.
+                            recovery_sid = sid
+
+                            # Create a new on_success callback wrapper for the resubmit.
+                            def _on_success_resubmit(
+                                result_path: Any,
+                                _recovery_sid: str = recovery_sid,
+                                _on_success: Callable[[Any], None] = on_success,
+                            ) -> None:
+                                _on_success(result_path)
+                                if recovery_manager is not None:
+                                    recovery_manager.reset(_recovery_sid)
+
+                            # Await the resubmitted handle.
+                            try:
+                                result = new_handle.result()
+                                _on_success_resubmit(result)
+                                self._job_queue.mark_completed(f"{recovery_sid}_{step_name}")
+                                self._checkpoint_sample(recovery_sid)
+                                return recovery_sid
+                            except Exception as resubmit_error:
+                                log.error(
+                                    "%s %s auto-recovery failed: %s",
+                                    step_name,
+                                    sid,
+                                    resubmit_error,
+                                    exc_info=True,
+                                )
+                                # Fall through to mark as failed.
+
                 # Mark failed in the job queue (issue #263).
                 self._job_queue.mark_failed(
                     f"{sid}_{step_name}",
@@ -649,6 +847,49 @@ class Campaign:
                 # cancelled via f.cancel() during a cancellation sweep.
                 with contextlib.suppress(Exception, concurrent.futures.CancelledError):
                     future.result()
+
+    def _record_costs(self, step_name: str) -> None:
+        """Record per-sample costs from the completed *step_name* fan-out.
+
+        This is called after each ``_submit_and_await_all`` for the three
+        fan-out steps (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS).
+        The cost data (``cost_usd``, ``billed_duration_seconds``) is sourced
+        from ``_sample_state``, populated by the step's ``_on_success``
+        callback when the executor sets these attributes on the Handle.
+
+        When ``self._cost_tracker`` is None (cost tracking disabled), this
+        is a no-op.
+        """
+        if self._cost_tracker is None:
+            return
+        for sid, state in self._sample_state.items():
+            cost_usd = state.get("cost_usd")
+            billed_secs = state.get("billed_duration_seconds")
+            if cost_usd is None and billed_secs is None:
+                continue
+            resource_usage: dict[str, float] = {}
+            if billed_secs is not None:
+                resource_usage["billed_duration_seconds"] = float(billed_secs)
+            if cost_usd is not None:
+                resource_usage["cost_usd"] = float(cost_usd)
+            estimate = self._cost_tracker._cost_model.estimate(resource_usage)  # type: ignore[attr-defined]
+            self._cost_tracker.record_sample(sid, estimate)
+        step_cost = sum(est.estimated_cost_usd for est in self._cost_tracker._sample_costs.values())
+        self._cost_tracker.record_step(step_name, step_cost)
+
+    def _finalize_costs(self) -> None:
+        """Build and persist the campaign cost summary.
+
+        Called once at the end of ``run()`` when cost tracking is enabled.
+        """
+        if self._cost_tracker is None:
+            return
+        try:
+            path = self._cost_tracker.persist()
+            if path:
+                log.info("campaign cost summary written to %s", path)
+        except Exception as exc:
+            log.warning("could not persist cost summary: %s", exc, exc_info=True)
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -1593,7 +1834,7 @@ class Campaign:
 
         return self._finalize_full_campaign(t0, all_kpi_files, last_simulated, last_samples)
 
-    def _run_one_generation(
+    def _run_one_generation(  # noqa: PLR0912
         self,
         algo: BaseAlgorithm,
         history: list[dict[str, Any]],
@@ -1676,6 +1917,16 @@ class Campaign:
             self.step_compute_sensitivity_indices(
                 samples, kpi_files, variables, generation=generation
             )
+
+        # UQ analysis (issue #530): compute POF, CIs, and distribution summaries.
+        if self.cfg.algorithm == "uq":
+            variables = {}
+            if self.cfg.input_variables.exists():
+                with self.cfg.input_variables.open() as fh:
+                    raw = yaml.safe_load(fh)
+                    if isinstance(raw, dict):
+                        variables = raw
+            self.step_compute_uq_indices(samples, kpi_files, variables, generation=generation)
 
         # Per-generation Pareto front persistence for multi-objective
         # algorithms (issue #141).  When the algorithm reports
@@ -2383,6 +2634,7 @@ class Campaign:
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
+        self._record_costs("APPLY_PARAMETERS")
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
@@ -2594,7 +2846,64 @@ class Campaign:
             submissions[sid] = (handle, _on_success)
 
         # --- Phase 3: await all results concurrently ---
-        self._submit_and_await_all(submissions, "RUN_OPENSTUDIO_SIM")
+        # Worker auto-recovery (issue #443): set up recovery manager and resubmit
+        # callback when auto-recovery is enabled.
+        recovery_manager: WorkerRecoveryManager | None = None
+        resubmit_callback: Callable[[str], Handle | TQHandle | None] | None = None
+
+        if self.cfg.worker_auto_recovery:
+            recovery_manager = WorkerRecoveryManager(self.cfg.outdir)
+
+            def resubmit_callback(sid: str) -> Handle | TQHandle | None:
+                """Resubmit a failed job for auto-recovery."""
+                ctx = pending.get(sid)
+                if ctx is None:
+                    log.error("auto-recovery: no pending context for sample %s", sid)
+                    return None
+                log.info(
+                    "auto-recovery: resubmitting sample %s (outdir=%s)",
+                    sid,
+                    ctx["out_dir"],
+                )
+                if self.task_queue is not None:
+                    return self.task_queue.submit(
+                        run_openstudio_sim,
+                        ctx["mod_pkg"],
+                        sid,
+                        os_version,
+                        ctx["out_dir"],
+                        openstudio_version=os_version,
+                        stdout_path=ctx["stdout_log"],
+                        stderr_path=ctx["stderr_log"],
+                        max_retries=self.cfg.max_sample_retries,
+                        worker_id="local",
+                    )
+                else:
+                    return self.executor.submit(
+                        run_openstudio_sim,
+                        ctx["mod_pkg"],
+                        sid,
+                        os_version,
+                        ctx["out_dir"],
+                        name=f"sim_{sid}",
+                        cpus=4,
+                        memory_mb=8 * 1024,
+                        time_min=240,
+                        container=CONTAINER_OS.format(version=os_version),
+                        openstudio_version=os_version,
+                        stdout_path=ctx["stdout_log"],
+                        stderr_path=ctx["stderr_log"],
+                        max_retries=self.cfg.max_sample_retries,
+                        worker_id="local",
+                    )
+
+        self._submit_and_await_all(
+            submissions,
+            "RUN_OPENSTUDIO_SIM",
+            recovery_manager=recovery_manager,
+            resubmit_callback=resubmit_callback,
+        )
+        self._record_costs("RUN_OPENSTUDIO_SIM")
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
@@ -2726,6 +3035,7 @@ class Campaign:
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "EXTRACT_KPIS")
+        self._record_costs("EXTRACT_KPIS")
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
@@ -2850,6 +3160,119 @@ class Campaign:
         log.info("COMPUTE_SENSITIVITY_INDICES: wrote %s", indices_path)
         return indices_path
 
+    def step_compute_uq_indices(
+        self,
+        samples: list[SampleSpec],
+        kpi_files: list[Path],
+        variables: dict[str, Any],
+        generation: int = 0,
+    ) -> Path | None:
+        """Compute UQ indices (POF, CIs, distribution summaries) after KPI extraction.
+
+        This step runs only when ``cfg.algorithm == "uq"``. It reads the
+        per-sample KPI values, passes them to
+        :meth:`UncertaintyQuantification.compute_uq_indices`, and stores
+        the resulting ``uq_results.json`` in the campaign output directory.
+
+        The step is not cached — UQ computation is cheap relative to
+        simulation and the user may want to re-run with different thresholds.
+
+        Parameters
+        ----------
+        samples
+            Sample specs from ``step_generate_samples``.
+        kpi_files
+            Per-sample KPI JSON files from ``step_extract_kpis``.
+        variables
+            Parsed ``variables.yml`` dict.
+        generation
+            Generation number (included for consistency; UQ is
+            single-shot so this is always 0).
+
+        Returns
+        -------
+        Path | None
+            Path to ``uq_results.json``, or ``None`` if the algorithm
+            is not ``"uq"`` or no KPI files are available.
+        """
+        if self.cfg.algorithm != "uq":
+            return None
+
+        t0 = time.time()
+
+        if self._check_cancel_requested():
+            raise KeyboardInterrupt("cancellation requested before COMPUTE_UQ_INDICES")
+
+        if not kpi_files:
+            log.warning("COMPUTE_UQ_INDICES: no KPI files — skipping")
+            self.trace.step_finished(
+                "COMPUTE_UQ_INDICES",
+                cache="SKIPPED",
+                elapsed_s=0.0,
+                exit_code=0,
+            )
+            return None
+
+        kpi_values: dict[str, dict[str, float]] = {}
+        for kpi_path in kpi_files:
+            try:
+                data = json.loads(kpi_path.read_text())
+                sid = str(data.get("sample_id", kpi_path.stem.replace("kpi_", "")))
+                kpis = data.get("kpis", {})
+                numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
+                kpi_values[sid] = numeric_kpis
+            except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                log.warning("could not read KPI file %s: %s", kpi_path, exc)
+
+        failure_thresholds: dict[str, tuple[float, str]] | None = None
+        if self.cfg.uq_failure_thresholds:
+            failure_thresholds = {}
+            from osimflow.algorithms.uq import _parse_failure_threshold  # noqa: PLC0415
+
+            for raw in self.cfg.uq_failure_thresholds:
+                try:
+                    kpi_name, threshold = _parse_failure_threshold(raw)
+                    failure_thresholds[kpi_name] = (threshold, "greater")
+                except ValueError as exc:
+                    log.warning("invalid failure threshold %r: %s", raw, exc)
+
+        algo = AlgorithmRegistry.get("uq")
+        uq_dir = self.cfg.outdir / "uq"
+        uq_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            uq_path = algo.compute_uq_indices(
+                variables=variables,
+                samples=samples,  # type: ignore[arg-type]
+                kpi_values=kpi_values,
+                outdir=uq_dir,
+                failure_thresholds=failure_thresholds,
+            )
+        except Exception as exc:
+            log.error(
+                "COMPUTE_UQ_INDICES failed: %s",
+                exc,
+                exc_info=True,
+            )
+            self.trace.step_finished(
+                "COMPUTE_UQ_INDICES",
+                cache="MISS",
+                elapsed_s=time.time() - t0,
+                exit_code=1,
+            )
+            raise RuntimeError("compute_uq_indices failed") from exc
+
+        elapsed = time.time() - t0
+        self.trace.step_finished(
+            "COMPUTE_UQ_INDICES",
+            cache="MISS",
+            elapsed_s=elapsed,
+            exit_code=0,
+        )
+        self._obs.record_step_duration("COMPUTE_UQ_INDICES", elapsed, generation=generation)
+        log.info("COMPUTE_UQ_INDICES: wrote %s", uq_path)
+        return uq_path
+
     def step_aggregate_results(
         self,
         kpi_files: list[Path],
@@ -2969,10 +3392,70 @@ class Campaign:
         self._obs.record_step_duration("GENERATE_BASIC_PLOTS", elapsed)
         return result
 
+    def warm_cache(self, n_warm: int = 10) -> dict[str, object]:
+        """Run N pilot samples to pre-populate the cache before a campaign.
+
+        Generates N pilot samples using the configured sampling algorithm,
+        runs ``APPLY_PARAMETERS`` and ``RUN_OPENSTUDIO_SIM`` for each, and
+        stores results in the SQLite cache.  When the real campaign starts
+        with the same configuration, those steps will hit the cache instead
+        of re-running the simulation.
+
+        This method intentionally skips KPI extraction and result aggregation
+        — those steps are not cached and running them for pilot samples would
+        add latency for no cache benefit.
+
+        Args:
+            n_warm: number of pilot samples to run (default 10).
+
+        Returns:
+            dict with ``n_samples`` and ``cache_stats``.
+        """
+        log.info("Cache warming: generating %d pilot samples", n_warm)
+        algo = AlgorithmRegistry.get(self.cfg.algorithm)
+        warm_dir = self.cfg.outdir / ".osimflow_warm"
+        warm_dir.mkdir(parents=True, exist_ok=True)
+
+        variables: dict[str, Any] = {}
+        if self.cfg.input_variables.exists():
+            with self.cfg.input_variables.open() as fh:
+                raw = yaml.safe_load(fh)
+                if isinstance(raw, dict):
+                    variables = raw
+
+        result_path = algo.generate_samples(
+            variables=variables,
+            n_samples=n_warm,
+            seed=None,
+            outdir=warm_dir,
+        )
+        samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
+        pilot_specs: list[SampleSpec] = cast_samples(samples_obj)
+
+        log.info(
+            "Cache warming: running apply + sim for %d pilot samples (populating cache)",
+            len(pilot_specs),
+        )
+        parameterized: SampleDict = self.step_apply_parameters(pilot_specs)
+        self.step_run_openstudio_sim(parameterized, generation=0)
+        stats = self.cache.get_stats()
+        log.info(
+            "Cache warming complete: %d/%d steps cached",
+            stats.hits,
+            stats.hits + stats.misses,
+        )
+        return {
+            "n_samples": len(pilot_specs),
+            "cache_stats": {
+                "hits": stats.hits,
+                "misses": stats.misses,
+                "total_keys": stats.total_keys,
+            },
+        }
+
 
 # ---------------------------------------------------------------------------
 # MLflow param view (issue #7)
-# ---------------------------------------------------------------------------
 def _make_mlflow_param_view(cfg: CampaignConfig, executor_name: str) -> SimpleNamespace:
     """Build a small adapter for `log_mlflow_params`.
 

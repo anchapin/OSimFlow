@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from osimflow import (
     AWSBatchExecutor,
@@ -627,6 +628,36 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "single-process LocalCluster is started automatically."
         ),
     )
+    # Cost tracking flags (issue #447)
+    run.add_argument(
+        "--enable-cost-tracking",
+        action="store_true",
+        help=(
+            "Enable campaign cost tracking for cloud/HPC resources (issue #447). "
+            "When set, estimated and actual costs are recorded per-sample and "
+            "a cost summary is written to run.json at campaign completion."
+        ),
+    )
+    run.add_argument(
+        "--cost-on-demand-price",
+        type=float,
+        default=None,
+        help=(
+            "On-demand price per vCPU-hour for cost estimation (USD). "
+            "Used when cloud provider APIs are unavailable. "
+            "Default: 0.05 (i.e., $0.05/vCPU·hour)."
+        ),
+    )
+    run.add_argument(
+        "--cost-spot-price",
+        type=float,
+        default=None,
+        help=(
+            "Spot price per vCPU-hour for cost estimation (USD). "
+            "Used to estimate potential savings vs on-demand. "
+            "Default: 0.03 (i.e., $0.03/vCPU·hour, ~40%% savings)."
+        ),
+    )
     run.add_argument("--input_variables", required=True)
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)
@@ -904,6 +935,122 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Only valid when --result-storage-backend is 's3'."
         ),
     )
+    run.add_argument(
+        "--resource-quota",
+        default=None,
+        help=(
+            "JSON dict of resource quota limits for the campaign (issue #446). "
+            'Example: \'{"max_samples": 100, "max_cost_usd": 5000.0, '
+            '"max_wall_time_min": 240, "max_concurrent_samples": 10}\'. '
+            "All fields are optional. The campaign fails fast at start if "
+            "a quota is already exceeded, and skips further sample submissions "
+            "when the quota is exhausted during fan-out steps."
+        ),
+    )
+    run.add_argument(
+        "--alert-rules",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a YAML file defining alert rules (issue #438). "
+            "Each rule specifies an event_type, severity, message_template, "
+            "and condition. Built-in rules are always included; custom rules "
+            "from this file are added alongside them."
+        ),
+    )
+    run.add_argument(
+        "--alert-destinations",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a YAML file defining alert destinations (issue #438). "
+            "Supported destination types: webhook (url), email (smtp_host, recipients), "
+            "and log (level). When not set, alerts are only logged."
+        ),
+    )
+    run.add_argument(
+        "--track-costs",
+        action="store_true",
+        help=(
+            "Enable campaign cost tracking (issue #447). "
+            "Estimates cloud/HPC resource costs and writes a cost summary JSON "
+            "alongside campaign outputs. Supports AWS Batch (on-demand/Spot), "
+            "Slurm (per-node-hour), and Local (no cost) executors."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-spot-price",
+        type=float,
+        default=None,
+        help=(
+            "AWS Batch Spot price in USD per vCPU-hour for cost tracking "
+            "(issue #447). When set alongside --track-costs, this rate is used "
+            "instead of the default $0.0036/vCPU·hr to estimate Spot savings. "
+            "The on-demand rate is set via --aws-batch-on-demand-price."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-on-demand-price",
+        type=float,
+        default=None,
+        help=(
+            "AWS Batch on-demand price in USD per vCPU-hour for cost tracking "
+            "(issue #447). When set alongside --track-costs, this rate is used "
+            "instead of the default $0.0132/vCPU·hr to estimate job costs."
+        ),
+    )
+    run.add_argument(
+        "--slurm-cost-per-node-hour",
+        type=float,
+        default=None,
+        help=(
+            "Slurm cost in USD per node-hour for cost tracking (issue #447). "
+            "When set alongside --track-costs, this rate is used instead of the "
+            "default $0.10/node·hr to estimate job costs."
+        ),
+    )
+    run.add_argument(
+        "--rate-limit-key",
+        choices=["ip", "user", "campaign"],
+        default="ip",
+        help=(
+            "Rate limit key type for per-user or per-campaign rate limiting (issue #445). "
+            '"ip" = per-IP address limiting (default). '
+            '"user" = per-API-key limiting (requires --api-keys-file or API key in X-API-Key header). '
+            '"campaign" = per-campaign-ID limiting (uses campaign ID from URL path).'
+        ),
+    )
+    run.add_argument(
+        "--uq-method",
+        default="latin_hypercube",
+        help=(
+            "Uncertainty Quantification (UQ) sampling method (issue #530). "
+            "Options: 'latin_hypercube' (default) or 'monte_carlo'. "
+            "Used when --algorithm uq is set."
+        ),
+    )
+    run.add_argument(
+        "--uq-n-samples",
+        type=int,
+        default=None,
+        help=(
+            "Number of Monte Carlo samples for UQ analysis (issue #530). "
+            "When omitted, defaults to --n_samples. "
+            "Used when --algorithm uq is set."
+        ),
+    )
+    run.add_argument(
+        "--uq-failure-threshold",
+        action="append",
+        default=None,
+        dest="uq_failure_thresholds",
+        help=(
+            "Failure threshold for probability of failure (POF) analysis (issue #530). "
+            "Format: 'kpi_name=threshold_value' (e.g., 'eui=150'). "
+            "Can be specified multiple times for multiple KPIs. "
+            "Used when --algorithm uq is set."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
@@ -1007,6 +1154,16 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         "--rate-limit",
         default="60/minute",
         help="Rate limit string, e.g. '60/minute' (default: 60/minute).",
+    )
+    serve.add_argument(
+        "--rate-limit-key",
+        default="ip",
+        choices=["ip", "user", "campaign"],
+        help=(
+            "Rate limit key type: 'ip' (default, per-IP limiting), "
+            "'user' (per-API-key limiting, issue #445), or "
+            "'campaign' (per-campaign-ID limiting, issue #445)."
+        ),
     )
     serve.add_argument(
         "--tls-cert",
@@ -1181,6 +1338,74 @@ def _add_cancel_args(cancel: argparse.ArgumentParser) -> None:
     cancel.add_argument("--log_level", default="INFO")
 
 
+def _add_mark_for_reanalysis_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments for the mark-for-reanalysis command (issue #420)."""
+    parser.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json and .osimflow/data_points.json",
+    )
+    parser.add_argument(
+        "sample_id",
+        type=str,
+        help="Sample ID to re-analyze (must be COMPLETED or FAILED)",
+    )
+    parser.add_argument(
+        "--priority",
+        type=int,
+        default=0,
+        help="Priority of the new reanalysis sample (default: 0)",
+    )
+    parser.add_argument("--log_level", default="INFO")
+
+
+def _add_merge_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments for the merge command (issue #418)."""
+    parser.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing .osimflow/data_points.json",
+    )
+    parser.add_argument(
+        "--source-ids",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Source sample IDs to merge (at least one required)",
+    )
+    parser.add_argument(
+        "--target-id",
+        type=str,
+        required=True,
+        help="Target sample ID for the merged result",
+    )
+    parser.add_argument(
+        "--target-work-dir",
+        type=Path,
+        required=True,
+        help="Path to the target sample's work directory",
+    )
+    parser.add_argument("--log_level", default="INFO")
+
+
+def _add_pause_args(pause: argparse.ArgumentParser) -> None:
+    pause.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json",
+    )
+    pause.add_argument("--log_level", default="INFO")
+
+
+def _add_resume_args(resume: argparse.ArgumentParser) -> None:
+    resume.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json",
+    )
+    resume.add_argument("--log_level", default="INFO")
+
+
 def _add_backup_args(bk: argparse.ArgumentParser) -> None:
     bk.add_argument(
         "--output",
@@ -1247,6 +1472,27 @@ def _add_health_args(health: argparse.ArgumentParser) -> None:
     health.add_argument("--log_level", default="ERROR")
 
 
+def _add_measure_args(measure: argparse.ArgumentParser) -> None:
+    measure.add_argument(
+        "action",
+        choices=["list"],
+        help="Action to perform (only 'list' is currently supported).",
+    )
+    measure.add_argument(
+        "--template",
+        type=Path,
+        required=True,
+        help="Path to the template simulation package (must contain a measures/ directory).",
+    )
+    measure.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table).",
+    )
+    measure.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -1255,6 +1501,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="Run a campaign")
     _add_run_args(run)
+    warm = sub.add_parser("warm-cache", help="Pre-populate the simulation cache before a campaign")
+    _add_run_args(warm)
+    warm.add_argument(
+        "--n_warm",
+        type=int,
+        default=10,
+        help="Number of pilot samples to run for cache warming (default: 10)",
+    )
     imp = sub.add_parser(
         "import-osa",
         help="Import an OpenStudio Analysis (.osa / analysis.json) file",
@@ -1302,6 +1556,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Request graceful cancellation of a running campaign",
     )
     _add_cancel_args(cncl)
+    reanl = sub.add_parser(
+        "mark-for-reanalysis",
+        help="Mark a completed/failed sample for re-running (issue #420)",
+    )
+    _add_mark_for_reanalysis_args(reanl)
+    mrg = sub.add_parser(
+        "merge",
+        help="Merge multiple data points into a single target (issue #418)",
+    )
+    _add_merge_args(mrg)
+    pause_cmd = sub.add_parser(
+        "pause",
+        help="Request graceful pause of a running campaign (issue #444)",
+    )
+    _add_pause_args(pause_cmd)
+    resume_cmd = sub.add_parser(
+        "resume",
+        help="Request resume of a paused campaign (issue #444)",
+    )
+    _add_resume_args(resume_cmd)
     bk = sub.add_parser(
         "backup",
         help="Create a backup of the campaign registry (issue #440)",
@@ -1317,6 +1591,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Verify system health before starting a campaign (issue #411)",
     )
     _add_health_args(health)
+    measure = sub.add_parser(
+        "measure",
+        help="Discover and inspect measures from a template simulation package (issue #532)",
+    )
+    _add_measure_args(measure)
     return p
 
 
@@ -1390,7 +1669,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         api_keys_file=api_keys_file,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
+        rate_limit_key=args.rate_limit_key,
         ui_enabled=args.ui,
+        results_viewer=args.dashboard,
         registry_path=args.registry,
     )
     if args.host not in ("127.0.0.1", "localhost"):
@@ -1757,6 +2038,91 @@ def _format_field(record: CampaignRecord, key: str) -> str:
     return str(getattr(record, key, ""))
 
 
+def _cmd_mark_for_reanalysis(args: argparse.Namespace) -> int:
+    """Mark a completed/failed sample for re-running (issue #420)."""
+    from osimflow.data_point_manager import DataPointManager  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    dp_file = outdir / ".osimflow" / "data_points.json"
+
+    if not dp_file.exists():
+        print(f"error: data_points.json not found in {outdir}/.osimflow/", file=sys.stderr)
+        return 1
+
+    mgr = DataPointManager(outdir=outdir)
+    try:
+        new_dp = mgr.mark_for_reanalysis(args.sample_id)
+    except KeyError as exc:
+        print(
+            f"error: sample_id {args.sample_id!r} not found in data_points.json: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Reanalysis sample created: {new_dp.sample_id}")
+    print(f"  Status: {new_dp.status.value}")
+    print(f"  Original: {args.sample_id}")
+    return 0
+
+
+def _cmd_merge(args: argparse.Namespace) -> int:
+    """Merge multiple data points into a single target (issue #418)."""
+    from osimflow.data_point_manager import DataPointManager  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    dp_file = outdir / ".osimflow" / "data_points.json"
+
+    if not dp_file.exists():
+        print(f"error: data_points.json not found in {outdir}/.osimflow/", file=sys.stderr)
+        return 1
+
+    mgr = DataPointManager(outdir=outdir)
+    try:
+        target = mgr.merge(
+            source_ids=args.source_ids,
+            target_id=args.target_id,
+            target_work_dir=args.target_work_dir,
+        )
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Merged {len(args.source_ids)} source(s) into: {target.sample_id}")
+    print(f"  Status: {target.status.value}")
+    print(f"  Merged from: {', '.join(args.source_ids)}")
+    return 0
+
+
+def _cmd_warm_cache(args: argparse.Namespace) -> int:
+    """Pre-populate the simulation cache before a campaign (issue #427)."""
+    _apply_preset(args)
+    cfg: CampaignConfig = load_config(vars(args))
+    executor = _build_executor(args)
+    task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+    campaign = Campaign(
+        cfg,
+        executor,
+        apply_fn=None,
+        extract_fn=None,
+        max_workers=args.max_workers,
+        task_queue=task_queue,
+    )
+    result: Any = campaign.warm_cache(n_warm=args.n_warm)
+    cache_stats: Any = result["cache_stats"]
+    print(
+        f"Cache warming complete: {result['n_samples']} samples warm, "
+        f"{cache_stats['hits']} cache hits, {cache_stats['misses']} misses, "
+        f"{cache_stats['total_keys']} total keys"
+    )
+    return 0
+
+
 def _cmd_health(args: argparse.Namespace) -> int:
     """Run system health checks (issue #411)."""
     from osimflow.health import (  # noqa: PLC0415
@@ -1826,6 +2192,103 @@ def _cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pause(args: argparse.Namespace) -> int:
+    """Request graceful pause of a running campaign.
+
+    Writes a ``.pause`` flag file to the campaign's output directory.
+    The campaign orchestrator checks for this file during fan-out and
+    waits for in-flight samples to complete before writing the paused
+    trace to run.json. Unlike cancellation, pausing allows subsequent
+    resume to continue from where the campaign left off.
+    """
+    import json as json_mod  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    if run_data.get("finished_at") is not None:
+        print(
+            f"error: campaign '{run_data.get('campaign_id', 'unknown')}' "
+            f"has already completed (finished_at is set)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if run_data.get("status") == "paused":
+        print(f"campaign '{run_data.get('campaign_id', outdir.name)}' is already paused")
+        return 0
+
+    pause_file = outdir / ".pause"
+    if pause_file.exists():
+        print(f"pause already requested (--outdir={outdir})")
+        return 0
+
+    pause_file.write_text(json_mod.dumps({"requested_at": time.time()}))
+    campaign_id = run_data.get("campaign_id", outdir.name)
+    print(f"pause requested for campaign '{campaign_id}'")
+    print(f"  outdir:  {outdir}")
+    print(f"  pause file: {pause_file}")
+    return 0
+
+
+def _cmd_resume(args: argparse.Namespace) -> int:
+    """Request resume of a paused campaign.
+
+    Removes the ``.pause`` flag file from the campaign's output directory.
+    The campaign orchestrator detects the cleared pause condition and
+    continues processing pending samples.
+    """
+    import json as json_mod  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    if run_data.get("status") != "paused":
+        print(
+            f"error: campaign '{run_data.get('campaign_id', outdir.name)}' "
+            f"is not paused (status={run_data.get('status')})",
+            file=sys.stderr,
+        )
+        return 1
+
+    pause_file = outdir / ".pause"
+    if not pause_file.exists():
+        print(
+            f"warning: .pause file not found in {outdir}; "
+            "campaign may not recognize resume request",
+            file=sys.stderr,
+        )
+
+    if pause_file.exists():
+        pause_file.unlink()
+        print(f"pause flag removed from {pause_file}")
+    campaign_id = run_data.get("campaign_id", outdir.name)
+    print(f"resume requested for campaign '{campaign_id}'")
+    return 0
+
+
 def _cmd_backup(args: argparse.Namespace) -> int:
     """Create a backup of the campaign registry database (issue #440)."""
     registry_path = args.registry if args.registry else None
@@ -1859,6 +2322,55 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_measure_list(args: argparse.Namespace) -> int:
+    """List available measures in a template simulation package (issue #532)."""
+    import json as json_mod  # noqa: PLC0415
+
+    from osimflow import MeasureRegistry  # noqa: PLC0415
+
+    template_path: Path = args.template
+    if not template_path.exists():
+        print(f"error: template path not found: {template_path}", file=sys.stderr)
+        return 1
+    if not template_path.is_dir():
+        print(f"error: template path is not a directory: {template_path}", file=sys.stderr)
+        return 1
+
+    registry = MeasureRegistry()
+    registry.index_measures(template_path)
+    measures = registry.list_available_measures()
+
+    if not measures:
+        measures_dir = template_path / "measures"
+        if measures_dir.is_dir():
+            print(f"No measures found in {measures_dir}")
+        else:
+            print(f"No measures/ directory found in {template_path}")
+        return 0
+
+    if args.format == "json":
+        print(json_mod.dumps(measures, indent=2, default=str))
+        return 0
+
+    # table format (default)
+    print(f"Available Measures in {template_path / 'measures/'}:")
+    print()
+    for m in measures:
+        print(f"  - {m['name']} ({m['language']})")
+        for arg in m.get("arguments", []):
+            default_str = ""
+            if arg.get("default") is not None:
+                default_str = f", default: {arg['default']}"
+            required_str = " [required]" if arg.get("required") else ""
+            print(f"    Args: {arg['name']} [{arg['type']}]{default_str}{required_str}")
+        if not m.get("arguments"):
+            print("    (no arguments discovered)")
+        print()
+
+    print(f"Total: {len(measures)} measure(s)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -1876,9 +2388,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "status": _cmd_status,
         "download": _cmd_download,
         "cancel": _cmd_cancel,
+        "mark-for-reanalysis": _cmd_mark_for_reanalysis,
+        "merge": _cmd_merge,
+        "pause": _cmd_pause,
+        "resume": _cmd_resume,
         "backup": _cmd_backup,
         "restore": _cmd_restore,
         "health": _cmd_health,
+        "warm-cache": _cmd_warm_cache,
+        "measure": _cmd_measure_list,
     }
     handler = dispatch.get(args.command)
     if handler is not None:

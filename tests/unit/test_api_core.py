@@ -179,6 +179,155 @@ class TestStepsEndpoint:
         assert data["total_steps"] == 0
 
 
+class TestCampaignHealthEndpoint:
+    """Tests for /api/v1/health endpoint (issue #437)."""
+
+    def test_health_returns_overall_status(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["overall_status"] in ("healthy", "degraded", "unknown")
+        assert data["campaign_id"] == "test-campaign-001"
+
+    def test_health_returns_sample_counts(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "samples" in data
+        assert "total" in data["samples"]
+        assert "success" in data["samples"]
+        assert "failed" in data["samples"]
+        assert "running" in data["samples"]
+        assert "cached" in data["samples"]
+
+    def test_health_returns_step_statuses(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "steps" in data
+        assert len(data["steps"]) == 2
+        assert data["steps"][0]["step"] == "GENERATE_LHS_SAMPLES"
+
+    def test_health_returns_timestamps(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["started_at"] == 1000.0
+        assert data["finished_at"] == 2000.0
+
+    def test_health_no_outdir(self) -> None:
+        app = create_app(outdir=None)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 503
+
+    def test_health_no_run_json(self, tmp_path: Path) -> None:
+        app = create_app(outdir=tmp_path)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 404
+
+    def test_health_running_campaign(self, tmp_path: Path) -> None:
+        run_json = {
+            "schema_version": 1,
+            "campaign_id": "running-campaign",
+            "status": "running",
+            "started_at": 1000.0,
+            "steps": [],
+            "per_sample": [
+                {"sample_id": "s0", "status": "ok", "elapsed_s": 10.0},
+                {"sample_id": "s1", "status": "failed", "elapsed_s": 5.0},
+            ],
+        }
+        (tmp_path / "run.json").write_text(json.dumps(run_json))
+        app = create_app(outdir=tmp_path)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["overall_status"] == "degraded"
+        assert data["campaign_status"] == "running"
+        assert data["samples"]["total"] == 2
+        assert data["samples"]["success"] == 1
+        assert data["samples"]["failed"] == 1
+
+    def test_health_success_campaign_no_failures(self, tmp_path: Path) -> None:
+        run_json = {
+            "schema_version": 1,
+            "campaign_id": "success-campaign",
+            "status": "success",
+            "started_at": 1000.0,
+            "finished_at": 2000.0,
+            "steps": [],
+            "per_sample": [
+                {"sample_id": "s0", "status": "ok", "elapsed_s": 10.0},
+                {"sample_id": "s1", "status": "ok", "elapsed_s": 11.0},
+            ],
+        }
+        (tmp_path / "run.json").write_text(json.dumps(run_json))
+        app = create_app(outdir=tmp_path)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["overall_status"] == "healthy"
+        assert data["campaign_status"] == "success"
+
+    def test_health_cancelled_campaign(self, tmp_path: Path) -> None:
+        run_json = {
+            "schema_version": 1,
+            "campaign_id": "cancelled-campaign",
+            "status": "cancelled",
+            "started_at": 1000.0,
+            "finished_at": 1500.0,
+            "steps": [],
+            "per_sample": [],
+        }
+        (tmp_path / "run.json").write_text(json.dumps(run_json))
+        app = create_app(outdir=tmp_path)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["overall_status"] == "unhealthy"
+        assert data["campaign_status"] == "cancelled"
+
+
+class TestCampaignHealthDetailsEndpoint:
+    """Tests for /api/v1/health/details endpoint (issue #437)."""
+
+    def test_health_details_returns_full_run_json(self, tmp_outdir: Path) -> None:
+        app = create_app(outdir=tmp_outdir)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health/details")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["campaign_id"] == "test-campaign-001"
+        assert data["schema_version"] == 1
+        assert "steps" in data
+        assert "per_sample" in data
+
+    def test_health_details_no_outdir(self) -> None:
+        app = create_app(outdir=None)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health/details")
+        assert resp.status_code == 503
+
+    def test_health_details_no_run_json(self, tmp_path: Path) -> None:
+        app = create_app(outdir=tmp_path)
+        client = TestClient(app)
+        resp = client.get("/api/v1/health/details")
+        assert resp.status_code == 404
+
+
 class TestUnknownRoutes:
     """Tests for unknown route handling."""
 

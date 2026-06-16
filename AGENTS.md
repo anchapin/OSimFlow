@@ -109,25 +109,29 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 | Path | Purpose |
 |---|---|
-| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `DistributedCache`, `build_cache`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), and logging setup (`get_logger`, `setup_logging`). |
+| `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `DistributedCache`, `build_cache`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, `CacheStats`, `QuotaExceededError`, `ResourceQuota`, `DiscoveredMeasure`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`, `DOEAnalysis`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), the alerting helpers (`AlertManager`, `build_alert_manager`), the cost tracking helpers (`CostEstimate`, `CostTracker`, `CampaignCostSummary`), the data point lifecycle helpers (`DataPoint`, `DataPointManager`, `DataPointStatus` for issues #418/#419/#420), the version detection helpers (`VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`), and logging setup (`get_logger`, `setup_logging`). |
 | `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
-| `osimflow/cache.py` | `SQLiteCache` + `CacheKey` — explicit, testable resume semantics. |
+| `osimflow/cache.py` | `SQLiteCache` + `CacheKey` + `CacheStats` — explicit, testable resume semantics and hit rate statistics (issue #426). |
+| `osimflow/data_point_manager.py` | `DataPoint` + `DataPointManager` + `DataPointStatus` — JSON-persisted data point lifecycle manager for reanalysis, merging, and priority ordering (issues #418, #419, #420). |
 | `osimflow/document_store.py` | `DocumentStore` ABC + `SQLiteDocumentStore` — MongoDB-equivalent document store using SQLite JSON1; provides `insert_one`, `find_one`, `find_many`, `update_one`, `delete_one`, `create_index`, and `aggregate` for campaign data persistence (issue #389). |
 | `osimflow/distributed_cache.py` | `DistributedCache` + `build_cache` — Redis pub/sub wrapper for cross-node cache invalidation in multi-node campaigns (issue #330). |
 | `osimflow/distributed_jobqueue.py` | `DistributedJobQueue` + `build_job_queue` — Redis pub/sub wrapper for cross-node job queue coordination in multi-node campaigns (issue #393). |
-| `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()` + `coerce_variable_type` (issue #409 type auto-coercion). |
+| `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()` + `coerce_variable_type` + `ResourceQuota` (issue #409 type auto-coercion). |
 | `osimflow/storage.py` | `ResultStorage` ABC, `LocalStorage` (no-op), `S3Storage` (boto3), `GCSStorage` (google-cloud-storage), `AzureBlobStorage` (azure-storage-blob async), `ResultStorageUploader` (sync wrapper), and `build_result_storage` factory (issue #339). |
 | `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
 | `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger`, `setup_logging`, and `LogAggregator`. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend` + `new_trace_id` (per-sample trace-ID helper); plug-in metrics backends (issue #145, #127). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, `osimflow compare`, `osimflow backup`, and `osimflow restore` subcommands. Registry backup/export/import methods: `export_registry()`, `import_registry()`, `backup()` (issue #440). |
-| `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, plus `EPWValidationError` / `EPWDownloadError`. |
+ | `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, `detect_climate_zone_from_stat`, plus `EPWValidationError` / `EPWDownloadError` (issue #424). |
 | `osimflow/health.py` | CLI health check module (issue #411): `CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`, `run_health_checks`, `format_results`, `to_json`, `get_exit_code`. Powers the `osimflow health` subcommand — verifies Python version, core packages, SQLite, write permissions, disk space, external tools (OpenStudio/Docker/Podman), optional packages, and network connectivity. |
 | `osimflow/api/__init__.py` | REST API public surface: `create_app`. Optional `[api]` extra (issue #138). |
 | `osimflow/api/app.py` | FastAPI application factory with `/health`, `/ready`, `/api/v1/campaign`, `/api/v1/steps` endpoints (issue #138, G23a). |
 | `osimflow/api/events.py` | SSE live events and campaign stop endpoints (issue #143): `GET /api/v1/events` (Server-Sent Events stream watching `run.json`), `POST /api/v1/campaign/stop` (writes `.stop` flag to halt a running campaign). |
 | `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
+| `osimflow/alerting.py` | `AlertManager` + `build_alert_manager` — Alert routing for campaign events (Slack, PagerDuty, email). |
+| `osimflow/cost_tracking.py` | `CostEstimate` + `CostTracker` + `CampaignCostSummary` — Cloud/HPC resource cost estimation and tracking (issue #447). |
+| `osimflow/version_detection.py` | `VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility` — OpenStudio version detection and container tag resolution. |
 | `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. `AlgorithmRegistry.discover_plugins()` auto-discovers third-party algorithms via `entry_points` group `osimflow.algorithms` (issue #432). |
 | `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
 | `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
@@ -138,6 +142,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
+| `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
 | `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
@@ -146,6 +151,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254). |
 | `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
+| `osimflow/measures.py` | `MeasureRegistry`, `Measure`, `MeasureArgument`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError` — measure discovery, argument introspection, and variable validation for parametric campaigns (issue #532). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
@@ -223,10 +229,13 @@ The 7-step DAG that the `Campaign` class drives:
 - `--max-workers` (local executor parallelism)
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
 - `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
+- `--slurm-cost-per-node-hour` (Slurm cost in USD per node-hour for cost tracking; issue #447)
 - `--aws-batch-queue`, `--aws-batch-job-definition`
 - `--aws-batch-max-spot-price-usd` (Spot price ceiling in USD/vCPU-hour. Issue #131)
 - `--aws-batch-fallback-to-on-demand` (fall back to on-demand when Spot exceeds ceiling or retries exhausted. Issue #131)
 - `--aws-batch-max-retries` (max Spot interruption retries; default 3. Issue #131)
+- `--aws-batch-spot-price` (AWS Batch Spot price in USD per vCPU-hour for cost tracking; issue #447)
+- `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
 - `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-pool-id`, `--azure-batch-location` (Azure Batch executor configuration)
 - `--azure-use-spot`, `--azure-fallback-to-on-demand`, `--azure-max-retries` (Azure spot/preemptible instance handling; issue #352)
 - `--google-batch-project-id`, `--google-batch-region`, `--google-batch-service-account` (Google Cloud Batch executor configuration)
@@ -243,12 +252,16 @@ The 7-step DAG that the `Campaign` class drives:
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
+- `--uq-method` (UQ propagation method: `latin_hypercube` (default). Issue #530)
+- `--uq-n-samples` (number of samples for UQ analysis. Issue #530)
+- `--uq-failure-threshold` (failure threshold in `kpi=threshold` format; may be specified multiple times. Issue #530)
 - `--openstudio_version`, `--archive_intermediates`
 - `--init-script`, `--finalize-script` (pre/post campaign shell hooks. Issue #108)
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
 - `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
 - `--byos-resource-limits` (CPU/memory limits for BYOS subprocess wrapper; issue #343)
 - `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
+- `--rate-limit-key` (rate limit key type: `ip` (default), `user`, or `campaign`; issue #445)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
@@ -267,12 +280,22 @@ The 7-step DAG that the `Campaign` class drives:
 - `--result-storage-bucket` (bucket/container name for result storage; issue #339)
 - `--result-storage-endpoint` (custom S3-compatible endpoint URL for result storage; issue #339)
 - `--log_level`
+- `--alert-destinations` (alert receiver endpoints for campaign events)
+- `--alert-rules` (alert routing rules for campaign events)
+- `--enable-cost-tracking` (enable cloud/HPC resource cost estimation; issue #447)
+- `--cost-on-demand-price` (on-demand price per vCPU-hour for cost estimation; issue #447)
+- `--cost-spot-price` (Spot price per vCPU-hour for cost estimation; issue #447)
+- `--track-costs` (enable campaign cost tracking; issue #447)
+- `--aws-batch-spot-price` (AWS Batch Spot price in USD per vCPU-hour for cost tracking; issue #447)
+- `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
+- `--slurm-cost-per-node-hour` (Slurm cost in USD per node-hour for cost tracking; issue #447)
+- `--resource-quota` (resource quota limits for campaign execution)
 
 **Backup subcommand flags** (issue #440):
 - `backup` — `--output` (custom backup file path), `--registry` (registry DB path), `--log_level`
 - `restore` — `<backup_file>` (positional), `--registry` (registry DB path), `--merge` (merge instead of replace), `--log_level`
 
-**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results), `backup` (registry backup; issue #440), `restore` (registry restore/import; issue #440), `health` (system health checks; issue #411). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, `--rate-limit`, `--tls-cert`, `--tls-key`, `--ui`, and `--dashboard` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`. The `backup` subcommand accepts `--output` (custom backup path) and `--registry`; it creates a timestamped SQLite backup using the online backup API. The `restore` subcommand accepts `<backup_file>`, `--registry`, and `--merge` (merge vs. replace mode). The `health` subcommand accepts `--outdir` (directory to check write permissions/disk space; default: cwd), `--json` (machine-readable JSON output), and `--offline` (skip network connectivity check). Exit code 0 if all critical checks pass, 1 otherwise.
+**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results), `backup` (registry backup; issue #440), `restore` (registry restore/import; issue #440), `health` (system health checks; issue #411), `mark-for-reanalysis` (mark a completed/failed sample for re-running; issue #420), `merge` (merge multiple data points into a single target; issue #418). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, `--rate-limit`, `--tls-cert`, `--tls-key`, `--ui`, and `--dashboard` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`. The `backup` subcommand accepts `--output` (custom backup path) and `--registry`; it creates a timestamped SQLite backup using the online backup API. The `restore` subcommand accepts `<backup_file>`, `--registry`, and `--merge` (merge vs. replace mode). The `health` subcommand accepts `--outdir` (directory to check write permissions/disk space; default: cwd), `--json` (machine-readable JSON output), and `--offline` (skip network connectivity check). The `mark-for-reanalysis` subcommand accepts `<outdir>`, `<sample_id>` (must be COMPLETED or FAILED), and `--priority` (default 0). The `merge` subcommand accepts `<outdir>`, `--source-ids` (one or more source sample IDs), `--target-id` (target sample ID), and `--target-work-dir` (path to target work directory). Exit code 0 if all critical checks pass, 1 otherwise.
 
 ### Developer workflow targets (Makefile)
 

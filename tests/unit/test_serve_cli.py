@@ -93,7 +93,9 @@ class TestServeCLI:
             api_keys_file=None,
             cors_origins=None,
             rate_limit="60/minute",
+            rate_limit_key="ip",
             ui_enabled=False,
+            results_viewer=False,
             registry_path=None,
         )
 
@@ -124,7 +126,9 @@ class TestServeCLI:
             api_keys_file=None,
             cors_origins=None,
             rate_limit="60/minute",
+            rate_limit_key="ip",
             ui_enabled=False,
+            results_viewer=False,
             registry_path=None,
         )
 

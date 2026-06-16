@@ -141,7 +141,13 @@ class RunTrace:
         # Per-campaign cost tracking (issue #126).
         self.total_cost_usd: float = 0.0
         self.spot_savings_usd: float = 0.0
-        self.status: str = "running"  # "running", "success", "cancelled", "failed"
+        # Campaign-level cost summary (issue #447). Set by CostTracker.finalize()
+        # when enable_cost_tracking is True.
+        self.cost_summary: dict[str, object] | None = None
+        # Cache hit rate (issue #426). Set by Campaign._finalize_samples() after
+        # AGGREGATE_RESULTS so the value is available in run.json.
+        self.cache_hit_rate: float | None = None
+        self.status: str = "running"  # "running", "success", "cancelled", "failed", "paused"
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -236,6 +242,12 @@ class RunTrace:
         # Cost summary (issue #126). Always present; defaults to 0.0.
         d["total_cost_usd"] = self.total_cost_usd
         d["spot_savings_usd"] = self.spot_savings_usd
+        # Cost summary (issue #447). Present when enable_cost_tracking is True.
+        if self.cost_summary is not None:
+            d["cost_summary"] = self.cost_summary
+        # Cache hit rate (issue #426).
+        if self.cache_hit_rate is not None:
+            d["cache_hit_rate"] = self.cache_hit_rate
         return d
 
     def update_sample(self, trace: SampleTrace) -> None:
@@ -438,3 +450,60 @@ def check_heartbeat(outdir: Path, sample_id: str) -> bool:
         return age > STALE_THRESHOLD_SEC
     except (json.JSONDecodeError, OSError, ValueError):
         return True
+
+
+# ---------------------------------------------------------------------------
+# Worker auto-recovery (issue #443)
+# ---------------------------------------------------------------------------
+
+
+class WorkerRecoveryManager:
+    """Monitors worker heartbeats and tracks recovery attempts for stale workers.
+
+    When a worker becomes stale (heartbeat not updated for STALE_THRESHOLD_SEC),
+    the job is considered crashed/hung and eligible for auto-recovery.
+    This class tracks which samples have been auto-recovered and their
+    recovery attempt counts to avoid infinite recovery loops.
+    """
+
+    def __init__(self, outdir: Path) -> None:
+        self.outdir = outdir
+        # Track recovery attempts per sample: {sample_id: attempt_count}
+        self._recovery_attempts: dict[str, int] = {}
+
+    def is_stale(self, sample_id: str) -> bool:
+        """Return True if the heartbeat for *sample_id* is stale."""
+        return check_heartbeat(self.outdir, sample_id)
+
+    def can_recover(self, sample_id: str, max_retries: int) -> bool:
+        """Return True if *sample_id* can be recovered (hasn't exceeded max retries)."""
+        attempts = self._recovery_attempts.get(sample_id, 0)
+        return attempts < max_retries
+
+    def record_attempt(self, sample_id: str) -> None:
+        """Record a recovery attempt for *sample_id*."""
+        self._recovery_attempts[sample_id] = self._recovery_attempts.get(sample_id, 0) + 1
+
+    def get_attempt_count(self, sample_id: str) -> int:
+        """Return the number of recovery attempts for *sample_id*."""
+        return self._recovery_attempts.get(sample_id, 0)
+
+    def reset(self, sample_id: str) -> None:
+        """Reset recovery state for *sample_id* after successful completion."""
+        self._recovery_attempts.pop(sample_id, None)
+
+    def check_and_recover(self, sample_id: str, max_retries: int) -> tuple[bool, int]:
+        """Check if *sample_id* is stale and can be recovered.
+
+        Returns
+        -------
+        tuple[bool, int]
+            (can_recover, attempt_count) where can_recover is True if the
+            heartbeat is stale and recovery hasn't exceeded max_retries.
+        """
+        if not self.is_stale(sample_id):
+            return False, 0
+        if not self.can_recover(sample_id, max_retries):
+            return False, self.get_attempt_count(sample_id)
+        self.record_attempt(sample_id)
+        return True, self.get_attempt_count(sample_id)

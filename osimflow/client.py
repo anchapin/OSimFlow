@@ -64,6 +64,9 @@ __all__ = [
     "ParetoResponse",
     "CampaignStopResponse",
     "Event",
+"CampaignHealthResponse",
+    "StepHealth",
+    "SampleCounts",
     "ValidateConfigRequest",
     "ValidateConfigResponse",
 ]
@@ -248,6 +251,38 @@ class Event(BaseModel):
 
     event: str
     data: Any = None
+
+
+class StepHealth(BaseModel):
+    """A single step status in the campaign health response."""
+
+    step: str | None = None
+    cache: str | None = None
+    status: str | None = None
+    elapsed_s: float | None = None
+
+
+class SampleCounts(BaseModel):
+    """Sample counts in the campaign health response."""
+
+    total: int = 0
+    success: int = 0
+    failed: int = 0
+    cached: int = 0
+    running: int = 0
+
+
+class CampaignHealthResponse(BaseModel):
+    """Response from ``GET /api/v1/health`` — campaign health dashboard."""
+
+    campaign_id: str | None = None
+    overall_status: str = Field(description="'healthy', 'degraded', or 'unknown'")
+    campaign_status: str = Field(description="'running', 'success', 'failed', 'cancelled', ...")
+    steps: list[StepHealth] = Field(default_factory=list)
+    samples: SampleCounts = Field(default_factory=SampleCounts)
+    started_at: float | None = None
+    finished_at: float | None = None
+    elapsed_s: float | None = None
 
 
 class ValidateConfigRequest(BaseModel):
@@ -504,6 +539,24 @@ class OSimFlowClient:
         """``GET /ready`` — readiness probe."""
         resp = await self._request("GET", "/ready")
         return ReadyResponse.model_validate(resp.json())
+
+    # ------------------------------------------------------------------
+    # Campaign health (issue #437)
+    # ------------------------------------------------------------------
+
+    async def get_campaign_health(self) -> CampaignHealthResponse:
+        """``GET /api/v1/health`` — campaign health dashboard.
+
+        Returns overall status (healthy/degraded/unknown), per-step status,
+        sample counts (total/success/failed/running), and timestamps.
+        """
+        resp = await self._request("GET", "/api/v1/health")
+        return CampaignHealthResponse.model_validate(resp.json())
+
+    async def get_campaign_health_details(self) -> dict[str, Any]:
+        """``GET /api/v1/health/details`` — full run.json contents."""
+        resp = await self._request("GET", "/api/v1/health/details")
+        return dict[str, Any](resp.json())
 
     # ------------------------------------------------------------------
     # Campaign metadata

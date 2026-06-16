@@ -23,6 +23,7 @@ from typing import Any
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 
+from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
     VariableDeleteResponse,
     VariableDetailResponse,
@@ -204,10 +205,10 @@ async def create_variable(
     Validates the variable definition against the same schema used by
     ``validate_variables_yml``.  Returns 403 in read-only mode.
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Variable creation requires --enable-writes mode",
+            detail="Variable creation requires readwrite permission",
         )
 
     yml_path = _variables_yml_path(request)
@@ -291,10 +292,10 @@ async def update_variable(
 
     Raises 404 if the variable does not exist.  Raises 403 in read-only mode.
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Variable update requires --enable-writes mode",
+            detail="Variable update requires readwrite permission",
         )
 
     yml_path = _variables_yml_path(request)
@@ -355,10 +356,10 @@ async def delete_variable(
 
     Raises 404 if the variable does not exist.  Raises 403 in read-only mode.
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Variable deletion requires --enable-writes mode",
+            detail="Variable deletion requires readwrite permission",
         )
 
     yml_path = _variables_yml_path(request)
@@ -527,4 +528,3 @@ _VALIDATORS: dict[str, Callable[..., Any]] = {
     "gamma": _v_gamma,
     "exponential": _v_exponential,
 }
-# test

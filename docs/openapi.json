@@ -50,6 +50,48 @@
         }
       }
     },
+    "/api/v1/health": {
+      "get": {
+        "summary": "Get Campaign Health",
+        "description": "Campaign health dashboard \u2014 overall status + per-step summary.\n\nReturns:\n    overall status (healthy/degraded/unknown), per-step status list,\n    sample counts (total/success/failed/running), and key timestamps.",
+        "operationId": "get_campaign_health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Campaign Health Api V1 Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/details": {
+      "get": {
+        "summary": "Get Campaign Health Details",
+        "description": "Full run.json contents for the campaign health dashboard.\n\nReturns the complete run.json for clients that need per-sample details,\nerror summaries, worker info, or any field not surfaced in\n``GET /api/v1/health``.",
+        "operationId": "get_campaign_health_details_api_v1_health_details_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Campaign Health Details Api V1 Health Details Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaign": {
       "get": {
         "summary": "Get Campaign",
@@ -369,6 +411,48 @@
         }
       }
     },
+    "/api/v1/errors/{sample_id}": {
+      "get": {
+        "summary": "Get Sample Error",
+        "description": "Get detailed error diagnosis for a failed sample.\n\nReads the ``eplusout.err`` file from the sample's simulation directory\nand returns classified error information with actionable suggestions.",
+        "operationId": "get_sample_error_api_v1_errors__sample_id__get",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Sample Error Api V1 Errors  Sample Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Root Redirect",
@@ -406,7 +490,7 @@
     "/api/v1/campaign/stop": {
       "post": {
         "summary": "Campaign Stop",
-        "description": "Write a ``.stop`` flag file to request campaign cancellation.\n\nThe campaign orchestrator checks for ``${outdir}/.stop`` between steps.\nReturns 403 in read-only mode.",
+        "description": "Write a ``.stop`` flag file to request campaign cancellation.\n\nThe campaign orchestrator checks for ``${outdir}/.stop`` between steps.\nReturns 403 if the user lacks write permission (issue #395).",
         "operationId": "campaign_stop_api_v1_campaign_stop_post",
         "responses": {
           "200": {
@@ -446,7 +530,7 @@
       },
       "post": {
         "summary": "Create Campaign",
-        "description": "Create a new campaign directory and optionally launch it.\n\nWhen ``auto_start`` is ``True`` the campaign is launched in a\nbackground thread.  The server must be running with\n``read_only=False`` (``--enable-writes``) to use auto_start.",
+        "description": "Create a new campaign directory and optionally launch it.\n\nWhen ``auto_start`` is ``True`` the campaign is launched in a\nbackground thread.  The user must have admin role (issue #395).",
         "operationId": "create_campaign_api_v1_campaigns_post",
         "requestBody": {
           "content": {
@@ -465,6 +549,96 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CampaignCreateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/compare": {
+      "get": {
+        "summary": "Compare Campaigns",
+        "description": "Compare two campaigns side by side by their campaign IDs.\n\nBoth campaigns must exist under the campaigns base directory.\nReturns ``null`` for whichever campaign is not found.",
+        "operationId": "compare_campaigns_api_v1_campaigns_compare_get",
+        "parameters": [
+          {
+            "name": "id1",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "First campaign ID",
+              "title": "Id1"
+            },
+            "description": "First campaign ID"
+          },
+          {
+            "name": "id2",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Second campaign ID",
+              "title": "Id2"
+            },
+            "description": "Second campaign ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignComparisonResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Compare Campaigns Post",
+        "description": "Compare two or more campaigns by registry ID, campaign directory name,\nor explicit outdir path (issue #404).\n\nEach entry in the request body may specify ``campaign_id`` (resolved\nvia the registry or campaigns base directory) **or** ``outdir`` (a\ndirect filesystem path to the campaign output directory).\n\nThe response includes per-campaign metadata, step timing, sample\ncounts and success rates, per-KPI aggregated statistics, and an\naligned KPI comparison table for easy charting.\n\nCampaigns that cannot be found are included in the response with\n``found=False`` and an ``error`` message \u2014 the endpoint never raises\n404 so callers can compare even when some campaigns are missing.",
+        "operationId": "compare_campaigns_post_api_v1_campaigns_compare_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareCampaignsPostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiCampaignComparisonResponse"
                 }
               }
             }
@@ -641,7 +815,7 @@
     "/api/v1/campaigns/{campaign_id}/cancel": {
       "post": {
         "summary": "Cancel Campaign",
-        "description": "Cancel a running campaign by writing a ``.stop`` flag file.\n\nReturns 403 in read-only mode.  Returns 409 if the campaign is not\ncurrently running.",
+        "description": "Cancel a running campaign by writing a ``.stop`` flag file.\n\nReturns 403 if the user lacks write permission (issue #395).\nReturns 409 if the campaign is not currently running.",
         "operationId": "cancel_campaign_api_v1_campaigns__campaign_id__cancel_post",
         "parameters": [
           {
@@ -1387,6 +1561,166 @@
         ],
         "title": "CampaignCancelResponse",
         "description": "Response for campaign cancellation."
+      },
+      "CampaignComparisonEntry": {
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "title": "Identifier",
+            "description": "The campaign_id or outdir used for lookup"
+          },
+          "found": {
+            "type": "boolean",
+            "title": "Found",
+            "description": "Whether the campaign was located",
+            "default": false
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "elapsed_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed S"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config",
+            "description": "Config summary (executor, n_samples, etc.)"
+          },
+          "step_timing": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Step Timing",
+            "description": "Per-step timing traces"
+          },
+          "sample_summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Summary",
+            "description": "n_samples, n_succeeded, n_failed, success_rate"
+          },
+          "kpi_stats": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/KpiMetricStats"
+            },
+            "type": "object",
+            "title": "Kpi Stats",
+            "description": "Per-KPI aggregated statistics keyed by metric name"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Error message if the campaign could not be loaded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "identifier"
+        ],
+        "title": "CampaignComparisonEntry",
+        "description": "One campaign's data within a multi-campaign comparison."
+      },
+      "CampaignComparisonResponse": {
+        "properties": {
+          "left": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignDetailResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left campaign details (or null if not found)"
+          },
+          "right": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignDetailResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Right campaign details (or null if not found)"
+          }
+        },
+        "type": "object",
+        "title": "CampaignComparisonResponse",
+        "description": "Side-by-side comparison of two campaigns."
       },
       "CampaignCreateRequest": {
         "properties": {
@@ -2177,6 +2511,56 @@
         "title": "CampaignSummary",
         "description": "Lightweight campaign entry returned by ``GET /api/v1/campaigns``."
       },
+      "CompareCampaignIdentifier": {
+        "properties": {
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id",
+            "description": "Campaign ID to look up in the registry or campaigns base dir"
+          },
+          "outdir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdir",
+            "description": "Direct path to a campaign output directory"
+          }
+        },
+        "type": "object",
+        "title": "CompareCampaignIdentifier",
+        "description": "Identifies a single campaign to include in a comparison.\n\nProvide **either** ``campaign_id`` (resolved via the campaigns base\ndirectory or the campaign registry) **or** ``outdir`` (an absolute\nor relative path to a campaign output directory)."
+      },
+      "CompareCampaignsPostRequest": {
+        "properties": {
+          "campaigns": {
+            "items": {
+              "$ref": "#/components/schemas/CompareCampaignIdentifier"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "Campaigns",
+            "description": "Two or more campaign identifiers to compare"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaigns"
+        ],
+        "title": "CompareCampaignsPostRequest",
+        "description": "Request body for ``POST /api/v1/campaigns/compare`` (issue #404).\n\nAccepts two or more campaign identifiers.  Each identifier may\nreference a campaign by registry ID, by campaign directory name\n(under the campaigns base directory), or by explicit ``outdir``\npath."
+      },
       "FileDeleteResponse": {
         "properties": {
           "file_id": {
@@ -2304,6 +2688,91 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "KpiComparisonRow": {
+        "properties": {
+          "metric": {
+            "type": "string",
+            "title": "Metric"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "metric",
+          "values"
+        ],
+        "title": "KpiComparisonRow",
+        "description": "One KPI metric compared across all campaigns.\n\nThe ``values`` list is aligned with the ``campaigns`` list in the\nparent response \u2014 ``values[i]`` is the mean of this KPI in\n``campaigns[i]``, or ``None`` if that campaign has no data for it."
+      },
+      "KpiMetricStats": {
+        "properties": {
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "KpiMetricStats",
+        "description": "Aggregated statistics for a single numeric KPI metric."
       },
       "MeasureArgument": {
         "properties": {
@@ -2460,6 +2929,36 @@
         ],
         "title": "MeasureListResponse",
         "description": "Envelope for the measure list endpoint."
+      },
+      "MultiCampaignComparisonResponse": {
+        "properties": {
+          "campaigns": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignComparisonEntry"
+            },
+            "type": "array",
+            "title": "Campaigns"
+          },
+          "kpi_comparison": {
+            "items": {
+              "$ref": "#/components/schemas/KpiComparisonRow"
+            },
+            "type": "array",
+            "title": "Kpi Comparison",
+            "description": "KPI mean values aligned across campaigns for easy charting"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaigns",
+          "total"
+        ],
+        "title": "MultiCampaignComparisonResponse",
+        "description": "Response for ``POST /api/v1/campaigns/compare`` (issue #404)."
       },
       "PATAnalysisRequest": {
         "properties": {

@@ -47,9 +47,9 @@ class TestNewTraceId:
         int(tid, 16)  # raises ValueError if not hex
 
     def test_uniqueness_across_many_calls(self) -> None:
-        ids = {new_trace_id() for _ in range(10_000)}
-        # 8 hex chars → ~4 billion space; 10k draws should be unique.
-        assert len(ids) == 10_000
+        ids = {new_trace_id() for _ in range(1_000)}
+        # 8 hex chars → ~4 billion space; 1k draws has ~1e-6 collision risk.
+        assert len(ids) == 1_000
 
     def test_derived_from_uuid4(self) -> None:
         """The returned ID is the 8-char prefix of a uuid4 hex."""

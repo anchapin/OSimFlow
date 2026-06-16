@@ -53,6 +53,7 @@ log = logging.getLogger("osimflow.algorithms.nsga2")
 # loaded for static analysis even when pymoo is not installed.
 try:
     from pymoo.algorithms.moo.nsga2 import NSGA2
+    from pymoo.algorithms.moo.rnsga2 import RNSGA2
     from pymoo.core.problem import Problem
     from pymoo.indicators.hv import HV
     from pymoo.operators.crossover.sbx import SBX
@@ -60,10 +61,13 @@ try:
     from pymoo.operators.sampling.rnd import FloatRandomSampling
     from pymoo.optimize import minimize as pymoo_minimize
     from pymoo.termination import get_termination
+    from pymoo.util.reference_direction import das_dennis
 
     _HAS_PYMOO = True
 except ImportError:
     _HAS_PYMOO = False
+    RNSGA2 = None  # type: ignore[assignment]
+    NSGA2 = None  # type: ignore[assignment]
 
 try:
     from pymoo.util.ref_dirs import get_reference_directions
@@ -399,6 +403,75 @@ class NSGA2Algorithm(BaseAlgorithm):
         self._parsed_ref_points: npt.NDArray[np.float64] | None = None
         # R-NSGA-II: generated reference directions (n_dirs, n_obj)
         self._generated_ref_dirs: npt.NDArray[np.float64] | None = None
+        self._ref_dirs_strategy: str | None = None
+
+    def configure(self, config: Any) -> None:
+        """Configure R-NSGA-II reference points from campaign config (issue #529).
+
+        Parses ``config.nsga2_ref_points`` (comma-separated floats, e.g.
+        ``"0.25,0.5,0.75"`` for 3 reference points on a 2-objective front)
+        and optionally ``config.nsga2_ref_dirs_strategy`` (e.g. ``"das_dennis"``)
+        to generate reference directions.
+
+        When reference points are set, ``observe()`` uses ``pymoo.RNSGA2``
+        instead of the standard ``NSGA2`` crowding-distance selection.
+        """
+        ref_points_str: str | None = getattr(config, "nsga2_ref_points", None)
+        if not ref_points_str:
+            return
+
+        ref_dirs_strategy: str | None = getattr(config, "nsga2_ref_dirs_strategy", None)
+        self._ref_dirs_strategy = ref_dirs_strategy
+
+        n_obj = len(self._objective_kpis)
+
+        if ref_dirs_strategy and ref_dirs_strategy.lower() == "das_dennis":
+            try:
+                n_partitions = int(ref_points_str)
+                self._parsed_ref_points = das_dennis(n_partitions, n_obj)
+                log.info(
+                    "R-NSGA-II das_dennis ref dirs: %d partitions, %d objectives, %d points",
+                    n_partitions,
+                    n_obj,
+                    self._parsed_ref_points.shape[0],
+                )
+            except ValueError:
+                self._parsed_ref_points = self._parse_ref_points_string(ref_points_str, n_obj)
+        else:
+            self._parsed_ref_points = self._parse_ref_points_string(ref_points_str, n_obj)
+
+        if self._parsed_ref_points is not None:
+            log.info(
+                "R-NSGA-II configured with %d reference points for %d objectives",
+                self._parsed_ref_points.shape[0],
+                n_obj,
+            )
+
+    def _parse_ref_points_string(
+        self, s: str, n_obj: int
+    ) -> npt.NDArray[np.float64]:
+        """Parse a comma-separated reference point string into a numpy array.
+
+        Examples:
+        - "0.25,0.5,0.75" → 3 ref points for 2-objective problem
+        - "0.25,0.5,0.5,0.75" → 2 ref points for 2-objective problem
+        """
+        parts = [float(p.strip()) for p in s.split(",") if p.strip()]
+        if not parts:
+            return np.array([]).reshape(0, n_obj)
+
+        if len(parts) % n_obj != 0:
+            log.warning(
+                "R-NSGA-II ref_points length %d not divisible by n_obj %d; "
+                "using first %d values as one ref point",
+                len(parts),
+                n_obj,
+                n_obj,
+            )
+            parts = parts[: len(parts) // n_obj * n_obj]
+
+        n_points = len(parts) // n_obj
+        return np.array(parts, dtype=np.float64).reshape(n_points, n_obj)
 
     def generate_samples(
         self,
@@ -557,29 +630,11 @@ class NSGA2Algorithm(BaseAlgorithm):
 
         problem = _EvaluatedProblem(n_var=dim, n_obj=n_obj, xl=xl, xu=xu)
 
-        # Set up NSGA-II.
+# Set up NSGA-II.
         # Check if this is the first call to initialize ref_points and ref_dirs
         pop_size = min(self._pop_size, len(results))
 
-        # Initialize reference points (R-NSGA-II, issue #529)
-        if self._parsed_ref_points is None and self._ref_points is not None:
-            self._parsed_ref_points = _parse_ref_points(self._ref_points, n_obj)
-            if self._parsed_ref_points is not None:
-                log.info(
-                    "NSGA-II R-NSGA-II mode: initialized %d reference points",
-                    self._parsed_ref_points.shape[0],
-                )
-
-        # Initialize reference directions (R-NSGA-II, issue #529)
-        if self._generated_ref_dirs is None and self._ref_dirs is not None:
-            self._generated_ref_dirs = _generate_ref_dirs(self._ref_dirs, n_obj, pop_size)
-            if self._generated_ref_dirs is not None:
-                log.info(
-                    "NSGA-II R-NSGA-II mode: initialized %d reference directions",
-                    self._generated_ref_dirs.shape[0],
-                )
-
-        # Build NSGA2 kwargs - pass ref_dirs if available (issue #529)
+        # Build NSGA2 kwargs - pass ref_dirs if available (R-NSGA-II, issue #529)
         nsga2_kwargs: dict[str, Any] = {
             "pop_size": pop_size,
             "sampling": FloatRandomSampling(),
@@ -588,12 +643,16 @@ class NSGA2Algorithm(BaseAlgorithm):
             "eliminate_duplicates": True,
         }
 
-        # Add reference directions if specified (R-NSGA-II style)
-        if self._generated_ref_dirs is not None:
-            nsga2_kwargs["ref_dirs"] = self._generated_ref_dirs
-            log.info("NSGA-II using %d reference directions", len(self._generated_ref_dirs))
-
-        algorithm = NSGA2(**nsga2_kwargs)
+        # Use RNSGA2 when reference points are configured (R-NSGA-II, issue #529)
+        if self._parsed_ref_points is not None and RNSGA2 is not None:
+            nsga2_kwargs["ref_points"] = self._parsed_ref_points
+            log.info(
+                "R-NSGA-II observe(): using RNSGA2 with %d ref points",
+                self._parsed_ref_points.shape[0],
+            )
+            algorithm = RNSGA2(**nsga2_kwargs)
+        else:
+            algorithm = NSGA2(**nsga2_kwargs)
 
         # Use pymoo.minimize with a 1-gen termination.
         res = pymoo_minimize(

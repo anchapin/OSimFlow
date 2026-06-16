@@ -7,9 +7,10 @@ the PRD §1.4 calls out as required (`--input_variables`,
 """
 
 import dataclasses
+import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -22,6 +23,123 @@ from .validation import (
 )
 
 log = logging.getLogger("osimflow.config")
+
+
+# ======================================================================
+# Resource quota (issue #446)
+# ======================================================================
+
+
+@dataclasses.dataclass
+class ResourceQuota:
+    """Campaign resource quota limits (issue #446).
+
+    All fields are optional. A ``None`` value means "no limit" for that
+    resource. Quota enforcement is checked at campaign start (fail-fast)
+    and during per-step fan-out (skip further submissions when the
+    quota is exhausted).
+
+    Attributes
+    ----------
+    max_samples
+        Maximum total number of samples across all generations.
+        When ``None``, there is no limit.
+    max_cost_usd
+        Maximum total campaign cost in USD.
+        When ``None``, there is no limit.
+    max_wall_time_min
+        Maximum wall-clock time for the entire campaign in minutes.
+        When ``None``, there is no limit.
+    max_concurrent_samples
+        Maximum number of samples that may run concurrently.
+        When ``None``, there is no limit (bounded only by the executor's
+        ``max_workers``).
+    """
+
+    max_samples: int | None = None
+    max_cost_usd: float | None = None
+    max_wall_time_min: float | None = None
+    max_concurrent_samples: int | None = None
+
+
+def _parse_resource_quota(raw: object) -> ResourceQuota | None:
+    """Parse a resource quota from a JSON-serializable dict, JSON string, or None."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValidationError(
+                f"resource_quota must be a valid JSON dict: {exc}",
+                field="resource_quota",
+            ) from exc
+    if not isinstance(raw, dict):
+        raise ValidationError(
+            f"resource_quota must be a dict, got {type(raw).__name__}",
+            field="resource_quota",
+        )
+    quota = ResourceQuota(
+        max_samples=_int_field(raw, "max_samples"),
+        max_cost_usd=_float_field(raw, "max_cost_usd"),
+        max_wall_time_min=_float_field(raw, "max_wall_time_min"),
+        max_concurrent_samples=_int_field(raw, "max_concurrent_samples"),
+    )
+    if quota.max_samples is not None and quota.max_samples < 1:
+        raise ValidationError(
+            "max_samples must be >= 1",
+            field="resource_quota.max_samples",
+        )
+    if quota.max_cost_usd is not None and quota.max_cost_usd < 0:
+        raise ValidationError(
+            "max_cost_usd must be >= 0",
+            field="resource_quota.max_cost_usd",
+        )
+    if quota.max_wall_time_min is not None and quota.max_wall_time_min <= 0:
+        raise ValidationError(
+            "max_wall_time_min must be > 0",
+            field="resource_quota.max_wall_time_min",
+        )
+    if quota.max_concurrent_samples is not None and quota.max_concurrent_samples < 1:
+        raise ValidationError(
+            "max_concurrent_samples must be >= 1",
+            field="resource_quota.max_concurrent_samples",
+        )
+    return quota
+
+
+def _int_field(raw: dict[str, object], key: str) -> int | None:
+    val = raw.get(key)
+    if val is None:
+        return None
+    if isinstance(val, int):
+        return val
+    if isinstance(val, (float, str)):
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            pass
+    raise ValidationError(
+        f"{key} must be an integer, got {type(val).__name__}",
+        field=f"resource_quota.{key}",
+    )
+
+
+def _float_field(raw: dict[str, object], key: str) -> float | None:
+    val = raw.get(key)
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        try:
+            return float(val)
+        except ValueError:
+            pass
+    raise ValidationError(
+        f"{key} must be a number, got {type(val).__name__}",
+        field=f"resource_quota.{key}",
+    )
 
 
 # ======================================================================
@@ -421,6 +539,12 @@ class CampaignConfig:
     # disables retries. Each retry uses exponential backoff starting at
     # base_delay seconds (default 1.0), doubling each attempt up to 60s cap.
     max_sample_retries: int = 3
+    # Worker auto-recovery (issue #443). When True and a job fails, OSimFlow
+    # checks if the worker's heartbeat is stale (no update for 60+ seconds).
+    # If stale, the job is automatically resubmitted (up to max_sample_retries).
+    # This handles worker crashes without manual intervention. When False,
+    # failed jobs are marked as failed without auto-recovery.
+    worker_auto_recovery: bool = True
     # Air-gapped / offline mode (issue #261). When True, OSimFlow skips
     # Docker Hub pulls, PyPI version checks, and online weather downloads.
     # It reads pip wheels from --offline_bundle/pip/ and uses pre-loaded
@@ -468,7 +592,58 @@ class CampaignConfig:
     # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
     # When None and task_queue="dask", an embedded LocalCluster is used.
     dask_scheduler_address: str | None = None
+    # Resource quota limits for the campaign (issue #446).
+    # When None, no quota enforcement is applied.
+    # When set, the campaign fails fast at start and/or skips further
+    # sample submissions when the quota is exhausted.
+    resource_quota: ResourceQuota | None = None
+    # Cost tracking configuration (issue #447). When True, the campaign
+    # tracks estimated and actual costs for cloud/HPC resources and writes
+    # a cost summary to run.json. When False (default), cost tracking
+    # is disabled for backward compatibility.
+    enable_cost_tracking: bool = False
+    # On-demand price per vCPU-hour for cost estimation. Used when cloud
+    # provider APIs are unavailable. Default $0.05/vCPU·h.
+    cost_on_demand_price: float = 0.05
+    # Spot price per vCPU-hour for cost estimation. Default $0.03/vCPU·h
+    # (40% savings vs on-demand).
+    cost_spot_price: float = 0.03
+    # Alert rules YAML file path (issue #438). When set, custom alert rules
+    # are loaded from this file in addition to the built-in rules.
+    alert_rules: Path | None = None
+    # Alert destinations YAML file path (issue #438). When set, alert
+    # destinations are loaded from this file.
+    alert_destinations: Path | None = None
+    # Cross-step retry configuration (issue #416). When a fan-out step
+    # (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS) fails with a
+    # transient error, retry that specific step up to max_step_retries
+    # times before aborting the campaign. A value of 0 disables retries.
+    # Only transient errors trigger retry; permanent errors (invalid input,
+    # missing files) abort immediately.
+    max_step_retries: int = 2
+    # UQ (Uncertainty Quantification) configuration (issue #530).
+    # uq_method: sampling method for UQ analysis. Default 'latin_hypercube'.
+    uq_method: str = "latin_hypercube"
+    # uq_n_samples: number of Monte Carlo samples for UQ analysis.
+    # When None, defaults to n_samples.
+    uq_n_samples: int | None = None
+    # uq_failure_thresholds: list of 'kpi=threshold' strings defining
+    # failure thresholds for probability of failure (POF) computation.
+    # Example: ['eui=150', 'cooling=5000']
+    uq_failure_thresholds: list[str] | None = None
 
+    # R-NSGA-II reference points (issue #529). Comma-separated fractions
+    # along the Pareto front for 2-objective problems, or explicit reference
+    # point coordinates for higher dimensions. When set, the NSGA2Algorithm
+    # uses pymoo's RNSGA2 with these reference points instead of standard
+    # crowding distance. Example: "0.25,0.5,0.75" for three reference points.
+    nsga2_ref_points: str | None = None
+    # R-NSGA-II reference direction generation strategy (issue #529).
+    # When set alongside nsga2_ref_points, the specified reference direction
+    # strategy is used to generate reference points. Supported values:
+    # "das_dennis" (Das-Dennis decomposition), "wedge" (wedge pattern),
+    # "adaptive" (adaptive update during evolution).
+    nsga2_ref_dirs_strategy: str | None = None
     @property
     def work_dir(self) -> Path:
         return self.outdir / "work"
@@ -761,4 +936,26 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
         ),
+        resource_quota=_parse_resource_quota(args.get("resource_quota")),
+        enable_cost_tracking=bool(args.get("enable_cost_tracking", False)),
+        cost_on_demand_price=float(str(args.get("cost_on_demand_price", 0.05))),
+        cost_spot_price=float(str(args.get("cost_spot_price", 0.03))),
+        alert_rules=(Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None),
+        alert_destinations=(
+            Path(str(args["alert_destinations"])).resolve()
+            if args.get("alert_destinations")
+            else None
+        ),
+        max_step_retries=int(str(args.get("max_step_retries", 2))),
+        uq_method=str(args.get("uq_method", "latin_hypercube")),
+        uq_n_samples=int(str(args["uq_n_samples"]))
+        if args.get("uq_n_samples") is not None
+        else None,
+        uq_failure_thresholds=(
+            cast(list[str], args["uq_failure_thresholds"])
+            if args.get("uq_failure_thresholds")
+            else None
+        ),
+        nsga2_ref_points=str(args["nsga2_ref_points"]) if args.get("nsga2_ref_points") else None,
+        nsga2_ref_dirs_strategy=str(args["nsga2_ref_dirs_strategy"]) if args.get("nsga2_ref_dirs_strategy") else None,
     )

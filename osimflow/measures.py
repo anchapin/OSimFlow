@@ -170,7 +170,7 @@ class MeasureRegistry:
         plain_to_measures: dict[str, set[str]] = {}
         dotted_to_arg: dict[str, MeasureArgument] = {}
 
-        for measure in registry._measures.values():
+        for measure in self._measures.values():
             for arg in measure.arguments:
                 # Dotted key: always registered.
                 dotted_key = f"{measure.name}.{arg.name}"

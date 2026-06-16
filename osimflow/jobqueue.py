@@ -34,11 +34,17 @@ Job JSON schema::
         "id": "sample_0_sim",
         "state": "pending",
         "payload": { ... },
+        "priority": 0,
         "created_at": 1700000000.123,
         "started_at": null,
         "completed_at": null,
         "error": null
     }
+
+Priority ordering:
+    Jobs are dequeued in priority order (highest priority first).
+    Priority is an integer where higher values indicate higher priority.
+    Jobs with equal priority are ordered by ``created_at`` (oldest first).
 """
 
 from __future__ import annotations
@@ -86,7 +92,7 @@ class JobQueue:
     # ------------------------------------------------------------------
     # Core operations
     # ------------------------------------------------------------------
-    def enqueue(self, job_id: str, payload: dict[str, Any]) -> Path:
+    def enqueue(self, job_id: str, payload: dict[str, Any], priority: int = 0) -> Path:
         """Write a new job to the ``pending`` directory.
 
         If a job with the same ``job_id`` already exists in any state
@@ -101,6 +107,9 @@ class JobQueue:
             ``"sample_0_RUN_OPENSTUDIO_SIM"``).
         payload
             Arbitrary JSON-serializable data describing the work.
+        priority
+            Integer priority value. Higher values are dequeued first.
+            Defaults to 0.
 
         Returns
         -------
@@ -117,6 +126,7 @@ class JobQueue:
             "id": job_id,
             "state": "pending",
             "payload": payload,
+            "priority": priority,
             "created_at": time.time(),
             "started_at": None,
             "completed_at": None,
@@ -130,23 +140,39 @@ class JobQueue:
         Returns ``None`` when there are no pending jobs. The returned dict
         is the full job record with ``state`` updated to ``"in_progress"``
         and ``started_at`` set to the current time.
+
+        Jobs are selected by highest priority first, then oldest by
+        ``created_at`` for stable ordering within the same priority.
         """
         pending_dir = self._state_dir("pending")
-        # Sort for determinism (oldest first by filename, which includes
-        # enough entropy from job_id but gives stable ordering).
-        job_files = sorted(pending_dir.glob("*.json"))
+        job_files = list(pending_dir.glob("*.json"))
         if not job_files:
             return None
 
-        job_file = job_files[0]
-        record = self._read_job(job_file)
+        # Read all job records and sort by priority (desc), then created_at (asc).
+        jobs: list[dict[str, Any]] = []
+        for job_file in job_files:
+            try:
+                record = self._read_job(job_file)
+                jobs.append(record)
+            except (json.JSONDecodeError, ValueError) as exc:
+                log.warning("skipping corrupt job file %s: %s", job_file, exc)
+                continue
+
+        if not jobs:
+            return None
+
+        jobs.sort(key=lambda j: (-j.get("priority", 0), j.get("created_at", 0)))
+        record = jobs[0]
         record["state"] = "in_progress"
         record["started_at"] = time.time()
 
         # Atomic move: write new file then remove old.
         self._write_job("in_progress", record)
-        job_file.unlink(missing_ok=True)
-        log.debug("dequeue: picked up job %s", record["id"])
+        (pending_dir / f"{record['id']}.json").unlink(missing_ok=True)
+        log.debug(
+            "dequeue: picked up job %s (priority=%d)", record["id"], record.get("priority", 0)
+        )
         return record
 
     def mark_completed(self, job_id: str) -> None:

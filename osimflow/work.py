@@ -20,12 +20,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from .executors import run_subprocess  # local helper (issue #6)
+from .version_detection import VersionDetectionError, detect_openstudio_version
 from .weather import EPWValidationError, discover_epw_files, validate_epw_header
 
 log = logging.getLogger("osimflow.work")
@@ -73,6 +77,115 @@ def _is_transient_error(exc: BaseException) -> bool:
 
 
 _TRANSIENT_EXIT_CODES = frozenset([-1, 2, 4, 5, 6, 11, 12, 15, 24, 25, 26, 27, 28])
+
+
+# ---------------------------------------------------------------------------
+# Container / simulation health monitoring (issue #415)
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_INTERVAL_S = 30  # seconds between heartbeat writes
+HEARTBEAT_FILENAME = ".heartbeat.json"
+HEALTH_CHECK_INTERVAL_S = 60  # default health check tolerance (stale if no beat for this long)
+
+
+class SimulationHealthStatus(StrEnum):
+    HEALTHY = "healthy"
+    STALE = "stale"  # no heartbeat within the expected interval
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class SimulationHealth:
+    status: SimulationHealthStatus
+    last_heartbeat: float | None = None
+    pid: int | None = None
+    message: str | None = None
+
+
+def _write_heartbeat(sim_out: Path, pid: int, sample_id: str, version: str) -> None:
+    """Write a heartbeat file for the running simulation.
+
+    The heartbeat is consumed by ``check_container_health`` to detect
+    simulations that have gone silent (container freeze, process deadlock).
+    """
+    heartbeat_path = sim_out / HEARTBEAT_FILENAME
+    payload = {
+        "pid": pid,
+        "sample_id": sample_id,
+        "version": version,
+        "timestamp": time.time(),
+    }
+    try:
+        sim_out.mkdir(parents=True, exist_ok=True)
+        heartbeat_path.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError as exc:
+        log.warning("failed to write heartbeat for %s: %s", sample_id, exc)
+
+
+def check_container_health(
+    sim_out: Path,
+    health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
+) -> SimulationHealth:
+    """Check whether the simulation container is still responsive.
+
+    Returns a ``SimulationHealth`` describing the current state:
+    - HEALTHY: heartbeat is fresh (written within health_check_interval).
+    - STALE: heartbeat exists but is older than health_check_interval.
+    - UNKNOWN: no heartbeat file exists (simulation may not have started yet
+      or the file was deleted).
+
+    The caller can use the STALE status to decide whether to cancel and
+    retry a frozen simulation.  This function does **not** terminate
+    anything — it only reports health status.
+    """
+    heartbeat_path = sim_out / HEARTBEAT_FILENAME
+    if not heartbeat_path.is_file():
+        return SimulationHealth(
+            status=SimulationHealthStatus.UNKNOWN,
+            message="no heartbeat file found",
+        )
+    try:
+        payload = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        last_ts = payload.get("timestamp")
+        if last_ts is None:
+            return SimulationHealth(
+                status=SimulationHealthStatus.UNKNOWN, message="heartbeat has no timestamp"
+            )
+        age = time.time() - last_ts
+        if age > health_check_interval:
+            return SimulationHealth(
+                status=SimulationHealthStatus.STALE,
+                last_heartbeat=last_ts,
+                pid=payload.get("pid"),
+                message=f"heartbeat is {age:.0f}s old (threshold {health_check_interval}s)",
+            )
+        return SimulationHealth(
+            status=SimulationHealthStatus.HEALTHY,
+            last_heartbeat=last_ts,
+            pid=payload.get("pid"),
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        return SimulationHealth(
+            status=SimulationHealthStatus.UNKNOWN,
+            message=f"failed to read heartbeat: {exc}",
+        )
+
+
+def _heartbeat_writer(
+    sim_out: Path,
+    sample_id: str,
+    version: str,
+    stop_event: threading.Event,
+) -> None:
+    """Background thread: writes a heartbeat file every HEARTBEAT_INTERVAL_S.
+
+    Stopped when *stop_event* is set (simulation completed or cancelled).
+    """
+    pid = os.getpid()
+    while not stop_event.wait(HEARTBEAT_INTERVAL_S):
+        _write_heartbeat(sim_out, pid, sample_id, version)
+    # Final heartbeat on exit
+    _write_heartbeat(sim_out, pid, sample_id, version)
 
 
 def run_with_retry(
@@ -398,6 +511,7 @@ def _run_openstudio_sim_impl(
     stderr_path: Path | None = None,
     max_retries: int = 3,
     worker_id: str = "local",
+    health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
 ) -> Path:
     """Internal implementation — wrapped with retry by ``run_openstudio_sim``."""
     sim_out = out / sample_id
@@ -424,40 +538,73 @@ def _run_openstudio_sim_impl(
 
     use_real_cli = _is_openstudio_available() and not _is_stub_mode()
 
-    if use_real_cli:
-        return _run_real_openstudio(
-            modified_sim_package=modified_sim_package,
-            sample_id=sample_id,
-            sim_out=sim_out,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
+    # --- Container health monitoring (issue #415) ---
+    # Start a heartbeat writer thread for the duration of the simulation.
+    # This allows the executor to detect frozen/silently-failed containers.
+    stop_heartbeat = threading.Event()
+    heartbeat_thread: threading.Thread | None = None
+    if health_check_interval > 0:
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_writer,
+            args=(sim_out, sample_id, openstudio_version, stop_heartbeat),
+            daemon=True,
+            name=f"heartbeat-{sample_id}",
         )
+        heartbeat_thread.start()
 
-    cmd = [
-        sys.executable,
-        "-c",
-        (
-            "import sys, time;"
-            f" print('openstudio CLI stub v{openstudio_version} sample={sample_id}');"
-            f" time.sleep({simulate_work_s});"
-            " print('-- eplusout.sql placeholder --');"
-            " sys.exit(0)"
-        ),
-    ]
     try:
-        run_subprocess(
-            cmd,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-            cwd=sim_out,
-        )
-    except subprocess.SubprocessError as e:
-        log.error("run_openstudio_sim failed for %s: %s", sample_id, e)
-        raise
+        if use_real_cli:
+            result_path = _run_real_openstudio(
+                modified_sim_package=modified_sim_package,
+                sample_id=sample_id,
+                sim_out=sim_out,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        else:
+            cmd = [
+                sys.executable,
+                "-c",
+                (
+                    "import sys, time;"
+                    f" print('openstudio CLI stub v{openstudio_version} sample={sample_id}');"
+                    f" time.sleep({simulate_work_s});"
+                    " print('-- eplusout.sql placeholder --');"
+                    " sys.exit(0)"
+                ),
+            ]
+            run_subprocess(
+                cmd,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                cwd=sim_out,
+            )
+            (sim_out / "eplusout.sql").write_text("-- placeholder sql")
+            (sim_out / "eplusout.err").write_text("")
+            result_path = sim_out
+    finally:
+        # Stop the heartbeat thread
+        if heartbeat_thread is not None:
+            stop_heartbeat.set()
+            heartbeat_thread.join(timeout=5.0)
 
-    (sim_out / "eplusout.sql").write_text("-- placeholder sql")
-    (sim_out / "eplusout.err").write_text("")
-    return sim_out
+    # --- Health check after simulation ---
+    # If enabled and the heartbeat went stale during execution, treat it as
+    # a potentially transient failure so the retry loop can recover.
+    if health_check_interval > 0:
+        health = check_container_health(sim_out, health_check_interval)
+        if health.status == SimulationHealthStatus.STALE:
+            log.warning(
+                "sample %s container health STALE after simulation: %s",
+                sample_id,
+                health.message,
+            )
+            # Raise TransientError so run_with_retry / executor retries it.
+            raise TransientError(
+                f"container health check stale for sample {sample_id}: {health.message}"
+            )
+
+    return result_path
 
 
 def run_openstudio_sim(
@@ -471,6 +618,7 @@ def run_openstudio_sim(
     stderr_path: Path | None = None,
     max_retries: int = 3,
     worker_id: str = "local",
+    health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
 ) -> Path:
     """Run the OpenStudio simulation with exponential-backoff retry.
 
@@ -494,6 +642,13 @@ def run_openstudio_sim(
     exit codes) are retried with exponential backoff (1s base, 60s cap)
     up to ``max_retries`` attempts before surfacing the final error.
 
+    Container health monitoring (issue #415): when ``health_check_interval``
+    is greater than 0, a background heartbeat thread writes a
+    ``.heartbeat.json`` file every 30 seconds. If the simulation exits
+    with a STALE heartbeat (no update for longer than
+    ``health_check_interval``), the failure is treated as potentially
+    transient so the executor can retry it.
+
     Args:
         modified_sim_package: per-sample modified package from APPLY_PARAMETERS.
         sample_id: the sample's identifier (e.g. "0001").
@@ -512,6 +667,11 @@ def run_openstudio_sim(
             (default 3). Set to 0 to disable retries.
         worker_id: identifier for the worker running this simulation
             (issue #341). Written to the heartbeat file for liveness tracking.
+        health_check_interval: seconds between container health checks.
+            Set to 0 to disable health monitoring (default 60s). When enabled,
+            a heartbeat thread runs for the duration of the simulation and a
+            STALE heartbeat on failure triggers a retry as a potentially
+            transient error (issue #415).
 
     Returns:
         Path to the simulation output directory (eplusout.sql inside).
@@ -521,17 +681,41 @@ def run_openstudio_sim(
             ``workflow.osw`` is found in the modified package.
         subprocess.CalledProcessError: when ``openstudio.cli`` exits
             with a non-zero code that is not transient.
+        TransientError: when the simulation exited with a stale heartbeat,
+            indicating a potentially transient container freeze.
     """
+    # Auto-detect version if not provided or invalid
+    resolved_version = openstudio_version
+    if not resolved_version or not resolved_version[0].isdigit():
+        log.debug(
+            "run_openstudio_sim: version %r is empty/invalid - attempting auto-detection",
+            openstudio_version,
+        )
+        try:
+            resolved_version = detect_openstudio_version()
+            log.info(
+                "run_openstudio_sim: auto-detected OpenStudio version %s for sample %s",
+                resolved_version,
+                sample_id,
+            )
+        except VersionDetectionError:
+            log.warning(
+                "run_openstudio_sim: could not auto-detect version for sample %s - using stub",
+                sample_id,
+            )
+            resolved_version = "unknown"
+
     return _run_openstudio_sim_impl(
         modified_sim_package=modified_sim_package,
         sample_id=sample_id,
-        openstudio_version=openstudio_version,
+        openstudio_version=resolved_version,
         out=out,
         simulate_work_s=simulate_work_s,
         stdout_path=stdout_path,
         stderr_path=stderr_path,
         max_retries=max_retries,
         worker_id=worker_id,
+        health_check_interval=health_check_interval,
     )
 
 

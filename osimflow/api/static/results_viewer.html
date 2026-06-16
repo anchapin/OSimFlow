@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSimFlow Results Viewer</title>
+<script src="https://cdn.plot.ly/plotly-2.35.3.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface-alt:#222633;--border:#2e3345;
+  --text:#e2e4eb;--text-muted:#8b8fa3;--primary:#6c8cff;--primary-dim:#4a67d6;
+  --success:#4ade80;--warning:#fbbf24;--danger:#f87171;--cached:#a78bfa;
+  --radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --mono:"SF Mono","Fira Code","JetBrains Mono",monospace;
+}
+html{font-size:15px}
+body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+.app{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-brand{padding:20px 16px 12px;font-size:1.1rem;font-weight:700;letter-spacing:-0.02em;color:var(--primary);border-bottom:1px solid var(--border)}
+.sidebar-brand small{font-size:0.7rem;color:var(--text-muted);font-weight:400}
+.sidebar-nav{flex:1;padding:8px}
+.sidebar-nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius);color:var(--text-muted);text-decoration:none;font-size:0.9rem;transition:background 0.15s,color 0.15s}
+.sidebar-nav a:hover{background:var(--surface-alt);color:var(--text)}
+.sidebar-nav a.active{background:var(--primary-dim);color:#fff}
+.sidebar-nav a .icon{font-size:1.1rem;width:20px;text-align:center}
+.main{flex:1;overflow-y:auto}
+.page{display:none;padding:32px;max-width:1400px}
+.page.active{display:block}
+.api-key-bar{background:var(--surface-alt);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:12px;font-size:0.82rem}
+.api-key-bar label{color:var(--text-muted);font-weight:500}
+.api-key-bar input{flex:1;max-width:400px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;color:var(--text);font-family:var(--mono);font-size:0.82rem}
+.api-key-bar .status{margin-left:auto;padding:3px 10px;border-radius:12px;font-weight:600;font-size:0.75rem}
+.status-ok{background:rgba(74,222,128,0.15);color:var(--success)}
+.status-err{background:rgba(248,113,113,0.15);color:var(--danger)}
+.status-pending{background:rgba(139,143,163,0.15);color:var(--text-muted)}
+h1{font-size:1.6rem;font-weight:700;margin-bottom:6px}
+h2{font-size:1.15rem;font-weight:600;margin:24px 0 12px}
+.subtitle{color:var(--text-muted);font-size:0.9rem;margin-bottom:20px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px}
+.card-label{font-size:0.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px}
+.card-value{font-size:1.5rem;font-weight:700}
+.card-value.ok{color:var(--success)}.card-value.fail{color:var(--danger)}
+.card-value.cached{color:var(--cached)}.card-value.time{color:var(--primary)}
+.chart-container{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px}
+.chart-controls{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px;align-items:center}
+.chart-controls label{font-size:0.85rem;color:var(--text-muted)}
+.chart-controls select{background:var(--surface-alt);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-size:0.85rem;font-family:var(--font)}
+.chart-plot{width:100%;min-height:400px}
+.export-bar{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+.btn{border:none;padding:8px 18px;border-radius:var(--radius);cursor:pointer;font-size:0.85rem;font-weight:600;transition:background 0.2s}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-dim)}
+.btn-secondary{background:var(--surface-alt);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--border)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:0.88rem}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{background:var(--surface-alt);color:var(--text-muted);font-weight:600;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.04em;position:sticky;top:0}
+tr:hover td{background:var(--surface-alt)}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600}
+.badge-ok{background:rgba(74,222,128,0.15);color:var(--success)}
+.badge-fail{background:rgba(248,113,113,0.15);color:var(--danger)}
+.badge-running{background:rgba(251,191,36,0.15);color:var(--warning)}
+.empty{text-align:center;padding:60px 20px;color:var(--text-muted)}
+.empty .icon{font-size:2.5rem;margin-bottom:12px}
+.tab-bar{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border)}
+.tab{background:none;border:none;color:var(--text-muted);padding:8px 16px;cursor:pointer;font-size:0.88rem;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.active{color:var(--primary);border-bottom-color:var(--primary)}
+.plotly-graph-div{margin:auto}
+@media(max-width:768px){
+  .app{flex-direction:column}
+  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border)}
+  .sidebar-nav{display:flex;overflow-x:auto;padding:4px}
+  .page{padding:16px}
+  .cards{grid-template-columns:1fr 1fr}
+  .chart-controls{flex-direction:column;align-items:flex-start}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <nav class="sidebar">
+    <div class="sidebar-brand">OSimFlow <small>Results</small></div>
+    <div class="sidebar-nav">
+      <a href="#" data-page="overview" class="active"><span class="icon">&#9632;</span> Overview</a>
+      <a href="#" data-page="histogram"><span class="icon">&#9650;</span> Histogram</a>
+      <a href="#" data-page="scatter"><span class="icon">&#9679;</span> Scatter</a>
+      <a href="#" data-page="parallel"><span class="icon">&#8776;</span> Parallel Coords</a>
+      <a href="#" data-page="timeseries"><span class="icon">&#8810;</span> Time-series</a>
+      <a href="#" data-page="failures"><span class="icon">&#9888;</span> Failures</a>
+      <a href="#" data-page="export"><span class="icon">&#8681;</span> Export</a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="api-key-bar">
+      <label for="apiKey">API Key:</label>
+      <input type="password" id="apiKey" placeholder="(none)" autocomplete="off">
+      <span id="connStatus" class="status status-pending">loading...</span>
+    </div>
+
+    <!-- Overview Page -->
+    <div id="page-overview" class="page active">
+      <h1>Campaign Overview</h1>
+      <p class="subtitle">Summary of aggregated simulation results</p>
+      <div class="cards" id="overview-cards"></div>
+      <div id="overview-empty" class="empty" style="display:none">
+        <div class="icon">&#128196;</div>
+        <p>No campaign results found.</p>
+      </div>
+      <div id="overview-stats" style="display:none">
+        <div class="chart-container">
+          <h2>EUI Distribution</h2>
+          <div id="eui-histogram-mini" class="chart-plot"></div>
+        </div>
+        <div class="chart-container">
+          <h2>Sample Correlation Heatmap</h2>
+          <div id="correlation-heatmap" class="chart-plot"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Histogram Page -->
+    <div id="page-histogram" class="page">
+      <h1>KPI Histogram</h1>
+      <p class="subtitle">Interactive distribution chart for any numeric KPI</p>
+      <div class="chart-container">
+        <div class="chart-controls">
+          <label for="hist-kpi">KPI:</label>
+          <select id="hist-kpi"></select>
+          <label for="hist-bins">Bins:</label>
+          <select id="hist-bins">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="30">30</option>
+            <option value="50">50</option>
+          </select>
+          <button class="btn btn-primary" id="hist-update">Update</button>
+        </div>
+        <div id="hist-plot" class="chart-plot"></div>
+        <div id="hist-stats" style="margin-top:12px;font-size:0.85rem;color:var(--text-muted)"></div>
+      </div>
+    </div>
+
+    <!-- Scatter Page -->
+    <div id="page-scatter" class="page">
+      <h1>Variable vs KPI Scatter</h1>
+      <p class="subtitle">Explore relationships between input variables and KPIs</p>
+      <div class="chart-container">
+        <div class="chart-controls">
+          <label for="scat-x">Variable:</label>
+          <select id="scat-x"></select>
+          <label for="scat-y">KPI:</label>
+          <select id="scat-y"></select>
+          <button class="btn btn-primary" id="scat-update">Update</button>
+        </div>
+        <div id="scat-plot" class="chart-plot"></div>
+        <div id="scat-stats" style="margin-top:12px;font-size:0.85rem;color:var(--text-muted)"></div>
+      </div>
+    </div>
+
+    <!-- Parallel Coordinates Page -->
+    <div id="page-parallel" class="page">
+      <h1>Parallel Coordinates</h1>
+      <p class="subtitle">High-dimensional view of variables and KPIs — drag axes to filter</p>
+      <div class="chart-container">
+        <div id="parallel-plot" class="chart-plot"></div>
+      </div>
+    </div>
+
+    <!-- Time-series Page -->
+    <div id="page-timeseries" class="page">
+      <h1>Time-Series Browser</h1>
+      <p class="subtitle">Aggregated hourly/daily/monthly time-series across all samples</p>
+      <div class="chart-container">
+        <div class="chart-controls">
+          <label for="ts-var">Variable:</label>
+          <input type="text" id="ts-var" placeholder="e.g. Zone Air Temperature" style="background:var(--surface-alt);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-size:0.85rem;width:220px">
+          <label for="ts-res">Resolution:</label>
+          <select id="ts-res">
+            <option value="hourly" selected>Hourly</option>
+            <option value="daily">Daily</option>
+            <option value="monthly">Monthly</option>
+          </select>
+          <button class="btn btn-primary" id="ts-update">Load</button>
+        </div>
+        <div id="ts-plot" class="chart-plot"></div>
+        <div id="ts-info" style="margin-top:12px;font-size:0.85rem;color:var(--text-muted)"></div>
+      </div>
+    </div>
+
+    <!-- Failures Page -->
+    <div id="page-failures" class="page">
+      <h1>Failed Simulations</h1>
+      <p class="subtitle">Error summaries and root-cause classifications</p>
+      <div class="table-wrap" id="failures-table-wrap">
+        <table id="failures-table">
+          <thead><tr><th>Sample ID</th><th>Error Summary</th><th>Category</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="failures-empty" class="empty" style="display:none">
+        <div class="icon">&#9989;</div>
+        <p>No failed simulations.</p>
+      </div>
+    </div>
+
+    <!-- Export Page -->
+    <div id="page-export" class="page">
+      <h1>Export Results</h1>
+      <p class="subtitle">Download aggregated results in your preferred format</p>
+      <div class="chart-container">
+        <h2>Download Options</h2>
+        <div style="margin-top:16px">
+          <p style="margin-bottom:16px;color:var(--text-muted)">Select format and download the full aggregated results dataset.</p>
+          <div class="export-bar">
+            <button class="btn btn-primary" id="export-csv">Download CSV</button>
+            <button class="btn btn-secondary" id="export-json">Download JSON</button>
+            <button class="btn btn-secondary" id="export-parquet">Download Parquet</button>
+          </div>
+          <div style="margin-top:12px;font-size:0.82rem;color:var(--text-muted)">
+            <label><input type="checkbox" id="export-include-failed" checked> Include failed simulations</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const state = {
+  campaignId: null,
+  campaignData: null,
+  overviewData: null,
+  lhsVars: [],
+  kpiCols: [],
+  allNumeric: [],
+  euiCol: null,
+};
+
+// ── API helpers ────────────────────────────────────────────────
+function apiKey() { return document.getElementById('apiKey').value.trim() || null; }
+function apiHeaders() { const k = apiKey(); return k ? { 'X-API-Key': k } : {}; }
+function apiUrl(path) {
+  const k = apiKey();
+  const sep = path.includes('?') ? '&' : '?';
+  return k ? `${path}${sep}api_key=${encodeURIComponent(k)}` : path;
+}
+async function apiFetch(path) {
+  const resp = await fetch(apiUrl(path), { headers: apiHeaders() });
+  if (resp.status === 401) {
+    document.getElementById('connStatus').textContent = 'unauthorized';
+    document.getElementById('connStatus').className = 'status status-err';
+    throw new Error('Unauthorized');
+  }
+  return resp;
+}
+
+// ── Navigation ───────────────────────────────────────────────
+document.querySelectorAll('.sidebar-nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const page = a.dataset.page;
+    navigate(page);
+  });
+});
+function navigate(page) {
+  document.querySelectorAll('.sidebar-nav a').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `page-${page}`));
+  loadPage(page);
+}
+async function loadPage(page) {
+  try {
+    switch (page) {
+      case 'overview': await loadOverview(); break;
+      case 'histogram': await initHistogram(); break;
+      case 'scatter': await initScatter(); break;
+      case 'parallel': await initParallel(); break;
+      case 'timeseries': initTimeseries(); break;
+      case 'failures': await loadFailures(); break;
+      case 'export': initExport(); break;
+    }
+  } catch (err) { console.error(`Error loading ${page}:`, err); }
+}
+
+// ── Campaign ID from URL ──────────────────────────────────────
+function getCampaignId() {
+  const m = window.location.pathname.match(/^\/results\/([^/]+)/);
+  return m ? m[1] : 'default';
+}
+state.campaignId = getCampaignId();
+
+// ── Overview ─────────────────────────────────────────────────
+async function loadOverview() {
+  const resp = await apiFetch(`/results/${state.campaignId}`);
+  if (!resp.ok) {
+    document.getElementById('overview-cards').innerHTML = '<p style="color:var(--danger)">Failed to load campaign data</p>';
+    return;
+  }
+  const data = await resp.json();
+  state.campaignData = data;
+  state.overviewData = data;
+  state.lhsVars = data.schema ? data.schema.lhs_variables : [];
+  state.kpiCols = data.schema ? data.schema.kpi_columns : [];
+  state.allNumeric = data.schema ? data.schema.all_numeric : [];
+  state.euiCol = data.eui_column;
+
+  document.getElementById('connStatus').textContent = 'connected';
+  document.getElementById('connStatus').className = 'status status-ok';
+
+  const s = data.samples || {};
+  document.getElementById('overview-cards').innerHTML = `
+    <div class="card"><div class="card-label">Campaign</div><div class="card-value">${esc(data.campaign_id || '—')}</div></div>
+    <div class="card"><div class="card-label">Status</div><div class="card-value">${esc(data.status || '—')}</div></div>
+    <div class="card"><div class="card-label">Total Samples</div><div class="card-value">${s.total || 0}</div></div>
+    <div class="card"><div class="card-label">Succeeded</div><div class="card-value ok">${s.success || 0}</div></div>
+    <div class="card"><div class="card-label">Failed</div><div class="card-value fail">${s.failed || 0}</div></div>
+    <div class="card"><div class="card-label">EUI Column</div><div class="card-value" style="font-size:1rem">${esc(state.euiCol || '—')}</div></div>
+  `;
+
+  if (data.has_results && state.euiCol) {
+    document.getElementById('overview-stats').style.display = '';
+    renderMiniHistogram(state.euiCol);
+  } else {
+    document.getElementById('overview-stats').style.display = 'none';
+  }
+}
+
+async function renderMiniHistogram(kpi) {
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/histogram?kpi=${encodeURIComponent(kpi)}&bins=20`);
+    if (!resp.ok) return;
+    const d = await resp.json();
+    const trace = {
+      x: d.counts,
+      y: d.bins,
+      type: 'bar',
+      orientation: 'h',
+      marker: { color: '#6c8cff' },
+      name: kpi,
+    };
+    const layout = {
+      paper_bgcolor: 'transparent',
+      plot_bgcolor: 'transparent',
+      font: { color: '#e2e4eb', family: 'inherit' },
+      margin: { l: 60, r: 20, t: 20, b: 40 },
+      xaxis: { title: 'Count', gridcolor: '#2e3345' },
+      yaxis: { title: kpi, gridcolor: '#2e3345' },
+    };
+    Plotly.newPlot('eui-histogram-mini', [trace], layout, {responsive: true});
+  } catch (err) { console.error(err); }
+}
+
+// ── Histogram ────────────────────────────────────────────────
+async function initHistogram() {
+  const kpiSelect = document.getElementById('hist-kpi');
+  kpiSelect.innerHTML = state.kpiCols.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  if (state.euiCol && state.kpiCols.includes(state.euiCol)) {
+    kpiSelect.value = state.euiCol;
+  }
+  document.getElementById('hist-update').onclick = () => renderHistogram();
+  if (state.kpiCols.length) renderHistogram();
+}
+
+async function renderHistogram() {
+  const kpi = document.getElementById('hist-kpi').value;
+  const bins = parseInt(document.getElementById('hist-bins').value, 10);
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/histogram?kpi=${encodeURIComponent(kpi)}&bins=${bins}`);
+    if (!resp.ok) return;
+    const d = await resp.json();
+    const trace = {
+      x: d.bins,
+      y: d.counts,
+      type: 'bar',
+      marker: { color: '#6c8cff', opacity: 0.85 },
+      name: kpi,
+    };
+    const layout = {
+      title: { text: `${kpi} Distribution`, font: { color: '#e2e4eb' } },
+      paper_bgcolor: 'transparent',
+      plot_bgcolor: 'transparent',
+      font: { color: '#e2e4eb', family: 'inherit' },
+      margin: { l: 60, r: 20, t: 40, b: 50 },
+      xaxis: { title: kpi, gridcolor: '#2e3345' },
+      yaxis: { title: 'Count', gridcolor: '#2e3345' },
+      shapes: [{
+        type: 'line',
+        x0: d.mean, x1: d.mean,
+        y0: 0, y1: Math.max(...d.counts) * 1.05,
+        line: { color: '#4ade80', width: 2, dash: 'dot' },
+      }],
+    };
+    Plotly.newPlot('hist-plot', [trace], layout, {responsive: true});
+    document.getElementById('hist-stats').innerHTML =
+      `n=${d.n_points} | mean=${d.mean.toFixed(2)} | median=${d.median.toFixed(2)} | σ=${d.std.toFixed(2)} | p5=${d.p5.toFixed(2)} | p95=${d.p95.toFixed(2)}`;
+  } catch (err) { console.error(err); }
+}
+
+// ── Scatter ──────────────────────────────────────────────────
+async function initScatter() {
+  const xSelect = document.getElementById('scat-x');
+  const ySelect = document.getElementById('scat-y');
+  xSelect.innerHTML = state.lhsVars.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  ySelect.innerHTML = state.kpiCols.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  if (state.euiCol && state.kpiCols.includes(state.euiCol)) {
+    ySelect.value = state.euiCol;
+  }
+  document.getElementById('scat-update').onclick = () => renderScatter();
+  if (state.lhsVars.length && state.kpiCols.length) renderScatter();
+}
+
+async function renderScatter() {
+  const variable = document.getElementById('scat-x').value;
+  const kpi = document.getElementById('scat-y').value;
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/scatter?variable=${encodeURIComponent(variable)}&kpi=${encodeURIComponent(kpi)}`);
+    if (!resp.ok) return;
+    const d = await resp.json();
+    const trace = {
+      x: d.data.map(p => p.variable_value),
+      y: d.data.map(p => p.kpi_value),
+      mode: 'markers',
+      type: 'scatter',
+      marker: { color: '#6c8cff', size: 8, opacity: 0.7 },
+      name: 'samples',
+      text: d.data.map(p => `ID: ${p.sample_id}<br>${variable}: ${p.variable_value.toFixed(3)}<br>${kpi}: ${p.kpi_value.toFixed(2)}`),
+      hoverinfo: 'text',
+    };
+    const xmin = Math.min(...trace.x), xmax = Math.max(...trace.x);
+    const trendline = {
+      x: [xmin, xmax],
+      y: [d.mean - d.std * 0.5 + (d.mean - d.std * 0.5), d.mean + d.std * 0.5 + (d.mean + d.std * 0.5)],
+      mode: 'lines', type: 'scatter',
+      line: { color: '#4ade80', width: 2, dash: 'dash' },
+      name: 'trend',
+      hoverinfo: 'skip',
+    };
+    const layout = {
+      title: { text: `${variable} vs ${kpi}  (r=${d.correlation.toFixed(3)}, r²=${d.r_squared.toFixed(3)})`, font: { color: '#e2e4eb' } },
+      paper_bgcolor: 'transparent',
+      plot_bgcolor: 'transparent',
+      font: { color: '#e2e4eb', family: 'inherit' },
+      margin: { l: 60, r: 20, t: 50, b: 50 },
+      xaxis: { title: variable, gridcolor: '#2e3345' },
+      yaxis: { title: kpi, gridcolor: '#2e3345' },
+    };
+    Plotly.newPlot('scat-plot', [trace, trendline], layout, {responsive: true});
+    document.getElementById('scat-stats').innerHTML =
+      `n=${d.n_points} | Pearson r=${d.correlation.toFixed(4)} | r²=${d.r_squared.toFixed(4)}`;
+  } catch (err) { console.error(err); }
+}
+
+// ── Parallel Coordinates ─────────────────────────────────────
+async function initParallel() {
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/parallel_coordinates`);
+    if (!resp.ok) return;
+    const d = await resp.json();
+    if (!d.dimensions || !d.dimensions.length) return;
+    const traces = [{
+      type: 'parcoords',
+      dimensions: d.dimensions.map(dim => ({
+        label: dim.label,
+        values: dim.values,
+      })),
+      line: {
+        color: d.samples.map(s => s.color_value),
+        colorscale: [[0, '#f87171'], [0.5, '#fbbf24'], [1, '#4ade80']],
+        colorbar: { title: d.color_column, ticksuffix: '', bgcolor: 'rgba(0,0,0,0)' },
+      },
+    }];
+    const layout = {
+      title: { text: `Parallel Coordinates — color: ${d.color_column}`, font: { color: '#e2e4eb' } },
+      paper_bgcolor: 'transparent',
+      font: { color: '#e2e4eb', family: 'inherit' },
+      margin: { l: 60, r: 40, t: 50, b: 30 },
+    };
+    Plotly.newPlot('parallel-plot', traces, layout, {responsive: true});
+  } catch (err) { console.error(err); }
+}
+
+// ── Time-series ───────────────────────────────────────────────
+function initTimeseries() {
+  document.getElementById('ts-var').value = 'Zone Air Temperature';
+  document.getElementById('ts-update').onclick = () => renderTimeseries();
+  renderTimeseries();
+}
+
+async function renderTimeseries() {
+  const variable = document.getElementById('ts-var').value.trim() || 'Zone Air Temperature';
+  const resolution = document.getElementById('ts-res').value;
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/timeseries?variable=${encodeURIComponent(variable)}&resolution=${encodeURIComponent(resolution)}`);
+    if (!resp.ok) {
+      document.getElementById('ts-plot').innerHTML = '<p style="color:var(--danger);padding:20px">No time-series data found for this variable.</p>';
+      return;
+    }
+    const d = await resp.json();
+    const meanTrace = {
+      x: d.timestamps,
+      y: d.mean,
+      mode: 'lines',
+      type: 'scatter',
+      line: { color: '#6c8cff', width: 1.5 },
+      name: 'Mean',
+      fill: 'tonexty',
+      fillcolor: 'rgba(108,140,255,0.1)',
+    };
+    const p5Trace = {
+      x: d.timestamps, y: d.p5,
+      mode: 'lines', type: 'scatter',
+      line: { color: 'rgba(108,140,255,0.4)', width: 1, dash: 'dot' },
+      name: 'p5', hoverinfo: 'skip',
+    };
+    const p95Trace = {
+      x: d.timestamps, y: d.p95,
+      mode: 'lines', type: 'scatter',
+      line: { color: 'rgba(108,140,255,0.4)', width: 1, dash: 'dot' },
+      name: 'p95', hoverinfo: 'skip',
+    };
+    const layout = {
+      title: { text: `${variable} — ${resolution} (n=${d.n_samples} samples)`, font: { color: '#e2e4eb' } },
+      paper_bgcolor: 'transparent',
+      plot_bgcolor: 'transparent',
+      font: { color: '#e2e4eb', family: 'inherit' },
+      margin: { l: 60, r: 20, t: 50, b: 50 },
+      xaxis: { title: 'Time', gridcolor: '#2e3345', rangeslider: { visible: false } },
+      yaxis: { title: variable, gridcolor: '#2e3345' },
+    };
+    Plotly.newPlot('ts-plot', [meanTrace, p5Trace, p95Trace], layout, {responsive: true});
+    document.getElementById('ts-info').textContent =
+      `${d.n_timesteps} timesteps | ${d.n_samples} samples | mean=${d.mean.reduce((a,b)=>a+b,0)/d.mean.length.toFixed(2)}`;
+  } catch (err) {
+    document.getElementById('ts-plot').innerHTML = '<p style="color:var(--danger);padding:20px">Error loading time-series: '+esc(err.message)+'</p>';
+  }
+}
+
+// ── Failures ────────────────────────────────────────────────
+async function loadFailures() {
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/failures`);
+    if (!resp.ok) return;
+    const d = await resp.json();
+    if (!d.total) {
+      document.getElementById('failures-table-wrap').style.display = 'none';
+      document.getElementById('failures-empty').style.display = '';
+      return;
+    }
+    document.getElementById('failures-table-wrap').style.display = '';
+    document.getElementById('failures-empty').style.display = 'none';
+    const tbody = document.querySelector('#failures-table tbody');
+    tbody.innerHTML = d.failures.map(f => `
+      <tr>
+        <td style="font-family:var(--mono);font-size:0.82rem">${esc(f.sample_id || '—')}</td>
+        <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis" title="${esc(f.error_summary || '')}">${esc(f.error_summary || '—')}</td>
+        <td><span class="badge badge-fail">${esc(f.failure_category || 'unknown')}</span></td>
+      </tr>
+    `).join('');
+  } catch (err) { console.error(err); }
+}
+
+// ── Export ───────────────────────────────────────────────────
+function initExport() {
+  document.getElementById('export-csv').onclick = () => downloadExport('csv');
+  document.getElementById('export-json').onclick = () => downloadExport('json');
+  document.getElementById('export-parquet').onclick = () => downloadExport('parquet');
+}
+
+function downloadExport(fmt) {
+  const includeFailed = document.getElementById('export-include-failed').checked;
+  const url = apiUrl(`/results/${state.campaignId}/export?fmt=${fmt}&include_failed=${includeFailed}`);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${state.campaignId}_results.${fmt}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// ── Utilities ───────────────────────────────────────────────
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+// ── Init ────────────────────────────────────────────────────
+loadOverview();
+</script>
+</body>
+</html>
