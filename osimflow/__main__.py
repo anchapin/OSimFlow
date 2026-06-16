@@ -1296,6 +1296,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="Run a campaign")
     _add_run_args(run)
+    warm = sub.add_parser("warm-cache", help="Pre-populate the simulation cache before a campaign")
+    _add_run_args(warm)
+    warm.add_argument(
+        "--n_warm",
+        type=int,
+        default=10,
+        help="Number of pilot samples to run for cache warming (default: 10)",
+    )
     imp = sub.add_parser(
         "import-osa",
         help="Import an OpenStudio Analysis (.osa / analysis.json) file",
@@ -1798,6 +1806,30 @@ def _format_field(record: CampaignRecord, key: str) -> str:
     return str(getattr(record, key, ""))
 
 
+def _cmd_warm_cache(args: argparse.Namespace) -> int:
+    """Pre-populate the simulation cache before a campaign (issue #427)."""
+    _apply_preset(args)
+    cfg: CampaignConfig = load_config(vars(args))
+    executor = _build_executor(args)
+    task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
+    campaign = Campaign(
+        cfg,
+        executor,
+        apply_fn=None,
+        extract_fn=None,
+        max_workers=args.max_workers,
+        task_queue=task_queue,
+    )
+    result = campaign.warm_cache(n_warm=args.n_warm)
+    cache_stats = result["cache_stats"]
+    print(
+        f"Cache warming complete: {result['n_samples']} samples warm, "
+        f"{cache_stats['hits']} cache hits, {cache_stats['misses']} misses, "
+        f"{cache_stats['total_keys']} total keys"
+    )
+    return 0
+
+
 def _cmd_health(args: argparse.Namespace) -> int:
     """Run system health checks (issue #411)."""
     from osimflow.health import (  # noqa: PLC0415
@@ -1920,6 +1952,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "backup": _cmd_backup,
         "restore": _cmd_restore,
         "health": _cmd_health,
+        "warm-cache": _cmd_warm_cache,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
