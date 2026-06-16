@@ -22,6 +22,7 @@ from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from slowapi.util import get_remote_address
@@ -43,7 +44,16 @@ from osimflow.api.timeseries import timeseries_router
 from osimflow.api.ui import ui_router
 from osimflow.api.variables import variables_router
 from osimflow.validation import ValidationError as OsimflowValidationError
-from osimflow.validation import sanitize_filename, sanitize_sample_id, validate_path_within_base
+from osimflow.validation import (
+    sanitize_filename,
+    sanitize_sample_id,
+    validate_path_within_base,
+    validate_template_package,
+    validate_variables_yml,
+)
+
+# OpenStudio version pattern: must start with digit (e.g. "3.11.0")
+_OPENSTUDIO_VERSION_RE = re.compile(r"^\d+\.\d+")
 
 log = logging.getLogger("osimflow.api")
 
@@ -263,6 +273,200 @@ async def ready(request: Request) -> dict[str, Any]:
         return {"status": "ready", "campaign_id": data.get("campaign_id")}
     except HTTPException:
         return {"status": "not_ready", "reason": "run.json not available"}
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight config validation (issue #398)
+# ---------------------------------------------------------------------------
+
+
+class ValidateConfigRequest(BaseModel):  # type: ignore[no-redef]
+    """Request body for ``POST /api/v1/validate``."""
+
+    input_variables: str = Field(description="Path to variables.yml")
+    template_sim_package: str = Field(description="Path to template simulation package")
+    n_samples: int = Field(ge=1, description="Number of samples (must be >= 1)")
+    openstudio_version: str = Field(description="OpenStudio version string (e.g. 3.11.0)")
+    outdir: str | None = Field(default=None, description="Output directory path")
+    archive_intermediates: bool = False
+    algorithm: str = "lhs"
+    max_generations: int = 1
+    dry_run: bool = False
+    skip_preflight: bool = False
+    custom_apply_script: str | None = None
+    custom_kpi_extractor: str | None = None
+    init_script: str | None = None
+    finalize_script: str | None = None
+    weather_dir: str = "weather"
+    project: str = ""
+    mlflow_tracking_uri: str | None = None
+    redis_url: str | None = None
+    slurm_qos: str | None = None
+    slurm_constraint: str | None = None
+    slurm_gres: str | None = None
+    baseline: dict[str, object] | None = None
+    objective: dict[str, object] | None = None
+    constraints: list[dict[str, object]] | None = None
+    max_sample_retries: int = 3
+    offline: bool = False
+    offline_bundle: str | None = None
+    webhook_url: str | None = None
+    nomad_tls: bool = False
+    nomad_cert: str | None = None
+    nomad_key: str | None = None
+    nomad_ca_cert: str | None = None
+    byos_trust_level: str = "subprocess"
+    byos_resource_limits: dict[str, int] | None = None
+    observability: str = "none"
+    cloudwatch_namespace: str = "OSimFlow"
+    cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
+    prometheus_port: int = 9090
+    otel_endpoint: str | None = None
+    registry_path: str | None = None
+    task_queue: str = "none"
+    dask_scheduler_address: str | None = None
+    result_storage_backend: str = "local"
+    result_storage_bucket: str = ""
+    result_storage_endpoint: str | None = None
+    track_costs: bool = False
+    aws_batch_max_spot_price_usd: float | None = None
+    aws_batch_fallback_to_on_demand: bool = False
+    aws_batch_max_retries: int = 3
+    aws_batch_on_demand_price: float | None = None
+    aws_batch_spot_price: float | None = None
+    ecr_repository: str | None = None
+    azure_batch_account_name: str | None = None
+    azure_batch_account_url: str | None = None
+    azure_batch_pool_id: str = "osimflow-pool"
+    azure_batch_location: str = "eastus"
+    azure_use_spot: bool = False
+    azure_fallback_to_on_demand: bool = False
+    azure_max_retries: int = 3
+    google_batch_project_id: str | None = None
+    google_batch_region: str = "us-central1"
+    google_batch_service_account: str | None = None
+    google_use_spot: bool = False
+    google_fallback_to_on_demand: bool = False
+    google_max_retries: int = 3
+    slurm_cost_per_node_hour: float = 0.10
+
+
+class ValidateConfigResponse(BaseModel):  # type: ignore[no-redef]
+    """Response for ``POST /api/v1/validate``."""
+
+    valid: bool = Field(description="True when all validation checks passed")
+    errors: list[str] = Field(
+        default_factory=list, description="Critical validation errors"
+    )
+    warnings: list[str] = Field(
+        default_factory=list, description="Non-critical warnings"
+    )
+
+
+@router.post("/api/v1/validate")  # type: ignore[untyped-decorator]
+async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
+    """Pre-flight configuration validation (issue #398).
+
+    Validates the supplied config fields without running a campaign.
+    Checks:
+
+    - ``variables.yml`` schema and variable definitions
+    - ``template_sim_package`` structure and required files
+    - OpenStudio version format
+    - Sample count sanity
+    - Max generations sanity
+    - Script paths (custom_apply_script, custom_kpi_extractor, etc.)
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # --- Validate variables.yml ---
+    variables_path = Path(req.input_variables)
+    if not variables_path.exists():
+        errors.append(f"input_variables not found: {variables_path}")
+    else:
+        try:
+            validate_variables_yml(variables_path)
+        except OsimflowValidationError as exc:
+            errors.append(str(exc))
+
+    # --- Validate template package ---
+    template_path = Path(req.template_sim_package)
+    if not template_path.exists():
+        errors.append(f"template_sim_package not found: {template_path}")
+    else:
+        try:
+            validate_template_package(template_path)
+        except OsimflowValidationError as exc:
+            errors.append(str(exc))
+
+    # --- OpenStudio version format ---
+    if req.openstudio_version:
+        if not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
+            errors.append(
+                f"openstudio_version must start with a digit (e.g. 3.11.0), "
+                f"got {req.openstudio_version!r}"
+            )
+
+    # --- Sample count sanity ---
+    if req.n_samples < 1:
+        errors.append(f"n_samples must be >= 1, got {req.n_samples}")
+    if req.n_samples > 10000:
+        warnings.append(
+            f"n_samples={req.n_samples} is very large — simulation runtime may be extensive"
+        )
+
+    # --- Max generations sanity ---
+    if req.max_generations < 1:
+        errors.append(f"max_generations must be >= 1, got {req.max_generations}")
+
+    # --- Script path validation ---
+    for script_field, script_path in [
+        ("custom_apply_script", req.custom_apply_script),
+        ("custom_kpi_extractor", req.custom_kpi_extractor),
+        ("init_script", req.init_script),
+        ("finalize_script", req.finalize_script),
+        ("nomad_cert", req.nomad_cert),
+        ("nomad_key", req.nomad_key),
+        ("nomad_ca_cert", req.nomad_ca_cert),
+    ]:
+        if script_path:
+            p = Path(script_path)
+            if not p.exists():
+                errors.append(f"{script_field} not found: {p}")
+            elif not p.is_file():
+                errors.append(f"{script_field} is not a file: {p}")
+
+    # --- Algorithm sanity ---
+    valid_algorithms = {"lhs", "sobol", "halton", "morris", "fast99", "de", "da", "ga", "nsga2", "pso"}
+    if req.algorithm.lower() not in valid_algorithms:
+        warnings.append(
+            f"algorithm '{req.algorithm}' may not be recognised — "
+            f"known algorithms: {', '.join(sorted(valid_algorithms))}"
+        )
+
+    # --- Observability backend sanity ---
+    valid_backends = {"none", "cloudwatch", "prometheus", "opentelemetry"}
+    if req.observability not in valid_backends:
+        warnings.append(
+            f"observability '{req.observability}' is not a known backend — "
+            f"valid: {', '.join(sorted(valid_backends))}"
+        )
+
+    # --- Result storage backend sanity ---
+    valid_storage = {"local", "s3", "gs", "azure"}
+    if req.result_storage_backend not in valid_storage:
+        warnings.append(
+            f"result_storage_backend '{req.result_storage_backend}' is not a known backend — "
+            f"valid: {', '.join(sorted(valid_storage))}"
+        )
+
+    return ValidateConfigResponse(
+        valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+    )
 
 
 # ---------------------------------------------------------------------------
