@@ -185,7 +185,18 @@ class DataPointManager:
         status: DataPointStatus,
         error_summary: str | None = None,
     ) -> DataPoint:
-        """Update the status of a data point."""
+        """Update the status of a data point.
+
+        If the data point is not yet registered, it will be auto-registered
+        first with work_dir=None. This makes update_status idempotent and
+        eliminates the need for callers to explicitly register before
+        updating status — particularly useful in exception-handling paths
+        where registration may not have occurred yet.
+        """
+        if sample_id not in self._data_points:
+            # Auto-register if not found — work_dir will be set properly
+            # if/when the sample is re-registered with real path info.
+            self.register(sample_id)
         dp = self._data_points[sample_id]
         dp.status = status
         dp.updated_at = time.time()
