@@ -203,6 +203,24 @@ class BaseAlgorithm(abc.ABC):
             f"{self.__class__.__name__} does not implement compute_sensitivity_indices"
         )
 
+    def compute_uq_indices(
+        self,
+        variables: dict[str, Any],
+        samples: list[dict[str, Any]],
+        kpi_values: dict[str, dict[str, float]],
+        outdir: Path,
+        failure_thresholds: dict[str, tuple[float, str]] | None = None,
+        confidence: float = 0.95,
+    ) -> Path:
+        """Compute UQ indices (POF, CIs). Raises NotImplementedError by default.
+
+        Only ``UncertaintyQuantification`` implements this method. Other algorithms
+        that do not support UQ analysis will raise ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement compute_uq_indices"
+        )
+
 
 # ======================================================================
 # Registry
@@ -649,6 +667,10 @@ AlgorithmRegistry.register("random", RandomSamplingAlgorithm)
 from osimflow.algorithms.custom import CustomDOEAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("custom", CustomDOEAlgorithm)
+
+from osimflow.algorithms.uq import UncertaintyQuantification  # noqa: E402
+
+AlgorithmRegistry.register("uq", UncertaintyQuantification)
 
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)

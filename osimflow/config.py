@@ -10,7 +10,7 @@ import dataclasses
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -614,6 +614,16 @@ class CampaignConfig:
     # Only transient errors trigger retry; permanent errors (invalid input,
     # missing files) abort immediately.
     max_step_retries: int = 2
+    # UQ (Uncertainty Quantification) configuration (issue #530).
+    # uq_method: sampling method for UQ analysis. Default 'latin_hypercube'.
+    uq_method: str = "latin_hypercube"
+    # uq_n_samples: number of Monte Carlo samples for UQ analysis.
+    # When None, defaults to n_samples.
+    uq_n_samples: int | None = None
+    # uq_failure_thresholds: list of 'kpi=threshold' strings defining
+    # failure thresholds for probability of failure (POF) computation.
+    # Example: ['eui=150', 'cooling=5000']
+    uq_failure_thresholds: list[str] | None = None
 
     @property
     def work_dir(self) -> Path:
@@ -910,4 +920,13 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             else None
         ),
         max_step_retries=int(str(args.get("max_step_retries", 2))),
+        uq_method=str(args.get("uq_method", "latin_hypercube")),
+        uq_n_samples=int(str(args["uq_n_samples"]))
+        if args.get("uq_n_samples") is not None
+        else None,
+        uq_failure_thresholds=(
+            cast(list[str], args["uq_failure_thresholds"])
+            if args.get("uq_failure_thresholds")
+            else None
+        ),
     )

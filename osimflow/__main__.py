@@ -998,6 +998,37 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             '"campaign" = per-campaign-ID limiting (uses campaign ID from URL path).'
         ),
     )
+    run.add_argument(
+        "--uq-method",
+        default="latin_hypercube",
+        help=(
+            "Uncertainty Quantification (UQ) sampling method (issue #530). "
+            "Options: 'latin_hypercube' (default) or 'monte_carlo'. "
+            "Used when --algorithm uq is set."
+        ),
+    )
+    run.add_argument(
+        "--uq-n-samples",
+        type=int,
+        default=None,
+        help=(
+            "Number of Monte Carlo samples for UQ analysis (issue #530). "
+            "When omitted, defaults to --n_samples. "
+            "Used when --algorithm uq is set."
+        ),
+    )
+    run.add_argument(
+        "--uq-failure-threshold",
+        action="append",
+        default=None,
+        dest="uq_failure_thresholds",
+        help=(
+            "Failure threshold for probability of failure (POF) analysis (issue #530). "
+            "Format: 'kpi_name=threshold_value' (e.g., 'eui=150'). "
+            "Can be specified multiple times for multiple KPIs. "
+            "Used when --algorithm uq is set."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
