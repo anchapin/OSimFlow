@@ -315,7 +315,9 @@ class DistributedJobQueue:
             if self._subscriber_thread is None:
                 self._start_subscriber()
         result = self._local.enqueue(job_id, payload, priority=priority)
-        self._publish({"action": "enqueue", "job_id": job_id, "payload": payload, "priority": priority})
+        self._publish(
+            {"action": "enqueue", "job_id": job_id, "payload": payload, "priority": priority}
+        )
         return result
 
     def dequeue(self) -> dict[str, Any] | None:

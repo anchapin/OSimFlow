@@ -170,7 +170,9 @@ class JobQueue:
         # Atomic move: write new file then remove old.
         self._write_job("in_progress", record)
         (pending_dir / f"{record['id']}.json").unlink(missing_ok=True)
-        log.debug("dequeue: picked up job %s (priority=%d)", record["id"], record.get("priority", 0))
+        log.debug(
+            "dequeue: picked up job %s (priority=%d)", record["id"], record.get("priority", 0)
+        )
         return record
 
     def mark_completed(self, job_id: str) -> None:
