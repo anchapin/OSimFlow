@@ -21,7 +21,7 @@ from osimflow.measure_versioning import (
 # Test data helpers
 # ---------------------------------------------------------------------------
 
-RUBY_MEASURE_V1 = '''
+RUBY_MEASURE_V1 = """
 # *******************************************************************************
 # Measures Name: TestMeasure
 # Description: A test measure
@@ -39,9 +39,9 @@ class TestMeasure < OpenStudio::Measure::ModelMeasure
     # ...
   end
 end
-'''
+"""
 
-RUBY_MEASURE_NO_VERSION = '''
+RUBY_MEASURE_NO_VERSION = """
 # *******************************************************************************
 # Measures Name: NoVersionMeasure
 # Description: A measure without a version
@@ -55,7 +55,7 @@ class NoVersionMeasure < OpenStudio::Measure::ModelMeasure
     # ...
   end
 end
-'''
+"""
 
 PYTHON_MEASURE_V2 = '''
 #!/usr/bin/env openstudio measure
@@ -100,16 +100,17 @@ class PythonNoVersionMeasure(openstudio.measure.OSMeasure):
         pass
 '''
 
-RUBY_MEASURE_EDGE_CASES = '''
+RUBY_MEASURE_EDGE_CASES = """
 # Version: version_id = "0.1.0-beta"
 # Another field: version_id: '1.2.3'
 version_id: "3.0.0"
-'''
+"""
 
 
 # ---------------------------------------------------------------------------
 # detect_measure_version tests
 # ---------------------------------------------------------------------------
+
 
 class TestDetectMeasureVersion:
     """Tests for detect_measure_version."""
@@ -191,6 +192,7 @@ class TestDetectMeasureVersion:
 # scan_measure_versions tests
 # ---------------------------------------------------------------------------
 
+
 class TestScanMeasureVersions:
     """Tests for scan_measure_versions."""
 
@@ -210,15 +212,11 @@ class TestScanMeasureVersions:
 
         m1 = measures / "MeasureA"
         m1.mkdir()
-        (m1 / "measure.rb").write_text(
-            '# version_id: "1.0.0"\nclass M1; end', encoding="utf-8"
-        )
+        (m1 / "measure.rb").write_text('# version_id: "1.0.0"\nclass M1; end', encoding="utf-8")
 
         m2 = measures / "MeasureB"
         m2.mkdir()
-        (m2 / "measure.py").write_text(
-            '"""version_id: 2.0.0"""\nclass M2; end', encoding="utf-8"
-        )
+        (m2 / "measure.py").write_text('"""version_id: 2.0.0"""\nclass M2; end', encoding="utf-8")
 
         result = scan_measure_versions(pkg)
 
@@ -250,6 +248,7 @@ class TestScanMeasureVersions:
 # ---------------------------------------------------------------------------
 # compare_measure_versions tests
 # ---------------------------------------------------------------------------
+
 
 class TestCompareMeasureVersions:
     """Tests for compare_measure_versions."""
@@ -306,6 +305,7 @@ class TestCompareMeasureVersions:
 # ---------------------------------------------------------------------------
 # write / read / list tests
 # ---------------------------------------------------------------------------
+
 
 class TestMeasureVersionFileOperations:
     """Tests for write_measure_versions and read_measure_versions."""

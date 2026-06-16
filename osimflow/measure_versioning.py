@@ -102,9 +102,7 @@ def detect_measure_version(measure_dir: Path) -> MeasureVersion:
             language="python",
         )
 
-    raise MeasureVersioningError(
-        f"No measure.rb or measure.py found in {measure_dir}"
-    )
+    raise MeasureVersioningError(f"No measure.rb or measure.py found in {measure_dir}")
 
 
 def _extract_version_from_ruby(rb_path: Path) -> str:
