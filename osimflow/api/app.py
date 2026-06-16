@@ -22,9 +22,9 @@ from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
@@ -449,7 +449,7 @@ class ValidateConfigResponse(BaseModel):  # type: ignore[no-redef]
 
 
 @router.post("/api/v1/validate")  # type: ignore[untyped-decorator]
-async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
+async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:  # noqa: PLR0912
     """Pre-flight configuration validation (issue #398).
 
     Validates the supplied config fields without running a campaign.
@@ -486,12 +486,11 @@ async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
             errors.append(str(exc))
 
     # --- OpenStudio version format ---
-    if req.openstudio_version:
-        if not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
-            errors.append(
-                f"openstudio_version must start with a digit (e.g. 3.11.0), "
-                f"got {req.openstudio_version!r}"
-            )
+    if req.openstudio_version and not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
+        errors.append(
+            f"openstudio_version must start with a digit (e.g. 3.11.0), "
+            f"got {req.openstudio_version!r}"
+        )
 
     # --- Sample count sanity ---
     if req.n_samples < 1:
