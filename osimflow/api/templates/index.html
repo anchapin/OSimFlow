@@ -175,6 +175,10 @@
 <header>
   <h1>OSimFlow</h1>
   <span class="subtitle">Campaign Setup & Results</span>
+  <nav style="margin-left:auto; display:flex; gap:1rem;">
+    <a href="/ui/" style="color:var(--muted); text-decoration:none; font-size:0.85rem;">Campaign Setup</a>
+    <a href="/ui/designer/" style="color:var(--muted); text-decoration:none; font-size:0.85rem;">Variable Designer</a>
+  </nav>
 </header>
 
 <main>
@@ -233,6 +237,11 @@
     distribution: normal
     mean: 3.0
     std: 0.3"></textarea>
+          <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center;">
+            <button type="button" class="secondary" style="padding:0.3rem 0.75rem; font-size:0.8rem;" onclick="openVariableDesigner()">Open Variable Designer</button>
+            <button type="button" class="secondary" style="padding:0.3rem 0.75rem; font-size:0.8rem;" onclick="importFromDesigner()">Import from Designer</button>
+            <span id="import-msg" style="font-size:0.8rem; color:var(--success); display:none;">Variables imported!</span>
+          </div>
         </label>
       </div>
       <div style="margin-top:1rem; display:flex; gap:0.75rem; align-items:center;">
@@ -319,6 +328,38 @@ async function startCampaign() {
   } finally {
     btn.disabled = false;
     spinner.style.display = 'none';
+  }
+}
+
+function openVariableDesigner() {
+  window.open('/ui/designer/', 'variable_designer', 'width=1200,height=800,scrollbars=yes');
+}
+
+function importFromDesigner() {
+  // Check URL hash for variables passed back from the designer
+  const hash = window.location.hash;
+  if (!hash || !hash.startsWith('#variables=')) {
+    alert('No variables to import. Please design variables in the Variable Designer and use "Use These Variables" button.');
+    return;
+  }
+  try {
+    const encoded = hash.substring('#variables='.length);
+    const yaml = decodeURIComponent(encoded);
+    document.getElementById('input_variables_yaml').value = yaml;
+    window.location.hash = ''; // Clear the hash
+    const msg = document.getElementById('import-msg');
+    msg.style.display = '';
+    setTimeout(() => msg.style.display = 'none', 3000);
+  } catch (e) {
+    alert('Failed to import variables: ' + e.message);
+  }
+}
+
+function checkUrlHash() {
+  // On page load, check if variables were passed back from the designer
+  const hash = window.location.hash;
+  if (hash && hash.startsWith('#variables=')) {
+    importFromDesigner();
   }
 }
 
@@ -467,6 +508,7 @@ async function stopCampaignById(id) {
 // refresh campaigns list on load
 refreshCampaigns();
 setInterval(refreshCampaigns, 5000);
+checkUrlHash();
 </script>
 </body>
 </html>
