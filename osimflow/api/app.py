@@ -440,12 +440,8 @@ class ValidateConfigResponse(BaseModel):  # type: ignore[no-redef]
     """Response for ``POST /api/v1/validate``."""
 
     valid: bool = Field(description="True when all validation checks passed")
-    errors: list[str] = Field(
-        default_factory=list, description="Critical validation errors"
-    )
-    warnings: list[str] = Field(
-        default_factory=list, description="Non-critical warnings"
-    )
+    errors: list[str] = Field(default_factory=list, description="Critical validation errors")
+    warnings: list[str] = Field(default_factory=list, description="Non-critical warnings")
 
 
 @router.post("/api/v1/validate")  # type: ignore[untyped-decorator]
