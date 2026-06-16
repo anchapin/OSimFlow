@@ -22,9 +22,9 @@ from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
@@ -481,11 +481,12 @@ async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
             errors.append(str(exc))
 
     # --- OpenStudio version format ---
-    if req.openstudio_version and not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
-        errors.append(
-            f"openstudio_version must start with a digit (e.g. 3.11.0), "
-            f"got {req.openstudio_version!r}"
-        )
+<    if req.openstudio_version:
+        if not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
+            errors.append(
+                f"openstudio_version must start with a digit (e.g. 3.11.0), "
+                f"got {req.openstudio_version!r}"
+            )
 
     # --- Sample count sanity ---
     if req.n_samples < 1:
@@ -517,18 +518,7 @@ async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
                 errors.append(f"{script_field} is not a file: {p}")
 
     # --- Algorithm sanity ---
-    valid_algorithms = {
-        "lhs",
-        "sobol",
-        "halton",
-        "morris",
-        "fast99",
-        "de",
-        "da",
-        "ga",
-        "nsga2",
-        "pso",
-    }
+    valid_algorithms = {"lhs", "sobol", "halton", "morris", "fast99", "de", "da", "ga", "nsga2", "pso"}
     if req.algorithm.lower() not in valid_algorithms:
         warnings.append(
             f"algorithm '{req.algorithm}' may not be recognised — "
