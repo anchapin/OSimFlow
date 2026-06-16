@@ -171,7 +171,7 @@ def _classify_failure(error_text: str) -> str:  # noqa: PLR0911
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}")
+@results_viewer_router.get("/results/{campaign_id}")  # type: ignore[untyped-decorator]
 async def results_campaign_summary(
     campaign_id: str,
     request: Request,
@@ -254,7 +254,7 @@ async def results_campaign_summary(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/scatter")
+@results_viewer_router.get("/results/{campaign_id}/scatter")  # type: ignore[untyped-decorator]
 async def results_scatter(
     campaign_id: str,
     request: Request,
@@ -316,7 +316,7 @@ async def results_scatter(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/histogram")
+@results_viewer_router.get("/results/{campaign_id}/histogram")  # type: ignore[untyped-decorator]
 async def results_histogram(
     campaign_id: str,
     request: Request,
@@ -382,7 +382,7 @@ async def results_histogram(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/timeseries")
+@results_viewer_router.get("/results/{campaign_id}/timeseries")  # type: ignore[untyped-decorator]
 async def results_timeseries(  # noqa: PLR0912,PLR0915
     campaign_id: str,
     request: Request,
@@ -533,7 +533,7 @@ async def results_timeseries(  # noqa: PLR0912,PLR0915
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/export")
+@results_viewer_router.get("/results/{campaign_id}/export")  # type: ignore[untyped-decorator]
 async def results_export(
     campaign_id: str,
     request: Request,
@@ -606,7 +606,7 @@ async def results_export(
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/failures")
+@results_viewer_router.get("/results/{campaign_id}/failures")  # type: ignore[untyped-decorator]
 async def results_failures(campaign_id: str, request: Request) -> dict[str, Any]:
     """Return the failed simulations table with error classifications."""
     from osimflow.api.campaigns import _campaigns_base_dir  # noqa: PLC0415
@@ -638,7 +638,7 @@ async def results_failures(campaign_id: str, request: Request) -> dict[str, Any]
 # ---------------------------------------------------------------------------
 
 
-@results_viewer_router.get("/results/{campaign_id}/parallel_coordinates")
+@results_viewer_router.get("/results/{campaign_id}/parallel_coordinates")  # type: ignore[untyped-decorator]
 async def results_parallel_coordinates(campaign_id: str, request: Request) -> dict[str, Any]:
     """Return data for a parallel coordinates plot.
 
