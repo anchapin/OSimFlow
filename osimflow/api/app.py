@@ -41,7 +41,6 @@ from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
 from osimflow.api.timeseries import timeseries_router
-from osimflow.api.ui import ui_router
 from osimflow.api.variables import variables_router
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import (
@@ -1213,11 +1212,6 @@ def create_app(
     app.include_router(timeseries_router)
     app.include_router(variables_router)
     app.include_router(measures_router)
-
-    # --- Web UI router (issue #337) ---
-    if ui_enabled:
-        app.include_router(ui_router)
-        log.info("web UI enabled at /ui/")
 
     # --- Static files for the web GUI (issue #264) ---
     static_dir = Path(__file__).parent / "static"
