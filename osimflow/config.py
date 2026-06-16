@@ -408,6 +408,13 @@ class CampaignConfig:
     # During objective evaluation, constraint violations are penalised with
     # a large positive value (1e9) added to the objective.
     constraints: list[dict[str, object]] | None = None
+    # R-NSGA-II reference points (issue #529). Comma-separated fractions
+    # representing aspiration points on the Pareto front, e.g.,
+    # "0.25,0.5,0.75" for 2 objectives. Only used with --algorithm nsga2.
+    nsga2_reference_points: str | None = None
+    # R-NSGA-II reference direction strategy (issue #529). Supported:
+    # das-dennis, energy, wedge, incremental. Only used with --algorithm nsga2.
+    nsga2_reference_directions: str | None = None
     # Per-sample retry configuration (issue #252).
     # max_sample_retries: maximum retry attempts for transient per-sample
     # failures (network timeout, resource contention, etc.). A value of 0
@@ -722,6 +729,14 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         registry_path=(Path(str(args["registry"])).resolve() if args.get("registry") else None),
         objective=objective,
         constraints=constraints,
+        nsga2_reference_points=(
+            str(args["nsga2_reference_points"]) if args.get("nsga2_reference_points") else None
+        ),
+        nsga2_reference_directions=(
+            str(args["nsga2_reference_directions"])
+            if args.get("nsga2_reference_directions")
+            else None
+        ),
         max_sample_retries=int(str(args.get("max_sample_retries", 3))),
         offline=bool(args.get("offline", False)),
         offline_bundle=(

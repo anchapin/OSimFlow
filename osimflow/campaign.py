@@ -1435,7 +1435,15 @@ class Campaign:
         self.cfg = dataclasses.replace(self.cfg, n_samples=1)
         log.info("DRY RUN: overriding n_samples from %d to 1", original_n)
 
-        algo = AlgorithmRegistry.get(self.cfg.algorithm)
+        # Build algorithm kwargs (issue #529: R-NSGA-II support)
+        algo_kwargs: dict[str, Any] = {}
+        if self.cfg.algorithm == "nsga2":
+            if self.cfg.nsga2_reference_points is not None:
+                algo_kwargs["ref_points"] = self.cfg.nsga2_reference_points
+            if self.cfg.nsga2_reference_directions is not None:
+                algo_kwargs["ref_dirs"] = self.cfg.nsga2_reference_directions
+
+        algo = AlgorithmRegistry.get(self.cfg.algorithm, **algo_kwargs)
         samples: list[SampleSpec] = self.step_generate_samples(algo)
         self.cfg.samples_file.parent.mkdir(parents=True, exist_ok=True)
         self.cfg.samples_file.write_text(json.dumps({"samples": samples}, indent=2))
@@ -1536,7 +1544,15 @@ class Campaign:
         if self.cfg.max_generations < 1:
             raise ValueError(f"max_generations must be >= 1, got {self.cfg.max_generations}")
 
-        algo = AlgorithmRegistry.get(self.cfg.algorithm)
+        # Build algorithm kwargs (issue #529: R-NSGA-II support)
+        algo_kwargs: dict[str, Any] = {}
+        if self.cfg.algorithm == "nsga2":
+            if self.cfg.nsga2_reference_points is not None:
+                algo_kwargs["ref_points"] = self.cfg.nsga2_reference_points
+            if self.cfg.nsga2_reference_directions is not None:
+                algo_kwargs["ref_dirs"] = self.cfg.nsga2_reference_directions
+
+        algo = AlgorithmRegistry.get(self.cfg.algorithm, **algo_kwargs)
 
         # History accumulator: one dict per generation.
         history: list[dict[str, Any]] = []
