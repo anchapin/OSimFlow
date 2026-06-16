@@ -444,7 +444,7 @@ class ValidateConfigResponse(BaseModel):  # type: ignore[no-redef]
 
 
 @router.post("/api/v1/validate")  # type: ignore[untyped-decorator]
-async def validate_config(req: ValidateConfigRequest):  # noqa: PLR0912 -> ValidateConfigResponse:
+async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:  # noqa: PLR0912
     """Pre-flight configuration validation (issue #398).
 
     Validates the supplied config fields without running a campaign.
