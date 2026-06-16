@@ -43,6 +43,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from osimflow.api.auth import get_user_permission
 from osimflow.api.campaigns import (
     _campaign_dir_from_id,
     _campaigns_base_dir,
@@ -223,10 +224,10 @@ async def create_pat_analysis(
     OSimFlow's ``variables.yml`` format, and optionally starts the
     campaign.
     """
-    if getattr(request.app.state, "read_only", True):
+    if not get_user_permission(request, "readwrite"):
         raise HTTPException(
             status_code=403,
-            detail="Analysis creation requires --enable-writes mode",
+            detail="Analysis creation requires readwrite permission",
         )
 
     if body.osa_path is None and body.analysis is None:
