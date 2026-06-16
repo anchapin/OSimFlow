@@ -267,6 +267,68 @@
       vertical-align: middle;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .import-export {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .import-export input[type="text"] {
+      flex: 1;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+    }
+    .measure-browser {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .measure-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .measure-item:hover {
+      border-color: var(--accent);
+    }
+    .measure-item.active {
+      border-color: var(--accent);
+      background: rgba(79,156,249,0.1);
+    }
+    .measure-name {
+      font-weight: 600;
+      color: var(--accent2);
+      margin-bottom: 0.25rem;
+    }
+    .measure-type {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .measure-args {
+      margin-top: 0.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+    }
+    .measure-arg {
+      font-size: 0.8rem;
+      padding: 0.25rem 0;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .measure-arg-name {
+      color: var(--accent);
+      font-family: 'Courier New', monospace;
+    }
+    .measure-arg-type {
+      color: var(--muted);
+    }
+    .measure-arg-default {
+      color: var(--muted);
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -283,6 +345,24 @@
   <div class="two-col">
     <!-- Left column: form + visualization -->
     <div>
+      <!-- Import/Export Bar -->
+      <div class="card">
+        <h2>Import / Export</h2>
+        <div class="import-export">
+          <input type="text" id="import-url" placeholder="Or enter URL to variables.yml..." />
+          <button class="secondary" onclick="loadFromUrl()" title="Load from URL">Load URL</button>
+        </div>
+        <div class="import-export">
+          <input type="file" id="import-file" accept=".yml,.yaml" style="display:none;" onchange="loadFromFile(event)" />
+          <button class="secondary" onclick="document.getElementById('import-file').click()">Import File</button>
+          <button class="secondary" onclick="loadFromClipboard()">Load Clipboard</button>
+          <button onclick="downloadYaml()">Download YAML</button>
+          <button class="secondary" onclick="saveToApi()">Save to API</button>
+        </div>
+        <div id="import-msg" class="success-msg" style="display:none;"></div>
+        <div id="import-error" class="error-msg" style="display:none;"></div>
+      </div>
+
       <!-- Add/Edit Variable Form -->
       <div class="card">
         <h2 id="form-title">Add Variable</h2>
@@ -384,6 +464,18 @@
         <h2>Variables (<span id="var-count">0</span>)</h2>
         <div class="var-list" id="var-list">
           <div class="empty">No variables yet. Add one using the form.</div>
+        </div>
+      </div>
+
+      <!-- Measure Browser -->
+      <div class="card">
+        <h2>Measure Arguments</h2>
+        <div style="margin-bottom:0.75rem; display:flex; gap:0.5rem; align-items:center;">
+          <input type="text" id="template-path" placeholder="Template package path..." style="flex:1; padding:0.4rem 0.75rem; font-size:0.85rem;" />
+          <button class="secondary" onclick="loadMeasures()" style="padding:0.4rem 0.75rem; font-size:0.85rem;">Load Measures</button>
+        </div>
+        <div class="measure-browser" id="measure-browser">
+          <div class="empty" id="measure-empty">Enter a template path and click "Load Measures" to browse arguments</div>
         </div>
       </div>
 
@@ -1091,6 +1183,304 @@ function gammaLn(z) {
   }
   const t = z + g + 0.5;
   return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+// ─── Import / Export ────────────────────────────────────────────────────────
+
+function loadFromUrl() {
+  const url = document.getElementById('import-url').value.trim();
+  if (!url) return;
+  const msgEl = document.getElementById('import-msg');
+  const errEl = document.getElementById('import-error');
+  msgEl.style.display = 'none';
+  errEl.style.display = 'none';
+
+  fetch(url)
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + r.statusText);
+      return r.text();
+    })
+    .then(text => parseAndLoadYaml(text))
+    .catch(e => {
+      errEl.textContent = 'Failed to load from URL: ' + e.message;
+      errEl.style.display = '';
+    });
+}
+
+function loadFromFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    parseAndLoadYaml(e.target.result);
+  };
+  reader.onerror = () => {
+    const errEl = document.getElementById('import-error');
+    errEl.textContent = 'Failed to read file';
+    errEl.style.display = '';
+  };
+  reader.readAsText(file);
+}
+
+function loadFromClipboard() {
+  navigator.clipboard.readText()
+    .then(text => parseAndLoadYaml(text))
+    .catch(() => {
+      const errEl = document.getElementById('import-error');
+      errEl.textContent = 'Failed to read clipboard';
+      errEl.style.display = '';
+    });
+}
+
+function parseAndLoadYaml(yamlText) {
+  const msgEl = document.getElementById('import-msg');
+  const errEl = document.getElementById('import-error');
+
+  try {
+    const data = parseYamlDoc(yamlText);
+    if (!data || !Array.isArray(data.variables)) {
+      throw new Error('Invalid YAML: expected { variables: [...] }');
+    }
+    variables = data.variables.filter(v => v && v.name && v.distribution);
+    if (variables.length === 0) {
+      throw new Error('No valid variables found in YAML');
+    }
+    msgEl.textContent = 'Loaded ' + variables.length + ' variable(s)';
+    msgEl.style.display = '';
+    errEl.style.display = 'none';
+    setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+    renderVariableList();
+    updateYamlPreview();
+  } catch (e) {
+    errEl.textContent = 'Parse error: ' + e.message;
+    errEl.style.display = '';
+  }
+}
+
+function parseYamlDoc(text) {
+  const result = {};
+  const lines = text.split('\n');
+  let inVars = false;
+  let varList = [];
+  let currentVar = null;
+  let currentKey = null;
+  let inList = false;
+  let valuesBuffer = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed === 'variables:') {
+      inVars = true;
+      inList = false;
+      valuesBuffer = null;
+      continue;
+    }
+
+    if (inVars) {
+      if (trimmed.startsWith('-')) {
+        if (currentVar && currentKey !== 'values') varList.push(currentVar);
+        currentVar = { name: '', distribution: '' };
+        inList = true;
+        valuesBuffer = null;
+        const afterDash = trimmed.substring(1).trim();
+        if (afterDash.startsWith('name:')) {
+          currentVar.name = afterDash.substring(5).trim().replace(/^["']|["']$/g, '');
+        }
+        continue;
+      }
+
+      if (inList && currentVar) {
+        if (trimmed.startsWith('values:')) {
+          currentKey = 'values';
+          currentVar.values = [];
+          valuesBuffer = [];
+          if (trimmed.includes('[')) {
+            const match = trimmed.match(/\[(.*)\]/);
+            if (match) {
+              valuesBuffer = match[1].split(',').map(v => v.trim().replace(/^["']|["']$/g, '')).filter(v => v);
+            }
+          }
+          continue;
+        }
+
+        if (valuesBuffer !== null && trimmed.startsWith('-')) {
+          const val = trimmed.substring(1).trim().replace(/^["']|["']$/g, '');
+          if (val) {
+            valuesBuffer.push(val);
+            const num = parseFloat(val);
+            currentVar.values.push(isNaN(num) ? val : num);
+          }
+          continue;
+        }
+
+        if (valuesBuffer !== null && !trimmed.startsWith('-') && !trimmed.startsWith('description:') && !trimmed.startsWith('min:') && !trimmed.startsWith('max:') && !trimmed.startsWith('mean:') && !trimmed.startsWith('sigma:') && !trimmed.startsWith('mode:') && !trimmed.startsWith('alpha:') && !trimmed.startsWith('beta:') && !trimmed.startsWith('rate:') && trimmed !== '') {
+          varList.push(currentVar);
+          currentVar = null;
+          valuesBuffer = null;
+          inList = false;
+        }
+
+        if (currentVar) {
+          if (trimmed.startsWith('name:')) {
+            currentVar.name = trimmed.substring(5).trim().replace(/^["']|["']$/g, '');
+          } else if (trimmed.startsWith('distribution:')) {
+            currentVar.distribution = trimmed.substring(13).trim().replace(/^["']|["']$/g, '');
+          } else if (trimmed.startsWith('description:')) {
+            currentVar.description = trimmed.substring(13).trim().replace(/^["']|["']$/g, '');
+          } else if (trimmed.startsWith('min:')) {
+            const num = parseFloat(trimmed.substring(4).trim());
+            if (!isNaN(num)) currentVar.min = num;
+          } else if (trimmed.startsWith('max:')) {
+            const num = parseFloat(trimmed.substring(4).trim());
+            if (!isNaN(num)) currentVar.max = num;
+          } else if (trimmed.startsWith('mean:')) {
+            const num = parseFloat(trimmed.substring(5).trim());
+            if (!isNaN(num)) currentVar.mean = num;
+          } else if (trimmed.startsWith('sigma:')) {
+            const num = parseFloat(trimmed.substring(6).trim());
+            if (!isNaN(num)) currentVar.sigma = num;
+          } else if (trimmed.startsWith('mode:')) {
+            const num = parseFloat(trimmed.substring(5).trim());
+            if (!isNaN(num)) currentVar.mode = num;
+          } else if (trimmed.startsWith('alpha:')) {
+            const num = parseFloat(trimmed.substring(6).trim());
+            if (!isNaN(num)) currentVar.alpha = num;
+          } else if (trimmed.startsWith('beta:')) {
+            const num = parseFloat(trimmed.substring(5).trim());
+            if (!isNaN(num)) currentVar.beta = num;
+          } else if (trimmed.startsWith('rate:')) {
+            const num = parseFloat(trimmed.substring(5).trim());
+            if (!isNaN(num)) currentVar.rate = num;
+          }
+        }
+      }
+    }
+  }
+  if (currentVar && currentVar.name) varList.push(currentVar);
+  result.variables = varList;
+  return result;
+}
+
+function downloadYaml() {
+  const yaml = toYaml({ variables });
+  const blob = new Blob([yaml], { type: 'text/yaml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'variables.yml';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  const msgEl = document.getElementById('import-msg');
+  msgEl.textContent = 'Downloaded variables.yml';
+  msgEl.style.display = '';
+  setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+}
+
+async function saveToApi() {
+  const yaml = toYaml({ variables });
+  const msgEl = document.getElementById('import-msg');
+  const errEl = document.getElementById('import-error');
+  msgEl.style.display = 'none';
+  errEl.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/v1/variables', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yaml_content: yaml })
+    });
+    if (res.ok) {
+      msgEl.textContent = 'Saved to API';
+      msgEl.style.display = '';
+    } else {
+      errEl.textContent = 'API save not available (server may be read-only)';
+      errEl.style.display = '';
+    }
+  } catch (e) {
+    errEl.textContent = 'API save failed: ' + e.message;
+    errEl.style.display = '';
+  }
+}
+
+// ─── Measure Browser ───────────────────────────────────────────────────────
+
+let loadedMeasures = [];
+let activeMeasureIdx = null;
+
+async function loadMeasures() {
+  const templatePath = document.getElementById('template-path').value.trim();
+  if (!templatePath) return;
+
+  const browser = document.getElementById('measure-browser');
+  browser.innerHTML = '<div class="empty">Loading measures...</div>';
+
+  try {
+    const res = await fetch('/api/v1/measures?template_path=' + encodeURIComponent(templatePath));
+    if (res.ok) {
+      const data = await res.json();
+      loadedMeasures = data.measures || [];
+      renderMeasureList();
+    } else if (res.status === 503) {
+      browser.innerHTML = '<div class="empty">Configure campaigns_base_dir to browse measures</div>';
+    } else {
+      browser.innerHTML = '<div class="empty">No measures found in template package</div>';
+    }
+  } catch (e) {
+    browser.innerHTML = '<div class="empty">Error loading measures: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function renderMeasureList() {
+  const browser = document.getElementById('measure-browser');
+  if (loadedMeasures.length === 0) {
+    browser.innerHTML = '<div class="empty">No measures found</div>';
+    return;
+  }
+
+  browser.innerHTML = loadedMeasures.map((m, i) => `
+    <div class="measure-item${i === activeMeasureIdx ? ' active' : ''}" onclick="toggleMeasure(${i})">
+      <div class="measure-name">${escapeHtml(m.measure_dir_name || m.display_name)}</div>
+      <div class="measure-type">${escapeHtml(m.measure_type || 'Unknown type')}</div>
+      ${i === activeMeasureIdx && m.arguments && m.arguments.length > 0 ? renderMeasureArgs(m.arguments) : ''}
+    </div>
+  `).join('');
+}
+
+function renderMeasureArgs(args) {
+  if (!args || args.length === 0) return '';
+  return `
+    <div class="measure-args">
+      ${args.map(a => `
+        <div class="measure-arg">
+          <span class="measure-arg-name">${escapeHtml(a.name)}</span>
+          <span class="measure-arg-type">${escapeHtml(a.argument_type || 'String')}</span>
+          ${a.default_value !== null && a.default_value !== undefined ? '<span class="measure-arg-default">= ' + escapeHtml(String(a.default_value)) + '</span>' : ''}
+          ${a.required ? '<span style="color:var(--warning);">*required</span>' : ''}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function toggleMeasure(idx) {
+  activeMeasureIdx = activeMeasureIdx === idx ? null : idx;
+  renderMeasureList();
+}
+
+function useVariablesInCampaign() {
+  const yaml = toYaml({ variables });
+  const textarea = window.parent.document.getElementById('input_variables_yaml');
+  if (textarea) {
+    textarea.value = yaml;
+    const msg = document.getElementById('use-msg');
+    msg.style.display = '';
+    setTimeout(() => { msg.style.display = 'none'; }, 3000);
+  }
 }
 </script>
 </body>
