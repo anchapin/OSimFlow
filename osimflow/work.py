@@ -148,7 +148,9 @@ def check_container_health(
         payload = json.loads(heartbeat_path.read_text(encoding="utf-8"))
         last_ts = payload.get("timestamp")
         if last_ts is None:
-            return SimulationHealth(status=SimulationHealthStatus.UNKNOWN, message="heartbeat has no timestamp")
+            return SimulationHealth(
+                status=SimulationHealthStatus.UNKNOWN, message="heartbeat has no timestamp"
+            )
         age = time.time() - last_ts
         if age > health_check_interval:
             return SimulationHealth(

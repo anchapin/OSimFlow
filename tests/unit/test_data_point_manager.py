@@ -66,9 +66,7 @@ class TestDataPointManager_status:
         assert dp.status == DataPointStatus.RUNNING
         assert dp.completed_at is None
 
-    def test_update_status_sets_completed_at(
-        self, mgr: DataPointManager
-    ) -> None:
+    def test_update_status_sets_completed_at(self, mgr: DataPointManager) -> None:
         mgr.register("sample_000")
         dp = mgr.update_status("sample_000", DataPointStatus.COMPLETED)
         assert dp.status == DataPointStatus.COMPLETED
@@ -102,9 +100,7 @@ class TestDataPointManager_priority:
         dp = mgr.set_priority("sample_000", priority=999)
         assert dp.priority == 999
 
-    def test_list_pending_ordered_by_priority(
-        self, mgr: DataPointManager
-    ) -> None:
+    def test_list_pending_ordered_by_priority(self, mgr: DataPointManager) -> None:
         mgr.register("low", priority=1)
         mgr.register("high", priority=100)
         mgr.register("mid", priority=50)
@@ -122,9 +118,7 @@ class TestDataPointManager_priority:
 
 
 class TestDataPointManager_reanalysis:
-    def test_mark_for_reanalysis_completed(
-        self, mgr: DataPointManager
-    ) -> None:
+    def test_mark_for_reanalysis_completed(self, mgr: DataPointManager) -> None:
         mgr.register("sample_000")
         mgr.update_status("sample_000", DataPointStatus.COMPLETED)
         new_dp = mgr.mark_for_reanalysis("sample_000")
@@ -140,16 +134,12 @@ class TestDataPointManager_reanalysis:
         assert new_dp.sample_id == "sample_000_reanalyze_1"
         assert mgr.get("sample_000").reanalyze_count == 1
 
-    def test_mark_for_reanalysis_requires_completed_or_failed(
-        self, mgr: DataPointManager
-    ) -> None:
+    def test_mark_for_reanalysis_requires_completed_or_failed(self, mgr: DataPointManager) -> None:
         mgr.register("sample_000")
         with pytest.raises(ValueError, match="must be completed or failed"):
             mgr.mark_for_reanalysis("sample_000")
 
-    def test_mark_for_reanalysis_increments_count(
-        self, mgr: DataPointManager
-    ) -> None:
+    def test_mark_for_reanalysis_increments_count(self, mgr: DataPointManager) -> None:
         mgr.register("sample_000")
         mgr.update_status("sample_000", DataPointStatus.COMPLETED)
         mgr.mark_for_reanalysis("sample_000")

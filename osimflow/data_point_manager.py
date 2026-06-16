@@ -119,10 +119,7 @@ class DataPointManager:
         if self._state_file.exists():
             try:
                 raw = json.loads(self._state_file.read_text())
-                self._data_points = {
-                    sid: DataPoint.from_dict(rec)
-                    for sid, rec in raw.items()
-                }
+                self._data_points = {sid: DataPoint.from_dict(rec) for sid, rec in raw.items()}
             except (json.JSONDecodeError, KeyError, TypeError) as exc:
                 log.warning("Corrupt data_points.json, starting fresh: %s", exc)
                 self._data_points = {}
