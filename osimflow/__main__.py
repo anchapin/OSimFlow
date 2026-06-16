@@ -2309,9 +2309,7 @@ def _cmd_measure_list(args: argparse.Namespace) -> int:
             if arg.get("default") is not None:
                 default_str = f", default: {arg['default']}"
             required_str = " [required]" if arg.get("required") else ""
-            print(
-                f"    Args: {arg['name']} [{arg['type']}]{default_str}{required_str}"
-            )
+            print(f"    Args: {arg['name']} [{arg['type']}]{default_str}{required_str}")
         if not m.get("arguments"):
             print("    (no arguments discovered)")
         print()
