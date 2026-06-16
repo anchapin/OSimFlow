@@ -236,11 +236,13 @@ class DistributedJobQueue:
             if action == "enqueue":
                 job_id = payload.get("job_id")
                 job_payload = payload.get("payload", {})
+                priority = payload.get("priority", 0)
                 if job_id:
-                    self._local.enqueue(job_id, job_payload)
+                    self._local.enqueue(job_id, job_payload, priority=priority)
                     log.info(
-                        "DistributedJobQueue: received enqueue job_id=%s",
+                        "DistributedJobQueue: received enqueue job_id=%s priority=%d",
                         job_id,
+                        priority,
                     )
             elif action == "mark_completed":
                 job_id = payload.get("job_id")
@@ -307,13 +309,13 @@ class DistributedJobQueue:
     # ------------------------------------------------------------------
     # Public queue interface (same as JobQueue)
     # ------------------------------------------------------------------
-    def enqueue(self, job_id: str, payload: dict[str, Any]) -> Path:
+    def enqueue(self, job_id: str, payload: dict[str, Any], priority: int = 0) -> Path:
         """Enqueue a job locally and broadcast to Redis."""
         with self._sub_lock:
             if self._subscriber_thread is None:
                 self._start_subscriber()
-        result = self._local.enqueue(job_id, payload)
-        self._publish({"action": "enqueue", "job_id": job_id, "payload": payload})
+        result = self._local.enqueue(job_id, payload, priority=priority)
+        self._publish({"action": "enqueue", "job_id": job_id, "payload": payload, "priority": priority})
         return result
 
     def dequeue(self) -> dict[str, Any] | None:
