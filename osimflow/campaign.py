@@ -329,6 +329,104 @@ class Campaign:
             return OpenTelemetryBackend(endpoint=endpoint)
         raise ValueError(f"unknown observability backend: {backend_type}")
 
+    def _enforce_start_quota(self) -> None:
+        """Fail fast if the campaign's resource quota is already exceeded at start.
+
+        Called at the beginning of ``run()`` before any work is dispatched.
+        Raises ``QuotaExceededError`` with a descriptive message if any quota
+        is already violated.
+        """
+        quota = self.cfg.resource_quota
+        if quota is None:
+            return
+
+        if quota.max_samples is not None and self.cfg.n_samples > quota.max_samples:
+            raise QuotaExceededError(
+                f"n_samples={self.cfg.n_samples} exceeds resource_quota.max_samples="
+                f"{quota.max_samples}",
+                quota_type="max_samples",
+                limit=quota.max_samples,
+                current=self.cfg.n_samples,
+            )
+
+        log.info(
+            "resource quota active: max_samples=%s, max_cost_usd=%s, "
+            "max_wall_time_min=%s, max_concurrent_samples=%s",
+            quota.max_samples,
+            quota.max_cost_usd,
+            quota.max_wall_time_min,
+            quota.max_concurrent_samples,
+        )
+
+    def _check_quota_exceeded(self) -> bool:
+        """Return True if any hard quota limit has been reached.
+
+        Checks:
+        - ``max_samples``: total samples submitted so far vs. the limit.
+        - ``max_cost_usd``: accumulated campaign cost vs. the limit.
+        - ``max_wall_time_min``: elapsed campaign time vs. the limit.
+
+        Does NOT check ``max_concurrent_samples`` — that is enforced
+        by bounding ``max_workers`` at construction time.
+        """
+        quota = self.cfg.resource_quota
+        if quota is None:
+            return False
+
+        if quota.max_samples is not None:
+            submitted = sum(
+                1
+                for state in self._sample_state.values()
+                if any(
+                    k.endswith("_exit_code") or k.endswith("_status")
+                    for k in state
+                )
+            )
+            if submitted >= quota.max_samples:
+                log.warning(
+                    "max_samples quota reached (%d >= %d) — skipping further submissions",
+                    submitted,
+                    quota.max_samples,
+                )
+                return True
+
+        if (
+            quota.max_cost_usd is not None
+            and self.trace.total_cost_usd >= quota.max_cost_usd
+        ):
+            log.warning(
+                "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
+                self.trace.total_cost_usd,
+                quota.max_cost_usd,
+            )
+            return True
+
+        elapsed_min = (time.time() - self.trace.started_at) / 60.0
+        if (
+            quota.max_wall_time_min is not None
+            and elapsed_min >= quota.max_wall_time_min
+        ):
+            log.warning(
+                "max_wall_time_min quota reached (%.1f >= %.1f min) — skipping further submissions",
+                elapsed_min,
+                quota.max_wall_time_min,
+            )
+            return True
+
+        return False
+
+    def _effective_max_workers(self) -> int:
+        """Return the effective max_workers bounded by max_concurrent_samples quota.
+
+        If a ``max_concurrent_samples`` quota is set, the fan-out parallelism
+        is capped to that value. Otherwise, ``self.max_workers`` is returned
+        unchanged.
+        """
+        quota = self.cfg.resource_quota
+        if quota is not None and quota.max_concurrent_samples is not None:
+            return min(self.max_workers, quota.max_concurrent_samples)
+        return self.max_workers
+
     def _compute_code_hashes(self) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
 
