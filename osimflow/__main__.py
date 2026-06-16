@@ -1273,6 +1273,24 @@ def _add_merge_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--log_level", default="INFO")
 
 
+def _add_pause_args(pause: argparse.ArgumentParser) -> None:
+    pause.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json",
+    )
+    pause.add_argument("--log_level", default="INFO")
+
+
+def _add_resume_args(resume: argparse.ArgumentParser) -> None:
+    resume.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json",
+    )
+    resume.add_argument("--log_level", default="INFO")
+
+
 def _add_backup_args(bk: argparse.ArgumentParser) -> None:
     bk.add_argument(
         "--output",
@@ -1412,6 +1430,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Merge multiple data points into a single target (issue #418)",
     )
     _add_merge_args(mrg)
+    pause_cmd = sub.add_parser(
+        "pause",
+        help="Request graceful pause of a running campaign (issue #444)",
+    )
+    _add_pause_args(pause_cmd)
+    resume_cmd = sub.add_parser(
+        "resume",
+        help="Request resume of a paused campaign (issue #444)",
+    )
+    _add_resume_args(resume_cmd)
     bk = sub.add_parser(
         "backup",
         help="Create a backup of the campaign registry (issue #440)",
@@ -2021,6 +2049,103 @@ def _cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pause(args: argparse.Namespace) -> int:
+    """Request graceful pause of a running campaign.
+
+    Writes a ``.pause`` flag file to the campaign's output directory.
+    The campaign orchestrator checks for this file during fan-out and
+    waits for in-flight samples to complete before writing the paused
+    trace to run.json. Unlike cancellation, pausing allows subsequent
+    resume to continue from where the campaign left off.
+    """
+    import json as json_mod  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    if run_data.get("finished_at") is not None:
+        print(
+            f"error: campaign '{run_data.get('campaign_id', 'unknown')}' "
+            f"has already completed (finished_at is set)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if run_data.get("status") == "paused":
+        print(f"campaign '{run_data.get('campaign_id', outdir.name)}' is already paused")
+        return 0
+
+    pause_file = outdir / ".pause"
+    if pause_file.exists():
+        print(f"pause already requested (--outdir={outdir})")
+        return 0
+
+    pause_file.write_text(json_mod.dumps({"requested_at": time.time()}))
+    campaign_id = run_data.get("campaign_id", outdir.name)
+    print(f"pause requested for campaign '{campaign_id}'")
+    print(f"  outdir:  {outdir}")
+    print(f"  pause file: {pause_file}")
+    return 0
+
+
+def _cmd_resume(args: argparse.Namespace) -> int:
+    """Request resume of a paused campaign.
+
+    Removes the ``.pause`` flag file from the campaign's output directory.
+    The campaign orchestrator detects the cleared pause condition and
+    continues processing pending samples.
+    """
+    import json as json_mod  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    run_json_path = outdir / "run.json"
+
+    if not run_json_path.exists():
+        print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        return 1
+
+    try:
+        with open(run_json_path) as f:
+            run_data = json_mod.load(f)
+    except (OSError, json_mod.JSONDecodeError) as exc:
+        print(f"error: could not read run.json: {exc}", file=sys.stderr)
+        return 1
+
+    if run_data.get("status") != "paused":
+        print(
+            f"error: campaign '{run_data.get('campaign_id', outdir.name)}' "
+            f"is not paused (status={run_data.get('status')})",
+            file=sys.stderr,
+        )
+        return 1
+
+    pause_file = outdir / ".pause"
+    if not pause_file.exists():
+        print(
+            f"warning: .pause file not found in {outdir}; "
+            "campaign may not recognize resume request",
+            file=sys.stderr,
+        )
+
+    if pause_file.exists():
+        pause_file.unlink()
+        print(f"pause flag removed from {pause_file}")
+    campaign_id = run_data.get("campaign_id", outdir.name)
+    print(f"resume requested for campaign '{campaign_id}'")
+    return 0
+
+
 def _cmd_backup(args: argparse.Namespace) -> int:
     """Create a backup of the campaign registry database (issue #440)."""
     registry_path = args.registry if args.registry else None
@@ -2073,6 +2198,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "cancel": _cmd_cancel,
         "mark-for-reanalysis": _cmd_mark_for_reanalysis,
         "merge": _cmd_merge,
+        "pause": _cmd_pause,
+        "resume": _cmd_resume,
         "backup": _cmd_backup,
         "restore": _cmd_restore,
         "health": _cmd_health,

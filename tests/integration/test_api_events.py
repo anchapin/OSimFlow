@@ -30,6 +30,7 @@ def _make_run_json(
     samples: list[dict] | None = None,
     steps: list[dict] | None = None,
     finished_at: float | None = None,
+    status: str | None = None,
 ) -> dict:
     data: dict = {
         "schema_version": 1,
@@ -40,6 +41,8 @@ def _make_run_json(
         "steps": steps or [],
         "per_sample": samples or [],
     }
+    if status is not None:
+        data["status"] = status
     return data
 
 
@@ -251,6 +254,100 @@ class TestCampaignStop:
         assert resp2.status_code == 200
         assert resp1.json()["status"] == "stopping"
         assert resp2.json()["status"] == "stopping"
+
+
+# ---------------------------------------------------------------------------
+# Campaign pause
+# ---------------------------------------------------------------------------
+
+
+class TestCampaignPause:
+    """Tests for POST /api/v1/campaign/pause."""
+
+    def test_pause_creates_flag_file(self, client_rw: TestClient, outdir: Path) -> None:
+        """Pause endpoint creates .pause file and returns correct response."""
+        resp = client_rw.post("/api/v1/campaign/pause")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "pausing"
+
+        pause_file = outdir / ".pause"
+        assert pause_file.exists()
+        content = json.loads(pause_file.read_text())
+        assert "requested_at" in content
+
+    def test_pause_returns_403_in_read_only(self, client_ro: TestClient) -> None:
+        """Pause endpoint returns 403 in read-only mode."""
+        resp = client_ro.post("/api/v1/campaign/pause")
+        assert resp.status_code == 403
+        assert "read-only" in resp.json()["detail"].lower()
+
+    def test_pause_no_outdir(self) -> None:
+        """Pause endpoint returns 503 when no outdir configured."""
+        client = TestClient(create_app(outdir=None, read_only=False))
+        resp = client.post("/api/v1/campaign/pause")
+        assert resp.status_code == 503
+
+    def test_pause_already_paused(self, client_rw: TestClient, outdir: Path) -> None:
+        """Returns already_paused when campaign is already paused."""
+        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=None, status="paused")))
+        resp = client_rw.post("/api/v1/campaign/pause")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "already_paused"
+
+    def test_pause_conflict_if_finished(self, client_rw: TestClient, outdir: Path) -> None:
+        """Returns 409 when campaign has already finished."""
+        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=2000.0)))
+        resp = client_rw.post("/api/v1/campaign/pause")
+        assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Campaign resume
+# ---------------------------------------------------------------------------
+
+
+class TestCampaignResume:
+    """Tests for DELETE /api/v1/campaign/pause."""
+
+    def test_resume_removes_flag_file(self, client_rw: TestClient, outdir: Path) -> None:
+        """Resume endpoint removes .pause file and returns correct response."""
+        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=None, status="paused")))
+        (outdir / ".pause").write_text(json.dumps({"requested_at": 1000.0}))
+        resp = client_rw.delete("/api/v1/campaign/pause")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "resuming"
+
+        pause_file = outdir / ".pause"
+        assert not pause_file.exists()
+
+    def test_resume_returns_403_in_read_only(self, client_ro: TestClient) -> None:
+        """Resume endpoint returns 403 in read-only mode."""
+        resp = client_ro.delete("/api/v1/campaign/pause")
+        assert resp.status_code == 403
+        assert "read-only" in resp.json()["detail"].lower()
+
+    def test_resume_no_outdir(self) -> None:
+        """Resume endpoint returns 503 when no outdir configured."""
+        client = TestClient(create_app(outdir=None, read_only=False))
+        resp = client.delete("/api/v1/campaign/pause")
+        assert resp.status_code == 503
+
+    def test_resume_no_flag_file_noop(self, client_rw: TestClient, outdir: Path) -> None:
+        """Resume is a no-op when .pause file doesn't exist (safe to call)."""
+        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=None, status="paused")))
+        assert not (outdir / ".pause").exists()
+        resp = client_rw.delete("/api/v1/campaign/pause")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "resuming"
+
+    def test_resume_conflict_if_not_paused(self, client_rw: TestClient, outdir: Path) -> None:
+        """Returns 409 when run.json status is not paused."""
+        (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=None)))
+        resp = client_rw.delete("/api/v1/campaign/pause")
+        assert resp.status_code == 409
+        assert "not paused" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

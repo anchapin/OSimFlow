@@ -313,6 +313,13 @@ class Campaign:
         self._cancel_requested = False
         self._quota_exceeded = False
         self._cancel_lock = threading.Lock()
+        # Pause/resume (issue #444): pause flag, lock, and condition.
+        # Unlike cancellation, pausing waits for in-flight work to complete
+        # before stopping, and allows resume to continue from where the
+        # campaign left off.
+        self._pause_requested = False
+        self._pause_lock = threading.Lock()
+        self._pause_cond = threading.Condition(self._pause_lock)
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
@@ -772,6 +779,14 @@ class Campaign:
                 if self._quota_exceeded:
                     log.warning("quota exceeded — stopping further submissions in %s", step_name)
                     break
+                if self._check_pause_requested():
+                    log.warning("pause requested during %s — waiting for in-flight work", step_name)
+                    self._wait_while_paused()
+                    if self._is_paused():
+                        log.warning("still paused after waiting — stopping fan-out gracefully")
+                        self._write_pause_trace()
+                        return
+                    log.warning("resume detected — continuing fan-out")
                 _await_one(item)
             if self._cancel_requested:
                 raise KeyboardInterrupt("cancellation requested during fan-out")
@@ -802,6 +817,22 @@ class Campaign:
                     for f in futures:
                         f.cancel()
                     break
+                if self._check_pause_requested():
+                    log.warning("pause requested during %s — waiting for in-flight work", step_name)
+                    # Wait for in-flight work to complete before pausing.
+                    # We wait by letting remaining futures finish normally,
+                    # then signal pause.
+                    remaining = [f for f in futures if not f.done()]
+                    log.info("waiting for %d in-flight tasks to complete", len(remaining))
+                    for f in remaining:
+                        with contextlib.suppress(Exception, concurrent.futures.CancelledError):
+                            f.result()
+                    self._wait_while_paused()
+                    if self._is_paused():
+                        log.warning("still paused after waiting — stopping fan-out gracefully")
+                        self._write_pause_trace()
+                        return
+                    log.warning("resume detected — continuing fan-out")
                 # CancelledError is a BaseException (not Exception), so we must
                 # suppress it explicitly here — it is raised when a future was
                 # cancelled via f.cancel() during a cancellation sweep.
@@ -1446,6 +1477,81 @@ class Campaign:
             log.info("wrote cancellation trace to run.json")
         except Exception as exc:
             log.warning("could not write cancellation trace: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Pause / Resume (issue #444)
+    # ------------------------------------------------------------------
+    def request_pause(self) -> None:
+        """Request campaign pause.
+
+        Unlike cancellation, pausing waits for in-flight work to complete
+        before stopping and allows subsequent resume to continue from where
+        the campaign left off. Thread-safe and idempotent.
+        """
+        with self._pause_lock:
+            self._pause_requested = True
+        log.warning("campaign pause requested")
+
+    def request_resume(self) -> None:
+        """Request campaign resume from a paused state.
+
+        Clears the pause flag and condition, allowing the campaign to
+        continue processing pending samples. Thread-safe.
+        """
+        with self._pause_lock:
+            self._pause_requested = False
+            self._pause_cond.notify_all()
+        log.warning("campaign resume requested")
+
+    def _check_pause_requested(self) -> bool:
+        """Check if pause has been requested.
+
+        Checks both the in-memory flag and the ``.pause`` file in the
+        outdir. The ``.pause`` file is written by the CLI ``pause``
+        command or the REST API ``POST /api/v1/campaign/pause`` endpoint.
+
+        Returns:
+            ``True`` if pause is requested, ``False`` otherwise.
+        """
+        with self._pause_lock:
+            if self._pause_requested:
+                return True
+        pause_file = self.cfg.outdir / ".pause"
+        if pause_file.is_file():
+            log.warning(".pause file detected — requesting pause")
+            with self._pause_lock:
+                self._pause_requested = True
+            return True
+        return False
+
+    def _is_paused(self) -> bool:
+        """Return True if campaign is currently in a paused state."""
+        with self._pause_lock:
+            return self._pause_requested
+
+    def _wait_while_paused(self) -> None:
+        """Block until pause is cleared (resume or cancel).
+
+        Called during the fan-out loop to wait for a resume signal
+        without busy-waiting. Uses a Condition variable so the thread
+        wakes immediately on resume or cancel.
+        """
+        with self._pause_cond:
+            while self._pause_requested:
+                if self._check_cancel_requested():
+                    break
+                self._pause_cond.wait(timeout=1.0)
+                if self._check_cancel_requested():
+                    break
+
+    def _write_pause_trace(self) -> None:
+        """Write run.json with paused status at the outdir root."""
+        try:
+            self.trace.status = "paused"
+            self.trace.write(self.cfg.outdir / "run.json")
+            log.info("wrote paused trace to run.json")
+        except Exception as exc:
+            log.warning("could not write paused trace: %s", exc)
 
     # ------------------------------------------------------------------
     # Public entry point
