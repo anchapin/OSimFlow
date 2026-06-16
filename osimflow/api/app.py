@@ -41,6 +41,7 @@ from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
 from osimflow.api.timeseries import timeseries_router
+from osimflow.api.ui import ui_router
 from osimflow.api.variables import variables_router
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import (
