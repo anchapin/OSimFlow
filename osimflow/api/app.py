@@ -1329,6 +1329,7 @@ def create_app(
         async def results_viewer_redirect() -> RedirectResponse:
             """Redirect /results/ to the Results Viewer HTML page."""
             return RedirectResponse(url="/static/results_viewer.html")
+
     app.include_router(measures_router)
 
     # --- Static files for the web GUI (issue #264) ---

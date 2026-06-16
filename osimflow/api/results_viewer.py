@@ -293,13 +293,17 @@ async def results_scatter(
     # Filter to rows where both values are non-null
     sub = df[["sample_id", variable, kpi]].dropna()
     data = [
-        {"sample_id": str(row["sample_id"]), "variable_value": float(row[variable]), "kpi_value": float(row[kpi])}
+        {
+            "sample_id": str(row["sample_id"]),
+            "variable_value": float(row[variable]),
+            "kpi_value": float(row[kpi]),
+        }
         for row in sub.to_dict(orient="records")
     ]
 
     # Compute Pearson correlation
     corr = float(sub[variable].corr(sub[kpi])) if len(sub) > 1 else 0.0
-    r_squared = corr ** 2
+    r_squared = corr**2
 
     return {
         "variable": variable,
@@ -424,7 +428,9 @@ async def results_timeseries(  # noqa: PLR0912,PLR0915
     ]
 
     if not sim_dirs:
-        raise HTTPException(status_code=404, detail="No completed samples with simulation data found")
+        raise HTTPException(
+            status_code=404, detail="No completed samples with simulation data found"
+        )
 
     all_series: list[dict[str, Any]] = []
     for _sid, sim_dir in sim_dirs:
@@ -487,9 +493,7 @@ async def results_timeseries(  # noqa: PLR0912,PLR0915
                 """,
                 (var_name,),
             ).fetchall()
-            all_series.append(
-                {row["ts"]: float(row["value"]) for row in ts_rows}
-            )
+            all_series.append({row["ts"]: float(row["value"]) for row in ts_rows})
         finally:
             conn.close()
 
@@ -675,7 +679,9 @@ async def results_parallel_coordinates(campaign_id: str, request: Request) -> di
     color_col = kpi_cols[0] if kpi_cols else (lhs_cols[0] if lhs_cols else None)
 
     if not selected_cols:
-        raise HTTPException(status_code=404, detail="No numeric columns found for parallel coordinates")
+        raise HTTPException(
+            status_code=404, detail="No numeric columns found for parallel coordinates"
+        )
 
     sub = df[selected_cols + (["sample_id"] if "sample_id" in df.columns else [])].dropna()
 
@@ -683,11 +689,17 @@ async def results_parallel_coordinates(campaign_id: str, request: Request) -> di
     for col in selected_cols:
         dimensions.append({"label": col, "values": [float(v) for v in sub[col].tolist()]})
 
-    sample_ids = [str(v) for v in (sub["sample_id"].tolist() if "sample_id" in sub.columns else range(len(sub)))]
+    sample_ids = [
+        str(v)
+        for v in (sub["sample_id"].tolist() if "sample_id" in sub.columns else range(len(sub)))
+    ]
     color_values = [float(v) for v in (sub[color_col].tolist() if color_col else [0] * len(sub))]
 
     return {
         "dimensions": dimensions,
-        "samples": [{"sample_id": sid, "color_value": cv} for sid, cv in zip(sample_ids, color_values, strict=False)],
+        "samples": [
+            {"sample_id": sid, "color_value": cv}
+            for sid, cv in zip(sample_ids, color_values, strict=False)
+        ],
         "color_column": color_col,
     }
