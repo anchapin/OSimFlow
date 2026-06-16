@@ -52,6 +52,14 @@ from .executors import (
 )
 from .jobqueue import JobQueue
 from .logging import get_logger, setup_logging
+from .measures import (
+    AmbiguousVariableError,
+    DiscoveredMeasure,
+    MeasureArgument,
+    MeasureRegistry,
+    MeasureRegistryError,
+    UnmappedVariableError,
+)
 from .monitoring import RunTrace, StepTrace
 from .observability import (
     CloudWatchBackend,
@@ -188,6 +196,13 @@ __all__ = [
     "DuplicateDocumentError",
     "SQLiteDocumentStore",
     "build_document_store",
+    # Measure registry (issue #532)
+    "MeasureRegistry",
+    "MeasureArgument",
+    "DiscoveredMeasure",
+    "MeasureRegistryError",
+    "UnmappedVariableError",
+    "AmbiguousVariableError",
 ]
 
 setup_logging()

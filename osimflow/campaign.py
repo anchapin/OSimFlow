@@ -749,6 +749,7 @@ class Campaign:
                         if new_handle is not None:
                             # Capture sid for use in the resubmit logic.
                             recovery_sid = sid
+
                             # Create a new on_success callback wrapper for the resubmit.
                             def _on_success_resubmit(
                                 result_path: Any,

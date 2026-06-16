@@ -244,11 +244,10 @@ class TestDistributedJobQueueAutoRecovery:
         mock_pubsub.get_message = mock_get_message
         mock_pubsub.subscribe = AsyncMock()
 
-        async def mock_pubsub_context():
-            return mock_pubsub
-
         mock_client_instance = AsyncMock()
-        mock_client_instance.pubsub = mock_pubsub_context
+        mock_client_instance.pubsub = MagicMock(return_value=mock_pubsub)
+        mock_pubsub.__aenter__ = AsyncMock(return_value=mock_pubsub)
+        mock_pubsub.__aexit__ = AsyncMock(return_value=None)
         mock_client_instance.aclose = AsyncMock()
 
         sleep_delays: list[float] = []
