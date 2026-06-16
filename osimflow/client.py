@@ -67,6 +67,8 @@ __all__ = [
     "CampaignHealthResponse",
     "StepHealth",
     "SampleCounts",
+    "ValidateConfigRequest",
+    "ValidateConfigResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -281,6 +283,86 @@ class CampaignHealthResponse(BaseModel):
     started_at: float | None = None
     finished_at: float | None = None
     elapsed_s: float | None = None
+
+
+class ValidateConfigRequest(BaseModel):
+    """Request body for ``POST /api/v1/validate``."""
+
+    input_variables: str
+    template_sim_package: str
+    n_samples: int = 1
+    openstudio_version: str = ""
+    outdir: str | None = None
+    archive_intermediates: bool = False
+    algorithm: str = "lhs"
+    max_generations: int = 1
+    dry_run: bool = False
+    skip_preflight: bool = False
+    custom_apply_script: str | None = None
+    custom_kpi_extractor: str | None = None
+    init_script: str | None = None
+    finalize_script: str | None = None
+    weather_dir: str = "weather"
+    project: str = ""
+    mlflow_tracking_uri: str | None = None
+    redis_url: str | None = None
+    slurm_qos: str | None = None
+    slurm_constraint: str | None = None
+    slurm_gres: str | None = None
+    baseline: dict[str, object] | None = None
+    objective: dict[str, object] | None = None
+    constraints: list[dict[str, object]] | None = None
+    max_sample_retries: int = 3
+    offline: bool = False
+    offline_bundle: str | None = None
+    webhook_url: str | None = None
+    nomad_tls: bool = False
+    nomad_cert: str | None = None
+    nomad_key: str | None = None
+    nomad_ca_cert: str | None = None
+    byos_trust_level: str = "subprocess"
+    byos_resource_limits: dict[str, int] | None = None
+    observability: str = "none"
+    cloudwatch_namespace: str = "OSimFlow"
+    cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
+    prometheus_port: int = 9090
+    otel_endpoint: str | None = None
+    registry_path: str | None = None
+    task_queue: str = "none"
+    dask_scheduler_address: str | None = None
+    result_storage_backend: str = "local"
+    result_storage_bucket: str = ""
+    result_storage_endpoint: str | None = None
+    track_costs: bool = False
+    aws_batch_max_spot_price_usd: float | None = None
+    aws_batch_fallback_to_on_demand: bool = False
+    aws_batch_max_retries: int = 3
+    aws_batch_on_demand_price: float | None = None
+    aws_batch_spot_price: float | None = None
+    ecr_repository: str | None = None
+    azure_batch_account_name: str | None = None
+    azure_batch_account_url: str | None = None
+    azure_batch_pool_id: str = "osimflow-pool"
+    azure_batch_location: str = "eastus"
+    azure_use_spot: bool = False
+    azure_fallback_to_on_demand: bool = False
+    azure_max_retries: int = 3
+    google_batch_project_id: str | None = None
+    google_batch_region: str = "us-central1"
+    google_batch_service_account: str | None = None
+    google_use_spot: bool = False
+    google_fallback_to_on_demand: bool = False
+    google_max_retries: int = 3
+    slurm_cost_per_node_hour: float = 0.10
+
+
+class ValidateConfigResponse(BaseModel):
+    """Response from ``POST /api/v1/validate``."""
+
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +661,51 @@ class OSimFlowClient:
         resp = await self._request("GET", f"/api/v1/errors/{sample_id}")
         data: dict[str, Any] = resp.json()
         return data
+
+    # ------------------------------------------------------------------
+    # Pre-flight config validation (issue #398)
+    # ------------------------------------------------------------------
+
+    async def validate_config(
+        self,
+        input_variables: str,
+        template_sim_package: str,
+        n_samples: int,
+        openstudio_version: str,
+        **kwargs: Any,
+    ) -> ValidateConfigResponse:
+        """``POST /api/v1/validate`` — pre-flight config validation.
+
+        Validates the supplied config fields without running a campaign.
+        Checks variables.yml schema, template package structure, version
+        format, sample counts, and script paths.
+
+        Parameters
+        ----------
+        input_variables
+            Path to ``variables.yml``.
+        template_sim_package
+            Path to the template simulation package directory.
+        n_samples
+            Number of samples (must be >= 1).
+        openstudio_version
+            OpenStudio version string (e.g. ``"3.11.0"``).
+        **kwargs
+            Additional config fields forwarded as-is in the request body.
+        """
+        body = ValidateConfigRequest(
+            input_variables=input_variables,
+            template_sim_package=template_sim_package,
+            n_samples=n_samples,
+            openstudio_version=openstudio_version,
+            **kwargs,
+        )
+        resp = await self._request(
+            "POST",
+            "/api/v1/validate",
+            json_body=body.model_dump(mode="json"),
+        )
+        return ValidateConfigResponse.model_validate(resp.json())
 
     # ------------------------------------------------------------------
     # SSE events stream
