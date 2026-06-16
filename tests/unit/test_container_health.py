@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -45,8 +44,6 @@ class TestWriteHeartbeat:
 
     def test_write_error_is_swallowed(self, sim_out: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import osimflow.work as w
-
-        original_write = w.Path.write_text
 
         def _fail_write(self: Path, *args: object, **kwargs: object) -> None:
             raise OSError("disk full")
