@@ -22,7 +22,6 @@ from typing import Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -48,7 +47,7 @@ from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
 from osimflow.api.timeseries import timeseries_router
-from osimflow.api.ui import ui_router
+
 from osimflow.api.variables import variables_router
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import (
@@ -1370,13 +1369,9 @@ def create_app(
     app.include_router(variables_router)
     app.include_router(measures_router)
 
-    if ui_enabled:
-        app.include_router(ui_router)
-        log.info("web UI enabled at /ui/")
-
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-        log.info("web GUI mounted at /static/ from %s", static_dir)
+        log.info("static files mounted at /static/ from %s", static_dir)
 
     return app
