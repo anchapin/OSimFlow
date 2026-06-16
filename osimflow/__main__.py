@@ -1223,6 +1223,56 @@ def _add_cancel_args(cancel: argparse.ArgumentParser) -> None:
     cancel.add_argument("--log_level", default="INFO")
 
 
+def _add_mark_for_reanalysis_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments for the mark-for-reanalysis command (issue #420)."""
+    parser.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing run.json and .osimflow/data_points.json",
+    )
+    parser.add_argument(
+        "sample_id",
+        type=str,
+        help="Sample ID to re-analyze (must be COMPLETED or FAILED)",
+    )
+    parser.add_argument(
+        "--priority",
+        type=int,
+        default=0,
+        help="Priority of the new reanalysis sample (default: 0)",
+    )
+    parser.add_argument("--log_level", default="INFO")
+
+
+def _add_merge_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments for the merge command (issue #418)."""
+    parser.add_argument(
+        "outdir",
+        type=Path,
+        help="Campaign output directory containing .osimflow/data_points.json",
+    )
+    parser.add_argument(
+        "--source-ids",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Source sample IDs to merge (at least one required)",
+    )
+    parser.add_argument(
+        "--target-id",
+        type=str,
+        required=True,
+        help="Target sample ID for the merged result",
+    )
+    parser.add_argument(
+        "--target-work-dir",
+        type=Path,
+        required=True,
+        help="Path to the target sample's work directory",
+    )
+    parser.add_argument("--log_level", default="INFO")
+
+
 def _add_backup_args(bk: argparse.ArgumentParser) -> None:
     bk.add_argument(
         "--output",
@@ -1352,6 +1402,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Request graceful cancellation of a running campaign",
     )
     _add_cancel_args(cncl)
+    reanl = sub.add_parser(
+        "mark-for-reanalysis",
+        help="Mark a completed/failed sample for re-running (issue #420)",
+    )
+    _add_mark_for_reanalysis_args(reanl)
+    mrg = sub.add_parser(
+        "merge",
+        help="Merge multiple data points into a single target (issue #418)",
+    )
+    _add_merge_args(mrg)
     bk = sub.add_parser(
         "backup",
         help="Create a backup of the campaign registry (issue #440)",
@@ -1807,6 +1867,64 @@ def _format_field(record: CampaignRecord, key: str) -> str:
     return str(getattr(record, key, ""))
 
 
+def _cmd_mark_for_reanalysis(args: argparse.Namespace) -> int:
+    """Mark a completed/failed sample for re-running (issue #420)."""
+    from osimflow.data_point_manager import DataPointManager  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    dp_file = outdir / ".osimflow" / "data_points.json"
+
+    if not dp_file.exists():
+        print(f"error: data_points.json not found in {outdir}/.osimflow/", file=sys.stderr)
+        return 1
+
+    mgr = DataPointManager(outdir=outdir)
+    try:
+        new_dp = mgr.mark_for_reanalysis(args.sample_id)
+    except KeyError as exc:
+        print(f"error: sample_id {args.sample_id!r} not found in data_points.json: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Reanalysis sample created: {new_dp.sample_id}")
+    print(f"  Status: {new_dp.status.value}")
+    print(f"  Original: {args.sample_id}")
+    return 0
+
+
+def _cmd_merge(args: argparse.Namespace) -> int:
+    """Merge multiple data points into a single target (issue #418)."""
+    from osimflow.data_point_manager import DataPointManager  # noqa: PLC0415
+
+    outdir: Path = args.outdir.resolve()
+    dp_file = outdir / ".osimflow" / "data_points.json"
+
+    if not dp_file.exists():
+        print(f"error: data_points.json not found in {outdir}/.osimflow/", file=sys.stderr)
+        return 1
+
+    mgr = DataPointManager(outdir=outdir)
+    try:
+        target = mgr.merge(
+            source_ids=args.source_ids,
+            target_id=args.target_id,
+            target_work_dir=args.target_work_dir,
+        )
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Merged {len(args.source_ids)} source(s) into: {target.sample_id}")
+    print(f"  Status: {target.status.value}")
+    print(f"  Merged from: {', '.join(args.source_ids)}")
+    return 0
+
+
 def _cmd_warm_cache(args: argparse.Namespace) -> int:
     """Pre-populate the simulation cache before a campaign (issue #427)."""
     _apply_preset(args)
@@ -1950,6 +2068,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "status": _cmd_status,
         "download": _cmd_download,
         "cancel": _cmd_cancel,
+        "mark-for-reanalysis": _cmd_mark_for_reanalysis,
+        "merge": _cmd_merge,
         "backup": _cmd_backup,
         "restore": _cmd_restore,
         "health": _cmd_health,
