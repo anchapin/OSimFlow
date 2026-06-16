@@ -1882,7 +1882,10 @@ def _cmd_mark_for_reanalysis(args: argparse.Namespace) -> int:
     try:
         new_dp = mgr.mark_for_reanalysis(args.sample_id)
     except KeyError as exc:
-        print(f"error: sample_id {args.sample_id!r} not found in data_points.json: {exc}", file=sys.stderr)
+        print(
+            f"error: sample_id {args.sample_id!r} not found in data_points.json: {exc}",
+            file=sys.stderr,
+        )
         return 1
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
