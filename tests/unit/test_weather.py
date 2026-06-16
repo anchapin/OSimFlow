@@ -1,6 +1,7 @@
 """Unit tests for .epw weather file validation, discovery, and format checking.
 
 Issue #63 — EPW bundling and validation in template_sim_package.
+Issue #424 — ASHRAE climate zone auto-detection from .stat files.
 
 Tests cover:
   - validate_epw: valid/invalid EPW format detection
@@ -8,8 +9,8 @@ Tests cover:
   - discover_epw_files: weather directory scanning
   - validate_all_epw_files: batch validation
   - CampaignConfig.weather_dir: configuration field
-  - Campaign integration: pre-flight EPW format validation
   - download_epw: network error handling (no live network calls)
+  - detect_climate_zone_from_stat: ASHRAE zone extraction from .stat header
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from osimflow.executors import LocalExecutor
 from osimflow.weather import (
     EPWDownloadError,
     EPWValidationError,
+    detect_climate_zone_from_stat,
     discover_epw_files,
     download_epw,
     validate_all_epw_files,
@@ -565,3 +567,45 @@ class TestDownloadEpw:
 
         with pytest.raises(EPWDownloadError, match="exceeded"):
             download_epw("USA_CA_Los.Angeles", tmp_path / "dest")
+
+
+# ---------------------------------------------------------------------------
+# Tests: detect_climate_zone_from_stat (issue #424)
+# ---------------------------------------------------------------------------
+class TestDetectClimateZoneFromStat:
+    """Tests for the detect_climate_zone_from_stat function."""
+
+    def test_detects_climate_zone_6b(self, tmp_path: Path) -> None:
+        """ASHRAE climate zone 6B should be detected from stat header."""
+        stat = tmp_path / "USA_CA_Los.Angeles.stat"
+        stat.write_text("USA_CA_Los.Angeles - TMYx, ASHRAE 169-2006-, 6B\n")
+        assert detect_climate_zone_from_stat(stat) == "6B"
+
+    def test_detects_climate_zone_6a(self, tmp_path: Path) -> None:
+        """ASHRAE climate zone 6A should be detected from stat header."""
+        stat = tmp_path / "USA_MI_Detroit.stat"
+        stat.write_text("USA_MI_Detroit - TMYx, ASHRAE 169-2013-, 6A\n")
+        assert detect_climate_zone_from_stat(stat) == "6A"
+
+    def test_detects_climate_zone_5a(self, tmp_path: Path) -> None:
+        """ASHRAE climate zone 5A should be detected from stat header."""
+        stat = tmp_path / "USA_IL_Chicago.stat"
+        stat.write_text("USA_IL_Chicago - TMYx, ASHRAE 169-2006-, 5A\n")
+        assert detect_climate_zone_from_stat(stat) == "5A"
+
+    def test_missing_file_returns_none(self, tmp_path: Path) -> None:
+        """A non-existent stat file should return None."""
+        result = detect_climate_zone_from_stat(tmp_path / "nonexistent.stat")
+        assert result is None
+
+    def test_empty_file_returns_none(self, tmp_path: Path) -> None:
+        """An empty stat file should return None."""
+        stat = tmp_path / "empty.stat"
+        stat.write_text("")
+        assert detect_climate_zone_from_stat(stat) is None
+
+    def test_no_climate_zone_returns_none(self, tmp_path: Path) -> None:
+        """A stat file without a climate zone pattern should return None."""
+        stat = tmp_path / "unknown.stat"
+        stat.write_text("SomeUnknownFile - Unknown Source\n")
+        assert detect_climate_zone_from_stat(stat) is None

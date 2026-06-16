@@ -28,6 +28,7 @@ The ``weather/`` subdirectory is configurable via
 """
 
 import logging
+import re
 import urllib.request
 from pathlib import Path
 
@@ -265,3 +266,46 @@ def download_epw(
     dest_path.write_bytes(data)
     log.info("downloaded EPW: %s (%d bytes)", dest_path, len(data))
     return dest_path
+
+
+def detect_climate_zone_from_stat(stat_path: Path) -> str | None:
+    """Detect ASHRAE climate zone from the first line of a .stat file.
+
+    The ASHRAE .stat file header (EnergyPlus weather file metadata) contains
+    the climate zone in its first line, e.g.::
+
+        USA_CA_Los.Angeles - TMYx, ASHRAE 169-2006-, 6B
+
+    The climate zone appears at the end of the first line as a numeric
+    subcategory code (``A``/``B``/``C``) appended to a number (1-8),
+    e.g. ``6B``, ``3C``, ``4A``.
+
+    Args:
+        stat_path: path to the ``.stat`` companion file of an EPW.
+
+    Returns:
+        The detected ASHRAE climate zone string (e.g. ``"6B"``), or
+        ``None`` if the file is missing, empty, or no zone pattern was found.
+    """
+    if not stat_path.is_file():
+        log.debug("stat file not found: %s", stat_path)
+        return None
+
+    try:
+        first_line = stat_path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (OSError, IndexError) as exc:
+        log.debug("failed to read stat file %s: %s", stat_path, exc)
+        return None
+
+    if not first_line.strip():
+        log.debug("stat file is empty: %s", stat_path)
+        return None
+
+    match = re.search(r"\b(\d+[A-Za-z])\b", first_line)
+    if not match:
+        log.debug("no ASHRAE climate zone pattern found in: %s", stat_path)
+        return None
+
+    zone = match.group(1)
+    log.debug("detected climate zone %r from %s", zone, stat_path)
+    return zone
