@@ -252,6 +252,8 @@ The 7-step DAG that the `Campaign` class drives:
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
+- `--nsga2-reference-points` (comma-separated aspiration fractions for R-NSGA-II, e.g. `0.25,0.5,0.75`; issue #529)
+- `--nsga2-reference-directions` (R-NSGA-II reference direction strategy: `das-dennis`, `energy`, `wedge`, or `incremental`; issue #529)
 - `--uq-method` (UQ propagation method: `latin_hypercube` (default). Issue #530)
 - `--uq-n-samples` (number of samples for UQ analysis. Issue #530)
 - `--uq-failure-threshold` (failure threshold in `kpi=threshold` format; may be specified multiple times. Issue #530)

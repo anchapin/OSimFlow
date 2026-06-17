@@ -848,34 +848,18 @@ class Campaign:
                 with contextlib.suppress(Exception, concurrent.futures.CancelledError):
                     future.result()
 
-    def _record_costs(self, step_name: str) -> None:
-        """Record per-sample costs from the completed *step_name* fan-out.
+    def _record_costs(self, step_name: str, cost_usd: float, spot_savings_usd: float) -> None:
+        """Record per-step aggregated costs from the completed fan-out.
 
         This is called after each ``_submit_and_await_all`` for the three
         fan-out steps (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS).
-        The cost data (``cost_usd``, ``billed_duration_seconds``) is sourced
-        from ``_sample_state``, populated by the step's ``_on_success``
-        callback when the executor sets these attributes on the Handle.
 
         When ``self._cost_tracker`` is None (cost tracking disabled), this
         is a no-op.
         """
         if self._cost_tracker is None:
             return
-        for sid, state in self._sample_state.items():
-            cost_usd = state.get("cost_usd")
-            billed_secs = state.get("billed_duration_seconds")
-            if cost_usd is None and billed_secs is None:
-                continue
-            resource_usage: dict[str, float] = {}
-            if billed_secs is not None:
-                resource_usage["billed_duration_seconds"] = float(billed_secs)
-            if cost_usd is not None:
-                resource_usage["cost_usd"] = float(cost_usd)
-            estimate = self._cost_tracker._cost_model.estimate(resource_usage)  # type: ignore[attr-defined]
-            self._cost_tracker.record_sample(sid, estimate)
-        step_cost = sum(est.estimated_cost_usd for est in self._cost_tracker._sample_costs.values())
-        self._cost_tracker.record_step(step_name, step_cost)
+        self._cost_tracker.record_actual(step_name, cost_usd, spot_savings_usd)
 
     def _finalize_costs(self) -> None:
         """Build and persist the campaign cost summary.
@@ -885,11 +869,11 @@ class Campaign:
         if self._cost_tracker is None:
             return
         try:
-            path = self._cost_tracker.persist()
-            if path:
-                log.info("campaign cost summary written to %s", path)
+            summary = self._cost_tracker.finalize()
+            self.trace.cost_summary = summary.to_dict()
+            log.info("campaign cost summary written to run.json")
         except Exception as exc:
-            log.warning("could not persist cost summary: %s", exc, exc_info=True)
+            log.warning("could not finalize cost summary: %s", exc, exc_info=True)
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -2634,7 +2618,12 @@ class Campaign:
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
-        self._record_costs("APPLY_PARAMETERS")
+        total_cost = sum(
+            float(str(_v)) if _v is not None else 0.0
+            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        )
+        total_savings = 0.0
+        self._record_costs("APPLY_PARAMETERS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
@@ -2903,7 +2892,12 @@ class Campaign:
             recovery_manager=recovery_manager,
             resubmit_callback=resubmit_callback,
         )
-        self._record_costs("RUN_OPENSTUDIO_SIM")
+        total_cost = sum(
+            float(str(_v)) if _v is not None else 0.0
+            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        )
+        total_savings = 0.0
+        self._record_costs("RUN_OPENSTUDIO_SIM", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
@@ -3035,7 +3029,12 @@ class Campaign:
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "EXTRACT_KPIS")
-        self._record_costs("EXTRACT_KPIS")
+        total_cost = sum(
+            float(str(_v)) if _v is not None else 0.0
+            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        )
+        total_savings = 0.0
+        self._record_costs("EXTRACT_KPIS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():

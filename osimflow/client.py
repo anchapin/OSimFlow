@@ -64,7 +64,7 @@ __all__ = [
     "ParetoResponse",
     "CampaignStopResponse",
     "Event",
-"CampaignHealthResponse",
+    "CampaignHealthResponse",
     "StepHealth",
     "SampleCounts",
     "ValidateConfigRequest",

@@ -96,6 +96,7 @@ def _make_history_with_kpis(
 # Registry tests
 # ======================================================================
 
+
 class TestCalibrationRegistry:
     """Registry discovery tests for CalibrationAlgorithm."""
 
@@ -114,6 +115,7 @@ class TestCalibrationRegistry:
 # ======================================================================
 # Interface tests
 # ======================================================================
+
 
 class TestCalibrationInterface:
     """Contract tests for CalibrationAlgorithm."""
@@ -149,6 +151,7 @@ class TestCalibrationInterface:
 # Calibration data loading tests
 # ======================================================================
 
+
 class TestLoadCalibrationData:
     """Tests for _load_calibration_data."""
 
@@ -169,6 +172,7 @@ class TestLoadCalibrationData:
 # ======================================================================
 # Metric computation tests
 # ======================================================================
+
 
 class TestComputeCalibrationMetrics:
     """Tests for _compute_bm25_score, _compute_nmbe, _compute_cvrmse."""
@@ -254,6 +258,7 @@ class TestComputeCalibrationMetrics:
 # Sample generation tests
 # ======================================================================
 
+
 class TestCalibrationGenerateSamples:
     """Generate-samples tests for CalibrationAlgorithm."""
 
@@ -298,10 +303,12 @@ class TestCalibrationGenerateSamples:
     def test_with_calibration_data(self, tmp_path: Path, calibration_csv: Path) -> None:
         """Test that calibration data can be loaded via configure."""
         algo = CalibrationAlgorithm()
+
         # Create a mock config with calibration data
         class MockConfig:
             calibration_data = str(calibration_csv)
             calibration_metric = "bm25"
+
         algo.configure(MockConfig())
         data = algo.load_calibration_data()
         assert "electricity" in data
@@ -310,6 +317,7 @@ class TestCalibrationGenerateSamples:
 # ======================================================================
 # Observe tests
 # ======================================================================
+
 
 class TestCalibrationObserve:
     """Tests for CalibrationAlgorithm.observe."""
@@ -349,6 +357,7 @@ class TestCalibrationObserve:
 # ======================================================================
 # Convergence tests
 # ======================================================================
+
 
 class TestCalibrationConvergence:
     """Tests for CalibrationAlgorithm.is_converged."""
@@ -392,11 +401,13 @@ class TestCalibrationConvergence:
 # Propose samples helper tests
 # ======================================================================
 
+
 class TestProposeSamplesAround:
     """Tests for _propose_samples_around helper."""
 
     def test_proposes_correct_count(self) -> None:
         import numpy as np
+
         center = np.array([5.0, 0.5])
         bounds = [(1.0, 10.0), (0.1, 0.9)]
         var_names = ["wall_r", "window_shgc"]
@@ -409,6 +420,7 @@ class TestProposeSamplesAround:
 
     def test_proposed_samples_clipped_to_bounds(self) -> None:
         import numpy as np
+
         center = np.array([1.0, 0.1])
         bounds = [(1.0, 10.0), (0.1, 0.9)]
         var_names = ["wall_r", "window_shgc"]
@@ -421,6 +433,7 @@ class TestProposeSamplesAround:
 # ======================================================================
 # Algorithm subclass tests
 # ======================================================================
+
 
 class TestBM25CalibrationAlgorithm:
     """Tests for BM25CalibrationAlgorithm."""
@@ -454,6 +467,7 @@ class TestCVRMSECalibrationAlgorithm:
 # ======================================================================
 # ASHRAE 14 threshold tests
 # ======================================================================
+
 
 class TestASHRAE14Thresholds:
     """Tests for ASHRAE 14 threshold values."""

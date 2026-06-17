@@ -646,6 +646,7 @@ class CampaignConfig:
     # "das_dennis" (Das-Dennis decomposition), "wedge" (wedge pattern),
     # "adaptive" (adaptive update during evolution).
     nsga2_ref_dirs_strategy: str | None = None
+
     @property
     def work_dir(self) -> Path:
         return self.outdir / "work"
@@ -959,5 +960,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             else None
         ),
         nsga2_ref_points=str(args["nsga2_ref_points"]) if args.get("nsga2_ref_points") else None,
-        nsga2_ref_dirs_strategy=str(args["nsga2_ref_dirs_strategy"]) if args.get("nsga2_ref_dirs_strategy") else None,
+        nsga2_ref_dirs_strategy=str(args["nsga2_ref_dirs_strategy"])
+        if args.get("nsga2_ref_dirs_strategy")
+        else None,
     )

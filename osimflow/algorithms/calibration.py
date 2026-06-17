@@ -425,7 +425,9 @@ class CalibrationAlgorithm(BaseAlgorithm):
                 seed,
             )
         except (ValueError, NotImplementedError) as exc:
-            raise RuntimeError("generate_calibration_samples failed: initial LHS population") from exc
+            raise RuntimeError(
+                "generate_calibration_samples failed: initial LHS population"
+            ) from exc
 
         samples_path.write_text(json.dumps({"samples": samples}, indent=2))
         log.info("Calibration generated %d initial samples", len(samples))

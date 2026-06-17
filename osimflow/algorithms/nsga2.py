@@ -450,9 +450,7 @@ class NSGA2Algorithm(BaseAlgorithm):
                 n_obj,
             )
 
-    def _parse_ref_points_string(
-        self, s: str, n_obj: int
-    ) -> npt.NDArray[np.float64]:
+    def _parse_ref_points_string(self, s: str, n_obj: int) -> npt.NDArray[np.float64]:
         """Parse a comma-separated reference point string into a numpy array.
 
         Examples:
@@ -633,7 +631,7 @@ class NSGA2Algorithm(BaseAlgorithm):
 
         problem = _EvaluatedProblem(n_var=dim, n_obj=n_obj, xl=xl, xu=xu)
 
-# Set up NSGA-II.
+        # Set up NSGA-II.
         # Check if this is the first call to initialize ref_points and ref_dirs
         pop_size = min(self._pop_size, len(results))
 
