@@ -620,7 +620,10 @@ def test_batch_update_missing_required_param(client: TestClient, tmp_outdir: Pat
         "/api/v1/variables/batch_update",
         json={
             "variables": [
-                {"name": "heating_setpoint", "distribution": "discrete"},  # discrete requires `values`
+                {
+                    "name": "heating_setpoint",
+                    "distribution": "discrete",
+                },  # discrete requires `values`
             ]
         },
     )
