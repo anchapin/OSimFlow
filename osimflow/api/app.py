@@ -40,6 +40,7 @@ from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
+from osimflow.api.results_query import results_query_router
 from osimflow.api.results_viewer import results_viewer_router
 from osimflow.api.timeseries import timeseries_router
 from osimflow.api.variable_designer import variable_designer_router
@@ -1327,6 +1328,7 @@ def create_app(
     app.include_router(files_router)
     app.include_router(timeseries_router)
     app.include_router(variables_router)
+    app.include_router(results_query_router)
 
     if results_viewer:
         app.include_router(results_viewer_router)
