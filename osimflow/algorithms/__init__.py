@@ -4,9 +4,10 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
-``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``,
+``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``IslandModelGAAlgorithm``,
+``NSGA2Algorithm``, ``PSOAlgorithm``,
 ``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``,
-``RandomSamplingAlgorithm``, and ``RgenoudAlgorithm`` implementations.
+``RandomSamplingAlgorithm``, ``RgenoudAlgorithm``, and ``SequentialSearchAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:
 
@@ -91,6 +92,10 @@ class BaseAlgorithm(abc.ABC):
                 "name": str(raw_obj.get("name", "eui")),
                 "direction": str(raw_obj.get("direction", "minimize")),
                 "weight": float(raw_obj.get("weight", 1.0)),
+                "target": float(raw_obj["target"]) if "target" in raw_obj else None,
+                "scaling_factor": float(raw_obj["scaling_factor"])
+                if "scaling_factor" in raw_obj
+                else None,
             }
         raw_constraints = variables.get("constraints")
         if isinstance(raw_constraints, list):
@@ -687,6 +692,15 @@ except ImportError:
     # when the [ga] extra is installed.
     pass
 
+try:
+    from osimflow.algorithms.gaisl import IslandModelGAAlgorithm  # noqa: F401, E402
+
+    AlgorithmRegistry.register("gaisl", IslandModelGAAlgorithm)
+except ImportError:
+    # deap is a required dependency for IslandModelGAAlgorithm — only available
+    # when the [ga] extra is installed.
+    pass
+
 from osimflow.algorithms.random_sampling import RandomSamplingAlgorithm  # noqa: E402
 from osimflow.algorithms.repeat_all import RepeatAllAlgorithm  # noqa: E402
 
@@ -706,6 +720,12 @@ from osimflow.algorithms.calibration import (  # noqa: E402
 )
 
 AlgorithmRegistry.register("calibration", BM25CalibrationAlgorithm)
+
+from osimflow.algorithms.sequential_search import (  # noqa: E402
+    SequentialSearchAlgorithm,
+)
+
+AlgorithmRegistry.register("sequential_search", SequentialSearchAlgorithm)
 
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)

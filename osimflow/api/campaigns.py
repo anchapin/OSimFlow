@@ -8,6 +8,8 @@ Provides:
   - GET  /api/v1/campaigns/{campaign_id}       — campaign status
   - GET  /api/v1/campaigns/{campaign_id}/samples    — per-sample results
   - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id} — individual sample
+  - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — download result file
+  - DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — delete result file
   - POST /api/v1/campaigns/{campaign_id}/cancel — cancel running campaign
 """
 
@@ -23,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
 
 if TYPE_CHECKING:
     from osimflow.executors.base import BaseExecutor
@@ -46,6 +49,12 @@ from osimflow.api.schemas import (
     SampleSummary,
 )
 from osimflow.audit import AuditLogger, api_actor_from_request
+from osimflow.validation import (
+    ValidationError,
+    sanitize_filename,
+    sanitize_sample_id,
+    validate_path_within_base,
+)
 
 log = logging.getLogger("osimflow.api.campaigns")
 
@@ -956,3 +965,124 @@ async def cancel_campaign(
         campaign_id=campaign_id,
         status="stopping",
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}
+# DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}
+# ---------------------------------------------------------------------------
+
+
+def _result_file_media_type(filename: str) -> str:
+    """Return the media type for a result filename based on its extension."""
+    if filename.endswith(".sql"):
+        return "application/x-sqlite3"
+    if filename.endswith((".err", ".log", ".osw")):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
+
+
+@campaigns_router.get(
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename:path}",
+)
+async def download_sample_result_file(
+    campaign_id: str,
+    sample_id: str,
+    filename: str,
+    request: Request,
+) -> Response:
+    """Download a per-sample result file.
+
+    Result files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.
+    Returns 400 if the filename contains path traversal sequences.
+    Returns 404 if the campaign, sample, or file is not found.
+    """
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Validate sample_id to prevent path traversal.
+    try:
+        safe_sample_id = sanitize_sample_id(sample_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Validate filename to prevent path traversal.
+    try:
+        safe_filename = sanitize_filename(filename)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve the result file path.
+    result_file = campaign_dir / "work" / "sim" / safe_sample_id / safe_filename
+    try:
+        validate_path_within_base(result_file.resolve(), campaign_dir.resolve())
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid result file path") from None
+
+    if not result_file.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result file '{safe_filename}' not found for sample '{safe_sample_id}'",
+        )
+
+    media_type = _result_file_media_type(safe_filename)
+    return FileResponse(
+        result_file,
+        media_type=media_type,
+        filename=safe_filename,
+    )
+
+
+@campaigns_router.delete(
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename:path}",
+)
+async def delete_sample_result_file(
+    campaign_id: str,
+    sample_id: str,
+    filename: str,
+    request: Request,
+) -> Response:
+    """Delete a per-sample result file.
+
+    Result files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.
+    Returns 400 if the filename contains path traversal sequences.
+    Returns 403 if the server is in read-only mode.
+    Returns 404 if the campaign, sample, or file is not found.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for file deletion",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Validate sample_id to prevent path traversal.
+    try:
+        safe_sample_id = sanitize_sample_id(sample_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Validate filename to prevent path traversal.
+    try:
+        safe_filename = sanitize_filename(filename)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve the result file path.
+    result_file = campaign_dir / "work" / "sim" / safe_sample_id / safe_filename
+    try:
+        validate_path_within_base(result_file.resolve(), campaign_dir.resolve())
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid result file path") from None
+
+    if not result_file.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result file '{safe_filename}' not found for sample '{safe_sample_id}'",
+        )
+
+    result_file.unlink()
+    log.info("deleted result file: %s", result_file)
+    return Response(status_code=204)

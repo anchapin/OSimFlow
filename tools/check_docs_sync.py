@@ -68,7 +68,7 @@ PATH_SKIP_SUBSTRINGS = (
     "shutil.which",  # stdlib API, not a file
     "pypi.org",  # domain name, not a path
     "tar.gz",  # generated archive artifact, not a repo file
-    "variables",  # MongoDB field name prefix in docs (e.g. variables.foo.bar)
+    "variables.foo.bar",  # MongoDB field name example in migration docs
 )
 # Extension classes that look like file refs but are documented file
 # *patterns*, not real on-disk files we can resolve.
