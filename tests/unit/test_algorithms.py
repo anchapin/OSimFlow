@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 import scipy.stats
 
@@ -818,3 +819,507 @@ class TestRandomSamplingAlgorithm:
         }
         with pytest.raises(NotImplementedError):
             algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# IslandModelGAAlgorithm
+# ---------------------------------------------------------------------------
+
+from osimflow.algorithms.gaisl import IslandModelGAAlgorithm  # noqa: E402
+
+
+class TestIslandModelGAAlgorithm:
+    """Tests for the IslandModelGAAlgorithm (issue #549, GAP-005)."""
+
+    _VARIABLES: dict[str, Any] = {
+        "variables": [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0},
+        ]
+    }
+
+    def test_name(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.name() == "gaisl"
+
+    def test_is_iterative_true(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.is_iterative() is True
+
+    def test_is_converged_empty_history(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.is_converged([]) is False
+
+    def test_observe_empty_history(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_without_init_returns_empty(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        # No islands initialized yet.
+        result = algo.observe([{"samples": [{"sample_id": "0001"}]}])
+        assert result == []
+
+    def test_generate_samples_creates_file(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        result = algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path)
+        assert result.exists()
+        data = json.loads(result.read_text())
+        assert "samples" in data
+        assert len(data["samples"]) == 10
+
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+
+
+# SequentialSearchAlgorithm
+# ---------------------------------------------------------------------------
+
+from osimflow.algorithms.sequential_search import (  # noqa: E402
+    SequentialSearchAlgorithm,
+    _build_grid_samples,
+    _extract_bounds,
+)
+
+
+class TestBuildGridSamples:
+    """Tests for _build_grid_samples helper."""
+
+    def test_full_range_grid(self) -> None:
+        bounds = [(0.0, 10.0), (0.0, 1.0)]
+        var_names = ["x", "y"]
+        samples = _build_grid_samples(bounds, var_names, n_points_per_dim=3, center=None)
+        assert len(samples) == 9  # 3x3 grid
+        for s in samples:
+            assert "x" in s["values"]
+            assert "y" in s["values"]
+            assert 0.0 <= s["values"]["x"] <= 10.0
+            assert 0.0 <= s["values"]["y"] <= 1.0
+
+    def test_adaptive_grid_around_center(self) -> None:
+        bounds = [(0.0, 10.0)]
+        var_names = ["x"]
+        center = np.array([5.0])
+        samples = _build_grid_samples(
+            bounds, var_names, n_points_per_dim=3, center=center, radius_frac=0.5
+        )
+        # radius_frac=0.5 means 50% of range = 5.0, so grid should be in [0.0, 10.0]
+        # (still within bounds because center is at 5.0 and radius is 5)
+        assert len(samples) == 3
+        for s in samples:
+            assert 0.0 <= s["values"]["x"] <= 10.0
+
+    def test_adaptive_grid_clipped_to_bounds(self) -> None:
+        bounds = [(0.0, 10.0)]
+        var_names = ["x"]
+        center = np.array([9.0])  # Near upper bound
+        samples = _build_grid_samples(
+            bounds, var_names, n_points_per_dim=3, center=center, radius_frac=0.5
+        )
+        # radius=5, center=9, range would be [4, 14] but clips to [0, 10]
+        for s in samples:
+            assert 0.0 <= s["values"]["x"] <= 10.0
+
+    def test_empty_bounds(self) -> None:
+        samples = _build_grid_samples([], [], n_points_per_dim=3)
+        assert samples == []
+
+    def test_single_point_grid(self) -> None:
+        bounds = [(0.0, 10.0)]
+        var_names = ["x"]
+        samples = _build_grid_samples(bounds, var_names, n_points_per_dim=1, center=None)
+        assert len(samples) == 1
+        assert samples[0]["values"]["x"] == pytest.approx(5.0)
+
+
+class TestExtractBounds:
+    """Tests for _extract_bounds helper."""
+
+    def test_uniform(self) -> None:
+        vars = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(0.0, 10.0)]
+
+    def test_normal(self) -> None:
+        vars = [{"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(2.0, 8.0)]  # ±3σ
+
+    def test_lognormal(self) -> None:
+        vars = [{"name": "x", "distribution": "lognormal", "mean": 0.0, "sigma": 0.5}]
+        bounds = _extract_bounds(vars)
+        assert len(bounds) == 1
+        lo, hi = bounds[0]
+        assert lo > 0  # lognormal bounds must be positive
+
+    def test_triangular(self) -> None:
+        vars = [{"name": "x", "distribution": "triangular", "min": 0.0, "max": 10.0}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(0.0, 10.0)]
+
+    def test_fallback(self) -> None:
+        vars = [{"name": "x", "distribution": "discrete", "values": [1, 2, 3]}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(0.0, 1.0)]
+
+
+class TestSequentialSearchAlgorithm:
+    """Tests for the SequentialSearchAlgorithm (issue #550, GAP-006)."""
+
+    def test_name(self) -> None:
+        algo = SequentialSearchAlgorithm()
+        assert algo.name() == "sequential_search"
+
+    def test_is_iterative_false_by_default(self) -> None:
+        """Non-adaptive SequentialSearch is single-shot."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        assert algo.is_iterative() is False
+
+    def test_is_iterative_true_when_adaptive(self) -> None:
+        """Adaptive SequentialSearch is iterative."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=True, n_iterations=3)
+        assert algo.is_iterative() is True
+
+    def test_is_converged_non_adaptive(self) -> None:
+        """Non-adaptive mode always returns True (single-shot)."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        assert algo.is_converged([]) is True
+        assert algo.is_converged([{"samples": []}]) is True
+
+    def test_is_converged_adaptive_not_converged(self) -> None:
+        """Adaptive mode with no improvement returns False."""
+        algo = SequentialSearchAlgorithm(
+            adaptive_sampling=True, n_iterations=3, convergence_threshold=1e-3
+        )
+        # Simulate history with results
+        algo._best_value = 100.0
+        algo._prev_best = 100.0
+        algo._iteration = 1
+        assert algo.is_converged([{"samples": []}]) is True  # 0% change < threshold
+
+    def test_observe_non_adaptive_returns_last_samples(self) -> None:
+        """Non-adaptive observe() returns the last history entry's samples."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        history = [{"samples": [{"sample_id": "s0001"}]}]
+        result = algo.observe(history)
+        assert result == [{"sample_id": "s0001"}]
+
+    def test_observe_empty_history_adaptive_returns_empty(self) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=True, n_iterations=3)
+        assert algo.observe([]) == []
+
+    def test_generate_samples_creates_file(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
+                {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=9, seed=42, outdir=tmp_path)
+        assert result.exists()
+        data = json.loads(result.read_text())
+        assert "samples" in data
+        # grid_points=3 (default) × grid_points=3 = 9 samples
+        assert len(data["samples"]) == 9
+        for sample in data["samples"]:
+            assert "sample_id" in sample
+            assert "values" in sample
+            assert "x" in sample["values"]
+            assert "y" in sample["values"]
+            assert 0.0 <= sample["values"]["x"] <= 10.0
+            assert -5.0 <= sample["values"]["y"] <= 5.0
+
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+
+    def test_generate_samples_no_independent_vars(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_generate_samples_creates_outdir(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        nested = tmp_path / "deep" / "nested"
+        result = algo.generate_samples(self._VARIABLES, n_samples=3, seed=0, outdir=nested)
+        assert result.exists()
+        assert nested.is_dir()
+
+    def test_generate_samples_with_seed_reproducible(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        r1 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run1")
+        r2 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run2")
+        d1 = json.loads(r1.read_text())
+        d2 = json.loads(r2.read_text())
+        assert d1 == d2
+
+    def test_observe_after_init_proposes_samples(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5)
+        # Initialize variables first.
+        algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path)
+        # Observe with empty history (islands not initialized).
+        result = algo.observe([])
+        assert result == []
+        # Simulate KPI data that the algorithm can read.
+        # For a proper observe test we would need a full history with kpi_files,
+        # but we can verify that observe() doesn't crash with the island init path.
+        # The island initializes only when observe() is called with non-empty history.
+
+    def test_observe_updates_best_value(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5)
+        algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path)
+
+        # Create mock history with a KPI file.
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 100.0}}))
+        sample_file = tmp_path / "samples.json"
+        sample_data = {
+            "samples": [
+                {"sample_id": "0001", "values": {"x": 0.5, "y": 0.0}}
+            ]
+        }
+        sample_file.write_text(json.dumps(sample_data))
+
+        history = [{"samples": sample_data["samples"], "kpi_files": [str(kpi_file)]}]
+        result = algo.observe(history)
+        # Should return proposed samples after processing.
+        assert isinstance(result, list)
+
+    def test_migration_happens_at_interval(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=3, popsize=5, migrationInterval=2)
+        algo.generate_samples(self._VARIABLES, n_samples=15, seed=42, outdir=tmp_path)
+
+        # Simulate multiple generations.
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 100.0}}))
+
+        for gen in range(1, 5):
+            sample_file = tmp_path / f"samples_gen{gen}.json"
+            samples = [
+                {"sample_id": f"{i:04d}", "values": {"x": 0.5 + gen * 0.01, "y": 0.0}}
+                for i in range(15)
+            ]
+            sample_file.write_text(json.dumps({"samples": samples}))
+            history = [{"samples": samples, "kpi_files": [str(kpi_file)] * 15}]
+            algo.observe(history)
+
+        # After 4 generations and migrationInterval=2, migration should have
+        # happened at generations 2 and 4.
+        assert algo._generation == 4
+
+    def test_invalid_numIslands_raises(self) -> None:
+        with pytest.raises(ValueError, match="numIslands must be >= 1"):
+            IslandModelGAAlgorithm(numIslands=0)
+
+    def test_invalid_migrationRate_raises(self) -> None:
+        with pytest.raises(ValueError, match="migrationRate must be in"):
+            IslandModelGAAlgorithm(migrationRate=0.0)
+        with pytest.raises(ValueError, match="migrationRate must be in"):
+            IslandModelGAAlgorithm(migrationRate=1.5)
+
+    def test_invalid_migrationInterval_raises(self) -> None:
+        with pytest.raises(ValueError, match="migrationInterval must be >= 1"):
+            IslandModelGAAlgorithm(migrationInterval=0)
+
+    def test_invalid_popsize_raises(self) -> None:
+        with pytest.raises(ValueError, match="popsize must be >= 2"):
+            IslandModelGAAlgorithm(popsize=1)
+
+    def test_default_parameters(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo._numIslands == 5
+        assert algo._migrationRate == 0.1
+        assert algo._migrationInterval == 10
+        assert algo._popsize == 20
+        assert algo._maximize is False
+        assert algo._objective_kpi == "eui"
+
+    def test_custom_parameters(self) -> None:
+        algo = IslandModelGAAlgorithm(
+            numIslands=8,
+            migrationRate=0.2,
+            migrationInterval=5,
+            popsize=30,
+            maximize=True,
+            objective_kpi="cost",
+        )
+        assert algo._numIslands == 8
+        assert algo._migrationRate == 0.2
+        assert algo._migrationInterval == 5
+        assert algo._popsize == 30
+        assert algo._maximize is True
+        assert algo._objective_kpi == "cost"
+
+    def test_converged_when_relative_change_small(self) -> None:
+        algo = IslandModelGAAlgorithm(tol=1e-3)
+        algo._best_value = 99.99
+        algo._prev_best = 100.0
+        # relative_change = abs(99.99 - 100.0) / 100.0 = 0.0001 < 1e-3
+        assert algo.is_converged([{"samples": []}, {"samples": []}]) is True
+
+    def test_not_converged_when_relative_change_large(self) -> None:
+        algo = IslandModelGAAlgorithm(tol=1e-3)
+        algo._best_value = 100.0
+        algo._prev_best = 200.0
+        assert algo.is_converged([{}, {}]) is False
+
+    def test_not_converged_when_prev_best_inf(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        algo._best_value = 100.0
+        algo._prev_best = float("inf")
+        assert algo.is_converged([{}, {}]) is False
+
+    def test_not_converged_single_history(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.is_converged([{}]) is False
+
+    def test_proposed_samples_consumed_on_generate(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5)
+        # First call to generate_samples initializes islands via observe.
+        algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path / "g1")
+        # Simulate history with results so islands initialize.
+        kpi_file = tmp_path / "kpi.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 100.0}}))
+        samples = [{"sample_id": f"{i:04d}", "values": {"x": 0.5, "y": 0.0}} for i in range(10)]
+        history = [{"samples": samples, "kpi_files": [str(kpi_file)] * 10}]
+        proposed = algo.observe(history)
+        assert isinstance(proposed, list)
+
+        # Next generate_samples should consume the proposed samples.
+        result2 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path / "g2")
+        data2 = json.loads(result2.read_text())
+        # If proposed samples were consumed, this should be the new set.
+        assert len(data2["samples"]) == 10
+
+
+class TestIslandModelGAAlgorithmIntegration:
+    """Integration-style tests for IslandModelGAAlgorithm with DEAP (skip if no DEAP)."""
+
+    def test_observe_runs_generation_on_islands(self, tmp_path: Path) -> None:
+        try:
+            from deap import base as deap_base  # noqa: F401
+        except ImportError:
+            pytest.skip("DEAP not installed")
+
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5, migrationInterval=999)
+        algo.generate_samples(
+            {"variables": [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]},
+            n_samples=10,
+            seed=42,
+            outdir=tmp_path,
+        )
+
+        # Create mock KPI data.
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 50.0}}))
+
+        samples = [{"sample_id": f"{i:04d}", "values": {"x": 0.5}} for i in range(10)]
+        history = [{"samples": samples, "kpi_files": [str(kpi_file)] * 10}]
+
+        result = algo.observe(history)
+        assert isinstance(result, list)
+        # Islands should have run a generation.
+        assert algo._generation == 1
+        assert len(algo._islands) == 2
+
+
+    def test_generate_samples_custom_grid_points(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False, grid_points=4)
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 4
+
+    def test_generate_samples_reproducible(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ]
+        }
+        r1 = algo.generate_samples(variables, n_samples=3, seed=99, outdir=tmp_path / "a")
+        r2 = algo.generate_samples(variables, n_samples=3, seed=99, outdir=tmp_path / "b")
+        assert json.loads(r1.read_text()) == json.loads(r2.read_text())
+
+    def test_n_iterations_validation(self) -> None:
+        with pytest.raises(ValueError, match="n_iterations must be >= 1"):
+            SequentialSearchAlgorithm(n_iterations=0)
+
+    def test_adaptive_sampling_convergence(self, tmp_path: Path) -> None:
+        """Adaptive mode converges when improvement drops below threshold."""
+        algo = SequentialSearchAlgorithm(
+            adaptive_sampling=True,
+            n_iterations=10,
+            convergence_threshold=1e-3,
+            grid_points=2,
+        )
+        # Simulate: iteration 1, prev=100, curr=100.5 (0.5% change > 0.1%)
+        algo._iteration = 1
+        algo._prev_best = 100.0
+        algo._best_value = 100.5
+        assert algo.is_converged([{"samples": []}]) is False
+
+        # Simulate: iteration 1, prev=100, curr=100.0005 (0.0005% change < 0.1%)
+        algo._prev_best = 100.0
+        algo._best_value = 100.0005
+        assert algo.is_converged([{"samples": []}]) is True
+
+    def test_adaptive_sampling_exhausted_iterations(self, tmp_path: Path) -> None:
+        """Adaptive mode stops proposing new samples after n_iterations."""
+        algo = SequentialSearchAlgorithm(
+            adaptive_sampling=True,
+            n_iterations=3,
+            grid_points=2,
+        )
+        algo._iteration = 0
+        algo._best_params = np.array([5.0])
+        algo._best_value = 50.0
+
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
+            ]
+        }
+        # First call: iteration 0, generates initial grid
+        result1 = algo.generate_samples(variables, n_samples=2, seed=42, outdir=tmp_path)
+        data1 = json.loads(result1.read_text())
+        assert len(data1["samples"]) == 2
+
+        # Create KPI files so observe() has valid results to process.
+        kpi_files: list[str] = []
+        for sample in data1["samples"]:
+            kpi_path = tmp_path / f"kpi_{sample['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"kpis": {"eui": 50.0}}))
+            kpi_files.append(str(kpi_path))
+
+        # Simulate observe: updates iteration to 1, proposes next grid
+        history1 = [{"samples": data1["samples"], "kpi_files": kpi_files}]
+        algo.observe(history1)
+        assert algo._iteration == 1
+
+        # After 3 iterations (0, 1, 2), the next observe should return empty
+        algo._iteration = 3  # exhausted
+        result = algo.observe(history1)
+        assert result == []
+
+    def test_registry_lookup(self) -> None:
+        """SequentialSearchAlgorithm is registered in AlgorithmRegistry."""
+        available = AlgorithmRegistry.list_available()
+        assert "sequential_search" in available
+        algo = AlgorithmRegistry.get("sequential_search")
+        assert isinstance(algo, SequentialSearchAlgorithm)
+

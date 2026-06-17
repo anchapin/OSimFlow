@@ -1,14 +1,19 @@
 """Campaign CRUD and per-sample result endpoints (issue #267, #395).
 
 Provides:
-  - GET  /api/v1/campaigns                     — list all campaigns
-  - POST /api/v1/campaigns                     — create (and optionally launch) a campaign
-  - GET  /api/v1/campaigns/compare             — compare two campaigns (legacy, issue #386)
-  - POST /api/v1/campaigns/compare             — multi-campaign comparison (issue #404)
-  - GET  /api/v1/campaigns/{campaign_id}       — campaign status
-  - GET  /api/v1/campaigns/{campaign_id}/samples    — per-sample results
+  - GET  /api/v1/campaigns                           — list all campaigns
+  - POST /api/v1/campaigns                           — create (and optionally launch) a campaign
+  - GET  /api/v1/campaigns/compare                   — compare two campaigns (legacy, issue #386)
+  - POST /api/v1/campaigns/compare                   — multi-campaign comparison (issue #404)
+  - GET  /api/v1/campaigns/{campaign_id}             — campaign status
+  - GET  /api/v1/campaigns/{campaign_id}/download    — download campaign artifacts zip (issue #555)
+  - GET  /api/v1/campaigns/{campaign_id}/samples     — per-sample results
   - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id} — individual sample
-  - POST /api/v1/campaigns/{campaign_id}/cancel — cancel running campaign
+  - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — download result file
+  - DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — delete result file
+  - POST /api/v1/campaigns/{campaign_id}/cancel      — cancel running campaign
+  - POST /api/v1/campaigns/{campaign_id}/pause      — pause a running campaign (soft-stop, issue #553)
+  - POST /api/v1/campaigns/{campaign_id}/resume     — resume a paused campaign (issue #553)
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 if TYPE_CHECKING:
     from osimflow.executors.base import BaseExecutor
@@ -32,6 +38,8 @@ from osimflow.api.schemas import (
     BatchUploadRequest,
     BatchUploadResponse,
     CampaignCancelResponse,
+    CampaignPauseResponse,
+    CampaignResumeResponse,
     CampaignComparisonEntry,
     CampaignComparisonResponse,
     CampaignCreateRequest,
@@ -49,6 +57,12 @@ from osimflow.api.schemas import (
     SampleSummary,
 )
 from osimflow.audit import AuditLogger, api_actor_from_request
+from osimflow.validation import (
+    ValidationError,
+    sanitize_filename,
+    sanitize_sample_id,
+    validate_path_within_base,
+)
 
 log = logging.getLogger("osimflow.api.campaigns")
 
@@ -959,6 +973,391 @@ async def cancel_campaign(
         campaign_id=campaign_id,
         status="stopping",
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/pause — pause a campaign (issue #553)
+# ---------------------------------------------------------------------------
+
+
+@campaigns_router.post(
+    "/api/v1/campaigns/{campaign_id}/pause",
+    response_model=CampaignPauseResponse,
+)
+async def pause_campaign(
+    campaign_id: str,
+    request: Request,
+) -> CampaignPauseResponse:
+    """Pause a running campaign by writing a ``.pause`` flag file.
+
+    Running samples complete normally; only new submissions are skipped.
+    This is a soft-stop mechanism that allows the campaign to be resumed
+    later from where it left off.
+
+    Returns 403 if the user lacks write permission (issue #395).
+    Returns 409 if the campaign is not currently running.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for campaign pause",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Check campaign status — only running campaigns can be paused
+    run_json_path = campaign_dir / "run.json"
+    if run_json_path.exists():
+        data = json.loads(run_json_path.read_text())
+        if data.get("finished_at") is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' has already completed",
+            )
+        if data.get("status") == "paused":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' is already paused",
+            )
+
+    # Write the .pause flag
+    pause_file = campaign_dir / ".pause"
+    pause_file.write_text(json.dumps({"requested_at": time.time()}))
+    log.info("pause flag written to %s", pause_file)
+
+    # Update run.json with paused status
+    trace = {"status": "paused", "paused_at": time.time()}
+    run_json_path.write_text(json.dumps(trace))
+    log.info("paused trace written to run.json")
+
+    # Audit log: campaign paused via API (issue #439, #553)
+    audit = AuditLogger(outdir=campaign_dir)
+    actor = api_actor_from_request(request)
+    audit.api_campaign_paused(campaign_id=campaign_id, actor=actor)
+
+    return CampaignPauseResponse(
+        campaign_id=campaign_id,
+        status="paused",
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/resume — resume a paused campaign (issue #553)
+# ---------------------------------------------------------------------------
+
+
+@campaigns_router.post(
+    "/api/v1/campaigns/{campaign_id}/resume",
+    response_model=CampaignResumeResponse,
+)
+async def resume_campaign(
+    campaign_id: str,
+    request: Request,
+) -> CampaignResumeResponse:
+    """Resume a paused campaign by removing the ``.pause`` flag file.
+
+    Clears the paused status and allows new sample submissions to proceed.
+
+    Returns 403 if the user lacks write permission (issue #395).
+    Returns 409 if the campaign is not currently paused.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for campaign resume",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Check campaign status — only paused campaigns can be resumed
+    run_json_path = campaign_dir / "run.json"
+    if run_json_path.exists():
+        data = json.loads(run_json_path.read_text())
+        if data.get("finished_at") is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' has already completed",
+            )
+        if data.get("status") != "paused":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' is not currently paused",
+            )
+
+    # Remove the .pause flag
+    pause_file = campaign_dir / ".pause"
+    if pause_file.exists():
+        pause_file.unlink()
+        log.info("pause flag removed from %s", pause_file)
+
+    # Update run.json with running status
+    run_json_path.write_text(json.dumps({"status": "running", "paused_at": None}))
+    log.info("resume trace written to run.json")
+
+    # Audit log: campaign resumed via API (issue #439, #553)
+    audit = AuditLogger(outdir=campaign_dir)
+    actor = api_actor_from_request(request)
+    audit.api_campaign_resumed(campaign_id=campaign_id, actor=actor)
+
+    return CampaignResumeResponse(
+        campaign_id=campaign_id,
+        status="running",
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/campaigns/{campaign_id}/download — campaign artifact bundle
+# ---------------------------------------------------------------------------
+
+# Files included in the bundle (evaluated at request time).
+_BUNDLE_ROOT_FILES = frozenset({"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"})
+_BUNDLE_PLOT_GLOB = "*.png"
+_BUNDLE_SQL_GLOB = "eplusout.sql"
+
+
+def _iter_campaign_bundle(
+    campaign_dir: Path,
+    *,
+    include_sql: bool = False,
+) -> tuple[tuple[str, Path], ...]:
+    """Iterate over files to include in the campaign bundle.
+
+    Yields ``(archive_path, file_path)`` pairs for streaming into a zip.
+    Skips missing files silently.  Per-sample KPI JSONs and plot files
+    are discovered by glob.
+    """
+    # Root-level artifacts
+    for name in _BUNDLE_ROOT_FILES:
+        f = campaign_dir / name
+        if f.is_file():
+            yield (name, f)
+
+    # Per-sample KPI JSONs
+    work_dir = campaign_dir / "work"
+    sim_dir = work_dir / "sim"
+    if sim_dir.is_dir():
+        for sample_dir in sim_dir.iterdir():
+            if not sample_dir.is_dir():
+                continue
+            for kpi_name in ("kpi.json", "kpis.json"):
+                kpi_file = sample_dir / kpi_name
+                if kpi_file.is_file():
+                    rel = f"samples/{sample_dir.name}/{kpi_name}"
+                    yield (rel, kpi_file)
+
+    # Plot files — campaign root
+    for plot_file in campaign_dir.glob(_BUNDLE_PLOT_GLOB):
+        if plot_file.is_file() and plot_file.name != "run.json":
+            yield (plot_file.name, plot_file)
+    # Plot files — plots/ subdirectory
+    plots_dir = campaign_dir / "plots"
+    if plots_dir.is_dir():
+        for plot_file in plots_dir.glob(_BUNDLE_PLOT_GLOB):
+            if plot_file.is_file():
+                yield (f"plots/{plot_file.name}", plot_file)
+
+    # Per-sample eplusout.sql (only when --archive_intermediates was used)
+    if include_sql and work_dir.is_dir():
+        sim_dir = work_dir / "sim"
+        if sim_dir.is_dir():
+            for sample_dir in sim_dir.iterdir():
+                if not sample_dir.is_dir():
+                    continue
+                sql_file = sample_dir / _BUNDLE_SQL_GLOB
+                if sql_file.is_file():
+                    rel = f"samples/{sample_dir.name}/{_BUNDLE_SQL_GLOB}"
+                    yield (rel, sql_file)
+
+
+@campaigns_router.get("/api/v1/campaigns/{campaign_id}/download")
+async def download_campaign_bundle(
+    campaign_id: str,
+    request: Request,
+    include_sql: bool = Query(
+        False,
+        description=(
+            "Include eplusout.sql files from per-sample directories. "
+            "Only present when --archive_intermediates was used during the campaign run."
+        ),
+    ),
+) -> StreamingResponse:
+    """Download a bundled ZIP archive of all campaign artifacts.
+
+    The bundle includes:
+    - ``run.json`` — monitoring trace
+    - ``samples.json`` — variable mappings
+    - ``aggregated_results.csv`` — KPI table
+    - ``failed_simulations.csv`` — failure summary
+    - Per-sample KPI JSON files (``kpi.json`` / ``kpis.json``)
+    - PNG plot files from the campaign root and ``plots/`` subdirectory
+    - ``eplusout.sql`` files when ``include_sql=true`` (requires
+      ``--archive_intermediates`` during the campaign run)
+
+    Returns a ZIP with ``Content-Disposition: attachment;
+    filename="campaign-{campaign_id}.zip"``.
+    """
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    import io
+    import zipfile
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    safe_name = "".join(c for c in campaign_id if c.isalnum() or c in ("-", "_"))
+    archive_name = f"campaign-{safe_name}.zip"
+
+    def generate_zip() -> io.BytesIO:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for archive_path, file_path in _iter_campaign_bundle(
+                campaign_dir, include_sql=include_sql
+            ):
+                try:
+                    with file_path.open("rb") as f:
+                        data = f.read()
+                    zf.writestr(archive_path, data)
+                except (OSError, zipfile.BadZipFile) as exc:
+                    log.warning("failed to add %s to bundle: %s", file_path, exc)
+        buf.seek(0)
+        return buf
+
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        zip_bytes = await loop.run_in_executor(pool, lambda: generate_zip().read())
+
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{archive_name}"',
+            "Content-Length": str(len(zip_bytes)),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}
+# DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}
+# ---------------------------------------------------------------------------
+
+
+def _result_file_media_type(filename: str) -> str:
+    """Return the media type for a result filename based on its extension."""
+    if filename.endswith(".sql"):
+        return "application/x-sqlite3"
+    if filename.endswith((".err", ".log", ".osw")):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
+
+
+@campaigns_router.get(
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename:path}",
+)
+async def download_sample_result_file(
+    campaign_id: str,
+    sample_id: str,
+    filename: str,
+    request: Request,
+) -> Response:
+    """Download a per-sample result file.
+
+    Result files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.
+    Returns 400 if the filename contains path traversal sequences.
+    Returns 404 if the campaign, sample, or file is not found.
+    """
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Validate sample_id to prevent path traversal.
+    try:
+        safe_sample_id = sanitize_sample_id(sample_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Validate filename to prevent path traversal.
+    try:
+        safe_filename = sanitize_filename(filename)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve the result file path.
+    result_file = campaign_dir / "work" / "sim" / safe_sample_id / safe_filename
+    try:
+        validate_path_within_base(result_file.resolve(), campaign_dir.resolve())
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid result file path") from None
+
+    if not result_file.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result file '{safe_filename}' not found for sample '{safe_sample_id}'",
+        )
+
+    media_type = _result_file_media_type(safe_filename)
+    return FileResponse(
+        result_file,
+        media_type=media_type,
+        filename=safe_filename,
+    )
+
+
+@campaigns_router.delete(
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename:path}",
+)
+async def delete_sample_result_file(
+    campaign_id: str,
+    sample_id: str,
+    filename: str,
+    request: Request,
+) -> Response:
+    """Delete a per-sample result file.
+
+    Result files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.
+    Returns 400 if the filename contains path traversal sequences.
+    Returns 403 if the server is in read-only mode.
+    Returns 404 if the campaign, sample, or file is not found.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for file deletion",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Validate sample_id to prevent path traversal.
+    try:
+        safe_sample_id = sanitize_sample_id(sample_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Validate filename to prevent path traversal.
+    try:
+        safe_filename = sanitize_filename(filename)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve the result file path.
+    result_file = campaign_dir / "work" / "sim" / safe_sample_id / safe_filename
+    try:
+        validate_path_within_base(result_file.resolve(), campaign_dir.resolve())
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid result file path") from None
+
+    if not result_file.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result file '{safe_filename}' not found for sample '{safe_sample_id}'",
+        )
+
+    result_file.unlink()
+    log.info("deleted result file: %s", result_file)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------

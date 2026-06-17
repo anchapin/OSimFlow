@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -63,12 +64,17 @@ __all__ = [
     "ParetoGeneration",
     "ParetoResponse",
     "CampaignStopResponse",
+    "CampaignPauseResponse",
+    "CampaignResumeResponse",
     "Event",
     "CampaignHealthResponse",
     "StepHealth",
     "SampleCounts",
     "ValidateConfigRequest",
     "ValidateConfigResponse",
+    "VariableBatchUpdateItem",
+    "VariableBatchUpdateError",
+    "VariableBatchUpdateResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -243,6 +249,20 @@ class CampaignStopResponse(BaseModel):
     status: str = Field(description="Always 'stopping' on success.")
 
 
+class CampaignPauseResponse(BaseModel):
+    """Response from ``POST /api/v1/campaigns/{campaign_id}/pause``."""
+
+    campaign_id: str
+    status: str = Field(description="Always 'paused' on success.")
+
+
+class CampaignResumeResponse(BaseModel):
+    """Response from ``POST /api/v1/campaigns/{campaign_id}/resume``."""
+
+    campaign_id: str
+    status: str = Field(description="Always 'running' on success.")
+
+
 class Event(BaseModel):
     """A single SSE event from ``GET /api/v1/events``.
 
@@ -363,6 +383,59 @@ class ValidateConfigResponse(BaseModel):
     valid: bool
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class VariableBatchUpdateItem(BaseModel):
+    """One item in a batch variable update request."""
+
+    name: str
+    rename_to: str | None = None
+    distribution: str | None = None
+    description: str | None = None
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableBatchUpdateError(BaseModel):
+    """Error detail for a single failed variable update in a batch."""
+
+    name: str
+    error: str
+
+
+class VariableDetailResponse(BaseModel):
+    """Full variable detail returned by ``GET /api/v1/variables/{name}``."""
+
+    name: str
+    distribution: str
+    description: str | None = None
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableBatchUpdateResponse(BaseModel):
+    """Response from ``POST /api/v1/variables/batch_update``."""
+
+    updated: list[VariableDetailResponse] = Field(default_factory=list)
+    errors: list[VariableBatchUpdateError] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +653,39 @@ class OSimFlowClient:
         resp = await self._request("POST", "/api/v1/campaign/stop")
         return CampaignStopResponse.model_validate(resp.json())
 
+    async def pause_campaign(self, campaign_id: str) -> CampaignPauseResponse:
+        """``POST /api/v1/campaigns/{campaign_id}/pause`` — pause a running campaign.
+
+        Pauses a running campaign using a soft-stop mechanism. Running samples
+        complete normally; only new submissions are skipped.
+
+        Parameters
+        ----------
+        campaign_id
+            The unique campaign identifier.
+
+        Requires read-write permission on the server.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/pause"
+        resp = await self._request("POST", path)
+        return CampaignPauseResponse.model_validate(resp.json())
+
+    async def resume_campaign(self, campaign_id: str) -> CampaignResumeResponse:
+        """``POST /api/v1/campaigns/{campaign_id}/resume`` — resume a paused campaign.
+
+        Resumes a paused campaign by removing the pause flag.
+
+        Parameters
+        ----------
+        campaign_id
+            The unique campaign identifier.
+
+        Requires read-write permission on the server.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/resume"
+        resp = await self._request("POST", path)
+        return CampaignResumeResponse.model_validate(resp.json())
+
     # ------------------------------------------------------------------
     # Samples
     # ------------------------------------------------------------------
@@ -612,6 +718,40 @@ class OSimFlowClient:
         """
         resp = await self._request("GET", f"/api/v1/samples/{sample_id}/logs/{log_name}")
         return resp.text
+
+    # ------------------------------------------------------------------
+    # Per-sample result files (issue #559)
+    # ------------------------------------------------------------------
+
+    async def download_sample_result_file(
+        self,
+        campaign_id: str,
+        sample_id: str,
+        filename: str,
+    ) -> httpx.Response:
+        """``GET /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}`` — download a result file.
+
+        Returns the raw :class:`httpx.Response` so callers can access ``.content``
+        directly.  Content-type is determined by the file extension:
+        ``.sql`` → ``application/x-sqlite3``, ``.err``/``.log``/``.osw`` →
+        ``text/plain; charset=utf-8``, everything else → ``application/octet-stream``.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}"
+        resp = await self._request("GET", path)
+        return resp
+
+    async def delete_sample_result_file(
+        self,
+        campaign_id: str,
+        sample_id: str,
+        filename: str,
+    ) -> None:
+        """``DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}`` — delete a result file.
+
+        Requires the server to have write permission enabled.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}"
+        await self._request("DELETE", path)
 
     # ------------------------------------------------------------------
     # Results & failures
@@ -661,6 +801,54 @@ class OSimFlowClient:
         resp = await self._request("GET", f"/api/v1/errors/{sample_id}")
         data: dict[str, Any] = resp.json()
         return data
+
+    # ------------------------------------------------------------------
+    # Campaign artifact bundle (issue #555)
+    # ------------------------------------------------------------------
+
+    async def download_campaign(
+        self,
+        campaign_id: str,
+        output_path: Path | str,
+        *,
+        include_sql: bool = False,
+    ) -> None:
+        """``GET /api/v1/campaigns/{campaign_id}/download`` — download campaign artifact bundle.
+
+        Fetches the bundled ZIP of all campaign artifacts and saves it to
+        *output_path*.  The bundle includes ``run.json``, ``samples.json``,
+        ``aggregated_results.csv``, ``failed_simulations.csv``, per-sample
+        KPI JSONs, and PNG plot files.  When *include_sql* is ``True``,
+        ``eplusout.sql`` files from per-sample directories are also included
+        (requires the campaign was run with ``--archive_intermediates``).
+
+        Parameters
+        ----------
+        campaign_id
+            The campaign identifier (directory name under the campaigns
+            base directory, or a registry-resolved ID).
+        output_path
+            Local filesystem path where the ZIP archive will be written.
+            Parent directories are created if they do not exist.
+        include_sql
+            When ``True``, include ``eplusout.sql`` files from per-sample
+            directories.  Only set this when the campaign used
+            ``--archive_intermediates``, otherwise these files will not
+            be present in the bundle.
+        """
+        params: dict[str, Any] = {}
+        if include_sql:
+            params["include_sql"] = "1"
+        resp = await self.http_client.get(
+            f"/api/v1/campaigns/{campaign_id}/download",
+            params=params,
+            follow_redirects=True,
+        )
+        if resp.status_code >= 400:
+            self._raise_for_status(resp)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(resp.content)
 
     # ------------------------------------------------------------------
     # Pre-flight config validation (issue #398)
@@ -756,3 +944,37 @@ class OSimFlowClient:
                 elif line.startswith("data:"):
                     data_lines.append(line[len("data:") :].strip())
                 # Ignore comments (lines starting with ':') and other fields
+
+    # ------------------------------------------------------------------
+    # Variable management (issue #557)
+    # ------------------------------------------------------------------
+
+    async def batch_update_variables(
+        self,
+        variables: list[VariableBatchUpdateItem],
+    ) -> VariableBatchUpdateResponse:
+        """``POST /api/v1/variables/batch_update`` — atomic batch variable update.
+
+        Updates multiple variables atomically.  All variables are validated
+        before any are updated.  If any variable is invalid, the entire batch
+        is rejected with error details for each failed variable.
+
+        Parameters
+        ----------
+        variables
+            List of variable update items, each with ``name`` and the fields
+            to update.
+
+        Returns
+        -------
+        VariableBatchUpdateResponse
+            ``updated`` contains successfully updated variables.
+            ``errors`` contains error details for failed updates.
+        """
+        body = {"variables": [v.model_dump(mode="json") for v in variables]}
+        resp = await self._request(
+            "POST",
+            "/api/v1/variables/batch_update",
+            json_body=body,
+        )
+        return VariableBatchUpdateResponse.model_validate(resp.json())

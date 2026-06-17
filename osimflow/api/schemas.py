@@ -253,6 +253,25 @@ class CampaignCancelResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Campaign pause / resume (issue #553)
+# ---------------------------------------------------------------------------
+
+
+class CampaignPauseResponse(BaseModel):
+    """Response for campaign pause."""
+
+    campaign_id: str
+    status: str = Field(description="paused")
+
+
+class CampaignResumeResponse(BaseModel):
+    """Response for campaign resume."""
+
+    campaign_id: str
+    status: str = Field(description="running")
+
+
+# ---------------------------------------------------------------------------
 # Campaign comparison (issue #386)
 # ---------------------------------------------------------------------------
 

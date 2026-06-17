@@ -62,6 +62,7 @@ from .apply_params import (
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .cost_tracking import build_cost_tracker
+from .data_point_manager import DataPointManager
 from .distributed_jobqueue import build_job_queue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
 from .measures import MeasureRegistry, UnmappedVariableError
@@ -142,9 +143,14 @@ class QuotaExceededError(RuntimeError):
 
 
 # Type aliases — these are the schemas of intermediate DAG outputs.
-class SampleSpec(TypedDict):
+class SampleSpec(TypedDict, total=False):
     sample_id: str
     values: dict[str, object]
+    # Per-sample override paths (GAP-009). When set on a sample, these
+    # replace the campaign-level template_sim_package (seed_model) or
+    # weather file (weather_file) for that sample only.
+    seed_model: str
+    weather_file: str
 
 
 class VariableSpec(TypedDict, total=False):
@@ -198,11 +204,16 @@ class Campaign:
         extract_fn: Callable[..., Path] | None = None,
         max_workers: int = 1,
         task_queue: TaskQueue | None = None,
+        data_point_manager: DataPointManager | None = None,
     ):
         self.cfg = cfg
         self.executor = executor
         self.max_workers = max_workers
         self.task_queue = task_queue
+        # Per-sample override manager (GAP-009). When set, per-sample
+        # seed_model and weather_file overrides from the DataPointManager
+        # are injected into SampleSpec before processing.
+        self._dp_manager = data_point_manager
         # Resolve apply_fn: explicit param > cfg.custom_apply_script > default.
         if apply_fn is not None:
             self.apply_fn = apply_fn
@@ -324,6 +335,9 @@ class Campaign:
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
         self._cancel_lock = threading.Lock()
+        # Soft pause (issue #553): pause flag and lock.
+        self._pause_requested = False
+        self._pause_lock = threading.Lock()
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
@@ -463,6 +477,31 @@ class Campaign:
             "bin": sha256_of_files(files),
             "work": sha256_of_files([work_file]),
         }
+
+    def _inject_dp_overrides(self, samples: list[SampleSpec]) -> list[SampleSpec]:
+        """Inject per-sample overrides from DataPointManager into SampleSpec list.
+
+        For each sample, if the DataPointManager has a DataPoint with
+        seed_model or weather_file set, those values are injected into
+        the SampleSpec so subsequent steps use the per-sample overrides
+        instead of the campaign-level defaults (GAP-009).
+        """
+        if self._dp_manager is None:
+            return samples
+        result: list[SampleSpec] = []
+        for s in samples:
+            sid = str(s["sample_id"])
+            dp = self._dp_manager.get(sid)
+            if dp is not None:
+                overridden: SampleSpec = dict(s)  # type: ignore[assignment]
+                if dp.seed_model:
+                    overridden["seed_model"] = dp.seed_model
+                if dp.weather_file:
+                    overridden["weather_file"] = dp.weather_file
+                result.append(overridden)
+            else:
+                result.append(s)
+        return result
 
     def _trace_id_for(self, sample_id: str) -> str:
         """Return the per-sample trace ID, minting one on first access.
@@ -819,6 +858,10 @@ class Campaign:
                 if self._check_cancel_requested():
                     log.warning("cancellation requested during %s — stopping fan-out", step_name)
                     break
+                # Soft pause (issue #553): running samples complete, new ones are skipped.
+                if self._check_pause_requested():
+                    self._write_paused_trace()
+                    raise KeyboardInterrupt("pause requested during fan-out")
                 _await_one(item)
             if self._cancel_requested:
                 raise KeyboardInterrupt("cancellation requested during fan-out")
@@ -841,6 +884,12 @@ class Campaign:
                     # Cancel remaining futures.
                     for f in futures:
                         f.cancel()
+                    break
+                # Soft pause (issue #553): running samples complete, new ones are skipped.
+                # Do NOT cancel futures — let in-flight work finish naturally.
+                if self._check_pause_requested():
+                    self._write_paused_trace()
+                    log.warning("pause requested during %s — breaking fan-out", step_name)
                     break
                 # CancelledError is a BaseException (not Exception), so we must
                 # suppress it explicitly here — it is raised when a future was
@@ -1082,6 +1131,7 @@ class Campaign:
         self,
         params: dict[str, object],
         variable_defs: list[dict[str, Any]],
+        weather_file_override: str | None = None,
     ) -> dict[str, object]:
         """Resolve ``epw_file`` targets in a sample's parameter dict.
 
@@ -1099,6 +1149,17 @@ class Campaign:
         Raises:
             ValueError: a parameter value is not in the variable's mapping.
         """
+        # GAP-009: per-sample weather_file override takes precedence over
+        # campaign-level epw_file target resolution.
+        if weather_file_override:
+            resolved = dict(params)
+            resolved[EPW_FILE_KEY] = str(weather_file_override)
+            log.debug(
+                "resolved epw_file (GAP-009 override): %s",
+                weather_file_override,
+            )
+            return resolved
+
         epw_vars = [v for v in variable_defs if v.get("target") == "epw_file"]
         if not epw_vars:
             return params
@@ -1461,6 +1522,30 @@ class Campaign:
             return True
         return False
 
+    def _check_pause_requested(self) -> bool:
+        """Check if pause has been requested via the ``.pause`` file.
+
+        The ``.pause`` file is written by the REST API's
+        ``POST /api/v1/campaign/pause`` endpoint (issue #553) or by the
+        CLI ``osimflow pause`` command.
+
+        Sets and latches ``_pause_requested`` so that subsequent checks
+        during the same fan-out pass return ``True`` immediately.
+
+        Returns:
+            ``True`` if pause is requested, ``False`` otherwise.
+        """
+        with self._pause_lock:
+            if self._pause_requested:
+                return True
+        pause_file = self.cfg.outdir / ".pause"
+        if pause_file.is_file():
+            log.warning(".pause file detected — pausing new submissions")
+            with self._pause_lock:
+                self._pause_requested = True
+            return True
+        return False
+
     def _setup_signal_handlers(self) -> None:
         """Register SIGINT/SIGTERM handlers to request graceful shutdown.
 
@@ -1513,6 +1598,61 @@ class Campaign:
             log.info("wrote cancellation trace to run.json")
         except Exception as exc:
             log.warning("could not write cancellation trace: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Soft pause / resume (issue #553)
+    # ------------------------------------------------------------------
+
+    def pause(self) -> None:
+        """Request campaign pause (soft-stop).
+
+        Writes a ``.pause`` flag file to the campaign directory and
+        records the ``paused_at`` timestamp in the run trace.  Running
+        samples complete normally; the executor checks for the ``.pause``
+        file between sample dispatches and skips queuing new ones.
+
+        Thread-safe and idempotent.
+        """
+        pause_file = self.cfg.outdir / ".pause"
+        pause_file.write_text(json.dumps({"requested_at": time.time()}))
+        self.trace.status = "paused"
+        self.trace.paused_at = time.time()
+        self.trace.write(self.cfg.outdir / "run.json")
+        log.warning("campaign pause requested (paused_at=%.0f)", self.trace.paused_at)
+
+    def resume(self) -> None:
+        """Resume a paused campaign.
+
+        Removes the ``.pause`` flag file and clears ``paused_at`` from
+        the run trace.  The executor's fan-out loop checks for the
+        ``.pause`` file between sample dispatches and will resume
+        queuing pending samples.
+
+        Thread-safe and idempotent.
+        """
+        pause_file = self.cfg.outdir / ".pause"
+        if pause_file.is_file():
+            pause_file.unlink()
+        self.trace.status = "running"
+        self.trace.paused_at = None
+        self.trace.write(self.cfg.outdir / "run.json")
+        log.warning("campaign resume requested")
+
+    def _write_paused_trace(self) -> None:
+        """Write run.json with paused status when a soft-pause is triggered.
+
+        Sets ``trace.status = "paused"`` and records the ``paused_at``
+        timestamp so a subsequent resume can continue from where the
+        campaign left off.
+        """
+        try:
+            self.trace.status = "paused"
+            self.trace.paused_at = time.time()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            log.info("wrote paused trace to run.json (paused_at=%.0f)", self.trace.paused_at)
+        except Exception as exc:
+            log.warning("could not write paused trace: %s", exc)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -1670,6 +1810,9 @@ class Campaign:
 
         algo = AlgorithmRegistry.get(self.cfg.algorithm, **algo_kwargs)
         samples: list[SampleSpec] = self.step_generate_samples(algo)
+        # GAP-009: inject per-sample seed_model / weather_file overrides
+        # from the DataPointManager before processing.
+        samples = self._inject_dp_overrides(samples)
         self.cfg.samples_file.parent.mkdir(parents=True, exist_ok=True)
         self.cfg.samples_file.write_text(json.dumps({"samples": samples}, indent=2))
         parameterized: SampleDict = self.step_apply_parameters(samples)
@@ -1878,6 +2021,9 @@ class Campaign:
                 )
 
         samples = self.step_generate_samples(algo, generation=generation)
+        # GAP-009: inject per-sample seed_model / weather_file overrides
+        # from the DataPointManager before processing.
+        samples = self._inject_dp_overrides(samples)
         samples_link = self.cfg.samples_file
         samples_link.parent.mkdir(parents=True, exist_ok=True)
         samples_link.write_text(json.dumps({"samples": samples}, indent=2))
@@ -2496,6 +2642,11 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before APPLY_PARAMETERS")
 
+        # Soft pause (issue #553): skip this step entirely if pause was requested.
+        if self._check_pause_requested():
+            self._write_paused_trace()
+            raise KeyboardInterrupt("pause requested before APPLY_PARAMETERS")
+
         # Load variable definitions from variables.yml for epw_file
         # target resolution and pre-flight validation (issue #55).
         variable_defs: list[dict[str, Any]] = self._load_variable_defs()
@@ -2530,12 +2681,29 @@ class Campaign:
         for s in samples:
             sid = str(s["sample_id"])
             params = s["values"]
+            # GAP-009: per-sample seed_model override. When set, this
+            # replaces the campaign-level template_sim_package for this
+            # sample's apply_parameters step.
+            seed_model_override: str | None = s.get("seed_model")
             # Resolve epw_file targets: inject __epw_file__ with the
             # mapped .epw path (issue #55). The apply function extracts
             # this reserved key and uses it to mutate the .osw
             # weather_file field.
-            resolved_params = self._resolve_epw_targets(params, variable_defs)
-            inputs_hash = sha256_of_dict({"params": resolved_params, "sid": sid})
+            # GAP-009: if a per-sample weather_file override is set, use it
+            # for epw resolution instead of the campaign-level weather file.
+            weather_file_override: str | None = s.get("weather_file")
+            resolved_params = self._resolve_epw_targets(
+                params, variable_defs, weather_file_override=weather_file_override
+            )
+            # Include seed_model_override in the cache key so a different
+            # seed model for the same sample params is a distinct cache entry.
+            inputs_hash = sha256_of_dict(
+                {
+                    "params": resolved_params,
+                    "sid": sid,
+                    "seed_model": seed_model_override,
+                }
+            )
             key = CacheKey(
                 step="APPLY_PARAMETERS",
                 sample_id=sid,
@@ -2560,16 +2728,28 @@ class Campaign:
                 "out_dir": out_dir,
                 "key": key,
                 "state": state,
+                "seed_model_override": seed_model_override,
             }
 
         # --- Phase 2: submit all non-cached samples at once ---
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
+            # Soft pause (issue #553): if pause is requested, stop submitting new
+            # samples. Pending samples will be re-evaluated on resume.
+            if self._check_pause_requested():
+                break
             handle: Handle | TQHandle
+            # GAP-009: use per-sample seed_model override if set,
+            # otherwise fall back to the campaign-level template_sim_package.
+            template_pkg: Path = (
+                Path(ctx["seed_model_override"])
+                if ctx["seed_model_override"]
+                else self.cfg.template_sim_package
+            )
             if self.task_queue is not None:
                 handle = self.task_queue.submit(
                     self.apply_fn,
-                    self.cfg.template_sim_package,
+                    template_pkg,
                     ctx["resolved_params"],
                     sid,
                     ctx["out_dir"],
@@ -2577,7 +2757,7 @@ class Campaign:
             else:
                 handle = self.executor.submit(
                     self.apply_fn,
-                    self.cfg.template_sim_package,
+                    template_pkg,
                     ctx["resolved_params"],
                     sid,
                     ctx["out_dir"],
@@ -2666,6 +2846,11 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before RUN_OPENSTUDIO_SIM")
 
+        # Soft pause (issue #553): skip this step entirely if pause was requested.
+        if self._check_pause_requested():
+            self._write_paused_trace()
+            raise KeyboardInterrupt("pause requested before RUN_OPENSTUDIO_SIM")
+
         out: SampleDict = {}
         os_version = self.cfg.openstudio_version
         n = len(parameterized)
@@ -2730,6 +2915,9 @@ class Campaign:
         # --- Phase 2: submit all non-cached samples at once ---
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
+            # Soft pause (issue #553): stop submitting new samples.
+            if self._check_pause_requested():
+                break
             handle: Handle | TQHandle
             if self.task_queue is not None:
                 handle = self.task_queue.submit(
@@ -2931,6 +3119,11 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before EXTRACT_KPIS")
 
+        # Soft pause (issue #553): skip this step entirely if pause was requested.
+        if self._check_pause_requested():
+            self._write_paused_trace()
+            raise KeyboardInterrupt("pause requested before EXTRACT_KPIS")
+
         out: list[Path] = []
         n = len(simulated)
         self.trace.step_started("EXTRACT_KPIS", total=n)
@@ -2968,6 +3161,9 @@ class Campaign:
         # --- Phase 2: submit all non-cached samples at once ---
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
+            # Soft pause (issue #553): stop submitting new samples.
+            if self._check_pause_requested():
+                break
             handle: Handle | TQHandle
             if self.task_queue is not None:
                 handle = self.task_queue.submit(
