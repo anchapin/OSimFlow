@@ -34,6 +34,7 @@ stays decoupled from the sampling strategy.
 """
 
 import abc
+import bisect
 import json
 import logging
 import math
@@ -41,8 +42,11 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import scipy.stats
 import scipy.stats.qmc
+
+from osimflow.algorithms.qdiscrete import qdiscrete
 
 log = logging.getLogger("osimflow.algorithms")
 
@@ -365,6 +369,10 @@ def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float | 
     This is the same logic that lives in ``bin/generate_lhs.py``.  The
     inline copy avoids a subprocess call so the algorithm can run
     directly inside the executor's work function if desired.
+
+    When *params* contains a ``pmf`` key for ``discrete`` or ``categorical``
+    distributions, inverse-CDF (qdiscrete) weighted sampling is used instead
+    of equal-probability sampling, matching R's DoE.base qdiscrete behaviour.
     """
     if dist == "uniform":
         return float(params["min"] + u * (params["max"] - params["min"]))
@@ -383,10 +391,18 @@ def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float | 
         return float(scipy.stats.triang.ppf(u, c, loc=left, scale=right - left))
 
     if dist in ("discrete", "categorical"):
+        pmf = params.get("pmf")
         values_list: list[Any] = params["values"]
-        idx = int(round(u * (len(values_list) - 1)))
-        chosen: float | dict[str, Any] = values_list[idx]
-        return chosen
+        uniform_idx = int(round(u * (len(values_list) - 1)))
+        chosen_idx = uniform_idx
+        if pmf is not None:
+            pmf_values = list(pmf.keys())
+            pmf_probs = np.array(list(pmf.values()), dtype=float)
+            pmf_probs = pmf_probs / pmf_probs.sum()
+            cdf = np.cumsum(pmf_probs)
+            chosen_idx = int(bisect.bisect_right(cdf, u))
+            chosen_idx = min(chosen_idx, len(pmf_values) - 1)
+        return values_list[chosen_idx] if pmf is None else pmf_values[chosen_idx]  # type: ignore[no-any-return]
 
     if dist == "conditional":
         raise NotImplementedError("conditional distributions require dependency resolution")
