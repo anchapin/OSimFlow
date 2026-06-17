@@ -1,16 +1,17 @@
 """Campaign CRUD and per-sample result endpoints (issue #267, #395).
 
 Provides:
-  - GET  /api/v1/campaigns                     — list all campaigns
-  - POST /api/v1/campaigns                     — create (and optionally launch) a campaign
-  - GET  /api/v1/campaigns/compare             — compare two campaigns (legacy, issue #386)
-  - POST /api/v1/campaigns/compare             — multi-campaign comparison (issue #404)
-  - GET  /api/v1/campaigns/{campaign_id}       — campaign status
-  - GET  /api/v1/campaigns/{campaign_id}/samples    — per-sample results
+  - GET  /api/v1/campaigns                           — list all campaigns
+  - POST /api/v1/campaigns                           — create (and optionally launch) a campaign
+  - GET  /api/v1/campaigns/compare                   — compare two campaigns (legacy, issue #386)
+  - POST /api/v1/campaigns/compare                   — multi-campaign comparison (issue #404)
+  - GET  /api/v1/campaigns/{campaign_id}             — campaign status
+  - GET  /api/v1/campaigns/{campaign_id}/download    — download campaign artifacts zip (issue #555)
+  - GET  /api/v1/campaigns/{campaign_id}/samples     — per-sample results
   - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id} — individual sample
   - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — download result file
   - DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — delete result file
-  - POST /api/v1/campaigns/{campaign_id}/cancel — cancel running campaign
+  - POST /api/v1/campaigns/{campaign_id}/cancel      — cancel running campaign
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 if TYPE_CHECKING:
     from osimflow.executors.base import BaseExecutor
@@ -964,6 +965,138 @@ async def cancel_campaign(
     return CampaignCancelResponse(
         campaign_id=campaign_id,
         status="stopping",
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/campaigns/{campaign_id}/download — campaign artifact bundle
+# ---------------------------------------------------------------------------
+
+# Files included in the bundle (evaluated at request time).
+_BUNDLE_ROOT_FILES = frozenset({"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"})
+_BUNDLE_PLOT_GLOB = "*.png"
+_BUNDLE_SQL_GLOB = "eplusout.sql"
+
+
+def _iter_campaign_bundle(
+    campaign_dir: Path,
+    *,
+    include_sql: bool = False,
+) -> tuple[tuple[str, Path], ...]:
+    """Iterate over files to include in the campaign bundle.
+
+    Yields ``(archive_path, file_path)`` pairs for streaming into a zip.
+    Skips missing files silently.  Per-sample KPI JSONs and plot files
+    are discovered by glob.
+    """
+    # Root-level artifacts
+    for name in _BUNDLE_ROOT_FILES:
+        f = campaign_dir / name
+        if f.is_file():
+            yield (name, f)
+
+    # Per-sample KPI JSONs
+    work_dir = campaign_dir / "work"
+    sim_dir = work_dir / "sim"
+    if sim_dir.is_dir():
+        for sample_dir in sim_dir.iterdir():
+            if not sample_dir.is_dir():
+                continue
+            for kpi_name in ("kpi.json", "kpis.json"):
+                kpi_file = sample_dir / kpi_name
+                if kpi_file.is_file():
+                    rel = f"samples/{sample_dir.name}/{kpi_name}"
+                    yield (rel, kpi_file)
+
+    # Plot files — campaign root
+    for plot_file in campaign_dir.glob(_BUNDLE_PLOT_GLOB):
+        if plot_file.is_file() and plot_file.name != "run.json":
+            yield (plot_file.name, plot_file)
+    # Plot files — plots/ subdirectory
+    plots_dir = campaign_dir / "plots"
+    if plots_dir.is_dir():
+        for plot_file in plots_dir.glob(_BUNDLE_PLOT_GLOB):
+            if plot_file.is_file():
+                yield (f"plots/{plot_file.name}", plot_file)
+
+    # Per-sample eplusout.sql (only when --archive_intermediates was used)
+    if include_sql and work_dir.is_dir():
+        sim_dir = work_dir / "sim"
+        if sim_dir.is_dir():
+            for sample_dir in sim_dir.iterdir():
+                if not sample_dir.is_dir():
+                    continue
+                sql_file = sample_dir / _BUNDLE_SQL_GLOB
+                if sql_file.is_file():
+                    rel = f"samples/{sample_dir.name}/{_BUNDLE_SQL_GLOB}"
+                    yield (rel, sql_file)
+
+
+@campaigns_router.get("/api/v1/campaigns/{campaign_id}/download")
+async def download_campaign_bundle(
+    campaign_id: str,
+    request: Request,
+    include_sql: bool = Query(
+        False,
+        description=(
+            "Include eplusout.sql files from per-sample directories. "
+            "Only present when --archive_intermediates was used during the campaign run."
+        ),
+    ),
+) -> StreamingResponse:
+    """Download a bundled ZIP archive of all campaign artifacts.
+
+    The bundle includes:
+    - ``run.json`` — monitoring trace
+    - ``samples.json`` — variable mappings
+    - ``aggregated_results.csv`` — KPI table
+    - ``failed_simulations.csv`` — failure summary
+    - Per-sample KPI JSON files (``kpi.json`` / ``kpis.json``)
+    - PNG plot files from the campaign root and ``plots/`` subdirectory
+    - ``eplusout.sql`` files when ``include_sql=true`` (requires
+      ``--archive_intermediates`` during the campaign run)
+
+    Returns a ZIP with ``Content-Disposition: attachment;
+    filename="campaign-{campaign_id}.zip"``.
+    """
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    import io
+    import zipfile
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    safe_name = "".join(c for c in campaign_id if c.isalnum() or c in ("-", "_"))
+    archive_name = f"campaign-{safe_name}.zip"
+
+    def generate_zip() -> io.BytesIO:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for archive_path, file_path in _iter_campaign_bundle(
+                campaign_dir, include_sql=include_sql
+            ):
+                try:
+                    with file_path.open("rb") as f:
+                        data = f.read()
+                    zf.writestr(archive_path, data)
+                except (OSError, zipfile.BadZipFile) as exc:
+                    log.warning("failed to add %s to bundle: %s", file_path, exc)
+        buf.seek(0)
+        return buf
+
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        zip_bytes = await loop.run_in_executor(pool, lambda: generate_zip().read())
+
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{archive_name}"',
+            "Content-Length": str(len(zip_bytes)),
+        },
     )
 
 

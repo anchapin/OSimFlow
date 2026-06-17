@@ -1051,6 +1051,56 @@
         }
       }
     },
+    "/api/v1/campaigns/{campaign_id}/download": {
+      "get": {
+        "summary": "Download Campaign Bundle",
+        "description": "Download a bundled ZIP archive of all campaign artifacts.\n\nThe bundle includes:\n- ``run.json`` \u2014 monitoring trace\n- ``samples.json`` \u2014 variable mappings\n- ``aggregated_results.csv`` \u2014 KPI table\n- ``failed_simulations.csv`` \u2014 failure summary\n- Per-sample KPI JSON files (``kpi.json`` / ``kpis.json``)\n- PNG plot files from the campaign root and ``plots/`` subdirectory\n- ``eplusout.sql`` files when ``include_sql=true`` (requires\n  ``--archive_intermediates`` during the campaign run)\n\nThe ZIP is streamed directly \u2014 no temporary files are created on\nthe server, which keeps memory usage bounded regardless of campaign\nsize.\n\nReturns a ZIP with ``Content-Disposition: attachment;\nfilename=\"campaign-{campaign_id}.zip\"``.",
+        "operationId": "download_campaign_bundle_api_v1_campaigns__campaign_id__download_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "include_sql",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run.",
+              "default": false,
+              "title": "Include Sql"
+            },
+            "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pat/analyses": {
       "post": {
         "tags": [
