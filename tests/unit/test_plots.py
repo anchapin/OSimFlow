@@ -6,10 +6,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from osimflow._work_scripts import generate_plots as gp
-
 
 # ---------------------------------------------------------------------------
 # _generate_eui_distribution_plot
@@ -175,7 +173,7 @@ class TestNewPlotsIntegration:
         results_csv.write_text(
             "sample_id,eui_kwh_m2_yr,insulation_r,window_u\n"
             + "\n".join(
-                f"{i},{np.random.normal(120,15):.2f},{np.random.normal(30,5):.2f},{np.random.normal(1.5,0.3):.2f}"
+                f"{i},{np.random.normal(120, 15):.2f},{np.random.normal(30, 5):.2f},{np.random.normal(1.5, 0.3):.2f}"
                 for i in range(n)
             )
         )

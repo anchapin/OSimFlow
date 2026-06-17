@@ -68,6 +68,7 @@ PATH_SKIP_SUBSTRINGS = (
     "shutil.which",  # stdlib API, not a file
     "pypi.org",  # domain name, not a path
     "tar.gz",  # generated archive artifact, not a repo file
+    "variables",  # MongoDB field name prefix in docs (e.g. variables.foo.bar)
 )
 # Extension classes that look like file refs but are documented file
 # *patterns*, not real on-disk files we can resolve.
@@ -90,6 +91,7 @@ DOCUMENTED_PATTERNS = {
     "md",
     "txt",
     "ini",
+    "html",
 }
 SKIP_DIRS = {".agents", ".github", "__pycache__", ".venv", "node_modules", ".git"}
 

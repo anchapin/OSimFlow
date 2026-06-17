@@ -859,11 +859,7 @@ def _generate_radar_plot(results: pd.DataFrame, outdir: Path) -> Path | None:
 
     numeric_cols = results.select_dtypes(include="number").columns.tolist()
     # Drop sample_id and any single-valued columns
-    kpi_cols = [
-        c
-        for c in numeric_cols
-        if c not in ("sample_id",) and results[c].std() > 1e-9
-    ]
+    kpi_cols = [c for c in numeric_cols if c not in ("sample_id",) and results[c].std() > 1e-9]
     if len(kpi_cols) < 3:
         log.info("Fewer than 3 varying KPI columns; skipping radar plot.")
         return None
@@ -954,8 +950,14 @@ def _generate_density_heatmap(results: pd.DataFrame, outdir: Path) -> Path | Non
         xy = np.vstack([x, y])
         kernel = stats.gaussian_kde(xy)
 
-        xmin, xmax = x.min() - 0.1 * (x.max() - x.min() or 1), x.max() + 0.1 * (x.max() - x.min() or 1)
-        ymin, ymax = y.min() - 0.1 * (y.max() - y.min() or 1), y.max() + 0.1 * (y.max() - y.min() or 1)
+        xmin, xmax = (
+            x.min() - 0.1 * (x.max() - x.min() or 1),
+            x.max() + 0.1 * (x.max() - x.min() or 1),
+        )
+        ymin, ymax = (
+            y.min() - 0.1 * (y.max() - y.min() or 1),
+            y.max() + 0.1 * (y.max() - y.min() or 1),
+        )
         xx, yy = np.meshgrid(
             np.linspace(xmin, xmax, 200),
             np.linspace(ymin, ymax, 200),
