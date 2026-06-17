@@ -92,7 +92,9 @@ class BaseAlgorithm(abc.ABC):
                 "direction": str(raw_obj.get("direction", "minimize")),
                 "weight": float(raw_obj.get("weight", 1.0)),
                 "target": float(raw_obj["target"]) if "target" in raw_obj else None,
-                "scaling_factor": float(raw_obj["scaling_factor"]) if "scaling_factor" in raw_obj else None,
+                "scaling_factor": float(raw_obj["scaling_factor"])
+                if "scaling_factor" in raw_obj
+                else None,
             }
         raw_constraints = variables.get("constraints")
         if isinstance(raw_constraints, list):

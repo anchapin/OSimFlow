@@ -675,7 +675,9 @@ def _parse_objective_and_constraints(
                 "direction": str(raw_obj.get("direction", "minimize")),
                 "weight": float(raw_obj.get("weight", 1.0)),
                 "target": float(raw_obj["target"]) if "target" in raw_obj else None,
-                "scaling_factor": float(raw_obj["scaling_factor"]) if "scaling_factor" in raw_obj else None,
+                "scaling_factor": float(raw_obj["scaling_factor"])
+                if "scaling_factor" in raw_obj
+                else None,
             }
             log.info(
                 "objective config: name=%s, direction=%s, weight=%.2f, target=%s, scaling_factor=%s",
