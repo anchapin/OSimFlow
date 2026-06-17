@@ -994,7 +994,9 @@ class TestBatchUploadSamples:
         )
         assert resp.status_code == 422
 
-    def test_batch_upload_no_run_json_404(self, client_rw: TestClient, campaigns_base: Path) -> None:
+    def test_batch_upload_no_run_json_404(
+        self, client_rw: TestClient, campaigns_base: Path
+    ) -> None:
         """Campaign without run.json returns 404."""
         # Create a campaign dir without run.json
         (campaigns_base / "no-run").mkdir()
@@ -1004,7 +1006,9 @@ class TestBatchUploadSamples:
         )
         assert resp.status_code == 404
 
-    def test_batch_upload_updates_summary(self, client_rw: TestClient, campaigns_base: Path) -> None:
+    def test_batch_upload_updates_summary(
+        self, client_rw: TestClient, campaigns_base: Path
+    ) -> None:
         """Summary n_samples is updated after batch upload."""
         import json
 
