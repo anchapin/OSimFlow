@@ -54,6 +54,7 @@ from .jobqueue import JobQueue
 from .logging import get_logger, setup_logging
 from .measures import (
     AmbiguousVariableError,
+    BCLMeasureError,
     DiscoveredMeasure,
     MeasureArgument,
     MeasureRegistry,

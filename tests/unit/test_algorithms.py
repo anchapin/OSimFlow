@@ -38,6 +38,7 @@ from osimflow.algorithms import (
     _sample_with_engine,
     _write_empty_samples,
 )
+from osimflow.algorithms.qdiscrete import qdiscrete
 
 # AlgorithmRegistry-mutating tests must run on the same xdist worker.
 pytestmark = pytest.mark.xdist_group("algorithm_registry")
@@ -232,6 +233,19 @@ class TestApplyDistribution:
         values = ["a", "b", "c"]
         result = _apply_distribution(0.5, "categorical", {"values": values})
         assert result in values
+
+    def test_discrete_with_pmf_uses_qdiscrete(self) -> None:
+        pmf = {"low": 0.1, "medium": 0.6, "high": 0.3}
+        result = _apply_distribution(
+            0.5, "discrete", {"values": ["low", "medium", "high"], "pmf": pmf}
+        )
+        assert result == "medium"
+
+    def test_discrete_with_pmf_reproducible(self) -> None:
+        pmf = {"a": 0.3, "b": 0.7}
+        result1 = qdiscrete(pmf, n=1, seed=42)[0]
+        result2 = qdiscrete(pmf, n=1, seed=42)[0]
+        assert result1 == result2
 
     def test_conditional_raises(self) -> None:
         with pytest.raises(NotImplementedError, match="conditional"):
@@ -868,9 +882,6 @@ class TestIslandModelGAAlgorithm:
         assert "samples" in data
         assert len(data["samples"]) == 10
 
-    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
-        algo = IslandModelGAAlgorithm()
-
 
 # SequentialSearchAlgorithm
 # ---------------------------------------------------------------------------
@@ -966,6 +977,13 @@ class TestExtractBounds:
 class TestSequentialSearchAlgorithm:
     """Tests for the SequentialSearchAlgorithm (issue #550, GAP-006)."""
 
+    _VARIABLES: dict[str, Any] = {
+        "variables": [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+        ]
+    }
+
     def test_name(self) -> None:
         algo = SequentialSearchAlgorithm()
         assert algo.name() == "sequential_search"
@@ -1036,7 +1054,6 @@ class TestSequentialSearchAlgorithm:
         data = json.loads(result.read_text())
         assert data["samples"] == []
 
-
     def test_generate_samples_no_independent_vars(self, tmp_path: Path) -> None:
         algo = IslandModelGAAlgorithm()
         variables: dict[str, Any] = {
@@ -1057,8 +1074,12 @@ class TestSequentialSearchAlgorithm:
 
     def test_generate_samples_with_seed_reproducible(self, tmp_path: Path) -> None:
         algo = IslandModelGAAlgorithm()
-        r1 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run1")
-        r2 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run2")
+        r1 = algo.generate_samples(
+            self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run1"
+        )
+        r2 = algo.generate_samples(
+            self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run2"
+        )
         d1 = json.loads(r1.read_text())
         d2 = json.loads(r2.read_text())
         assert d1 == d2
@@ -1083,11 +1104,7 @@ class TestSequentialSearchAlgorithm:
         kpi_file = tmp_path / "kpi_0001.json"
         kpi_file.write_text(json.dumps({"kpis": {"eui": 100.0}}))
         sample_file = tmp_path / "samples.json"
-        sample_data = {
-            "samples": [
-                {"sample_id": "0001", "values": {"x": 0.5, "y": 0.0}}
-            ]
-        }
+        sample_data = {"samples": [{"sample_id": "0001", "values": {"x": 0.5, "y": 0.0}}]}
         sample_file.write_text(json.dumps(sample_data))
 
         history = [{"samples": sample_data["samples"], "kpi_files": [str(kpi_file)]}]
@@ -1196,7 +1213,9 @@ class TestSequentialSearchAlgorithm:
         assert isinstance(proposed, list)
 
         # Next generate_samples should consume the proposed samples.
-        result2 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path / "g2")
+        result2 = algo.generate_samples(
+            self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path / "g2"
+        )
         data2 = json.loads(result2.read_text())
         # If proposed samples were consumed, this should be the new set.
         assert len(data2["samples"]) == 10
@@ -1231,7 +1250,6 @@ class TestIslandModelGAAlgorithmIntegration:
         # Islands should have run a generation.
         assert algo._generation == 1
         assert len(algo._islands) == 2
-
 
     def test_generate_samples_custom_grid_points(self, tmp_path: Path) -> None:
         algo = SequentialSearchAlgorithm(adaptive_sampling=False, grid_points=4)
@@ -1322,4 +1340,3 @@ class TestIslandModelGAAlgorithmIntegration:
         assert "sequential_search" in available
         algo = AlgorithmRegistry.get("sequential_search")
         assert isinstance(algo, SequentialSearchAlgorithm)
-

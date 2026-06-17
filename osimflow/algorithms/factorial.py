@@ -7,6 +7,13 @@ Provides two DOE strategies:
   counts; the caller's ``n_samples`` is advisory only (a warning is
   logged when it doesn't match the actual count).
 
+  When a variable defines ``discrete_distribution`` with a ``pmf`` key,
+  the algorithm uses :func:`osimflow.algorithms.qdiscrete.qdiscrete` to draw
+  ``n_samples`` values weighted by the probability mass function instead
+  of the exhaustive cartesian product over ``levels``.  This matches
+  R's ``DoE.base::qdiscrete()`` weighted discrete variable behaviour
+  (issue #579).
+
 - **GridSamplingAlgorithm** — evenly-spaced grid over continuous
   parameter ranges.  Each variable specifies ``grid_points`` (default 5)
   and ``min``/``max`` bounds.  The total sample count is
@@ -29,6 +36,7 @@ from osimflow.algorithms import (
     _resolve_conditional,
     _write_empty_samples,
 )
+from osimflow.algorithms.qdiscrete import qdiscrete
 
 log = logging.getLogger("osimflow.algorithms.factorial")
 
@@ -36,6 +44,145 @@ log = logging.getLogger("osimflow.algorithms.factorial")
 # ======================================================================
 # Full Factorial
 # ======================================================================
+
+
+def _fullfact_samples(
+    var_defs: list[dict[str, Any]],
+    n_samples: int,
+    seed: int | None,
+) -> list[dict[str, Any]]:
+    """Draw samples using qdiscrete when discrete_distribution/pmf is present.
+
+    For each variable that carries a ``discrete_distribution`` entry with
+    a ``pmf`` key, :func:`osimflow.algorithms.qdiscrete.qdiscrete` is used
+    to draw ``n_samples`` values weighted by the probability mass function.
+    For variables without a ``discrete_distribution`` pmf, the standard
+    cartesian product over ``levels`` is used.
+
+    Parameters
+    ----------
+    var_defs
+        List of normalised variable definition dicts.
+    n_samples
+        Number of samples to produce (used as the qdiscrete draw count).
+    seed
+        RNG seed passed through to qdiscrete.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        List of sample dicts with ``sample_id`` and ``values`` keys.
+    """
+    has_pmf: list[bool] = []
+    var_names: list[str] = []
+    level_lists: list[list[Any]] = []
+    discrete_pmf_vars: list[dict[Any, float] | None] = []
+
+    for var_def in var_defs:
+        var_name = var_def["name"]
+        var_names.append(var_name)
+        levels = var_def.get("levels")
+        discrete_dist = var_def.get("discrete_distribution")
+        pmf: dict[Any, float] | None = None
+        if discrete_dist is not None and isinstance(discrete_dist, dict):
+            pmf = discrete_dist.get("pmf")
+        if pmf is not None:
+            has_pmf.append(True)
+            level_lists.append(list(pmf.keys()))
+            discrete_pmf_vars.append(pmf)
+        else:
+            if levels is None:
+                raise ValueError(
+                    f"FullFactorialAlgorithm requires a 'levels' key for variable "
+                    f"'{var_name}'. Got keys: {sorted(var_def.keys())}"
+                )
+            if not isinstance(levels, list) or len(levels) == 0:
+                raise ValueError(
+                    f"'levels' for variable '{var_name}' must be a non-empty list, got {levels!r}"
+                )
+            has_pmf.append(False)
+            level_lists.append(list(levels))
+            discrete_pmf_vars.append(None)
+
+    has_any_pmf = any(has_pmf)
+    if has_any_pmf:
+        return _qdiscrete_weighted_samples(
+            var_names=var_names,
+            level_lists=level_lists,
+            has_pmf=has_pmf,
+            discrete_pmf_vars=discrete_pmf_vars,
+            n_samples=n_samples,
+            seed=seed,
+        )
+
+    cartesian = list(itertools.product(*level_lists))
+    actual_count = len(cartesian)
+
+    if n_samples != actual_count:
+        log.warning(
+            "FullFactorialAlgorithm: n_samples=%d ignored; actual cartesian "
+            "product size is %d (product of levels: %s)",
+            n_samples,
+            actual_count,
+            " × ".join(str(len(ll)) for ll in level_lists),
+        )
+
+    samples: list[dict[str, Any]] = []
+    for i, combo in enumerate(cartesian):
+        values: dict[str, Any] = {}
+        for j, var_name in enumerate(var_names):
+            values[var_name] = combo[j]
+        samples.append({"sample_id": f"{i + 1:04d}", "values": values})
+    return samples
+
+
+def _qdiscrete_weighted_samples(
+    var_names: list[str],
+    level_lists: list[list[Any]],
+    has_pmf: list[bool],
+    discrete_pmf_vars: list[dict[Any, float] | None],
+    n_samples: int,
+    seed: int | None,
+) -> list[dict[str, Any]]:
+    """Draw samples using qdiscrete inverse-CDF weighted sampling.
+
+    For each variable with ``has_pmf[i] is True``, draws ``n_samples`` values
+    from the PMF via :func:`osimflow.algorithms.qdiscrete.qdiscrete`.
+    For variables with ``has_pmf[i] is False``, draws ``n_samples`` values
+    by cycling through the ``level_lists[i]`` cartesian product.
+    """
+    per_var_samples: list[list[Any]] = []
+
+    for i, _var_name in enumerate(var_names):
+        if has_pmf[i]:
+            pmf = discrete_pmf_vars[i]
+            assert pmf is not None
+            drawn = qdiscrete(pmf, n=n_samples, seed=seed)
+            per_var_samples.append(drawn)
+        else:
+            axis = level_lists[i]
+            if n_samples <= len(axis):
+                per_var_samples.append(list(axis[:n_samples]))
+            else:
+                repeats = (n_samples + len(axis) - 1) // len(axis)
+                cycled = (axis * repeats)[:n_samples]
+                per_var_samples.append(cycled)
+
+    if n_samples != len(per_var_samples[0]):
+        log.warning(
+            "FullFactorialAlgorithm: qdiscrete-weighted sampling produced "
+            "%d samples (n_samples=%d)",
+            len(per_var_samples[0]),
+            n_samples,
+        )
+
+    samples: list[dict[str, Any]] = []
+    for i in range(len(per_var_samples[0])):
+        values: dict[str, Any] = {}
+        for j, var_name in enumerate(var_names):
+            values[var_name] = per_var_samples[j][i]
+        samples.append({"sample_id": f"{i + 1:04d}", "values": values})
+    return samples
 
 
 class FullFactorialAlgorithm(BaseAlgorithm):
@@ -46,6 +193,13 @@ class FullFactorialAlgorithm(BaseAlgorithm):
     total sample count is ``product(len(levels) for each variable)``.
     ``n_samples`` is **not** used to drive sampling; a warning is logged
     if the supplied ``n_samples`` differs from the actual cartesian count.
+
+    When a variable defines ``discrete_distribution`` with a ``pmf`` key,
+    the algorithm uses :func:`osimflow.algorithms.qdiscrete.qdiscrete` to draw
+    ``n_samples`` values weighted by the probability mass function instead
+    of the exhaustive cartesian product over ``levels``.  This matches
+    R's ``DoE.base::qdiscrete()`` weighted discrete variable behaviour
+    (issue #579).
 
     Single-shot: ``is_iterative()`` returns ``False``, ``is_converged()``
     always returns ``True``.
@@ -69,44 +223,8 @@ class FullFactorialAlgorithm(BaseAlgorithm):
         if not independent_vars:
             return _write_empty_samples(samples_path)
 
-        # Extract levels per variable.  Each independent variable must
-        # have a ``levels`` key.
-        level_lists: list[list[Any]] = []
-        var_names: list[str] = []
-        for var_def in independent_vars:
-            var_name = var_def["name"]
-            var_names.append(var_name)
-            levels = var_def.get("levels")
-            if levels is None:
-                raise ValueError(
-                    f"FullFactorialAlgorithm requires a 'levels' key for variable "
-                    f"'{var_name}'. Got keys: {sorted(var_def.keys())}"
-                )
-            if not isinstance(levels, list) or len(levels) == 0:
-                raise ValueError(
-                    f"'levels' for variable '{var_name}' must be a non-empty list, got {levels!r}"
-                )
-            level_lists.append(list(levels))
-
-        # Cartesian product of all level lists.
-        cartesian = list(itertools.product(*level_lists))
-        actual_count = len(cartesian)
-
-        if n_samples != actual_count:
-            log.warning(
-                "FullFactorialAlgorithm: n_samples=%d ignored; actual cartesian "
-                "product size is %d (product of levels: %s)",
-                n_samples,
-                actual_count,
-                " × ".join(str(len(ll)) for ll in level_lists),
-            )
-
-        samples: list[dict[str, Any]] = []
-        for i, combo in enumerate(cartesian):
-            values: dict[str, Any] = {}
-            for j, var_name in enumerate(var_names):
-                values[var_name] = combo[j]
-            samples.append({"sample_id": f"{i + 1:04d}", "values": values})
+        samples = _fullfact_samples(independent_vars, n_samples, seed)
+        actual_count = len(samples)
 
         if conditional_vars:
             _resolve_conditional(samples, conditional_vars, actual_count)

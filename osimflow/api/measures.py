@@ -397,7 +397,7 @@ def _load_measures_registry(measures_dir: Path) -> dict[str, Any]:
     if not registry_path.is_file():
         return {}
     try:
-        return json.loads(registry_path.read_text(encoding="utf-8"))
+        return json.loads(registry_path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -441,24 +441,26 @@ def _extract_measure_archive(
                 # Reject any member that writes outside dest_dir
                 member_path = (dest_dir / member.filename).resolve()
                 if not member_path.is_relative_to(dest_dir.resolve()):
-                    raise ValueError(f"Archive member {member.filename} escapes extraction directory")
+                    raise ValueError(
+                        f"Archive member {member.filename} escapes extraction directory"
+                    )
             zf.extractall(dest_dir)
     elif tarfile.is_tarfile(archive_path):
         with tarfile.open(archive_path, "r:*") as tf:
-            for member in tf.getmembers():
-                if member.isfile():
-                    member_path = (dest_dir / member.name).resolve()
+            for tar_member in tf.getmembers():
+                if tar_member.isfile():
+                    member_path = (dest_dir / tar_member.name).resolve()
                     if not member_path.is_relative_to(dest_dir.resolve()):
-                        raise ValueError(f"Archive member {member.name} escapes extraction directory")
+                        raise ValueError(
+                            f"Archive member {tar_member.name} escapes extraction directory"
+                        )
             tf.extractall(dest_dir)
     else:
         raise ValueError("Archive is neither a valid zip nor tar.gz file")
 
     # Find the measure directory inside the extracted archive
     for item in sorted(dest_dir.iterdir()):
-        if item.is_dir() and (
-            (item / "measure.rb").is_file() or (item / "measure.py").is_file()
-        ):
+        if item.is_dir() and ((item / "measure.rb").is_file() or (item / "measure.py").is_file()):
             return item
     raise ValueError("Archive does not contain a directory with measure.rb or measure.py")
 
@@ -649,10 +651,7 @@ def _discover_uploaded_measures(
             hay = (mentry.get("name", "") + " " + (mentry.get("description") or "")).lower()
             if search.lower() not in hay:
                 continue
-        args = [
-            MeasureArgument(**a) for a in mentry.get("arguments", [])
-            if isinstance(a, dict)
-        ]
+        args = [MeasureArgument(**a) for a in mentry.get("arguments", []) if isinstance(a, dict)]
         results.append(
             MeasureDetailResponse(
                 measure_id=mid,
@@ -704,19 +703,17 @@ async def list_measures(
     # --- Uploaded measures ---
     uploaded: list[MeasureDetailResponse] = []
     if measures_dir is not None:
-        uploaded, has_uploaded = _discover_uploaded_measures(
-            measures_dir, search, taxonomy, tag
-        )
+        uploaded, has_uploaded = _discover_uploaded_measures(measures_dir, search, taxonomy, tag)
         if has_uploaded:
             source_parts.append("uploaded")
 
     # Neither source available: raise 503 to stay consistent with the
     # original behaviour where a missing outdir → 503.
     if outdir is None and measures_dir is None:
-        raise HTTPException(status_code=503, detail="No output directory or measures directory configured")
-        uploaded, has_uploaded = _discover_uploaded_measures(
-            measures_dir, search, taxonomy, tag
+        raise HTTPException(
+            status_code=503, detail="No output directory or measures directory configured"
         )
+        uploaded, has_uploaded = _discover_uploaded_measures(measures_dir, search, taxonomy, tag)
         if has_uploaded:
             source_parts.append("uploaded")
 
@@ -738,8 +735,7 @@ async def list_measures(
         all_measures = [
             m
             for m in all_measures
-            if hay in m.measure_dir_name.lower()
-            or (m.description and hay in m.description.lower())
+            if hay in m.measure_dir_name.lower() or (m.description and hay in m.description.lower())
         ]
 
     if not source_parts:

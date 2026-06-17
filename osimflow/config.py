@@ -633,6 +633,14 @@ class CampaignConfig:
     # failure thresholds for probability of failure (POF) computation.
     # Example: ['eui=150', 'cooling=5000']
     uq_failure_thresholds: list[str] | None = None
+    # BCL API key for the NREL Building Component Library (issue #580).
+    # Can also be set via the BCL_API_KEY env var.
+    # Some BCL API endpoints require authentication.
+    bcl_api_key: str | None = None
+    # Validate measure arguments against BCL taxonomy when discovering
+    # measures from BCL (issue #580). When True, warnings are logged
+    # for measures with incomplete metadata or unexpected argument types.
+    validate_measures: bool = False
 
     # R-NSGA-II reference points (issue #529). Comma-separated fractions
     # along the Pareto front for 2-objective problems, or explicit reference
@@ -969,4 +977,6 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         nsga2_ref_dirs_strategy=str(args["nsga2_ref_dirs_strategy"])
         if args.get("nsga2_ref_dirs_strategy")
         else None,
+        bcl_api_key=str(args["bcl_api_key"]) if args.get("bcl_api_key") else None,
+        validate_measures=bool(args.get("validate_measures", False)),
     )
