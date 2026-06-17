@@ -243,6 +243,9 @@ async def results_campaign_summary(
         "available_plots": {
             "histogram": has_results and len(kpi_columns) > 0,
             "scatter": has_results and len(lhs_columns) > 0 and len(kpi_columns) > 0,
+            "scatter_matrix": has_results and len(lhs_columns) >= 2 and len(kpi_columns) >= 1,
+            "radar": has_results and len(kpi_columns) >= 3,
+            "parallel_coordinates": has_results and (len(lhs_columns) + len(kpi_columns)) >= 3,
             "timeseries": True,
             "export": has_results or n_failures > 0,
         },
@@ -702,4 +705,172 @@ async def results_parallel_coordinates(campaign_id: str, request: Request) -> di
             for sid, cv in zip(sample_ids, color_values, strict=False)
         ],
         "color_column": color_col,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /results/{campaign_id}/scatter_matrix — scatter plot matrix data
+# ---------------------------------------------------------------------------
+
+
+@results_viewer_router.get("/results/{campaign_id}/scatter_matrix")
+async def results_scatter_matrix(campaign_id: str, request: Request) -> dict[str, Any]:
+    """Return data for a scatter plot matrix showing all variable-KPI pairs.
+
+    Returns top N LHS variables and top M KPIs, producing an N x M grid
+    of scatter traces suitable for rendering with Plotly's scatterpolar
+    or as a subplot grid.
+
+    Response shape::
+
+        {
+          "variables": ["wall_u_value", "window_ratio"],
+          "kpis": ["eui_kwh_m2_yr", "cost_annual"],
+          "traces": [
+            {
+              "type": "scatter",
+              "mode": "markers",
+              "x": [0.5, 0.3, ...],       // variable values
+              "y": [120.3, 98.7, ...],   // KPI values
+              "marker": {...},
+              "name": "wall_u_value vs eui_kwh_m2_yr",
+              "xaxis": "x1", "yaxis": "y1"
+            },
+            ...
+          ],
+          "layout": {
+            "subplot_titles": ["wall_u_value vs eui_kwh_m2_yr", ...],
+            ...
+          }
+        }
+    """
+    from osimflow.api.campaigns import _campaigns_base_dir  # noqa: PLC0415
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+    _load_campaign_json(campaign_dir)
+
+    df = _load_results_df(campaign_dir)
+
+    lhs_cols = _infer_lhs_columns(df)
+    kpi_cols = _infer_kpi_columns(df)
+
+    max_vars = 6
+    max_kpis = 4
+    selected_vars = lhs_cols[:max_vars]
+    selected_kpis = kpi_cols[:max_kpis]
+
+    if not selected_vars or not selected_kpis:
+        raise HTTPException(
+            status_code=404,
+            detail="Not enough numeric columns for scatter matrix",
+        )
+
+    sub = df[selected_vars + selected_kpis].dropna()
+
+    traces = []
+    for kpi in selected_kpis:
+        for var in selected_vars:
+            traces.append(
+                {
+                    "variable": var,
+                    "kpi": kpi,
+                    "x": [float(v) for v in sub[var].tolist()],
+                    "y": [float(v) for v in sub[kpi].tolist()],
+                    "n_points": len(sub),
+                    "correlation": float(sub[var].corr(sub[kpi])) if len(sub) > 1 else 0.0,
+                }
+            )
+
+    return {
+        "variables": selected_vars,
+        "kpis": selected_kpis,
+        "traces": traces,
+        "n_samples": int(len(sub)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /results/{campaign_id}/radar — radar / spider chart data
+# ---------------------------------------------------------------------------
+
+
+@results_viewer_router.get("/results/{campaign_id}/radar")
+async def results_radar(
+    campaign_id: str,
+    request: Request,
+    max_kpis: int = Query(8, ge=3, le=12, description="Max number of KPIs to include"),
+) -> dict[str, Any]:
+    """Return data for a radar / spider chart of normalized KPI values.
+
+    Each sample is rendered as a closed polygon on the radar chart, with
+    KPIs normalised to [0, 1] per campaign so different units are comparable.
+
+    Response shape::
+
+        {
+          "kpis": ["eui_kwh_m2_yr", "cost_annual", "peak_power_kw"],
+          "samples": [
+            {
+              "sample_id": "0000",
+              "values": [0.45, 0.32, 0.78],  // normalised 0-1
+              "raw": [120.3, 850.0, 45.2]     // original values
+            },
+            ...
+          ],
+          "ranges": [[0.0, 1.0], ...]  // [min, max] per KPI (in original units)
+        }
+    """
+    from osimflow.api.campaigns import _campaigns_base_dir  # noqa: PLC0415
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+    _load_campaign_json(campaign_dir)
+
+    df = _load_results_df(campaign_dir)
+
+    kpi_cols = _infer_kpi_columns(df)
+    selected_kpis = kpi_cols[:max_kpis]
+
+    if len(selected_kpis) < 3:
+        raise HTTPException(
+            status_code=404,
+            detail="At least 3 KPIs required for radar chart",
+        )
+
+    sub = df[selected_kpis].dropna()
+    if sub.empty:
+        raise HTTPException(status_code=404, detail="No numeric data for radar chart")
+
+    mins = sub.min()
+    maxs = sub.max()
+    ranges = [[float(mins[k]), float(maxs[k])] for k in selected_kpis]
+
+    def _normalize(row: pd.Series) -> list[float]:
+        result = []
+        for k in selected_kpis:
+            lo, hi = mins[k], maxs[k]
+            if hi == lo:
+                result.append(0.5)
+            else:
+                result.append(float((row[k] - lo) / (hi - lo)))
+        return result
+
+    samples = []
+    sample_ids = sub["sample_id"].tolist() if "sample_id" in sub.columns else list(range(len(sub)))
+    for idx, (_, row) in enumerate(sub.iterrows()):
+        raw = [float(row[k]) for k in selected_kpis]
+        norm = _normalize(row)
+        samples.append(
+            {
+                "sample_id": str(sample_ids[idx]),
+                "values": norm,
+                "raw": raw,
+            }
+        )
+
+    return {
+        "kpis": selected_kpis,
+        "samples": samples,
+        "ranges": ranges,
     }

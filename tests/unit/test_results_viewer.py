@@ -116,7 +116,9 @@ class TestScatterMatrixEndpoint:
         resp = rv_client.get("/results/nonexistent/scatter_matrix")
         assert resp.status_code == 404
 
-    def test_404_when_no_results_csv(self, rv_client: pytest.TestClient, rv_campaign_dir: Path) -> None:
+    def test_404_when_no_results_csv(
+        self, rv_client: pytest.TestClient, rv_campaign_dir: Path
+    ) -> None:
         (rv_campaign_dir / "no-results").mkdir()
         (rv_campaign_dir / "no-results" / "run.json").write_text(
             json.dumps(_make_run_json(campaign_id="no-results"))
@@ -181,14 +183,15 @@ class TestRadarEndpoint:
         resp = rv_client.get("/results/nonexistent/radar")
         assert resp.status_code == 404
 
-    def test_404_when_too_few_kpis(self, rv_client: pytest.TestClient, rv_campaign_dir: Path) -> None:
+    def test_404_when_too_few_kpis(
+        self, rv_client: pytest.TestClient, rv_campaign_dir: Path
+    ) -> None:
         (rv_campaign_dir / "few-kpis").mkdir()
         (rv_campaign_dir / "few-kpis" / "run.json").write_text(
-            json.dumps(_make_run_json(campaign_id="few-kpis")))
-        few_kpi_csv = rv_campaign_dir / "few-kpis" / "aggregated_results.csv"
-        few_kpi_csv.write_text(
-            "sample_id,single_kpi\ns0,100\ns1,110\n"
+            json.dumps(_make_run_json(campaign_id="few-kpis"))
         )
+        few_kpi_csv = rv_campaign_dir / "few-kpis" / "aggregated_results.csv"
+        few_kpi_csv.write_text("sample_id,single_kpi\ns0,100\ns1,110\n")
         resp = rv_client.get("/results/few-kpis/radar")
         assert resp.status_code == 404
         assert "3 KPIs" in resp.json()["detail"]
@@ -226,11 +229,10 @@ class TestAvailablePlotsUpdated:
     ) -> None:
         (rv_campaign_dir / "single-var").mkdir()
         (rv_campaign_dir / "single-var" / "run.json").write_text(
-            json.dumps(_make_run_json(campaign_id="single-var")))
-        single_var_csv = rv_campaign_dir / "single-var" / "aggregated_results.csv"
-        single_var_csv.write_text(
-            "sample_id,wall_r,eui_kwh_m2_yr\ns0,2.5,120\n"
+            json.dumps(_make_run_json(campaign_id="single-var"))
         )
+        single_var_csv = rv_campaign_dir / "single-var" / "aggregated_results.csv"
+        single_var_csv.write_text("sample_id,wall_r,eui_kwh_m2_yr\ns0,2.5,120\n")
         resp = rv_client.get("/results/single-var")
         assert resp.status_code == 200
         d = resp.json()
