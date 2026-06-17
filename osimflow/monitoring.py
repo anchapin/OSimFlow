@@ -148,6 +148,8 @@ class RunTrace:
         # AGGREGATE_RESULTS so the value is available in run.json.
         self.cache_hit_rate: float | None = None
         self.status: str = "running"  # "running", "success", "cancelled", "failed", "paused"
+        # Timestamp when the campaign was paused (None if not paused).
+        self.paused_at: float | None = None
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -248,6 +250,9 @@ class RunTrace:
         # Cache hit rate (issue #426).
         if self.cache_hit_rate is not None:
             d["cache_hit_rate"] = self.cache_hit_rate
+        # Paused timestamp (issue #553). Present when the campaign has been paused.
+        if self.paused_at is not None:
+            d["paused_at"] = self.paused_at
         return d
 
     def update_sample(self, trace: SampleTrace) -> None:

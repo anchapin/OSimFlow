@@ -64,6 +64,8 @@ __all__ = [
     "ParetoGeneration",
     "ParetoResponse",
     "CampaignStopResponse",
+    "CampaignPauseResponse",
+    "CampaignResumeResponse",
     "Event",
     "CampaignHealthResponse",
     "StepHealth",
@@ -245,6 +247,20 @@ class CampaignStopResponse(BaseModel):
     """Response from ``POST /api/v1/campaign/stop``."""
 
     status: str = Field(description="Always 'stopping' on success.")
+
+
+class CampaignPauseResponse(BaseModel):
+    """Response from ``POST /api/v1/campaigns/{campaign_id}/pause``."""
+
+    campaign_id: str
+    status: str = Field(description="Always 'paused' on success.")
+
+
+class CampaignResumeResponse(BaseModel):
+    """Response from ``POST /api/v1/campaigns/{campaign_id}/resume``."""
+
+    campaign_id: str
+    status: str = Field(description="Always 'running' on success.")
 
 
 class Event(BaseModel):
@@ -636,6 +652,39 @@ class OSimFlowClient:
         """
         resp = await self._request("POST", "/api/v1/campaign/stop")
         return CampaignStopResponse.model_validate(resp.json())
+
+    async def pause_campaign(self, campaign_id: str) -> CampaignPauseResponse:
+        """``POST /api/v1/campaigns/{campaign_id}/pause`` — pause a running campaign.
+
+        Pauses a running campaign using a soft-stop mechanism. Running samples
+        complete normally; only new submissions are skipped.
+
+        Parameters
+        ----------
+        campaign_id
+            The unique campaign identifier.
+
+        Requires read-write permission on the server.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/pause"
+        resp = await self._request("POST", path)
+        return CampaignPauseResponse.model_validate(resp.json())
+
+    async def resume_campaign(self, campaign_id: str) -> CampaignResumeResponse:
+        """``POST /api/v1/campaigns/{campaign_id}/resume`` — resume a paused campaign.
+
+        Resumes a paused campaign by removing the pause flag.
+
+        Parameters
+        ----------
+        campaign_id
+            The unique campaign identifier.
+
+        Requires read-write permission on the server.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/resume"
+        resp = await self._request("POST", path)
+        return CampaignResumeResponse.model_validate(resp.json())
 
     # ------------------------------------------------------------------
     # Samples
