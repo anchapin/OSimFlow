@@ -149,13 +149,13 @@ def _build_grid_samples(
             if n_points_per_dim == 1:
                 grid_axes.append(np.array([c]))
             else:
-                grid_axes.append(np.linspace(lo_ad, hi_ad, n_points_per_dim))
+                grid_axes.append(np.linspace(lo_ad, hi_ad, n_points_per_dim).astype(np.float64))
         elif n_points_per_dim == 1:
             # Full-range grid, single point.
             grid_axes.append(np.array([(lo + hi) / 2.0]))
         else:
             # Full-range grid.
-            grid_axes.append(np.linspace(lo, hi, n_points_per_dim))
+            grid_axes.append(np.linspace(lo, hi, n_points_per_dim).astype(np.float64))
 
     # Cartesian product of all grid axes.
     cartesian = np.array(list(np.meshgrid(*grid_axes, indexing="ij"))).reshape(dim, -1).T
