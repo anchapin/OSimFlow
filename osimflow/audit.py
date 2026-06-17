@@ -580,3 +580,31 @@ class AuditLogger:
                 resource=campaign_id,
             )
         )
+
+    def api_campaign_paused(
+        self,
+        campaign_id: str,
+        actor: str,
+    ) -> None:
+        """Log an api.campaign.paused event (issue #553)."""
+        self.log(
+            AuditEvent(
+                actor=actor,
+                action="api.campaign.paused",
+                resource=campaign_id,
+            )
+        )
+
+    def api_campaign_resumed(
+        self,
+        campaign_id: str,
+        actor: str,
+    ) -> None:
+        """Log an api.campaign.resumed event (issue #553)."""
+        self.log(
+            AuditEvent(
+                actor=actor,
+                action="api.campaign.resumed",
+                resource=campaign_id,
+            )
+        )

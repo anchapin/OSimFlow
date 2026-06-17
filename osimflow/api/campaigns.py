@@ -12,6 +12,8 @@ Provides:
   - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — download result file
   - DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — delete result file
   - POST /api/v1/campaigns/{campaign_id}/cancel      — cancel running campaign
+  - POST /api/v1/campaigns/{campaign_id}/pause      — pause a running campaign (soft-stop, issue #553)
+  - POST /api/v1/campaigns/{campaign_id}/resume     — resume a paused campaign (issue #553)
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ if TYPE_CHECKING:
 from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
     CampaignCancelResponse,
+    CampaignPauseResponse,
+    CampaignResumeResponse,
     CampaignComparisonEntry,
     CampaignComparisonResponse,
     CampaignCreateRequest,
@@ -965,6 +969,138 @@ async def cancel_campaign(
     return CampaignCancelResponse(
         campaign_id=campaign_id,
         status="stopping",
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/pause — pause a campaign (issue #553)
+# ---------------------------------------------------------------------------
+
+
+@campaigns_router.post(
+    "/api/v1/campaigns/{campaign_id}/pause",
+    response_model=CampaignPauseResponse,
+)
+async def pause_campaign(
+    campaign_id: str,
+    request: Request,
+) -> CampaignPauseResponse:
+    """Pause a running campaign by writing a ``.pause`` flag file.
+
+    Running samples complete normally; only new submissions are skipped.
+    This is a soft-stop mechanism that allows the campaign to be resumed
+    later from where it left off.
+
+    Returns 403 if the user lacks write permission (issue #395).
+    Returns 409 if the campaign is not currently running.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for campaign pause",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Check campaign status — only running campaigns can be paused
+    run_json_path = campaign_dir / "run.json"
+    if run_json_path.exists():
+        data = json.loads(run_json_path.read_text())
+        if data.get("finished_at") is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' has already completed",
+            )
+        if data.get("status") == "paused":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' is already paused",
+            )
+
+    # Write the .pause flag
+    pause_file = campaign_dir / ".pause"
+    pause_file.write_text(json.dumps({"requested_at": time.time()}))
+    log.info("pause flag written to %s", pause_file)
+
+    # Update run.json with paused status
+    trace = {"status": "paused", "paused_at": time.time()}
+    run_json_path.write_text(json.dumps(trace))
+    log.info("paused trace written to run.json")
+
+    # Audit log: campaign paused via API (issue #439, #553)
+    audit = AuditLogger(outdir=campaign_dir)
+    actor = api_actor_from_request(request)
+    audit.api_campaign_paused(campaign_id=campaign_id, actor=actor)
+
+    return CampaignPauseResponse(
+        campaign_id=campaign_id,
+        status="paused",
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/resume — resume a paused campaign (issue #553)
+# ---------------------------------------------------------------------------
+
+
+@campaigns_router.post(
+    "/api/v1/campaigns/{campaign_id}/resume",
+    response_model=CampaignResumeResponse,
+)
+async def resume_campaign(
+    campaign_id: str,
+    request: Request,
+) -> CampaignResumeResponse:
+    """Resume a paused campaign by removing the ``.pause`` flag file.
+
+    Clears the paused status and allows new sample submissions to proceed.
+
+    Returns 403 if the user lacks write permission (issue #395).
+    Returns 409 if the campaign is not currently paused.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for campaign resume",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Check campaign status — only paused campaigns can be resumed
+    run_json_path = campaign_dir / "run.json"
+    if run_json_path.exists():
+        data = json.loads(run_json_path.read_text())
+        if data.get("finished_at") is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' has already completed",
+            )
+        if data.get("status") != "paused":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Campaign '{campaign_id}' is not currently paused",
+            )
+
+    # Remove the .pause flag
+    pause_file = campaign_dir / ".pause"
+    if pause_file.exists():
+        pause_file.unlink()
+        log.info("pause flag removed from %s", pause_file)
+
+    # Update run.json with running status
+    run_json_path.write_text(json.dumps({"status": "running", "paused_at": None}))
+    log.info("resume trace written to run.json")
+
+    # Audit log: campaign resumed via API (issue #439, #553)
+    audit = AuditLogger(outdir=campaign_dir)
+    actor = api_actor_from_request(request)
+    audit.api_campaign_resumed(campaign_id=campaign_id, actor=actor)
+
+    return CampaignResumeResponse(
+        campaign_id=campaign_id,
+        status="running",
     )
 
 

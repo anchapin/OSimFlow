@@ -335,6 +335,9 @@ class Campaign:
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
         self._cancel_lock = threading.Lock()
+        # Soft pause (issue #553): pause flag and lock.
+        self._pause_requested = False
+        self._pause_lock = threading.Lock()
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
@@ -855,6 +858,10 @@ class Campaign:
                 if self._check_cancel_requested():
                     log.warning("cancellation requested during %s — stopping fan-out", step_name)
                     break
+                # Soft pause (issue #553): running samples complete, new ones are skipped.
+                if self._check_pause_requested():
+                    self._write_paused_trace()
+                    raise KeyboardInterrupt("pause requested during fan-out")
                 _await_one(item)
             if self._cancel_requested:
                 raise KeyboardInterrupt("cancellation requested during fan-out")
@@ -877,6 +884,12 @@ class Campaign:
                     # Cancel remaining futures.
                     for f in futures:
                         f.cancel()
+                    break
+                # Soft pause (issue #553): running samples complete, new ones are skipped.
+                # Do NOT cancel futures — let in-flight work finish naturally.
+                if self._check_pause_requested():
+                    self._write_paused_trace()
+                    log.warning("pause requested during %s — breaking fan-out", step_name)
                     break
                 # CancelledError is a BaseException (not Exception), so we must
                 # suppress it explicitly here — it is raised when a future was
@@ -1509,6 +1522,30 @@ class Campaign:
             return True
         return False
 
+    def _check_pause_requested(self) -> bool:
+        """Check if pause has been requested via the ``.pause`` file.
+
+        The ``.pause`` file is written by the REST API's
+        ``POST /api/v1/campaign/pause`` endpoint (issue #553) or by the
+        CLI ``osimflow pause`` command.
+
+        Sets and latches ``_pause_requested`` so that subsequent checks
+        during the same fan-out pass return ``True`` immediately.
+
+        Returns:
+            ``True`` if pause is requested, ``False`` otherwise.
+        """
+        with self._pause_lock:
+            if self._pause_requested:
+                return True
+        pause_file = self.cfg.outdir / ".pause"
+        if pause_file.is_file():
+            log.warning(".pause file detected — pausing new submissions")
+            with self._pause_lock:
+                self._pause_requested = True
+            return True
+        return False
+
     def _setup_signal_handlers(self) -> None:
         """Register SIGINT/SIGTERM handlers to request graceful shutdown.
 
@@ -1561,6 +1598,61 @@ class Campaign:
             log.info("wrote cancellation trace to run.json")
         except Exception as exc:
             log.warning("could not write cancellation trace: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Soft pause / resume (issue #553)
+    # ------------------------------------------------------------------
+
+    def pause(self) -> None:
+        """Request campaign pause (soft-stop).
+
+        Writes a ``.pause`` flag file to the campaign directory and
+        records the ``paused_at`` timestamp in the run trace.  Running
+        samples complete normally; the executor checks for the ``.pause``
+        file between sample dispatches and skips queuing new ones.
+
+        Thread-safe and idempotent.
+        """
+        pause_file = self.cfg.outdir / ".pause"
+        pause_file.write_text(json.dumps({"requested_at": time.time()}))
+        self.trace.status = "paused"
+        self.trace.paused_at = time.time()
+        self.trace.write(self.cfg.outdir / "run.json")
+        log.warning("campaign pause requested (paused_at=%.0f)", self.trace.paused_at)
+
+    def resume(self) -> None:
+        """Resume a paused campaign.
+
+        Removes the ``.pause`` flag file and clears ``paused_at`` from
+        the run trace.  The executor's fan-out loop checks for the
+        ``.pause`` file between sample dispatches and will resume
+        queuing pending samples.
+
+        Thread-safe and idempotent.
+        """
+        pause_file = self.cfg.outdir / ".pause"
+        if pause_file.is_file():
+            pause_file.unlink()
+        self.trace.status = "running"
+        self.trace.paused_at = None
+        self.trace.write(self.cfg.outdir / "run.json")
+        log.warning("campaign resume requested")
+
+    def _write_paused_trace(self) -> None:
+        """Write run.json with paused status when a soft-pause is triggered.
+
+        Sets ``trace.status = "paused"`` and records the ``paused_at``
+        timestamp so a subsequent resume can continue from where the
+        campaign left off.
+        """
+        try:
+            self.trace.status = "paused"
+            self.trace.paused_at = time.time()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            log.info("wrote paused trace to run.json (paused_at=%.0f)", self.trace.paused_at)
+        except Exception as exc:
+            log.warning("could not write paused trace: %s", exc)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -2550,6 +2642,11 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before APPLY_PARAMETERS")
 
+        # Soft pause (issue #553): skip this step entirely if pause was requested.
+        if self._check_pause_requested():
+            self._write_paused_trace()
+            raise KeyboardInterrupt("pause requested before APPLY_PARAMETERS")
+
         # Load variable definitions from variables.yml for epw_file
         # target resolution and pre-flight validation (issue #55).
         variable_defs: list[dict[str, Any]] = self._load_variable_defs()
@@ -2637,6 +2734,10 @@ class Campaign:
         # --- Phase 2: submit all non-cached samples at once ---
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
+            # Soft pause (issue #553): if pause is requested, stop submitting new
+            # samples. Pending samples will be re-evaluated on resume.
+            if self._check_pause_requested():
+                break
             handle: Handle | TQHandle
             # GAP-009: use per-sample seed_model override if set,
             # otherwise fall back to the campaign-level template_sim_package.
@@ -2745,6 +2846,11 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before RUN_OPENSTUDIO_SIM")
 
+        # Soft pause (issue #553): skip this step entirely if pause was requested.
+        if self._check_pause_requested():
+            self._write_paused_trace()
+            raise KeyboardInterrupt("pause requested before RUN_OPENSTUDIO_SIM")
+
         out: SampleDict = {}
         os_version = self.cfg.openstudio_version
         n = len(parameterized)
@@ -2809,6 +2915,9 @@ class Campaign:
         # --- Phase 2: submit all non-cached samples at once ---
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
+            # Soft pause (issue #553): stop submitting new samples.
+            if self._check_pause_requested():
+                break
             handle: Handle | TQHandle
             if self.task_queue is not None:
                 handle = self.task_queue.submit(
@@ -3010,6 +3119,11 @@ class Campaign:
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before EXTRACT_KPIS")
 
+        # Soft pause (issue #553): skip this step entirely if pause was requested.
+        if self._check_pause_requested():
+            self._write_paused_trace()
+            raise KeyboardInterrupt("pause requested before EXTRACT_KPIS")
+
         out: list[Path] = []
         n = len(simulated)
         self.trace.step_started("EXTRACT_KPIS", total=n)
@@ -3047,6 +3161,9 @@ class Campaign:
         # --- Phase 2: submit all non-cached samples at once ---
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
         for sid, ctx in pending.items():
+            # Soft pause (issue #553): stop submitting new samples.
+            if self._check_pause_requested():
+                break
             handle: Handle | TQHandle
             if self.task_queue is not None:
                 handle = self.task_queue.submit(
