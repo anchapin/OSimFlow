@@ -40,7 +40,21 @@ class DataPointStatus(StrEnum):
 
 @dataclass
 class DataPoint:
-    """Immutable-ish record of a single simulation data point."""
+    """Immutable-ish record of a single simulation data point.
+
+    Attributes
+    ----------
+    seed_model
+        Path to a per-sample seed model override. When set, this replaces
+        the campaign-level ``template_sim_package`` for this sample only.
+        Supports multi-archetype studies where each sample uses a different
+        building model (GAP-009).
+    weather_file
+        Path to a per-sample weather file override. When set, this replaces
+        the campaign-level weather file for this sample only. Supports
+        multi-climate-zone studies where each sample uses a different EPW
+        file (GAP-009).
+    """
 
     sample_id: str
     status: DataPointStatus = DataPointStatus.PENDING
@@ -56,6 +70,9 @@ class DataPoint:
     # Reanalysis metadata
     reanalyze_count: int = 0
     original_sample_id: str | None = None  # if this is a reanalysis of another
+    # Per-sample override paths (GAP-009)
+    seed_model: str | None = None  # absolute path to per-sample seed model
+    weather_file: str | None = None  # absolute path to per-sample weather file
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +88,8 @@ class DataPoint:
             "merged_from": self.merged_from,
             "reanalyze_count": self.reanalyze_count,
             "original_sample_id": self.original_sample_id,
+            "seed_model": self.seed_model,
+            "weather_file": self.weather_file,
         }
 
     @classmethod
@@ -88,6 +107,8 @@ class DataPoint:
             merged_from=d.get("merged_from", []),
             reanalyze_count=d.get("reanalyze_count", 0),
             original_sample_id=d.get("original_sample_id"),
+            seed_model=d.get("seed_model"),
+            weather_file=d.get("weather_file"),
         )
 
 
@@ -164,6 +185,60 @@ class DataPointManager:
     def get(self, sample_id: str) -> DataPoint | None:
         """Return a data point by id, or None if not registered."""
         return self._data_points.get(sample_id)
+
+    # -------------------------------------------------------------------------
+    # Per-sample overrides (GAP-009)
+    # -------------------------------------------------------------------------
+
+    def with_seed_model(self, sample_id: str, path: Path) -> DataPoint:
+        """Set a per-sample seed model override.
+
+        When set, this data point will use *path* as its seed model
+        instead of the campaign-level ``template_sim_package``. This enables
+        multi-archetype studies where different samples use different
+        building models in a single campaign.
+
+        Auto-registers the data point if it does not exist.
+
+        Args:
+            sample_id: the sample's identifier.
+            path: absolute path to the per-sample seed model directory.
+
+        Returns:
+            The updated ``DataPoint``.
+        """
+        if sample_id not in self._data_points:
+            self.register(sample_id)
+        dp = self._data_points[sample_id]
+        dp.seed_model = str(path)
+        dp.updated_at = time.time()
+        self._save()
+        return dp
+
+    def with_weather_file(self, sample_id: str, path: Path) -> DataPoint:
+        """Set a per-sample weather file override.
+
+        When set, this data point will use *path* as its weather file
+        instead of the campaign-level default. This enables multi-climate-zone
+        studies where different samples use different EPW files in a single
+        campaign.
+
+        Auto-registers the data point if it does not exist.
+
+        Args:
+            sample_id: the sample's identifier.
+            path: absolute path to the per-sample ``.epw`` weather file.
+
+        Returns:
+            The updated ``DataPoint``.
+        """
+        if sample_id not in self._data_points:
+            self.register(sample_id)
+        dp = self._data_points[sample_id]
+        dp.weather_file = str(path)
+        dp.updated_at = time.time()
+        self._save()
+        return dp
 
     def list_all(self) -> list[DataPoint]:
         """Return all registered data points sorted by sample_id."""
@@ -259,6 +334,8 @@ class DataPointManager:
             updated_at=time.time(),
             reanalyze_count=0,
             original_sample_id=sample_id,
+            seed_model=original.seed_model,
+            weather_file=original.weather_file,
         )
         self._data_points[new_id] = new_dp
         self._save()
