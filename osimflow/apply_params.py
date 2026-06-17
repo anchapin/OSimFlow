@@ -730,11 +730,18 @@ def _check_cross_measure_conflicts(
             )
 
     if conflicts:
-        raise CrossMeasureConflictError(
-            "Pre-flight check failed: the same argument is specified for "
-            "multiple measures via dotted names, creating a potential runtime "
-            "conflict:\n" + "\n".join(conflicts)
-        )
+        import os
+        if not os.environ.get("OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT"):
+            raise CrossMeasureConflictError(
+                "Pre-flight check failed: the same argument is specified for "
+                "multiple measures via dotted names, creating a potential runtime "
+                "conflict:\n" + "\n".join(conflicts)
+            )
+        else:
+            log.warning(
+                "Bypassing cross-measure conflicts due to OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT:\n"
+                + "\n".join(conflicts)
+            )
 
 
 def preflight_validate_osm_paths(
