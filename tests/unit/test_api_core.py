@@ -618,3 +618,175 @@ class TestCLIArgumentChanges:
         parser = _build_parser()
         args = parser.parse_args(["serve", "--outdir", "/tmp/x", "--rate-limit", "120/minute"])
         assert args.rate_limit == "120/minute"
+
+
+class TestSampleResultFiles:
+    """Tests for per-sample result file download and delete (issue #559)."""
+
+    @pytest.fixture
+    def campaigns_base(self, tmp_path: Path) -> Path:
+        """Create a campaigns base dir with one campaign and sample result files."""
+        base = tmp_path / "campaigns"
+        base.mkdir()
+        campaign_dir = base / "test-campaign-001"
+        campaign_dir.mkdir(parents=True)
+
+        run_json = {
+            "schema_version": 1,
+            "campaign_id": "test-campaign-001",
+            "started_at": 1000.0,
+            "finished_at": 2000.0,
+            "config_summary": {"executor": "local", "n_samples": 2},
+            "steps": [
+                {"step": "RUN_OPENSTUDIO_SIM", "cache": "MISS", "elapsed_s": 10.0, "exit_code": 0}
+            ],
+            "per_sample": [
+                {"sample_id": "s0001", "status": "ok", "elapsed_s": 10.0},
+                {"sample_id": "s0002", "status": "failed", "elapsed_s": 5.0},
+            ],
+        }
+        (campaign_dir / "run.json").write_text(json.dumps(run_json))
+
+        # Create sample result files.
+        sample_dir = campaign_dir / "work" / "sim" / "s0001"
+        sample_dir.mkdir(parents=True)
+        (sample_dir / "eplusout.sql").write_bytes(b"SQLITE DATABASE CONTENT")
+        (sample_dir / "stdout.log").write_text("simulation output log")
+        (sample_dir / "eplusout.err").write_text("warning: something happened")
+        (sample_dir / "workflow.osw").write_text("workflow content")
+
+        return base
+
+    @pytest.fixture
+    def client_rw(self, campaigns_base: Path) -> TestClient:
+        """Read-write TestClient."""
+        return TestClient(create_app(campaigns_base_dir=campaigns_base, read_only=False))
+
+    @pytest.fixture
+    def client_ro(self, campaigns_base: Path) -> TestClient:
+        """Read-only TestClient."""
+        return TestClient(create_app(campaigns_base_dir=campaigns_base))
+
+    def test_download_result_file_success_sql(self, client_rw: TestClient) -> None:
+        """Download an existing .sql result file."""
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/eplusout.sql",
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/x-sqlite3"
+        assert resp.content == b"SQLITE DATABASE CONTENT"
+
+    def test_download_result_file_success_log(self, client_rw: TestClient) -> None:
+        """Download an existing .log result file."""
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/stdout.log",
+        )
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers["content-type"]
+        assert resp.text == "simulation output log"
+
+    def test_download_result_file_success_err(self, client_rw: TestClient) -> None:
+        """Download an existing .err result file."""
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/eplusout.err",
+        )
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers["content-type"]
+
+    def test_download_result_file_success_osw(self, client_rw: TestClient) -> None:
+        """Download an existing .osw result file."""
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/workflow.osw",
+        )
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers["content-type"]
+
+    def test_download_result_file_success_other_ext(self, client_rw: TestClient) -> None:
+        """Download a file with an unknown extension returns octet-stream."""
+        (
+            client_rw.app.state.campaigns_base_dir
+            / "test-campaign-001"
+            / "work"
+            / "sim"
+            / "s0001"
+            / "data.csv"
+        ).write_text("a,b")
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/data.csv",
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/octet-stream"
+
+    def test_download_result_file_not_found(self, client_rw: TestClient) -> None:
+        """404 for a missing result file."""
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/missing.sql",
+        )
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"]
+
+    def test_download_result_file_path_traversal(self, client_rw: TestClient) -> None:
+        """400 for a filename containing '..' (path traversal attempt).
+
+        Note: Starlette resolves '..' in URL paths before routing, so we
+        URL-encode the path separators to prevent that resolution.
+        """
+        # URL-encode the path separators in the traversal attempt:
+        # '../../../etc/passwd' -> '%2F%2F%2E.%2F%2E.%2Fetc%2Fpasswd'
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/%2F%2F%2E.%2F%2E.%2Fetc%2Fpasswd",
+        )
+        assert resp.status_code == 400
+        assert "path" in resp.json()["detail"].lower()
+
+    def test_download_result_file_campaign_not_found(self, client_rw: TestClient) -> None:
+        """404 for a non-existent campaign."""
+        resp = client_rw.get(
+            "/api/v1/campaigns/nonexistent-campaign/samples/s0001/results/eplusout.sql",
+        )
+        assert resp.status_code == 404
+
+    def test_download_result_file_sample_not_found(self, client_rw: TestClient) -> None:
+        """404 for a non-existent sample."""
+        resp = client_rw.get(
+            "/api/v1/campaigns/test-campaign-001/samples/s9999/results/eplusout.sql",
+        )
+        assert resp.status_code == 404
+
+    def test_delete_result_file_success(self, client_rw: TestClient) -> None:
+        """DELETE removes an existing result file and returns 204."""
+        sample_dir = (
+            client_rw.app.state.campaigns_base_dir / "test-campaign-001" / "work" / "sim" / "s0001"
+        )
+        assert (sample_dir / "eplusout.err").exists()
+
+        resp = client_rw.delete(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/eplusout.err",
+        )
+        assert resp.status_code == 204
+        assert not (sample_dir / "eplusout.err").exists()
+
+    def test_delete_result_file_not_found(self, client_rw: TestClient) -> None:
+        """DELETE returns 404 for a missing file."""
+        resp = client_rw.delete(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/missing.log",
+        )
+        assert resp.status_code == 404
+
+    def test_delete_result_file_path_traversal(self, client_rw: TestClient) -> None:
+        """DELETE returns 400 for a filename containing '..'.
+
+        Note: Starlette resolves '..' in URL paths before routing, so we
+        URL-encode the path separators to prevent that resolution.
+        """
+        resp = client_rw.delete(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/%2F%2F%2E.%2F%2E.%2Fetc%2Fpasswd",
+        )
+        assert resp.status_code == 400
+
+    def test_delete_result_file_read_only_forbidden(self, client_ro: TestClient) -> None:
+        """DELETE returns 403 in read-only mode."""
+        resp = client_ro.delete(
+            "/api/v1/campaigns/test-campaign-001/samples/s0001/results/eplusout.err",
+        )
+        assert resp.status_code == 403
