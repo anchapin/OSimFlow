@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -661,6 +662,54 @@ class OSimFlowClient:
         resp = await self._request("GET", f"/api/v1/errors/{sample_id}")
         data: dict[str, Any] = resp.json()
         return data
+
+    # ------------------------------------------------------------------
+    # Campaign artifact bundle (issue #555)
+    # ------------------------------------------------------------------
+
+    async def download_campaign(
+        self,
+        campaign_id: str,
+        output_path: Path | str,
+        *,
+        include_sql: bool = False,
+    ) -> None:
+        """``GET /api/v1/campaigns/{campaign_id}/download`` — download campaign artifact bundle.
+
+        Fetches the bundled ZIP of all campaign artifacts and saves it to
+        *output_path*.  The bundle includes ``run.json``, ``samples.json``,
+        ``aggregated_results.csv``, ``failed_simulations.csv``, per-sample
+        KPI JSONs, and PNG plot files.  When *include_sql* is ``True``,
+        ``eplusout.sql`` files from per-sample directories are also included
+        (requires the campaign was run with ``--archive_intermediates``).
+
+        Parameters
+        ----------
+        campaign_id
+            The campaign identifier (directory name under the campaigns
+            base directory, or a registry-resolved ID).
+        output_path
+            Local filesystem path where the ZIP archive will be written.
+            Parent directories are created if they do not exist.
+        include_sql
+            When ``True``, include ``eplusout.sql`` files from per-sample
+            directories.  Only set this when the campaign used
+            ``--archive_intermediates``, otherwise these files will not
+            be present in the bundle.
+        """
+        params: dict[str, Any] = {}
+        if include_sql:
+            params["include_sql"] = "1"
+        resp = await self.http_client.get(
+            f"/api/v1/campaigns/{campaign_id}/download",
+            params=params,
+            follow_redirects=True,
+        )
+        if resp.status_code >= 400:
+            self._raise_for_status(resp)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(resp.content)
 
     # ------------------------------------------------------------------
     # Pre-flight config validation (issue #398)

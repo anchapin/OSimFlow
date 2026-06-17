@@ -92,6 +92,45 @@
         }
       }
     },
+    "/api/v1/validate": {
+      "post": {
+        "summary": "Validate Config",
+        "description": "Pre-flight configuration validation (issue #398).\n\nValidates the supplied config fields without running a campaign.\nChecks:\n\n- ``variables.yml`` schema and variable definitions\n- ``template_sim_package`` structure and required files\n- OpenStudio version format\n- Sample count sanity\n- Max generations sanity\n- Script paths (custom_apply_script, custom_kpi_extractor, etc.)",
+        "operationId": "validate_config_api_v1_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaign": {
       "get": {
         "summary": "Get Campaign",
@@ -510,6 +549,50 @@
         }
       }
     },
+    "/api/v1/campaign/pause": {
+      "post": {
+        "summary": "Campaign Pause",
+        "description": "Write a ``.pause`` flag file to request campaign pause.\n\nThe campaign orchestrator checks for ``${outdir}/.pause`` during fan-out,\nwaits for in-flight work to complete, and writes a \"paused\" status\nto run.json. Unlike stop, pause allows subsequent resume.\nReturns 403 if the user lacks write permission (issue #395).",
+        "operationId": "campaign_pause_api_v1_campaign_pause_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Campaign Pause Api V1 Campaign Pause Post"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Campaign Resume",
+        "description": "Remove the ``.pause`` flag file to request campaign resume.\n\nThe campaign orchestrator detects the cleared pause condition and\ncontinues processing pending samples. Returns 403 if the user lacks\nwrite permission (issue #395).",
+        "operationId": "campaign_resume_api_v1_campaign_pause_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Campaign Resume Api V1 Campaign Pause Delete"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns": {
       "get": {
         "summary": "List Campaigns",
@@ -836,6 +919,56 @@
                 "schema": {
                   "$ref": "#/components/schemas/CampaignCancelResponse"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/download": {
+      "get": {
+        "summary": "Download Campaign Bundle",
+        "description": "Download a bundled ZIP archive of all campaign artifacts.\n\nThe bundle includes:\n- ``run.json`` \u2014 monitoring trace\n- ``samples.json`` \u2014 variable mappings\n- ``aggregated_results.csv`` \u2014 KPI table\n- ``failed_simulations.csv`` \u2014 failure summary\n- Per-sample KPI JSON files (``kpi.json`` / ``kpis.json``)\n- PNG plot files from the campaign root and ``plots/`` subdirectory\n- ``eplusout.sql`` files when ``include_sql=true`` (requires\n  ``--archive_intermediates`` during the campaign run)\n\nThe ZIP is streamed directly \u2014 no temporary files are created on\nthe server, which keeps memory usage bounded regardless of campaign\nsize.\n\nReturns a ZIP with ``Content-Disposition: attachment;\nfilename=\"campaign-{campaign_id}.zip\"``.",
+        "operationId": "download_campaign_bundle_api_v1_campaigns__campaign_id__download_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "include_sql",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run.",
+              "default": false,
+              "title": "Include Sql"
+            },
+            "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -3364,6 +3497,594 @@
         ],
         "title": "SampleSummary",
         "description": "One row in the per-sample results list."
+      },
+      "ValidateConfigRequest": {
+        "properties": {
+          "input_variables": {
+            "type": "string",
+            "title": "Input Variables",
+            "description": "Path to variables.yml"
+          },
+          "template_sim_package": {
+            "type": "string",
+            "title": "Template Sim Package",
+            "description": "Path to template simulation package"
+          },
+          "n_samples": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "N Samples",
+            "description": "Number of samples (must be >= 1)"
+          },
+          "openstudio_version": {
+            "type": "string",
+            "title": "Openstudio Version",
+            "description": "OpenStudio version string (e.g. 3.11.0)"
+          },
+          "outdir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outdir",
+            "description": "Output directory path"
+          },
+          "archive_intermediates": {
+            "type": "boolean",
+            "title": "Archive Intermediates",
+            "default": false
+          },
+          "algorithm": {
+            "type": "string",
+            "title": "Algorithm",
+            "default": "lhs"
+          },
+          "max_generations": {
+            "type": "integer",
+            "title": "Max Generations",
+            "default": 1
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          },
+          "skip_preflight": {
+            "type": "boolean",
+            "title": "Skip Preflight",
+            "default": false
+          },
+          "custom_apply_script": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Apply Script"
+          },
+          "custom_kpi_extractor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Kpi Extractor"
+          },
+          "init_script": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Init Script"
+          },
+          "finalize_script": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalize Script"
+          },
+          "weather_dir": {
+            "type": "string",
+            "title": "Weather Dir",
+            "default": "weather"
+          },
+          "project": {
+            "type": "string",
+            "title": "Project",
+            "default": ""
+          },
+          "mlflow_tracking_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Tracking Uri"
+          },
+          "redis_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redis Url"
+          },
+          "slurm_qos": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Qos"
+          },
+          "slurm_constraint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Constraint"
+          },
+          "slurm_gres": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slurm Gres"
+          },
+          "baseline": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline"
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraints"
+          },
+          "max_sample_retries": {
+            "type": "integer",
+            "title": "Max Sample Retries",
+            "default": 3
+          },
+          "offline": {
+            "type": "boolean",
+            "title": "Offline",
+            "default": false
+          },
+          "offline_bundle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offline Bundle"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "nomad_tls": {
+            "type": "boolean",
+            "title": "Nomad Tls",
+            "default": false
+          },
+          "nomad_cert": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Cert"
+          },
+          "nomad_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Key"
+          },
+          "nomad_ca_cert": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nomad Ca Cert"
+          },
+          "byos_trust_level": {
+            "type": "string",
+            "title": "Byos Trust Level",
+            "default": "subprocess"
+          },
+          "byos_resource_limits": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byos Resource Limits"
+          },
+          "observability": {
+            "type": "string",
+            "title": "Observability",
+            "default": "none"
+          },
+          "cloudwatch_namespace": {
+            "type": "string",
+            "title": "Cloudwatch Namespace",
+            "default": "OSimFlow"
+          },
+          "cloudwatch_log_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cloudwatch Log Group"
+          },
+          "log_aggregation_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Aggregation Url"
+          },
+          "prometheus_port": {
+            "type": "integer",
+            "title": "Prometheus Port",
+            "default": 9090
+          },
+          "otel_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Otel Endpoint"
+          },
+          "registry_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registry Path"
+          },
+          "task_queue": {
+            "type": "string",
+            "title": "Task Queue",
+            "default": "none"
+          },
+          "dask_scheduler_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dask Scheduler Address"
+          },
+          "result_storage_backend": {
+            "type": "string",
+            "title": "Result Storage Backend",
+            "default": "local"
+          },
+          "result_storage_bucket": {
+            "type": "string",
+            "title": "Result Storage Bucket",
+            "default": ""
+          },
+          "result_storage_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Storage Endpoint"
+          },
+          "track_costs": {
+            "type": "boolean",
+            "title": "Track Costs",
+            "default": false
+          },
+          "aws_batch_max_spot_price_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch Max Spot Price Usd"
+          },
+          "aws_batch_fallback_to_on_demand": {
+            "type": "boolean",
+            "title": "Aws Batch Fallback To On Demand",
+            "default": false
+          },
+          "aws_batch_max_retries": {
+            "type": "integer",
+            "title": "Aws Batch Max Retries",
+            "default": 3
+          },
+          "aws_batch_on_demand_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch On Demand Price"
+          },
+          "aws_batch_spot_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch Spot Price"
+          },
+          "ecr_repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ecr Repository"
+          },
+          "azure_batch_account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Azure Batch Account Name"
+          },
+          "azure_batch_account_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Azure Batch Account Url"
+          },
+          "azure_batch_pool_id": {
+            "type": "string",
+            "title": "Azure Batch Pool Id",
+            "default": "osimflow-pool"
+          },
+          "azure_batch_location": {
+            "type": "string",
+            "title": "Azure Batch Location",
+            "default": "eastus"
+          },
+          "azure_use_spot": {
+            "type": "boolean",
+            "title": "Azure Use Spot",
+            "default": false
+          },
+          "azure_fallback_to_on_demand": {
+            "type": "boolean",
+            "title": "Azure Fallback To On Demand",
+            "default": false
+          },
+          "azure_max_retries": {
+            "type": "integer",
+            "title": "Azure Max Retries",
+            "default": 3
+          },
+          "google_batch_project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Batch Project Id"
+          },
+          "google_batch_region": {
+            "type": "string",
+            "title": "Google Batch Region",
+            "default": "us-central1"
+          },
+          "google_batch_service_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Batch Service Account"
+          },
+          "google_use_spot": {
+            "type": "boolean",
+            "title": "Google Use Spot",
+            "default": false
+          },
+          "google_fallback_to_on_demand": {
+            "type": "boolean",
+            "title": "Google Fallback To On Demand",
+            "default": false
+          },
+          "google_max_retries": {
+            "type": "integer",
+            "title": "Google Max Retries",
+            "default": 3
+          },
+          "slurm_cost_per_node_hour": {
+            "type": "number",
+            "title": "Slurm Cost Per Node Hour",
+            "default": 0.1
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_variables",
+          "template_sim_package",
+          "n_samples",
+          "openstudio_version"
+        ],
+        "title": "ValidateConfigRequest",
+        "description": "Request body for ``POST /api/v1/validate``."
+      },
+      "ValidateConfigResponse": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid",
+            "description": "True when all validation checks passed"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors",
+            "description": "Critical validation errors"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "description": "Non-critical warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid"
+        ],
+        "title": "ValidateConfigResponse",
+        "description": "Response for ``POST /api/v1/validate``."
       },
       "ValidationError": {
         "properties": {
