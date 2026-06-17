@@ -497,6 +497,102 @@ class TestParseObjectiveAndConstraints:
         # The parsing populates internal state. Verify it didn't raise.
         assert cfg is not None
 
+    def test_objective_target_and_scaling_factor_parsed(
+        self, tmp_path: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """GAP-020: objective section with target and scaling_factor is parsed correctly."""
+        vyml = tmp_path / "variables.yml"
+        vyml.write_text(
+            yaml.dump(
+                {
+                    "variables": [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}],
+                    "objective": {
+                        "name": "eui",
+                        "direction": "minimize",
+                        "weight": 1.0,
+                        "target": 100.0,
+                        "scaling_factor": 0.5,
+                    },
+                }
+            )
+        )
+        args = _base_args(vyml, template_pkg, outdir)
+        cfg = load_config(args)
+        assert cfg.objective is not None
+        assert cfg.objective["target"] == 100.0
+        assert cfg.objective["scaling_factor"] == 0.5
+
+    def test_objective_target_optional(
+        self, tmp_path: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """GAP-020: target is optional and defaults to None."""
+        vyml = tmp_path / "variables.yml"
+        vyml.write_text(
+            yaml.dump(
+                {
+                    "variables": [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}],
+                    "objective": {
+                        "name": "eui",
+                        "direction": "minimize",
+                        "weight": 1.0,
+                        "scaling_factor": 1.0,
+                    },
+                }
+            )
+        )
+        args = _base_args(vyml, template_pkg, outdir)
+        cfg = load_config(args)
+        assert cfg.objective is not None
+        assert cfg.objective["target"] is None
+        assert cfg.objective["scaling_factor"] == 1.0
+
+    def test_objective_scaling_factor_optional(
+        self, tmp_path: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """GAP-020: scaling_factor is optional and defaults to None."""
+        vyml = tmp_path / "variables.yml"
+        vyml.write_text(
+            yaml.dump(
+                {
+                    "variables": [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}],
+                    "objective": {
+                        "name": "eui",
+                        "direction": "maximize",
+                        "weight": 2.0,
+                        "target": 50.0,
+                    },
+                }
+            )
+        )
+        args = _base_args(vyml, template_pkg, outdir)
+        cfg = load_config(args)
+        assert cfg.objective is not None
+        assert cfg.objective["target"] == 50.0
+        assert cfg.objective["scaling_factor"] is None
+
+    def test_objective_neither_target_nor_scaling_factor(
+        self, tmp_path: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """GAP-020: neither target nor scaling_factor defaults to None for backward compat."""
+        vyml = tmp_path / "variables.yml"
+        vyml.write_text(
+            yaml.dump(
+                {
+                    "variables": [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}],
+                    "objective": {
+                        "name": "eui",
+                        "direction": "minimize",
+                        "weight": 1.0,
+                    },
+                }
+            )
+        )
+        args = _base_args(vyml, template_pkg, outdir)
+        cfg = load_config(args)
+        assert cfg.objective is not None
+        assert cfg.objective["target"] is None
+        assert cfg.objective["scaling_factor"] is None
+
     def test_constraints_section_parsed(
         self, tmp_path: Path, template_pkg: Path, outdir: Path
     ) -> None:
