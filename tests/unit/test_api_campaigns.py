@@ -938,3 +938,174 @@ class TestBackwardCompatibility:
     def test_legacy_health(self, client_no_base: TestClient) -> None:
         resp = client_no_base.get("/health")
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/samples/batch_upload
+# ---------------------------------------------------------------------------
+
+
+class TestBatchUploadSamples:
+    """Tests for batch sample upload (issue #552)."""
+
+    def test_batch_upload_success(self, client_rw: TestClient, campaigns_base: Path) -> None:
+        """Valid batch upload adds samples to run.json per_sample list."""
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/batch_upload",
+            json={
+                "samples": [
+                    {"values": {"wall_r": 2.5, "window_shgc": 0.4}},
+                    {"values": {"wall_r": 3.0, "window_shgc": 0.3}, "kpi_values": {"eui": 120.5}},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["campaign_id"] == "campaign-aaa"
+        assert data["added"] == 2
+        assert len(data["sample_ids"]) == 2
+        # Verify run.json was updated
+        import json
+
+        run_json = json.loads((campaigns_base / "campaign-aaa" / "run.json").read_text())
+        assert len(run_json["per_sample"]) == 4  # 2 original + 2 new
+
+    def test_batch_upload_read_only_forbidden(self, client_ro: TestClient) -> None:
+        """Read-only clients get 403."""
+        resp = client_ro.post(
+            "/api/v1/campaigns/campaign-aaa/samples/batch_upload",
+            json={"samples": [{"values": {"x": 1}}]},
+        )
+        assert resp.status_code == 403
+
+    def test_batch_upload_unknown_campaign_404(self, client_rw: TestClient) -> None:
+        """Unknown campaign returns 404."""
+        resp = client_rw.post(
+            "/api/v1/campaigns/nonexistent/samples/batch_upload",
+            json={"samples": [{"values": {"x": 1}}]},
+        )
+        assert resp.status_code == 404
+
+    def test_batch_upload_empty_samples_422(self, client_rw: TestClient) -> None:
+        """Empty samples list is rejected with 422."""
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/batch_upload",
+            json={"samples": []},
+        )
+        assert resp.status_code == 422
+
+    def test_batch_upload_no_run_json_404(self, client_rw: TestClient, campaigns_base: Path) -> None:
+        """Campaign without run.json returns 404."""
+        # Create a campaign dir without run.json
+        (campaigns_base / "no-run").mkdir()
+        resp = client_rw.post(
+            "/api/v1/campaigns/no-run/samples/batch_upload",
+            json={"samples": [{"values": {"x": 1}}]},
+        )
+        assert resp.status_code == 404
+
+    def test_batch_upload_updates_summary(self, client_rw: TestClient, campaigns_base: Path) -> None:
+        """Summary n_samples is updated after batch upload."""
+        import json
+
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/batch_upload",
+            json={"samples": [{"values": {"x": 1}}]},
+        )
+        assert resp.status_code == 200
+        run_json = json.loads((campaigns_base / "campaign-aaa" / "run.json").read_text())
+        assert run_json["summary"]["n_samples"] == 3
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/samples/{sample_id}/requeue
+# ---------------------------------------------------------------------------
+
+
+class TestRequeueSample:
+    """Tests for per-sample requeue (issue #552)."""
+
+    def test_requeue_completed_sample(self, client_rw: TestClient) -> None:
+        """Requeueing a completed sample creates a new pending sample."""
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/s0/requeue",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["campaign_id"] == "campaign-aaa"
+        assert data["original_sample_id"] == "s0"
+        assert data["new_sample_id"] == "s0_reanalyze_1"
+        assert data["status"] == "pending"
+
+    def test_requeue_failed_sample(self, client_rw: TestClient) -> None:
+        """Requeueing a failed sample creates a new pending sample."""
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-bbb/samples/s0/requeue",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["new_sample_id"] == "s0_reanalyze_1"
+
+    def test_requeue_read_only_forbidden(self, client_ro: TestClient) -> None:
+        """Read-only clients get 403."""
+        resp = client_ro.post("/api/v1/campaigns/campaign-aaa/samples/s0/requeue")
+        assert resp.status_code == 403
+
+    def test_requeue_unknown_sample_404(self, client_rw: TestClient) -> None:
+        """Unknown sample returns 404."""
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/nonexistent/requeue",
+        )
+        assert resp.status_code == 404
+
+    def test_requeue_unknown_campaign_404(self, client_rw: TestClient) -> None:
+        """Unknown campaign returns 404."""
+        resp = client_rw.post(
+            "/api/v1/campaigns/nonexistent/samples/s0/requeue",
+        )
+        assert resp.status_code == 404
+
+    def test_requeue_running_sample_422(self, client_rw: TestClient, campaigns_base: Path) -> None:
+        """Running sample cannot be requeued."""
+        import json
+
+        # Modify campaign-bbb's s0 to have "running" status
+        cdir = campaigns_base / "campaign-bbb"
+        data = json.loads((cdir / "run.json").read_text())
+        data["per_sample"][0]["status"] = "running"
+        (cdir / "run.json").write_text(json.dumps(data))
+
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-bbb/samples/s0/requeue",
+        )
+        assert resp.status_code == 422
+        assert "running" in resp.json()["detail"]
+
+    def test_requeue_increments_count(self, client_rw: TestClient) -> None:
+        """Multiple requeues of the same sample increment the suffix."""
+        resp1 = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/s0/requeue",
+        )
+        assert resp1.status_code == 200
+        assert resp1.json()["new_sample_id"] == "s0_reanalyze_1"
+
+        resp2 = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/s0/requeue",
+        )
+        assert resp2.status_code == 200
+        assert resp2.json()["new_sample_id"] == "s0_reanalyze_2"
+
+    def test_requeue_updates_run_json(self, client_rw: TestClient, campaigns_base: Path) -> None:
+        """Requeue updates run.json per_sample and summary."""
+        import json
+
+        resp = client_rw.post(
+            "/api/v1/campaigns/campaign-aaa/samples/s0/requeue",
+        )
+        assert resp.status_code == 200
+
+        run_json = json.loads((campaigns_base / "campaign-aaa" / "run.json").read_text())
+        # Should have original s0, s1 + new s0_reanalyze_1
+        sample_ids = [s["sample_id"] for s in run_json["per_sample"]]
+        assert "s0_reanalyze_1" in sample_ids
+        assert run_json["summary"]["n_samples"] == 3

@@ -556,3 +556,80 @@ class ErrorDiagnosisResponse(BaseModel):
         default=None, description="Error severity: critical | high | medium | low"
     )
     log_path: str | None = Field(default=None, description="Path to the eplusout.err file")
+
+
+# ---------------------------------------------------------------------------
+# Batch sample upload (issue #552)
+# ---------------------------------------------------------------------------
+
+
+class BatchUploadSampleItem(BaseModel):
+    """One sample in a batch upload request.
+
+    Each item describes a pre-generated datapoint to add to the campaign.
+    A new unique ``sample_id`` is assigned to each entry on the server side.
+    """
+
+    values: dict[str, Any] = Field(
+        description="Dictionary of variable name → value mappings for this sample"
+    )
+    kpi_values: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional pre-computed KPI values for this sample (e.g. for re-upload after external processing)",
+    )
+    generation: int | None = Field(
+        default=None,
+        description="Optional generation number for iterative algorithms (default: 1)",
+    )
+
+
+class BatchUploadRequest(BaseModel):
+    """Request body for ``POST /api/v1/campaigns/{campaign_id}/samples/batch_upload``.
+
+    Accepts a JSON array of sample data. Each sample must provide a ``values``
+    dict; ``kpi_values`` and ``generation`` are optional.
+
+    Example::
+
+        {
+          "samples": [
+            {"values": {"wall_r": 2.5, "window_shgc": 0.4}},
+            {"values": {"wall_r": 3.0, "window_shgc": 0.3}, "kpi_values": {"eui": 120.5}}
+          ]
+        }
+    """
+
+    samples: list[BatchUploadSampleItem] = Field(
+        min_length=1,
+        description="One or more pre-generated samples to add to the campaign",
+    )
+
+
+class BatchUploadResponse(BaseModel):
+    """Response for a successful batch upload."""
+
+    campaign_id: str = Field(description="Campaign identifier")
+    added: int = Field(description="Number of samples successfully added")
+    sample_ids: list[str] = Field(
+        description="Newly assigned sample IDs for the uploaded samples (in order)"
+    )
+    detail: str = Field(
+        description="Human-readable summary of the operation"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-sample requeue (issue #552)
+# ---------------------------------------------------------------------------
+
+
+class SampleRequeueResponse(BaseModel):
+    """Response for requeueing a completed or failed sample."""
+
+    campaign_id: str = Field(description="Campaign identifier")
+    original_sample_id: str = Field(description="The sample that was requeued")
+    new_sample_id: str = Field(
+        description="Newly created sample ID pending re-run"
+    )
+    status: str = Field(description="Status of the new sample: pending")
+    detail: str = Field(description="Human-readable summary of the operation")
