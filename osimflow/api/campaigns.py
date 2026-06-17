@@ -18,12 +18,16 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import io
 import json
 import logging
 import threading
 import time
 import uuid
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -38,14 +42,14 @@ from osimflow.api.schemas import (
     BatchUploadRequest,
     BatchUploadResponse,
     CampaignCancelResponse,
-    CampaignPauseResponse,
-    CampaignResumeResponse,
     CampaignComparisonEntry,
     CampaignComparisonResponse,
     CampaignCreateRequest,
     CampaignCreateResponse,
     CampaignDetailResponse,
     CampaignListResponse,
+    CampaignPauseResponse,
+    CampaignResumeResponse,
     CampaignSummary,
     CompareCampaignsPostRequest,
     KpiComparisonRow,
@@ -1112,9 +1116,43 @@ async def resume_campaign(
 # ---------------------------------------------------------------------------
 
 # Files included in the bundle (evaluated at request time).
-_BUNDLE_ROOT_FILES = frozenset({"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"})
+_BUNDLE_ROOT_FILES = frozenset(
+    {"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"}
+)
 _BUNDLE_PLOT_GLOB = "*.png"
 _BUNDLE_SQL_GLOB = "eplusout.sql"
+
+
+def _iter_sample_files(
+    sim_dir: Path,
+    file_names: tuple[str, ...],
+    archive_prefix: str,
+) -> tuple[tuple[str, Path], ...]:
+    """Yield (archive_path, file_path) for each existing file in sample dirs."""
+    results: list[tuple[str, Path]] = []
+    for sample_dir in sim_dir.iterdir():
+        if not sample_dir.is_dir():
+            continue
+        for file_name in file_names:
+            file_path = sample_dir / file_name
+            if file_path.is_file():
+                rel = f"{archive_prefix}/{sample_dir.name}/{file_name}"
+                results.append((rel, file_path))
+    return tuple(results)
+
+
+def _iter_plot_files(
+    directory: Path, glob_pattern: str, archive_prefix: str = ""
+) -> tuple[tuple[str, Path], ...]:
+    """Yield (archive_path, file_path) for plot files in directory."""
+    results: list[tuple[str, Path]] = []
+    if not directory.is_dir():
+        return tuple(results)
+    for plot_file in directory.glob(glob_pattern):
+        if plot_file.is_file():
+            name = f"{archive_prefix}/{plot_file.name}" if archive_prefix else plot_file.name
+            results.append((name, plot_file))
+    return tuple(results)
 
 
 def _iter_campaign_bundle(
@@ -1128,47 +1166,33 @@ def _iter_campaign_bundle(
     Skips missing files silently.  Per-sample KPI JSONs and plot files
     are discovered by glob.
     """
+    results: list[tuple[str, Path]] = []
+
     # Root-level artifacts
     for name in _BUNDLE_ROOT_FILES:
         f = campaign_dir / name
         if f.is_file():
-            yield (name, f)
+            results.append((name, f))
 
     # Per-sample KPI JSONs
     work_dir = campaign_dir / "work"
     sim_dir = work_dir / "sim"
     if sim_dir.is_dir():
-        for sample_dir in sim_dir.iterdir():
-            if not sample_dir.is_dir():
-                continue
-            for kpi_name in ("kpi.json", "kpis.json"):
-                kpi_file = sample_dir / kpi_name
-                if kpi_file.is_file():
-                    rel = f"samples/{sample_dir.name}/{kpi_name}"
-                    yield (rel, kpi_file)
+        results.extend(_iter_sample_files(sim_dir, ("kpi.json", "kpis.json"), "samples"))
 
-    # Plot files — campaign root
+    # Plot files — campaign root (excluding run.json)
     for plot_file in campaign_dir.glob(_BUNDLE_PLOT_GLOB):
         if plot_file.is_file() and plot_file.name != "run.json":
-            yield (plot_file.name, plot_file)
+            results.append((plot_file.name, plot_file))
+
     # Plot files — plots/ subdirectory
-    plots_dir = campaign_dir / "plots"
-    if plots_dir.is_dir():
-        for plot_file in plots_dir.glob(_BUNDLE_PLOT_GLOB):
-            if plot_file.is_file():
-                yield (f"plots/{plot_file.name}", plot_file)
+    results.extend(_iter_plot_files(campaign_dir / "plots", _BUNDLE_PLOT_GLOB, "plots"))
 
     # Per-sample eplusout.sql (only when --archive_intermediates was used)
     if include_sql and work_dir.is_dir():
-        sim_dir = work_dir / "sim"
-        if sim_dir.is_dir():
-            for sample_dir in sim_dir.iterdir():
-                if not sample_dir.is_dir():
-                    continue
-                sql_file = sample_dir / _BUNDLE_SQL_GLOB
-                if sql_file.is_file():
-                    rel = f"samples/{sample_dir.name}/{_BUNDLE_SQL_GLOB}"
-                    yield (rel, sql_file)
+        results.extend(_iter_sample_files(sim_dir, (_BUNDLE_SQL_GLOB,), "samples"))
+
+    return tuple(results)
 
 
 @campaigns_router.get("/api/v1/campaigns/{campaign_id}/download")
@@ -1200,12 +1224,6 @@ async def download_campaign_bundle(
     """
     base = _campaigns_base_dir(request)
     campaign_dir = _campaign_dir_from_id(base, campaign_id)
-
-    import io
-    import zipfile
-
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
 
     safe_name = "".join(c for c in campaign_id if c.isalnum() or c in ("-", "_"))
     archive_name = f"campaign-{safe_name}.zip"

@@ -43,8 +43,12 @@ def tmp_campaign_dir(tmp_path: Path) -> Path:
     }
     (campaign_dir / "run.json").write_text(json.dumps(run_json))
     (campaign_dir / "samples.json").write_text(json.dumps({"variables": []}))
-    (campaign_dir / "aggregated_results.csv").write_text("sample_id,kpi_eui\nsample-000,120.5\nsample-001,118.2\nsample-002,nan")
-    (campaign_dir / "failed_simulations.csv").write_text("sample_id,error\nsample-002, Severe  Convergence failure")
+    (campaign_dir / "aggregated_results.csv").write_text(
+        "sample_id,kpi_eui\nsample-000,120.5\nsample-001,118.2\nsample-002,nan"
+    )
+    (campaign_dir / "failed_simulations.csv").write_text(
+        "sample_id,error\nsample-002, Severe  Convergence failure"
+    )
     # Per-sample KPI files
     work_dir = campaign_dir / "work" / "sim"
     (work_dir / "sample-000").mkdir(parents=True)
@@ -115,9 +119,7 @@ class TestCampaignDownloadEndpoint:
         resp = client.get("/api/v1/campaigns/nonexistent-campaign/download")
         assert resp.status_code == 404
 
-    def test_download_include_sql_false(
-        self, client: TestClient, tmp_campaign_dir: Path
-    ) -> None:
+    def test_download_include_sql_false(self, client: TestClient, tmp_campaign_dir: Path) -> None:
         # Create a fake eplusout.sql to verify it's NOT included by default
         work_dir = tmp_campaign_dir / "work" / "sim" / "sample-000"
         (work_dir / "eplusout.sql").write_text("fake sql content")
@@ -128,9 +130,7 @@ class TestCampaignDownloadEndpoint:
             names = zf.namelist()
         assert "samples/sample-000/eplusout.sql" not in names
 
-    def test_download_include_sql_true(
-        self, client: TestClient, tmp_campaign_dir: Path
-    ) -> None:
+    def test_download_include_sql_true(self, client: TestClient, tmp_campaign_dir: Path) -> None:
         # Create a fake eplusout.sql to verify it IS included when requested
         work_dir = tmp_campaign_dir / "work" / "sim" / "sample-000"
         (work_dir / "eplusout.sql").write_text("fake sql content")
@@ -151,9 +151,7 @@ class TestCampaignDownloadEndpoint:
         zip_bytes = resp.content
         assert int(resp.headers["content-length"]) == len(zip_bytes)
 
-    def test_download_campaign_id_sanitization(
-        self, tmp_campaign_dir: Path
-    ) -> None:
+    def test_download_campaign_id_sanitization(self, tmp_campaign_dir: Path) -> None:
         """Campaign IDs with traversal characters are rejected with 400."""
         # Create a campaign directory with a "suspicious" name containing ..
         special_dir = tmp_campaign_dir.parent / "campaign-abc..123"
@@ -179,7 +177,7 @@ class TestCampaignDownloadClientMethod:
     @pytest.mark.asyncio
     async def test_download_campaign_saves_zip(self, tmp_path: Path) -> None:
         pytest.importorskip("httpx")
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
 
         from osimflow.client import OSimFlowClient
 

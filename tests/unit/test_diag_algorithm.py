@@ -86,7 +86,9 @@ class TestDiagAlgorithm:
     ) -> None:
         algo = DiagAlgorithm()
         n_samples = 4
-        result = algo.generate_samples(two_var_variables, n_samples=n_samples, seed=42, outdir=tmp_path)
+        result = algo.generate_samples(
+            two_var_variables, n_samples=n_samples, seed=42, outdir=tmp_path
+        )
         with result.open() as f:
             data = json.load(f)
         assert len(data["samples"]) == n_samples * 2
@@ -109,7 +111,9 @@ class TestDiagAlgorithm:
     ) -> None:
         algo = DiagAlgorithm()
         n_samples = 3
-        result = algo.generate_samples(two_var_variables, n_samples=n_samples, seed=456, outdir=tmp_path)
+        result = algo.generate_samples(
+            two_var_variables, n_samples=n_samples, seed=456, outdir=tmp_path
+        )
         with result.open() as f:
             data = json.load(f)
         baseline_x = _baseline_value(two_var_variables["variables"][0])
@@ -121,9 +125,7 @@ class TestDiagAlgorithm:
             if vals["y"] != baseline_y:
                 assert vals["x"] == baseline_x
 
-    def test_triangular_distribution_sampling(
-        self, tmp_path: pytest.TempPathFactory
-    ) -> None:
+    def test_triangular_distribution_sampling(self, tmp_path: pytest.TempPathFactory) -> None:
         algo = DiagAlgorithm()
         variables = {
             "variables": [
@@ -189,9 +191,7 @@ class TestDiagAlgorithm:
         assert data["experiment_type"] == "diagonal"
         assert all("sample_id" in s for s in data["samples"])
 
-    def test_all_variables_get_varied_eventually(
-        self, tmp_path: pytest.TempPathFactory
-    ) -> None:
+    def test_all_variables_get_varied_eventually(self, tmp_path: pytest.TempPathFactory) -> None:
         algo = DiagAlgorithm()
         variables = {
             "variables": [
@@ -211,9 +211,7 @@ class TestDiagAlgorithm:
         varied_c = any(s["values"]["c"] != baseline_c for s in data["samples"])
         assert varied_a and varied_b and varied_c
 
-    def test_sample_ids_are_sequential(
-        self, tmp_path: pytest.TempPathFactory
-    ) -> None:
+    def test_sample_ids_are_sequential(self, tmp_path: pytest.TempPathFactory) -> None:
         algo = DiagAlgorithm()
         variables = {
             "variables": [

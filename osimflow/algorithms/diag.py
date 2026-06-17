@@ -123,16 +123,12 @@ class DiagAlgorithm(BaseAlgorithm):
                     other_name = other_def["name"]
                     if j == var_idx:
                         u = rng.random()
-                        values[other_name] = _apply_distribution(
-                            u, dist_name, params
-                        )
+                        values[other_name] = _apply_distribution(u, dist_name, params)
                     else:
                         values[other_name] = _baseline_value(other_def)
 
                 sample_counter += 1
-                samples.append(
-                    {"sample_id": f"{sample_counter:04d}", "values": values}
-                )
+                samples.append({"sample_id": f"{sample_counter:04d}", "values": values})
 
         if conditional_vars:
             _resolve_conditional(samples, conditional_vars, len(samples))
@@ -144,8 +140,7 @@ class DiagAlgorithm(BaseAlgorithm):
         samples_path.write_text(json.dumps(payload, indent=2))
 
         log.info(
-            "DiagAlgorithm generated %d sample points "
-            "(%d variables × %d samples/variable)",
+            "DiagAlgorithm generated %d sample points (%d variables × %d samples/variable)",
             len(samples),
             len(independent_vars),
             n_samples,
