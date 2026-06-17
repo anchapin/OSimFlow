@@ -257,7 +257,7 @@ class CrossRunAggregator:
             self.aggregate()
 
         df = self._combined_df
-        if df.empty:
+        if df is None or df.empty:
             return {}
 
         kpi_cols = [
@@ -273,6 +273,7 @@ class CrossRunAggregator:
         ]
 
         # Filter to numeric columns only
+        assert df is not None
         numeric_cols = [c for c in kpi_cols if pd.api.types.is_numeric_dtype(df[c])]
 
         self._cross_run_stats.clear()
