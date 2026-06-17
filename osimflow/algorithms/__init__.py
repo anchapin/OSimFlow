@@ -6,8 +6,8 @@ built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
 ``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``IslandModelGAAlgorithm``,
 ``NSGA2Algorithm``, ``PSOAlgorithm``,
-``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
-``RandomSamplingAlgorithm`` implementations.
+``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``,
+``RandomSamplingAlgorithm``, and ``SequentialSearchAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:
 
@@ -714,6 +714,12 @@ from osimflow.algorithms.calibration import (  # noqa: E402
 )
 
 AlgorithmRegistry.register("calibration", BM25CalibrationAlgorithm)
+
+from osimflow.algorithms.sequential_search import (  # noqa: E402
+    SequentialSearchAlgorithm,
+)
+
+AlgorithmRegistry.register("sequential_search", SequentialSearchAlgorithm)
 
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)

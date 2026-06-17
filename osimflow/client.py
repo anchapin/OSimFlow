@@ -69,6 +69,9 @@ __all__ = [
     "SampleCounts",
     "ValidateConfigRequest",
     "ValidateConfigResponse",
+    "VariableBatchUpdateItem",
+    "VariableBatchUpdateError",
+    "VariableBatchUpdateResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -365,6 +368,59 @@ class ValidateConfigResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class VariableBatchUpdateItem(BaseModel):
+    """One item in a batch variable update request."""
+
+    name: str
+    rename_to: str | None = None
+    distribution: str | None = None
+    description: str | None = None
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableBatchUpdateError(BaseModel):
+    """Error detail for a single failed variable update in a batch."""
+
+    name: str
+    error: str
+
+
+class VariableDetailResponse(BaseModel):
+    """Full variable detail returned by ``GET /api/v1/variables/{name}``."""
+
+    name: str
+    distribution: str
+    description: str | None = None
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableBatchUpdateResponse(BaseModel):
+    """Response from ``POST /api/v1/variables/batch_update``."""
+
+    updated: list[VariableDetailResponse] = Field(default_factory=list)
+    errors: list[VariableBatchUpdateError] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
@@ -614,6 +670,40 @@ class OSimFlowClient:
         return resp.text
 
     # ------------------------------------------------------------------
+    # Per-sample result files (issue #559)
+    # ------------------------------------------------------------------
+
+    async def download_sample_result_file(
+        self,
+        campaign_id: str,
+        sample_id: str,
+        filename: str,
+    ) -> httpx.Response:
+        """``GET /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}`` — download a result file.
+
+        Returns the raw :class:`httpx.Response` so callers can access ``.content``
+        directly.  Content-type is determined by the file extension:
+        ``.sql`` → ``application/x-sqlite3``, ``.err``/``.log``/``.osw`` →
+        ``text/plain; charset=utf-8``, everything else → ``application/octet-stream``.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}"
+        resp = await self._request("GET", path)
+        return resp
+
+    async def delete_sample_result_file(
+        self,
+        campaign_id: str,
+        sample_id: str,
+        filename: str,
+    ) -> None:
+        """``DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}`` — delete a result file.
+
+        Requires the server to have write permission enabled.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}"
+        await self._request("DELETE", path)
+
+    # ------------------------------------------------------------------
     # Results & failures
     # ------------------------------------------------------------------
 
@@ -756,3 +846,37 @@ class OSimFlowClient:
                 elif line.startswith("data:"):
                     data_lines.append(line[len("data:") :].strip())
                 # Ignore comments (lines starting with ':') and other fields
+
+    # ------------------------------------------------------------------
+    # Variable management (issue #557)
+    # ------------------------------------------------------------------
+
+    async def batch_update_variables(
+        self,
+        variables: list[VariableBatchUpdateItem],
+    ) -> VariableBatchUpdateResponse:
+        """``POST /api/v1/variables/batch_update`` — atomic batch variable update.
+
+        Updates multiple variables atomically.  All variables are validated
+        before any are updated.  If any variable is invalid, the entire batch
+        is rejected with error details for each failed variable.
+
+        Parameters
+        ----------
+        variables
+            List of variable update items, each with ``name`` and the fields
+            to update.
+
+        Returns
+        -------
+        VariableBatchUpdateResponse
+            ``updated`` contains successfully updated variables.
+            ``errors`` contains error details for failed updates.
+        """
+        body = {"variables": [v.model_dump(mode="json") for v in variables]}
+        resp = await self._request(
+            "POST",
+            "/api/v1/variables/batch_update",
+            json_body=body,
+        )
+        return VariableBatchUpdateResponse.model_validate(resp.json())
