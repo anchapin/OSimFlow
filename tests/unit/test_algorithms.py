@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 import scipy.stats
 
@@ -818,3 +819,259 @@ class TestRandomSamplingAlgorithm:
         }
         with pytest.raises(NotImplementedError):
             algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# SequentialSearchAlgorithm
+# ---------------------------------------------------------------------------
+
+from osimflow.algorithms.sequential_search import (  # noqa: E402
+    SequentialSearchAlgorithm,
+    _build_grid_samples,
+    _extract_bounds,
+)
+
+
+class TestBuildGridSamples:
+    """Tests for _build_grid_samples helper."""
+
+    def test_full_range_grid(self) -> None:
+        bounds = [(0.0, 10.0), (0.0, 1.0)]
+        var_names = ["x", "y"]
+        samples = _build_grid_samples(bounds, var_names, n_points_per_dim=3, center=None)
+        assert len(samples) == 9  # 3x3 grid
+        for s in samples:
+            assert "x" in s["values"]
+            assert "y" in s["values"]
+            assert 0.0 <= s["values"]["x"] <= 10.0
+            assert 0.0 <= s["values"]["y"] <= 1.0
+
+    def test_adaptive_grid_around_center(self) -> None:
+        bounds = [(0.0, 10.0)]
+        var_names = ["x"]
+        center = np.array([5.0])
+        samples = _build_grid_samples(
+            bounds, var_names, n_points_per_dim=3, center=center, radius_frac=0.5
+        )
+        # radius_frac=0.5 means 50% of range = 5.0, so grid should be in [0.0, 10.0]
+        # (still within bounds because center is at 5.0 and radius is 5)
+        assert len(samples) == 3
+        for s in samples:
+            assert 0.0 <= s["values"]["x"] <= 10.0
+
+    def test_adaptive_grid_clipped_to_bounds(self) -> None:
+        bounds = [(0.0, 10.0)]
+        var_names = ["x"]
+        center = np.array([9.0])  # Near upper bound
+        samples = _build_grid_samples(
+            bounds, var_names, n_points_per_dim=3, center=center, radius_frac=0.5
+        )
+        # radius=5, center=9, range would be [4, 14] but clips to [0, 10]
+        for s in samples:
+            assert 0.0 <= s["values"]["x"] <= 10.0
+
+    def test_empty_bounds(self) -> None:
+        samples = _build_grid_samples([], [], n_points_per_dim=3)
+        assert samples == []
+
+    def test_single_point_grid(self) -> None:
+        bounds = [(0.0, 10.0)]
+        var_names = ["x"]
+        samples = _build_grid_samples(bounds, var_names, n_points_per_dim=1, center=None)
+        assert len(samples) == 1
+        assert samples[0]["values"]["x"] == pytest.approx(5.0)
+
+
+class TestExtractBounds:
+    """Tests for _extract_bounds helper."""
+
+    def test_uniform(self) -> None:
+        vars = [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(0.0, 10.0)]
+
+    def test_normal(self) -> None:
+        vars = [{"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(2.0, 8.0)]  # ±3σ
+
+    def test_lognormal(self) -> None:
+        vars = [{"name": "x", "distribution": "lognormal", "mean": 0.0, "sigma": 0.5}]
+        bounds = _extract_bounds(vars)
+        assert len(bounds) == 1
+        lo, hi = bounds[0]
+        assert lo > 0  # lognormal bounds must be positive
+
+    def test_triangular(self) -> None:
+        vars = [{"name": "x", "distribution": "triangular", "min": 0.0, "max": 10.0}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(0.0, 10.0)]
+
+    def test_fallback(self) -> None:
+        vars = [{"name": "x", "distribution": "discrete", "values": [1, 2, 3]}]
+        bounds = _extract_bounds(vars)
+        assert bounds == [(0.0, 1.0)]
+
+
+class TestSequentialSearchAlgorithm:
+    """Tests for the SequentialSearchAlgorithm (issue #550, GAP-006)."""
+
+    def test_name(self) -> None:
+        algo = SequentialSearchAlgorithm()
+        assert algo.name() == "sequential_search"
+
+    def test_is_iterative_false_by_default(self) -> None:
+        """Non-adaptive SequentialSearch is single-shot."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        assert algo.is_iterative() is False
+
+    def test_is_iterative_true_when_adaptive(self) -> None:
+        """Adaptive SequentialSearch is iterative."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=True, n_iterations=3)
+        assert algo.is_iterative() is True
+
+    def test_is_converged_non_adaptive(self) -> None:
+        """Non-adaptive mode always returns True (single-shot)."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        assert algo.is_converged([]) is True
+        assert algo.is_converged([{"samples": []}]) is True
+
+    def test_is_converged_adaptive_not_converged(self) -> None:
+        """Adaptive mode with no improvement returns False."""
+        algo = SequentialSearchAlgorithm(
+            adaptive_sampling=True, n_iterations=3, convergence_threshold=1e-3
+        )
+        # Simulate history with results
+        algo._best_value = 100.0
+        algo._prev_best = 100.0
+        algo._iteration = 1
+        assert algo.is_converged([{"samples": []}]) is True  # 0% change < threshold
+
+    def test_observe_non_adaptive_returns_last_samples(self) -> None:
+        """Non-adaptive observe() returns the last history entry's samples."""
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        history = [{"samples": [{"sample_id": "s0001"}]}]
+        result = algo.observe(history)
+        assert result == [{"sample_id": "s0001"}]
+
+    def test_observe_empty_history_adaptive_returns_empty(self) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=True, n_iterations=3)
+        assert algo.observe([]) == []
+
+    def test_generate_samples_creates_file(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
+                {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=9, seed=42, outdir=tmp_path)
+        assert result.exists()
+        data = json.loads(result.read_text())
+        assert "samples" in data
+        # grid_points=3 (default) × grid_points=3 = 9 samples
+        assert len(data["samples"]) == 9
+        for sample in data["samples"]:
+            assert "sample_id" in sample
+            assert "values" in sample
+            assert "x" in sample["values"]
+            assert "y" in sample["values"]
+            assert 0.0 <= sample["values"]["x"] <= 10.0
+            assert -5.0 <= sample["values"]["y"] <= 5.0
+
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_generate_samples_custom_grid_points(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False, grid_points=4)
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) == 4
+
+    def test_generate_samples_reproducible(self, tmp_path: Path) -> None:
+        algo = SequentialSearchAlgorithm(adaptive_sampling=False)
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            ]
+        }
+        r1 = algo.generate_samples(variables, n_samples=3, seed=99, outdir=tmp_path / "a")
+        r2 = algo.generate_samples(variables, n_samples=3, seed=99, outdir=tmp_path / "b")
+        assert json.loads(r1.read_text()) == json.loads(r2.read_text())
+
+    def test_n_iterations_validation(self) -> None:
+        with pytest.raises(ValueError, match="n_iterations must be >= 1"):
+            SequentialSearchAlgorithm(n_iterations=0)
+
+    def test_adaptive_sampling_convergence(self, tmp_path: Path) -> None:
+        """Adaptive mode converges when improvement drops below threshold."""
+        algo = SequentialSearchAlgorithm(
+            adaptive_sampling=True,
+            n_iterations=10,
+            convergence_threshold=1e-3,
+            grid_points=2,
+        )
+        # Simulate: iteration 1, prev=100, curr=100.5 (0.5% change > 0.1%)
+        algo._iteration = 1
+        algo._prev_best = 100.0
+        algo._best_value = 100.5
+        assert algo.is_converged([{"samples": []}]) is False
+
+        # Simulate: iteration 1, prev=100, curr=100.0005 (0.0005% change < 0.1%)
+        algo._prev_best = 100.0
+        algo._best_value = 100.0005
+        assert algo.is_converged([{"samples": []}]) is True
+
+    def test_adaptive_sampling_exhausted_iterations(self, tmp_path: Path) -> None:
+        """Adaptive mode stops proposing new samples after n_iterations."""
+        algo = SequentialSearchAlgorithm(
+            adaptive_sampling=True,
+            n_iterations=3,
+            grid_points=2,
+        )
+        algo._iteration = 0
+        algo._best_params = np.array([5.0])
+        algo._best_value = 50.0
+
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
+            ]
+        }
+        # First call: iteration 0, generates initial grid
+        result1 = algo.generate_samples(variables, n_samples=2, seed=42, outdir=tmp_path)
+        data1 = json.loads(result1.read_text())
+        assert len(data1["samples"]) == 2
+
+        # Create KPI files so observe() has valid results to process.
+        kpi_files: list[str] = []
+        for sample in data1["samples"]:
+            kpi_path = tmp_path / f"kpi_{sample['sample_id']}.json"
+            kpi_path.write_text(json.dumps({"kpis": {"eui": 50.0}}))
+            kpi_files.append(str(kpi_path))
+
+        # Simulate observe: updates iteration to 1, proposes next grid
+        history1 = [{"samples": data1["samples"], "kpi_files": kpi_files}]
+        algo.observe(history1)
+        assert algo._iteration == 1
+
+        # After 3 iterations (0, 1, 2), the next observe should return empty
+        algo._iteration = 3  # exhausted
+        result = algo.observe(history1)
+        assert result == []
+
+    def test_registry_lookup(self) -> None:
+        """SequentialSearchAlgorithm is registered in AlgorithmRegistry."""
+        available = AlgorithmRegistry.list_available()
+        assert "sequential_search" in available
+        algo = AlgorithmRegistry.get("sequential_search")
+        assert isinstance(algo, SequentialSearchAlgorithm)
