@@ -2842,7 +2842,7 @@ def _cmd_export_results(args: argparse.Namespace) -> int:
     if args.outdirs:
         outdirs = [o.strip() for o in args.outdirs.split(",") if o.strip()]
 
-    return export_results_cli(
+    return export_results_cli(  # type: ignore[no-any-return]
         campaign_ids=campaign_ids,
         outdirs=outdirs,
         filter_expr=args.filter_expr,
