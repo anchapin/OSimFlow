@@ -17,13 +17,8 @@ CampaignCostSummary
 from __future__ import annotations
 
 import dataclasses
-import time
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .storage import ResultStorage, build_result_storage
-
 import logging
+import time
 
 log = logging.getLogger(__name__)
 
@@ -293,7 +288,7 @@ def build_cost_tracker(
     aws_on_demand_per_vcpu_hour: float = DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
     aws_spot_per_vcpu_hour: float = DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
     slurm_cost_per_node_hour: float = DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
-) -> "CostTracker | None":
+) -> CostTracker | None:
     """Factory: build a CostTracker if cost tracking is enabled.
 
     Parameters
@@ -327,25 +322,9 @@ def build_cost_tracker(
     if not track_costs:
         return None
 
-    from .storage import ResultStorage, build_result_storage
-
-    storage: ResultStorage | None = None
-    if result_storage_backend != "local":
-        try:
-            storage = build_result_storage(
-                backend=result_storage_backend,
-                bucket=result_storage_bucket,
-                prefix=result_storage_prefix,
-                endpoint_url=result_storage_endpoint,
-            )
-        except Exception as exc:
-            log.warning("could not build ResultStorage for cost tracking: %s", exc, exc_info=True)
-
     return CostTracker(
-        campaign_id=campaign_id,
-        executor_type=executor_type,
-        result_storage=storage,
-        aws_on_demand_per_vcpu_hour=aws_on_demand_per_vcpu_hour,
-        aws_spot_per_vcpu_hour=aws_spot_per_vcpu_hour,
-        slurm_cost_per_node_hour=slurm_cost_per_node_hour,
+        n_samples=0,  # n_samples set separately via n_samples property
+        executor=executor_type,
+        on_demand_price=aws_on_demand_per_vcpu_hour,
+        spot_price=aws_spot_per_vcpu_hour,
     )

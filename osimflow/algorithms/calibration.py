@@ -425,7 +425,9 @@ class CalibrationAlgorithm(BaseAlgorithm):
                 seed,
             )
         except (ValueError, NotImplementedError) as exc:
-            raise RuntimeError("generate_calibration_samples failed: initial LHS population") from exc
+            raise RuntimeError(
+                "generate_calibration_samples failed: initial LHS population"
+            ) from exc
 
         samples_path.write_text(json.dumps({"samples": samples}, indent=2))
         log.info("Calibration generated %d initial samples", len(samples))
@@ -539,7 +541,8 @@ class CalibrationAlgorithm(BaseAlgorithm):
             return self._best_value == 0.0
 
         relative_change = abs(self._best_value - self._prev_best) / abs(self._prev_best)
-        converged = relative_change < self._tol
+        # ASHRAE 14: ≤ threshold is converged; small eps handles floating-point noise
+        converged = relative_change <= self._tol * (1 + 1e-12)
         if converged:
             log.info(
                 "Calibration converged: relative change %.6f < tol %.6f",

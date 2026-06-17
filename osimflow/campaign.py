@@ -307,7 +307,7 @@ class Campaign:
                 )
 
         # Cost tracking (issue #447). Built here so the correct backend is
-        # always used.  None when track_costs is False (zero overhead).
+        # always used.  None when enable_cost_tracking is False (zero overhead).
         self._cost_tracker = build_cost_tracker(
             campaign_id=self.trace.campaign_id,
             executor_type=executor.name,
@@ -315,10 +315,10 @@ class Campaign:
             result_storage_bucket=cfg.result_storage_bucket,
             result_storage_prefix=str(cfg.outdir.name),
             result_storage_endpoint=cfg.result_storage_endpoint,
-            track_costs=cfg.track_costs,
-            aws_on_demand_per_vcpu_hour=cfg.aws_on_demand_per_vcpu_hour,
-            aws_spot_per_vcpu_hour=cfg.aws_spot_per_vcpu_hour,
-            slurm_cost_per_node_hour=cfg.slurm_cost_per_node_hour,
+            track_costs=cfg.enable_cost_tracking,
+            aws_on_demand_per_vcpu_hour=cfg.cost_on_demand_price,
+            aws_spot_per_vcpu_hour=cfg.cost_spot_price,
+            slurm_cost_per_node_hour=getattr(cfg, "slurm_cost_per_node_hour", 0.0),
         )
 
         # Graceful shutdown (issue #255): cancellation flag and lock.
@@ -848,34 +848,18 @@ class Campaign:
                 with contextlib.suppress(Exception, concurrent.futures.CancelledError):
                     future.result()
 
-    def _record_costs(self, step_name: str) -> None:
-        """Record per-sample costs from the completed *step_name* fan-out.
+    def _record_costs(self, step_name: str, cost_usd: float, spot_savings_usd: float) -> None:
+        """Record per-step aggregated costs from the completed fan-out.
 
         This is called after each ``_submit_and_await_all`` for the three
         fan-out steps (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS).
-        The cost data (``cost_usd``, ``billed_duration_seconds``) is sourced
-        from ``_sample_state``, populated by the step's ``_on_success``
-        callback when the executor sets these attributes on the Handle.
 
         When ``self._cost_tracker`` is None (cost tracking disabled), this
         is a no-op.
         """
         if self._cost_tracker is None:
             return
-        for sid, state in self._sample_state.items():
-            cost_usd = state.get("cost_usd")
-            billed_secs = state.get("billed_duration_seconds")
-            if cost_usd is None and billed_secs is None:
-                continue
-            resource_usage: dict[str, float] = {}
-            if billed_secs is not None:
-                resource_usage["billed_duration_seconds"] = float(billed_secs)
-            if cost_usd is not None:
-                resource_usage["cost_usd"] = float(cost_usd)
-            estimate = self._cost_tracker._cost_model.estimate(resource_usage)  # type: ignore[attr-defined]
-            self._cost_tracker.record_sample(sid, estimate)
-        step_cost = sum(est.estimated_cost_usd for est in self._cost_tracker._sample_costs.values())
-        self._cost_tracker.record_step(step_name, step_cost)
+        self._cost_tracker.record_actual(step_name, cost_usd, spot_savings_usd)
 
     def _finalize_costs(self) -> None:
         """Build and persist the campaign cost summary.
@@ -885,11 +869,11 @@ class Campaign:
         if self._cost_tracker is None:
             return
         try:
-            path = self._cost_tracker.persist()
-            if path:
-                log.info("campaign cost summary written to %s", path)
+            summary = self._cost_tracker.finalize()
+            self.trace.cost_summary = summary.to_dict()
+            log.info("campaign cost summary written to run.json")
         except Exception as exc:
-            log.warning("could not persist cost summary: %s", exc, exc_info=True)
+            log.warning("could not finalize cost summary: %s", exc, exc_info=True)
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
@@ -1676,8 +1660,15 @@ class Campaign:
         self.cfg = dataclasses.replace(self.cfg, n_samples=1)
         log.info("DRY RUN: overriding n_samples from %d to 1", original_n)
 
-        algo = AlgorithmRegistry.get(self.cfg.algorithm)
-        algo.configure(self.cfg)
+        # Build algorithm kwargs (issue #529: R-NSGA-II support)
+        algo_kwargs: dict[str, Any] = {}
+        if self.cfg.algorithm == "nsga2":
+            if self.cfg.nsga2_reference_points is not None:
+                algo_kwargs["ref_points"] = self.cfg.nsga2_reference_points
+            if self.cfg.nsga2_reference_directions is not None:
+                algo_kwargs["ref_dirs"] = self.cfg.nsga2_reference_directions
+
+        algo = AlgorithmRegistry.get(self.cfg.algorithm, **algo_kwargs)
         samples: list[SampleSpec] = self.step_generate_samples(algo)
         self.cfg.samples_file.parent.mkdir(parents=True, exist_ok=True)
         self.cfg.samples_file.write_text(json.dumps({"samples": samples}, indent=2))
@@ -1778,8 +1769,15 @@ class Campaign:
         if self.cfg.max_generations < 1:
             raise ValueError(f"max_generations must be >= 1, got {self.cfg.max_generations}")
 
-        algo = AlgorithmRegistry.get(self.cfg.algorithm)
-        algo.configure(self.cfg)
+        # Build algorithm kwargs (issue #529: R-NSGA-II support)
+        algo_kwargs: dict[str, Any] = {}
+        if self.cfg.algorithm == "nsga2":
+            if self.cfg.nsga2_reference_points is not None:
+                algo_kwargs["ref_points"] = self.cfg.nsga2_reference_points
+            if self.cfg.nsga2_reference_directions is not None:
+                algo_kwargs["ref_dirs"] = self.cfg.nsga2_reference_directions
+
+        algo = AlgorithmRegistry.get(self.cfg.algorithm, **algo_kwargs)
 
         # History accumulator: one dict per generation.
         history: list[dict[str, Any]] = []
@@ -2620,7 +2618,12 @@ class Campaign:
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
-        self._record_costs("APPLY_PARAMETERS")
+        total_cost = sum(
+            float(str(_v)) if _v is not None else 0.0
+            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        )
+        total_savings = 0.0
+        self._record_costs("APPLY_PARAMETERS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
@@ -2889,7 +2892,12 @@ class Campaign:
             recovery_manager=recovery_manager,
             resubmit_callback=resubmit_callback,
         )
-        self._record_costs("RUN_OPENSTUDIO_SIM")
+        total_cost = sum(
+            float(str(_v)) if _v is not None else 0.0
+            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        )
+        total_savings = 0.0
+        self._record_costs("RUN_OPENSTUDIO_SIM", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():
@@ -3021,7 +3029,12 @@ class Campaign:
 
         # --- Phase 3: await all results concurrently ---
         self._submit_and_await_all(submissions, "EXTRACT_KPIS")
-        self._record_costs("EXTRACT_KPIS")
+        total_cost = sum(
+            float(str(_v)) if _v is not None else 0.0
+            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        )
+        total_savings = 0.0
+        self._record_costs("EXTRACT_KPIS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
         for _sid, ctx in pending.items():

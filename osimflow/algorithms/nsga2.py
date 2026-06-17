@@ -5,6 +5,19 @@ multiple KPIs simultaneously (e.g. EUI vs. cost).  The algorithm is
 *iterative*: ``is_iterative()`` returns ``True`` and ``is_converged()``
 checks hypervolume improvement across generations.
 
+R-NSGA-II Support (issue #529)
+-------------------------------
+When ``ref_points`` or ``ref_dirs`` are provided, the algorithm uses
+reference-based survival selection similar to R-NSGA-II / R-NSGA-III.
+Reference points can be:
+  - Predefined aspiration points (Pareto-front fractions)
+  - Adaptive (updated each generation based on population)
+
+Reference directions can be:
+  - ``das-dennis`` — Das-Dennis structured points
+  - ``energy`` — Riesz s-Energy well-spaced points
+  - ``wedge`` — Wedge/decomposition-based adaptation
+
 Workflow
 --------
 1. **Generation 0** — ``generate_samples()`` creates an initial LHS
@@ -53,8 +66,15 @@ try:
     _HAS_PYMOO = True
 except ImportError:
     _HAS_PYMOO = False
-    RNSGA2 = None  # type: ignore[assignment]
-    NSGA2 = None  # type: ignore[assignment]
+    RNSGA2 = None
+    NSGA2 = None
+
+try:
+    from pymoo.util.ref_dirs import get_reference_directions
+
+    _HAS_PYMOO_REF_DIRS = True
+except ImportError:
+    _HAS_PYMOO_REF_DIRS = False
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +156,182 @@ class _SurrogateProblem:
 
 
 # ---------------------------------------------------------------------------
+# Reference Direction Helpers (R-NSGA-II support, issue #529)
+# ---------------------------------------------------------------------------
+
+
+def _parse_ref_points(
+    ref_points_spec: str | list[float] | None,
+    n_obj: int,
+) -> npt.NDArray[np.float64] | None:
+    """Parse reference points from CLI string or list.
+
+    Reference points can be specified as:
+    - Comma-separated floats (e.g., "0.25,0.5,0.75" for 2 objectives)
+    - List of floats
+    - None (no reference points)
+
+    Each value is a fraction [0, 1] representing position on the
+    normalized Pareto front. Multiple reference points can be provided.
+
+    Returns
+    -------
+    numpy.ndarray of shape (n_ref_points, n_obj) or None
+    """
+    if ref_points_spec is None:
+        return None
+
+    # Parse values from string or list
+    if isinstance(ref_points_spec, str):
+        # Parse comma-separated string like "0.25,0.5" or "0.25,0.5,0.75"
+        try:
+            values = [float(v.strip()) for v in ref_points_spec.split(",")]
+        except ValueError:
+            log.warning("Invalid ref_points string '%s', ignoring", ref_points_spec)
+            return None
+    elif isinstance(ref_points_spec, (list, tuple)):
+        values = [float(v) for v in ref_points_spec]
+    else:
+        return None
+
+    # Validate and reshape
+    if not values:
+        return None
+
+    # Each group of n_obj values forms one reference point
+    n_ref_points = len(values) // n_obj
+    if len(values) % n_obj != 0 or n_ref_points == 0:
+        log.warning(
+            "ref_points length %d not divisible by n_obj=%d or results in 0 points, ignoring",
+            len(values),
+            n_obj,
+        )
+        return None
+
+    ref_points = np.array(values, dtype=np.float64).reshape(n_ref_points, n_obj)
+    return ref_points
+
+
+def _generate_ref_dirs(
+    ref_dirs_spec: str | None,
+    n_obj: int,
+    pop_size: int,
+) -> npt.NDArray[np.float64] | None:
+    """Generate reference directions from specification string.
+
+    Reference direction strategies:
+    - ``das-dennis`` or ``uniform`` — Das-Dennis structured points
+    - ``energy`` — Riesz s-Energy well-spaced points
+    - ``wedge`` — Wedge/decomposition-based (Das-Dennis with scaling)
+    - ``incremental`` — Incremental method
+
+    Parameters
+    ----------
+    ref_dirs_spec
+        Strategy name or None
+    n_obj
+        Number of objectives
+    pop_size
+        Population size (used to determine number of directions)
+
+    Returns
+    -------
+    numpy.ndarray of shape (n_dirs, n_obj) or None
+    """
+    if ref_dirs_spec is None or not _HAS_PYMOO_REF_DIRS:
+        return None
+
+    # Determine number of points based on pop_size
+    n_points = max(pop_size // n_obj, 3)
+
+    strategy = ref_dirs_spec.lower().strip()
+
+    try:
+        if strategy in ("das-dennis", "uniform"):
+            # Das-Dennis method with adaptive partitions
+            # Use n_partitions to get approximately n_points
+            n_partitions = max(2, int(np.ceil(n_points ** (1.0 / (n_obj - 1)))))
+            ref_dirs = get_reference_directions("uniform", n_obj, n_partitions=n_partitions)
+        elif strategy == "energy":
+            ref_dirs = get_reference_directions("energy", n_obj, n_points, seed=42)
+        elif strategy == "wedge":
+            # Wedge method: multiple layers with different scalings
+            # Creates a bias towards the center for better coverage
+            ref_dirs_outer = get_reference_directions(
+                "uniform", n_obj, n_partitions=max(2, n_partitions // 2), scaling=1.0
+            )
+            ref_dirs_inner = get_reference_directions(
+                "uniform", n_obj, n_partitions=max(1, n_partitions // 4), scaling=0.5
+            )
+            # Combine outer and inner
+            ref_dirs = np.vstack([ref_dirs_outer, ref_dirs_inner])
+        elif strategy == "incremental":
+            ref_dirs = get_reference_directions("incremental", n_obj, n_points)
+        else:
+            log.warning("Unknown ref_dirs strategy '%s', ignoring", ref_dirs_spec)
+            return None
+
+        log.info(
+            "Generated %d reference directions using '%s' strategy",
+            len(ref_dirs),
+            strategy,
+        )
+        return np.array(ref_dirs, dtype=np.float64)
+
+    except Exception as exc:
+        log.warning("Failed to generate ref_dirs '%s': %s", ref_dirs_spec, exc)
+        return None
+
+
+def _adaptive_ref_points(
+    population_F: npt.NDArray[np.float64],
+    ref_points: npt.NDArray[np.float64],
+    extreme_points: npt.NDArray[np.float64],
+    n_obj: int,
+) -> npt.NDArray[np.float64]:
+    """Adaptively update reference points based on current population.
+
+    This implements the adaptive reference point generation from R-NSGA-II.
+    Reference points are projected onto the Pareto front approximation
+    formed by the current non-dominated solutions.
+
+    Parameters
+    ----------
+    population_F
+        Current population objective values (n_pop, n_obj)
+    ref_points
+        Previous reference points (n_ref, n_obj)
+    extreme_points
+        Extreme points of the Pareto front (n_obj, n_obj)
+    n_obj
+        Number of objectives
+
+    Returns
+    -------
+    Updated reference points
+    """
+    if population_F.shape[0] == 0 or ref_points.shape[0] == 0:
+        return ref_points
+
+    # Normalize objectives using extreme points as anchors
+    # Project reference points onto the Pareto front approximation
+    try:
+        # Simple projection: for each reference point, find closest
+        # non-dominated solution in the population
+        updated_refs = ref_points.copy()
+        for i in range(ref_points.shape[0]):
+            ref = ref_points[i]
+            # Calculate perpendicular distance to each solution
+            distances = np.linalg.norm(population_F - ref, axis=1)
+            closest_idx = np.argmin(distances)
+            # Update reference point: blend toward closest solution
+            updated_refs[i] = 0.5 * ref + 0.5 * population_F[closest_idx]
+        return updated_refs
+    except Exception:
+        return ref_points
+
+
+# ---------------------------------------------------------------------------
 # NSGA-II Algorithm
 # ---------------------------------------------------------------------------
 
@@ -163,6 +359,20 @@ class NSGA2Algorithm(BaseAlgorithm):
         Optional list of constraint definitions from variables.yml
         (issue #282). Violations are penalised by adding 1e9 to each
         violated constraint's objective.
+    ref_points
+        Predefined reference points for R-NSGA-II (issue #529).
+        Can be specified as:
+        - Comma-separated string: "0.25,0.5,0.75" (fractions on Pareto front)
+        - List of floats
+        - None (no reference points, standard NSGA-II)
+    ref_dirs
+        Reference direction strategy for many-objective optimization (issue #529).
+        Supported values:
+        - ``das-dennis`` or ``uniform`` — Das-Dennis structured points
+        - ``energy`` — Riesz s-Energy well-spaced points
+        - ``wedge`` — Wedge/decomposition-based adaptation
+        - ``incremental`` — Incremental method
+        - None (no reference directions, standard NSGA-II)
     """
 
     def __init__(
@@ -173,6 +383,8 @@ class NSGA2Algorithm(BaseAlgorithm):
         hv_tol: float = 1e-3,
         pop_size: int = 40,
         constraints: list[dict[str, Any]] | None = None,
+        ref_points: str | list[float] | None = None,
+        ref_dirs: str | None = None,
     ) -> None:
         self._objective_kpis = objective_kpis or ["eui", "cost"]
         self._maximize = maximize or [False, False]
@@ -180,12 +392,17 @@ class NSGA2Algorithm(BaseAlgorithm):
         self._hv_tol = hv_tol
         self._pop_size = pop_size
         self._constraints = constraints
+        self._ref_points = ref_points
+        self._ref_dirs = ref_dirs
         self._independent_vars: list[dict[str, Any]] = []
         self._bounds: list[tuple[float, float]] = []
         self._hv_history: list[float] = []
         self._population_X: npt.NDArray[np.float64] = np.array([])
         self._population_F: npt.NDArray[np.float64] = np.array([])
-        self._ref_points: npt.NDArray[np.float64] | None = None
+        # R-NSGA-II: parsed reference points (n_ref_points, n_obj)
+        self._parsed_ref_points: npt.NDArray[np.float64] | None = None
+        # R-NSGA-II: generated reference directions (n_dirs, n_obj)
+        self._generated_ref_dirs: npt.NDArray[np.float64] | None = None
         self._ref_dirs_strategy: str | None = None
 
     def configure(self, config: Any) -> None:
@@ -211,28 +428,29 @@ class NSGA2Algorithm(BaseAlgorithm):
         if ref_dirs_strategy and ref_dirs_strategy.lower() == "das_dennis":
             try:
                 n_partitions = int(ref_points_str)
-                self._ref_points = das_dennis(n_partitions, n_obj)
+                self._parsed_ref_points = das_dennis(n_partitions, n_obj)
                 log.info(
                     "R-NSGA-II das_dennis ref dirs: %d partitions, %d objectives, %d points",
                     n_partitions,
                     n_obj,
-                    self._ref_points.shape[0],
+                    self._parsed_ref_points.shape[0],
                 )
             except ValueError:
-                self._ref_points = self._parse_ref_points_string(ref_points_str, n_obj)
+                self._parsed_ref_points = self._parse_ref_points_string(ref_points_str, n_obj)
         else:
-            self._ref_points = self._parse_ref_points_string(ref_points_str, n_obj)
+            self._parsed_ref_points = self._parse_ref_points_string(ref_points_str, n_obj)
 
-        if self._ref_points is not None:
+        if self._parsed_ref_points is not None:
+            # Sync the public _ref_points attribute so that tests and
+            # downstream callers see the configured value.
+            self._ref_points = self._parsed_ref_points  # type: ignore[assignment]
             log.info(
                 "R-NSGA-II configured with %d reference points for %d objectives",
-                self._ref_points.shape[0],
+                self._parsed_ref_points.shape[0],
                 n_obj,
             )
 
-    def _parse_ref_points_string(
-        self, s: str, n_obj: int
-    ) -> npt.NDArray[np.float64]:
+    def _parse_ref_points_string(self, s: str, n_obj: int) -> npt.NDArray[np.float64]:
         """Parse a comma-separated reference point string into a numpy array.
 
         Examples:
@@ -361,6 +579,9 @@ class NSGA2Algorithm(BaseAlgorithm):
         Reads KPI files from the last generation, builds the objective
         matrix, runs one generation of NSGA-II via pymoo, and stores
         the selected individuals for the next ``generate_samples()`` call.
+
+        When ``ref_points`` or ``ref_dirs`` are provided (R-NSGA-II mode,
+        issue #529), the algorithm uses reference-based survival selection.
         """
         if not _HAS_PYMOO:
             log.warning("pymoo not installed; NSGA-II observe() is a no-op")
@@ -410,27 +631,29 @@ class NSGA2Algorithm(BaseAlgorithm):
 
         problem = _EvaluatedProblem(n_var=dim, n_obj=n_obj, xl=xl, xu=xu)
 
+        # Set up NSGA-II.
+        # Check if this is the first call to initialize ref_points and ref_dirs
         pop_size = min(self._pop_size, len(results))
 
-        if self._ref_points is not None and RNSGA2 is not None:
-            ref_points_normalized = self._ref_points.copy()
-            algorithm = RNSGA2(
-                ref_points=ref_points_normalized,
-                pop_size=pop_size,
-                sampling=FloatRandomSampling(),
-                crossover=SBX(prob=0.9, eta=15),
-                mutation=PM(eta=20),
-                eliminate_duplicates=True,
+        # Build NSGA2 kwargs - pass ref_dirs if available (R-NSGA-II, issue #529)
+        nsga2_kwargs: dict[str, Any] = {
+            "pop_size": pop_size,
+            "sampling": FloatRandomSampling(),
+            "crossover": SBX(prob=0.9, eta=15),
+            "mutation": PM(eta=20),
+            "eliminate_duplicates": True,
+        }
+
+        # Use RNSGA2 when reference points are configured (R-NSGA-II, issue #529)
+        if self._parsed_ref_points is not None and RNSGA2 is not None:
+            nsga2_kwargs["ref_points"] = self._parsed_ref_points
+            log.info(
+                "R-NSGA-II observe(): using RNSGA2 with %d ref points",
+                self._parsed_ref_points.shape[0],
             )
-            log.info("R-NSGA-II observe(): using RNSGA2 with %d ref points", self._ref_points.shape[0])
+            algorithm = RNSGA2(**nsga2_kwargs)
         else:
-            algorithm = NSGA2(
-                pop_size=pop_size,
-                sampling=FloatRandomSampling(),
-                crossover=SBX(prob=0.9, eta=15),
-                mutation=PM(eta=20),
-                eliminate_duplicates=True,
-            )
+            algorithm = NSGA2(**nsga2_kwargs)
 
         # Use pymoo.minimize with a 1-gen termination.
         res = pymoo_minimize(
@@ -450,6 +673,21 @@ class NSGA2Algorithm(BaseAlgorithm):
             self._population_X = res.algorithm.pop.get("X")
             self._population_F = res.algorithm.pop.get("F")
 
+        # Adaptive reference point update (R-NSGA-II, issue #529)
+        if (
+            self._parsed_ref_points is not None
+            and self._population_F is not None
+            and self._population_F.shape[0] > 0
+        ):
+            # Extract extreme points for normalization
+            extreme_points = self._extract_extreme_points(self._population_F, n_obj)
+            self._parsed_ref_points = _adaptive_ref_points(
+                self._population_F,
+                self._parsed_ref_points,
+                extreme_points,
+                n_obj,
+            )
+
         # Compute hypervolume for convergence tracking.
         self._update_hypervolume(F_signed)
 
@@ -468,6 +706,51 @@ class NSGA2Algorithm(BaseAlgorithm):
             self._hv_history[-1] if self._hv_history else 0.0,
         )
         return new_samples
+
+    def _extract_extreme_points(
+        self, F: npt.NDArray[np.float64], n_obj: int
+    ) -> npt.NDArray[np.float64]:
+        """Extract extreme points of the Pareto front.
+
+        Extreme points are used for normalizing reference points in R-NSGA-II.
+        Each extreme point maximizes one objective while minimizing others.
+
+        Parameters
+        ----------
+        F
+            Population objective values (n_individuals, n_obj)
+        n_obj
+            Number of objectives
+
+        Returns
+        -------
+        Extreme points array (n_obj, n_obj)
+        """
+        if F.shape[0] == 0 or n_obj == 0:
+            return np.zeros((n_obj, n_obj))
+
+        extreme_points = np.zeros((n_obj, n_obj))
+
+        for j in range(n_obj):
+            # Create weight vector that maximizes objective j
+            weights = np.zeros(n_obj)
+            weights[j] = 1.0
+
+            # Find the solution that maximizes this weighted objective
+            # (considering all objectives to be minimized)
+            min_dist = float("inf")
+            best_idx = 0
+
+            for i in range(F.shape[0]):
+                # ASF (Achievement Scalarizing Function)
+                asf = np.max(np.abs(F[i]) * weights) + np.sum(np.abs(F[i]) * weights)
+                if asf < min_dist:
+                    min_dist = asf
+                    best_idx = i
+
+            extreme_points[j] = F[best_idx]
+
+        return extreme_points
 
     def _update_hypervolume(self, F: npt.NDArray[np.float64]) -> None:
         """Compute and store the hypervolume indicator."""

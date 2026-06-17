@@ -696,20 +696,22 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--nsga2-reference-points",
         default=None,
         help=(
-            "R-NSGA-II reference points (issue #529). "
-            "Comma-separated fractions along the Pareto front (e.g., '0.25,0.5,0.75'). "
-            "When set, the NSGA2Algorithm uses pymoo's R-NSGA-II with these reference points "
-            "instead of standard crowding distance. Only used when --algorithm is 'nsga2'."
+            "Reference points for R-NSGA-II (issue #529). "
+            "Comma-separated fractions representing aspiration points on the "
+            "Pareto front, e.g., '0.25,0.5,0.75' for 2 objectives. "
+            "Only used when --algorithm is 'nsga2'."
         ),
     )
     run.add_argument(
         "--nsga2-reference-directions",
         default=None,
         help=(
-            "R-NSGA-II reference direction generation strategy (issue #529). "
-            "Supported values: 'das_dennis' (Das-Dennis decomposition), 'wedge' (wedge pattern), "
-            "'adaptive' (adaptive reference point update during evolution). "
-            "Only used when --algorithm is 'nsga2' and --nsga2-reference-points is set."
+            "Reference direction strategy for R-NSGA-II (issue #529). "
+            "Supported values: 'das-dennis' (Das-Dennis structured points), "
+            "'energy' (Riesz s-Energy well-spaced points), "
+            "'wedge' (wedge/decomposition-based), "
+            "'incremental' (incremental method). "
+            "Only used when --algorithm is 'nsga2'."
         ),
     )
     run.add_argument(

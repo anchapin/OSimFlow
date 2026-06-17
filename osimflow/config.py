@@ -526,6 +526,13 @@ class CampaignConfig:
     # During objective evaluation, constraint violations are penalised with
     # a large positive value (1e9) added to the objective.
     constraints: list[dict[str, object]] | None = None
+    # R-NSGA-II reference points (issue #529). Comma-separated fractions
+    # representing aspiration points on the Pareto front, e.g.,
+    # "0.25,0.5,0.75" for 2 objectives. Only used with --algorithm nsga2.
+    nsga2_reference_points: str | None = None
+    # R-NSGA-II reference direction strategy (issue #529). Supported:
+    # das-dennis, energy, wedge, incremental. Only used with --algorithm nsga2.
+    nsga2_reference_directions: str | None = None
     # Per-sample retry configuration (issue #252).
     # max_sample_retries: maximum retry attempts for transient per-sample
     # failures (network timeout, resource contention, etc.). A value of 0
@@ -601,6 +608,8 @@ class CampaignConfig:
     # Spot price per vCPU-hour for cost estimation. Default $0.03/vCPU·h
     # (40% savings vs on-demand).
     cost_spot_price: float = 0.03
+    # Slurm cost per node-hour for cost estimation. Default $0.0 (free).
+    slurm_cost_per_node_hour: float = 0.0
     # Alert rules YAML file path (issue #438). When set, custom alert rules
     # are loaded from this file in addition to the built-in rules.
     alert_rules: Path | None = None
@@ -637,6 +646,7 @@ class CampaignConfig:
     # "das_dennis" (Das-Dennis decomposition), "wedge" (wedge pattern),
     # "adaptive" (adaptive update during evolution).
     nsga2_ref_dirs_strategy: str | None = None
+
     @property
     def work_dir(self) -> Path:
         return self.outdir / "work"
@@ -897,6 +907,14 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         registry_path=(Path(str(args["registry"])).resolve() if args.get("registry") else None),
         objective=objective,
         constraints=constraints,
+        nsga2_reference_points=(
+            str(args["nsga2_reference_points"]) if args.get("nsga2_reference_points") else None
+        ),
+        nsga2_reference_directions=(
+            str(args["nsga2_reference_directions"])
+            if args.get("nsga2_reference_directions")
+            else None
+        ),
         max_sample_retries=int(str(args.get("max_sample_retries", 3))),
         offline=bool(args.get("offline", False)),
         offline_bundle=(
@@ -942,5 +960,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             else None
         ),
         nsga2_ref_points=str(args["nsga2_ref_points"]) if args.get("nsga2_ref_points") else None,
-        nsga2_ref_dirs_strategy=str(args["nsga2_ref_dirs_strategy"]) if args.get("nsga2_ref_dirs_strategy") else None,
+        nsga2_ref_dirs_strategy=str(args["nsga2_ref_dirs_strategy"])
+        if args.get("nsga2_ref_dirs_strategy")
+        else None,
     )

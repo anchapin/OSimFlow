@@ -263,8 +263,17 @@ class AlgorithmRegistry:
         log.debug("registered algorithm %s -> %s", name, algo_cls.__qualname__)
 
     @classmethod
-    def get(cls, name: str) -> BaseAlgorithm:
+    def get(cls, name: str, **kwargs: Any) -> BaseAlgorithm:
         """Instantiate and return the algorithm registered under *name*.
+
+        Parameters
+        ----------
+        name
+            Algorithm name to look up.
+        **kwargs
+            Additional keyword arguments passed to the algorithm constructor.
+            Useful for algorithm-specific parameters like NSGA2's
+            ``ref_points`` and ``ref_dirs`` (issue #529).
 
         Raises
         ------
@@ -275,7 +284,7 @@ class AlgorithmRegistry:
         if name not in cls._registry:
             available = ", ".join(sorted(cls._registry)) or "(none)"
             raise ValueError(f"unknown algorithm '{name}'. Available algorithms: {available}")
-        return cls._registry[name]()
+        return cls._registry[name](**kwargs)
 
     @classmethod
     def list_available(cls) -> list[str]:
@@ -689,6 +698,12 @@ AlgorithmRegistry.register("custom", CustomDOEAlgorithm)
 from osimflow.algorithms.uq import UncertaintyQuantification  # noqa: E402
 
 AlgorithmRegistry.register("uq", UncertaintyQuantification)
+
+from osimflow.algorithms.calibration import (  # noqa: E402
+    BM25CalibrationAlgorithm,
+)
+
+AlgorithmRegistry.register("calibration", BM25CalibrationAlgorithm)
 
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)
