@@ -614,6 +614,40 @@ class OSimFlowClient:
         return resp.text
 
     # ------------------------------------------------------------------
+    # Per-sample result files (issue #559)
+    # ------------------------------------------------------------------
+
+    async def download_sample_result_file(
+        self,
+        campaign_id: str,
+        sample_id: str,
+        filename: str,
+    ) -> httpx.Response:
+        """``GET /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}`` — download a result file.
+
+        Returns the raw :class:`httpx.Response` so callers can access ``.content``
+        directly.  Content-type is determined by the file extension:
+        ``.sql`` → ``application/x-sqlite3``, ``.err``/``.log``/``.osw`` →
+        ``text/plain; charset=utf-8``, everything else → ``application/octet-stream``.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}"
+        resp = await self._request("GET", path)
+        return resp
+
+    async def delete_sample_result_file(
+        self,
+        campaign_id: str,
+        sample_id: str,
+        filename: str,
+    ) -> None:
+        """``DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}`` — delete a result file.
+
+        Requires the server to have write permission enabled.
+        """
+        path = f"/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}"
+        await self._request("DELETE", path)
+
+    # ------------------------------------------------------------------
     # Results & failures
     # ------------------------------------------------------------------
 
