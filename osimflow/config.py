@@ -564,6 +564,25 @@ class CampaignConfig:
     # NomadExecutor uses HTTPS to connect to the Nomad cluster. The
     # nomad_cert, nomad_key, and nomad_ca_cert fields specify client
     # certificate, key, and CA certificate paths for mTLS authentication.
+    # Nomad scale-control wiring (nomad-scale-cli-config):
+    # - dispatch policy controls whether submit() uses direct jobs or dispatch API.
+    # - allocation resolution timeout controls how long to wait for EvalID -> Allocation ID.
+    # - polling controls the backoff window for allocation terminal-state polling.
+    # - fan-out controls are campaign-level knobs for future rate/chunked submit pacing.
+    nomad_dispatch_policy: str = "keep_manual"
+    nomad_allocation_resolution_timeout_s: float = 30.0
+    nomad_poll_interval_s: float = 5.0
+    nomad_max_poll_interval_s: float = 60.0
+    nomad_fanout_submit_rate_per_sec: float | None = None
+    nomad_fanout_submit_chunk_size: int = 0
+    # Coordinator sharding controls for scale-out campaign orchestration.
+    # Backward compatible defaults (all None) disable sharding.
+    # - shard_count + shard_index: partition samples by modulo index.
+    # - shard_start + shard_end: process an explicit sample index range [start, end).
+    shard_count: int | None = None
+    shard_index: int | None = None
+    shard_start: int | None = None
+    shard_end: int | None = None
     nomad_tls: bool = False
     nomad_cert: Path | None = None
     nomad_key: Path | None = None
@@ -741,7 +760,7 @@ def _validate_script_path(raw: object) -> None:
     )
 
 
-def load_config(args: dict[str, object]) -> CampaignConfig:
+def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
     """Resolve a config from a flat dict (e.g. argparse namespace -> vars).
 
     Each value is narrowed via ``str()`` / ``bool()`` / ``int()`` because
@@ -815,6 +834,50 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             f"max_generations must be >= 1, got {max_generations}",
             field="max_generations",
         )
+    nomad_fanout_submit_chunk_size = int(str(args.get("nomad_fanout_submit_chunk_size", 0)))
+    if nomad_fanout_submit_chunk_size < 0:
+        raise ValidationError(
+            "nomad_fanout_submit_chunk_size must be >= 0",
+            field="nomad_fanout_submit_chunk_size",
+        )
+    shard_count_raw = args.get("shard_count")
+    shard_index_raw = args.get("shard_index")
+    shard_start_raw = args.get("shard_start")
+    shard_end_raw = args.get("shard_end")
+    shard_count = int(str(shard_count_raw)) if shard_count_raw is not None else None
+    shard_index = int(str(shard_index_raw)) if shard_index_raw is not None else None
+    shard_start = int(str(shard_start_raw)) if shard_start_raw is not None else None
+    shard_end = int(str(shard_end_raw)) if shard_end_raw is not None else None
+    partition_mode = shard_count is not None or shard_index is not None
+    range_mode = shard_start is not None or shard_end is not None
+    if partition_mode and range_mode:
+        raise ValidationError(
+            "shard_count/shard_index cannot be combined with shard_start/shard_end",
+            field="shard",
+        )
+    if partition_mode:
+        if shard_count is None or shard_index is None:
+            raise ValidationError(
+                "both shard_count and shard_index are required for partition sharding",
+                field="shard",
+            )
+        if shard_count < 1:
+            raise ValidationError("shard_count must be >= 1", field="shard_count")
+        if shard_index < 0 or shard_index >= shard_count:
+            raise ValidationError(
+                f"shard_index must be in [0, {shard_count - 1}]",
+                field="shard_index",
+            )
+    if range_mode:
+        if shard_start is None or shard_end is None:
+            raise ValidationError(
+                "both shard_start and shard_end are required for range sharding",
+                field="shard",
+            )
+        if shard_start < 0:
+            raise ValidationError("shard_start must be >= 0", field="shard_start")
+        if shard_end <= shard_start:
+            raise ValidationError("shard_end must be greater than shard_start", field="shard_end")
 
     openstudio_version = str(args["openstudio_version"])
     if not openstudio_version or not openstudio_version[0].isdigit():
@@ -927,6 +990,22 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
             Path(str(args["offline_bundle"])).resolve() if args.get("offline_bundle") else None
         ),
         webhook_url=str(args["webhook_url"]) if args.get("webhook_url") else None,
+        nomad_dispatch_policy=str(args.get("nomad_dispatch_policy", "keep_manual")),
+        nomad_allocation_resolution_timeout_s=float(
+            str(args.get("nomad_allocation_resolution_timeout_s", 30.0))
+        ),
+        nomad_poll_interval_s=float(str(args.get("nomad_poll_interval_s", 5.0))),
+        nomad_max_poll_interval_s=float(str(args.get("nomad_max_poll_interval_s", 60.0))),
+        nomad_fanout_submit_rate_per_sec=(
+            float(str(args["nomad_fanout_submit_rate_per_sec"]))
+            if args.get("nomad_fanout_submit_rate_per_sec") is not None
+            else None
+        ),
+        nomad_fanout_submit_chunk_size=nomad_fanout_submit_chunk_size,
+        shard_count=shard_count,
+        shard_index=shard_index,
+        shard_start=shard_start,
+        shard_end=shard_end,
         nomad_tls=bool(args.get("nomad_tls", False)),
         nomad_cert=(Path(str(args["nomad_cert"])).resolve() if args.get("nomad_cert") else None),
         nomad_key=(Path(str(args["nomad_key"])).resolve() if args.get("nomad_key") else None),

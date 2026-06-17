@@ -7,6 +7,7 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -183,6 +184,18 @@ class TestKubernetesHandle:
         handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
         result = handle.result()
         assert result is None
+
+    def test_result_returns_result_hint_on_succeeded(self) -> None:
+        mock_ex = MagicMock()
+        mock_ex._wait_for_terminal.return_value = {"status": {"phase": "Succeeded"}}
+        hint = Path("/tmp/osimflow/plots")
+        handle = _KubernetesHandle(
+            job_name="test",
+            executor=mock_ex,
+            submit_params={},
+            result_hint=hint,
+        )
+        assert handle.result() == hint
 
     def test_result_raises_on_failed(self) -> None:
         mock_ex = MagicMock()

@@ -477,6 +477,71 @@ def _find_workflow_osw(modified_sim_package: Path) -> Path | None:
         return osw
     return None
 
+
+def _find_sql_in_package_run(package_run_dir: Path) -> Path | None:
+    """Find an existing ``eplusout.sql`` produced during apply-parameters.
+
+    The OpenStudio workflow can write SQL either directly under ``run/`` or in
+    nested sub-workflow directories (for example ``run/**/SR1/run/eplusout.sql``).
+    Prefer the top-level SQL when present; otherwise return the most recently
+    modified nested SQL as the best candidate for downstream extraction.
+    """
+    top_level_sql = package_run_dir / "eplusout.sql"
+    if top_level_sql.is_file():
+        return top_level_sql
+
+    if not package_run_dir.is_dir():
+        return None
+
+    candidates = [p for p in package_run_dir.rglob("eplusout.sql") if p.is_file()]
+    if not candidates:
+        return None
+
+    try:
+        return max(candidates, key=lambda p: (p.stat().st_mtime, p.stat().st_size))
+    except OSError:
+        # If metadata lookup fails, fall back to deterministic lexical ordering.
+        return sorted(candidates)[-1]
+
+
+def _reuse_existing_simulation_output(
+    modified_sim_package: Path,
+    sim_out: Path,
+    sample_id: str,
+) -> bool:
+    """Reuse simulation outputs produced by apply-parameters when available."""
+    sql_in_sim_out = sim_out / "eplusout.sql"
+    if sql_in_sim_out.is_file():
+        log.info(
+            "simulation already run for sample=%s (eplusout.sql exists in sim_out) - skipping",
+            sample_id,
+        )
+        return True
+
+    package_run_dir = modified_sim_package / "run"
+    sql_in_package_run = _find_sql_in_package_run(package_run_dir)
+    if sql_in_package_run is None:
+        return False
+
+    log.info(
+        "simulation already run for sample=%s (eplusout.sql found at %s) - copying to sim_out",
+        sample_id,
+        sql_in_package_run,
+    )
+    shutil.copy(sql_in_package_run, sql_in_sim_out)
+
+    sql_parent = sql_in_package_run.parent
+    for fname in ["eplusout.err", "eplusout.end", "eplusout.mtd"]:
+        src = sql_parent / fname
+        if not src.is_file() and sql_parent != package_run_dir:
+            src = package_run_dir / fname
+        dst = sim_out / fname
+        if src.is_file() and not dst.is_file():
+            shutil.copy(src, dst)
+
+    return True
+
+
 def _get_openstudio_cmd() -> str:
     """Return the name of the OpenStudio CLI executable on PATH.
 
@@ -537,12 +602,17 @@ def _run_openstudio_sim_impl(
     # invokes the CLI which runs the full measure pipeline including
     # simulation (issue #248). In that case, eplusout.sql already
     # exists and we should skip re-running.
+    #
+    # The simulation outputs from apply_parameters end up in the
+    # modified_sim_package's run/ subdirectory. Check both the sim_out
+    # directory (for cached results) and the package's run directory
+    # (for fresh apply outputs).
     # ------------------------------------------------------------------
-    if (sim_out / "eplusout.sql").is_file():
-        log.info(
-            "simulation already run for sample=%s (eplusout.sql exists) - skipping",
-            sample_id,
-        )
+    if _reuse_existing_simulation_output(
+        modified_sim_package=modified_sim_package,
+        sim_out=sim_out,
+        sample_id=sample_id,
+    ):
         return sim_out
 
     use_real_cli = _is_openstudio_available() and not _is_stub_mode()

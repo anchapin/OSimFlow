@@ -83,7 +83,7 @@ job "osimflow-worker" {
         command = "/bin/sh"
         args = [
           "-c",
-          "echo \"sample_id=${NOMAD_META_sample_id} version=${NOMAD_META_openstudio_version}\" && sleep 1",
+          "python -m osimflow.remote_runner",
         ]
 
         # Logging: stdout/stderr are captured by the Nomad client and

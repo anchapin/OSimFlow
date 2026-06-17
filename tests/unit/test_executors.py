@@ -565,6 +565,12 @@ class TestAWSBatchHandle:
         handle, _ = self._make_handle("SUCCEEDED")
         assert handle.result() is None
 
+    def test_result_succeeded_returns_result_hint(self) -> None:
+        handle, _ = self._make_handle("SUCCEEDED")
+        hint = Path("/tmp/osimflow/aggregate/aggregated_results.csv")
+        handle._result_hint = hint  # noqa: SLF001
+        assert handle.result() == hint
+
     def test_result_failed_raises(self) -> None:
         handle, _ = self._make_handle("FAILED", "OOM killed")
         with pytest.raises(RuntimeError, match="OOM killed"):
@@ -704,6 +710,86 @@ class TestNomadExecutor:
     def test_name_attribute(self) -> None:
         assert NomadExecutor.__new__(NomadExecutor).name == "nomad"  # noqa: SLF001
 
+    def test_submit_remote_results_only_returns_result_hint(self) -> None:
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646", remote_results_only=True)
+            hint = Path("/tmp/remote/work/apply/0001")
+            handle = ex.submit(
+                lambda: (_ for _ in ()).throw(AssertionError("local callable should not run")),
+                name="apply_0001",
+                result_hint=hint,
+            )
+            with patch("osimflow.executors.time.sleep"):
+                result = handle.result()
+        assert Path(str(result)) == hint
+        ex.shutdown()
+
+    def test_compat_mode_emits_deprecation_warning_with_migration_guidance(self) -> None:
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            with pytest.warns(DeprecationWarning, match="one minor release"):
+                ex = NomadExecutor(address="http://127.0.0.1:4646", remote_results_only=False)
+        ex.shutdown()
+
+    def test_build_job_spec_prefers_env_openstudio_image(self) -> None:
+        mock_urlopen = self._mock_urlopen()
+        with (
+            patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect),
+            patch.dict(os.environ, {"OSIMFLOW_OPENSTUDIO_CONTAINER_IMAGE": "local/openstudio:3.11.0"}),
+        ):
+            ex = NomadExecutor(address="http://127.0.0.1:4646")
+            spec = ex._build_job_spec(  # noqa: SLF001
+                name="sim_0001",
+                cpus=4,
+                memory_mb=8192,
+                container=None,
+                openstudio_version="3.11.0",
+            )
+        image = spec["Job"]["TaskGroups"][0]["Tasks"][0]["Config"]["image"]
+        assert image == "local/openstudio:3.11.0"
+        ex.shutdown()
+
+    def test_build_job_spec_allows_remote_command_override(self) -> None:
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646")
+            spec = ex._build_job_spec(  # noqa: SLF001
+                name="sim_0001",
+                cpus=4,
+                memory_mb=8192,
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+                remote_command="python -m osimflow.remote_runner --step sim",
+            )
+        entrypoint = spec["Job"]["TaskGroups"][0]["Tasks"][0]["Config"]["entrypoint"]
+        assert entrypoint == ["/bin/sh", "-c", "python -m osimflow.remote_runner --step sim"]
+        ex.shutdown()
+
+    def test_build_job_spec_defaults_to_remote_runner_command(self) -> None:
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646")
+            spec = ex._build_job_spec(  # noqa: SLF001
+                name="sim_0001",
+                cpus=2,
+                memory_mb=2048,
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+            )
+        entrypoint = spec["Job"]["TaskGroups"][0]["Tasks"][0]["Config"]["entrypoint"]
+        assert entrypoint == ["/bin/sh", "-c", "python -m osimflow.remote_runner"]
+        ex.shutdown()
+
+    def test_build_dispatch_job_spec_defaults_to_remote_runner_command(self) -> None:
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646", use_dispatch=True)
+            spec = ex._build_dispatch_job_spec()  # noqa: SLF001
+        args = spec["Job"]["TaskGroups"][0]["Tasks"][0]["Config"]["args"]
+        assert args == ["-c", "python -m osimflow.remote_runner"]
+        ex.shutdown()
+
     def test_wait_for_terminal(self) -> None:
         alloc_response = {"ID": "alloc-1", "ClientStatus": "complete"}
         mock_urlopen = self._mock_urlopen({"alloc": alloc_response})
@@ -825,9 +911,65 @@ class TestNomadHandle:
         handle, _ = self._make_handle(alloc_status="lost")
         assert handle.done() is True
 
+    def test_result_complete_materializes_object_storage_hint(self) -> None:
+        class _ClientStub:
+            @staticmethod
+            def resolve_allocation(eval_id: str, job_id: str) -> str:  # noqa: ARG004
+                return "alloc-r"
+
+            @staticmethod
+            def get_allocation(allocation_id: str) -> dict[str, object]:  # noqa: ARG004
+                return {"ID": "alloc-r", "ClientStatus": "complete", "TaskStates": {}}
+
+        class _ExecutorStub:
+            datacentre = "dc1"
+            _client = _ClientStub()
+
+            @staticmethod
+            def _wait_for_terminal(allocation_id: str) -> dict[str, object]:  # noqa: ARG004
+                return {"ID": "alloc-r", "ClientStatus": "complete", "TaskStates": {}}
+
+        with patch("osimflow.executors.materialize_object_storage_result") as materialize:
+            materialize.side_effect = lambda value, **_: value
+            hint = Path("/repo/out/work/kpis/kpi_0001.json")
+            handle = _NomadHandle(
+                job_id="job-1",
+                eval_id="eval-1",
+                executor=_ExecutorStub(),  # type: ignore[arg-type]
+                result_hint=hint,
+                result_transport_mode="object_storage",
+                result_storage_backend="s3",
+                result_storage_bucket="bucket",
+                result_storage_prefix="out",
+                result_storage_endpoint=None,
+            )
+            result = handle.result()
+
+        assert result == hint
+        materialize.assert_called_once()
+
     def test_extract_failure_description(self) -> None:
         states = {"task": {"Events": [{"Description": "OOM killed"}]}}
         assert _NomadHandle._extract_failure_description(states) == "OOM killed"
+
+    def test_extract_failure_description_display_message_fallback(self) -> None:
+        states = {"task": {"Events": [{"DisplayMessage": "Image pull denied"}]}}
+        assert _NomadHandle._extract_failure_description(states) == "Image pull denied"
+
+    def test_extract_failure_description_prefers_driver_failure(self) -> None:
+        states = {
+            "task": {
+                "Events": [
+                    {"Type": "Restarting", "Description": "Task restarting in 15s"},
+                    {"Type": "Driver Failure", "Description": "Failed to pull image: denied"},
+                    {
+                        "Type": "Not Restarting",
+                        "Description": "Exceeded allowed attempts and mode is fail",
+                    },
+                ]
+            }
+        }
+        assert _NomadHandle._extract_failure_description(states) == "Failed to pull image: denied"
 
     def test_extract_failure_description_no_events(self) -> None:
         assert _NomadHandle._extract_failure_description({}) == "unknown reason"

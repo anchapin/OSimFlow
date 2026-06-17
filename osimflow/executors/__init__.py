@@ -19,15 +19,18 @@ import abc
 import dataclasses
 import json
 import logging
+import math
 import os
 import re
 import subprocess
+import threading
 import time
+import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, ClassVar, Optional, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
@@ -35,6 +38,12 @@ from osimflow.executors.dask_jobqueue_executor import DaskJobQueueExecutor as Da
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor as GoogleBatchExecutor
 from osimflow.executors.kubernetes_executor import KubernetesExecutor as KubernetesExecutor
 from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
+from osimflow.executors.transport import (
+    coerce_transport_mode,
+    encode_transport_value,
+    materialize_object_storage_result,
+    resolve_result_for_callback,
+)
 
 log = logging.getLogger("osimflow.executors")
 
@@ -424,10 +433,13 @@ class _AWSBatchHandle(Handle):
         job_id: str,
         executor: "AWSBatchExecutor",
         submit_params: dict[str, Any],
+        *,
+        result_hint: Any = None,
     ) -> None:
         self.job_id = job_id
         self._executor = executor
         self._submit_params = submit_params
+        self._result_hint = result_hint
         # Keep a `Future` so the base-class `.result(timeout=...)` /
         # `.done()` paths remain reachable; we cache the poll result
         # in it so concurrent callers don't re-poll.
@@ -470,8 +482,9 @@ class _AWSBatchHandle(Handle):
             self._apply_cost(job)
             status = job.get("status")
             if status == "SUCCEEDED":
-                self._future.set_result(None)
-                return None
+                resolved = resolve_result_for_callback(self._result_hint, default=None)
+                self._future.set_result(resolved)
+                return resolved
 
             # Job FAILED — check if it was a Spot interruption.
             reason = job.get("statusReason", "")
@@ -510,8 +523,9 @@ class _AWSBatchHandle(Handle):
                     self._apply_cost(job)
                     status = job.get("status")
                     if status == "SUCCEEDED":
-                        self._future.set_result(None)
-                        return None
+                        resolved = resolve_result_for_callback(self._result_hint, default=None)
+                        self._future.set_result(resolved)
+                        return resolved
                     reason = job.get("statusReason", "unknown reason")
                     msg = f"AWS Batch job {self.job_id!r} {status}: {reason}"
                     self._future.set_exception(RuntimeError(msg))
@@ -865,6 +879,7 @@ class AWSBatchExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         openstudio_version = kwargs.get("openstudio_version")
+        result_hint = kwargs.get("result_hint")
 
         log.info(
             "aws_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -923,6 +938,7 @@ class AWSBatchExecutor(BaseExecutor):
             job_id=job_id,
             executor=self,
             submit_params=submit_params,
+            result_hint=result_hint,
         )
 
     def shutdown(self) -> None:
@@ -1155,7 +1171,7 @@ class _NomadClient:
             return result
         return []
 
-    def resolve_allocation(self, eval_id: str, job_id: str) -> str:
+    def resolve_allocation(self, eval_id: str, job_id: str, *, timeout_s: float = 30.0) -> str:
         """Resolve a submitted job's evaluation to its allocation ID.
 
         Nomad's ``POST /v1/jobs`` returns an ``EvalID`` but not the
@@ -1167,7 +1183,8 @@ class _NomadClient:
         Returns the first allocation ID found, or raises ``RuntimeError``
         if no allocation is created within the polling window.
         """
-        deadline = time.monotonic() + 30.0
+        effective_timeout_s = max(float(timeout_s), 0.1)
+        deadline = time.monotonic() + effective_timeout_s
         poll_delay = 0.5
         while time.monotonic() < deadline:
             # Try eval-based lookup first (fast path).
@@ -1180,7 +1197,10 @@ class _NomadClient:
                 return str(allocs[0].get("ID", ""))
             time.sleep(poll_delay)
             poll_delay = min(poll_delay * 1.5, 5.0)
-        raise RuntimeError(f"No allocation created for eval={eval_id!r} job={job_id!r} within 30s")
+        raise RuntimeError(
+            f"No allocation created for eval={eval_id!r} job={job_id!r} "
+            f"within {effective_timeout_s:.1f}s"
+        )
 
 
 class _NomadHandle(Handle):
@@ -1199,11 +1219,31 @@ class _NomadHandle(Handle):
     through the cached Future.
     """
 
-    def __init__(self, job_id: str, eval_id: str, executor: "NomadExecutor") -> None:
+    def __init__(
+        self,
+        job_id: str,
+        eval_id: str,
+        executor: "NomadExecutor",
+        *,
+        local_future: Future[Any] | None = None,
+        result_hint: Any = None,
+        result_transport_mode: str = "auto",
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+    ) -> None:
         self.job_id = job_id
         self._eval_id = eval_id
         self._allocation_id: str | None = None
         self._executor = executor
+        self._local_future = local_future
+        self._result_hint = result_hint
+        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
+        self._result_storage_backend = result_storage_backend
+        self._result_storage_bucket = result_storage_bucket
+        self._result_storage_prefix = result_storage_prefix
+        self._result_storage_endpoint = result_storage_endpoint
         self._future: Future[Any] = Future()
         # Worker tracking (issue #105): populate at submit time.
         # allocation_id is not yet resolved; worker_id uses the job ID
@@ -1220,10 +1260,18 @@ class _NomadHandle(Handle):
         return immediately.
         """
         if self._allocation_id is None:
-            self._allocation_id = self._executor._client.resolve_allocation(  # noqa: SLF001
-                eval_id=self._eval_id,
-                job_id=self.job_id,
-            )
+            timeout_s = float(getattr(self._executor, "allocation_resolution_timeout_s", 30.0))
+            try:
+                self._allocation_id = self._executor._client.resolve_allocation(  # noqa: SLF001
+                    eval_id=self._eval_id,
+                    job_id=self.job_id,
+                    timeout_s=timeout_s,
+                )
+            except TypeError:
+                self._allocation_id = self._executor._client.resolve_allocation(  # noqa: SLF001
+                    eval_id=self._eval_id,
+                    job_id=self.job_id,
+                )
         return self._allocation_id
 
     def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
@@ -1242,8 +1290,19 @@ class _NomadHandle(Handle):
         status = alloc.get("ClientStatus", "unknown")
         task_states = alloc.get("TaskStates", {}) or {}
         if status == "complete":
-            self._future.set_result(None)
-            return None
+            local_result: Any = resolve_result_for_callback(self._result_hint, default=None)
+            local_result = materialize_object_storage_result(
+                local_result,
+                transport_mode=self._result_transport_mode,
+                result_storage_backend=self._result_storage_backend,
+                result_storage_bucket=self._result_storage_bucket,
+                result_storage_prefix=self._result_storage_prefix,
+                result_storage_endpoint=self._result_storage_endpoint,
+            )
+            if self._local_future is not None:
+                local_result = self._local_future.result(timeout=timeout)
+            self._future.set_result(local_result)
+            return local_result
         # FAILED (or any non-complete terminal state — ``failed``,
         # ``lost``): re-raise with the most useful status description
         # we can extract from the task events. The Campaign's
@@ -1276,7 +1335,11 @@ class _NomadHandle(Handle):
         except Exception:  # noqa: BLE001 — never raise from done()
             return False
         status = alloc.get("ClientStatus", "")
-        return status in ("complete", "failed", "lost")
+        if status not in ("complete", "failed", "lost"):
+            return False
+        if self._local_future is None:
+            return True
+        return self._local_future.done()
 
     @staticmethod
     def _extract_failure_description(task_states: dict[str, Any]) -> str:
@@ -1288,13 +1351,33 @@ class _NomadHandle(Handle):
         log line is actionable. Falls back to ``"unknown reason"``
         if no description is available.
         """
+        best: tuple[int, str] | None = None
+        priority_by_type = {
+            "Driver Failure": 50,
+            "Failed Validation": 45,
+            "Terminated": 40,
+            "Not Restarting": 30,
+            "Restarting": 10,
+        }
         for state in task_states.values():
             if not isinstance(state, dict):
                 continue
             for event in state.get("Events", []) or []:
-                desc = event.get("Description")
+                desc = (
+                    event.get("Description")
+                    or event.get("DisplayMessage")
+                    or event.get("Message")
+                )
                 if desc:
-                    return str(desc)
+                    message = str(desc)
+                    event_type = str(event.get("Type", ""))
+                    score = priority_by_type.get(event_type, 20)
+                    if message.lower().startswith("task restarting"):
+                        score = min(score, 5)
+                    if best is None or score > best[0]:
+                        best = (score, message)
+        if best is not None:
+            return best[1]
         return "unknown reason"
 
 
@@ -1303,11 +1386,11 @@ class NomadExecutor(BaseExecutor):
 
     Supports two dispatch modes:
 
-    * **Dispatch mode** (default): registers a parameterized job spec once,
+    * **Dispatch mode**: registers a parameterized job spec once,
       then uses ``POST /v1/job/osimflow-worker/dispatch`` for per-sample
       work. Each ``submit()`` call dispatches a child job with the sample
       parameters as Nomad meta vars.
-    * **Direct mode** (legacy): builds and submits a unique ``batch`` job
+    * **Direct mode** (default/backward compatible): builds and submits a unique ``batch`` job
       per ``submit()`` call via ``POST /v1/jobs``. Used when the
       parameterized job is not yet registered or when ``use_dispatch`` is
       ``False``.
@@ -1336,6 +1419,16 @@ class NomadExecutor(BaseExecutor):
 
     # The parameterized job ID used for dispatch mode.
     DISPATCH_JOB_ID = "osimflow-worker"
+    _LEGACY_DISPATCH_POLICY_ALIASES: ClassVar[dict[str, str]] = {
+        "direct": "keep_manual",
+        "dispatch": "force_dispatch",
+        "auto": "auto_prefer_dispatch",
+    }
+    _VALID_DISPATCH_POLICIES: ClassVar[set[str]] = {
+        "keep_manual",
+        "force_dispatch",
+        "auto_prefer_dispatch",
+    }
 
     def __init__(
         self,
@@ -1344,6 +1437,12 @@ class NomadExecutor(BaseExecutor):
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
         use_dispatch: bool = False,
+        dispatch_policy: str | None = None,
+        estimated_run_size: int | None = None,
+        fanout_submit_rate_per_sec: float | None = None,
+        fanout_submit_chunk_size: int = 0,
+        allocation_resolution_timeout_s: float = 30.0,
+        remote_results_only: bool = True,
         verify_tls: bool = True,
         tls: bool = False,
         cert: str | None = None,
@@ -1357,15 +1456,59 @@ class NomadExecutor(BaseExecutor):
         # Token precedence: NOMAD_TOKEN env var only. The constructor
         # does NOT accept a token kwarg (see test_nomad_executor_does_not_accept_token_kwarg).
         self.datacentre = datacentre
-        self.poll_interval_s = poll_interval_s
-        self.max_poll_interval_s = max_poll_interval_s
-        self.use_dispatch = use_dispatch
+        self.poll_interval_s = self._sanitize_positive_delay(poll_interval_s, fallback=5.0)
+        max_interval = self._sanitize_positive_delay(max_poll_interval_s, fallback=60.0)
+        self.max_poll_interval_s = max(max_interval, self.poll_interval_s)
+        self.fanout_submit_rate_per_sec = (
+            self._sanitize_positive_delay(fanout_submit_rate_per_sec, fallback=1.0)
+            if fanout_submit_rate_per_sec is not None
+            else None
+        )
+        self.fanout_submit_chunk_size = max(int(fanout_submit_chunk_size), 0)
+        self.estimated_run_size = max(int(estimated_run_size), 0) if estimated_run_size is not None else None
+        self._auto_dispatch_threshold = (
+            self.fanout_submit_chunk_size if self.fanout_submit_chunk_size > 0 else 25
+        )
+        self._submit_count = 0
+        self._active_waiters = 0
+        self._waiters_lock = threading.Lock()
+        if dispatch_policy is None:
+            resolved_dispatch_policy = "force_dispatch" if use_dispatch else "keep_manual"
+        else:
+            resolved_dispatch_policy = self._LEGACY_DISPATCH_POLICY_ALIASES.get(
+                dispatch_policy, dispatch_policy
+            )
+        if resolved_dispatch_policy not in self._VALID_DISPATCH_POLICIES:
+            raise ValueError(
+                "dispatch_policy must be one of: "
+                "keep_manual, force_dispatch, auto_prefer_dispatch "
+                "(legacy aliases: direct, dispatch, auto) "
+                f"(got {resolved_dispatch_policy!r})"
+            )
+        self.dispatch_policy = resolved_dispatch_policy
+        self._manual_dispatch_requested = bool(use_dispatch)
+        self.use_dispatch = self._select_dispatch_mode()
+        self.allocation_resolution_timeout_s = max(float(allocation_resolution_timeout_s), 0.1)
+        self.remote_results_only = remote_results_only
+        if not remote_results_only:
+            warnings.warn(
+                "Nomad local-callable compatibility mode (--no-nomad-remote-results-only) is deprecated "
+                "and will be removed after one minor release. Migrate now by using the default "
+                "remote-results mode and removing the compatibility flag.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.verify_tls = verify_tls
         self.tls = tls
         self.cert = cert
         self.key = key
         self.ca_cert = ca_cert
         self._dispatch_job_registered = False
+        # Compatibility mode:
+        # - remote_results_only=True (default): do not run local callables; Handle.result()
+        #   returns result_hint on terminal success, enabling fully remote flows.
+        # - remote_results_only=False: legacy compatibility path that runs callables locally.
+        self._local_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="osimflow-nomad")
         self._client = _NomadClient(
             address=self.address,
             token=os.environ.get("NOMAD_TOKEN"),
@@ -1376,6 +1519,54 @@ class NomadExecutor(BaseExecutor):
             ca_cert=ca_cert,
         )
 
+    @staticmethod
+    def _sanitize_positive_delay(value: float | None, *, fallback: float) -> float:
+        if value is None:
+            return fallback
+        try:
+            delay = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        if not math.isfinite(delay) or delay <= 0:
+            return fallback
+        return delay
+
+    def _select_dispatch_mode(self) -> bool:
+        if self.dispatch_policy == "force_dispatch":
+            return True
+        if self.dispatch_policy == "keep_manual":
+            return self._manual_dispatch_requested
+        if self._manual_dispatch_requested:
+            return True
+        if self.estimated_run_size is not None:
+            return self.estimated_run_size >= self._auto_dispatch_threshold
+        return self._submit_count >= self._auto_dispatch_threshold
+
+    @staticmethod
+    def _resolve_nomad_image(
+        *,
+        container: str | None,
+        openstudio_version: str | None,
+    ) -> str:
+        """Resolve task image for Nomad with local-tag preference + fallback.
+
+        Resolution order:
+        1) explicit submit(container=...)
+        2) OSIMFLOW_NOMAD_PREFERRED_IMAGE env override
+        3) OSIMFLOW_OPENSTUDIO_CONTAINER_IMAGE env override
+        4) nrel/openstudio:<openstudio_version|latest>
+        """
+        if container:
+            return container
+        preferred = os.environ.get("OSIMFLOW_NOMAD_PREFERRED_IMAGE")
+        if preferred:
+            return preferred
+        openstudio_image = os.environ.get("OSIMFLOW_OPENSTUDIO_CONTAINER_IMAGE")
+        if openstudio_image:
+            return openstudio_image
+        tag = openstudio_version or "latest"
+        return f"nrel/openstudio:{tag}"
+
     def _build_job_spec(
         self,
         *,
@@ -1384,6 +1575,13 @@ class NomadExecutor(BaseExecutor):
         memory_mb: int,
         container: str | None,
         openstudio_version: str | None,
+        remote_command: str | None = None,
+        task_payload: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
     ) -> dict[str, Any]:
         """Build a Nomad ``batch`` job spec for one OpenStudio task.
 
@@ -1399,22 +1597,36 @@ class NomadExecutor(BaseExecutor):
         task-group-level ``KillTimeout`` (Go duration string) so a
         runaway task is hard-killed by the Nomad client.
         """
-        env: list[dict[str, str]] = []
+        env: dict[str, str] = {}
         if openstudio_version is not None:
-            env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
+            env["OSIMFLOW_OS_VERSION"] = str(openstudio_version)
         if container is not None:
-            env.append({"name": "OSIMFLOW_CONTAINER", "value": container})
+            env["OSIMFLOW_CONTAINER"] = container
+        if task_payload is not None:
+            env["OSIMFLOW_TASK_PAYLOAD"] = task_payload
+        if result_transport_mode is not None:
+            env["OSIMFLOW_RESULT_TRANSPORT_MODE"] = result_transport_mode
+        if result_storage_backend is not None:
+            env["OSIMFLOW_RESULT_STORAGE_BACKEND"] = result_storage_backend
+        if result_storage_bucket is not None:
+            env["OSIMFLOW_RESULT_STORAGE_BUCKET"] = result_storage_bucket
+        if result_storage_prefix is not None:
+            env["OSIMFLOW_RESULT_STORAGE_PREFIX"] = result_storage_prefix
+        if result_storage_endpoint is not None:
+            env["OSIMFLOW_RESULT_STORAGE_ENDPOINT"] = result_storage_endpoint
 
-        # The image is the NREL OpenStudio container (or a custom
-        # tag) — same default that AWSBatchExecutor and SlurmExecutor
-        # use. The actual ``openstudio.cli run`` invocation lives in
-        # the work layer; the executor only ships the container spec.
-        image = container or "nrel/openstudio:latest"
+        image = self._resolve_nomad_image(
+            container=container,
+            openstudio_version=openstudio_version,
+        )
+        task_command = remote_command or "python -m osimflow.remote_runner"
+        import uuid  # noqa: PLC0415
+        job_id = _slugify_job_name(f"osimflow-{name}-{uuid.uuid4().hex[:8]}")
 
         return {
             "Job": {
-                "ID": None,  # let Nomad assign an ID from the Name prefix
-                "Name": _slugify_job_name(f"osimflow-{name}"),
+                "ID": job_id,
+                "Name": job_id,
                 "Type": "batch",
                 "Datacenters": [self.datacentre],
                 "Meta": {
@@ -1430,9 +1642,11 @@ class NomadExecutor(BaseExecutor):
                                 "Driver": "docker",
                                 "Config": {
                                     "image": image,
-                                    "command": "/bin/sh",
-                                    "args": ["-c", "sleep infinity"],
-                                    "env": env,
+                                    "entrypoint": [
+                                        "/bin/sh",
+                                        "-c",
+                                        task_command,
+                                    ],
                                 },
                                 "Resources": {
                                     "CPU": int(cpus) * 1000,
@@ -1441,6 +1655,7 @@ class NomadExecutor(BaseExecutor):
                                 "Restart": {
                                     "Attempts": 0,
                                 },
+                                "Env": env,
                             }
                         ],
                     }
@@ -1460,6 +1675,10 @@ class NomadExecutor(BaseExecutor):
           * Memory limited to 4096 MB, CPU to 2000 MHz (2 logical CPUs).
           * No host network, no bind mounts.
         """
+        default_image = self._resolve_nomad_image(
+            container=os.environ.get("OSIMFLOW_NOMAD_PREFERRED_IMAGE"),
+            openstudio_version="3.11.0",
+        )
         return {
             "Job": {
                 "ID": self.DISPATCH_JOB_ID,
@@ -1472,12 +1691,24 @@ class NomadExecutor(BaseExecutor):
                         "variables_json",
                         "openstudio_version",
                         "container_image",
+                        "task_payload",
+                        "result_transport_mode",
+                        "result_storage_backend",
+                        "result_storage_bucket",
+                        "result_storage_prefix",
+                        "result_storage_endpoint",
                     ],
                 },
                 "Meta": {
                     "variables_json": "{}",
                     "openstudio_version": "3.11.0",
-                    "container_image": "nrel/openstudio:3.11.0",
+                    "container_image": default_image,
+                    "task_payload": "{}",
+                    "result_transport_mode": "auto",
+                    "result_storage_backend": "",
+                    "result_storage_bucket": "",
+                    "result_storage_prefix": "",
+                    "result_storage_endpoint": "",
                 },
                 "TaskGroups": [
                     {
@@ -1487,9 +1718,9 @@ class NomadExecutor(BaseExecutor):
                                 "Name": "simulate",
                                 "Driver": "docker",
                                 "Config": {
-                                    "image": "nrel/openstudio:3.11.0",
+                                    "image": default_image,
                                     "command": "/bin/sh",
-                                    "args": ["-c", "sleep infinity"],
+                                    "args": ["-c", "python -m osimflow.remote_runner"],
                                     "privileged": False,
                                 },
                                 "Resources": {
@@ -1499,10 +1730,7 @@ class NomadExecutor(BaseExecutor):
                                 "Restart": {
                                     "Attempts": 0,
                                 },
-                                "Env": {
-                                    "OSIMFLOW_STUB_SIM": "1",
-                                    "OSIMFLOW_OUTDIR": "/local/osimflow/out",
-                                },
+                                "Env": {},
                             }
                         ],
                     }
@@ -1528,15 +1756,37 @@ class NomadExecutor(BaseExecutor):
         until the allocation reaches a terminal state (``complete`` /
         ``failed`` / ``lost``). Returns the final allocation dict."""
         delay = self.poll_interval_s
-        while True:
-            alloc = self._client.get_allocation(allocation_id)
-            status = alloc.get("ClientStatus", "UNKNOWN")
-            if status in ("complete", "failed", "lost"):
-                return alloc
-            log.info("nomad poll alloc=%s status=%s (sleeping %.1fs)", allocation_id, status, delay)
-            time.sleep(delay)
-            # Exponential backoff, capped.
-            delay = min(delay * 2, self.max_poll_interval_s)
+        phase_offset = 0.0
+        with self._waiters_lock:
+            self._active_waiters += 1
+            active_waiters = self._active_waiters
+        try:
+            # Deterministic offset only under concurrency to reduce poll bursts.
+            if active_waiters > 1:
+                phase_offset = (sum(ord(ch) for ch in allocation_id) % 10) / 100.0
+            while True:
+                alloc = self._client.get_allocation(allocation_id)
+                status = alloc.get("ClientStatus", "UNKNOWN")
+                if status in ("complete", "failed", "lost"):
+                    return alloc
+                sleep_for = min(delay + phase_offset, self.max_poll_interval_s)
+                log.info(
+                    "nomad poll alloc=%s status=%s (sleeping %.2fs, active_waiters=%d)",
+                    allocation_id,
+                    status,
+                    sleep_for,
+                    active_waiters,
+                )
+                time.sleep(sleep_for)
+                concurrency_pressure = max(active_waiters - 8, 0) * 0.05
+                rate_pressure = 0.0
+                if self.fanout_submit_rate_per_sec is not None:
+                    rate_pressure = max(self.fanout_submit_rate_per_sec - 10.0, 0.0) * 0.01
+                backoff_factor = 1.6 + min(concurrency_pressure + rate_pressure, 0.4)
+                delay = min(delay * backoff_factor, self.max_poll_interval_s)
+        finally:
+            with self._waiters_lock:
+                self._active_waiters = max(self._active_waiters - 1, 0)
 
     def submit(
         self,
@@ -1550,24 +1800,71 @@ class NomadExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         openstudio_version = kwargs.get("openstudio_version")
+        result_hint = kwargs.get("result_hint")
+        remote_command = kwargs.get("remote_command")
+        result_transport_mode = kwargs.get("result_transport_mode")
+        result_storage_backend = kwargs.get("result_storage_backend")
+        result_storage_bucket = kwargs.get("result_storage_bucket")
+        result_storage_prefix = kwargs.get("result_storage_prefix")
+        result_storage_endpoint = kwargs.get("result_storage_endpoint")
+        local_callable_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key
+            not in {
+                "openstudio_version",
+                "variables_json",
+                "result_hint",
+                "remote_command",
+                "result_transport_mode",
+                "result_storage_backend",
+                "result_storage_bucket",
+                "result_storage_prefix",
+                "result_storage_endpoint",
+            }
+        }
+        step_name = self._infer_step_name(name)
+        task_payload = self._build_task_payload(
+            step_name=step_name,
+            args=args,
+            kwargs=local_callable_kwargs,
+            result_hint=result_hint,
+            name=name,
+        )
+        local_future: Future[Any] | None = None
+        if not self.remote_results_only:
+            local_future = self._local_pool.submit(fn, *args, **local_callable_kwargs)
+        else:
+            del fn, args
+        self._submit_count += 1
+        dispatch_mode = self._select_dispatch_mode()
+        self.use_dispatch = dispatch_mode
 
         log.info(
-            "nomad submit name=%s cpus=%d mem=%dMB time_min=%d container=%s dispatch=%s",
+            "nomad submit name=%s cpus=%d mem=%dMB time_min=%d container=%s dispatch=%s "
+            "policy=%s threshold=%d count=%d remote_results_only=%s",
             name,
             cpus,
             memory_mb,
             time_min,
             container,
-            self.use_dispatch,
+            dispatch_mode,
+            self.dispatch_policy,
+            self._auto_dispatch_threshold,
+            self._submit_count,
+            self.remote_results_only,
         )
 
-        if self.use_dispatch:
+        if dispatch_mode:
             # Dispatch mode: register the parameterized job once, then
             # dispatch per-sample work via POST /v1/job/{id}/dispatch.
             self._ensure_dispatch_job_registered()
 
             # Build the per-dispatch meta payload.
-            image = container or "nrel/openstudio:3.11.0"
+            image = self._resolve_nomad_image(
+                container=container,
+                openstudio_version=(str(openstudio_version) if openstudio_version else None),
+            )
             meta: dict[str, str] = {
                 "sample_id": name,
                 "openstudio_version": str(openstudio_version or ""),
@@ -1580,6 +1877,18 @@ class NomadExecutor(BaseExecutor):
                     if isinstance(variables_json, str)
                     else json.dumps(variables_json)
                 )
+            meta["task_payload"] = task_payload
+            meta["result_transport_mode"] = (
+                str(result_transport_mode) if result_transport_mode is not None else "auto"
+            )
+            if result_storage_backend is not None:
+                meta["result_storage_backend"] = str(result_storage_backend)
+            if result_storage_bucket is not None:
+                meta["result_storage_bucket"] = str(result_storage_bucket)
+            if result_storage_prefix is not None:
+                meta["result_storage_prefix"] = str(result_storage_prefix)
+            if result_storage_endpoint is not None:
+                meta["result_storage_endpoint"] = str(result_storage_endpoint)
 
             response = self._client.dispatch_job(self.DISPATCH_JOB_ID, meta=meta)
         else:
@@ -1590,18 +1899,29 @@ class NomadExecutor(BaseExecutor):
                 memory_mb=memory_mb,
                 container=container,
                 openstudio_version=openstudio_version,
+                remote_command=(str(remote_command) if remote_command else None),
+                task_payload=task_payload,
+                result_transport_mode=(
+                    str(result_transport_mode) if result_transport_mode is not None else "auto"
+                ),
+                result_storage_backend=(
+                    str(result_storage_backend) if result_storage_backend is not None else None
+                ),
+                result_storage_bucket=(
+                    str(result_storage_bucket) if result_storage_bucket is not None else None
+                ),
+                result_storage_prefix=(
+                    str(result_storage_prefix) if result_storage_prefix is not None else None
+                ),
+                result_storage_endpoint=(
+                    str(result_storage_endpoint) if result_storage_endpoint is not None else None
+                ),
             )
             response = self._client.submit_job(spec)
 
-        job_id = response.get("JobID", "")
+        job_id = response.get("JobID") or (spec["Job"]["ID"] if not dispatch_mode else "")
         eval_id = response.get("EvalID", "")
         log.info("nomad submit_job -> jobId=%s evalId=%s", job_id, eval_id)
-
-        # `fn` and `args` are captured for the side-effect of being
-        # part of the job spec in production (the task command is
-        # built elsewhere from the campaign's working dir and these
-        # inputs); we don't run the callable locally.
-        del fn, args  # silence unused-arg warnings
 
         # Return a lazy handle: the allocation is resolved from the
         # evaluation on first ``result()`` / ``done()`` call, so the
@@ -1615,12 +1935,65 @@ class NomadExecutor(BaseExecutor):
             job_id=job_id,
             eval_id=eval_id,
             executor=self,
+            local_future=local_future,
+            result_hint=result_hint,
+            result_transport_mode=(
+                str(result_transport_mode) if result_transport_mode is not None else "auto"
+            ),
+            result_storage_backend=(
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            result_storage_bucket=(
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            result_storage_prefix=(
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            result_storage_endpoint=(
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
         )
 
     def shutdown(self) -> None:
-        # urllib's HTTP handler is closed by the underlying
-        # http.client on GC; nothing actionable here.
-        pass
+        self._local_pool.shutdown(wait=True)
+
+    @staticmethod
+    def _infer_step_name(submit_name: str) -> str:
+        lower = submit_name.lower()
+        if lower.startswith("apply_"):
+            return "apply"
+        if lower.startswith("sim_"):
+            return "sim"
+        if lower.startswith("kpi_"):
+            return "extract"
+        if lower.startswith("aggregate"):
+            return "aggregate"
+        if lower.startswith("plots"):
+            return "plots"
+        return "unknown"
+
+    @staticmethod
+    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
+        return encode_transport_value(value)
+
+    @staticmethod
+    def _build_task_payload(
+        *,
+        step_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        result_hint: Any,  # noqa: ANN401
+        name: str,
+    ) -> str:
+        payload = {
+            "schema_version": 1,
+            "name": name,
+            "step": step_name,
+            "args": [NomadExecutor._encode_payload_value(a) for a in args],
+            "kwargs": {k: NomadExecutor._encode_payload_value(v) for k, v in kwargs.items()},
+            "result_hint": NomadExecutor._encode_payload_value(result_hint),
+        }
+        return json.dumps(payload)
 
 
 # ======================================================================

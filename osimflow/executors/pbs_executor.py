@@ -26,6 +26,7 @@ from concurrent.futures import Future
 from typing import Any
 
 from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.transport import resolve_result_for_callback
 
 log = logging.getLogger("osimflow.executors")
 
@@ -48,9 +49,10 @@ class _PBSHandle(Handle):
     state so concurrent callers don't re-poll.
     """
 
-    def __init__(self, job_id: str, executor: PBSExecutor) -> None:
+    def __init__(self, job_id: str, executor: PBSExecutor, *, result_hint: Any = None) -> None:
         self.job_id = job_id
         self._executor = executor
+        self._result_hint = result_hint
         self._future: Future[Any] = Future()
         # Worker tracking fields.
         self.worker_id: str | None = job_id
@@ -70,8 +72,9 @@ class _PBSHandle(Handle):
             raise
 
         if exit_code == 0:
-            self._future.set_result(None)
-            return None
+            resolved = resolve_result_for_callback(self._result_hint, default=None)
+            self._future.set_result(resolved)
+            return resolved
 
         # Non-zero exit: surface the failure with the exit code.
         msg = f"PBS job {self.job_id!r} exited with code {exit_code} (state={job_state})"
@@ -329,6 +332,7 @@ class PBSExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         openstudio_version = kwargs.get("openstudio_version")
+        result_hint = kwargs.get("result_hint")
 
         if self.debug:
             # In debug mode, run locally via submitit.DebugExecutor-like
@@ -367,7 +371,7 @@ class PBSExecutor(BaseExecutor):
                 pass
 
             fut: Future[Any] = Future()
-            fut.set_result(None)
+            fut.set_result(resolve_result_for_callback(result_hint, default=None))
             return Handle(
                 job_id=local_job_id,
                 _future=fut,
@@ -411,7 +415,7 @@ class PBSExecutor(BaseExecutor):
         # tracks the PBS job state.
         del fn, args  # noqa: ARG002
 
-        return _PBSHandle(job_id=job_id, executor=self)
+        return _PBSHandle(job_id=job_id, executor=self, result_hint=result_hint)
 
     def shutdown(self) -> None:
         # PBS jobs are tracked by PBS itself; no local state to tear down.

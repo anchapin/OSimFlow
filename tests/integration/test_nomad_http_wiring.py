@@ -132,8 +132,7 @@ def test_nomad_submit_builds_batch_job_spec() -> None:
     task = job["TaskGroups"][0]["Tasks"][0]
     assert task["Name"] == "osimflow"
     assert task["Config"]["image"] == "openstudio_cli_image:3.11.0"
-    env = task["Config"]["env"]
-    env_dict = {e["name"]: e["value"] for e in env}
+    env_dict = task["Env"]
     assert env_dict["OSIMFLOW_OS_VERSION"] == "3.11.0"
     assert env_dict["OSIMFLOW_CONTAINER"] == "openstudio_cli_image:3.11.0"
 
@@ -192,11 +191,8 @@ def test_nomad_submit_uses_minimum_resource_defaults() -> None:
 
 
 def test_nomad_submit_omits_env_when_not_provided() -> None:
-    """If the caller does not pass ``container`` or
-    ``openstudio_version``, the env list must still be a well-formed
-    list (Nomad rejects malformed env blocks), but the per-job env
-    keys may be absent.
-    """
+    """If no container metadata is passed, task env still contains only
+    remote-runner contract values (no container-specific metadata)."""
     fake_response = MagicMock()
     fake_response.read.return_value = json.dumps({"JobID": "job-no-env"}).encode("utf-8")
     fake_response.__enter__ = lambda s: s
@@ -208,10 +204,41 @@ def test_nomad_submit_omits_env_when_not_provided() -> None:
 
     request_obj = ex._client.urlopen.call_args.args[0]  # type: ignore[attr-defined]
     payload = json.loads(request_obj.data.decode("utf-8"))
-    env = payload["Job"]["TaskGroups"][0]["Tasks"][0]["Config"]["env"]
-    assert isinstance(env, list)
-    for entry in env:
-        assert set(entry.keys()) == {"name", "value"}
+    env = payload["Job"]["TaskGroups"][0]["Tasks"][0]["Env"]
+    assert isinstance(env, dict)
+    assert "OSIMFLOW_CONTAINER" not in env
+    assert "OSIMFLOW_OS_VERSION" not in env
+    assert env["OSIMFLOW_RESULT_TRANSPORT_MODE"] == "auto"
+    assert "OSIMFLOW_TASK_PAYLOAD" in env
+    ex.shutdown()
+
+
+def test_nomad_submit_passes_object_storage_metadata_to_env() -> None:
+    fake_response = MagicMock()
+    fake_response.read.return_value = json.dumps({"JobID": "job-storage"}).encode("utf-8")
+    fake_response.__enter__ = lambda s: s
+    fake_response.__exit__ = lambda s, *a: None
+
+    with patch("urllib.request.urlopen", return_value=fake_response):
+        ex = NomadExecutor()
+        ex.submit(
+            lambda: None,
+            name="sim_0001",
+            result_transport_mode="object_storage",
+            result_storage_backend="s3",
+            result_storage_bucket="bucket-a",
+            result_storage_prefix="out-a",
+            result_storage_endpoint="https://minio.local",
+        )
+
+    request_obj = ex._client.urlopen.call_args.args[0]  # type: ignore[attr-defined]
+    payload = json.loads(request_obj.data.decode("utf-8"))
+    env = payload["Job"]["TaskGroups"][0]["Tasks"][0]["Env"]
+    assert env["OSIMFLOW_RESULT_TRANSPORT_MODE"] == "object_storage"
+    assert env["OSIMFLOW_RESULT_STORAGE_BACKEND"] == "s3"
+    assert env["OSIMFLOW_RESULT_STORAGE_BUCKET"] == "bucket-a"
+    assert env["OSIMFLOW_RESULT_STORAGE_PREFIX"] == "out-a"
+    assert env["OSIMFLOW_RESULT_STORAGE_ENDPOINT"] == "https://minio.local"
     ex.shutdown()
 
 
@@ -276,11 +303,9 @@ def mocked_nomad_client(
         yield mock
 
 
-def test_nomad_result_returns_none_on_success() -> None:
-    """``Handle.result()`` must block until the Nomad allocation
-    reaches the ``complete`` terminal state and return ``None`` to
-    the Campaign. The actual KPI extraction happens in a downstream
-    step that reads on-disk artifacts from shared storage.
+def test_nomad_legacy_compat_mode_returns_callable_output_on_success() -> None:
+    """Compatibility mode: when explicitly enabled, ``Handle.result()``
+    returns the local callable output after remote completion.
     """
     with mocked_nomad_client(
         submit_response={"JobID": "osimflow/ok", "Index": 0, "EvalID": "e1"},
@@ -289,11 +314,15 @@ def test_nomad_result_returns_none_on_success() -> None:
             {"ID": "alloc-1", "ClientStatus": "complete", "JobID": "osimflow/ok"},
         ],
     ) as mock:
-        ex = NomadExecutor(poll_interval_s=0.01, max_poll_interval_s=0.02)
+        ex = NomadExecutor(
+            poll_interval_s=0.01,
+            max_poll_interval_s=0.02,
+            remote_results_only=False,
+        )
         handle = ex.submit(lambda: 42, name="ok")
         result = handle.result(timeout=5)
 
-    assert result is None
+    assert result == 42
     assert handle.done() is True
     # The mock recorded the submit, eval-based allocation resolution,
     # and the allocation polling.
@@ -376,6 +405,110 @@ def test_nomad_polling_uses_exponential_backoff() -> None:
         for a, b in zip(sleep_durations, sleep_durations[1:])  # noqa: B905
     ), f"sleep durations not non-decreasing: {sleep_durations}"
     assert sleep_durations[-1] <= 4.0, f"final sleep {sleep_durations[-1]} exceeds cap 4.0"
+    ex.shutdown()
+
+
+def test_nomad_handle_uses_configured_allocation_resolution_timeout() -> None:
+    fake_response = MagicMock()
+    fake_response.read.return_value = json.dumps({"JobID": "osimflow/t", "EvalID": "eval-t"}).encode(
+        "utf-8"
+    )
+    fake_response.__enter__ = lambda s: s
+    fake_response.__exit__ = lambda s, *a: None
+
+    with patch("urllib.request.urlopen", return_value=fake_response):
+        ex = NomadExecutor(allocation_resolution_timeout_s=12.5)
+        ex._client.resolve_allocation = MagicMock(return_value="alloc-t")  # type: ignore[method-assign]
+        ex._wait_for_terminal = MagicMock(return_value={"ClientStatus": "complete"})  # type: ignore[method-assign]
+        handle = ex.submit(lambda: None, name="timeout-config")
+        handle.result(timeout=5)
+
+    timeout_s = ex._client.resolve_allocation.call_args.kwargs["timeout_s"]  # type: ignore[attr-defined]
+    assert timeout_s == pytest.approx(12.5)
+    ex.shutdown()
+
+
+def test_nomad_dispatch_policy_models() -> None:
+    keep_manual = NomadExecutor(dispatch_policy="keep_manual")
+    assert keep_manual.use_dispatch is False
+    keep_manual.shutdown()
+
+    force_dispatch = NomadExecutor(dispatch_policy="force_dispatch")
+    assert force_dispatch.use_dispatch is True
+    force_dispatch.shutdown()
+
+    auto_small = NomadExecutor(
+        dispatch_policy="auto_prefer_dispatch",
+        estimated_run_size=8,
+        fanout_submit_chunk_size=10,
+    )
+    assert auto_small.use_dispatch is False
+    auto_small.shutdown()
+
+    auto_large = NomadExecutor(
+        dispatch_policy="auto_prefer_dispatch",
+        estimated_run_size=12,
+        fanout_submit_chunk_size=10,
+    )
+    assert auto_large.use_dispatch is True
+    auto_large.shutdown()
+
+
+@pytest.mark.parametrize("estimated_run_size", [500, 2_000, 5_000, 10_000])
+def test_nomad_dispatch_policy_auto_prefers_dispatch_for_large_runs(
+    estimated_run_size: int,
+) -> None:
+    ex = NomadExecutor(
+        dispatch_policy="auto_prefer_dispatch",
+        estimated_run_size=estimated_run_size,
+    )
+    assert ex.use_dispatch is True
+    ex.shutdown()
+
+
+def test_nomad_dispatch_policy_auto_respects_threshold_boundary() -> None:
+    below = NomadExecutor(
+        dispatch_policy="auto_prefer_dispatch",
+        estimated_run_size=499,
+        fanout_submit_chunk_size=500,
+    )
+    assert below.use_dispatch is False
+    below.shutdown()
+
+    at = NomadExecutor(
+        dispatch_policy="auto_prefer_dispatch",
+        estimated_run_size=500,
+        fanout_submit_chunk_size=500,
+    )
+    assert at.use_dispatch is True
+    at.shutdown()
+
+
+def test_nomad_dispatch_policy_legacy_aliases_map_to_new_models() -> None:
+    direct = NomadExecutor(dispatch_policy="direct")
+    assert direct.dispatch_policy == "keep_manual"
+    assert direct.use_dispatch is False
+    direct.shutdown()
+
+    dispatch = NomadExecutor(dispatch_policy="dispatch")
+    assert dispatch.dispatch_policy == "force_dispatch"
+    assert dispatch.use_dispatch is True
+    dispatch.shutdown()
+
+    auto = NomadExecutor(dispatch_policy="auto")
+    assert auto.dispatch_policy == "auto_prefer_dispatch"
+    auto.shutdown()
+
+
+def test_nomad_polling_controls_harden_invalid_values() -> None:
+    ex = NomadExecutor(poll_interval_s=0.0, max_poll_interval_s=-2.0)
+    assert ex.poll_interval_s == pytest.approx(5.0)
+    assert ex.max_poll_interval_s == pytest.approx(60.0)
+    ex.shutdown()
+
+    ex = NomadExecutor(poll_interval_s=7.0, max_poll_interval_s=2.0)
+    assert ex.poll_interval_s == pytest.approx(7.0)
+    assert ex.max_poll_interval_s == pytest.approx(7.0)
     ex.shutdown()
 
 

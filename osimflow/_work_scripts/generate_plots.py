@@ -582,7 +582,7 @@ def _generate_interactive_report(
         )
 
     # ── Parameter vs EUI Scatter ─────────────────────────────────────
-    if not results.empty:
+    if not results.empty and "eui_kwh_m2_yr" in results.columns:
         numeric_cols = results.select_dtypes(include="number").columns
         design_vars = [c for c in numeric_cols if c not in ("sample_id", "eui_kwh_m2_yr")]
         if design_vars:

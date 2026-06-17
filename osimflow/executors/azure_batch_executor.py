@@ -36,6 +36,7 @@ from concurrent.futures import Future
 from typing import Any
 
 from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.transport import resolve_result_for_callback
 
 log = logging.getLogger("osimflow.executors.azure_batch")
 
@@ -55,10 +56,13 @@ class _AzureBatchHandle(Handle):
         job_id: str,
         executor: AzureBatchExecutor,
         submit_params: dict[str, Any],
+        *,
+        result_hint: Any = None,
     ) -> None:
         self.job_id = job_id
         self._executor = executor
         self._submit_params = submit_params
+        self._result_hint = result_hint
         self._future: Future[Any] = Future()
         self.worker_id: str | None = job_id
         self.worker_ip: str | None = None
@@ -77,8 +81,9 @@ class _AzureBatchHandle(Handle):
 
             exit_code = job.properties.execution_info.exit_code
             if exit_code is None or exit_code == 0:
-                self._future.set_result(None)
-                return None
+                resolved = resolve_result_for_callback(self._result_hint, default=None)
+                self._future.set_result(resolved)
+                return resolved
 
             failure_reason = getattr(job.properties.execution_info, "failure_reason", None)
             is_spot = self._executor._is_spot_interruption(failure_reason)
@@ -112,8 +117,9 @@ class _AzureBatchHandle(Handle):
                         raise
                     exit_code = job.properties.execution_info.exit_code
                     if exit_code is None or exit_code == 0:
-                        self._future.set_result(None)
-                        return None
+                        resolved = resolve_result_for_callback(self._result_hint, default=None)
+                        self._future.set_result(resolved)
+                        return resolved
                     failure_reason = getattr(
                         job.properties.execution_info, "failure_reason", "unknown reason"
                     )
@@ -340,6 +346,7 @@ class AzureBatchExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         openstudio_version = kwargs.get("openstudio_version")
+        result_hint = kwargs.get("result_hint")
 
         log.info(
             "azure_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -370,6 +377,7 @@ class AzureBatchExecutor(BaseExecutor):
             job_id=job_id,
             executor=self,
             submit_params=submit_params,
+            result_hint=result_hint,
         )
 
     def shutdown(self) -> None:

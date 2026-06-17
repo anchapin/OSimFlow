@@ -206,6 +206,14 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
         return NomadExecutor(
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
+            dispatch_policy=args.nomad_dispatch_policy,
+            estimated_run_size=int(args.n_samples),
+            fanout_submit_rate_per_sec=args.nomad_fanout_submit_rate_per_sec,
+            fanout_submit_chunk_size=args.nomad_fanout_submit_chunk_size,
+            allocation_resolution_timeout_s=args.nomad_allocation_resolution_timeout_s,
+            poll_interval_s=args.nomad_poll_interval_s,
+            max_poll_interval_s=args.nomad_max_poll_interval_s,
+            remote_results_only=args.nomad_remote_results_only,
             verify_tls=args.nomad_tls_verify,
             tls=args.nomad_tls,
             cert=args.nomad_cert,
@@ -388,6 +396,101 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help="Nomad datacentre to target (default: dc1).",
     )
     run.add_argument(
+        "--nomad-dispatch-policy",
+        choices=[
+            "keep_manual",
+            "force_dispatch",
+            "auto_prefer_dispatch",
+            "direct",
+            "dispatch",
+            "auto",
+        ],
+        default="keep_manual",
+        help=(
+            "Nomad submission policy. Preferred values: "
+            "'keep_manual' (default, no auto-switching), "
+            "'force_dispatch' (always dispatch), "
+            "'auto_prefer_dispatch' (auto-switch to dispatch for large runs). "
+            "Legacy aliases are accepted for compatibility: "
+            "'direct'->'keep_manual', 'dispatch'->'force_dispatch', 'auto'->'auto_prefer_dispatch'."
+        ),
+    )
+    run.add_argument(
+        "--nomad-allocation-resolution-timeout-s",
+        type=float,
+        default=30.0,
+        help=(
+            "Timeout in seconds to resolve Nomad EvalID to Allocation ID "
+            "(default: 30.0)."
+        ),
+    )
+    run.add_argument(
+        "--nomad-poll-interval-s",
+        type=float,
+        default=5.0,
+        help="Initial Nomad allocation polling interval in seconds (default: 5.0).",
+    )
+    run.add_argument(
+        "--nomad-max-poll-interval-s",
+        type=float,
+        default=60.0,
+        help="Maximum Nomad allocation polling interval in seconds (default: 60.0).",
+    )
+    run.add_argument(
+        "--nomad-fanout-submit-rate-per-sec",
+        type=float,
+        default=None,
+        help=(
+            "Optional fan-out submit rate limit for Nomad (submissions/sec). "
+            "Used by fan-out steps to pace submission and reduce coordinator pressure."
+        ),
+    )
+    run.add_argument(
+        "--nomad-fanout-submit-chunk-size",
+        type=int,
+        default=0,
+        help=(
+            "Optional fan-out submit chunk size for Nomad (0 disables chunking). "
+            "When >0, fan-out submits at most this many tasks per chunk."
+        ),
+    )
+    run.add_argument(
+        "--shard-count",
+        type=int,
+        default=None,
+        help=(
+            "Total number of coordinator shards (partition mode). "
+            "Requires --shard-index. Samples are assigned by global index modulo shard-count."
+        ),
+    )
+    run.add_argument(
+        "--shard-index",
+        type=int,
+        default=None,
+        help=(
+            "Zero-based shard index for partition mode. "
+            "Requires --shard-count."
+        ),
+    )
+    run.add_argument(
+        "--shard-start",
+        type=int,
+        default=None,
+        help=(
+            "Inclusive sample index start for explicit range shard mode. "
+            "Requires --shard-end."
+        ),
+    )
+    run.add_argument(
+        "--shard-end",
+        type=int,
+        default=None,
+        help=(
+            "Exclusive sample index end for explicit range shard mode. "
+            "Requires --shard-start."
+        ),
+    )
+    run.add_argument(
         "--nomad-tls-verify",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -431,6 +534,16 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Path to the CA certificate file (PEM) to verify the Nomad server's "
             "certificate when --nomad-tls is enabled. If not specified, the "
             "system default CA certificates are used."
+        ),
+    )
+    run.add_argument(
+        "--nomad-remote-results-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "DEPRECATED compatibility toggle. True (default) keeps Nomad in remote-results mode. "
+            "Set --no-nomad-remote-results-only only for temporary migration compatibility; "
+            "the legacy local-callable mode is scheduled for removal after one minor release."
         ),
     )
     run.add_argument(

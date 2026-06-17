@@ -248,6 +248,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
 - `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)
 - `--nomad-address`, `--nomad-datacentre`
+- `--nomad-remote-results-only` (deprecated compatibility toggle; defaults to remote-result mode. Use `--no-nomad-remote-results-only` only to temporarily enable legacy local-callable behavior)
 - `--nomad-ca-cert`, `--nomad-cert`, `--nomad-key`, `--nomad-tls`, `--nomad-tls-verify` (Nomad TLS configuration; issue #344)
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`

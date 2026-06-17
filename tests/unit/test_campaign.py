@@ -108,6 +108,10 @@ class MockExecutor(BaseExecutor):
         pass
 
 
+class NomadLikeMockExecutor(MockExecutor):
+    name = "nomad"
+
+
 # -----------------------------------------------------------------------
 # Cast helpers
 # -----------------------------------------------------------------------
@@ -396,6 +400,111 @@ class TestSampleFanOut:
         data = json.loads((outdir / "run.json").read_text())
         # dry_run overrides to 1 sample, so per_sample should have 1
         assert len(data["per_sample"]) >= 1
+
+    def test_nomad_fanout_submission_is_chunked(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            dry_run=False,
+            nomad_fanout_submit_chunk_size=2,
+            nomad_fanout_submit_rate_per_sec=None,
+        )
+        campaign = Campaign(cfg=cfg, executor=NomadLikeMockExecutor())
+        samples: list[SampleSpec] = [
+            {"sample_id": f"s{i:04d}", "values": {"window_u_value": float(i)}} for i in range(5)
+        ]
+        observed_chunk_sizes: list[int] = []
+        original = campaign._submit_and_await_all
+
+        def _wrapped_submit(
+            submissions: dict[str, tuple[Handle, Any]],
+            step_name: str,
+            recovery_manager: Any = None,
+            resubmit_callback: Any = None,
+        ) -> None:
+            observed_chunk_sizes.append(len(submissions))
+            original(
+                submissions,
+                step_name,
+                recovery_manager=recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+
+        with patch.object(campaign, "_submit_and_await_all", side_effect=_wrapped_submit):
+            campaign.step_apply_parameters(samples)
+        assert observed_chunk_sizes == [2, 2, 1]
+
+    def test_non_nomad_fanout_submission_remains_single_batch(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            dry_run=False,
+            nomad_fanout_submit_chunk_size=2,
+        )
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        samples: list[SampleSpec] = [
+            {"sample_id": f"s{i:04d}", "values": {"window_u_value": float(i)}} for i in range(5)
+        ]
+        observed_chunk_sizes: list[int] = []
+        original = campaign._submit_and_await_all
+
+        def _wrapped_submit(
+            submissions: dict[str, tuple[Handle, Any]],
+            step_name: str,
+            recovery_manager: Any = None,
+            resubmit_callback: Any = None,
+        ) -> None:
+            observed_chunk_sizes.append(len(submissions))
+            original(
+                submissions,
+                step_name,
+                recovery_manager=recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+
+        with patch.object(campaign, "_submit_and_await_all", side_effect=_wrapped_submit):
+            campaign.step_apply_parameters(samples)
+        assert observed_chunk_sizes == [5]
+
+    def test_partition_sharding_selects_assigned_subset(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            shard_count=3,
+            shard_index=1,
+        )
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        samples: list[SampleSpec] = [
+            {"sample_id": f"s{i:04d}", "values": {"window_u_value": float(i)}} for i in range(7)
+        ]
+        selected = campaign._apply_sharding(samples, generation=0)
+        assert [s["sample_id"] for s in selected] == ["s0001", "s0004"]
+
+    def test_range_sharding_selects_index_slice(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            shard_start=2,
+            shard_end=5,
+        )
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        samples: list[SampleSpec] = [
+            {"sample_id": f"s{i:04d}", "values": {"window_u_value": float(i)}} for i in range(7)
+        ]
+        selected = campaign._apply_sharding(samples, generation=0)
+        assert [s["sample_id"] for s in selected] == ["s0002", "s0003", "s0004"]
 
 
 # -----------------------------------------------------------------------
