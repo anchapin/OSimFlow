@@ -221,7 +221,7 @@ fixable = ["ALL"]
 # _work_scripts/ are CLI scripts (same as bin/).
 "osimflow/_work_scripts/*" = ["PL", "SIM"]
 # tests/ use pytest patterns that ruff would otherwise flag.
-"tests/**" = ["PL", "SIM", "B011"]
+"tests/**" = ["PL", "SIM", "B011", "F841"]
 # __init__.py: re-exports.
 "**/__init__.py" = ["F401"]
 # Executors use lazy SDK imports inside __init__ to avoid paying import
@@ -232,6 +232,10 @@ fixable = ["ALL"]
 "osimflow/executors/__init__.py" = ["I001"]
 # campaign.py: SIM108 if-else block is more readable with explanatory comment.
 "osimflow/campaign.py" = ["SIM108"]
+# campaigns.py uses lazy imports for heavy SDKs to avoid import-time overhead.
+# PLR0912: too many branches in _build_executor_from_request is intentional
+#          to map all executor types to their config dicts.
+"osimflow/api/campaigns.py" = ["PLC0415", "I001", "PLR0912"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["osimflow"]

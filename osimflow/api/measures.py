@@ -449,8 +449,8 @@ def _extract_measure_archive(
         with tarfile.open(archive_path, "r:*") as tf:
             for tar_member in tf.getmembers():
                 if tar_member.isfile():
-                    tar_member_path = (dest_dir / tar_member.name).resolve()
-                    if not tar_member_path.is_relative_to(dest_dir.resolve()):
+                    member_path = (dest_dir / tar_member.name).resolve()
+                    if not member_path.is_relative_to(dest_dir.resolve()):
                         raise ValueError(
                             f"Archive member {tar_member.name} escapes extraction directory"
                         )
