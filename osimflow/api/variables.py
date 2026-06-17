@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
@@ -450,6 +451,314 @@ def _validate_single_var_for_api(var: dict[str, Any]) -> None:
 
     # Dispatch to distribution-specific validator
     _VALIDATORS[dist](var)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/variables/batch_update — atomic batch update
+# ---------------------------------------------------------------------------
+
+
+class VariableBatchUpdateItem(BaseModel):
+    """One item in a batch variable update request."""
+
+    name: str = Field(description="Variable name to update")
+    rename_to: str | None = Field(
+        default=None,
+        description="New name for the variable (optional). When provided, the variable is renamed.",
+    )
+    distribution: str | None = Field(default=None, description="Distribution type")
+    description: str | None = Field(default=None)
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableBatchUpdateRequest(BaseModel):
+    """Request body for ``POST /api/v1/variables/batch_update``."""
+
+    variables: list[VariableBatchUpdateItem] = Field(
+        description="List of variable updates to apply atomically"
+    )
+
+
+class VariableBatchUpdateError(BaseModel):
+    """Error detail for a single failed variable update in a batch."""
+
+    name: str = Field(description="Variable name that failed")
+    error: str = Field(description="Error message")
+
+
+class VariableBatchUpdateResponse(BaseModel):
+    """Response for ``POST /api/v1/variables/batch_update``."""
+
+    updated: list[VariableDetailResponse] = Field(
+        default_factory=list,
+        description="List of successfully updated variables",
+    )
+    errors: list[VariableBatchUpdateError] = Field(
+        default_factory=list,
+        description="List of failed variable updates",
+    )
+
+
+@variables_router.post(
+    "/api/v1/variables/batch_update",
+    response_model=VariableBatchUpdateResponse,
+)
+async def batch_update_variables(  # noqa: PLR0912
+    body: VariableBatchUpdateRequest,
+    request: Request,
+) -> VariableBatchUpdateResponse:
+    """Atomically update multiple variables in the campaign's variables.yml.
+
+    All variables are validated before any are updated.  If any variable
+    is invalid (not found, unknown distribution, missing required parameters),
+    the entire batch is rejected with a 400 error listing all failures.
+
+    Returns 403 in read-only mode.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="Variable batch update requires readwrite permission",
+        )
+
+    yml_path = _variables_yml_path(request)
+    variables = _load_variables(yml_path)
+
+    # Build a name → index map for fast lookup
+    name_to_idx: dict[str, int] = {}
+    for i, v in enumerate(variables):
+        var_name = v.get("name", "")
+        if var_name:
+            name_to_idx[var_name] = i
+
+    # Phase 1: validate all updates before applying any
+    # Two error types:
+    #   - phase1a_errors: non-fatal rename conflicts — let other items proceed
+    #   - phase1b_errors: fatal validation failures — return early (atomic reject)
+    phase1a_errors: list[VariableBatchUpdateError] = []
+    phase1b_errors: list[VariableBatchUpdateError] = []
+    # Keep track of which names would be used after updates for conflict checking
+    post_update_names: set[str] = set()
+
+    # Track per-item computed data for Phase 2
+    # item_key -> {"is_rename": bool, "idx": int, "final_name": str, "updated": dict}
+    item_data: dict[int, dict[str, Any]] = {}
+    # Track items that failed Phase 1a so Phase 2/3 can skip them
+    phase1a_failed: set[int] = set()
+
+    for item in body.variables:
+        var_name = item.name
+        item_key = id(item)
+
+        # Check if variable exists
+        if var_name not in name_to_idx:
+            phase1b_errors.append(
+                VariableBatchUpdateError(
+                    name=var_name,
+                    error=f"Variable '{var_name}' not found",
+                )
+            )
+            continue
+
+        # Detect whether this item performs a rename: rename_to is set
+        is_rename = item.rename_to is not None
+
+        # Phase 1a: detect within-batch name conflicts for renames
+        if is_rename:
+            if item.rename_to in post_update_names:
+                phase1a_errors.append(
+                    VariableBatchUpdateError(
+                        name=var_name,
+                        error=f"Name conflict: '{item.rename_to}' already updated in this batch",
+                    )
+                )
+                phase1a_failed.add(item_key)
+                continue
+            assert item.rename_to is not None
+            post_update_names.add(item.rename_to)
+
+        # Build the updated variable dict
+        idx = name_to_idx[var_name]
+        updated: dict[str, Any] = dict(variables[idx])
+
+        # Apply updates - use item attributes
+        if item.distribution is not None:
+            if item.distribution not in VALID_DISTRIBUTIONS:
+                phase1b_errors.append(
+                    VariableBatchUpdateError(
+                        name=var_name,
+                        error=f"Unknown distribution '{item.distribution}'. Valid: {', '.join(sorted(VALID_DISTRIBUTIONS))}",
+                    )
+                )
+                continue
+            updated["distribution"] = item.distribution
+
+        # Copy all non-None fields from the item (including rename via rename_to)
+        for key in (
+            "name",
+            "rename_to",
+            "description",
+            "min",
+            "max",
+            "mean",
+            "sigma",
+            "mode",
+            "values",
+            "alpha",
+            "beta",
+            "rate",
+            "target",
+            "mapping",
+        ):
+            value = getattr(item, key, None)
+            if value is not None:
+                updated[key] = value
+
+        # Apply rename if specified
+        if is_rename:
+            updated["name"] = item.rename_to
+
+        # Phase 1b: validate the updated variable
+        try:
+            _validate_single_var_for_api(updated)
+        except HTTPException as exc:
+            phase1b_errors.append(VariableBatchUpdateError(name=var_name, error=str(exc.detail)))
+            continue
+        except Exception as exc:
+            phase1b_errors.append(VariableBatchUpdateError(name=var_name, error=str(exc)))
+            continue
+
+        # Compute final name for this item (needed for Phase 2 cross-item check)
+        final_name = item.rename_to if is_rename else updated.get("name", var_name)
+        item_data[item_key] = {
+            "is_rename": is_rename,
+            "idx": idx,
+            "final_name": final_name,
+            "updated": updated,
+            "var_name": var_name,
+        }
+
+    # Phase 1b errors are fatal — reject entire batch atomically
+    if phase1b_errors:
+        return VariableBatchUpdateResponse(errors=phase1b_errors)
+
+    # Phase 1a errors are non-fatal — let other items proceed through Phase 2
+
+    # Phase 2: cross-item conflict check for renames.
+    # Check that each rename target is not an original variable name that is NOT
+    # being renamed away in this batch. Phase 2 only runs for items that passed
+    # Phase 1a (stored in item_data).
+    existing_var_names = {v["name"] for v in variables}
+    # Map: original_name -> final_name (None if being renamed away)
+    original_to_final: dict[str, str | None] = {}
+    for item in body.variables:
+        item_info = item_data.get(id(item))
+        if item_info is None:
+            continue  # Phase 1a failed
+        if item_info["is_rename"]:
+            original_to_final[item.name] = item_info["final_name"]
+        else:
+            original_to_final[item.name] = None  # not renamed
+
+    phase2_errors: list[VariableBatchUpdateError] = []
+    phase2_passed_items: set[int] = set(item_data.keys())
+    for item in body.variables:
+        item_key = id(item)
+        if item_key not in phase2_passed_items:
+            continue  # Phase 1a failed
+        item_info = item_data[item_key]
+        if item_info["is_rename"]:
+            final_name = item_info["final_name"]
+            # If final_name is an original variable name, that original must be
+            # being renamed away in this batch (so the name becomes available)
+            if final_name in existing_var_names:
+                original_var_final = original_to_final.get(final_name)
+                if original_var_final is not None:
+                    # final_name is an existing variable that is NOT being renamed
+                    phase2_errors.append(
+                        VariableBatchUpdateError(
+                            name=item_info["var_name"],
+                            error=f"Variable '{final_name}' already exists",
+                        )
+                    )
+                    break
+
+    # Phase 2 errors are fatal — reject entire batch
+    if phase2_errors:
+        return VariableBatchUpdateResponse(errors=phase2_errors)
+
+    # Phase 3: apply all updates (items that passed Phase 1a and Phase 2)
+    updated_vars: list[VariableDetailResponse] = []
+    for item in body.variables:
+        item_key = id(item)
+        if item_key not in phase2_passed_items:
+            continue  # skip items that failed Phase 1a or Phase 2
+        var_name = item.name
+        idx = name_to_idx[var_name]
+        updated = dict(variables[idx])
+
+        if item.distribution is not None:
+            updated["distribution"] = item.distribution
+
+        for key in (
+            "name",
+            "description",
+            "min",
+            "max",
+            "mean",
+            "sigma",
+            "mode",
+            "values",
+            "alpha",
+            "beta",
+            "rate",
+            "target",
+            "mapping",
+        ):
+            value = getattr(item, key, None)
+            if value is not None:
+                updated[key] = value
+
+        # Apply rename if specified
+        if item.rename_to is not None:
+            updated["name"] = item.rename_to
+
+        variables[idx] = updated
+        updated_vars.append(
+            VariableDetailResponse(
+                name=updated.get("name", ""),
+                distribution=updated.get("distribution", ""),
+                description=updated.get("description"),
+                min=updated.get("min"),
+                max=updated.get("max"),
+                mean=updated.get("mean"),
+                sigma=updated.get("sigma"),
+                mode=updated.get("mode"),
+                values=updated.get("values"),
+                alpha=updated.get("alpha"),
+                beta=updated.get("beta"),
+                rate=updated.get("rate"),
+                target=updated.get("target"),
+                mapping=updated.get("mapping"),
+            )
+        )
+
+    _save_variables(yml_path, variables)
+    _invalidate_lhs_cache(request)
+
+    log.info("batch updated %d variables in %s", len(updated_vars), yml_path)
+
+    return VariableBatchUpdateResponse(updated=updated_vars, errors=phase1a_errors)
 
 
 # ---------------------------------------------------------------------------
