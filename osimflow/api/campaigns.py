@@ -31,6 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
@@ -43,7 +45,6 @@ from osimflow.api.schemas import (
     BatchUploadResponse,
     CampaignCancelResponse,
     CampaignComparisonEntry,
-    CampaignComparisonResponse,
     CampaignCreateRequest,
     CampaignCreateResponse,
     CampaignDetailResponse,
@@ -520,7 +521,7 @@ async def compare_campaigns_get(
         if label_hint in aggregator._runs:
             run = aggregator._runs[label_hint]
         else:
-            for lbl, r in aggregator._runs.items():
+            for _lbl, r in aggregator._runs.items():
                 if r.outdir == outdir_path:
                     run = r
                     break
@@ -694,11 +695,6 @@ def _compute_kpi_stats(campaign_dir: Path) -> dict[str, KpiMetricStats]:
     """
     csv_path = campaign_dir / "aggregated_results.csv"
     if not csv_path.exists():
-        return {}
-
-    try:
-        import pandas as pd  # noqa: PLC0415
-    except ImportError:
         return {}
 
     try:

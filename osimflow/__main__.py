@@ -39,8 +39,8 @@ from osimflow import (
     build_task_queue,
     load_config,
 )
-from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.byos import ByosTrustLevel, load_user_function
+from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.exporters.osa import OSAExporter
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 
@@ -2103,7 +2103,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_compare_outdirs(args: argparse.Namespace) -> int:
+def _cmd_compare_outdirs(args: argparse.Namespace) -> int:  # noqa: PLR0912
     """Compare N campaigns using CrossRunAggregator (KPI-level comparison)."""
     import json as json_mod  # noqa: PLC0415
 
@@ -2124,7 +2124,7 @@ def _cmd_compare_outdirs(args: argparse.Namespace) -> int:
     else:
         labels = [None] * len(args.outdirs)
 
-    aggregator = CrossRunAggregator(campaigns=list(zip(args.outdirs, labels)))
+    aggregator = CrossRunAggregator(campaigns=list(zip(args.outdirs, labels, strict=True)))
     aggregator.load()
     if not aggregator._runs:
         print("error: No valid campaigns found (missing aggregated_results.csv)", file=sys.stderr)
@@ -2162,10 +2162,7 @@ def _cmd_compare_outdirs(args: argparse.Namespace) -> int:
         print(f"{kpi[:kpi_col_w]:<{kpi_col_w}}", end="")
         for label in campaign_labels:
             val = s.values.get(label)
-            if val is None:
-                cell = "N/A"
-            else:
-                cell = f"{val:.4f}"
+            cell = "N/A" if val is None else f"{val:.4f}"
             print(f" {cell[:col_w]:<{col_w}}", end="")
         print()
 
@@ -2175,10 +2172,11 @@ def _cmd_compare_outdirs(args: argparse.Namespace) -> int:
     for kpi, s in stats.items():
         if kpi not in kpis_to_show:
             continue
-        if s.best_campaign and s.best_value is not None:
+        best_val = s.values.get(s.best_campaign) if s.best_campaign else None
+        if best_val is not None:
             print(
-                f"  {kpi:<20} best={s.best_campaign} ({s.best_value:.4f}), "
-                f"worst={s.worst_campaign} ({s.values.get(s.worst_campaign) or 0:.4f})"
+                f"  {kpi:<20} best={s.best_campaign} ({best_val:.4f}), "
+                f"worst={s.worst_campaign} ({s.values.get(s.worst_campaign or '') or 0:.4f})"
             )
 
     # Cross-run summary statistics
@@ -2233,7 +2231,7 @@ def _cmd_aggregate_runs(args: argparse.Namespace) -> int:
     else:
         labels = [None] * len(args.outdirs)
 
-    aggregator = CrossRunAggregator(campaigns=list(zip(args.outdirs, labels)))
+    aggregator = CrossRunAggregator(campaigns=list(zip(args.outdirs, labels, strict=True)))
     aggregator.load()
 
     loaded = aggregator._runs
@@ -2271,7 +2269,7 @@ def _cmd_aggregate_runs(args: argparse.Namespace) -> int:
         for kpi, s in stats.items():
             if kpi not in kpis_to_show:
                 continue
-            vals = {l: v for l, v in s.values.items() if v is not None}
+            vals = {k: v for k, v in s.values.items() if v is not None}
             if vals:
                 print(
                     f"  {kpi:<24} overall_mean={s.overall_mean:>10.4f}  "
@@ -2773,7 +2771,7 @@ def _cmd_query_results(args: argparse.Namespace) -> int:
     """Query aggregated results across multiple campaigns (issue #585)."""
     import json as json_mod  # noqa: PLC0415
 
-    from osimflow.api.results_query import query_results_cli
+    from osimflow.api.results_query import query_results_cli  # noqa: PLC0415
 
     campaign_ids = None
     if args.campaign_ids:
@@ -2834,7 +2832,7 @@ def _cmd_query_results(args: argparse.Namespace) -> int:
 
 def _cmd_export_results(args: argparse.Namespace) -> int:
     """Export aggregated results to CSV or JSON (issue #585)."""
-    from osimflow.api.results_query import export_results_cli
+    from osimflow.api.results_query import export_results_cli  # noqa: PLC0415
 
     campaign_ids = None
     if args.campaign_ids:

@@ -24,6 +24,7 @@ the existing POST endpoint.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -81,8 +82,8 @@ class CrossRunStats:
                     self.overall_std = (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
                 self.overall_min = min(finite.values())
                 self.overall_max = max(finite.values())
-                self.best_campaign = min(finite, key=finite.get)
-                self.worst_campaign = max(finite, key=finite.get)
+                self.best_campaign = min(finite.keys(), key=lambda k: finite[k])
+                self.worst_campaign = max(finite.keys(), key=lambda k: finite[k])
 
 
 # --------------------------------------------------------------------------- #
@@ -139,7 +140,7 @@ class CrossRunAggregator:
         Returns ``True`` if the label was found and removed.
         """
         original = len(self._campaigns)
-        self._campaigns = [(o, l) for o, l in self._campaigns if l != label]
+        self._campaigns = [(o, lbl) for o, lbl in self._campaigns if lbl != label]
         if len(self._campaigns) < original:
             self._combined_df = None
             self._cross_run_stats = {}
@@ -176,8 +177,6 @@ class CrossRunAggregator:
         run_json = outdir / "run.json"
         if run_json.exists():
             try:
-                import json
-
                 data = json.loads(run_json.read_text())
                 cid = data.get("campaign_id")
                 if cid:
@@ -237,8 +236,7 @@ class CrossRunAggregator:
         """Return the combined DataFrame, loading and aggregating if needed."""
         if self._combined_df is None:
             self.aggregate()
-        # pyright: ignore [None-vs-none-return]
-        return self._combined_df  # type: ignore[return-value]
+        return self._combined_df
 
     # ------------------------------------------------------------------ #
     # Cross-run statistics
@@ -258,8 +256,7 @@ class CrossRunAggregator:
         if self._combined_df is None:
             self.aggregate()
 
-        # pyright: ignore [None-vs-none]
-        df = self._combined_df  # type: ignore[assignment]
+        df = self._combined_df
         if df.empty:
             return {}
 
@@ -299,8 +296,7 @@ class CrossRunAggregator:
         """Return cross-run statistics, computing if needed."""
         if not self._cross_run_stats:
             self.compute_cross_run_stats()
-        # pyright: ignore [None-vs-none-return]
-        return self._cross_run_stats  # type: ignore[return-value]
+        return self._cross_run_stats
 
     # ------------------------------------------------------------------ #
     # Ranking
@@ -372,7 +368,7 @@ class CrossRunAggregator:
         combined = self.get_combined_dataframe()
         stats = self.get_cross_run_stats()
 
-        kpi_summary: dict[str, dict[str, float | None]] = {}
+        kpi_summary: dict[str, dict[str, str | float | None]] = {}
         for kpi, s in stats.items():
             kpi_summary[kpi] = {
                 "best_campaign": s.best_campaign,
