@@ -307,7 +307,7 @@ class Campaign:
                 )
 
         # Cost tracking (issue #447). Built here so the correct backend is
-        # always used.  None when track_costs is False (zero overhead).
+        # always used.  None when enable_cost_tracking is False (zero overhead).
         self._cost_tracker = build_cost_tracker(
             campaign_id=self.trace.campaign_id,
             executor_type=executor.name,
@@ -315,10 +315,10 @@ class Campaign:
             result_storage_bucket=cfg.result_storage_bucket,
             result_storage_prefix=str(cfg.outdir.name),
             result_storage_endpoint=cfg.result_storage_endpoint,
-            track_costs=cfg.track_costs,
-            aws_on_demand_per_vcpu_hour=cfg.aws_on_demand_per_vcpu_hour,
-            aws_spot_per_vcpu_hour=cfg.aws_spot_per_vcpu_hour,
-            slurm_cost_per_node_hour=cfg.slurm_cost_per_node_hour,
+            track_costs=cfg.enable_cost_tracking,
+            aws_on_demand_per_vcpu_hour=cfg.cost_on_demand_price,
+            aws_spot_per_vcpu_hour=cfg.cost_spot_price,
+            slurm_cost_per_node_hour=getattr(cfg, "slurm_cost_per_node_hour", 0.0),
         )
 
         # Graceful shutdown (issue #255): cancellation flag and lock.

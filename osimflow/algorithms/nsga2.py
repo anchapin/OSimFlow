@@ -66,8 +66,8 @@ try:
     _HAS_PYMOO = True
 except ImportError:
     _HAS_PYMOO = False
-    RNSGA2 = None  # type: ignore[assignment]
-    NSGA2 = None  # type: ignore[assignment]
+    RNSGA2 = None
+    NSGA2 = None
 
 try:
     from pymoo.util.ref_dirs import get_reference_directions
@@ -441,6 +441,9 @@ class NSGA2Algorithm(BaseAlgorithm):
             self._parsed_ref_points = self._parse_ref_points_string(ref_points_str, n_obj)
 
         if self._parsed_ref_points is not None:
+            # Sync the public _ref_points attribute so that tests and
+            # downstream callers see the configured value.
+            self._ref_points = self._parsed_ref_points  # type: ignore[assignment]
             log.info(
                 "R-NSGA-II configured with %d reference points for %d objectives",
                 self._parsed_ref_points.shape[0],

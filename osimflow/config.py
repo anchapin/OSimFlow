@@ -608,6 +608,8 @@ class CampaignConfig:
     # Spot price per vCPU-hour for cost estimation. Default $0.03/vCPU·h
     # (40% savings vs on-demand).
     cost_spot_price: float = 0.03
+    # Slurm cost per node-hour for cost estimation. Default $0.0 (free).
+    slurm_cost_per_node_hour: float = 0.0
     # Alert rules YAML file path (issue #438). When set, custom alert rules
     # are loaded from this file in addition to the built-in rules.
     alert_rules: Path | None = None

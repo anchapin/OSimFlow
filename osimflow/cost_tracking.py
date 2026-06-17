@@ -327,7 +327,9 @@ def build_cost_tracker(
     if not track_costs:
         return None
 
-    from .storage import build_result_storage
+    from .storage import (  # noqa: PLC0415  # conditional import to avoid circular import
+        build_result_storage,
+    )
 
     storage: ResultStorage | None = None
     if result_storage_backend != "local":
