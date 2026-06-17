@@ -397,7 +397,7 @@ def _load_measures_registry(measures_dir: Path) -> dict[str, Any]:
     if not registry_path.is_file():
         return {}
     try:
-        return json.loads(registry_path.read_text(encoding="utf-8"))
+        return json.loads(registry_path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -447,12 +447,12 @@ def _extract_measure_archive(
             zf.extractall(dest_dir)
     elif tarfile.is_tarfile(archive_path):
         with tarfile.open(archive_path, "r:*") as tf:
-            for member in tf.getmembers():
-                if member.isfile():
-                    member_path = (dest_dir / member.name).resolve()
+            for tar_member in tf.getmembers():
+                if tar_member.isfile():
+                    member_path = (dest_dir / tar_member.name).resolve()
                     if not member_path.is_relative_to(dest_dir.resolve()):
                         raise ValueError(
-                            f"Archive member {member.name} escapes extraction directory"
+                            f"Archive member {tar_member.name} escapes extraction directory"
                         )
             tf.extractall(dest_dir)
     else:
