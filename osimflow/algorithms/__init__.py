@@ -655,6 +655,7 @@ class LHSAlgorithm(BaseAlgorithm):
 
 AlgorithmRegistry.register("lhs", LHSAlgorithm)
 
+from osimflow.algorithms.diag import DiagAlgorithm  # noqa: E402
 from osimflow.algorithms.factorial import (  # noqa: E402
     FullFactorialAlgorithm,
     GridSamplingAlgorithm,
@@ -663,6 +664,7 @@ from osimflow.algorithms.halton import HaltonAlgorithm  # noqa: E402
 from osimflow.algorithms.rgenoud import RgenoudAlgorithm  # noqa: E402
 from osimflow.algorithms.sobol import SobolAlgorithm  # noqa: E402
 
+AlgorithmRegistry.register("diag", DiagAlgorithm)
 AlgorithmRegistry.register("sobol", SobolAlgorithm)
 AlgorithmRegistry.register("halton", HaltonAlgorithm)
 AlgorithmRegistry.register("full_factorial", FullFactorialAlgorithm)
