@@ -1927,11 +1927,106 @@
         }
       }
     },
+    "/api/v1/measures/upload": {
+      "post": {
+        "summary": "Upload Measure",
+        "description": "Upload a measure bundle (zip or tar.gz).\n\nThe bundle must contain a ``measure.rb`` (Ruby) or ``measure.py`` (Python)\nfile inside a named directory. Optional ``tests/`` and ``resources/``\nsubdirectories are also accepted.\n\nThe measure is introspected, stored in the configured measures directory,\nand registered with a content-based ``version_uuid`` for idempotent re-upload.",
+        "operationId": "upload_measure_api_v1_measures_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_measure_api_v1_measures_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/measures": {
       "get": {
         "summary": "List Measures",
-        "description": "List all measures referenced in the campaign's ``workflow.osw``.\n\nMeasures are discovered from the workflow steps.  For each measure,\nargument details are introspected from ``measure.rb`` (Ruby) or\n``measure.py`` (Python) source files when they are accessible on disk.\n\nReturns an empty list if no ``workflow.osw`` is found.",
+        "description": "List all measures referenced in the campaign's ``workflow.osw`` **and**\nuploaded measures from the measures directory.\n\nFor workflow measures, argument details are introspected from\n``measure.rb`` (Ruby) or ``measure.py`` (Python) source files.\n\nSupports filtering across both sources:\n- ``search``: substring match in measure name and description\n- ``taxonomy``: prefix match on the taxonomy field (uploaded measures only)\n- ``tag``: exact tag match (uploaded measures only)\n\nReturns an empty list if neither workflow.osw nor uploaded measures exist.",
         "operationId": "list_measures_api_v1_measures_get",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search in measure name and description",
+              "title": "Search"
+            },
+            "description": "Search in measure name and description"
+          },
+          {
+            "name": "taxonomy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by taxonomy prefix (e.g. Economics)",
+              "title": "Taxonomy"
+            },
+            "description": "Filter by taxonomy prefix (e.g. Economics)"
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by tag",
+              "title": "Tag"
+            },
+            "description": "Filter by tag"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1939,6 +2034,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MeasureListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1969,6 +2074,136 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MeasureInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/measures/by-id/{measure_id}": {
+      "get": {
+        "summary": "Get Uploaded Measure",
+        "description": "Get full metadata for an uploaded measure by its UUID.\n\nReturns 404 for workflow-discovered measures (use ``GET /api/v1/measures/{name}`` instead).",
+        "operationId": "get_uploaded_measure_api_v1_measures_by_id__measure_id__get",
+        "parameters": [
+          {
+            "name": "measure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measure Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Patch Uploaded Measure",
+        "description": "Update metadata for an uploaded measure.\n\nSupports updating: ``taxonomy``, ``description``, ``tags``, ``measure_group``.\nReturns 404 for workflow-discovered measures.",
+        "operationId": "patch_uploaded_measure_api_v1_measures_by_id__measure_id__patch",
+        "parameters": [
+          {
+            "name": "measure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measure Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeasureMetadataUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Uploaded Measure",
+        "description": "Delete an uploaded measure.\n\nRefuses to delete workflow-discovered measures (returns 403).\nReturns 404 if the measure_id is not in the uploaded registry.",
+        "operationId": "delete_uploaded_measure_api_v1_measures_by_id__measure_id__delete",
+        "parameters": [
+          {
+            "name": "measure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measure Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete Uploaded Measure Api V1 Measures By Id  Measure Id  Delete"
                 }
               }
             }
@@ -2098,6 +2333,20 @@
           "file"
         ],
         "title": "Body_upload_file_api_v1_files_upload_post"
+      },
+      "Body_upload_measure_api_v1_measures_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_measure_api_v1_measures_upload_post"
       },
       "CampaignCancelResponse": {
         "properties": {
@@ -3453,6 +3702,91 @@
         "title": "MeasureArgument",
         "description": "A single argument accepted by a measure."
       },
+      "MeasureDetailResponse": {
+        "properties": {
+          "measure_id": {
+            "type": "string",
+            "title": "Measure Id",
+            "description": "Unique identifier (UUID for uploaded measures)"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Measure directory name"
+          },
+          "version_uuid": {
+            "type": "string",
+            "title": "Version Uuid",
+            "description": "Version UUID from content hash"
+          },
+          "taxonomy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy",
+            "description": "ASHRAE 229 taxonomy"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Measure description"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags",
+            "description": "Arbitrary tags"
+          },
+          "measure_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measure Group",
+            "description": "Logical grouping"
+          },
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/MeasureArgument"
+            },
+            "type": "array",
+            "title": "Arguments",
+            "description": "Introspected arguments"
+          },
+          "is_uploaded": {
+            "type": "boolean",
+            "title": "Is Uploaded",
+            "description": "True if from measures_dir (uploaded), False if from workflow",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "measure_id",
+          "name",
+          "version_uuid"
+        ],
+        "title": "MeasureDetailResponse",
+        "description": "Full metadata for a measure, including taxonomy and tags."
+      },
       "MeasureInfo": {
         "properties": {
           "measure_dir_name": {
@@ -3516,7 +3850,7 @@
           "source": {
             "type": "string",
             "title": "Source",
-            "description": "Source of measure information: workflow.osw | template_package"
+            "description": "Source of measure information: workflow.osw | template_package | uploaded"
           }
         },
         "type": "object",
@@ -3526,6 +3860,103 @@
         ],
         "title": "MeasureListResponse",
         "description": "Envelope for the measure list endpoint."
+      },
+      "MeasureMetadataUpdate": {
+        "properties": {
+          "taxonomy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy",
+            "description": "ASHRAE 229 taxonomy (e.g. Economics.Construction.General)"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Measure description"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Arbitrary tags for filtering"
+          },
+          "measure_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measure Group",
+            "description": "Logical grouping for the measure"
+          }
+        },
+        "type": "object",
+        "title": "MeasureMetadataUpdate",
+        "description": "Request body for ``PATCH /api/v1/measures/{measure_id}``."
+      },
+      "MeasureUploadResponse": {
+        "properties": {
+          "measure_id": {
+            "type": "string",
+            "title": "Measure Id",
+            "description": "Unique identifier for the uploaded measure"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Measure directory name"
+          },
+          "version_uuid": {
+            "type": "string",
+            "title": "Version Uuid",
+            "description": "Version UUID derived from measure content hash"
+          },
+          "argument_count": {
+            "type": "integer",
+            "title": "Argument Count",
+            "description": "Number of arguments introspected from the measure"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Human-readable result message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measure_id",
+          "name",
+          "version_uuid",
+          "argument_count",
+          "detail"
+        ],
+        "title": "MeasureUploadResponse",
+        "description": "Response for a successful measure upload."
       },
       "MultiCampaignComparisonResponse": {
         "properties": {

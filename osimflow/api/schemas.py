@@ -496,7 +496,7 @@ class VariableDeleteResponse(BaseModel):
     status: str = Field(description="deleted")
 
 
-# Measure management (issue #348)
+# Measure management (issue #348, #547)
 # ---------------------------------------------------------------------------
 
 
@@ -542,7 +542,43 @@ class MeasureListResponse(BaseModel):
     measures: list[MeasureInfo] = Field(default_factory=list)
     total: int
     source: str = Field(
-        description="Source of measure information: workflow.osw | template_package"
+        description="Source of measure information: workflow.osw | template_package | uploaded"
+    )
+
+
+class MeasureUploadResponse(BaseModel):
+    """Response for a successful measure upload."""
+
+    measure_id: str = Field(description="Unique identifier for the uploaded measure")
+    name: str = Field(description="Measure directory name")
+    version_uuid: str = Field(description="Version UUID derived from measure content hash")
+    argument_count: int = Field(description="Number of arguments introspected from the measure")
+    detail: str = Field(description="Human-readable result message")
+
+
+class MeasureMetadataUpdate(BaseModel):
+    """Request body for ``PATCH /api/v1/measures/{measure_id}``."""
+
+    taxonomy: str | None = Field(default=None, description="ASHRAE 229 taxonomy (e.g. Economics.Construction.General)")
+    description: str | None = Field(default=None, description="Measure description")
+    tags: list[str] | None = Field(default=None, description="Arbitrary tags for filtering")
+    measure_group: str | None = Field(default=None, description="Logical grouping for the measure")
+
+
+class MeasureDetailResponse(BaseModel):
+    """Full metadata for a measure, including taxonomy and tags."""
+
+    measure_id: str = Field(description="Unique identifier (UUID for uploaded measures)")
+    name: str = Field(description="Measure directory name")
+    version_uuid: str = Field(description="Version UUID from content hash")
+    taxonomy: str | None = Field(default=None, description="ASHRAE 229 taxonomy")
+    description: str | None = Field(default=None, description="Measure description")
+    tags: list[str] = Field(default_factory=list, description="Arbitrary tags")
+    measure_group: str | None = Field(default=None, description="Logical grouping")
+    arguments: list[MeasureArgument] = Field(default_factory=list, description="Introspected arguments")
+    is_uploaded: bool = Field(
+        default=False,
+        description="True if from measures_dir (uploaded), False if from workflow",
     )
 
 

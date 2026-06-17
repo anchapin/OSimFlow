@@ -1258,6 +1258,8 @@ def create_app(
     # --- Application state ---
     app.state.outdir = outdir
     app.state.campaigns_base_dir = campaigns_base_dir
+    # measures_dir defaults to {outdir}/.measures/ when outdir is set (issue #547)
+    app.state.measures_dir = outdir / ".measures" if outdir is not None else None
     app.state.read_only = read_only
     # Store the key store for the middleware
     app.state.api_key_store = key_store
