@@ -872,6 +872,7 @@ class TestIslandModelGAAlgorithm:
         algo = IslandModelGAAlgorithm()
         algo.generate_samples({"variables": []}, n_samples=0, seed=None, outdir=tmp_path)
 
+
 # SequentialSearchAlgorithm
 # ---------------------------------------------------------------------------
 
