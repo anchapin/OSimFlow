@@ -267,6 +267,28 @@ def _convert_pivot_variable(
     return entry, warnings
 
 
+def _normalize_uncertainty_description(unc: dict[str, Any]) -> dict[str, Any]:
+    dist = {"type": unc.get("type", "")}
+    for attr in unc.get("attributes", []):
+        name = attr.get("name")
+        if name == "lower_bounds":
+            dist["minimum"] = attr.get("value")
+        elif name == "upper_bounds":
+            dist["maximum"] = attr.get("value")
+        elif name == "modes":
+            dist["mode"] = attr.get("value")
+        elif name in ("stddev", "sigma"):
+            if attr.get("value") is not None:
+                dist["stddev"] = attr.get("value")
+        elif name == "mean":
+            if attr.get("value") is not None:
+                dist["mean"] = attr.get("value")
+        elif name == "discrete":
+            vaw = attr.get("values_and_weights", [])
+            dist["values"] = [item["value"] for item in vaw if "value" in item]
+    return dist
+
+
 def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, Any], list[str]]:
     """Try to convert a single OSA variable; return (entry, warnings)."""
     if not isinstance(osa_var, dict):
@@ -279,6 +301,9 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     osa_variable_type = osa_var.get("variable_type", "variable")
     is_pivot = osa_variable_type == "pivot"
     osa_dist = osa_var.get("distribution")
+    if not osa_dist and "uncertainty_description" in osa_var:
+        if isinstance(osa_var["uncertainty_description"], dict):
+            osa_dist = _normalize_uncertainty_description(osa_var["uncertainty_description"])
 
     if not osa_dist or not isinstance(osa_dist, dict) or not osa_dist.get("type"):
         return _convert_static_variable(name, osa_var, osa_variable_type)
@@ -295,6 +320,7 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     entry.update(dist_entry)
     _attach_common_fields(entry, osa_var, name, osa_variable_type)
     return entry, []
+
 
 
 # Translation table: OSA algorithm type → OSimFlow registry name.
@@ -480,7 +506,29 @@ def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
 
     osa_variables = problem.get("variables", [])
     if not osa_variables:
-        raise OSAImportError("No variables found in OSA problem definition")
+        # Check if variables are nested in workflow measures
+        extracted_variables = []
+        for measure in problem.get("workflow", []):
+            if isinstance(measure, dict):
+                measure_vars = measure.get("variables", [])
+                if isinstance(measure_vars, list):
+                    for mv in measure_vars:
+                        if isinstance(mv, dict):
+                            mv_copy = dict(mv)
+                            m_name = measure.get("measure_definition_class_name") or measure.get("display_name") or measure.get("name")
+                            arg_name = None
+                            if "argument" in mv_copy and isinstance(mv_copy["argument"], dict):
+                                arg_name = mv_copy["argument"].get("name")
+                            if m_name and arg_name:
+                                mv_copy["measure"] = {
+                                    "display_name": m_name,
+                                    "argument": arg_name
+                                }
+                            extracted_variables.append(mv_copy)
+        osa_variables = extracted_variables
+
+    if not osa_variables:
+        raise OSAImportError("No variables found in OSA problem definition or workflow measures")
 
     warnings: list[str] = []
     converted: list[dict[str, Any]] = []
@@ -503,6 +551,9 @@ def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
     algorithm = problem.get("algorithm", {})
     algorithm_name: str = "lhs"
     if isinstance(algorithm, dict) and algorithm:
+        if "type" not in algorithm and "analysis_type" in problem:
+            algorithm = dict(algorithm)
+            algorithm["type"] = problem["analysis_type"]
         resolved = _resolve_algorithm(algorithm)
         algorithm_name = resolved.name()
         log.info(

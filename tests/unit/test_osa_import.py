@@ -673,6 +673,50 @@ class TestOsaToVariablesYmlAdditional:
         assert len(yml["variables"]) == 1
         assert yml["variables"][0]["name"] == "good"
 
+    def test_workflow_nested_variables_and_uncertainty_description(self, tmp_path: Path) -> None:
+        data = {
+            "problem": {
+                "analysis_type": "lhs",
+                "algorithm": {
+                    "seed": 123,
+                },
+                "workflow": [
+                    {
+                        "measure_definition_class_name": "SetRValue",
+                        "variables": [
+                            {
+                                "display_name": "insul_r",
+                                "variable_type": "variable",
+                                "argument": {
+                                    "name": "r_val",
+                                },
+                                "uncertainty_description": {
+                                    "type": "uniform",
+                                    "attributes": [
+                                        {"name": "lower_bounds", "value": 5.0},
+                                        {"name": "upper_bounds", "value": 30.0},
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        out = tmp_path / "variables.yml"
+        osa_to_variables_yml(data, out)
+        with out.open() as f:
+            yml = yaml.safe_load(f)
+        assert yml["algorithm"] == "lhs"
+        assert len(yml["variables"]) == 1
+        v = yml["variables"][0]
+        assert v["name"] == "insul_r"
+        assert v["distribution"] == "uniform"
+        assert v["min"] == 5.0
+        assert v["max"] == 30.0
+        assert v["measure_argument"] == "SetRValue.r_val"
+
+
 
 # ---------------------------------------------------------------------------
 # Test: importers __init__ re-exports
