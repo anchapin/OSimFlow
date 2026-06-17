@@ -95,6 +95,7 @@ class TestServeCLI:
             rate_limit="60/minute",
             rate_limit_key="ip",
             ui_enabled=False,
+            variable_editor=False,
             results_viewer=False,
             registry_path=None,
         )
@@ -128,6 +129,7 @@ class TestServeCLI:
             rate_limit="60/minute",
             rate_limit_key="ip",
             ui_enabled=False,
+            variable_editor=False,
             results_viewer=False,
             registry_path=None,
         )
