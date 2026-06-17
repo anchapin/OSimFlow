@@ -887,6 +887,7 @@ class TestIslandModelGAAlgorithm:
         algo.generate_samples({}, n_samples=0, seed=42, outdir=tmp_path)
 
 
+
 # SequentialSearchAlgorithm
 # ---------------------------------------------------------------------------
 
