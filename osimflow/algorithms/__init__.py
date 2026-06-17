@@ -699,6 +699,12 @@ from osimflow.algorithms.uq import UncertaintyQuantification  # noqa: E402
 
 AlgorithmRegistry.register("uq", UncertaintyQuantification)
 
+from osimflow.algorithms.calibration import (  # noqa: E402
+    BM25CalibrationAlgorithm,
+)
+
+AlgorithmRegistry.register("calibration", BM25CalibrationAlgorithm)
+
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)
 # ======================================================================
