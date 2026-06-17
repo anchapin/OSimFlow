@@ -6,17 +6,28 @@ and validates that every variable in ``variables.yml`` maps to a real
 measure argument before simulations start.
 
 GAP-003 / EXT-012: no measure management system.
+GAP-FRESH-CRIT-002: Rserve/BCL Integration — online measure discovery.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import re
+import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import requests
+
 log = logging.getLogger("osimflow.measures")
+
+BCL_API_BASE = "https://bcl.nrel.gov/api/"
+BCL_CACHE_TTL_S = 3600
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +86,76 @@ class AmbiguousVariableError(MeasureRegistryError):
     measures and must be disambiguated via the dotted form."""
 
 
+class BCLMeasureError(MeasureRegistryError):
+    """Raised when a BCL API call fails or returns an unexpected response."""
+
+
 # ---------------------------------------------------------------------------
 # MeasureRegistry
+# ---------------------------------------------------------------------------
+def _get_bcl_api_key() -> str | None:
+    """Resolve the BCL API key from the ``BCL_API_KEY`` env var or None."""
+    return os.environ.get("BCL_API_KEY")
+
+
+def _validate_bcl_measure_taxonomy(
+    name: str,
+    arguments: list[MeasureArgument],
+    entry: dict[str, Any],
+) -> None:
+    """Log warnings when BCL measure arguments deviate from expected taxonomy.
+
+    The BCL taxonomy defines expected argument names and types for standard
+    measure categories. This function checks the discovered arguments against
+    the taxonomy and logs warnings for deviations.
+
+    Parameters
+    ----------
+    name:
+        Measure name used in log messages.
+    arguments:
+        Parsed measure arguments.
+    entry:
+        Raw BCL API entry dict for additional context.
+    """
+    taxonomy = entry.get("taxonomy", "")
+    measure_type = entry.get("measure_type", "")
+
+    # Check for empty argument list (common BCL metadata issue)
+    if not arguments:
+        log.warning(
+            "BCL measure %r (taxonomy=%r, type=%r): no arguments discovered — "
+            "BCL metadata may be incomplete",
+            name,
+            taxonomy,
+            measure_type,
+        )
+        return
+
+    # Validate argument types against known OpenStudio argument types
+    valid_types = {"Double", "String", "Integer", "Boolean", "Choice", "Path"}
+    for arg in arguments:
+        if arg.type not in valid_types:
+            log.warning(
+                "BCL measure %r: argument %r has unexpected type %r — "
+                "expected one of %s",
+                name,
+                arg.name,
+                arg.type,
+                valid_types,
+            )
+
+    # Log info about measure size/complexity
+    n_required = sum(1 for a in arguments if a.required)
+    log.debug(
+        "BCL measure %r: %d argument(s) (%d required), taxonomy=%r",
+        name,
+        len(arguments),
+        n_required,
+        taxonomy,
+    )
+
+
 # ---------------------------------------------------------------------------
 class MeasureRegistry:
     """Discover measures and validate variable mappings.
@@ -96,6 +175,16 @@ class MeasureRegistry:
 
     def __init__(self) -> None:
         self._measures: dict[str, DiscoveredMeasure] = {}
+
+    # ------------------------------------------------------------------
+    # BCL cache directory (lazily initialized)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _bcl_cache_dir() -> Path:
+        """Return the BCL cache directory (~/.osimflow/bcl_cache/)."""
+        cache_dir = Path.home() / ".osimflow" / "bcl_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
 
     # ------------------------------------------------------------------
     # Public API
@@ -247,6 +336,216 @@ class MeasureRegistry:
                 }
             )
         return result
+
+    def discover_from_bcl(
+        self,
+        query: str | None = None,
+        api_key: str | None = None,
+        category: str | None = None,
+        validate: bool = False,
+        timeout: float = 30.0,
+    ) -> list[DiscoveredMeasure]:
+        """Discover measures from the NREL Building Component Library (BCL).
+
+        Queries the BCL API at ``https://bcl.nrel.gov/api/`` for measures
+        matching the given *query* string and/or *category*. Results are
+        cached in ``~/.osimflow/bcl_cache/`` for ``BCL_CACHE_TTL_S`` seconds
+        to avoid repeated network calls.
+
+        Parameters
+        ----------
+        query:
+            Free-text search query for measure name/description.
+            When ``None``, all measures are returned (paginated).
+        api_key:
+            BCL API key. Can also be set via the ``BCL_API_KEY`` env var.
+            An API key is required for some endpoints.
+        category:
+            Optional BCL measure taxonomy category to filter by
+            (e.g. ``"HVAC"``, ``"Envelope"``, ``"Lighting"``).
+        validate:
+            When ``True``, validate measure arguments against BCL taxonomy
+            and log warnings for mismatches.
+        timeout:
+            HTTP request timeout in seconds (default: 30.0).
+
+        Returns
+        -------
+        list[DiscoveredMeasure]
+            A list of measures discovered from BCL. Each measure includes
+            the name, a remote URL, the programming language, and parsed
+            arguments from the BCL metadata.
+
+        Raises
+        ------
+        BCLMeasureError
+            When the BCL API returns an error or the response cannot be parsed.
+        """
+        cache_dir = self._bcl_cache_dir()
+        cache_key = hashlib.sha256(
+            f"{query or ''}|{category or ''}".encode()
+        ).hexdigest()[:16]
+        cache_file = cache_dir / f"{cache_key}.json"
+
+        # Return cached result if fresh
+        if cache_file.is_file():
+            try:
+                mtime = cache_file.stat().st_mtime
+                if time.time() - mtime < BCL_CACHE_TTL_S:
+                    measures = self._load_cached_bcl_measures(cache_file)
+                    if measures:
+                        log.info(
+                            "BCL cache hit for query=%r, category=%r (%d measures)",
+                            query,
+                            category,
+                            len(measures),
+                        )
+                        return measures
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        # Fetch from BCL API
+        headers: dict[str, str] = {"Accept": "application/json"}
+        resolved_api_key = api_key or _get_bcl_api_key()
+        if resolved_api_key:
+            headers["x-api-key"] = resolved_api_key
+
+        params: dict[str, str] = {}
+        if query:
+            params["search"] = query
+        if category:
+            params["category"] = category
+
+        url = f"{BCL_API_BASE}measures"
+        log.info("BCL API request: %s params=%s", url, params)
+
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            log.error("BCL API request failed: %s", exc)
+            raise BCLMeasureError(f"BCL API request failed: {exc}") from exc
+
+        try:
+            data = response.json()
+        except (ValueError, ET.ParseError) as exc:
+            raise BCLMeasureError(f"BCL API returned non-JSON response: {exc}") from exc
+
+        measures = self._parse_bcl_response(data, validate=validate)
+
+        # Persist to cache
+        try:
+            cache_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": m.name,
+                            "path": str(m.path),
+                            "language": m.language,
+                            "arguments": [
+                                {"name": a.name, "type": a.type, "required": a.required, "default": a.default}
+                                for a in m.arguments
+                            ],
+                        }
+                        for m in measures
+                    ]
+                )
+            )
+            log.debug("BCL results cached at %s", cache_file)
+        except OSError as exc:
+            log.warning("could not write BCL cache: %s", exc)
+
+        return measures
+
+    @staticmethod
+    def _load_cached_bcl_measures(cache_file: Path) -> list[DiscoveredMeasure]:
+        """Load BCL measures from a JSON cache file."""
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        measures: list[DiscoveredMeasure] = []
+        for item in data:
+            measures.append(
+                DiscoveredMeasure(
+                    name=item["name"],
+                    path=Path(item["path"]),
+                    language=item["language"],
+                    arguments=[
+                        MeasureArgument(
+                            name=a["name"],
+                            type=a["type"],
+                            required=a["required"],
+                            default=a.get("default"),
+                        )
+                        for a in item.get("arguments", [])
+                    ],
+                )
+            )
+        return measures
+
+    @staticmethod
+    def _parse_bcl_response(data: dict[str, Any], validate: bool) -> list[DiscoveredMeasure]:
+        """Parse a BCL API JSON response into DiscoveredMeasure objects.
+
+        The BCL API returns a ``result`` dict with a ``meass`` list
+        (occasional typo in the API itself). Each measure entry has
+        ``name``, ``description``, ``measure_type``, ``arguments``, etc.
+        """
+        measures: list[DiscoveredMeasure] = []
+        result = data.get("result", {})
+        # Handle the BCL API's occasional typo "meass" vs "measures"
+        raw_measures = result.get("meass", result.get("measures", []))
+        if not isinstance(raw_measures, list):
+            log.warning("BCL response 'measures' field is not a list: %s", type(raw_measures))
+            return measures
+
+        for entry in raw_measures:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name", "")
+            if not name:
+                continue
+
+            # Determine language from taxonomy or file extension
+            measure_type = entry.get("measure_type", "")
+            language = "ruby" if measure_type.lower() == "ruby" else "python"
+
+            # Parse arguments from BCL metadata
+            arguments: list[MeasureArgument] = []
+            raw_args = entry.get("arguments", [])
+            if isinstance(raw_args, list):
+                for arg_entry in raw_args:
+                    if not isinstance(arg_entry, dict):
+                        continue
+                    arg_name = arg_entry.get("name", "")
+                    if not arg_name:
+                        continue
+                    arg_type_str = str(arg_entry.get("type", "String")).capitalize()
+                    if arg_type_str not in ("Double", "String", "Integer", "Boolean", "Choice", "Path"):
+                        arg_type_str = "String"
+                    required = bool(arg_entry.get("required", False))
+                    default = arg_entry.get("default_value")
+                    arguments.append(
+                        MeasureArgument(
+                            name=arg_name,
+                            type=arg_type_str,
+                            required=required,
+                            default=default,
+                        )
+                    )
+
+            if validate:
+                _validate_bcl_measure_taxonomy(name, arguments, entry)
+
+            measures.append(
+                DiscoveredMeasure(
+                    name=name,
+                    path=Path(entry.get("url", "")),  # remote URL, not a local path
+                    language=language,
+                    arguments=arguments,
+                )
+            )
+
+        log.info("BCL returned %d measure(s)", len(measures))
+        return measures
 
     # ------------------------------------------------------------------
     # Internal: measure discovery

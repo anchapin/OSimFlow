@@ -1051,6 +1051,26 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Used when --algorithm uq is set."
         ),
     )
+    run.add_argument(
+        "--bcl-api-key",
+        default=None,
+        help=(
+            "API key for the NREL Building Component Library (BCL) "
+            "(issue #580). Can also be set via the BCL_API_KEY env var. "
+            "Some BCL API endpoints require authentication. "
+            "Get your key at https://bcl.nrel.gov/profile"
+        ),
+    )
+    run.add_argument(
+        "--validate-measures",
+        action="store_true",
+        help=(
+            "Validate measure arguments against BCL taxonomy when discovering "
+            "measures from the Building Component Library (issue #580). "
+            "When set, warnings are logged for measures with incomplete "
+            "metadata or unexpected argument types."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
@@ -1493,6 +1513,62 @@ def _add_measure_args(measure: argparse.ArgumentParser) -> None:
     measure.add_argument("--log_level", default="INFO")
 
 
+def _add_list_measures_args(lm: argparse.ArgumentParser) -> None:
+    """Add arguments for the list-measures command (issue #580)."""
+    lm.add_argument(
+        "--remote",
+        action="store_true",
+        help=(
+            "Query the NREL Building Component Library (BCL) online "
+            "instead of scanning a local template package (issue #580). "
+            "Requires network access and optionally --bcl-api-key for "
+            "authenticated endpoints."
+        ),
+    )
+    lm.add_argument(
+        "--query",
+        type=str,
+        default=None,
+        help=(
+            "Free-text search query for BCL measure name/description. "
+            "Only used with --remote."
+        ),
+    )
+    lm.add_argument(
+        "--category",
+        type=str,
+        default=None,
+        help=(
+            "BCL measure taxonomy category to filter by "
+            "(e.g. HVAC, Envelope, Lighting). Only used with --remote."
+        ),
+    )
+    lm.add_argument(
+        "--bcl-api-key",
+        default=None,
+        help=(
+            "BCL API key (issue #580). Can also be set via BCL_API_KEY env var. "
+            "Get your key at https://bcl.nrel.gov/profile"
+        ),
+    )
+    lm.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Validate measure arguments against BCL taxonomy (issue #580). "
+            "Only used with --remote. Logs warnings for measures with "
+            "incomplete metadata or unexpected argument types."
+        ),
+    )
+    lm.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table).",
+    )
+    lm.add_argument("--log_level", default="INFO")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -1596,6 +1672,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Discover and inspect measures from a template simulation package (issue #532)",
     )
     _add_measure_args(measure)
+    lm = sub.add_parser(
+        "list-measures",
+        help="Browse and search measures from the NREL BCL (issue #580)",
+    )
+    _add_list_measures_args(lm)
     return p
 
 
@@ -2371,6 +2452,67 @@ def _cmd_measure_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_list_measures(args: argparse.Namespace) -> int:
+    """Browse and search measures from the NREL BCL (issue #580)."""
+    import json as json_mod  # noqa: PLC0415
+
+    from osimflow import MeasureRegistry  # noqa: PLC0415
+    from osimflow.measures import BCLMeasureError  # noqa: PLC0415
+
+    if args.remote:
+        api_key = args.bcl_api_key
+        if not api_key:
+            import os  # noqa: PLC0415
+            api_key = os.environ.get("BCL_API_KEY")
+
+        registry = MeasureRegistry()
+        try:
+            measures = registry.discover_from_bcl(
+                query=args.query,
+                api_key=api_key,
+                category=args.category,
+                validate=args.validate,
+            )
+        except BCLMeasureError as exc:
+            print(f"error: BCL query failed: {exc}", file=sys.stderr)
+            return 1
+
+        if not measures:
+            print("No measures found on BCL matching the given query.")
+            return 0
+
+        if args.format == "json":
+            print(json_mod.dumps([m.__dict__ for m in measures], indent=2, default=str))
+            return 0
+
+        print(f"BCL Measures (found {len(measures)}):")
+        print()
+        for m in measures:
+            path_str = str(m.path)
+            is_url = path_str.startswith("http")
+            path_display = path_str if is_url else f"(local) {path_str}"
+            print(f"  - {m.name} ({m.language})")
+            print(f"    Location: {path_display}")
+            for arg in m.arguments:
+                default_str = ""
+                if arg.default is not None:
+                    default_str = f", default: {arg.default}"
+                required_str = " [required]" if arg.required else ""
+                print(f"    Args: {arg.name} [{arg.type}]{default_str}{required_str}")
+            if not m.arguments:
+                print("    (no arguments in BCL metadata)")
+            print()
+        print(f"Total: {len(measures)} BCL measure(s)")
+        return 0
+    else:
+        print(
+            "error: --remote is required for list-measures. "
+            "Use 'osimflow measure list --template <path>' for local scanning.",
+            file=sys.stderr,
+        )
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -2397,6 +2539,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "health": _cmd_health,
         "warm-cache": _cmd_warm_cache,
         "measure": _cmd_measure_list,
+        "list-measures": _cmd_list_measures,
     }
     handler = dispatch.get(args.command)
     if handler is not None:
