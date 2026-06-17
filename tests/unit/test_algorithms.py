@@ -963,6 +963,13 @@ class TestExtractBounds:
 class TestSequentialSearchAlgorithm:
     """Tests for the SequentialSearchAlgorithm (issue #550, GAP-006)."""
 
+    _VARIABLES: dict[str, Any] = {
+        "variables": [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+        ]
+    }
+
     def test_name(self) -> None:
         algo = SequentialSearchAlgorithm()
         assert algo.name() == "sequential_search"
