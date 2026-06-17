@@ -1218,6 +1218,15 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         help="Enable the campaign setup web UI at /ui/ (issue #337).",
     )
     serve.add_argument(
+        "--editor",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable the Variable Designer web UI at /ui/designer/ "
+            "for editing variable YAML files. (issue #587)"
+        ),
+    )
+    serve.add_argument(
         "--dashboard",
         action="store_true",
         default=False,
@@ -1749,6 +1758,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         rate_limit=args.rate_limit,
         rate_limit_key=args.rate_limit_key,
         ui_enabled=args.ui,
+        variable_editor=args.editor,
         results_viewer=args.dashboard,
         registry_path=args.registry,
     )
