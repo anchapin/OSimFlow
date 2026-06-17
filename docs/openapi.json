@@ -895,10 +895,180 @@
         }
       }
     },
+    "/api/v1/campaigns/{campaign_id}/cancel": {
+      "post": {
+        "summary": "Cancel Campaign",
+        "description": "Cancel a running campaign by writing a ``.stop`` flag file.\n\nReturns 403 if the user lacks write permission (issue #395).\nReturns 409 if the campaign is not currently running.",
+        "operationId": "cancel_campaign_api_v1_campaigns__campaign_id__cancel_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignCancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/pause": {
+      "post": {
+        "summary": "Pause Campaign",
+        "description": "Pause a running campaign by writing a ``.pause`` flag file.\n\nRunning samples complete normally; only new submissions are skipped.\nThis is a soft-stop mechanism that allows the campaign to be resumed\nlater from where it left off.\n\nReturns 403 if the user lacks write permission (issue #395).\nReturns 409 if the campaign is not currently running.",
+        "operationId": "pause_campaign_api_v1_campaigns__campaign_id__pause_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPauseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/resume": {
+      "post": {
+        "summary": "Resume Campaign",
+        "description": "Resume a paused campaign by removing the ``.pause`` flag file.\n\nClears the paused status and allows new sample submissions to proceed.\n\nReturns 403 if the user lacks write permission (issue #395).\nReturns 409 if the campaign is not currently paused.",
+        "operationId": "resume_campaign_api_v1_campaigns__campaign_id__resume_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignResumeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/download": {
+      "get": {
+        "summary": "Download Campaign Bundle",
+        "description": "Download a bundled ZIP archive of all campaign artifacts.\n\nThe bundle includes:\n- ``run.json`` \u2014 monitoring trace\n- ``samples.json`` \u2014 variable mappings\n- ``aggregated_results.csv`` \u2014 KPI table\n- ``failed_simulations.csv`` \u2014 failure summary\n- Per-sample KPI JSON files (``kpi.json`` / ``kpis.json``)\n- PNG plot files from the campaign root and ``plots/`` subdirectory\n- ``eplusout.sql`` files when ``include_sql=true`` (requires\n  ``--archive_intermediates`` during the campaign run)\n\nReturns a ZIP with ``Content-Disposition: attachment;\nfilename=\"campaign-{campaign_id}.zip\"``.",
+        "operationId": "download_campaign_bundle_api_v1_campaigns__campaign_id__download_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "include_sql",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run.",
+              "default": false,
+              "title": "Include Sql"
+            },
+            "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}": {
       "get": {
         "summary": "Download Sample Result File",
-        "description": "Download a result file from a sample's simulation directory.\n\nAllowed filenames: eplusout.sql, eplusout.err, eplusout.log, eplusout.csv,\nkpi.json, kpis.json, stdout.log, stderr.log.\n\nReturns 403 if the user lacks write permission (issue #395) since this\nis a read-write campaign endpoint.",
+        "description": "Download a per-sample result file.\n\nResult files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.\nReturns 400 if the filename contains path traversal sequences.\nReturns 404 if the campaign, sample, or file is not found.",
         "operationId": "download_sample_result_file_api_v1_campaigns__campaign_id__samples__sample_id__results__filename__get",
         "parameters": [
           {
@@ -952,7 +1122,7 @@
       },
       "delete": {
         "summary": "Delete Sample Result File",
-        "description": "Delete a result file from a sample's simulation directory.\n\nUseful for cleaning up large intermediate files (e.g., eplusout.err)\nafter archiving or post-processing.\n\nAllowed filenames: eplusout.sql, eplusout.err, eplusout.log, eplusout.csv,\nkpi.json, kpis.json, stdout.log, stderr.log.\n\nReturns 403 if the user lacks write permission (issue #395).",
+        "description": "Delete a per-sample result file.\n\nResult files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.\nReturns 400 if the filename contains path traversal sequences.\nReturns 403 if the server is in read-only mode.\nReturns 404 if the campaign, sample, or file is not found.",
         "operationId": "delete_sample_result_file_api_v1_campaigns__campaign_id__samples__sample_id__results__filename__delete",
         "parameters": [
           {
@@ -981,102 +1151,6 @@
               "type": "string",
               "title": "Filename"
             }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Delete Sample Result File Api V1 Campaigns  Campaign Id  Samples  Sample Id  Results  Filename  Delete"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/campaigns/{campaign_id}/cancel": {
-      "post": {
-        "summary": "Cancel Campaign",
-        "description": "Cancel a running campaign by writing a ``.stop`` flag file.\n\nReturns 403 if the user lacks write permission (issue #395).\nReturns 409 if the campaign is not currently running.",
-        "operationId": "cancel_campaign_api_v1_campaigns__campaign_id__cancel_post",
-        "parameters": [
-          {
-            "name": "campaign_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Campaign Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CampaignCancelResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/campaigns/{campaign_id}/download": {
-      "get": {
-        "summary": "Download Campaign Bundle",
-        "description": "Download a bundled ZIP archive of all campaign artifacts.\n\nThe bundle includes:\n- ``run.json`` \u2014 monitoring trace\n- ``samples.json`` \u2014 variable mappings\n- ``aggregated_results.csv`` \u2014 KPI table\n- ``failed_simulations.csv`` \u2014 failure summary\n- Per-sample KPI JSON files (``kpi.json`` / ``kpis.json``)\n- PNG plot files from the campaign root and ``plots/`` subdirectory\n- ``eplusout.sql`` files when ``include_sql=true`` (requires\n  ``--archive_intermediates`` during the campaign run)\n\nThe ZIP is streamed directly \u2014 no temporary files are created on\nthe server, which keeps memory usage bounded regardless of campaign\nsize.\n\nReturns a ZIP with ``Content-Disposition: attachment;\nfilename=\"campaign-{campaign_id}.zip\"``.",
-        "operationId": "download_campaign_bundle_api_v1_campaigns__campaign_id__download_get",
-        "parameters": [
-          {
-            "name": "campaign_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Campaign Id"
-            }
-          },
-          {
-            "name": "include_sql",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run.",
-              "default": false,
-              "title": "Include Sql"
-            },
-            "description": "Include eplusout.sql files from per-sample directories. Only present when --archive_intermediates was used during the campaign run."
           }
         ],
         "responses": {
@@ -1715,11 +1789,145 @@
         }
       }
     },
+    "/api/v1/variables/batch_update": {
+      "post": {
+        "summary": "Batch Update Variables",
+        "description": "Atomically update multiple variables in the campaign's variables.yml.\n\nAll variables are validated before any are updated.  If any variable\nis invalid (not found, unknown distribution, missing required parameters),\nthe entire batch is rejected with a 400 error listing all failures.\n\nReturns 403 in read-only mode.",
+        "operationId": "batch_update_variables_api_v1_variables_batch_update_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VariableBatchUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariableBatchUpdateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/measures/upload": {
+      "post": {
+        "summary": "Upload Measure",
+        "description": "Upload a measure bundle (zip or tar.gz).\n\nThe bundle must contain a ``measure.rb`` (Ruby) or ``measure.py`` (Python)\nfile inside a named directory. Optional ``tests/`` and ``resources/``\nsubdirectories are also accepted.\n\nThe measure is introspected, stored in the configured measures directory,\nand registered with a content-based ``version_uuid`` for idempotent re-upload.",
+        "operationId": "upload_measure_api_v1_measures_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_measure_api_v1_measures_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/measures": {
       "get": {
         "summary": "List Measures",
-        "description": "List all measures referenced in the campaign's ``workflow.osw``.\n\nMeasures are discovered from the workflow steps.  For each measure,\nargument details are introspected from ``measure.rb`` (Ruby) or\n``measure.py`` (Python) source files when they are accessible on disk.\n\nReturns an empty list if no ``workflow.osw`` is found.",
+        "description": "List all measures referenced in the campaign's ``workflow.osw`` **and**\nuploaded measures from the measures directory.\n\nFor workflow measures, argument details are introspected from\n``measure.rb`` (Ruby) or ``measure.py`` (Python) source files.\n\nSupports filtering across both sources:\n- ``search``: substring match in measure name and description\n- ``taxonomy``: prefix match on the taxonomy field (uploaded measures only)\n- ``tag``: exact tag match (uploaded measures only)\n\nReturns an empty list if neither workflow.osw nor uploaded measures exist.",
         "operationId": "list_measures_api_v1_measures_get",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search in measure name and description",
+              "title": "Search"
+            },
+            "description": "Search in measure name and description"
+          },
+          {
+            "name": "taxonomy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by taxonomy prefix (e.g. Economics)",
+              "title": "Taxonomy"
+            },
+            "description": "Filter by taxonomy prefix (e.g. Economics)"
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by tag",
+              "title": "Tag"
+            },
+            "description": "Filter by tag"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1727,6 +1935,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MeasureListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1773,6 +1991,136 @@
           }
         }
       }
+    },
+    "/api/v1/measures/by-id/{measure_id}": {
+      "get": {
+        "summary": "Get Uploaded Measure",
+        "description": "Get full metadata for an uploaded measure by its UUID.\n\nReturns 404 for workflow-discovered measures (use ``GET /api/v1/measures/{name}`` instead).",
+        "operationId": "get_uploaded_measure_api_v1_measures_by_id__measure_id__get",
+        "parameters": [
+          {
+            "name": "measure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measure Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Patch Uploaded Measure",
+        "description": "Update metadata for an uploaded measure.\n\nSupports updating: ``taxonomy``, ``description``, ``tags``, ``measure_group``.\nReturns 404 for workflow-discovered measures.",
+        "operationId": "patch_uploaded_measure_api_v1_measures_by_id__measure_id__patch",
+        "parameters": [
+          {
+            "name": "measure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measure Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeasureMetadataUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Uploaded Measure",
+        "description": "Delete an uploaded measure.\n\nRefuses to delete workflow-discovered measures (returns 403).\nReturns 404 if the measure_id is not in the uploaded registry.",
+        "operationId": "delete_uploaded_measure_api_v1_measures_by_id__measure_id__delete",
+        "parameters": [
+          {
+            "name": "measure_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Measure Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete Uploaded Measure Api V1 Measures By Id  Measure Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1790,6 +2138,20 @@
           "file"
         ],
         "title": "Body_upload_file_api_v1_files_upload_post"
+      },
+      "Body_upload_measure_api_v1_measures_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_measure_api_v1_measures_upload_post"
       },
       "CampaignCancelResponse": {
         "properties": {
@@ -2703,6 +3065,46 @@
         "title": "CampaignListResponse",
         "description": "Envelope for the campaign list endpoint."
       },
+      "CampaignPauseResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "paused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "status"
+        ],
+        "title": "CampaignPauseResponse",
+        "description": "Response for campaign pause."
+      },
+      "CampaignResumeResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "running"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "status"
+        ],
+        "title": "CampaignResumeResponse",
+        "description": "Response for campaign resume."
+      },
       "CampaignSummary": {
         "properties": {
           "campaign_id": {
@@ -3105,6 +3507,91 @@
         "title": "MeasureArgument",
         "description": "A single argument accepted by a measure."
       },
+      "MeasureDetailResponse": {
+        "properties": {
+          "measure_id": {
+            "type": "string",
+            "title": "Measure Id",
+            "description": "Unique identifier (UUID for uploaded measures)"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Measure directory name"
+          },
+          "version_uuid": {
+            "type": "string",
+            "title": "Version Uuid",
+            "description": "Version UUID from content hash"
+          },
+          "taxonomy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy",
+            "description": "ASHRAE 229 taxonomy"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Measure description"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags",
+            "description": "Arbitrary tags"
+          },
+          "measure_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measure Group",
+            "description": "Logical grouping"
+          },
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/MeasureArgument"
+            },
+            "type": "array",
+            "title": "Arguments",
+            "description": "Introspected arguments"
+          },
+          "is_uploaded": {
+            "type": "boolean",
+            "title": "Is Uploaded",
+            "description": "True if from measures_dir (uploaded), False if from workflow",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "measure_id",
+          "name",
+          "version_uuid"
+        ],
+        "title": "MeasureDetailResponse",
+        "description": "Full metadata for a measure, including taxonomy and tags."
+      },
       "MeasureInfo": {
         "properties": {
           "measure_dir_name": {
@@ -3168,7 +3655,7 @@
           "source": {
             "type": "string",
             "title": "Source",
-            "description": "Source of measure information: workflow.osw | template_package"
+            "description": "Source of measure information: workflow.osw | template_package | uploaded"
           }
         },
         "type": "object",
@@ -3178,6 +3665,103 @@
         ],
         "title": "MeasureListResponse",
         "description": "Envelope for the measure list endpoint."
+      },
+      "MeasureMetadataUpdate": {
+        "properties": {
+          "taxonomy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy",
+            "description": "ASHRAE 229 taxonomy (e.g. Economics.Construction.General)"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Measure description"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags",
+            "description": "Arbitrary tags for filtering"
+          },
+          "measure_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measure Group",
+            "description": "Logical grouping for the measure"
+          }
+        },
+        "type": "object",
+        "title": "MeasureMetadataUpdate",
+        "description": "Request body for ``PATCH /api/v1/measures/{measure_id}``."
+      },
+      "MeasureUploadResponse": {
+        "properties": {
+          "measure_id": {
+            "type": "string",
+            "title": "Measure Id",
+            "description": "Unique identifier for the uploaded measure"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Measure directory name"
+          },
+          "version_uuid": {
+            "type": "string",
+            "title": "Version Uuid",
+            "description": "Version UUID derived from measure content hash"
+          },
+          "argument_count": {
+            "type": "integer",
+            "title": "Argument Count",
+            "description": "Number of arguments introspected from the measure"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Human-readable result message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "measure_id",
+          "name",
+          "version_uuid",
+          "argument_count",
+          "detail"
+        ],
+        "title": "MeasureUploadResponse",
+        "description": "Response for a successful measure upload."
       },
       "MultiCampaignComparisonResponse": {
         "properties": {
@@ -4241,6 +4825,241 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VariableBatchUpdateError": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Variable name that failed"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error",
+            "description": "Error message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "error"
+        ],
+        "title": "VariableBatchUpdateError",
+        "description": "Error detail for a single failed variable update in a batch."
+      },
+      "VariableBatchUpdateItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Variable name to update"
+          },
+          "rename_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rename To",
+            "description": "New name for the variable (optional). When provided, the variable is renamed."
+          },
+          "distribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distribution",
+            "description": "Distribution type"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "sigma": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sigma"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          },
+          "alpha": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alpha"
+          },
+          "beta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beta"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "mapping": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "VariableBatchUpdateItem",
+        "description": "One item in a batch variable update request."
+      },
+      "VariableBatchUpdateRequest": {
+        "properties": {
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/VariableBatchUpdateItem"
+            },
+            "type": "array",
+            "title": "Variables",
+            "description": "List of variable updates to apply atomically"
+          }
+        },
+        "type": "object",
+        "required": [
+          "variables"
+        ],
+        "title": "VariableBatchUpdateRequest",
+        "description": "Request body for ``POST /api/v1/variables/batch_update``."
+      },
+      "VariableBatchUpdateResponse": {
+        "properties": {
+          "updated": {
+            "items": {
+              "$ref": "#/components/schemas/VariableDetailResponse"
+            },
+            "type": "array",
+            "title": "Updated",
+            "description": "List of successfully updated variables"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/VariableBatchUpdateError"
+            },
+            "type": "array",
+            "title": "Errors",
+            "description": "List of failed variable updates"
+          }
+        },
+        "type": "object",
+        "title": "VariableBatchUpdateResponse",
+        "description": "Response for ``POST /api/v1/variables/batch_update``."
       },
       "VariableDeleteResponse": {
         "properties": {
