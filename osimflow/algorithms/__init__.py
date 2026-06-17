@@ -5,8 +5,8 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
 ``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``,
-``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
-``RandomSamplingAlgorithm`` implementations.
+``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``,
+``RandomSamplingAlgorithm``, and ``RgenoudAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:
 
@@ -639,12 +639,14 @@ from osimflow.algorithms.factorial import (  # noqa: E402
     GridSamplingAlgorithm,
 )
 from osimflow.algorithms.halton import HaltonAlgorithm  # noqa: E402
+from osimflow.algorithms.rgenoud import RgenoudAlgorithm  # noqa: E402
 from osimflow.algorithms.sobol import SobolAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("sobol", SobolAlgorithm)
 AlgorithmRegistry.register("halton", HaltonAlgorithm)
 AlgorithmRegistry.register("full_factorial", FullFactorialAlgorithm)
 AlgorithmRegistry.register("grid", GridSamplingAlgorithm)
+AlgorithmRegistry.register("rgenoud", RgenoudAlgorithm)
 
 from osimflow.algorithms.da import DualAnnealingAlgorithm  # noqa: E402
 from osimflow.algorithms.de import DifferentialEvolutionAlgorithm  # noqa: E402
