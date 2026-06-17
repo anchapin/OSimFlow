@@ -148,7 +148,12 @@ def main() -> int:
     # 5. DOE analysis and visualization (issue #405)
     _generate_doe_plots(args.results_csv, args.outdir)
 
-    # 6. Interactive HTML report (issue #388)
+    # 6. GAP-012: Radar/spider plot, EuiDistribution (histogram+CDF), density heatmap
+    _generate_eui_distribution_plot(results, args.outdir, baseline_eui)
+    _generate_radar_plot(results, args.outdir)
+    _generate_density_heatmap(results, args.outdir)
+
+    # 7. Interactive HTML report (issue #388)
     _generate_interactive_report(args.outdir, results, failed, baseline_eui, pareto_dir)
 
     return 0
@@ -766,6 +771,233 @@ def _assemble_html_report(sections: list[str]) -> str:
 </body>
 </html>
 """
+
+
+# ---------------------------------------------------------------------------
+# GAP-012: Radar / EuiDistribution / Density Heatmap
+# ---------------------------------------------------------------------------
+
+
+def _generate_eui_distribution_plot(
+    results: pd.DataFrame,
+    outdir: Path,
+    baseline_eui: float | None,
+) -> Path | None:
+    """Generate EUI histogram with overlaid empirical CDF (issue #554).
+
+    Shows the full distribution shape — histogram for frequency and CDF for
+    cumulative probability — on a single axes with a dual y-axis.
+    A baseline reference line is drawn when available.
+    """
+    eui_col = _find_eui_column(results)
+    if eui_col is None or results.empty or results[eui_col].isna().all():
+        return None
+
+    eui_values = results[eui_col].dropna()
+    if len(eui_values) < 3:
+        return None
+
+    fig, ax1 = plt.subplots(figsize=(9, 6))
+
+    # Histogram on primary axis
+    color_hist = "steelblue"
+    counts, bin_edges, patches = ax1.hist(
+        eui_values,
+        bins=30,
+        color=color_hist,
+        alpha=0.6,
+        edgecolor="white",
+        label="Frequency",
+    )
+    ax1.set_xlabel("EUI (kWh/m²/yr)", fontsize=11)
+    ax1.set_ylabel("Count", fontsize=11, color=color_hist)
+    ax1.tick_params(axis="y", labelcolor=color_hist)
+
+    # Empirical CDF on secondary axis
+    ax2 = ax1.twinx()
+    eui_sorted = np.sort(eui_values)
+    cdf_y = np.arange(1, len(eui_sorted) + 1) / len(eui_sorted)
+    color_cdf = "tomato"
+    ax2.plot(eui_sorted, cdf_y, color=color_cdf, linewidth=2.2, label="CDF")
+    ax2.set_ylabel("Cumulative Probability", fontsize=11, color=color_cdf)
+    ax2.tick_params(axis="y", labelcolor=color_cdf)
+    ax2.set_ylim(0, 1.05)
+
+    # Baseline reference line
+    if baseline_eui is not None and pd.notna(baseline_eui):
+        ax1.axvline(
+            baseline_eui,
+            color="red",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Baseline ({baseline_eui:.1f})",
+        )
+
+    # Merge legends
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=9)
+
+    ax1.set_title("EUI Distribution (Histogram + Empirical CDF)", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    path = outdir / "eui_distribution.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info("Generated EUI distribution plot: %s", path)
+    return path
+
+
+def _generate_radar_plot(results: pd.DataFrame, outdir: Path) -> Path | None:
+    """Generate radar/spider plot for multi-objective comparison (issue #554).
+
+    Normalises all numeric columns to [0,1] and renders them as axes on a
+    spider/radar chart — one "petal" per objective/KPI.  If there are too few
+    numeric columns (< 3) the plot is skipped.
+    """
+    if results.empty:
+        return None
+
+    numeric_cols = results.select_dtypes(include="number").columns.tolist()
+    # Drop sample_id and any single-valued columns
+    kpi_cols = [
+        c
+        for c in numeric_cols
+        if c not in ("sample_id",) and results[c].std() > 1e-9
+    ]
+    if len(kpi_cols) < 3:
+        log.info("Fewer than 3 varying KPI columns; skipping radar plot.")
+        return None
+
+    # Normalise each column to [0, 1]
+    df_norm = results[kpi_cols].copy()
+    for col in kpi_cols:
+        col_min = df_norm[col].min()
+        col_max = df_norm[col].max()
+        if col_max - col_min > 1e-9:
+            df_norm[col] = (df_norm[col] - col_min) / (col_max - col_min)
+        else:
+            df_norm[col] = 0.0
+
+    n = len(kpi_cols)
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
+    angles += angles[:1]  # close the loop
+
+    fig, ax = plt.subplots(figsize=(9, 9), subplot_kw=dict(polar=True))
+    cmap = plt.get_cmap("tab20", len(results))
+
+    for idx, (_, row) in enumerate(df_norm.iterrows()):
+        values = row.tolist()
+        values += values[:1]  # close the loop
+        ax.plot(
+            angles,
+            values,
+            color=cmap(idx % cmap.N),
+            alpha=0.25,
+            linewidth=0.8,
+        )
+        ax.fill(angles, values, color=cmap(idx % cmap.N), alpha=0.06)
+
+    # Compute and plot the mean normalised profile
+    mean_values = df_norm.mean().tolist()
+    mean_values += mean_values[:1]
+    ax.plot(angles, mean_values, color="tomato", linewidth=2.5, label="Mean profile")
+    ax.fill(angles, mean_values, color="tomato", alpha=0.12)
+
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(kpi_cols, fontsize=9)
+    ax.set_ylim(0, 1)
+    ax.set_title("Radar / Spider Plot\n(Normalised KPIs)", fontsize=13, fontweight="bold", pad=20)
+    ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=8)
+
+    plt.tight_layout()
+    path = outdir / "radar_plot.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info("Generated radar plot: %s", path)
+    return path
+
+
+def _generate_density_heatmap(results: pd.DataFrame, outdir: Path) -> Path | None:
+    """Generate a 2-D density heatmap for the two most variable parameters (issue #554).
+
+    Uses kernel density estimation (scipy.stats.gaussian_kde) to render a
+    colour-coded density surface with overlaid scatter points.
+    Skipped when there are fewer than 2 varying numeric columns.
+    """
+    if results.empty:
+        return None
+
+    numeric_cols = results.select_dtypes(include="number").columns.tolist()
+    design_vars = [c for c in numeric_cols if c not in ("sample_id", "eui_kwh_m2_yr")]
+    design_vars = [c for c in design_vars if results[c].std() > 1e-9]
+
+    if len(design_vars) < 2:
+        log.info("Fewer than 2 varying design variables; skipping density heatmap.")
+        return None
+
+    # Pick the two most variable columns
+    variances = results[design_vars].var()
+    top2 = variances.nlargest(2).index.tolist()
+    x_col, y_col = top2[0], top2[1]
+
+    x = results[x_col].dropna().values
+    y = results[y_col].dropna().values
+
+    if len(x) < 10:
+        log.info("Not enough non-NA samples for density heatmap.")
+        return None
+
+    # Compute KDE on a grid
+    try:
+        from scipy import stats
+
+        xy = np.vstack([x, y])
+        kernel = stats.gaussian_kde(xy)
+
+        xmin, xmax = x.min() - 0.1 * (x.max() - x.min() or 1), x.max() + 0.1 * (x.max() - x.min() or 1)
+        ymin, ymax = y.min() - 0.1 * (y.max() - y.min() or 1), y.max() + 0.1 * (y.max() - y.min() or 1)
+        xx, yy = np.meshgrid(
+            np.linspace(xmin, xmax, 200),
+            np.linspace(ymin, ymax, 200),
+        )
+        z = kernel(np.vstack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
+    except Exception as exc:
+        log.warning("KDE computation failed for density heatmap: %s", exc)
+        return None
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    im = ax.imshow(
+        z,
+        origin="lower",
+        extent=[xmin, xmax, ymin, ymax],
+        cmap="YlOrRd",
+        aspect="auto",
+        interpolation="bilinear",
+    )
+    cbar = plt.colorbar(im, ax=ax, label="Density")
+    cbar.ax.tick_params(labelsize=9)
+
+    # Overlay scatter points (downsampled if > 500)
+    if len(x) > 500:
+        idx_sample = np.random.choice(len(x), 500, replace=False)
+        x_sample = x[idx_sample]
+        y_sample = y[idx_sample]
+    else:
+        x_sample = x
+        y_sample = y
+
+    ax.scatter(x_sample, y_sample, c="white", s=6, alpha=0.4, edgecolors="none")
+
+    ax.set_xlabel(x_col, fontsize=11)
+    ax.set_ylabel(y_col, fontsize=11)
+    ax.set_title(f"Density Heatmap\n({x_col} vs {y_col})", fontsize=13, fontweight="bold")
+
+    plt.tight_layout()
+    path = outdir / "density_heatmap.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log.info("Generated density heatmap: %s", path)
+    return path
 
 
 if __name__ == "__main__":

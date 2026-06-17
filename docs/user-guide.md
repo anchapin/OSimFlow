@@ -528,7 +528,15 @@ my_campaign/
 ├── failed_simulations.csv            # One-line error summaries (if any)
 ├── plots/
 │   ├── eui_histogram.png             # Distribution of EUI across samples
-│   └── scatter_*.png                 # Parameter vs. KPI scatter plots
+│   ├── eui_distribution.png          # Histogram + empirical CDF (GAP-012)
+│   ├── top_var_vs_eui.png           # Most variable parameter vs. EUI
+│   ├── radar_plot.png               # Multi-KPI spider/radar chart (GAP-012)
+│   ├── density_heatmap.png          # 2-D KDE heatmap (GAP-012)
+│   ├── failure_summary.png           # Failure reason counts
+│   ├── pareto_front.png             # Pareto front (if multi-objective)
+│   ├── pareto_convergence.png       # Hypervolume convergence
+│   ├── doe_*.png                   # DOE analysis plots
+│   └── interactive_report.html       # Interactive Plotly report
 └── work/
     ├── lhs/                          # LHS parameter sets (samples.json)
     ├── apply/                        # Per-sample modified packages
@@ -635,6 +643,33 @@ After every campaign, verify:
 3. **No all-zero KPIs.** If all KPIs are zero, the extract step may be
    querying the wrong table in `eplusout.sql`.
 4. **Sample count matches.** `n_succeeded` should equal `n_samples`.
+
+### 6.6 Visualization Types
+
+OSimFlow generates the following plot files in the `plots/` directory:
+
+| File | Type | Description |
+|---|---|---|
+| `eui_histogram.png` | Histogram + KDE | Distribution of EUI across all samples |
+| `eui_distribution.png` | **GAP-012** Histogram + Empirical CDF | Dual-axis view showing frequency and cumulative probability of EUI |
+| `top_var_vs_eui.png` | Scatter | Most variable design parameter vs. EUI |
+| `radar_plot.png` | **GAP-012** Radar / Spider | Normalised multi-KPI profile (min 3 KPIs required) |
+| `density_heatmap.png` | **GAP-012** 2-D KDE Heatmap | Density surface for the two most variable design parameters |
+| `failure_summary.png` | Horizontal bar | Counts of each failure reason |
+| `pareto_front.png` | Scatter (multi-gen) | Pareto front coloured by generation |
+| `pareto_convergence.png` | Line | Hypervolume convergence across generations |
+| `doe_main_effects.png` | Line + error bars | DOE main effects per factor |
+| `doe_interaction_matrix.png` | Heatmap | DOE 2-way interaction F-statistics |
+| `doe_factor_sensitivity.png` | Horizontal bar | DOE factor contribution to variance |
+| `interactive_report.html` | Plotly HTML | Standalone interactive report (open in any browser) |
+
+**Radar / Spider Plot** (`radar_plot.png`): Each sample is a line on the spider chart with one spoke per KPI. All KPIs are min-max normalised to `[0, 1]` so the shape — not absolute values — reveals similarity across samples. The red "mean profile" shows the average normalised performance across the campaign.
+
+**EUI Distribution** (`eui_distribution.png`): A dual-axis chart overlaying a frequency histogram (blue, left y-axis) with the empirical cumulative distribution function (red, right y-axis). A dashed red vertical line marks the baseline EUI when a baseline sample is provided. Use this to read both "how many samples fall below X kWh/m²/yr" (CDF, right y-axis at X) and "how many samples are near X" (histogram, left y-axis at X).
+
+**Density Heatmap** (`density_heatmap.png`): A 2-D kernel density estimate (KDE) showing where the majority of samples concentrate in the space of the two most variable design parameters. Individual sample points are overlaid as white dots. Use this to identify parameter correlations and regions of the design space that are under-sampled.
+
+All plots are also embedded in `interactive_report.html` for browser-based exploration.
 
 ---
 
