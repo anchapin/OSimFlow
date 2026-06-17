@@ -1325,6 +1325,7 @@ def create_app(
     app.include_router(events_router)
     app.include_router(campaigns_router)
     app.include_router(pat_compat_router)
+    app.include_router(results_query_router)
     app.include_router(files_router)
     app.include_router(timeseries_router)
     app.include_router(variables_router)
