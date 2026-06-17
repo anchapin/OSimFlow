@@ -559,7 +559,9 @@ class MeasureUploadResponse(BaseModel):
 class MeasureMetadataUpdate(BaseModel):
     """Request body for ``PATCH /api/v1/measures/{measure_id}``."""
 
-    taxonomy: str | None = Field(default=None, description="ASHRAE 229 taxonomy (e.g. Economics.Construction.General)")
+    taxonomy: str | None = Field(
+        default=None, description="ASHRAE 229 taxonomy (e.g. Economics.Construction.General)"
+    )
     description: str | None = Field(default=None, description="Measure description")
     tags: list[str] | None = Field(default=None, description="Arbitrary tags for filtering")
     measure_group: str | None = Field(default=None, description="Logical grouping for the measure")
@@ -575,7 +577,9 @@ class MeasureDetailResponse(BaseModel):
     description: str | None = Field(default=None, description="Measure description")
     tags: list[str] = Field(default_factory=list, description="Arbitrary tags")
     measure_group: str | None = Field(default=None, description="Logical grouping")
-    arguments: list[MeasureArgument] = Field(default_factory=list, description="Introspected arguments")
+    arguments: list[MeasureArgument] = Field(
+        default_factory=list, description="Introspected arguments"
+    )
     is_uploaded: bool = Field(
         default=False,
         description="True if from measures_dir (uploaded), False if from workflow",
@@ -668,9 +672,7 @@ class BatchUploadResponse(BaseModel):
     sample_ids: list[str] = Field(
         description="Newly assigned sample IDs for the uploaded samples (in order)"
     )
-    detail: str = Field(
-        description="Human-readable summary of the operation"
-    )
+    detail: str = Field(description="Human-readable summary of the operation")
 
 
 # ---------------------------------------------------------------------------
@@ -683,8 +685,6 @@ class SampleRequeueResponse(BaseModel):
 
     campaign_id: str = Field(description="Campaign identifier")
     original_sample_id: str = Field(description="The sample that was requeued")
-    new_sample_id: str = Field(
-        description="Newly created sample ID pending re-run"
-    )
+    new_sample_id: str = Field(description="Newly created sample ID pending re-run")
     status: str = Field(description="Status of the new sample: pending")
     detail: str = Field(description="Human-readable summary of the operation")

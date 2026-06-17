@@ -18,12 +18,16 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import io
 import json
 import logging
 import threading
 import time
 import uuid
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -38,14 +42,14 @@ from osimflow.api.schemas import (
     BatchUploadRequest,
     BatchUploadResponse,
     CampaignCancelResponse,
-    CampaignPauseResponse,
-    CampaignResumeResponse,
     CampaignComparisonEntry,
     CampaignComparisonResponse,
     CampaignCreateRequest,
     CampaignCreateResponse,
     CampaignDetailResponse,
     CampaignListResponse,
+    CampaignPauseResponse,
+    CampaignResumeResponse,
     CampaignSummary,
     CompareCampaignsPostRequest,
     KpiComparisonRow,
@@ -1112,12 +1116,14 @@ async def resume_campaign(
 # ---------------------------------------------------------------------------
 
 # Files included in the bundle (evaluated at request time).
-_BUNDLE_ROOT_FILES = frozenset({"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"})
+_BUNDLE_ROOT_FILES = frozenset(
+    {"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"}
+)
 _BUNDLE_PLOT_GLOB = "*.png"
 _BUNDLE_SQL_GLOB = "eplusout.sql"
 
 
-def _iter_campaign_bundle(
+def _iter_campaign_bundle(  # noqa: PLR0912
     campaign_dir: Path,
     *,
     include_sql: bool = False,
@@ -1200,12 +1206,6 @@ async def download_campaign_bundle(
     """
     base = _campaigns_base_dir(request)
     campaign_dir = _campaign_dir_from_id(base, campaign_id)
-
-    import io
-    import zipfile
-
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
 
     safe_name = "".join(c for c in campaign_id if c.isalnum() or c in ("-", "_"))
     archive_name = f"campaign-{safe_name}.zip"

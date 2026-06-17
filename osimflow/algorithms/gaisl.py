@@ -180,9 +180,7 @@ class _Island:
         deap_creator.create("Individual", list, fitness=fitness_cls)
 
         def _init_individual() -> deap_creator.Individual:
-            return deap_creator.Individual(
-                [self._rng.uniform(lo, hi) for lo, hi in self._bounds]
-            )
+            return deap_creator.Individual([self._rng.uniform(lo, hi) for lo, hi in self._bounds])
 
         def _mate(a: list[float], b: list[float]) -> tuple[list[float], list[float]]:
             for i, (alo, ahi) in enumerate(self._bounds):
@@ -195,9 +193,7 @@ class _Island:
         def _mutate(ind: list[float]) -> tuple[list[float]]:
             for i, (lo, hi) in enumerate(self._bounds):
                 ind[i] = deap_creator.Individual(
-                    deap_tools.mutPolynomialBounded(
-                        [ind[i]], self._eta_mut, lo, hi, indpb=0.9
-                    )[0]
+                    deap_tools.mutPolynomialBounded([ind[i]], self._eta_mut, lo, hi, indpb=0.9)[0]
                 )[0]
             return (ind,)
 
@@ -251,7 +247,9 @@ class _Island:
             return
         best = list(self._hof[0])
         params = best
-        fitness_raw = -self._hof[0].fitness.values[0] if self._maximize else self._hof[0].fitness.values[0]
+        fitness_raw = (
+            -self._hof[0].fitness.values[0] if self._maximize else self._hof[0].fitness.values[0]
+        )
         eff = fitness_raw
         if eff < self._best_value:
             self._best_value = eff
@@ -327,9 +325,7 @@ class _Island:
         for i in range(n_inject):
             migrant = deap_creator.Individual(individuals[i])
             # Evaluate the migrant with current fitness map.
-            migrant.fitness.values = self._eval_fitness(
-                list(migrant), self._fitness_map, 0.0
-            )
+            migrant.fitness.values = self._eval_fitness(list(migrant), self._fitness_map, 0.0)
             sorted_pop[i] = migrant
 
         self._population = sorted_pop
@@ -630,7 +626,9 @@ class IslandModelGAAlgorithm(BaseAlgorithm):
             raise RuntimeError("generate_gaisl failed: initial LHS population") from exc
 
         samples_path.write_text(json.dumps({"samples": lhs_samples}, indent=2))
-        log.info("GAISL generated %d initial samples across %d islands", n_samples, self._numIslands)
+        log.info(
+            "GAISL generated %d initial samples across %d islands", n_samples, self._numIslands
+        )
         return samples_path
 
     def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -137,8 +137,7 @@ def _validate_bcl_measure_taxonomy(
     for arg in arguments:
         if arg.type not in valid_types:
             log.warning(
-                "BCL measure %r: argument %r has unexpected type %r — "
-                "expected one of %s",
+                "BCL measure %r: argument %r has unexpected type %r — expected one of %s",
                 name,
                 arg.name,
                 arg.type,
@@ -382,9 +381,7 @@ class MeasureRegistry:
             When the BCL API returns an error or the response cannot be parsed.
         """
         cache_dir = self._bcl_cache_dir()
-        cache_key = hashlib.sha256(
-            f"{query or ''}|{category or ''}".encode()
-        ).hexdigest()[:16]
+        cache_key = hashlib.sha256(f"{query or ''}|{category or ''}".encode()).hexdigest()[:16]
         cache_file = cache_dir / f"{cache_key}.json"
 
         # Return cached result if fresh
@@ -443,7 +440,12 @@ class MeasureRegistry:
                             "path": str(m.path),
                             "language": m.language,
                             "arguments": [
-                                {"name": a.name, "type": a.type, "required": a.required, "default": a.default}
+                                {
+                                    "name": a.name,
+                                    "type": a.type,
+                                    "required": a.required,
+                                    "default": a.default,
+                                }
                                 for a in m.arguments
                             ],
                         }
@@ -519,7 +521,14 @@ class MeasureRegistry:
                     if not arg_name:
                         continue
                     arg_type_str = str(arg_entry.get("type", "String")).capitalize()
-                    if arg_type_str not in ("Double", "String", "Integer", "Boolean", "Choice", "Path"):
+                    if arg_type_str not in (
+                        "Double",
+                        "String",
+                        "Integer",
+                        "Boolean",
+                        "Choice",
+                        "Path",
+                    ):
                         arg_type_str = "String"
                     required = bool(arg_entry.get("required", False))
                     default = arg_entry.get("default_value")

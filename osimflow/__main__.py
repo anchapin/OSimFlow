@@ -1529,10 +1529,7 @@ def _add_list_measures_args(lm: argparse.ArgumentParser) -> None:
         "--query",
         type=str,
         default=None,
-        help=(
-            "Free-text search query for BCL measure name/description. "
-            "Only used with --remote."
-        ),
+        help=("Free-text search query for BCL measure name/description. Only used with --remote."),
     )
     lm.add_argument(
         "--category",
@@ -2463,6 +2460,7 @@ def _cmd_list_measures(args: argparse.Namespace) -> int:
         api_key = args.bcl_api_key
         if not api_key:
             import os  # noqa: PLC0415
+
             api_key = os.environ.get("BCL_API_KEY")
 
         registry = MeasureRegistry()
