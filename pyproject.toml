@@ -214,6 +214,9 @@ fixable = ["ALL"]
 [tool.ruff.lint.per-file-ignores]
 # bin/*.py are CLI scripts (argparse, top-level side effects OK).
 "bin/*" = ["PL", "SIM"]
+# scripts/*.py are CLI utility scripts that use lazy imports to avoid
+# paying import cost when the optional dependency (bson/pymongo) is absent.
+"scripts/*" = ["PL", "SIM", "PLC0415"]
 # _work_scripts/ are CLI scripts (same as bin/).
 "osimflow/_work_scripts/*" = ["PL", "SIM"]
 # tests/ use pytest patterns that ruff would otherwise flag.

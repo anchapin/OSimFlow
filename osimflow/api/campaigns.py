@@ -9,6 +9,8 @@ Provides:
   - GET  /api/v1/campaigns/{campaign_id}/download    — download campaign artifacts zip (issue #555)
   - GET  /api/v1/campaigns/{campaign_id}/samples     — per-sample results
   - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id} — individual sample
+  - GET  /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — download result file
+  - DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename} — delete result file
   - POST /api/v1/campaigns/{campaign_id}/cancel      — cancel running campaign
 """
 
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 if TYPE_CHECKING:
     from osimflow.executors.base import BaseExecutor
@@ -48,6 +50,12 @@ from osimflow.api.schemas import (
     SampleSummary,
 )
 from osimflow.audit import AuditLogger, api_actor_from_request
+from osimflow.validation import (
+    ValidationError,
+    sanitize_filename,
+    sanitize_sample_id,
+    validate_path_within_base,
+)
 
 log = logging.getLogger("osimflow.api.campaigns")
 
@@ -980,14 +988,6 @@ def _iter_campaign_bundle(
     Yields ``(archive_path, file_path)`` pairs for streaming into a zip.
     Skips missing files silently.  Per-sample KPI JSONs and plot files
     are discovered by glob.
-
-    Parameters
-    ----------
-    campaign_dir
-        Root campaign output directory.
-    include_sql
-        When True, include ``eplusout.sql`` files from per-sample directories
-        (only present for runs that used ``--archive_intermediates``).
     """
     # Root-level artifacts
     for name in _BUNDLE_ROOT_FILES:
@@ -1002,14 +1002,13 @@ def _iter_campaign_bundle(
         for sample_dir in sim_dir.iterdir():
             if not sample_dir.is_dir():
                 continue
-            # Support both kpi.json and kpis.json
             for kpi_name in ("kpi.json", "kpis.json"):
                 kpi_file = sample_dir / kpi_name
                 if kpi_file.is_file():
                     rel = f"samples/{sample_dir.name}/{kpi_name}"
                     yield (rel, kpi_file)
 
-    # Plot files — campaign root (yield at root level)
+    # Plot files — campaign root
     for plot_file in campaign_dir.glob(_BUNDLE_PLOT_GLOB):
         if plot_file.is_file() and plot_file.name != "run.json":
             yield (plot_file.name, plot_file)
@@ -1057,10 +1056,6 @@ async def download_campaign_bundle(
     - ``eplusout.sql`` files when ``include_sql=true`` (requires
       ``--archive_intermediates`` during the campaign run)
 
-    The ZIP is streamed directly — no temporary files are created on
-    the server, which keeps memory usage bounded regardless of campaign
-    size.
-
     Returns a ZIP with ``Content-Disposition: attachment;
     filename="campaign-{campaign_id}.zip"``.
     """
@@ -1070,14 +1065,13 @@ async def download_campaign_bundle(
     import io
     import zipfile
 
-    # Determine archive name from campaign_id (directory name), not run.json
-    # content, to avoid any injection risk.
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
     safe_name = "".join(c for c in campaign_id if c.isalnum() or c in ("-", "_"))
     archive_name = f"campaign-{safe_name}.zip"
 
-    def generate_zip() -> zipfile.ZipExtFile:
-        # We use a generator-based StreamingResponse so we can write the
-        # zip incrementally without buffering all contents in memory.
+    def generate_zip() -> io.BytesIO:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             for archive_path, file_path in _iter_campaign_bundle(
@@ -1092,15 +1086,6 @@ async def download_campaign_bundle(
         buf.seek(0)
         return buf
 
-    # Use StreamingResponse with an async generator to avoid blocking the
-    # event loop while writing the zip file.
-    async def stream_zip() -> zipfile.ZipExtFile:
-        return generate_zip()
-
-    # For simplicity, we build the zip in a thread pool to avoid blocking.
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-
     loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=1) as pool:
         zip_bytes = await loop.run_in_executor(pool, lambda: generate_zip().read())
@@ -1113,3 +1098,124 @@ async def download_campaign_bundle(
             "Content-Length": str(len(zip_bytes)),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}
+# DELETE /api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}
+# ---------------------------------------------------------------------------
+
+
+def _result_file_media_type(filename: str) -> str:
+    """Return the media type for a result filename based on its extension."""
+    if filename.endswith(".sql"):
+        return "application/x-sqlite3"
+    if filename.endswith((".err", ".log", ".osw")):
+        return "text/plain; charset=utf-8"
+    return "application/octet-stream"
+
+
+@campaigns_router.get(
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename:path}",
+)
+async def download_sample_result_file(
+    campaign_id: str,
+    sample_id: str,
+    filename: str,
+    request: Request,
+) -> Response:
+    """Download a per-sample result file.
+
+    Result files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.
+    Returns 400 if the filename contains path traversal sequences.
+    Returns 404 if the campaign, sample, or file is not found.
+    """
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Validate sample_id to prevent path traversal.
+    try:
+        safe_sample_id = sanitize_sample_id(sample_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Validate filename to prevent path traversal.
+    try:
+        safe_filename = sanitize_filename(filename)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve the result file path.
+    result_file = campaign_dir / "work" / "sim" / safe_sample_id / safe_filename
+    try:
+        validate_path_within_base(result_file.resolve(), campaign_dir.resolve())
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid result file path") from None
+
+    if not result_file.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result file '{safe_filename}' not found for sample '{safe_sample_id}'",
+        )
+
+    media_type = _result_file_media_type(safe_filename)
+    return FileResponse(
+        result_file,
+        media_type=media_type,
+        filename=safe_filename,
+    )
+
+
+@campaigns_router.delete(
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename:path}",
+)
+async def delete_sample_result_file(
+    campaign_id: str,
+    sample_id: str,
+    filename: str,
+    request: Request,
+) -> Response:
+    """Delete a per-sample result file.
+
+    Result files live at ``{campaign_outdir}/work/sim/{sample_id}/{filename}``.
+    Returns 400 if the filename contains path traversal sequences.
+    Returns 403 if the server is in read-only mode.
+    Returns 404 if the campaign, sample, or file is not found.
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for file deletion",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Validate sample_id to prevent path traversal.
+    try:
+        safe_sample_id = sanitize_sample_id(sample_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Validate filename to prevent path traversal.
+    try:
+        safe_filename = sanitize_filename(filename)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolve the result file path.
+    result_file = campaign_dir / "work" / "sim" / safe_sample_id / safe_filename
+    try:
+        validate_path_within_base(result_file.resolve(), campaign_dir.resolve())
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid result file path") from None
+
+    if not result_file.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Result file '{safe_filename}' not found for sample '{safe_sample_id}'",
+        )
+
+    result_file.unlink()
+    log.info("deleted result file: %s", result_file)
+    return Response(status_code=204)

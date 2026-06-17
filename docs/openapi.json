@@ -895,6 +895,122 @@
         }
       }
     },
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/results/{filename}": {
+      "get": {
+        "summary": "Download Sample Result File",
+        "description": "Download a result file from a sample's simulation directory.\n\nAllowed filenames: eplusout.sql, eplusout.err, eplusout.log, eplusout.csv,\nkpi.json, kpis.json, stdout.log, stderr.log.\n\nReturns 403 if the user lacks write permission (issue #395) since this\nis a read-write campaign endpoint.",
+        "operationId": "download_sample_result_file_api_v1_campaigns__campaign_id__samples__sample_id__results__filename__get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Sample Result File",
+        "description": "Delete a result file from a sample's simulation directory.\n\nUseful for cleaning up large intermediate files (e.g., eplusout.err)\nafter archiving or post-processing.\n\nAllowed filenames: eplusout.sql, eplusout.err, eplusout.log, eplusout.csv,\nkpi.json, kpis.json, stdout.log, stderr.log.\n\nReturns 403 if the user lacks write permission (issue #395).",
+        "operationId": "delete_sample_result_file_api_v1_campaigns__campaign_id__samples__sample_id__results__filename__delete",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sample Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete Sample Result File Api V1 Campaigns  Campaign Id  Samples  Sample Id  Results  Filename  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/campaigns/{campaign_id}/cancel": {
       "post": {
         "summary": "Cancel Campaign",
