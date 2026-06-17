@@ -1175,6 +1175,105 @@
         }
       }
     },
+    "/api/v1/campaigns/{campaign_id}/samples/batch_upload": {
+      "post": {
+        "summary": "Batch Upload Samples",
+        "description": "Upload a batch of pre-generated datapoints to a campaign.\n\nAccepts a JSON body with a ``samples`` array. Each entry must provide\na ``values`` dict (variable name \u2192 value). ``kpi_values`` and\n``generation`` are optional.\n\nEach sample is assigned a new unique ``sample_id`` and appended to the\ncampaign's ``run.json`` ``per_sample`` list. The campaign's\n``summary.n_samples`` is updated accordingly.\n\nThis endpoint requires ``readwrite`` permission (issue #395).",
+        "operationId": "batch_upload_samples_api_v1_campaigns__campaign_id__samples_batch_upload_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchUploadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/requeue": {
+      "post": {
+        "summary": "Requeue Sample",
+        "description": "Mark a completed or failed sample for re-running.\n\nCreates a new ``pending`` sample derived from the specified sample's\nparameters. The new sample is appended to ``run.json.per_sample`` and\ncan be picked up by the executor on the campaign's next run.\n\nOnly ``COMPLETED`` or ``FAILED`` samples can be requeued. Returns 404\nif the sample does not exist, and 422 if the sample is not in a\nrequeueable state.\n\nThis endpoint requires ``readwrite`` permission (issue #395).",
+        "operationId": "requeue_sample_api_v1_campaigns__campaign_id__samples__sample_id__requeue_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleRequeueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pat/analyses": {
       "post": {
         "tags": [
@@ -2125,6 +2224,102 @@
   },
   "components": {
     "schemas": {
+      "BatchUploadRequest": {
+        "properties": {
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/BatchUploadSampleItem"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Samples",
+            "description": "One or more pre-generated samples to add to the campaign"
+          }
+        },
+        "type": "object",
+        "required": [
+          "samples"
+        ],
+        "title": "BatchUploadRequest",
+        "description": "Request body for ``POST /api/v1/campaigns/{campaign_id}/samples/batch_upload``.\n\nAccepts a JSON array of sample data. Each sample must provide a ``values``\ndict; ``kpi_values`` and ``generation`` are optional.\n\nExample::\n\n    {\n      \"samples\": [\n        {\"values\": {\"wall_r\": 2.5, \"window_shgc\": 0.4}},\n        {\"values\": {\"wall_r\": 3.0, \"window_shgc\": 0.3}, \"kpi_values\": {\"eui\": 120.5}}\n      ]\n    }"
+      },
+      "BatchUploadResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id",
+            "description": "Campaign identifier"
+          },
+          "added": {
+            "type": "integer",
+            "title": "Added",
+            "description": "Number of samples successfully added"
+          },
+          "sample_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sample Ids",
+            "description": "Newly assigned sample IDs for the uploaded samples (in order)"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Human-readable summary of the operation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "added",
+          "sample_ids",
+          "detail"
+        ],
+        "title": "BatchUploadResponse",
+        "description": "Response for a successful batch upload."
+      },
+      "BatchUploadSampleItem": {
+        "properties": {
+          "values": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Values",
+            "description": "Dictionary of variable name \u2192 value mappings for this sample"
+          },
+          "kpi_values": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kpi Values",
+            "description": "Optional pre-computed KPI values for this sample (e.g. for re-upload after external processing)"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation",
+            "description": "Optional generation number for iterative algorithms (default: 1)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "title": "BatchUploadSampleItem",
+        "description": "One sample in a batch upload request.\n\nEach item describes a pre-generated datapoint to add to the campaign.\nA new unique ``sample_id`` is assigned to each entry on the server side."
+      },
       "Body_upload_file_api_v1_files_upload_post": {
         "properties": {
           "file": {
@@ -4129,6 +4324,45 @@
         ],
         "title": "SampleListResponse",
         "description": "Paginated envelope for sample list endpoint."
+      },
+      "SampleRequeueResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id",
+            "description": "Campaign identifier"
+          },
+          "original_sample_id": {
+            "type": "string",
+            "title": "Original Sample Id",
+            "description": "The sample that was requeued"
+          },
+          "new_sample_id": {
+            "type": "string",
+            "title": "New Sample Id",
+            "description": "Newly created sample ID pending re-run"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Status of the new sample: pending"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Human-readable summary of the operation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "original_sample_id",
+          "new_sample_id",
+          "status",
+          "detail"
+        ],
+        "title": "SampleRequeueResponse",
+        "description": "Response for requeueing a completed or failed sample."
       },
       "SampleSummary": {
         "properties": {

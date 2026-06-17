@@ -35,6 +35,8 @@ if TYPE_CHECKING:
 
 from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
+    BatchUploadRequest,
+    BatchUploadResponse,
     CampaignCancelResponse,
     CampaignPauseResponse,
     CampaignResumeResponse,
@@ -51,6 +53,7 @@ from osimflow.api.schemas import (
     MultiCampaignComparisonResponse,
     SampleDetailResponse,
     SampleListResponse,
+    SampleRequeueResponse,
     SampleSummary,
 )
 from osimflow.audit import AuditLogger, api_actor_from_request
@@ -1355,3 +1358,240 @@ async def delete_sample_result_file(
     result_file.unlink()
     log.info("deleted result file: %s", result_file)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/samples/batch_upload — batch upload
+# ---------------------------------------------------------------------------
+
+
+@campaigns_router.post(
+    "/api/v1/campaigns/{campaign_id}/samples/batch_upload",
+    response_model=BatchUploadResponse,
+)
+async def batch_upload_samples(
+    campaign_id: str,
+    body: BatchUploadRequest,
+    request: Request,
+) -> BatchUploadResponse:
+    """Upload a batch of pre-generated datapoints to a campaign.
+
+    Accepts a JSON body with a ``samples`` array. Each entry must provide
+    a ``values`` dict (variable name → value). ``kpi_values`` and
+    ``generation`` are optional.
+
+    Each sample is assigned a new unique ``sample_id`` and appended to the
+    campaign's ``run.json`` ``per_sample`` list. The campaign's
+    ``summary.n_samples`` is updated accordingly.
+
+    This endpoint requires ``readwrite`` permission (issue #395).
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for batch upload",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Load existing run.json
+    run_json_path = campaign_dir / "run.json"
+    if not run_json_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Campaign '{campaign_id}' has no run.json — campaign may not have started",
+        )
+
+    try:
+        data: dict[str, Any] = json.loads(run_json_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read run.json: {exc}",
+        ) from exc
+
+    # Determine the next sample number suffix
+    per_sample: list[dict[str, Any]] = data.get("per_sample", [])
+    existing_ids = {s.get("sample_id", "") for s in per_sample}
+    max_num = 0
+    for sid in existing_ids:
+        # Match sample_0001, sample_001, etc.
+        for part in sid.split("_"):
+            if part.isdigit():
+                max_num = max(max_num, int(part))
+                break
+
+    # Build new sample entries
+    now = time.time()
+    new_sample_ids: list[str] = []
+    for idx, item in enumerate(body.samples):
+        sample_num = max_num + idx + 1
+        # Generate a unique sample_id
+        new_id = f"sample_{sample_num:04d}"
+        while new_id in existing_ids:
+            sample_num += 1
+            new_id = f"sample_{sample_num:04d}"
+            existing_ids.add(new_id)  # prevent further collisions in this batch
+
+        sample_entry: dict[str, Any] = {
+            "sample_id": new_id,
+            "status": "pending",
+            "generation": item.generation if item.generation is not None else 1,
+            "created_at": now,
+        }
+        if item.kpi_values is not None:
+            sample_entry["kpi_values"] = item.kpi_values
+        per_sample.append(sample_entry)
+        new_sample_ids.append(new_id)
+
+    # Update run.json
+    data["per_sample"] = per_sample
+    # Update summary counts
+    summary: dict[str, Any] = data.get("summary", {})
+    summary["n_samples"] = len(per_sample)
+    data["summary"] = summary
+
+    try:
+        run_json_path.write_text(json.dumps(data, indent=2))
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to write run.json: {exc}",
+        ) from exc
+
+    log.info(
+        "batch_upload: added %d samples to campaign %s: %s",
+        len(new_sample_ids),
+        campaign_id,
+        new_sample_ids,
+    )
+
+    return BatchUploadResponse(
+        campaign_id=campaign_id,
+        added=len(new_sample_ids),
+        sample_ids=new_sample_ids,
+        detail=f"Added {len(new_sample_ids)} sample(s) to campaign '{campaign_id}'",
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/campaigns/{campaign_id}/samples/{sample_id}/requeue
+# ---------------------------------------------------------------------------
+
+
+@campaigns_router.post(
+    "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/requeue",
+    response_model=SampleRequeueResponse,
+)
+async def requeue_sample(
+    campaign_id: str,
+    sample_id: str,
+    request: Request,
+) -> SampleRequeueResponse:
+    """Mark a completed or failed sample for re-running.
+
+    Creates a new ``pending`` sample derived from the specified sample's
+    parameters. The new sample is appended to ``run.json.per_sample`` and
+    can be picked up by the executor on the campaign's next run.
+
+    Only ``COMPLETED`` or ``FAILED`` samples can be requeued. Returns 404
+    if the sample does not exist, and 422 if the sample is not in a
+    requeueable state.
+
+    This endpoint requires ``readwrite`` permission (issue #395).
+    """
+    if not get_user_permission(request, "readwrite"):
+        raise HTTPException(
+            status_code=403,
+            detail="read-only mode: write permission required for requeue",
+        )
+
+    base = _campaigns_base_dir(request)
+    campaign_dir = _campaign_dir_from_id(base, campaign_id)
+
+    # Load run.json
+    run_json_path = campaign_dir / "run.json"
+    if not run_json_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Campaign '{campaign_id}' has no run.json",
+        )
+
+    try:
+        data: dict[str, Any] = json.loads(run_json_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read run.json: {exc}",
+        ) from exc
+
+    # Find the source sample
+    per_sample: list[dict[str, Any]] = data.get("per_sample", [])
+    source_sample: dict[str, Any] | None = None
+    for s in per_sample:
+        if s.get("sample_id") == sample_id:
+            source_sample = s
+            break
+
+    if source_sample is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Sample '{sample_id}' not found in campaign '{campaign_id}'",
+        )
+
+    status = source_sample.get("status", "")
+    if status not in ("ok", "completed", "failed"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Sample '{sample_id}' has status '{status}' — "
+                "only COMPLETED/FAILED samples can be requeued"
+            ),
+        )
+
+    # Build new sample id: {original}_reanalyze_{n}
+    reanalyze_count = source_sample.get("reanalyze_count", 0)
+    new_id = f"{sample_id}_reanalyze_{reanalyze_count + 1}"
+
+    # Update source sample's reanalyze_count
+    source_sample["reanalyze_count"] = reanalyze_count + 1
+
+    # Build new sample entry
+    new_entry: dict[str, Any] = {
+        "sample_id": new_id,
+        "status": "pending",
+        "generation": source_sample.get("generation", 1),
+        "created_at": time.time(),
+        "original_sample_id": sample_id,
+    }
+
+    per_sample.append(new_entry)
+    data["per_sample"] = per_sample
+    # Update summary counts
+    summary: dict[str, Any] = data.get("summary", {})
+    summary["n_samples"] = len(per_sample)
+    data["summary"] = summary
+
+    try:
+        run_json_path.write_text(json.dumps(data, indent=2))
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to write run.json: {exc}",
+        ) from exc
+
+    log.info(
+        "requeue: campaign=%s original=%s new=%s",
+        campaign_id,
+        sample_id,
+        new_id,
+    )
+
+    return SampleRequeueResponse(
+        campaign_id=campaign_id,
+        original_sample_id=sample_id,
+        new_sample_id=new_id,
+        status="pending",
+        detail=f"Created reanalysis sample '{new_id}' derived from '{sample_id}'",
+    )
