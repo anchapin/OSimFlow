@@ -306,7 +306,7 @@ class MeasureRegistry:
         (
             "Choice",
             re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeChoiceArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
+                r'OpenStudio::Measure::OSArgument\.makeChoiceArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*[^,]+\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
             ),
         ),
         (

@@ -544,13 +544,16 @@ def _generate_interactive_report(
         mean_eui = results[eui_col].mean() if eui_col else None
         std_eui = results[eui_col].std() if eui_col else None
 
+        mean_eui_str = f"{mean_eui:.2f}" if (mean_eui is not None and not pd.isna(mean_eui)) else "N/A"
+        std_eui_str = f"{std_eui:.2f}" if (std_eui is not None and not pd.isna(std_eui)) else "N/A"
+
         overview_html = f"""
         <div class="section">
         <h2>Campaign Overview</h2>
         <table>
             <tr><th>Total Samples</th><td>{n_samples}</td></tr>
-            <tr><th>Mean EUI</th><td>{mean_eui:.2f} kWh/m²/yr</td></tr>
-            <tr><th>Std Dev EUI</th><td>{std_eui:.2f} kWh/m²/yr</td></tr>
+            <tr><th>Mean EUI</th><td>{mean_eui_str} kWh/m²/yr</td></tr>
+            <tr><th>Std Dev EUI</th><td>{std_eui_str} kWh/m²/yr</td></tr>
         </table>
         </div>
         """
