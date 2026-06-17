@@ -7,7 +7,7 @@ built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``IslandModelGAAlgorithm``,
 ``NSGA2Algorithm``, ``PSOAlgorithm``,
 ``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``,
-``RandomSamplingAlgorithm``, and ``SequentialSearchAlgorithm`` implementations.
+``RandomSamplingAlgorithm``, ``RgenoudAlgorithm``, and ``SequentialSearchAlgorithm`` implementations.
 
 Adding a new algorithm (Bayesian optimisation, …) requires only:
 
@@ -644,12 +644,14 @@ from osimflow.algorithms.factorial import (  # noqa: E402
     GridSamplingAlgorithm,
 )
 from osimflow.algorithms.halton import HaltonAlgorithm  # noqa: E402
+from osimflow.algorithms.rgenoud import RgenoudAlgorithm  # noqa: E402
 from osimflow.algorithms.sobol import SobolAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("sobol", SobolAlgorithm)
 AlgorithmRegistry.register("halton", HaltonAlgorithm)
 AlgorithmRegistry.register("full_factorial", FullFactorialAlgorithm)
 AlgorithmRegistry.register("grid", GridSamplingAlgorithm)
+AlgorithmRegistry.register("rgenoud", RgenoudAlgorithm)
 
 from osimflow.algorithms.da import DualAnnealingAlgorithm  # noqa: E402
 from osimflow.algorithms.de import DifferentialEvolutionAlgorithm  # noqa: E402
