@@ -437,7 +437,9 @@ class TestUploadMeasure:
 class TestUploadedMeasureCrud:
     """Tests for GET/PATCH/DELETE /api/v1/measures/by-id/{measure_id}."""
 
-    def _upload_measure(self, tmp_path: Path, name: str = "TestRubyMeasure") -> tuple[TestClient, str]:
+    def _upload_measure(
+        self, tmp_path: Path, name: str = "TestRubyMeasure"
+    ) -> tuple[TestClient, str]:
         """Helper: upload a measure and return (client, measure_id)."""
         app = create_app(outdir=tmp_path)
         client = TestClient(app)
@@ -517,7 +519,9 @@ class TestUploadedMeasureCrud:
         resp3 = client.delete("/api/v1/measures/by-id/00000000-0000-0000-0000-000000000000")
         assert resp3.status_code == 404
 
-    def test_get_uploaded_measure_404_for_workflow_name(self, tmp_outdir: Path, workflow_osw: Path) -> None:
+    def test_get_uploaded_measure_404_for_workflow_name(
+        self, tmp_outdir: Path, workflow_osw: Path
+    ) -> None:
         """GET /by-id on a workflow measure name returns 404."""
         app = create_app(outdir=tmp_outdir)
         client = TestClient(app)
