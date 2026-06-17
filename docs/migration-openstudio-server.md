@@ -77,8 +77,8 @@ OSimFlow equivalent.
 | openstudio-server | OSimFlow | Notes |
 |---|---|---|
 | `lhs` algorithm | `--algorithm lhs` (default) | Latin Hypercube Sampling |
-| `nsga_nrel` algorithm | `--algorithm nsga2` | Multi-objective optimisation (requires `pip install osimflow[optimization]`) |
-| `pso` algorithm | `--algorithm pso` | Particle Swarm Optimisation (requires `pip install osimflow[optimization]`) |
+| `nsga_nrel` algorithm | `--algorithm nsga2` | Multi-objective optimisation (requires `pip install osimflow[optimization]` in addition to base install) |
+| `pso` algorithm | `--algorithm pso` | Particle Swarm Optimisation (requires `pip install osimflow[optimization]` in addition to base install) |
 | `doe` / `ga` algorithm | `--algorithm de` | Differential Evolution |
 | `sobol` algorithm | `--algorithm sobol` | Quasi-random sequences |
 | PAT "Seed Model" | `--template_sim_package ./pkg` | Directory containing `.osm`/`.osw` |
@@ -102,9 +102,16 @@ into OSimFlow's `template_sim_package/` + `variables.yml` format.
 
 ### Prerequisites
 
+Since OSimFlow is not yet published on PyPI, install from source:
+
 ```bash
-pip install osimflow
+git clone https://github.com/anchapin/OSimFlow.git
+cd OSimFlow
+pip install -e ".[dev,aws,slurm]"
 ```
+
+# Or install from PyPI (when available)
+# pip install osimflow
 
 ### Step 1: Export from PAT
 
@@ -547,8 +554,11 @@ See [runjson-guide.md](runjson-guide.md) for the full schema reference.
 For a visual monitoring experience closer to openstudio-server's
 dashboard, set up MLflow:
 
+> Note: These commands assume OSimFlow is already installed. If installing from source, use `pip install -e ".[dev,aws,slurm,mlflow]"` instead.
+
 ```bash
 pip install "osimflow[mlflow]"
+```
 
 # Terminal 1: Start MLflow UI
 mlflow ui --port 5000
@@ -575,6 +585,8 @@ This section provides a complete setup guide for using MLflow as a
 replacement for the openstudio-server web dashboard.
 
 ### 8.1 Installation
+
+> Note: This command assumes OSimFlow is already installed. If installing from source, use `pip install -e ".[dev,aws,slurm,mlflow]"` instead.
 
 ```bash
 pip install "osimflow[mlflow]"
@@ -681,7 +693,7 @@ osimflow run \
 | Artifact browsing | CSV download | Any file type |
 | Multi-campaign comparison | Manual | Built-in "Compare" |
 | Access control | Built-in | Via reverse proxy |
-| Setup complexity | Docker Compose + MongoDB | `pip install mlflow` |
+| Setup complexity | Docker Compose + MongoDB | `pip install "osimflow[mlflow]"` |
 
 ---
 
@@ -743,7 +755,7 @@ You were using `nsga_nrel` in openstudio-server and want to switch to
 NSGA-II in OSimFlow.
 
 ```bash
-# Install optimisation extra
+# Install optimisation extra (in addition to base OSimFlow install)
 pip install "osimflow[optimization]"
 
 # Run with NSGA-II
@@ -835,10 +847,10 @@ df = pd.read_csv("results/aggregated_results.csv")
 **Fix:**
 
 ```bash
-# NSGA-II and PSO
+# NSGA-II and PSO (in addition to base OSimFlow install)
 pip install "osimflow[optimization]"
 
-# Morris and FAST99 sensitivity analysis
+# Morris and FAST99 sensitivity analysis (in addition to base OSimFlow install)
 pip install "osimflow[sensitivity]"
 ```
 
