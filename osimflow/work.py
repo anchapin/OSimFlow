@@ -369,7 +369,7 @@ def _apply_parameters_via_cli(
     stderr_path = out_dir / "stderr.log"
 
     cmd: list[str] = [
-        "openstudio.cli",
+        _get_openstudio_cmd(),
         "run",
         "-w",
         str(workflow_path),
@@ -477,15 +477,24 @@ def _find_workflow_osw(modified_sim_package: Path) -> Path | None:
         return osw
     return None
 
+def _get_openstudio_cmd() -> str:
+    """Return the name of the OpenStudio CLI executable on PATH.
+
+    Prefers "openstudio.cli" but falls back to "openstudio" if that is
+    what is available on the local system (e.g. macOS installation).
+    """
+    if shutil.which("openstudio.cli") is not None:
+        return "openstudio.cli"
+    return "openstudio"
+
 
 def _is_openstudio_available() -> bool:
-    """Check whether ``openstudio.cli`` is on PATH.
+    """Check whether ``openstudio.cli`` or ``openstudio`` is on PATH.
 
     Uses ``shutil.which`` so the check works both on bare metal and
-    inside the ``nrel/openstudio`` container where the CLI is at
-    ``/usr/local/bin/openstudio.cli``.
+    inside the ``nrel/openstudio`` container.
     """
-    return shutil.which("openstudio.cli") is not None
+    return shutil.which("openstudio.cli") is not None or shutil.which("openstudio") is not None
 
 
 def _is_stub_mode() -> bool:
@@ -783,7 +792,7 @@ def _run_real_openstudio(
         )
 
     cmd: list[str] = [
-        "openstudio.cli",
+        _get_openstudio_cmd(),
         "run",
         "-w",
         str(workflow_path),
@@ -1083,7 +1092,7 @@ def _validate_model_geometry(template_sim_package: Path) -> None:
             try:
                 result = subprocess.run(  # noqa: S603
                     [
-                        "openstudio.cli",
+                        _get_openstudio_cmd(),
                         "openstudio",
                         "--execute",
                         "puts 'model ok'",
@@ -1212,7 +1221,7 @@ def preflight_run_model(
                     f"a workflow file."
                 )
             cmd: list[str] = [
-                "openstudio.cli",
+                _get_openstudio_cmd(),
                 "run",
                 "-w",
                 str(workflow_path),

@@ -392,7 +392,7 @@ def _resolve_measure_argument(osa_var: dict[str, Any]) -> str | None:
     measure = osa_var.get("measure")
     if not measure or not isinstance(measure, dict):
         return None
-    measure_name = measure.get("display_name") or measure.get("name")
+    measure_name = measure.get("name") or measure.get("display_name")
     argument = measure.get("argument") or measure.get("argument_name")
     if not measure_name or not argument:
         return None
@@ -515,13 +515,14 @@ def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
                     for mv in measure_vars:
                         if isinstance(mv, dict):
                             mv_copy = dict(mv)
-                            m_name = measure.get("measure_definition_class_name") or measure.get("display_name") or measure.get("name")
+                            m_dir = measure.get("measure_definition_directory") or measure.get("measure_definition_directory_local")
+                            m_name = Path(m_dir).name if m_dir else (measure.get("measure_definition_name") or measure.get("name") or measure.get("measure_definition_class_name"))
                             arg_name = None
                             if "argument" in mv_copy and isinstance(mv_copy["argument"], dict):
                                 arg_name = mv_copy["argument"].get("name")
                             if m_name and arg_name:
                                 mv_copy["measure"] = {
-                                    "display_name": m_name,
+                                    "name": m_name,
                                     "argument": arg_name
                                 }
                             extracted_variables.append(mv_copy)

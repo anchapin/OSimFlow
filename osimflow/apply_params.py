@@ -47,6 +47,28 @@ from typing import Any
 
 log = logging.getLogger("osimflow.apply_params")
 
+# Try to dynamically bind openstudio.openstudiomodelcore if openstudio is present
+# but openstudio.openstudiomodelcore is missing (as in macOS standalone installs).
+try:
+    import openstudio  # noqa: F401
+    import sys
+    try:
+        import openstudio.openstudiomodelcore  # noqa: F401
+    except ImportError:
+        try:
+            import openstudiomodel
+            sys.modules["openstudio.openstudiomodelcore"] = openstudiomodel
+            openstudio.openstudiomodelcore = openstudiomodel
+        except ImportError:
+            try:
+                import openstudiomodelcore
+                sys.modules["openstudio.openstudiomodelcore"] = openstudiomodelcore
+                openstudio.openstudiomodelcore = openstudiomodelcore
+            except ImportError:
+                pass
+except ImportError:
+    pass
+
 # Reserved key injected by the Campaign when a parameter targets
 # ``target: epw_file``.  The apply logic extracts this key before the
 # pre-flight check (because it does not correspond to a measure argument
@@ -394,9 +416,10 @@ def _parse_osm_production(template: Path) -> dict[str, MappedParameter]:
             "bindings. Install `openstudio` on the executor host."
         ) from exc
 
-    model = openstudio.openstudiomodelcore.Model.load(str(template))
-    if model is None:
+    model_opt = openstudio.openstudiomodelcore.Model.load(str(template))
+    if not model_opt.is_initialized():
         raise ValueError(f"OpenStudio failed to load model from {template}")
+    model = model_opt.get()
 
     result: dict[str, MappedParameter] = {}
     # Map OpenStudio object types to their attribute discoverers.
@@ -411,9 +434,7 @@ def _parse_osm_production(template: Path) -> dict[str, MappedParameter]:
 
 def _discover_space_types(model: Any, result: dict[str, MappedParameter]) -> None:
     """Discover settable attributes from SpaceType objects."""
-    import openstudio  # noqa: PLC0415
-
-    for st in openstudio.openstudiomodelcore.SpaceType.getSpaceTypes(model):
+    for st in model.getSpaceTypes():
         name = st.nameString()
         if not name:
             continue
@@ -431,9 +452,7 @@ def _discover_space_types(model: Any, result: dict[str, MappedParameter]) -> Non
 
 def _discover_thermal_zones(model: Any, result: dict[str, MappedParameter]) -> None:
     """Discover settable attributes from ThermalZone objects."""
-    import openstudio  # noqa: PLC0415
-
-    for tz in openstudio.openstudiomodelcore.ThermalZone.getThermalZones(model):
+    for tz in model.getThermalZones():
         name = tz.nameString()
         if not name:
             continue
@@ -463,9 +482,7 @@ def _discover_thermal_zones(model: Any, result: dict[str, MappedParameter]) -> N
 
 def _discover_constructions(model: Any, result: dict[str, MappedParameter]) -> None:
     """Discover settable attributes from Construction objects."""
-    import openstudio  # noqa: PLC0415
-
-    for c in openstudio.openstudiomodelcore.Construction.getConstructions(model):
+    for c in model.getConstructions():
         name = c.nameString()
         if not name:
             continue
@@ -484,9 +501,7 @@ def _discover_constructions(model: Any, result: dict[str, MappedParameter]) -> N
 
 def _discover_lights(model: Any, result: dict[str, MappedParameter]) -> None:
     """Discover settable attributes from Lights objects."""
-    import openstudio  # noqa: PLC0415
-
-    for lt in openstudio.openstudiomodelcore.Lights.getLights(model):
+    for lt in model.getLightss():
         name = lt.nameString()
         if not name:
             continue
@@ -505,9 +520,7 @@ def _discover_lights(model: Any, result: dict[str, MappedParameter]) -> None:
 
 def _discover_people(model: Any, result: dict[str, MappedParameter]) -> None:
     """Discover settable attributes from People objects."""
-    import openstudio  # noqa: PLC0415
-
-    for p in openstudio.openstudiomodelcore.People.getPeople(model):
+    for p in model.getPeoples():
         name = p.nameString()
         if not name:
             continue
@@ -818,19 +831,12 @@ def _resolve_model_object(
 
     Returns the model object, or ``None`` if no matching object exists.
     """
-    type_dispatch: dict[str, Any] = {
-        "SpaceType": openstudio.openstudiomodelcore.SpaceType,
-        "ThermalZone": openstudio.openstudiomodelcore.ThermalZone,
-        "Construction": openstudio.openstudiomodelcore.Construction,
-        "Lights": openstudio.openstudiomodelcore.Lights,
-        "People": openstudio.openstudiomodelcore.People,
-        "BuildingStory": openstudio.openstudiomodelcore.BuildingStory,
-    }
-    idd_type = type_dispatch.get(object_type)
-    if idd_type is None:
+    getter_name = "get" + object_type + "s"
+    getter = getattr(model, getter_name, None)
+    if getter is None:
         log.warning("Unsupported .osm object type %r — skipping validation", object_type)
         return None
-    objects = idd_type.__getattribute__("get" + object_type + "s")(model)
+    objects = getter()
     for obj in objects:
         if obj.nameString() == object_name:
             return obj
@@ -957,9 +963,10 @@ def _mutate_osm_production(
             "bindings. Install `openstudio` on the executor host."
         ) from exc
 
-    model = openstudio.openstudiomodelcore.Model.load(str(osm_path))
-    if model is None:
+    model_opt = openstudio.openstudiomodelcore.Model.load(str(osm_path))
+    if not model_opt.is_initialized():
         raise ValueError(f"OpenStudio failed to load model from {osm_path}")
+    model = model_opt.get()
 
     for name, value in parameters.items():
         mapping = mappings.get(name)

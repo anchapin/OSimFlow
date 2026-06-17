@@ -947,8 +947,12 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         ),
         resource_quota=_parse_resource_quota(args.get("resource_quota")),
         enable_cost_tracking=bool(args.get("enable_cost_tracking", False)),
-        cost_on_demand_price=float(str(args.get("cost_on_demand_price", 0.05))),
-        cost_spot_price=float(str(args.get("cost_spot_price", 0.03))),
+        cost_on_demand_price=float(args["cost_on_demand_price"])
+        if args.get("cost_on_demand_price") is not None
+        else 0.05,
+        cost_spot_price=float(args["cost_spot_price"])
+        if args.get("cost_spot_price") is not None
+        else 0.03,
         alert_rules=(Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None),
         alert_destinations=(
             Path(str(args["alert_destinations"])).resolve()
