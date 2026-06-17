@@ -1112,7 +1112,9 @@ async def resume_campaign(
 # ---------------------------------------------------------------------------
 
 # Files included in the bundle (evaluated at request time).
-_BUNDLE_ROOT_FILES = frozenset({"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"})
+_BUNDLE_ROOT_FILES = frozenset(
+    {"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"}
+)
 _BUNDLE_PLOT_GLOB = "*.png"
 _BUNDLE_SQL_GLOB = "eplusout.sql"
 

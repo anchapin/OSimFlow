@@ -31,6 +31,7 @@ Supports all distribution types that appear in ``variables.yml``:
 - ``triangular`` — mode + min/max, converted to a discrete PMF over ``values``
 - ``discrete`` — explicit ``{value: probability}`` PMF dict
 """
+
 import bisect
 import logging
 import math
@@ -183,9 +184,7 @@ def _triangular_pmf(
     float_values = sorted(float(v) for v in values)
     c_mode = (min_val + max_val) / 2.0 if mode is None else float(mode)
     if not (min_val <= c_mode <= max_val):
-        raise QDError(
-            f"triangular mode {c_mode} must be within [min, max]=[{min_val}, {max_val}]"
-        )
+        raise QDError(f"triangular mode {c_mode} must be within [min, max]=[{min_val}, {max_val}]")
     c = (c_mode - min_val) / (max_val - min_val)
     densities: list[float] = []
     for v in float_values:
@@ -218,6 +217,7 @@ def _register_pmf_builder(name: str) -> Callable[[_PMFBuilderFunc], _PMFBuilderF
     def decorator(func: _PMFBuilderFunc) -> _PMFBuilderFunc:
         _DIST_PMF_BUILDERS[name] = func
         return func
+
     return decorator
 
 
