@@ -716,7 +716,6 @@ class TestOsaToVariablesYmlAdditional:
         assert v["max"] == 30.0
         assert v["measure_argument"] == "SetRValue.r_val"
 
-
 # ---------------------------------------------------------------------------
 # Test: importers __init__ re-exports
 # ---------------------------------------------------------------------------

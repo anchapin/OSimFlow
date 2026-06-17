@@ -325,6 +325,7 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     return entry, []
 
 
+
 # Translation table: OSA algorithm type → OSimFlow registry name.
 # See https://github.com/NREL/openstudio-analysis-gem for the canonical
 # OSA algorithm types.
