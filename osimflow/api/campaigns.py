@@ -1163,7 +1163,7 @@ def _iter_plot_files(
             yield (archive_path, plot_file)
 
 
-def _iter_campaign_bundle(
+def _iter_campaign_bundle(  # noqa: PLR0912
     campaign_dir: Path,
     *,
     include_sql: bool = False,
