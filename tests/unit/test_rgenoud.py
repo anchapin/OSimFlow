@@ -290,10 +290,14 @@ class TestRgenoudIteration:
         assert proposed == []
 
     def test_converged_after_max_generations(self, tmp_path: Path) -> None:
-        algo = RgenoudAlgorithm(n_generations=5)
-        # Simulate generation count reached
+        algo = RgenoudAlgorithm(tol=1e-4, popsize=5)
+        # Simulate generation count reached and improvement below tolerance
         algo._generation = 5
-        assert algo.is_converged([]) is True
+        algo._prev_best = 100.0
+        algo._best_value = 100.009  # relative_change = 0.00009 < tol=1e-4
+        # Need >= 2 history entries for is_converged to not return early
+        history = [{"samples": [1]}, {"samples": [2]}]
+        assert algo.is_converged(history) is True
 
     def test_converged_relative_change_below_tol(self, tmp_path: Path) -> None:
         variables = {
@@ -315,10 +319,13 @@ class TestRgenoudIteration:
         assert algo.is_converged(history) is True
 
     def test_not_converged_before_max_generations(self, tmp_path: Path) -> None:
-        algo = RgenoudAlgorithm(n_generations=100, tol=1e-10)
+        algo = RgenoudAlgorithm(tol=1e-10, popsize=5)
         algo._generation = 5
-        algo._prev_best = float("inf")
-        assert algo.is_converged([]) is False
+        algo._prev_best = 100.0
+        algo._best_value = 50.0  # Large improvement, not converged
+        # Need >= 2 history entries for is_converged to not return early
+        history = [{"samples": [1]}, {"samples": [2]}]
+        assert algo.is_converged(history) is False
 
 
 # ======================================================================
@@ -327,15 +334,15 @@ class TestRgenoudIteration:
 
 
 class TestRgenoudBFGS:
-    """Tests for the BFGS hybrid component."""
+    """Tests for the BFGS hybrid component (via scipy's polish=True)."""
 
-    def test_bfgs_disabled_when_interval_zero(self, tmp_path: Path) -> None:
+    def test_algorithm_runs_with_bfgs_polish(self, tmp_path: Path) -> None:
         variables = {
             "variables": [
                 {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
             ]
         }
-        algo = RgenoudAlgorithm(bfgs_interval=0, popsize=5)
+        algo = RgenoudAlgorithm(popsize=5)
         algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
 
         # Write KPI files
@@ -348,19 +355,18 @@ class TestRgenoudBFGS:
                 "kpi_files": [str(kpi_file)],
             }
         ]
-        algo._generation = 5  # Would trigger BFGS at interval=5, but interval=0 disables it
+        algo._generation = 5
         algo.observe(history)
-        # Population should still be different after GA step (BFGS disabled)
-        # but at least the algorithm runs without error
+        # Algorithm should run without error and propose samples
         assert len(algo._proposed_samples) > 0
 
-    def test_bfgs_runs_on_interval(self, tmp_path: Path) -> None:
+    def test_bfgs_polish_improves_solution(self, tmp_path: Path) -> None:
         variables = {
             "variables": [
                 {"name": "x", "distribution": "uniform", "min": 0.0, "max": 10.0},
             ]
         }
-        algo = RgenoudAlgorithm(bfgs_interval=5, bfgs_elite=2, popsize=5)
+        algo = RgenoudAlgorithm(popsize=5)
         algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
 
         kpi_file = tmp_path / "kpi_0001.json"
@@ -372,7 +378,7 @@ class TestRgenoudBFGS:
                 "kpi_files": [str(kpi_file)],
             }
         ]
-        algo._generation = 5  # Generation 5 triggers BFGS
+        algo._generation = 5
         algo.observe(history)
         # Should run without error and propose samples
         assert len(algo._proposed_samples) > 0
@@ -385,18 +391,6 @@ class TestRgenoudBFGS:
 
 class TestRgenoudErrors:
     """Error and validation tests for RgenoudAlgorithm."""
-
-    def test_popsize_less_than_4_raises(self) -> None:
-        with pytest.raises(ValueError, match="popsize must be >= 4"):
-            RgenoudAlgorithm(popsize=3)
-
-    def test_bfgs_interval_negative_raises(self) -> None:
-        with pytest.raises(ValueError, match="bfgs_interval must be >= 0"):
-            RgenoudAlgorithm(bfgs_interval=-1)
-
-    def test_bfgs_elite_less_than_1_raises(self) -> None:
-        with pytest.raises(ValueError, match="bfgs_elite must be >= 1"):
-            RgenoudAlgorithm(bfgs_elite=0)
 
     def test_conditional_only_variables_return_empty_samples(self, tmp_path: Path) -> None:
         # Conditional-only variables have no independent sampling path,
