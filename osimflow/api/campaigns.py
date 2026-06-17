@@ -1121,6 +1121,46 @@ _BUNDLE_ROOT_FILES = frozenset(
 )
 _BUNDLE_PLOT_GLOB = "*.png"
 _BUNDLE_SQL_GLOB = "eplusout.sql"
+_BUNDLE_KPI_NAMES = ("kpi.json", "kpis.json")
+
+
+def _iter_sample_files(
+    campaign_dir: Path,
+    suffix: str,
+    *,
+    samples_prefix: str = "samples",
+) -> tuple[tuple[str, Path], ...]:
+    """Iterate over per-sample files matching a suffix in the sim/ subdirectory.
+
+    Yields ``(archive_path, file_path)`` pairs.
+    """
+    work_dir = campaign_dir / "work"
+    sim_dir = work_dir / "sim"
+    if not sim_dir.is_dir():
+        return
+    for sample_dir in sim_dir.iterdir():
+        if not sample_dir.is_dir():
+            continue
+        file_path = sample_dir / suffix
+        if file_path.is_file():
+            rel = f"{samples_prefix}/{sample_dir.name}/{suffix}"
+            yield (rel, file_path)
+
+
+def _iter_plot_files(
+    base_dir: Path,
+    pattern: str,
+    *,
+    prefix: str = "",
+) -> tuple[tuple[str, Path], ...]:
+    """Iterate over plot files matching pattern in base_dir.
+
+    Yields ``(archive_path, file_path)`` pairs.
+    """
+    for plot_file in base_dir.glob(pattern):
+        if plot_file.is_file() and plot_file.name not in _BUNDLE_ROOT_FILES:
+            archive_path = f"{prefix}/{plot_file.name}" if prefix else plot_file.name
+            yield (archive_path, plot_file)
 
 
 def _iter_campaign_bundle(  # noqa: PLR0912
@@ -1141,40 +1181,20 @@ def _iter_campaign_bundle(  # noqa: PLR0912
             yield (name, f)
 
     # Per-sample KPI JSONs
-    work_dir = campaign_dir / "work"
-    sim_dir = work_dir / "sim"
-    if sim_dir.is_dir():
-        for sample_dir in sim_dir.iterdir():
-            if not sample_dir.is_dir():
-                continue
-            for kpi_name in ("kpi.json", "kpis.json"):
-                kpi_file = sample_dir / kpi_name
-                if kpi_file.is_file():
-                    rel = f"samples/{sample_dir.name}/{kpi_name}"
-                    yield (rel, kpi_file)
+    for rel, file_path in _iter_sample_files(campaign_dir, _BUNDLE_KPI_NAMES[0]):
+        yield (rel, file_path)
+    for rel, file_path in _iter_sample_files(campaign_dir, _BUNDLE_KPI_NAMES[1]):
+        yield (rel, file_path)
 
-    # Plot files — campaign root
-    for plot_file in campaign_dir.glob(_BUNDLE_PLOT_GLOB):
-        if plot_file.is_file() and plot_file.name != "run.json":
-            yield (plot_file.name, plot_file)
-    # Plot files — plots/ subdirectory
+    # Plot files — campaign root and plots/ subdirectory
+    yield from _iter_plot_files(campaign_dir, _BUNDLE_PLOT_GLOB)
     plots_dir = campaign_dir / "plots"
     if plots_dir.is_dir():
-        for plot_file in plots_dir.glob(_BUNDLE_PLOT_GLOB):
-            if plot_file.is_file():
-                yield (f"plots/{plot_file.name}", plot_file)
+        yield from _iter_plot_files(plots_dir, _BUNDLE_PLOT_GLOB, prefix="plots")
 
     # Per-sample eplusout.sql (only when --archive_intermediates was used)
-    if include_sql and work_dir.is_dir():
-        sim_dir = work_dir / "sim"
-        if sim_dir.is_dir():
-            for sample_dir in sim_dir.iterdir():
-                if not sample_dir.is_dir():
-                    continue
-                sql_file = sample_dir / _BUNDLE_SQL_GLOB
-                if sql_file.is_file():
-                    rel = f"samples/{sample_dir.name}/{_BUNDLE_SQL_GLOB}"
-                    yield (rel, sql_file)
+    if include_sql:
+        yield from _iter_sample_files(campaign_dir, _BUNDLE_SQL_GLOB)
 
 
 @campaigns_router.get("/api/v1/campaigns/{campaign_id}/download")
