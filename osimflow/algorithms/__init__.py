@@ -4,7 +4,8 @@ Provides the ``BaseAlgorithm`` abstract base class, the
 ``AlgorithmRegistry`` singleton for discovery/instantiation, and the
 built-in ``LHSAlgorithm``, ``SobolAlgorithm``, ``HaltonAlgorithm``,
 ``MorrisAlgorithm``, ``FAST99Algorithm``, ``DifferentialEvolutionAlgorithm``,
-``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``NSGA2Algorithm``, ``PSOAlgorithm``,
+``DualAnnealingAlgorithm``, ``GeneticAlgorithm``, ``IslandModelGAAlgorithm``,
+``NSGA2Algorithm``, ``PSOAlgorithm``,
 ``FullFactorialAlgorithm``, ``GridSamplingAlgorithm``, ``RepeatAllAlgorithm``, and
 ``RandomSamplingAlgorithm`` implementations.
 
@@ -682,6 +683,15 @@ try:
     AlgorithmRegistry.register("ga", GeneticAlgorithm)
 except ImportError:
     # deap is a required dependency for GeneticAlgorithm — only available
+    # when the [ga] extra is installed.
+    pass
+
+try:
+    from osimflow.algorithms.gaisl import IslandModelGAAlgorithm  # noqa: F401, E402
+
+    AlgorithmRegistry.register("gaisl", IslandModelGAAlgorithm)
+except ImportError:
+    # deap is a required dependency for IslandModelGAAlgorithm — only available
     # when the [ga] extra is installed.
     pass
 

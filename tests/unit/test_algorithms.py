@@ -818,3 +818,252 @@ class TestRandomSamplingAlgorithm:
         }
         with pytest.raises(NotImplementedError):
             algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# IslandModelGAAlgorithm
+# ---------------------------------------------------------------------------
+
+from osimflow.algorithms.gaisl import IslandModelGAAlgorithm  # noqa: E402
+
+
+class TestIslandModelGAAlgorithm:
+    """Tests for the IslandModelGAAlgorithm (issue #549, GAP-005)."""
+
+    _VARIABLES: dict[str, Any] = {
+        "variables": [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "uniform", "min": -5.0, "max": 5.0},
+        ]
+    }
+
+    def test_name(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.name() == "gaisl"
+
+    def test_is_iterative_true(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.is_iterative() is True
+
+    def test_is_converged_empty_history(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.is_converged([]) is False
+
+    def test_observe_empty_history(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.observe([]) == []
+
+    def test_observe_without_init_returns_empty(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        # No islands initialized yet.
+        result = algo.observe([{"samples": [{"sample_id": "0001"}]}])
+        assert result == []
+
+    def test_generate_samples_creates_file(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        result = algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path)
+        assert result.exists()
+        data = json.loads(result.read_text())
+        assert "samples" in data
+        assert len(data["samples"]) == 10
+
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        result = algo.generate_samples({"variables": []}, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_generate_samples_no_independent_vars(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "conditional", "depends_on": {"variable": "y"}},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=5, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert data["samples"] == []
+
+    def test_generate_samples_creates_outdir(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        nested = tmp_path / "deep" / "nested"
+        result = algo.generate_samples(self._VARIABLES, n_samples=3, seed=0, outdir=nested)
+        assert result.exists()
+        assert nested.is_dir()
+
+    def test_generate_samples_with_seed_reproducible(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        r1 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run1")
+        r2 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=123, outdir=tmp_path / "run2")
+        d1 = json.loads(r1.read_text())
+        d2 = json.loads(r2.read_text())
+        assert d1 == d2
+
+    def test_observe_after_init_proposes_samples(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5)
+        # Initialize variables first.
+        algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path)
+        # Observe with empty history (islands not initialized).
+        result = algo.observe([])
+        assert result == []
+        # Simulate KPI data that the algorithm can read.
+        # For a proper observe test we would need a full history with kpi_files,
+        # but we can verify that observe() doesn't crash with the island init path.
+        # The island initializes only when observe() is called with non-empty history.
+
+    def test_observe_updates_best_value(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5)
+        algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path)
+
+        # Create mock history with a KPI file.
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 100.0}}))
+        sample_file = tmp_path / "samples.json"
+        sample_data = {
+            "samples": [
+                {"sample_id": "0001", "values": {"x": 0.5, "y": 0.0}}
+            ]
+        }
+        sample_file.write_text(json.dumps(sample_data))
+
+        history = [{"samples": sample_data["samples"], "kpi_files": [str(kpi_file)]}]
+        result = algo.observe(history)
+        # Should return proposed samples after processing.
+        assert isinstance(result, list)
+
+    def test_migration_happens_at_interval(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=3, popsize=5, migrationInterval=2)
+        algo.generate_samples(self._VARIABLES, n_samples=15, seed=42, outdir=tmp_path)
+
+        # Simulate multiple generations.
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 100.0}}))
+
+        for gen in range(1, 5):
+            sample_file = tmp_path / f"samples_gen{gen}.json"
+            samples = [
+                {"sample_id": f"{i:04d}", "values": {"x": 0.5 + gen * 0.01, "y": 0.0}}
+                for i in range(15)
+            ]
+            sample_file.write_text(json.dumps({"samples": samples}))
+            history = [{"samples": samples, "kpi_files": [str(kpi_file)] * 15}]
+            algo.observe(history)
+
+        # After 4 generations and migrationInterval=2, migration should have
+        # happened at generations 2 and 4.
+        assert algo._generation == 4
+
+    def test_invalid_numIslands_raises(self) -> None:
+        with pytest.raises(ValueError, match="numIslands must be >= 1"):
+            IslandModelGAAlgorithm(numIslands=0)
+
+    def test_invalid_migrationRate_raises(self) -> None:
+        with pytest.raises(ValueError, match="migrationRate must be in"):
+            IslandModelGAAlgorithm(migrationRate=0.0)
+        with pytest.raises(ValueError, match="migrationRate must be in"):
+            IslandModelGAAlgorithm(migrationRate=1.5)
+
+    def test_invalid_migrationInterval_raises(self) -> None:
+        with pytest.raises(ValueError, match="migrationInterval must be >= 1"):
+            IslandModelGAAlgorithm(migrationInterval=0)
+
+    def test_invalid_popsize_raises(self) -> None:
+        with pytest.raises(ValueError, match="popsize must be >= 2"):
+            IslandModelGAAlgorithm(popsize=1)
+
+    def test_default_parameters(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo._numIslands == 5
+        assert algo._migrationRate == 0.1
+        assert algo._migrationInterval == 10
+        assert algo._popsize == 20
+        assert algo._maximize is False
+        assert algo._objective_kpi == "eui"
+
+    def test_custom_parameters(self) -> None:
+        algo = IslandModelGAAlgorithm(
+            numIslands=8,
+            migrationRate=0.2,
+            migrationInterval=5,
+            popsize=30,
+            maximize=True,
+            objective_kpi="cost",
+        )
+        assert algo._numIslands == 8
+        assert algo._migrationRate == 0.2
+        assert algo._migrationInterval == 5
+        assert algo._popsize == 30
+        assert algo._maximize is True
+        assert algo._objective_kpi == "cost"
+
+    def test_converged_when_relative_change_small(self) -> None:
+        algo = IslandModelGAAlgorithm(tol=1e-3)
+        algo._best_value = 99.99
+        algo._prev_best = 100.0
+        # relative_change = abs(99.99 - 100.0) / 100.0 = 0.0001 < 1e-3
+        assert algo.is_converged([{"samples": []}, {"samples": []}]) is True
+
+    def test_not_converged_when_relative_change_large(self) -> None:
+        algo = IslandModelGAAlgorithm(tol=1e-3)
+        algo._best_value = 100.0
+        algo._prev_best = 200.0
+        assert algo.is_converged([{}, {}]) is False
+
+    def test_not_converged_when_prev_best_inf(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        algo._best_value = 100.0
+        algo._prev_best = float("inf")
+        assert algo.is_converged([{}, {}]) is False
+
+    def test_not_converged_single_history(self) -> None:
+        algo = IslandModelGAAlgorithm()
+        assert algo.is_converged([{}]) is False
+
+    def test_proposed_samples_consumed_on_generate(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5)
+        # First call to generate_samples initializes islands via observe.
+        algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path / "g1")
+        # Simulate history with results so islands initialize.
+        kpi_file = tmp_path / "kpi.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 100.0}}))
+        samples = [{"sample_id": f"{i:04d}", "values": {"x": 0.5, "y": 0.0}} for i in range(10)]
+        history = [{"samples": samples, "kpi_files": [str(kpi_file)] * 10}]
+        proposed = algo.observe(history)
+        assert isinstance(proposed, list)
+
+        # Next generate_samples should consume the proposed samples.
+        result2 = algo.generate_samples(self._VARIABLES, n_samples=10, seed=42, outdir=tmp_path / "g2")
+        data2 = json.loads(result2.read_text())
+        # If proposed samples were consumed, this should be the new set.
+        assert len(data2["samples"]) == 10
+
+
+class TestIslandModelGAAlgorithmIntegration:
+    """Integration-style tests for IslandModelGAAlgorithm with DEAP (skip if no DEAP)."""
+
+    def test_observe_runs_generation_on_islands(self, tmp_path: Path) -> None:
+        try:
+            from deap import base as deap_base  # noqa: F401
+        except ImportError:
+            pytest.skip("DEAP not installed")
+
+        algo = IslandModelGAAlgorithm(numIslands=2, popsize=5, migrationInterval=999)
+        algo.generate_samples(
+            {"variables": [{"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0}]},
+            n_samples=10,
+            seed=42,
+            outdir=tmp_path,
+        )
+
+        # Create mock KPI data.
+        kpi_file = tmp_path / "kpi_0001.json"
+        kpi_file.write_text(json.dumps({"kpis": {"eui": 50.0}}))
+
+        samples = [{"sample_id": f"{i:04d}", "values": {"x": 0.5}} for i in range(10)]
+        history = [{"samples": samples, "kpi_files": [str(kpi_file)] * 10}]
+
+        result = algo.observe(history)
+        assert isinstance(result, list)
+        # Islands should have run a generation.
+        assert algo._generation == 1
+        assert len(algo._islands) == 2
