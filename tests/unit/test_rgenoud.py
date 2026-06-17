@@ -13,8 +13,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from osimflow.algorithms import AlgorithmRegistry, BaseAlgorithm
 from osimflow.algorithms.rgenoud import RgenoudAlgorithm
 
