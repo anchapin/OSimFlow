@@ -43,11 +43,45 @@ def _session_example_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return dest
 
 
+_TEST_VARIABLES_YML = """\
+algorithm: lhs
+variables:
+- name: heating_setpoint
+  distribution: uniform
+  min: 18.0
+  max: 22.0
+  measure_argument: SetThermostatSchedule.heating_setpoint
+- name: cooling_setpoint
+  distribution: uniform
+  min: 23.0
+  max: 28.0
+  measure_argument: SetThermostatSchedule.cooling_setpoint
+- name: wwr
+  distribution: uniform
+  min: 0.2
+  max: 0.6
+  measure_argument: SetEnvelopePerformance.wwr
+- name: wall_r_value
+  distribution: uniform
+  min: 2.0
+  max: 5.0
+  measure_argument: SetEnvelopePerformance.wall_r_value
+"""
+
+
 @pytest.fixture(scope="session")
 def _session_variables_yml(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Copy ``variables.yml`` once per test session."""
+    """Write test-compatible ``variables.yml`` matching example_package measures.
+
+    The repo-root ``variables.yml`` references measures not present in
+    ``example_package/workflow.osw``, causing pre-flight validation to fail.
+    This fixture writes a test-specific variables file that uses only the
+    measure arguments actually exposed by the two example_package steps:
+    SetThermostatSchedule (heating_setpoint, cooling_setpoint) and
+    SetEnvelopePerformance (wwr, wall_r_value).
+    """
     dest = tmp_path_factory.mktemp("session_vars") / "variables.yml"
-    shutil.copy2(EXAMPLE_VARS_YML, dest)
+    dest.write_text(_TEST_VARIABLES_YML)
     return dest
 
 
