@@ -33,7 +33,7 @@ import pytest
 import yaml
 
 from osimflow import Campaign, CampaignConfig
-from osimflow.apply_params import _build_mappings, preflight_check
+from osimflow.apply_params import _build_mappings
 from osimflow.executors import LocalExecutor
 
 # Mark as slow: runs a real 3-sample campaign (30-60s). Excluded by `make test-fast`.
