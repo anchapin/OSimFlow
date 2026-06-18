@@ -30,6 +30,7 @@ from osimflow import (
     CampaignRecord,
     CampaignRegistry,
     DaskJobQueueExecutor,
+    DockerSwarmExecutor,
     GoogleBatchExecutor,
     KubernetesExecutor,
     LocalExecutor,
@@ -267,6 +268,13 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             queue=args.dask_queue,
             project=args.dask_project,
         )
+    if args.executor == "docker_swarm":
+        return DockerSwarmExecutor(
+            poll_interval_s=args.docker_swarm_poll_interval_s,
+            max_poll_interval_s=args.docker_swarm_max_poll_interval_s,
+            image=args.docker_swarm_image,
+            network=args.docker_swarm_network,
+        )
 
     # Fall back to the ExecutorRegistry for plugin-discovered executors
     # (issue #432).  Third-party executors registered via entry_points
@@ -314,6 +322,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "kubernetes",
             "pbs",
             "dask_jobqueue",
+            "docker_swarm",
         ],
         default="local",
         help="Executor backend (default: local). See --preset for quick-start bundles.",
@@ -729,6 +738,29 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "When omitted and --task-queue is 'dask', an embedded "
             "single-process LocalCluster is started automatically."
         ),
+    )
+    # Docker Swarm executor flags (issue #582)
+    run.add_argument(
+        "--docker-swarm-poll-interval-s",
+        type=float,
+        default=5.0,
+        help="Docker Swarm polling interval in seconds (default: 5.0).",
+    )
+    run.add_argument(
+        "--docker-swarm-max-poll-interval-s",
+        type=float,
+        default=60.0,
+        help="Docker Swarm max polling interval in seconds (default: 60.0).",
+    )
+    run.add_argument(
+        "--docker-swarm-image",
+        default="nrel/openstudio:latest",
+        help="Docker image for Swarm services (default: nrel/openstudio:latest).",
+    )
+    run.add_argument(
+        "--docker-swarm-network",
+        default=None,
+        help="Docker network to attach Swarm services to.",
     )
     # Cost tracking flags (issue #447)
     run.add_argument(

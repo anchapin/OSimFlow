@@ -35,6 +35,7 @@ from typing import Any, ClassVar, Optional, cast
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
 from osimflow.executors.dask_jobqueue_executor import DaskJobQueueExecutor as DaskJobQueueExecutor
+from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor as DockerSwarmExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor as GoogleBatchExecutor
 from osimflow.executors.kubernetes_executor import KubernetesExecutor as KubernetesExecutor
 from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
@@ -55,6 +56,7 @@ __all__ = [
     "AzureBatchExecutor",
     "BaseExecutor",
     "DaskJobQueueExecutor",
+    "DockerSwarmExecutor",
     "ExecutorRegistry",
     "GoogleBatchExecutor",
     "Handle",
@@ -2118,6 +2120,7 @@ ExecutorRegistry.register("google_batch", GoogleBatchExecutor)
 ExecutorRegistry.register("kubernetes", KubernetesExecutor)
 ExecutorRegistry.register("pbs", PBSExecutor)
 ExecutorRegistry.register("dask_jobqueue", DaskJobQueueExecutor)
+ExecutorRegistry.register("docker_swarm", DockerSwarmExecutor)
 
 # Discover third-party executor plug-ins (no-op when none installed).
 ExecutorRegistry.discover_plugins()
