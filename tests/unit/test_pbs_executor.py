@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -367,6 +368,14 @@ class TestPBSHandle:
         with patch("osimflow.executors.pbs_executor.time.sleep"):
             assert handle.result() is None
         assert handle._future.done()
+
+    def test_result_success_returns_result_hint(self) -> None:
+        mock_ex = MagicMock()
+        mock_ex._wait_for_terminal.return_value = ("F", 0)
+        hint = Path("/tmp/osimflow/work/apply/0001")
+        handle = _PBSHandle(job_id="123.pbs", executor=mock_ex, result_hint=hint)
+        with patch("osimflow.executors.pbs_executor.time.sleep"):
+            assert handle.result() == hint
 
     def test_result_failure_raises(self) -> None:
         handle, mock_ex = self._make_handle(state="F", exit_code=137)

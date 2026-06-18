@@ -37,6 +37,7 @@ from osimflow.api.auth import (
 )
 from osimflow.api.campaigns import campaigns_router
 from osimflow.api.coordinator import coordinator_router
+from osimflow.api.dashboard import dashboard_router
 from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
@@ -1180,6 +1181,7 @@ def create_app(
     ui_enabled: bool = False,
     variable_editor: bool = False,
     results_viewer: bool = False,
+    dashboard: bool = False,
     registry_path: Path | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
@@ -1339,6 +1341,9 @@ def create_app(
         async def results_viewer_redirect() -> RedirectResponse:
             """Redirect /results/ to the Results Viewer HTML page."""
             return RedirectResponse(url="/static/results_viewer.html")
+
+    if dashboard:
+        app.include_router(dashboard_router)
 
     if variable_editor:
         app.include_router(variable_designer_router)

@@ -210,7 +210,7 @@ class TestNomadDispatch:
 
     def test_dispatch_sends_correct_meta_params(self) -> None:
         """``dispatch_job`` must send ``sample_id``, ``openstudio_version``,
-        and ``container_image`` as meta vars."""
+        ``container_image``, and result-transport metadata as meta vars."""
         with mocked_dispatch_transport() as mock:
             ex = NomadExecutor(
                 address="http://nomad.test:4646",
@@ -223,6 +223,11 @@ class TestNomadDispatch:
                 name="sample-42",
                 container="nrel/openstudio:3.9.0",
                 openstudio_version="3.9.0",
+                result_transport_mode="object_storage",
+                result_storage_backend="s3",
+                result_storage_bucket="bucket-a",
+                result_storage_prefix="campaign-a",
+                result_storage_endpoint="https://minio.local",
             )
             ex.shutdown()
 
@@ -236,6 +241,13 @@ class TestNomadDispatch:
         assert meta["sample_id"] == "sample-42", f"wrong sample_id: {meta}"
         assert meta["openstudio_version"] == "3.9.0", f"wrong openstudio_version: {meta}"
         assert "nrel/openstudio:3.9.0" in meta["container_image"], f"wrong container_image: {meta}"
+        assert meta["result_transport_mode"] == "object_storage", f"wrong transport mode: {meta}"
+        assert meta["result_storage_backend"] == "s3", f"wrong storage backend: {meta}"
+        assert meta["result_storage_bucket"] == "bucket-a", f"wrong storage bucket: {meta}"
+        assert meta["result_storage_prefix"] == "campaign-a", f"wrong storage prefix: {meta}"
+        assert meta["result_storage_endpoint"] == "https://minio.local", (
+            f"wrong storage endpoint: {meta}"
+        )
 
     def test_dispatch_sends_variables_json_meta(self) -> None:
         """When ``variables_json`` is provided, it must be included in the

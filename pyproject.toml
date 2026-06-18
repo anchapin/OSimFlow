@@ -52,6 +52,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
     "types-PyYAML",
+    "types-requests",
     "pre-commit>=3.7",
     "moto[batch]>=5",
     "streamlit>=1.30",
@@ -304,7 +305,19 @@ module = "osimflow.api.ui"
 disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]
+module = "osimflow.api.variable_designer"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
 module = "osimflow.api.results_viewer"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.variable_designer"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.results_query"
 disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]

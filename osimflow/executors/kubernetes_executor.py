@@ -28,6 +28,7 @@ from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.transport import resolve_result_for_callback
 
 log = logging.getLogger("osimflow.executors.kubernetes")
 
@@ -47,11 +48,14 @@ class _KubernetesHandle(Handle):
         job_name: str,
         executor: KubernetesExecutor,
         submit_params: dict[str, Any],
+        *,
+        result_hint: Any = None,
     ) -> None:
         self.job_id = job_name
         self._job_name = job_name
         self._executor = executor
         self._submit_params = submit_params
+        self._result_hint = result_hint
         self._future: Future[Any] = Future()
         self.worker_id: str | None = job_name
         self.worker_ip: str | None = None
@@ -68,8 +72,9 @@ class _KubernetesHandle(Handle):
 
         phase = pod_status.get("status", {}).get("phase", "")
         if phase == "Succeeded":
-            self._future.set_result(None)
-            return None
+            resolved = resolve_result_for_callback(self._result_hint, default=None)
+            self._future.set_result(resolved)
+            return resolved
 
         reason = self._extract_failure_reason(pod_status)
         msg = f"Kubernetes job {self._job_name!r} {phase}: {reason}"
@@ -302,6 +307,7 @@ class KubernetesExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         openstudio_version = kwargs.get("openstudio_version")
+        result_hint = kwargs.get("result_hint")
 
         log.info(
             "kubernetes submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -332,6 +338,7 @@ class KubernetesExecutor(BaseExecutor):
             job_name=job_name,
             executor=self,
             submit_params=submit_params,
+            result_hint=result_hint,
         )
 
     def shutdown(self) -> None:

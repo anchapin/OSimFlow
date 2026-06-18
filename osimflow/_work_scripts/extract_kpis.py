@@ -16,9 +16,9 @@ KPIs extracted
 5. **Simulation summary** — number of warnings / severe errors from
    ``eplusout.err``.
 
-The EnergyPlus SQL schema stores tabular data in
-``TabularDataWithStrings``.  The queries below target the canonical
-table names produced by EnergyPlus 9.x–24.x.
+The EnergyPlus SQL schema may expose tabular outputs either as
+``TabularDataWithStrings`` (denormalized) or as indexed ``TabularData`` +
+``Strings`` + ``StringTypes`` tables.  This script supports both.
 """
 
 import argparse
@@ -73,13 +73,14 @@ def _fetch_scalar(
 
 def _fetch_floor_area(cur: sqlite3.Cursor) -> float | None:
     """Return total conditioned floor area in m² from the ``Zones`` table."""
-    try:
-        cur.execute("SELECT SUM(Floor_Area) FROM Zones")
-        row = cur.fetchone()
-        if row is not None and row[0] is not None:
-            return float(row[0])
-    except sqlite3.OperationalError:
-        pass
+    for col in ("Floor_Area", "FloorArea"):
+        try:
+            cur.execute(f"SELECT SUM({col}) FROM Zones")
+            row = cur.fetchone()
+            if row is not None and row[0] is not None:
+                return float(row[0])
+        except sqlite3.OperationalError:
+            continue
 
     # Fallback: try TabularDataWithStrings
     val = _fetch_scalar(
@@ -223,14 +224,39 @@ def _extract_peak_demand(
 
     # Try the "Demand End Use Components Summary" table.
     # EnergyPlus reports peak demand in Watts.
-    total_demand_w = _safe_float(
-        _fetch_scalar(
-            cur,
-            table_name="Demand End Use Components Summary",
-            row_name="Total End Uses",
-            column_name="Electricity",
+    demand_candidates: list[dict[str, str]] = [
+        {
+            "report_name": "AnnualBuildingUtilityPerformanceSummary",
+            "table_name": "Demand End Use Components Summary",
+            "row_name": "Total End Uses",
+            "column_name": "Electricity",
+        },
+        {
+            "report_name": "DemandEndUseComponentsSummary",
+            "table_name": "End Uses",
+            "row_name": "Total End Uses",
+            "column_name": "Electricity",
+        },
+        {
+            "report_name": "DemandEndUseComponentsSummary",
+            "table_name": "Demand End Use Components Summary",
+            "row_name": "Total End Uses",
+            "column_name": "Electricity",
+        },
+    ]
+    total_demand_w: float | None = None
+    for candidate in demand_candidates:
+        total_demand_w = _safe_float(
+            _fetch_scalar(
+                cur,
+                table_name=candidate["table_name"],
+                row_name=candidate["row_name"],
+                column_name=candidate["column_name"],
+                report_name=candidate["report_name"],
+            )
         )
-    )
+        if total_demand_w is not None:
+            break
     if total_demand_w is not None:
         kpis["peak_demand_w"] = round(total_demand_w, 3)
         if floor_area_m2 and floor_area_m2 > 0:
@@ -244,48 +270,82 @@ def _extract_unmet_hours(cur: sqlite3.Cursor) -> dict[str, Any]:
     """Extract unmet heating/cooling hours from ``Comfort and Setpoint Not Met Summary``."""
     kpis: dict[str, Any] = {}
 
-    heating_hours = _safe_float(
-        _fetch_scalar(
-            cur,
-            table_name="Comfort and Setpoint Not Met Summary",
-            row_name="Facility",
-            column_name="During Heating",
+    heating_candidates: list[tuple[str, str]] = [
+        ("Facility", "During Heating"),
+        ("Facility", "During Occupied Heating"),
+        ("Time Setpoint Not Met During Heating", "Facility"),
+        ("Time Setpoint Not Met During Occupied Heating", "Facility"),
+    ]
+    heating_hours: float | None = None
+    for row_name, column_name in heating_candidates:
+        heating_hours = _safe_float(
+            _fetch_scalar(
+                cur,
+                table_name="Comfort and Setpoint Not Met Summary",
+                row_name=row_name,
+                column_name=column_name,
+            )
         )
-    )
+        if heating_hours is not None:
+            break
     if heating_hours is not None:
         kpis["unmet_hours_heating"] = round(heating_hours, 1)
 
-    cooling_hours = _safe_float(
-        _fetch_scalar(
-            cur,
-            table_name="Comfort and Setpoint Not Met Summary",
-            row_name="Facility",
-            column_name="During Cooling",
+    cooling_candidates: list[tuple[str, str]] = [
+        ("Facility", "During Cooling"),
+        ("Facility", "During Occupied Cooling"),
+        ("Time Setpoint Not Met During Cooling", "Facility"),
+        ("Time Setpoint Not Met During Occupied Cooling", "Facility"),
+    ]
+    cooling_hours: float | None = None
+    for row_name, column_name in cooling_candidates:
+        cooling_hours = _safe_float(
+            _fetch_scalar(
+                cur,
+                table_name="Comfort and Setpoint Not Met Summary",
+                row_name=row_name,
+                column_name=column_name,
+            )
         )
-    )
+        if cooling_hours is not None:
+            break
     if cooling_hours is not None:
         kpis["unmet_hours_cooling"] = round(cooling_hours, 1)
 
     # Try "During Occupied Heating" / "During Occupied Cooling" as well
-    occ_heating = _safe_float(
-        _fetch_scalar(
-            cur,
-            table_name="Comfort and Setpoint Not Met Summary",
-            row_name="Facility",
-            column_name="During Occupied Heating",
+    occ_heating: float | None = None
+    for row_name, column_name in (
+        ("Facility", "During Occupied Heating"),
+        ("Time Setpoint Not Met During Occupied Heating", "Facility"),
+    ):
+        occ_heating = _safe_float(
+            _fetch_scalar(
+                cur,
+                table_name="Comfort and Setpoint Not Met Summary",
+                row_name=row_name,
+                column_name=column_name,
+            )
         )
-    )
+        if occ_heating is not None:
+            break
     if occ_heating is not None:
         kpis["unmet_hours_heating_occupied"] = round(occ_heating, 1)
 
-    occ_cooling = _safe_float(
-        _fetch_scalar(
-            cur,
-            table_name="Comfort and Setpoint Not Met Summary",
-            row_name="Facility",
-            column_name="During Occupied Cooling",
+    occ_cooling: float | None = None
+    for row_name, column_name in (
+        ("Facility", "During Occupied Cooling"),
+        ("Time Setpoint Not Met During Occupied Cooling", "Facility"),
+    ):
+        occ_cooling = _safe_float(
+            _fetch_scalar(
+                cur,
+                table_name="Comfort and Setpoint Not Met Summary",
+                row_name=row_name,
+                column_name=column_name,
+            )
         )
-    )
+        if occ_cooling is not None:
+            break
     if occ_cooling is not None:
         kpis["unmet_hours_cooling_occupied"] = round(occ_cooling, 1)
 
@@ -337,13 +397,55 @@ def extract_kpis_from_sql(sql_path: Path) -> dict[str, Any]:
         conn = sqlite3.connect(str(sql_path))
         cur = conn.cursor()
 
-        # Verify the database has the expected table structure
+        # Verify the database has a supported tabular schema.
         cur.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='TabularDataWithStrings'"
         )
-        if cur.fetchone() is None:
-            log.warning("TabularDataWithStrings table missing in %s", sql_path)
-            return {"error": "missing_TabularDataWithStrings"}
+        has_tdws = cur.fetchone() is not None
+        if not has_tdws:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='TabularData'")
+            has_tabular = cur.fetchone() is not None
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Strings'")
+            has_strings = cur.fetchone() is not None
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='StringTypes'")
+            has_string_types = cur.fetchone() is not None
+            if not (has_tabular and has_strings and has_string_types):
+                log.warning("No supported tabular schema found in %s", sql_path)
+                return {"error": "missing_TabularDataWithStrings"}
+
+            # Project indexed tabular schema into canonical column names used below.
+            cur.execute(
+                """
+                CREATE TEMP VIEW TabularDataWithStrings AS
+                SELECT
+                    rn.Value AS ReportName,
+                    rfs.Value AS ReportForString,
+                    tn.Value AS TableName,
+                    rown.Value AS RowName,
+                    cn.Value AS ColumnName,
+                    un.Value AS Units,
+                    td.Value AS Value
+                FROM TabularData td
+                LEFT JOIN Strings rn
+                    ON rn.StringIndex = td.ReportNameIndex
+                    AND rn.StringTypeIndex = 1
+                LEFT JOIN Strings rfs
+                    ON rfs.StringIndex = td.ReportForStringIndex
+                    AND rfs.StringTypeIndex = 2
+                LEFT JOIN Strings tn
+                    ON tn.StringIndex = td.TableNameIndex
+                    AND tn.StringTypeIndex = 3
+                LEFT JOIN Strings rown
+                    ON rown.StringIndex = td.RowNameIndex
+                    AND rown.StringTypeIndex = 4
+                LEFT JOIN Strings cn
+                    ON cn.StringIndex = td.ColumnNameIndex
+                    AND cn.StringTypeIndex = 5
+                LEFT JOIN Strings un
+                    ON un.StringIndex = td.UnitsIndex
+                    AND un.StringTypeIndex = 6
+                """
+            )
 
         floor_area = _fetch_floor_area(cur)
         if floor_area is not None:

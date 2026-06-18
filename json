@@ -1,0 +1,77 @@
+PLC0415 `import` should be at the top-level of a file
+  --> /home/alex/Projects/worktrees/issue-585-persistent-results-api/osimflow/api/results_query.py:85:5
+   |
+83 |     Raises ValueError on malformed input.
+84 |     """
+85 |     import re
+   |     ^^^^^^^^^
+86 |
+87 |     match = re.match(r"^(.+?)\s*(>=|<=|==|!=|>|<)\s*(.+)$", filter_expr.strip())
+   |
+
+PLR0912 Too many branches (26 > 12)
+   --> /home/alex/Projects/worktrees/issue-585-persistent-results-api/osimflow/api/results_query.py:293:11
+    |
+292 | @results_query_router.get("/api/v1/results/query", response_model=QueryResultsResponse)
+293 | async def query_results(
+    |           ^^^^^^^^^^^^^
+294 |     request: Request,
+295 |     campaign_ids: str | None = Query(
+    |
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+   --> /home/alex/Projects/worktrees/issue-585-persistent-results-api/osimflow/api/results_query.py:358:9
+    |
+356 |           failed_df = _load_failed_csv(campaign_dir)
+357 |           failed_map: dict[str, dict[str, Any]] = {}
+358 | /         if not failed_df.empty:
+359 | |             if "sample_id" in failed_df.columns:
+    | |________________________________________________^
+360 |                   for _, row in failed_df.iterrows():
+361 |                       sid = str(row["sample_id"])
+    |
+help: Combine `if` statements using `and`
+
+PLR0912 Too many branches (25 > 12)
+   --> /home/alex/Projects/worktrees/issue-585-persistent-results-api/osimflow/api/results_query.py:456:11
+    |
+455 | @results_query_router.get("/api/v1/results/export")
+456 | async def export_results(
+    |           ^^^^^^^^^^^^^^
+457 |     request: Request,
+458 |     campaign_ids: str | None = Query(
+    |
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+   --> /home/alex/Projects/worktrees/issue-585-persistent-results-api/osimflow/api/results_query.py:521:9
+    |
+519 |           failed_df = _load_failed_csv(campaign_dir)
+520 |           failed_map: dict[str, dict[str, Any]] = {}
+521 | /         if not failed_df.empty and include_failed:
+522 | |             if "sample_id" in failed_df.columns:
+    | |________________________________________________^
+523 |                   for _, row in failed_df.iterrows():
+524 |                       sid = str(row["sample_id"])
+    |
+help: Combine `if` statements using `and`
+
+PLR0912 Too many branches (25 > 12)
+   --> /home/alex/Projects/worktrees/issue-585-persistent-results-api/osimflow/api/results_query.py:614:5
+    |
+614 | def query_results_cli(
+    |     ^^^^^^^^^^^^^^^^^
+615 |     campaign_ids: list[str] | None = None,
+616 |     outdirs: list[str] | None = None,
+    |
+
+PLR0912 Too many branches (29 > 12)
+   --> /home/alex/Projects/worktrees/issue-585-persistent-results-api/osimflow/api/results_query.py:760:5
+    |
+760 | def export_results_cli(
+    |     ^^^^^^^^^^^^^^^^^^
+761 |     campaign_ids: list[str] | None = None,
+762 |     outdirs: list[str] | None = None,
+    |
+
+Found 7 errors.
+No fixes available (2 hidden fixes can be enabled with the `--unsafe-fixes` option).

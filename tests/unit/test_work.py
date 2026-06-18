@@ -389,6 +389,34 @@ class TestRunOpenstudioSimRealCli:
             (result / "eplusout.sql").read_text() != "-- placeholder sql"
         )
 
+    def test_copies_nested_package_run_sql_without_rerun(
+        self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
+    ) -> None:
+        """Copies SQL from nested run/**/eplusout.sql produced by apply step."""
+        stdout_path, stderr_path = log_paths
+        nested_run = sim_package / "run" / "008_measure" / "output" / "SR1" / "run"
+        nested_run.mkdir(parents=True, exist_ok=True)
+        (nested_run / "eplusout.sql").write_text("-- nested sql")
+        (nested_run / "eplusout.err").write_text("nested err")
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
+            result = run_openstudio_sim(
+                modified_sim_package=sim_package,
+                sample_id="0005",
+                openstudio_version="3.11.0",
+                out=out_dir,
+                simulate_work_s=0.0,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        mock_run.assert_not_called()
+        assert result == out_dir / "0005"
+        assert (result / "eplusout.sql").read_text() == "-- nested sql"
+        assert (result / "eplusout.err").read_text() == "nested err"
+
     def test_missing_workflow_osw_raises(
         self, tmp_path: Path, out_dir: Path, log_paths: tuple[Path, Path]
     ) -> None:

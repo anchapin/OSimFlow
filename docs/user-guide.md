@@ -244,6 +244,22 @@ All flags are passed to the `osimflow run` subcommand.
 |---|---|---|---|
 | `--nomad-address` | string | `NOMAD_ADDR` env or `http://127.0.0.1:4646` | Nomad cluster HTTP address. |
 | `--nomad-datacentre` | string | `dc1` | Nomad datacentre to target. |
+| `--nomad-dispatch-policy` | choice | `keep_manual` | Dispatch model: `keep_manual`, `force_dispatch`, `auto_prefer_dispatch`. |
+| `--nomad-allocation-resolution-timeout-s` | float | `30.0` | Timeout to resolve EvalID to AllocationID. |
+| `--nomad-poll-interval-s` | float | `5.0` | Initial allocation polling interval. |
+| `--nomad-max-poll-interval-s` | float | `60.0` | Max allocation polling interval cap. |
+| `--nomad-fanout-submit-rate-per-sec` | float | none | Optional fan-out submit rate limiter. |
+| `--nomad-fanout-submit-chunk-size` | int | `0` | Optional bounded chunk size for Nomad fan-out submission. |
+| `--shard-count` / `--shard-index` | int | none | Partition sharding controls for multi-coordinator runs. |
+| `--shard-start` / `--shard-end` | int | none | Explicit sample index range sharding controls. |
+| `--nomad-remote-results-only` / `--no-nomad-remote-results-only` | bool | `true` | **Deprecated compatibility toggle.** Default `true` keeps remote-first behavior. `--no-nomad-remote-results-only` temporarily enables legacy local-callable compatibility and is planned for removal after one minor release. |
+
+Nomad runtime environment variables:
+
+- `NOMAD_TOKEN` for ACL-authenticated clusters.
+- `OSIMFLOW_PYTHON_CONTAINER_IMAGE` to override the Python post-processing
+  image used by APPLY/KPI/AGGREGATE/PLOTS jobs when worker nodes cannot
+  pull the default GHCR image.
 
 #### BYOS (Bring Your Own Script)
 
@@ -468,6 +484,8 @@ definitions, see [deployment/aws-batch.md](deployment/aws-batch.md).
 Use the `nomad` executor for HashiCorp Nomad clusters:
 
 ```bash
+export OSIMFLOW_PYTHON_CONTAINER_IMAGE=registry.example.com/osimflow/scientific_python_image:latest
+
 osimflow run \
   --executor nomad \
   --nomad-address http://nomad.local:4646 \
@@ -478,6 +496,27 @@ osimflow run \
   --outdir ./results \
   --openstudio_version 3.9.0
 ```
+
+If Nomad clients cannot pull `ghcr.io/anchapin/scientific_python_image`,
+preload a local tag on the worker nodes and point OSimFlow at it:
+
+```bash
+export OSIMFLOW_PYTHON_CONTAINER_IMAGE=scientific_python_image:local
+```
+
+See `docs/nomad-production.md` for the OpenStack preload workflow using
+`scripts/setup_nomad_vm.sh`.
+
+Nomad now runs in **remote-first** mode by default. In this mode, OSimFlow
+does not execute per-sample local callables for result values; it relies on
+remote result hints and configured transport materialization (shared filesystem
+or object storage). If you still need the legacy local-callable behavior during
+migration, use `--no-nomad-remote-results-only` temporarily. That compatibility
+path is deprecated and kept for one minor release.
+
+For scale hardening guidance (dispatch behavior, staged ramp 500→2k→5k→10k,
+shard-first recommendation for 10k, and polling/submission/storage backpressure
+operations), see `docs/nomad-production.md`.
 
 ### 5.5 Dry-Run and Single-Sample Modes
 
@@ -987,6 +1026,12 @@ AWS Batch:
 Nomad:
   --nomad-address URL            Cluster HTTP address
   --nomad-datacentre STRING      Target datacentre (default: dc1)
+  --[no-]nomad-remote-results-only
+                                 Deprecated compatibility toggle.
+                                 Default keeps remote-results mode.
+                                 --no-nomad-remote-results-only temporarily
+                                 enables legacy local-callable mode
+                                 (planned removal after one minor release)
 
 Campaign:
   --openstudio_version STRING    OpenStudio version (default: 3.11.0)

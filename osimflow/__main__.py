@@ -32,6 +32,7 @@ from osimflow import (
     CampaignRecord,
     CampaignRegistry,
     DaskJobQueueExecutor,
+    DockerSwarmExecutor,
     GoogleBatchExecutor,
     KubernetesExecutor,
     LocalExecutor,
@@ -209,6 +210,14 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
         return NomadExecutor(
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
+            dispatch_policy=args.nomad_dispatch_policy,
+            estimated_run_size=int(args.n_samples),
+            fanout_submit_rate_per_sec=args.nomad_fanout_submit_rate_per_sec,
+            fanout_submit_chunk_size=args.nomad_fanout_submit_chunk_size,
+            allocation_resolution_timeout_s=args.nomad_allocation_resolution_timeout_s,
+            poll_interval_s=args.nomad_poll_interval_s,
+            max_poll_interval_s=args.nomad_max_poll_interval_s,
+            remote_results_only=args.nomad_remote_results_only,
             verify_tls=args.nomad_tls_verify,
             tls=args.nomad_tls,
             cert=args.nomad_cert,
@@ -261,6 +270,13 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             queue=args.dask_queue,
             project=args.dask_project,
         )
+    if args.executor == "docker_swarm":
+        return DockerSwarmExecutor(
+            poll_interval_s=args.docker_swarm_poll_interval_s,
+            max_poll_interval_s=args.docker_swarm_max_poll_interval_s,
+            image=args.docker_swarm_image,
+            network=args.docker_swarm_network,
+        )
 
     # Fall back to the ExecutorRegistry for plugin-discovered executors
     # (issue #432).  Third-party executors registered via entry_points
@@ -308,6 +324,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "kubernetes",
             "pbs",
             "dask_jobqueue",
+            "docker_swarm",
         ],
         default="local",
         help="Executor backend (default: local). See --preset for quick-start bundles.",
@@ -391,6 +408,89 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help="Nomad datacentre to target (default: dc1).",
     )
     run.add_argument(
+        "--nomad-dispatch-policy",
+        choices=[
+            "keep_manual",
+            "force_dispatch",
+            "auto_prefer_dispatch",
+            "direct",
+            "dispatch",
+            "auto",
+        ],
+        default="keep_manual",
+        help=(
+            "Nomad submission policy. Preferred values: "
+            "'keep_manual' (default, no auto-switching), "
+            "'force_dispatch' (always dispatch), "
+            "'auto_prefer_dispatch' (auto-switch to dispatch for large runs). "
+            "Legacy aliases are accepted for compatibility: "
+            "'direct'->'keep_manual', 'dispatch'->'force_dispatch', 'auto'->'auto_prefer_dispatch'."
+        ),
+    )
+    run.add_argument(
+        "--nomad-allocation-resolution-timeout-s",
+        type=float,
+        default=30.0,
+        help=("Timeout in seconds to resolve Nomad EvalID to Allocation ID (default: 30.0)."),
+    )
+    run.add_argument(
+        "--nomad-poll-interval-s",
+        type=float,
+        default=5.0,
+        help="Initial Nomad allocation polling interval in seconds (default: 5.0).",
+    )
+    run.add_argument(
+        "--nomad-max-poll-interval-s",
+        type=float,
+        default=60.0,
+        help="Maximum Nomad allocation polling interval in seconds (default: 60.0).",
+    )
+    run.add_argument(
+        "--nomad-fanout-submit-rate-per-sec",
+        type=float,
+        default=None,
+        help=(
+            "Optional fan-out submit rate limit for Nomad (submissions/sec). "
+            "Used by fan-out steps to pace submission and reduce coordinator pressure."
+        ),
+    )
+    run.add_argument(
+        "--nomad-fanout-submit-chunk-size",
+        type=int,
+        default=0,
+        help=(
+            "Optional fan-out submit chunk size for Nomad (0 disables chunking). "
+            "When >0, fan-out submits at most this many tasks per chunk."
+        ),
+    )
+    run.add_argument(
+        "--shard-count",
+        type=int,
+        default=None,
+        help=(
+            "Total number of coordinator shards (partition mode). "
+            "Requires --shard-index. Samples are assigned by global index modulo shard-count."
+        ),
+    )
+    run.add_argument(
+        "--shard-index",
+        type=int,
+        default=None,
+        help=("Zero-based shard index for partition mode. Requires --shard-count."),
+    )
+    run.add_argument(
+        "--shard-start",
+        type=int,
+        default=None,
+        help=("Inclusive sample index start for explicit range shard mode. Requires --shard-end."),
+    )
+    run.add_argument(
+        "--shard-end",
+        type=int,
+        default=None,
+        help=("Exclusive sample index end for explicit range shard mode. Requires --shard-start."),
+    )
+    run.add_argument(
         "--nomad-tls-verify",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -434,6 +534,16 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Path to the CA certificate file (PEM) to verify the Nomad server's "
             "certificate when --nomad-tls is enabled. If not specified, the "
             "system default CA certificates are used."
+        ),
+    )
+    run.add_argument(
+        "--nomad-remote-results-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "DEPRECATED compatibility toggle. True (default) keeps Nomad in remote-results mode. "
+            "Set --no-nomad-remote-results-only only for temporary migration compatibility; "
+            "the legacy local-callable mode is scheduled for removal after one minor release."
         ),
     )
     run.add_argument(
@@ -630,6 +740,29 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "When omitted and --task-queue is 'dask', an embedded "
             "single-process LocalCluster is started automatically."
         ),
+    )
+    # Docker Swarm executor flags (issue #582)
+    run.add_argument(
+        "--docker-swarm-poll-interval-s",
+        type=float,
+        default=5.0,
+        help="Docker Swarm polling interval in seconds (default: 5.0).",
+    )
+    run.add_argument(
+        "--docker-swarm-max-poll-interval-s",
+        type=float,
+        default=60.0,
+        help="Docker Swarm max polling interval in seconds (default: 60.0).",
+    )
+    run.add_argument(
+        "--docker-swarm-image",
+        default="nrel/openstudio:latest",
+        help="Docker image for Swarm services (default: nrel/openstudio:latest).",
+    )
+    run.add_argument(
+        "--docker-swarm-network",
+        default=None,
+        help="Docker network to attach Swarm services to.",
     )
     # Cost tracking flags (issue #447)
     run.add_argument(
@@ -1072,6 +1205,55 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Base URL of the Coordinator service (e.g., https://coordinator.example.com). "
             "Required when --detach is set. The CLI will POST to "
             "<coordinator-url>/api/v1/coordinator/handoff."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-bucket",
+        default=None,
+        help=(
+            "S3 bucket name for centralized artifact storage (issue #601). "
+            "When set, base simulation assets (.osm, .epw) are uploaded to S3 "
+            "once at campaign creation. Remote executor nodes download them "
+            "directly via pre-signed URLs, eliminating the local-machine bottleneck "
+            "for large fan-out campaigns."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-prefix",
+        default=None,
+        help=(
+            "S3 prefix within the artifact bucket for this campaign (issue #601). "
+            "Example: 'campaign-123' or 'project Q1/run-456'. "
+            "Required when --s3-artifact-bucket is set."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-region",
+        default=None,
+        help=(
+            "AWS region for the S3 artifact bucket (issue #601). "
+            "When omitted, uses the region from the IAM role or default "
+            "credential chain. Required for pre-signed URL generation "
+            "with some bucket configurations."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-endpoint",
+        default=None,
+        help=(
+            "Custom S3-compatible endpoint URL for artifact storage (issue #601). "
+            "Use for MinIO, Cloudflare R2, or other S3-compatible stores. "
+            "Only valid when --s3-artifact-bucket is set."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-presigned-url-expiration",
+        type=int,
+        default=3600,
+        help=(
+            "Expiration time in seconds for pre-signed URLs (issue #601). "
+            "Remote executor nodes must download artifacts within this window. "
+            "Default: 3600 (1 hour). Min: 60, Max: 43200 (12 hours)."
         ),
     )
 
@@ -1895,6 +2077,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         ui_enabled=args.ui,
         variable_editor=args.editor,
         results_viewer=args.dashboard,
+        dashboard=args.dashboard,
         registry_path=args.registry,
     )
     if args.host not in ("127.0.0.1", "localhost"):
@@ -2864,7 +3047,7 @@ def _cmd_export_results(args: argparse.Namespace) -> int:
     if args.outdirs:
         outdirs = [o.strip() for o in args.outdirs.split(",") if o.strip()]
 
-    return export_results_cli(  # type: ignore[no-any-return]
+    return export_results_cli(
         campaign_ids=campaign_ids,
         outdirs=outdirs,
         filter_expr=args.filter_expr,

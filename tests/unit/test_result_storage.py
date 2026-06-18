@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -166,6 +167,101 @@ class TestResultStorageUploader:
         uploader = ResultStorageUploader(store)
         uploader.close()
         uploader.close()
+
+    def test_upload_retries_then_succeeds(self, tmp_path: Path) -> None:
+        from osimflow.storage import ResultStorage, ResultStorageUploader
+
+        class FlakyStorage(ResultStorage):
+            name = "flaky"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                self.calls += 1
+                if self.calls == 1:
+                    raise OSError("transient")
+
+            def download_file(self, remote_path: str, local_path: Path) -> None:
+                return None
+
+            def list_results(self, prefix: str = "") -> list[str]:
+                return []
+
+        local_file = tmp_path / "retry.txt"
+        local_file.write_text("x")
+        store = FlakyStorage()
+        uploader = ResultStorageUploader(
+            store,
+            worker_count=1,
+            max_retries=2,
+            retry_backoff_s=0.0,
+        )
+        uploader.upload_file(local_file, "remote/retry.txt")
+        uploader.close()
+        assert store.calls == 2
+
+    def test_close_surfaces_upload_failure(self, tmp_path: Path) -> None:
+        from osimflow.storage import ResultStorage, ResultStorageUploader
+
+        class FailingStorage(ResultStorage):
+            name = "failing"
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                raise OSError("hard failure")
+
+            def download_file(self, remote_path: str, local_path: Path) -> None:
+                return None
+
+            def list_results(self, prefix: str = "") -> list[str]:
+                return []
+
+        local_file = tmp_path / "fail.txt"
+        local_file.write_text("x")
+        uploader = ResultStorageUploader(
+            FailingStorage(),
+            worker_count=1,
+            max_retries=1,
+            retry_backoff_s=0.0,
+        )
+        uploader.upload_file(local_file, "remote/fail.txt")
+        with pytest.raises(OSError, match="failed uploads"):
+            uploader.close()
+
+    def test_upload_queue_applies_backpressure_when_full(self, tmp_path: Path) -> None:
+        from osimflow.storage import ResultStorage, ResultStorageUploader
+
+        class SlowStorage(ResultStorage):
+            name = "slow"
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                time.sleep(0.2)
+
+            def download_file(self, remote_path: str, local_path: Path) -> None:
+                return None
+
+            def list_results(self, prefix: str = "") -> list[str]:
+                return []
+
+        files = [tmp_path / f"bp-{idx}.txt" for idx in range(3)]
+        for file_path in files:
+            file_path.write_text("x")
+
+        uploader = ResultStorageUploader(
+            SlowStorage(),
+            max_queue_size=1,
+            worker_count=1,
+            max_retries=0,
+            retry_backoff_s=0.0,
+        )
+        t0 = time.monotonic()
+        uploader.upload_file(files[0], "remote/0.txt")
+        uploader.upload_file(files[1], "remote/1.txt")
+        uploader.upload_file(files[2], "remote/2.txt")
+        enqueue_elapsed = time.monotonic() - t0
+        uploader.close()
+
+        assert enqueue_elapsed >= 0.15
 
 
 class TestCampaignConfigStorageFields:

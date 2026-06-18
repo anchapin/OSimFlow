@@ -28,6 +28,7 @@ The "same outputs" assertion is therefore understood as:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -45,14 +46,32 @@ from osimflow.executors import NomadExecutor
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
-EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
+NOMAD_STUB_VARS_YML = """\
+variables:
+  - name: heating_setpoint
+    distribution: uniform
+    min: 18.0
+    max: 22.0
+  - name: cooling_setpoint
+    distribution: uniform
+    min: 24.0
+    max: 28.0
+  - name: wall_r_value
+    distribution: uniform
+    min: 2.0
+    max: 5.0
+  - name: wwr
+    distribution: uniform
+    min: 0.2
+    max: 0.6
+"""
 
 
 @pytest.fixture
 def workdir(tmp_path: Path) -> Path:
     wd = tmp_path / "work"
     wd.mkdir()
-    (wd / "variables.yml").write_text(EXAMPLE_VARS_YML.read_text())
+    (wd / "variables.yml").write_text(NOMAD_STUB_VARS_YML)
     return wd
 
 
@@ -79,6 +98,7 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         outdir=outdir,
         openstudio_version="3.11.0",
         archive_intermediates=False,
+        skip_preflight=True,
     )
 
 
@@ -171,82 +191,10 @@ def mocked_nomad_transport() -> Iterator[MagicMock]:
 
 
 # ---------------------------------------------------------------------------
-# Test-only stub executor: NomadExecutor + local execution
+# Test-only stub executor
 # ---------------------------------------------------------------------------
 class _StubNomadExecutor(NomadExecutor):
-    """Test-only Nomad executor that ALSO runs the work locally.
-
-    The real ``NomadExecutor`` returns ``None`` from
-    ``Handle.result()`` because in production the work runs inside a
-    Nomad Docker container; the Campaign reads on-disk artifacts from
-    shared storage. The ``Campaign`` orchestrator treats the handle's
-    result as a ``Path`` (it calls ``Path(result_path)``), so the stub
-    would crash if used directly.
-
-    This stub fixes that gap: every ``submit()`` also queues the work
-    on a local thread pool, and the handle's ``result()`` returns the
-    *local* work output. The HTTP call is still made (so the wiring
-    is verified), and the handle's allocation poll still runs.
-    """
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
-        from concurrent.futures import ThreadPoolExecutor
-
-        self._local_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="stub-nomad")
-
-    def submit(  # type: ignore[override]
-        self,
-        fn: object,
-        *args: object,
-        name: str = "task",
-        cpus: int = 1,
-        memory_mb: int = 1024,
-        time_min: int = 60,
-        container: str | None = None,
-        **kwargs: object,
-    ) -> object:
-        # Run the real submit() first (so the HTTP call is made and
-        # the wire format is verified).
-        real_handle = super().submit(  # type: ignore[arg-type]
-            fn,  # type: ignore[arg-type]
-            *args,
-            name=name,
-            cpus=cpus,
-            memory_mb=memory_mb,
-            time_min=time_min,
-            container=container,
-            **kwargs,
-        )
-        # Queue the work on the local pool.
-        local_fut = self._local_pool.submit(fn, *args)  # type: ignore[arg-type]
-
-        class _StubHandle:
-            def __init__(self, fut: object) -> None:
-                self._fut = fut
-                self.job_id = real_handle.job_id
-                # Worker tracking fields (issue #105): the Campaign
-                # reads these from every handle, so the stub must
-                # expose them too.
-                self.worker_id: str | None = real_handle.job_id
-                self.worker_ip: str | None = None
-                self.worker_region: str | None = None
-                # Cost tracking fields (issue #126): the Campaign
-                # reads these from every handle after simulation.
-                self.cost_usd: float | None = None
-                self.billed_duration_seconds: float | None = None
-
-            def result(self, timeout: float | None = None) -> object:  # noqa: ARG002
-                return self._fut.result(timeout=timeout)  # type: ignore[attr-defined]
-
-            def done(self) -> bool:
-                return self._fut.done()  # type: ignore[attr-defined]
-
-        return _StubHandle(local_fut)
-
-    def shutdown(self) -> None:
-        self._local_pool.shutdown(wait=True)
-        super().shutdown()
+    """Test harness alias for NomadExecutor with mocked HTTP transport."""
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +212,10 @@ def test_three_sample_campaign_via_nomad_stub_produces_artifacts(
        and per-sample blocks.
     4. Issue one ``POST /v1/jobs`` per fan-out task.
     """
-    with mocked_nomad_transport() as fake_transport:
+    with (
+        mocked_nomad_transport() as fake_transport,
+        patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}),
+    ):
         executor = _StubNomadExecutor(
             address="http://nomad.stub:4646",
             datacentre="dc1",
@@ -303,6 +254,7 @@ def test_three_sample_campaign_via_nomad_stub_produces_artifacts(
     assert run_json.is_file(), f"missing run.json: {run_json}"
     trace = json.loads(run_json.read_text())
     assert trace["schema_version"] == 1
+    assert trace["status"] == "success"
     assert trace["config"]["executor"] == "nomad", (
         f"expected executor name 'nomad' in run.json, got {trace['config']['executor']!r}"
     )
@@ -354,8 +306,7 @@ def test_three_sample_campaign_via_nomad_stub_produces_artifacts(
         f"OpenStudio version not in container image: {task['Config']['image']!r}"
     )
     # Env vars must carry the OSIMFLOW_OS_VERSION.
-    env = task["Config"]["env"]
-    env_dict = {e["name"]: e["value"] for e in env}
+    env_dict = task["Env"]
     assert env_dict.get("OSIMFLOW_OS_VERSION") == "3.11.0", (
         f"OSIMFLOW_OS_VERSION not in task env: {env_dict}"
     )

@@ -1,0 +1,187 @@
+<?xml version="1.0"?>
+<measure>
+  <schema_version>3.1</schema_version>
+  <name>set_water_heater_efficiency</name>
+  <uid>51c76ca8-3df2-4992-922c-4a3ce44b9f39</uid>
+  <version_id>de01b986-dd3b-4b75-80b3-6c60b756ab65</version_id>
+  <version_modified>2025-09-23T11:21:57Z</version_modified>
+  <xml_checksum>4C515EF3</xml_checksum>
+  <class_name>SetWaterHeaterEfficiency</class_name>
+  <display_name>set_water_heater_efficiency</display_name>
+  <description></description>
+  <modeler_description></modeler_description>
+  <arguments>
+    <argument>
+      <name>performance_category_ratio</name>
+      <display_name>Performance category selection ratio</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>1</default_value>
+    </argument>
+    <argument>
+      <name>capacity_btu_per_hr_ratio</name>
+      <display_name>water heater capacity ratio (range: 0 to 1)</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>0.5</default_value>
+    </argument>
+    <argument>
+      <name>first_hour_rating_ratio</name>
+      <display_name>first hour rating ratio (range: 0 to 1)</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>0.5</default_value>
+    </argument>
+  </arguments>
+  <outputs />
+  <provenances />
+  <tags>
+    <tag>Service Water Heating.Water Heating</tag>
+  </tags>
+  <attributes>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Measure Type</name>
+      <value>ModelMeasure</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+  </attributes>
+  <files>
+    <file>
+      <filename>LICENSE.md</filename>
+      <filetype>md</filetype>
+      <usage_type>license</usage_type>
+      <checksum>91185A2B</checksum>
+    </file>
+    <file>
+      <filename>README.md</filename>
+      <filetype>md</filetype>
+      <usage_type>readme</usage_type>
+      <checksum>04D6C12F</checksum>
+    </file>
+    <file>
+      <filename>README.md.erb</filename>
+      <filetype>erb</filetype>
+      <usage_type>readmeerb</usage_type>
+      <checksum>78789F4B</checksum>
+    </file>
+    <file>
+      <version>
+        <software_program>OpenStudio</software_program>
+        <identifier>2.7.1</identifier>
+        <min_compatible>2.7.1</min_compatible>
+      </version>
+      <filename>measure.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>script</usage_type>
+      <checksum>2220066A</checksum>
+    </file>
+    <file>
+      <filename>179d_retail_stripmall_baseline_hawaii_large_waterheating.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>F9659D1C</checksum>
+    </file>
+    <file>
+      <filename>179d_retail_stripmall_baseline_hawaii_small_waterheating.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>7E27BE16</checksum>
+    </file>
+    <file>
+      <filename>179d_smalloffice_baseline_utah_large_waterheating.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>8EBE33A9</checksum>
+    </file>
+    <file>
+      <filename>179d_smalloffice_baseline_utah_small_waterheating.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>7FA9A174</checksum>
+    </file>
+    <file>
+      <filename>set_water_heater_efficiency_test.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>test</usage_type>
+      <checksum>254F0824</checksum>
+    </file>
+  </files>
+</measure>

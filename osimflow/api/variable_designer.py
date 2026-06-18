@@ -28,7 +28,7 @@ log = logging.getLogger("osimflow.api.variable_designer")
 variable_designer_router = APIRouter()
 
 
-@variable_designer_router.get("/ui/designer/")  # type: ignore[untyped-decorator]
+@variable_designer_router.get("/ui/designer/")
 async def variable_designer_redirect() -> RedirectResponse:
     """Redirect /ui/designer/ to the Variable Designer HTML page."""
     return RedirectResponse(url="/static/variable_designer.html")

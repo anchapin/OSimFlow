@@ -81,6 +81,16 @@ def _base_args(
         "aws_batch_fallback_to_on_demand": False,
         "aws_batch_max_retries": 3,
         "ecr_repository": None,
+        "nomad_dispatch_policy": "keep_manual",
+        "nomad_allocation_resolution_timeout_s": 30.0,
+        "nomad_poll_interval_s": 5.0,
+        "nomad_max_poll_interval_s": 60.0,
+        "nomad_fanout_submit_rate_per_sec": None,
+        "nomad_fanout_submit_chunk_size": 0,
+        "shard_count": None,
+        "shard_index": None,
+        "shard_start": None,
+        "shard_end": None,
     }
     args.update(overrides)
     return args
@@ -302,6 +312,75 @@ class TestLoadConfig:
         assert cfg.aws_batch_fallback_to_on_demand is True
         assert cfg.aws_batch_max_retries == 5
         assert cfg.ecr_repository == "123.dkr.ecr.us-east-1.amazonaws.com/os"
+
+    def test_nomad_scale_control_options(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            nomad_dispatch_policy="force_dispatch",
+            nomad_allocation_resolution_timeout_s="45.5",
+            nomad_poll_interval_s="2.5",
+            nomad_max_poll_interval_s="20.0",
+            nomad_fanout_submit_rate_per_sec="9.0",
+            nomad_fanout_submit_chunk_size="25",
+        )
+        cfg = load_config(args)
+        assert cfg.nomad_dispatch_policy == "force_dispatch"
+        assert cfg.nomad_allocation_resolution_timeout_s == pytest.approx(45.5)
+        assert cfg.nomad_poll_interval_s == pytest.approx(2.5)
+        assert cfg.nomad_max_poll_interval_s == pytest.approx(20.0)
+        assert cfg.nomad_fanout_submit_rate_per_sec == pytest.approx(9.0)
+        assert cfg.nomad_fanout_submit_chunk_size == 25
+
+    def test_partition_sharding_options(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            shard_count="4",
+            shard_index="2",
+        )
+        cfg = load_config(args)
+        assert cfg.shard_count == 4
+        assert cfg.shard_index == 2
+        assert cfg.shard_start is None
+        assert cfg.shard_end is None
+
+    def test_range_sharding_options(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            shard_start="10",
+            shard_end="20",
+        )
+        cfg = load_config(args)
+        assert cfg.shard_start == 10
+        assert cfg.shard_end == 20
+        assert cfg.shard_count is None
+        assert cfg.shard_index is None
+
+    def test_sharding_modes_cannot_be_combined(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            shard_count="2",
+            shard_index="0",
+            shard_start="0",
+            shard_end="5",
+        )
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            load_config(args)
 
     def test_mlflow_tracking_uri(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
