@@ -446,7 +446,7 @@ def _extract_measure_archive(
                     )
             zf.extractall(dest_dir)
     elif tarfile.is_tarfile(archive_path):
-with tarfile.open(archive_path, "r:*") as tf:
+        with tarfile.open(archive_path, "r:*") as tf:
             for tar_member in tf.getmembers():
                 if tar_member.isfile():
                     tar_member_path = (dest_dir / tar_member.name).resolve()
