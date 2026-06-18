@@ -281,6 +281,11 @@ The 7-step DAG that the `Campaign` class drives:
 - `--result-storage-backend` (result storage backend: `local` (default), `s3`, `gs`, `azure`; issue #339)
 - `--result-storage-bucket` (bucket/container name for result storage; issue #339)
 - `--result-storage-endpoint` (custom S3-compatible endpoint URL for result storage; issue #339)
+- `--s3-artifact-bucket` (S3 bucket name for centralized artifact storage; issue #601)
+- `--s3-artifact-prefix` (S3 key prefix for artifact organization; issue #601)
+- `--s3-artifact-region` (AWS region for S3 artifact bucket; issue #601)
+- `--s3-artifact-endpoint` (custom S3 endpoint URL for S3 artifact storage; issue #601)
+- `--s3-artifact-presigned-url-expiration` (presigned URL expiration time in seconds for S3 artifact access; issue #601)
 - `--log_level`
 - `--alert-destinations` (alert receiver endpoints for campaign events)
 - `--alert-rules` (alert routing rules for campaign events)
