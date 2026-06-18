@@ -82,6 +82,7 @@ def _make_campaign(
         n_samples=n_samples,
         outdir=outdir,
         openstudio_version="3.11.0",
+        skip_preflight=True,
     )
     return Campaign(cfg=cfg, executor=LocalExecutor(max_workers=2))
 
