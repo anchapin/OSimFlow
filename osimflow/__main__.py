@@ -3057,7 +3057,7 @@ def _cmd_export_results(args: argparse.Namespace) -> int:
     )
 
 
-def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level),

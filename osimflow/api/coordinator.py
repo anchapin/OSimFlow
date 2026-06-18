@@ -60,20 +60,20 @@ async def coordinator_handoff(
     metadata, and returns immediately. The CLI can exit after receiving
     the response.
     """
-    permission = get_user_permission(request)
-    if permission < 1:  # write permission
+    if not get_user_permission(request, "write"):
         raise HTTPException(status_code=403, detail="Insufficient permissions for campaign handoff")
 
     campaign_id = str(uuid.uuid4())
     now = time.time()
 
+    user_id: str = getattr(request.state, "user_id", None) or "anonymous"
     record: dict[str, Any] = {
         "campaign_id": campaign_id,
         "name": payload.name,
         "status": "pending",  # pending → running → aggregating → complete/failed
         "created_at": now,
         "updated_at": now,
-        "created_by": permission.get("user_id", "anonymous"),
+        "created_by": user_id,
         "payload": payload.model_dump(exclude_none=True),
         "n_samples": payload.n_samples,
         "executor": payload.executor,
@@ -97,7 +97,7 @@ async def coordinator_handoff(
 )
 async def list_coordinator_campaigns(request: Request) -> list[CoordinatorCampaignRecord]:
     """Return all campaigns known to the Coordinator."""
-    get_user_permission(request)  # authenticate
+    get_user_permission(request, "read")  # authenticate
     return [
         CoordinatorCampaignRecord(
             campaign_id=cid,
@@ -123,7 +123,7 @@ async def get_coordinator_campaign(
     request: Request,
 ) -> CoordinatorCampaignRecord:
     """Return the current status of a Coordinator campaign."""
-    get_user_permission(request)  # authenticate
+    get_user_permission(request, "read")  # authenticate
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -155,8 +155,7 @@ async def update_coordinator_campaign_status(
     worker processes (Phase 3/4). It is not exposed to the public API
     without authentication.
     """
-    permission = get_user_permission(request)
-    if permission < 1:
+    if not get_user_permission(request, "admin"):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     rec = _campaigns.get(campaign_id)
     if rec is None:
