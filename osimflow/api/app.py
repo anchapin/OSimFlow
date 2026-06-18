@@ -36,6 +36,7 @@ from osimflow.api.auth import (
     validate_api_key,
 )
 from osimflow.api.campaigns import campaigns_router
+from osimflow.api.coordinator import coordinator_router
 from osimflow.api.dashboard import dashboard_router
 from osimflow.api.events import events_router
 from osimflow.api.files import files_router
@@ -1233,10 +1234,6 @@ def create_app(
         Enable the web UI router (issue #337).
     variable_editor
         Enable the Variable Designer web UI at /ui/designer/ (issue #587).
-    dashboard
-        Enable the real-time HTML campaign dashboard at /dashboard (issue #586).
-        The dashboard shows live sample counts, step progress, and a status pie
-        chart updated via SSE events from ``/api/v1/events``.
     registry_path
         Path to the campaign registry database (issue #404).  When set,
         the ``POST /api/v1/campaigns/compare`` endpoint can resolve
@@ -1330,8 +1327,8 @@ def create_app(
     app.include_router(router)
     app.include_router(events_router)
     app.include_router(campaigns_router)
+    app.include_router(coordinator_router)
     app.include_router(pat_compat_router)
-    app.include_router(results_query_router)
     app.include_router(files_router)
     app.include_router(timeseries_router)
     app.include_router(variables_router)
@@ -1345,6 +1342,9 @@ def create_app(
             """Redirect /results/ to the Results Viewer HTML page."""
             return RedirectResponse(url="/static/results_viewer.html")
 
+    if dashboard:
+        app.include_router(dashboard_router)
+
     if variable_editor:
         app.include_router(variable_designer_router)
 
@@ -1352,9 +1352,6 @@ def create_app(
         async def variable_designer_redirect() -> RedirectResponse:
             """Redirect /ui/designer/ to the Variable Designer HTML page."""
             return RedirectResponse(url="/static/variable_designer.html")
-
-    if dashboard:
-        app.include_router(dashboard_router)
 
     app.include_router(measures_router)
 

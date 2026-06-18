@@ -321,6 +321,14 @@ module = "osimflow.api.results_query"
 disable_error_code = ["untyped-decorator", "misc"]
 
 [[tool.mypy.overrides]]
+module = "osimflow.api.coordinator"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.dashboard"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
 check_untyped_defs = false

@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from osimflow import (
     AWSBatchExecutor,
     AzureBatchExecutor,
@@ -1183,6 +1185,26 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Format: 'kpi_name=threshold_value' (e.g., 'eui=150'). "
             "Can be specified multiple times for multiple KPIs. "
             "Used when --algorithm uq is set."
+        ),
+    )
+    run.add_argument(
+        "--detach",
+        action="store_true",
+        default=False,
+        help=(
+            "Hand off the campaign to a remote Coordinator service and exit "
+            "immediately (Phase 2 fire-and-forget mode). Requires --coordinator-url. "
+            "The campaign runs on the Coordinator; poll its status via "
+            "GET <coordinator-url>/api/v1/coordinator/campaigns/<id>."
+        ),
+    )
+    run.add_argument(
+        "--coordinator-url",
+        default=None,
+        help=(
+            "Base URL of the Coordinator service (e.g., https://coordinator.example.com). "
+            "Required when --detach is set. The CLI will POST to "
+            "<coordinator-url>/api/v1/coordinator/handoff."
         ),
     )
     run.add_argument(
@@ -3035,7 +3057,7 @@ def _cmd_export_results(args: argparse.Namespace) -> int:
     )
 
 
-def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -3074,7 +3096,62 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     # Apply preset before load_config so preset values are in place.
     _apply_preset(args)
 
-    cfg: CampaignConfig = load_config(vars(args))
+    # --- Fire-and-forget handoff (Phase 2 — issue #602) ---
+    if args.detach:
+        if not args.coordinator_url:
+            print("error: --detach requires --coordinator-url", file=sys.stderr)
+            return 1
+        cfg: CampaignConfig = load_config(vars(args))
+
+        coordinator_payload = {
+            "name": str(cfg.outdir.name) if cfg.outdir else f"campaign-{int(time.time())}",
+            "n_samples": cfg.n_samples,
+            "executor": args.executor or "local",
+            "openstudio_version": cfg.openstudio_version or "3.11.0",
+            "algorithm": cfg.algorithm,
+            "max_generations": cfg.max_generations,
+            "input_variables": str(cfg.input_variables) if cfg.input_variables else None,
+            "template_sim_package": str(cfg.template_sim_package)
+            if cfg.template_sim_package
+            else None,
+            "custom_apply_script": args.custom_apply_script,
+            "custom_kpi_extractor": args.custom_kpi_extractor,
+            "archive_intermediates": cfg.archive_intermediates,
+            "result_storage_backend": cfg.result_storage_backend,
+            "result_storage_bucket": cfg.result_storage_bucket,
+            "extra": {
+                "slurm_partition": getattr(args, "slurm_partition", None),
+                "aws_batch_queue": getattr(args, "aws_batch_queue", None),
+                "nomad_datacentre": getattr(args, "nomad_datacentre", None),
+            },
+        }
+        try:
+            response = httpx.post(
+                f"{args.coordinator_url.rstrip('/')}/api/v1/coordinator/handoff",
+                json=coordinator_payload,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            print(
+                f"error: Coordinator returned {exc.response.status_code}: {exc.response.text}",
+                file=sys.stderr,
+            )
+            return 1
+        except httpx.RequestError as exc:
+            print(
+                f"error: Failed to reach Coordinator at {args.coordinator_url}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        result_data = response.json()
+        campaign_id = result_data.get("campaign_id", "unknown")
+        print(f"Campaign handed off to Coordinator: {campaign_id}")
+        print(f"  Status: {result_data.get('status', 'unknown')}")
+        print(f"  Poll: {args.coordinator_url}/api/v1/coordinator/campaigns/{campaign_id}")
+        return 0
+
+    cfg: CampaignConfig = load_config(vars(args))  # type: ignore[no-redef]
     executor: BaseExecutor
     if cfg.dry_run:
         executor = LocalExecutor(max_workers=1)

@@ -688,3 +688,69 @@ class SampleRequeueResponse(BaseModel):
     new_sample_id: str = Field(description="Newly created sample ID pending re-run")
     status: str = Field(description="Status of the new sample: pending")
     detail: str = Field(description="Human-readable summary of the operation")
+
+
+# ---------------------------------------------------------------------------
+# Coordinator (fire-and-forget campaign handoff — issue #602)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorHandoffPayload(BaseModel):
+    """Payload for handing off a campaign to the Coordinator (Phase 2).
+
+    This is the JSON schema the CLI posts when the ``--detach`` flag is used.
+    """
+
+    name: str = Field(description="Human-readable campaign name")
+    n_samples: int = Field(ge=1, description="Number of samples to run")
+    executor: str = Field(description="Executor type: local | slurm | aws_batch | nomad | ...")
+    openstudio_version: str = Field(description="OpenStudio version tag (e.g., 3.11.0)")
+    input_variables: str | None = Field(default=None, description="URL or path to variables.yml")
+    template_sim_package: str | None = Field(
+        default=None, description="URL or path to template sim package"
+    )
+    algorithm: str = Field(default="lhs", description="Sampling algorithm")
+    max_generations: int = Field(default=1, ge=1, description="Max DAG generations")
+    custom_apply_script: str | None = Field(
+        default=None, description="URL to custom apply_params script"
+    )
+    custom_kpi_extractor: str | None = Field(
+        default=None, description="URL to custom KPI extractor script"
+    )
+    archive_intermediates: bool = Field(default=False, description="Archive intermediate files")
+    result_storage_backend: str | None = Field(default=None, description="Result storage backend")
+    result_storage_bucket: str | None = Field(
+        default=None, description="Result storage bucket/container"
+    )
+    extra: dict[str, Any] | None = Field(
+        default=None, description="Additional executor-specific settings"
+    )
+
+
+class CoordinatorHandoffResponse(BaseModel):
+    """Response from a successful campaign handoff."""
+
+    campaign_id: str = Field(description="Assigned campaign identifier")
+    status: str = Field(description="Initial status: pending")
+    message: str = Field(description="Human-readable summary")
+
+
+class CoordinatorSubmitResponse(BaseModel):
+    """Alias for backward compatibility."""
+
+    campaign_id: str
+    status: str
+    message: str
+
+
+class CoordinatorCampaignRecord(BaseModel):
+    """A Coordinator campaign record returned by GET /campaigns/{id}."""
+
+    campaign_id: str
+    name: str
+    status: str = Field(description="pending | running | aggregating | complete | failed")
+    created_at: float | None = None
+    updated_at: float | None = None
+    n_samples: int = 0
+    executor: str = ""
+    openstudio_version: str = ""
