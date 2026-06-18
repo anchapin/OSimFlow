@@ -8,25 +8,36 @@ Phase 2 scope (issue #602):
   - Store campaign metadata and return a campaign_id immediately
   - Provide GET /api/v1/coordinator/campaigns/{campaign_id} for status
 
-Future phases (603, 604) will add:
-  - Array job submission (Phase 3)
-  - Result aggregation and user notifications (Phase 4)
+Phase 3 scope (issue #603):
+  - Store LHS sample parameter sets when campaign is handed off
+  - GET /campaigns/{id}/samples/{index} — workers fetch their parameters
+  - POST /campaigns/{id}/submit-array — submit an AWS Batch array job
+    with one child per sample (1 API call for N samples)
+
+Future phase (604) will add:
+  - Result aggregation and user notifications
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from typing import Any
 
+import boto3
 from fastapi import APIRouter, HTTPException, Request
 
 from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
+    CoordinatorArraySubmitRequest,
+    CoordinatorArraySubmitResponse,
     CoordinatorCampaignRecord,
     CoordinatorHandoffPayload,
     CoordinatorHandoffResponse,
+    CoordinatorSampleRecord,
+    CoordinatorSamplesResponse,
 )
 
 log = logging.getLogger("osimflow.api.coordinator")
@@ -67,6 +78,9 @@ async def coordinator_handoff(
     now = time.time()
 
     user_id: str = getattr(request.state, "user_id", None) or "anonymous"
+    samples: list[dict[str, Any]] = payload.samples or []
+    n_samples = len(samples) if samples else payload.n_samples
+
     record: dict[str, Any] = {
         "campaign_id": campaign_id,
         "name": payload.name,
@@ -75,9 +89,10 @@ async def coordinator_handoff(
         "updated_at": now,
         "created_by": user_id,
         "payload": payload.model_dump(exclude_none=True),
-        "n_samples": payload.n_samples,
+        "n_samples": n_samples,
         "executor": payload.executor,
         "openstudio_version": payload.openstudio_version,
+        "samples": samples,
     }
 
     _campaigns[campaign_id] = record
@@ -176,4 +191,153 @@ async def update_coordinator_campaign_status(
         n_samples=rec.get("n_samples", 0),
         executor=rec.get("executor", ""),
         openstudio_version=rec.get("openstudio_version", ""),
+    )
+
+
+@coordinator_router.get(
+    "/campaigns/{campaign_id}/samples",
+    response_model=CoordinatorSamplesResponse,
+    summary="List all sample parameter sets for a campaign",
+)
+async def list_campaign_samples(
+    campaign_id: str,
+    request: Request,
+) -> CoordinatorSamplesResponse:
+    """Return all sample parameter sets for a campaign.
+
+    Used by the Coordinator to inspect all samples before submitting an array job,
+    and by array job children to enumerate available sample indices.
+    """
+    get_user_permission(request, "read")  # authenticate
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+    samples = rec.get("samples", [])
+    return CoordinatorSamplesResponse(
+        campaign_id=campaign_id,
+        samples=[
+            CoordinatorSampleRecord(index=i, parameters=params, status="pending")
+            for i, params in enumerate(samples)
+        ],
+    )
+
+
+@coordinator_router.get(
+    "/campaigns/{campaign_id}/samples/{index}",
+    response_model=CoordinatorSampleRecord,
+    summary="Get a specific sample's parameters by index",
+)
+async def get_campaign_sample(
+    campaign_id: str,
+    index: int,
+    request: Request,
+) -> CoordinatorSampleRecord:
+    """Return the parameter set for a specific sample index.
+
+    This is the endpoint that array job children call to retrieve their
+    parameters. The child reads AWS_BATCH_JOB_ARRAY_INDEX from its environment
+    and uses that as the {index}.
+
+    Returns 404 if the campaign does not exist or the index is out of range.
+    """
+    get_user_permission(request, "read")  # authenticate
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+    samples = rec.get("samples", [])
+    if index < 0 or index >= len(samples):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Sample index {index} out of range (0..{len(samples) - 1})",
+        )
+    return CoordinatorSampleRecord(
+        index=index,
+        parameters=samples[index],
+        status=rec.get("status", "pending"),
+    )
+
+
+@coordinator_router.post(
+    "/campaigns/{campaign_id}/submit-array",
+    response_model=CoordinatorArraySubmitResponse,
+    summary="Submit a campaign as an AWS Batch array job",
+)
+async def submit_campaign_array_job(
+    campaign_id: str,
+    submit_req: CoordinatorArraySubmitRequest,
+    request: Request,
+) -> CoordinatorArraySubmitResponse:
+    """Submit a campaign as an AWS Batch array job.
+
+    Constructs a single ``submit_job`` call with ``arrayProperties.size`` equal
+    to the number of samples. Each array child will set
+    ``AWS_BATCH_JOB_ARRAY_INDEX`` to its zero-based index, then call
+    ``GET /campaigns/{campaign_id}/samples/{index}`` to retrieve its
+    parameter set.
+
+    This replaces N individual ``submit_job`` calls with a single call,
+    satisfying the Phase 3 acceptance criterion: *one submission API call for
+    a 50,000-run campaign*.
+
+    Requires AWS credentials with permissions to call ``batch.submit-job``.
+    """
+    if not get_user_permission(request, "admin"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+
+    array_size = submit_req.array_size
+    if array_size < 1:
+        raise HTTPException(status_code=400, detail="array_size must be >= 1")
+
+    try:
+        batch = boto3.client("batch")
+    except Exception as exc:
+        raise HTTPException(  # noqa: B904
+            status_code=503,
+            detail=f"Cannot connect to AWS Batch: {exc}",
+        )
+
+    try:
+        response = batch.submit_job(
+            jobName=f"osimflow-{campaign_id[:8]}",
+            jobQueue=submit_req.job_queue,
+            jobDefinition=submit_req.job_definition,
+            arrayProperties={"size": array_size},
+            containerOverrides={
+                "environment": [
+                    {"name": "OSIMFLOW_CAMPAIGN_ID", "value": campaign_id},
+                    {
+                        "name": "OSIMFLOW_COORDINATOR_URL",
+                        "value": os.environ.get(
+                            "OSIMFLOW_COORDINATOR_URL",
+                            "http://localhost:8000",
+                        ),
+                    },
+                ],
+            },
+            timeout={"attemptDurationSeconds": int(rec.get("payload", {}).get("timeout_seconds", 14400))},
+        )
+    except Exception as exc:
+        raise HTTPException(  # noqa: B904
+            status_code=502,
+            detail=f"AWS Batch submit-job failed: {exc}",
+        )
+
+    array_job_id: str = str(response["jobId"])
+    rec["status"] = "pending"
+    rec["array_job_id"] = array_job_id
+    rec["updated_at"] = time.time()
+    log.info(
+        "Campaign %s submitted as array job %s (size=%d)",
+        campaign_id,
+        array_job_id,
+        array_size,
+    )
+    return CoordinatorArraySubmitResponse(
+        campaign_id=campaign_id,
+        array_job_id=array_job_id,
+        status="pending",
+        message=f"Array job {array_job_id} submitted with {array_size} children.",
     )
