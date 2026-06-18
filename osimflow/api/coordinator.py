@@ -317,7 +317,9 @@ async def submit_campaign_array_job(
                     },
                 ],
             },
-            timeout={"attemptDurationSeconds": int(rec.get("payload", {}).get("timeout_seconds", 14400))},
+            timeout={
+                "attemptDurationSeconds": int(rec.get("payload", {}).get("timeout_seconds", 14400))
+            },
         )
     except Exception as exc:
         raise HTTPException(  # noqa: B904
