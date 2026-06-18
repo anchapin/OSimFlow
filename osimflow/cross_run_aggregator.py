@@ -24,6 +24,7 @@ the existing POST endpoint.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -139,7 +140,7 @@ class CrossRunAggregator:
         Returns ``True`` if the label was found and removed.
         """
         original = len(self._campaigns)
-        self._campaigns = [(o, l) for o, l in self._campaigns if l != label]
+        self._campaigns = [(orig, lbl) for orig, lbl in self._campaigns if lbl != label]
         if len(self._campaigns) < original:
             self._combined_df = None
             self._cross_run_stats = {}
@@ -176,8 +177,6 @@ class CrossRunAggregator:
         run_json = outdir / "run.json"
         if run_json.exists():
             try:
-                import json
-
                 data = json.loads(run_json.read_text())
                 cid = data.get("campaign_id")
                 if cid:

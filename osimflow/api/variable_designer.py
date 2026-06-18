@@ -19,7 +19,6 @@ The frontend is a self-contained HTML/JS file that provides:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, RedirectResponse
 

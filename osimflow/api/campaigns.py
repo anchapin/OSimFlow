@@ -18,12 +18,16 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import io
 import json
 import logging
 import threading
 import time
 import uuid
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -38,14 +42,14 @@ from osimflow.api.schemas import (
     BatchUploadRequest,
     BatchUploadResponse,
     CampaignCancelResponse,
-    CampaignPauseResponse,
-    CampaignResumeResponse,
     CampaignComparisonEntry,
     CampaignComparisonResponse,
     CampaignCreateRequest,
     CampaignCreateResponse,
     CampaignDetailResponse,
     CampaignListResponse,
+    CampaignPauseResponse,
+    CampaignResumeResponse,
     CampaignSummary,
     CompareCampaignsPostRequest,
     KpiComparisonRow,
@@ -1112,9 +1116,25 @@ async def resume_campaign(
 # ---------------------------------------------------------------------------
 
 # Files included in the bundle (evaluated at request time).
-_BUNDLE_ROOT_FILES = frozenset({"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"})
+_BUNDLE_ROOT_FILES = frozenset(
+    {"run.json", "samples.json", "aggregated_results.csv", "failed_simulations.csv"}
+)
 _BUNDLE_PLOT_GLOB = "*.png"
 _BUNDLE_SQL_GLOB = "eplusout.sql"
+
+
+def _iter_sample_bundle(sample_dir: Path, include_sql: bool) -> tuple[tuple[str, Path], ...]:
+    """Yield (archive_path, file_path) pairs for a single sample directory."""
+    results: list[tuple[str, Path]] = []
+    for kpi_name in ("kpi.json", "kpis.json"):
+        kpi_file = sample_dir / kpi_name
+        if kpi_file.is_file():
+            results.append((f"samples/{sample_dir.name}/{kpi_name}", kpi_file))
+    if include_sql:
+        sql_file = sample_dir / _BUNDLE_SQL_GLOB
+        if sql_file.is_file():
+            results.append((f"samples/{sample_dir.name}/{_BUNDLE_SQL_GLOB}", sql_file))
+    return tuple(results)
 
 
 def _iter_campaign_bundle(
@@ -1134,18 +1154,13 @@ def _iter_campaign_bundle(
         if f.is_file():
             yield (name, f)
 
-    # Per-sample KPI JSONs
+    # Per-sample KPI JSONs and eplusout.sql
     work_dir = campaign_dir / "work"
     sim_dir = work_dir / "sim"
     if sim_dir.is_dir():
         for sample_dir in sim_dir.iterdir():
-            if not sample_dir.is_dir():
-                continue
-            for kpi_name in ("kpi.json", "kpis.json"):
-                kpi_file = sample_dir / kpi_name
-                if kpi_file.is_file():
-                    rel = f"samples/{sample_dir.name}/{kpi_name}"
-                    yield (rel, kpi_file)
+            if sample_dir.is_dir():
+                yield from _iter_sample_bundle(sample_dir, include_sql)
 
     # Plot files — campaign root
     for plot_file in campaign_dir.glob(_BUNDLE_PLOT_GLOB):
@@ -1154,21 +1169,9 @@ def _iter_campaign_bundle(
     # Plot files — plots/ subdirectory
     plots_dir = campaign_dir / "plots"
     if plots_dir.is_dir():
-        for plot_file in plots_dir.glob(_BUNDLE_PLOT_GLOB):
-            if plot_file.is_file():
-                yield (f"plots/{plot_file.name}", plot_file)
-
-    # Per-sample eplusout.sql (only when --archive_intermediates was used)
-    if include_sql and work_dir.is_dir():
-        sim_dir = work_dir / "sim"
-        if sim_dir.is_dir():
-            for sample_dir in sim_dir.iterdir():
-                if not sample_dir.is_dir():
-                    continue
-                sql_file = sample_dir / _BUNDLE_SQL_GLOB
-                if sql_file.is_file():
-                    rel = f"samples/{sample_dir.name}/{_BUNDLE_SQL_GLOB}"
-                    yield (rel, sql_file)
+        yield from (
+            (f"plots/{p.name}", p) for p in plots_dir.glob(_BUNDLE_PLOT_GLOB) if p.is_file()
+        )
 
 
 @campaigns_router.get("/api/v1/campaigns/{campaign_id}/download")
@@ -1200,12 +1203,6 @@ async def download_campaign_bundle(
     """
     base = _campaigns_base_dir(request)
     campaign_dir = _campaign_dir_from_id(base, campaign_id)
-
-    import io
-    import zipfile
-
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
 
     safe_name = "".join(c for c in campaign_id if c.isalnum() or c in ("-", "_"))
     archive_name = f"campaign-{safe_name}.zip"
