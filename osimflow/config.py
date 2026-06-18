@@ -641,6 +641,23 @@ class CampaignConfig:
     # measures from BCL (issue #580). When True, warnings are logged
     # for measures with incomplete metadata or unexpected argument types.
     validate_measures: bool = False
+    # S3 artifact storage configuration (issue #601). When set, base
+    # simulation assets (.osm, .epw) are uploaded to S3 once at campaign
+    # creation and pre-signed URLs are generated for remote executor
+    # nodes to download directly, eliminating the local-machine bottleneck.
+    s3_artifact_bucket: str = ""
+    # S3 artifact storage prefix within the bucket (issue #601).
+    s3_artifact_prefix: str = ""
+    # AWS region for S3 artifact storage (issue #601). When None,
+    # uses the region from the IAM role or default credential chain.
+    s3_artifact_region: str | None = None
+    # Custom S3-compatible endpoint URL for artifact storage (issue #601).
+    # Used for MinIO, Cloudflare R2, and other S3-compatible stores.
+    s3_artifact_endpoint: str | None = None
+    # Expiration time in seconds for pre-signed URLs (issue #601).
+    # Default 3600 (1 hour). Remote nodes must download artifacts
+    # within this window.
+    s3_artifact_presigned_url_expiration: int = 3600
 
     # R-NSGA-II reference points (issue #529). Comma-separated fractions
     # along the Pareto front for 2-objective problems, or explicit reference
@@ -979,4 +996,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         else None,
         bcl_api_key=str(args["bcl_api_key"]) if args.get("bcl_api_key") else None,
         validate_measures=bool(args.get("validate_measures", False)),
+        s3_artifact_bucket=str(args.get("s3_artifact_bucket", "")),
+        s3_artifact_prefix=str(args.get("s3_artifact_prefix", "")),
+        s3_artifact_region=str(args["s3_artifact_region"]) if args.get("s3_artifact_region") else None,
+        s3_artifact_endpoint=str(args["s3_artifact_endpoint"]) if args.get("s3_artifact_endpoint") else None,
+        s3_artifact_presigned_url_expiration=int(str(args["s3_artifact_presigned_url_expiration"])) if args.get("s3_artifact_presigned_url_expiration") is not None else 3600,
     )

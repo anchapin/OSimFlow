@@ -584,6 +584,247 @@ class AzureBlobStorage(ResultStorage):
             raise OSError("AzureBlobStorage: list_results failed") from exc
 
 
+class S3ArtifactStorage:
+    """S3-backed centralized artifact storage for large simulation files.
+
+    This class handles uploading base simulation assets (``.osm``, ``.idf``,
+    and ``.epw`` files) to S3 exactly once at campaign creation, then
+    generates pre-signed URLs so remote executor nodes can download them
+    directly at high speed without routing through the local machine.
+
+    Credentials are sourced from the IAM role attached to the compute
+    environment (AWS Batch), the ECS task role, or the default credential
+    chain (``~/.aws/credentials``, environment variables, etc.).
+    Long-lived access keys are NOT used.
+
+    Usage
+    -----
+    >>> from osimflow.storage import S3ArtifactStorage
+    >>> store = S3ArtifactStorage(bucket="my-artifacts", prefix="campaign-123")
+    >>> store.upload_artifact(Path("model.osm"), "base/model.osm")
+    >>> url = store.generate_presigned_url("base/model.osm")
+    >>> # Remote nodes use the pre-signed URL to download directly
+    """
+
+    name = "s3_artifact"
+
+    def __init__(
+        self,
+        bucket: str,
+        prefix: str = "",
+        *,
+        endpoint_url: str | None = None,
+        region: str | None = None,
+        presigned_url_expiration_seconds: int = 3600,
+    ) -> None:
+        """Initialize the S3 artifact storage backend.
+
+        Parameters
+        ----------
+        bucket
+            S3 bucket name (e.g. ``"my-campaign-artifacts"``).
+        prefix
+            Prefix prepended to all artifact paths (e.g. ``"campaign-123"``).
+        endpoint_url
+            Optional custom endpoint URL for S3-compatible stores
+            (MinIO, Cloudflare R2, etc.).
+        region
+            AWS region for the S3 bucket. When None, uses the region from
+            the IAM role or default credential chain. Required for
+            presigned URL generation with some bucket configurations.
+        presigned_url_expiration_seconds
+            How long pre-signed URLs remain valid (default: 3600 = 1 hour).
+            Remote nodes should download artifacts within this window.
+        """
+        import boto3  # noqa: PLC0415
+
+        self.bucket = bucket
+        self.prefix = prefix.rstrip("/") if prefix else ""
+        self.endpoint_url = endpoint_url
+        self.region = region
+        self.presigned_url_expiration_seconds = presigned_url_expiration_seconds
+        self._client: boto3_typing.S3Client | None = None
+        self._s3 = boto3.Session()
+
+    @property
+    def client(self) -> boto3_typing.S3Client:
+        """Lazily-created S3 client (boto3 Session-scoped for thread safety)."""
+        if self._client is None:
+            kwargs: dict[str, str] = {"region_name": self.region} if self.region else {}
+            if self.endpoint_url:
+                kwargs["endpoint_url"] = self.endpoint_url
+            self._client = self._s3.client("s3", **kwargs)
+        return self._client
+
+    def _remote(self, path: str) -> str:
+        if self.prefix:
+            return f"{self.prefix}/{path}"
+        return path
+
+    def upload_artifact(self, local_path: Path, remote_path: str) -> None:
+        """Upload a base simulation artifact to S3.
+
+        Parameters
+        ----------
+        local_path
+            Path to the local artifact file (``.osm``, ``.epw``, etc.).
+        remote_path
+            Remote destination path relative to the bucket/prefix.
+
+        Raises
+        ------
+        FileNotFoundError
+            When the local file does not exist.
+        OSError
+            When the upload fails.
+        """
+        if not local_path.is_file():
+            raise FileNotFoundError(
+                f"S3ArtifactStorage: local file not found: {local_path}"
+            )
+        remote = self._remote(remote_path)
+        log.debug(
+            "S3ArtifactStorage: upload %s -> s3://%s/%s",
+            local_path,
+            self.bucket,
+            remote,
+        )
+        try:
+            self.client.upload_file(str(local_path), self.bucket, remote)
+            log.info(
+                "S3ArtifactStorage: uploaded artifact %s -> s3://%s/%s",
+                local_path.name,
+                self.bucket,
+                remote,
+            )
+        except Exception as exc:
+            log.error(
+                "S3ArtifactStorage: upload failed s3://%s/%s: %s",
+                self.bucket,
+                remote,
+                exc,
+            )
+            raise OSError(
+                f"S3ArtifactStorage: upload failed for {remote_path}"
+            ) from exc
+
+    def generate_presigned_url(
+        self,
+        remote_path: str,
+        expiration_seconds: int | None = None,
+    ) -> str:
+        """Generate a pre-signed URL for an artifact.
+
+        Remote executor nodes use this URL to download the artifact directly
+        from S3 at high speed without routing through the local machine.
+
+        Parameters
+        ----------
+        remote_path
+            Remote path of the artifact (relative to bucket/prefix).
+        expiration_seconds
+            URL expiration time in seconds. When None, uses the default
+            from the constructor (3600 seconds / 1 hour).
+
+        Returns
+        -------
+        str
+            The pre-signed URL. Valid for the specified duration.
+
+        Raises
+        ------
+        OSError
+            When URL generation fails.
+        """
+        remote = self._remote(remote_path)
+        expiration = (
+            expiration_seconds
+            if expiration_seconds is not None
+            else self.presigned_url_expiration_seconds
+        )
+        log.debug(
+            "S3ArtifactStorage: generating presigned URL for s3://%s/%s (expires in %ds)",
+            self.bucket,
+            remote,
+            expiration,
+        )
+        try:
+            url = self.client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self.bucket, "Key": remote},
+                ExpiresIn=expiration,
+            )
+            return url  # type: ignore[no-any-return]
+        except Exception as exc:
+            log.error(
+                "S3ArtifactStorage: presigned URL generation failed s3://%s/%s: %s",
+                self.bucket,
+                remote,
+                exc,
+            )
+            raise OSError(
+                f"S3ArtifactStorage: presigned URL generation failed for {remote_path}"
+            ) from exc
+
+    def artifact_exists(self, remote_path: str) -> bool:
+        """Check whether an artifact already exists in S3.
+
+        Parameters
+        ----------
+        remote_path
+            Remote path of the artifact (relative to bucket/prefix).
+
+        Returns
+        -------
+        bool
+            True if the artifact exists, False otherwise.
+        """
+        remote = self._remote(remote_path)
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=remote)
+            return True
+        except Exception:
+            return False
+
+    def list_artifacts(self, prefix: str = "") -> list[str]:
+        """List all artifacts under a prefix.
+
+        Parameters
+        ----------
+        prefix
+            Filter to artifacts whose remote path starts with this prefix.
+            Empty string means list all artifacts under the storage prefix.
+
+        Returns
+        -------
+        list[str]
+            List of remote paths (relative to the bucket root) for artifacts
+            matching the prefix, sorted lexicographically.
+        """
+        remote_prefix = self._remote(prefix) if prefix else self.prefix
+        log.debug(
+            "S3ArtifactStorage: list_artifacts prefix=%r -> s3://%s/%s",
+            prefix,
+            self.bucket,
+            remote_prefix,
+        )
+        try:
+            paginator = self.client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=self.bucket, Prefix=remote_prefix)
+            keys: list[str] = []
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    assert isinstance(key, str)
+                    if self.prefix and key.startswith(self.prefix + "/"):
+                        key = key[len(self.prefix) + 1 :]
+                    keys.append(key)
+            return sorted(keys)
+        except Exception as exc:
+            log.error("S3ArtifactStorage: list_artifacts failed: %s", exc)
+            raise OSError("S3ArtifactStorage: list_artifacts failed") from exc
+
+
 def build_result_storage(
     backend: str,
     bucket: str,

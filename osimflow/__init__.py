@@ -78,6 +78,7 @@ from .storage import (
     LocalStorage,
     ResultStorage,
     ResultStorageUploader,
+    S3ArtifactStorage,
     S3Storage,
     build_result_storage,
 )
