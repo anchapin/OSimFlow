@@ -55,6 +55,43 @@ api:
   # Read-only mode (no campaign start/stop).
   read_only: true
 
+# Campaign worker Deployment (optional — issue #583).
+# Deploys an in-cluster coordinator that runs OSimFlow campaigns using
+# KubernetesExecutor, faning out per-sample Jobs natively within the cluster.
+worker:
+  enabled: false
+  replica_count: 1
+  service_type: ClusterIP
+  # Image used for the worker. Defaults to the openstudio image.
+  image: ""
+  # Executor type for campaign fan-out. Only "kubernetes" is supported for
+  # in-cluster worker mode.
+  executor: kubernetes
+  # Task queue backend for distributing work across worker replicas:
+  #   "none"   — direct KubernetesExecutor (single-replica, no queue)
+  #   "redis"  — Redis pub/sub for cross-pod coordination (requires redis.enabled)
+  #   "dask"   — Dask.distributed scheduler (requires daskcheduler address)
+  job_queue: none
+  # Redis configuration (used when job_queue=redis).
+  redis:
+    enabled: false
+    host: osimflow-redis
+    port: 6379
+    password: ""
+  # Dask configuration (used when job_queue=dask).
+  dask:
+    scheduler_address: ""
+  # Campaign arguments passed to `osimflow run`. Override to point at a
+  # ConfigMap or PVC containing variables.yml and template_sim_package.
+  campaign_args: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
 # MLflow integration (optional — issue #7).
 mlflow:
   enabled: false
