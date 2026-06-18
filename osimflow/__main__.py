@@ -3151,7 +3151,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         print(f"  Poll: {args.coordinator_url}/api/v1/coordinator/campaigns/{campaign_id}")
         return 0
 
-    cfg: CampaignConfig = load_config(vars(args))
+    cfg: CampaignConfig = load_config(vars(args))  # type: ignore[no-redef]
     executor: BaseExecutor
     if cfg.dry_run:
         executor = LocalExecutor(max_workers=1)
