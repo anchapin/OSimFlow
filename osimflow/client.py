@@ -75,6 +75,9 @@ __all__ = [
     "VariableBatchUpdateItem",
     "VariableBatchUpdateError",
     "VariableBatchUpdateResponse",
+    # Results query (issue #585)
+    "QueryResultsResponse",
+    "QueryResultRow",
 ]
 
 # ---------------------------------------------------------------------------
@@ -436,6 +439,30 @@ class VariableBatchUpdateResponse(BaseModel):
 
     updated: list[VariableDetailResponse] = Field(default_factory=list)
     errors: list[VariableBatchUpdateError] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Results query (issue #585)
+# ---------------------------------------------------------------------------
+
+
+class QueryResultRow(BaseModel):
+    """A single result row from the results query endpoint."""
+
+    model_config = {"extra": "allow"}
+
+    sample_id: str | None = None
+    _campaign: str | None = None
+
+
+class QueryResultsResponse(BaseModel):
+    """Paginated response from ``GET /api/v1/campaigns/{campaign_id}/results/query``."""
+
+    rows: list[QueryResultRow] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    per_page: int = 50
+    campaign_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -978,3 +1005,91 @@ class OSimFlowClient:
             json_body=body,
         )
         return VariableBatchUpdateResponse.model_validate(resp.json())
+
+    # ------------------------------------------------------------------
+    # Results query (issue #585)
+    # ------------------------------------------------------------------
+
+    async def query_campaign_results(
+        self,
+        campaign_id: str,
+        *,
+        page: int = 1,
+        per_page: int = 50,
+        status: str | None = None,
+        filter_json: str | None = None,
+    ) -> QueryResultsResponse:
+        """``GET /api/v1/campaigns/{campaign_id}/results/query`` — query campaign results.
+
+        Queries ``aggregated_results.csv`` with optional MongoDB-style filters
+        and pagination.
+
+        Parameters
+        ----------
+        campaign_id
+            The campaign identifier.
+        page
+            Page number (1-indexed).
+        per_page
+            Items per page (max 1000).
+        status
+            Filter by sample status (``ok``, ``failed``, ``cached``).
+        filter_json
+            MongoDB-style filter as a JSON string, e.g. ``'{"kpi.eui": {"$gt": 100}}'``.
+        """
+        params: dict[str, Any] = {"page": page, "per_page": per_page}
+        if status is not None:
+            params["status"] = status
+        if filter_json is not None:
+            params["filter"] = filter_json
+
+        resp = await self._request(
+            "GET",
+            f"/api/v1/campaigns/{campaign_id}/results/query",
+            params=params,
+        )
+        return QueryResultsResponse.model_validate(resp.json())
+
+    async def export_campaign_results(
+        self,
+        campaign_id: str,
+        *,
+        format: str = "csv",
+        status: str | None = None,
+        include_failed: bool = True,
+        filter_json: str | None = None,
+    ) -> bytes:
+        """``GET /api/v1/campaigns/{campaign_id}/results/export`` — export campaign results.
+
+        Returns raw CSV or JSON bytes. Use ``.content`` on the response
+        directly when you need the raw bytes; this method parses JSON
+        responses into a dict.
+
+        Parameters
+        ----------
+        campaign_id
+            The campaign identifier.
+        format
+            Export format: ``csv`` (default) or ``json``.
+        status
+            Filter by sample status.
+        include_failed
+            Include failed simulations in export (default True).
+        filter_json
+            MongoDB-style filter as a JSON string.
+        """
+        params: dict[str, Any] = {"format": format}
+        if status is not None:
+            params["status"] = status
+        if not include_failed:
+            params["include_failed"] = "false"
+        if filter_json is not None:
+            params["filter"] = filter_json
+
+        resp = await self.http_client.get(
+            f"/api/v1/campaigns/{campaign_id}/results/export",
+            params=params,
+        )
+        if resp.status_code >= 400:
+            self._raise_for_status(resp)
+        return resp.content
