@@ -1,0 +1,27 @@
+# test_variables.yml — minimal variables for campaign-running unit tests.
+#
+# These variables match the two measures in example_package/workflow.osw:
+#   - SetThermostatSchedule: heating_setpoint, cooling_setpoint
+#   - SetEnvelopePerformance: wwr, wall_r_value
+#
+# This fixture is used by tests that run full campaigns against
+# example_package, avoiding the mismatch between the repo-root
+# variables.yml (which may have measure_argument fields referencing
+# measures not present in example_package).
+variables:
+  - name: heating_setpoint
+    distribution: uniform
+    min: 18.0
+    max: 24.0
+  - name: cooling_setpoint
+    distribution: uniform
+    min: 22.0
+    max: 28.0
+  - name: wwr
+    distribution: uniform
+    min: 0.2
+    max: 0.6
+  - name: wall_r_value
+    distribution: uniform
+    min: 2.0
+    max: 8.0

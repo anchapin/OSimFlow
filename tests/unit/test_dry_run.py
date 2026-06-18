@@ -18,12 +18,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
 EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
 
-# workdir, template_pkg, and outdir fixtures come from conftest.py.
+# campaign_workdir, template_pkg, and outdir fixtures come from conftest.py.
+# campaign_workdir uses test_variables.yml which has variables matching
+# the measures in example_package/workflow.osw (issue #599).
 
 
-def test_dry_run_forces_n_samples_to_1(workdir: Path, template_pkg: Path, outdir: Path) -> None:
+def test_dry_run_forces_n_samples_to_1(
+    campaign_workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
     cfg = CampaignConfig(
-        input_variables=workdir / "variables.yml",
+        input_variables=campaign_workdir / "variables.yml",
         template_sim_package=template_pkg,
         n_samples=5000,
         outdir=outdir,
@@ -38,10 +42,10 @@ def test_dry_run_forces_n_samples_to_1(workdir: Path, template_pkg: Path, outdir
 
 
 def test_dry_run_processes_exactly_one_sample(
-    workdir: Path, template_pkg: Path, outdir: Path
+    campaign_workdir: Path, template_pkg: Path, outdir: Path
 ) -> None:
     cfg = CampaignConfig(
-        input_variables=workdir / "variables.yml",
+        input_variables=campaign_workdir / "variables.yml",
         template_sim_package=template_pkg,
         n_samples=100,
         outdir=outdir,
@@ -58,10 +62,10 @@ def test_dry_run_processes_exactly_one_sample(
 
 
 def test_dry_run_does_not_produce_aggregated_csv(
-    workdir: Path, template_pkg: Path, outdir: Path
+    campaign_workdir: Path, template_pkg: Path, outdir: Path
 ) -> None:
     cfg = CampaignConfig(
-        input_variables=workdir / "variables.yml",
+        input_variables=campaign_workdir / "variables.yml",
         template_sim_package=template_pkg,
         n_samples=10,
         outdir=outdir,
@@ -75,9 +79,11 @@ def test_dry_run_does_not_produce_aggregated_csv(
     assert not (outdir / "plots").exists()
 
 
-def test_dry_run_writes_run_json(workdir: Path, template_pkg: Path, outdir: Path) -> None:
+def test_dry_run_writes_run_json(
+    campaign_workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
     cfg = CampaignConfig(
-        input_variables=workdir / "variables.yml",
+        input_variables=campaign_workdir / "variables.yml",
         template_sim_package=template_pkg,
         n_samples=10,
         outdir=outdir,
@@ -94,9 +100,11 @@ def test_dry_run_writes_run_json(workdir: Path, template_pkg: Path, outdir: Path
     assert len(data["per_sample"]) == 1
 
 
-def test_dry_run_returns_elapsed_time(workdir: Path, template_pkg: Path, outdir: Path) -> None:
+def test_dry_run_returns_elapsed_time(
+    campaign_workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
     cfg = CampaignConfig(
-        input_variables=workdir / "variables.yml",
+        input_variables=campaign_workdir / "variables.yml",
         template_sim_package=template_pkg,
         n_samples=10,
         outdir=outdir,
