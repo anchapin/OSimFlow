@@ -14,7 +14,6 @@ After `pip install -e .`, also available as:
 """
 
 import argparse
-import json
 import logging
 import sys
 import threading
@@ -41,7 +40,6 @@ from osimflow import (
     build_task_queue,
     load_config,
 )
-from osimflow.api.results_query import export_results_cli, query_results_cli
 from osimflow.byos import ByosTrustLevel, load_user_function
 from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.exporters.osa import OSAExporter
