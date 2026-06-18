@@ -506,7 +506,7 @@ def _discover_constructions(model: Any, result: dict[str, MappedParameter]) -> N
 
 def _discover_lights(model: Any, result: dict[str, MappedParameter]) -> None:
     """Discover settable attributes from Lights objects."""
-    for lt in model.getLightss():
+    for lt in model.getLights():
         name = lt.nameString()
         if not name:
             continue
@@ -525,7 +525,7 @@ def _discover_lights(model: Any, result: dict[str, MappedParameter]) -> None:
 
 def _discover_people(model: Any, result: dict[str, MappedParameter]) -> None:
     """Discover settable attributes from People objects."""
-    for p in model.getPeoples():
+    for p in model.getPeople():
         name = p.nameString()
         if not name:
             continue
