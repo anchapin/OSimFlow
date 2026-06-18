@@ -1185,6 +1185,55 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Used when --algorithm uq is set."
         ),
     )
+    run.add_argument(
+        "--s3-artifact-bucket",
+        default=None,
+        help=(
+            "S3 bucket name for centralized artifact storage (issue #601). "
+            "When set, base simulation assets (.osm, .epw) are uploaded to S3 "
+            "once at campaign creation. Remote executor nodes download them "
+            "directly via pre-signed URLs, eliminating the local-machine bottleneck "
+            "for large fan-out campaigns."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-prefix",
+        default=None,
+        help=(
+            "S3 prefix within the artifact bucket for this campaign (issue #601). "
+            "Example: 'campaign-123' or 'project Q1/run-456'. "
+            "Required when --s3-artifact-bucket is set."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-region",
+        default=None,
+        help=(
+            "AWS region for the S3 artifact bucket (issue #601). "
+            "When omitted, uses the region from the IAM role or default "
+            "credential chain. Required for pre-signed URL generation "
+            "with some bucket configurations."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-endpoint",
+        default=None,
+        help=(
+            "Custom S3-compatible endpoint URL for artifact storage (issue #601). "
+            "Use for MinIO, Cloudflare R2, or other S3-compatible stores. "
+            "Only valid when --s3-artifact-bucket is set."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-presigned-url-expiration",
+        type=int,
+        default=3600,
+        help=(
+            "Expiration time in seconds for pre-signed URLs (issue #601). "
+            "Remote executor nodes must download artifacts within this window. "
+            "Default: 3600 (1 hour). Min: 60, Max: 43200 (12 hours)."
+        ),
+    )
 
 
 def _add_import_osa_args(imp: argparse.ArgumentParser) -> None:
