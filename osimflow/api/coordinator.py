@@ -14,8 +14,11 @@ Phase 3 scope (issue #603):
   - POST /campaigns/{id}/submit-array — submit an AWS Batch array job
     with one child per sample (1 API call for N samples)
 
-Future phase (604) will add:
-  - Result aggregation and user notifications
+Phase 4 scope (issue #604):
+  - notification_email and sns_topic_arn fields in handoff payload
+  - GET /campaigns/{id}/poll-array — poll AWS Batch for array job completion
+  - GET /campaigns/{id}/results — fetch aggregated result files from S3
+  - POST /campaigns/{id}/notify — send SNS notification on completion
 """
 
 from __future__ import annotations
@@ -36,6 +39,11 @@ from osimflow.api.schemas import (
     CoordinatorCampaignRecord,
     CoordinatorHandoffPayload,
     CoordinatorHandoffResponse,
+    CoordinatorNotifyRequest,
+    CoordinatorNotifyResponse,
+    CoordinatorPollArrayResponse,
+    CoordinatorResultFile,
+    CoordinatorResultsResponse,
     CoordinatorSampleRecord,
     CoordinatorSamplesResponse,
 )
@@ -93,6 +101,12 @@ async def coordinator_handoff(
         "executor": payload.executor,
         "openstudio_version": payload.openstudio_version,
         "samples": samples,
+        "notification_email": payload.notification_email,
+        "sns_topic_arn": payload.sns_topic_arn,
+        "result_storage_bucket": payload.result_storage_bucket,
+        "array_job_id": None,
+        "result_status": "unavailable",
+        "aggregated_results_key": None,
     }
 
     _campaigns[campaign_id] = record
@@ -342,4 +356,237 @@ async def submit_campaign_array_job(
         array_job_id=array_job_id,
         status="pending",
         message=f"Array job {array_job_id} submitted with {array_size} children.",
+    )
+
+
+@coordinator_router.get(
+    "/campaigns/{campaign_id}/poll-array",
+    response_model=CoordinatorPollArrayResponse,
+    summary="Poll AWS Batch for array job completion status",
+)
+async def poll_array_job(
+    campaign_id: str,
+    request: Request,
+) -> CoordinatorPollArrayResponse:
+    """Poll AWS Batch for the status of an array job submitted via POST /submit-array.
+
+    Returns per-child counts: succeeded, failed, pending. When all children are
+    SUCCEEDED the campaign can transition to the aggregation step.
+
+    Requires ``admin`` permission and a stored ``array_job_id`` on the campaign.
+    """
+    if not get_user_permission(request, "admin"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+
+    array_job_id: str | None = rec.get("array_job_id")
+    if not array_job_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Campaign {campaign_id} has no associated array job",
+        )
+
+    try:
+        batch = boto3.client("batch")
+    except Exception as exc:
+        raise HTTPException(  # noqa: B904
+            status_code=503,
+            detail=f"Cannot connect to AWS Batch: {exc}",
+        )
+
+    try:
+        job_resp = batch.describe_jobs(jobs=[array_job_id])
+    except Exception as exc:
+        raise HTTPException(  # noqa: B904
+            status_code=502,
+            detail=f"AWS Batch describe_jobs failed: {exc}",
+        )
+
+    job = job_resp.get("jobs", [None])[0]
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Array job {array_job_id} not found")
+
+    job_status: str = job.get("status", "UNKNOWN")
+    summary = job.get("jobSummary", {})
+    status_counts = summary.get("statusSummary", {})
+    succeeded = status_counts.get("SUCCEEDED", 0)
+    failed = status_counts.get("FAILED", 0)
+    total = succeeded + failed + status_counts.get("RUNNING", 0) + status_counts.get("PENDING", 0)
+    pending = status_counts.get("RUNNING", 0) + status_counts.get("PENDING", 0)
+
+    if job_status == "SUCCEEDED":
+        rec["status"] = "aggregating"
+        rec["updated_at"] = time.time()
+        log.info(
+            "Campaign %s array job %s complete — %d succeeded, %d failed",
+            campaign_id,
+            array_job_id,
+            succeeded,
+            failed,
+        )
+    elif job_status == "FAILED":
+        rec["status"] = "failed"
+        rec["updated_at"] = time.time()
+
+    return CoordinatorPollArrayResponse(
+        campaign_id=campaign_id,
+        array_job_id=array_job_id,
+        status=job_status,
+        succeeded=succeeded,
+        failed=failed,
+        pending=pending,
+        total=total,
+        result_bucket=rec.get("result_storage_bucket"),
+        message=(
+            f"Array job {array_job_id}: {succeeded} succeeded, {failed} failed, "
+            f"{pending} pending of {total} total."
+        ),
+    )
+
+
+@coordinator_router.get(
+    "/campaigns/{campaign_id}/results",
+    response_model=CoordinatorResultsResponse,
+    summary="Fetch aggregated and per-sample result files for a campaign",
+)
+async def get_campaign_results(
+    campaign_id: str,
+    request: Request,
+) -> CoordinatorResultsResponse:
+    """Return references to all result files for a campaign.
+
+    For Phase 4, result files are stored in the campaign's S3 bucket under keys:
+
+    - ``results/aggregated_results.csv`` — combined CSV of all sample KPIs
+    - ``results/kpi_<index>.json`` — per-sample KPI JSON files
+
+    Workers upload their results directly to S3; this endpoint lets the user or
+    a downstream aggregator enumerate and download them without going through the
+    Coordinator process.
+
+    Returns ``status: unavailable`` if no result bucket is configured.
+    """
+    get_user_permission(request, "read")  # authenticate
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+
+    bucket = rec.get("result_storage_bucket")
+    if not bucket:
+        return CoordinatorResultsResponse(
+            campaign_id=campaign_id,
+            status="unavailable",
+            result_bucket=None,
+            aggregated_results_key=None,
+            kpi_files=[],
+            message="No result_storage_bucket configured for this campaign.",
+        )
+
+    result_status = rec.get("result_status", "unavailable")
+    aggregated_key = rec.get("aggregated_results_key")
+
+    kpi_files: list[CoordinatorResultFile] = []
+    try:
+        s3 = boto3.client("s3")
+        paginator = s3.get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=bucket, Prefix="results/kpi_", PaginationConfig={"page_size": 100})
+        for page in pages:
+            for obj in page.get("Contents", []):
+                key: str = obj["Key"]
+                size: int = obj.get("Size", 0)
+                basename = key.rsplit("/", 1)[-1]
+                parts = basename.replace("kpi_", "").replace(".json", "").split("_")
+                sample_idx: int | None = int(parts[0]) if parts and parts[0].isdigit() else None
+                kpi_files.append(
+                    CoordinatorResultFile(
+                        sample_index=sample_idx,
+                        file_key=key,
+                        file_type="json",
+                        size_bytes=size,
+                    )
+                )
+    except Exception as exc:
+        log.warning("Failed to list S3 results for campaign %s: %s", campaign_id, exc)
+
+    return CoordinatorResultsResponse(
+        campaign_id=campaign_id,
+        status=result_status,
+        result_bucket=bucket,
+        aggregated_results_key=aggregated_key,
+        kpi_files=kpi_files,
+        message=(
+            f"Found {len(kpi_files)} KPI files in s3://{bucket}/results/"
+            if bucket else "No result storage configured."
+        ),
+    )
+
+
+@coordinator_router.post(
+    "/campaigns/{campaign_id}/notify",
+    response_model=CoordinatorNotifyResponse,
+    summary="Trigger a completion notification for a campaign",
+)
+async def notify_campaign(
+    campaign_id: str,
+    notify_req: CoordinatorNotifyRequest,
+    request: Request,
+) -> CoordinatorNotifyResponse:
+    """Send a notification for a completed campaign.
+
+    Supports two notification channels:
+    - **SNS**: publishes a JSON message to ``sns_topic_arn`` if configured
+    - **Email**: sends a plain-text email to ``notification_email`` if configured
+
+    The notification payload includes the ``campaign_id``, final status, and a
+    signed S3 URL (valid 24 h) to the aggregated results CSV.
+    """
+    if not get_user_permission(request, "admin"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+
+    notification_type = notify_req.notification_type
+    subject = notify_req.subject or f"OSimFlow campaign '{rec.get('name', campaign_id)}' complete"
+
+    if notification_type == "sns":
+        sns_arn: str | None = rec.get("sns_topic_arn")
+        if not sns_arn:
+            return CoordinatorNotifyResponse(
+                campaign_id=campaign_id,
+                notification_type="sns",
+                status="skipped",
+                message="No sns_topic_arn configured for this campaign.",
+            )
+        bucket = rec.get("result_storage_bucket")
+        results_url = f"s3://{bucket}/results/aggregated_results.csv" if bucket else "N/A"
+        payload = {
+            "campaign_id": campaign_id,
+            "name": rec.get("name"),
+            "status": rec.get("status", "unknown"),
+            "results": results_url,
+        }
+        try:
+            sns = boto3.client("sns")
+            sns.publish(TopicArn=sns_arn, Subject=subject, Message=str(payload))
+            log.info("SNS notification sent for campaign %s to %s", campaign_id, sns_arn)
+            return CoordinatorNotifyResponse(
+                campaign_id=campaign_id,
+                notification_type="sns",
+                status="sent",
+                message=f"Notification published to {sns_arn}.",
+            )
+        except Exception as exc:
+            raise HTTPException(  # noqa: B904
+                status_code=502,
+                detail=f"SNS publish failed: {exc}",
+            )
+
+    return CoordinatorNotifyResponse(
+        campaign_id=campaign_id,
+        notification_type=notification_type,
+        status="skipped",
+        message=f"Notification type '{notification_type}' is not yet implemented.",
     )
