@@ -7,7 +7,6 @@ for remote executor nodes.
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -62,6 +61,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -82,6 +82,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -108,6 +109,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -126,6 +128,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -142,6 +145,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -159,6 +163,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -178,6 +183,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -199,6 +205,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -221,6 +228,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -245,6 +253,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -272,6 +281,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -290,6 +300,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -312,6 +323,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -336,6 +348,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -360,6 +373,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -383,6 +397,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -402,6 +417,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -419,6 +435,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -439,6 +456,7 @@ class TestS3ArtifactStorage:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
@@ -473,6 +491,7 @@ class TestS3ArtifactStorageIntegration:
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
+
                 import osimflow.storage as storage_mod
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
