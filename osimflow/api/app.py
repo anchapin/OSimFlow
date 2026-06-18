@@ -40,8 +40,10 @@ from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
 from osimflow.api.pat_compat import pat_compat_router
+from osimflow.api.results_query import results_query_router
 from osimflow.api.results_viewer import results_viewer_router
 from osimflow.api.timeseries import timeseries_router
+from osimflow.api.variable_designer import variable_designer_router
 from osimflow.api.variables import variables_router
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import (
@@ -1175,6 +1177,7 @@ def create_app(
     rate_limit: str = "60/minute",
     rate_limit_key: str = "ip",
     ui_enabled: bool = False,
+    variable_editor: bool = False,
     results_viewer: bool = False,
     registry_path: Path | None = None,
 ) -> FastAPI:
@@ -1226,6 +1229,8 @@ def create_app(
         ``"campaign"`` (per-campaign-ID limiting, issue #445).
     ui_enabled
         Enable the web UI router (issue #337).
+    variable_editor
+        Enable the Variable Designer web UI at /ui/designer/ (issue #587).
     registry_path
         Path to the campaign registry database (issue #404).  When set,
         the ``POST /api/v1/campaigns/compare`` endpoint can resolve
@@ -1323,6 +1328,7 @@ def create_app(
     app.include_router(files_router)
     app.include_router(timeseries_router)
     app.include_router(variables_router)
+    app.include_router(results_query_router)
 
     if results_viewer:
         app.include_router(results_viewer_router)
@@ -1331,6 +1337,14 @@ def create_app(
         async def results_viewer_redirect() -> RedirectResponse:
             """Redirect /results/ to the Results Viewer HTML page."""
             return RedirectResponse(url="/static/results_viewer.html")
+
+    if variable_editor:
+        app.include_router(variable_designer_router)
+
+        @router.get("/ui/designer/")  # type: ignore[untyped-decorator]
+        async def variable_designer_redirect() -> RedirectResponse:
+            """Redirect /ui/designer/ to the Variable Designer HTML page."""
+            return RedirectResponse(url="/static/variable_designer.html")
 
     app.include_router(measures_router)
 

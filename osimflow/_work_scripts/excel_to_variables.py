@@ -16,6 +16,9 @@ mean             Mean (normal, lognormal)
 stddev           Standard deviation (normal, lognormal)
 mode             Mode / peak (triangular)
 values           Comma-separated list of values (discrete, categorical)
+pmf              Comma-separated probability weights for discrete variables
+                 (qdiscrete weighted sampling; issue #579). When omitted,
+                 all values have equal probability.
 display_name     Optional human-readable label
 measure_argument Optional MeasureName.argument_name dotted reference
 ================  ==============================================================
@@ -77,6 +80,7 @@ _DEFAULT_COLUMN_MAP: dict[str, str] = {
     "sigma": "stddev",
     "mode": "mode",
     "values": "values",
+    "pmf": "pmf",
     "display_name": "display_name",
     "measure_argument": "measure_argument",
 }
@@ -209,6 +213,22 @@ def _row_to_variable(row: dict[str, Any], column_map: dict[str, str]) -> dict[st
         values_list = _parse_values(values_str)
         if values_list is not None:
             entry["values"] = values_list
+        pmf_str = col("pmf")
+        pmf_list = _parse_values(pmf_str)
+        if pmf_list is not None:
+            pmf_values: list[Any] = values_list if values_list is not None else []
+            if len(pmf_list) != len(pmf_values):
+                log.warning(
+                    "pmf and values lists have different lengths for variable %r "
+                    "(%d vs %d); using uniform probabilities",
+                    name,
+                    len(pmf_list),
+                    len(pmf_values),
+                )
+            else:
+                entry["discrete_distribution"] = {
+                    "pmf": {str(v): float(p) for v, p in zip(pmf_values, pmf_list, strict=True)},
+                }
         return entry
 
     # Unknown distribution — still include what we have.
@@ -399,6 +419,12 @@ def main() -> int:
         help="Column header for values list (default: values)",
     )
     parser.add_argument(
+        "--col-pmf",
+        dest="col_pmf",
+        metavar="HEADER",
+        help="Column header for pmf/weights (default: pmf)",
+    )
+    parser.add_argument(
         "--col-display-name",
         dest="col_display_name",
         metavar="HEADER",
@@ -431,6 +457,8 @@ def main() -> int:
         col_map["mode"] = args.col_mode
     if args.col_values:
         col_map["values"] = args.col_values
+    if args.col_pmf:
+        col_map["pmf"] = args.col_pmf
     if args.col_display_name:
         col_map["display_name"] = args.col_display_name
     if args.col_measure_argument:

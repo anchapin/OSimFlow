@@ -82,8 +82,8 @@ class CrossRunStats:
                     self.overall_std = (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
                 self.overall_min = min(finite.values())
                 self.overall_max = max(finite.values())
-                self.best_campaign = min(finite, key=finite.get)
-                self.worst_campaign = max(finite, key=finite.get)
+                self.best_campaign = min(finite.keys(), key=lambda k: finite[k])
+                self.worst_campaign = max(finite.keys(), key=lambda k: finite[k])
 
 
 # --------------------------------------------------------------------------- #
@@ -236,8 +236,7 @@ class CrossRunAggregator:
         """Return the combined DataFrame, loading and aggregating if needed."""
         if self._combined_df is None:
             self.aggregate()
-        # pyright: ignore [None-vs-none-return]
-        return self._combined_df  # type: ignore[return-value]
+        return self._combined_df
 
     # ------------------------------------------------------------------ #
     # Cross-run statistics
@@ -257,9 +256,8 @@ class CrossRunAggregator:
         if self._combined_df is None:
             self.aggregate()
 
-        # pyright: ignore [None-vs-none]
-        df = self._combined_df  # type: ignore[assignment]
-        if df.empty:
+        df = self._combined_df
+        if df is None or df.empty:
             return {}
 
         kpi_cols = [
@@ -275,6 +273,7 @@ class CrossRunAggregator:
         ]
 
         # Filter to numeric columns only
+        assert df is not None
         numeric_cols = [c for c in kpi_cols if pd.api.types.is_numeric_dtype(df[c])]
 
         self._cross_run_stats.clear()
@@ -298,8 +297,7 @@ class CrossRunAggregator:
         """Return cross-run statistics, computing if needed."""
         if not self._cross_run_stats:
             self.compute_cross_run_stats()
-        # pyright: ignore [None-vs-none-return]
-        return self._cross_run_stats  # type: ignore[return-value]
+        return self._cross_run_stats
 
     # ------------------------------------------------------------------ #
     # Ranking
@@ -371,7 +369,7 @@ class CrossRunAggregator:
         combined = self.get_combined_dataframe()
         stats = self.get_cross_run_stats()
 
-        kpi_summary: dict[str, dict[str, float | None]] = {}
+        kpi_summary: dict[str, dict[str, str | float | None]] = {}
         for kpi, s in stats.items():
             kpi_summary[kpi] = {
                 "best_campaign": s.best_campaign,

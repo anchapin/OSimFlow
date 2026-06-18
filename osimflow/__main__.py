@@ -40,6 +40,7 @@ from osimflow import (
     load_config,
 )
 from osimflow.byos import ByosTrustLevel, load_user_function
+from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.exporters.osa import OSAExporter
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 
@@ -1299,6 +1300,15 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         help="Enable the campaign setup web UI at /ui/ (issue #337).",
     )
     serve.add_argument(
+        "--editor",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable the Variable Designer web UI at /ui/designer/ "
+            "for editing variable YAML files. (issue #587)"
+        ),
+    )
+    serve.add_argument(
         "--dashboard",
         action="store_true",
         default=False,
@@ -1386,11 +1396,13 @@ def _add_show_args(show: argparse.ArgumentParser) -> None:
 def _add_compare_args(cmp: argparse.ArgumentParser) -> None:
     cmp.add_argument(
         "id1",
-        help="First campaign ID",
+        nargs="?",
+        help="First campaign ID (used when --outdirs is not given)",
     )
     cmp.add_argument(
         "id2",
-        help="Second campaign ID",
+        nargs="?",
+        help="Second campaign ID (used when --outdirs is not given)",
     )
     cmp.add_argument(
         "--registry",
@@ -1398,7 +1410,63 @@ def _add_compare_args(cmp: argparse.ArgumentParser) -> None:
         type=Path,
         help="Path to the campaign registry database (default: ~/.osimflow/registry.db)",
     )
+    cmp.add_argument(
+        "--outdirs",
+        nargs="+",
+        type=Path,
+        metavar="OUTDIR",
+        help="Two or more campaign output directories to compare using KPI data "
+        "(ignores registry). Use this to compare campaigns that are not in the registry.",
+    )
+    cmp.add_argument(
+        "--labels",
+        nargs="+",
+        metavar="LABEL",
+        help="Optional labels for each --outdirs path (must match the number of paths).",
+    )
+    cmp.add_argument(
+        "--kpis",
+        nargs="*",
+        metavar="KPI",
+        help="Restrict comparison to these KPI names (all KPIs if omitted).",
+    )
+    cmp.add_argument(
+        "--export",
+        type=Path,
+        metavar="CSV",
+        help="Export combined results to the given CSV path.",
+    )
     cmp.add_argument("--log_level", default="INFO")
+
+
+def _add_aggregate_runs_args(agr: argparse.ArgumentParser) -> None:
+    agr.add_argument(
+        "outdirs",
+        nargs="+",
+        type=Path,
+        metavar="OUTDIR",
+        help="Two or more campaign output directories to aggregate",
+    )
+    agr.add_argument(
+        "--labels",
+        nargs="*",
+        metavar="LABEL",
+        help="Optional labels for each outdir (defaults to campaign_id from run.json or outdir stem)",
+    )
+    agr.add_argument(
+        "--output",
+        type=Path,
+        metavar="CSV",
+        help="Path to write the combined aggregated CSV "
+        "(default: <first_outdir>/../aggregated_combined.csv)",
+    )
+    agr.add_argument(
+        "--kpis",
+        nargs="*",
+        metavar="KPI",
+        help="Restrict output to these KPI names (all KPIs if omitted)",
+    )
+    agr.add_argument("--log_level", default="INFO")
 
 
 def _add_status_args(st: argparse.ArgumentParser) -> None:
@@ -1594,6 +1662,122 @@ def _add_measure_args(measure: argparse.ArgumentParser) -> None:
     measure.add_argument("--log_level", default="INFO")
 
 
+def _add_query_results_args(qr: argparse.ArgumentParser) -> None:
+    """Add arguments for the query-results command (issue #585)."""
+    qr.add_argument(
+        "--campaign-ids",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated campaign IDs to query. "
+            "If not provided, queries all campaigns in the current directory."
+        ),
+    )
+    qr.add_argument(
+        "--outdirs",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated output directory paths to query (alternative to --campaign-ids). "
+            "Each path must point to a campaign output directory."
+        ),
+    )
+    qr.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        dest="filter_expr",
+        help=(
+            "Filter expression in 'column op value' format, e.g., 'eui > 100'. "
+            "Supports: >, <, >=, <=, ==, !=. "
+            "Can be specified multiple times; separate expressions with semicolons. "
+            "Example: 'eui > 100; status == ok'"
+        ),
+    )
+    qr.add_argument(
+        "--page",
+        type=int,
+        default=1,
+        help="Page number (1-indexed, default: 1)",
+    )
+    qr.add_argument(
+        "--per-page",
+        type=int,
+        default=100,
+        help="Items per page (default: 100, max: 1000)",
+    )
+    qr.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
+    qr.add_argument(
+        "--log_level",
+        default="INFO",
+    )
+
+
+def _add_export_results_args(er: argparse.ArgumentParser) -> None:
+    """Add arguments for the export-results command (issue #585)."""
+    er.add_argument(
+        "--campaign-ids",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated campaign IDs to export. "
+            "If not provided, exports all campaigns in the current directory."
+        ),
+    )
+    er.add_argument(
+        "--outdirs",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated output directory paths to export (alternative to --campaign-ids). "
+            "Each path must point to a campaign output directory."
+        ),
+    )
+    er.add_argument(
+        "--filter",
+        type=str,
+        default=None,
+        dest="filter_expr",
+        help=(
+            "Filter expression in 'column op value' format. "
+            "Can be specified multiple times; separate expressions with semicolons."
+        ),
+    )
+    er.add_argument(
+        "--format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Export format (default: csv)",
+    )
+    er.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output file path. If not provided, prints to stdout.",
+    )
+    er.add_argument(
+        "--include-failed",
+        action="store_true",
+        default=True,
+        help="Include failed simulations in the export (default: True)",
+    )
+    er.add_argument(
+        "--no-include-failed",
+        action="store_false",
+        dest="include_failed",
+        help="Exclude failed simulations from the export.",
+    )
+    er.add_argument(
+        "--log_level",
+        default="INFO",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="osimflow",
@@ -1642,6 +1826,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Compare two campaigns side by side",
     )
     _add_compare_args(cmp)
+    agr = sub.add_parser(
+        "aggregate-runs",
+        help="Aggregate KPI results from two or more campaign runs into a combined dataset "
+        "and print cross-run statistics (issue #588)",
+    )
+    _add_aggregate_runs_args(agr)
     st = sub.add_parser(
         "status",
         help="Show detailed status of a campaign (reads run.json)",
@@ -1697,6 +1887,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Discover and inspect measures from a template simulation package (issue #532)",
     )
     _add_measure_args(measure)
+    qr = sub.add_parser(
+        "query-results",
+        help="Query aggregated results across multiple campaigns (issue #585)",
+    )
+    _add_query_results_args(qr)
+    er = sub.add_parser(
+        "export-results",
+        help="Export aggregated results to CSV or JSON (issue #585)",
+    )
+    _add_export_results_args(er)
     return p
 
 
@@ -1772,6 +1972,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         rate_limit=args.rate_limit,
         rate_limit_key=args.rate_limit_key,
         ui_enabled=args.ui,
+        variable_editor=args.editor,
         results_viewer=args.dashboard,
         registry_path=args.registry,
     )
@@ -1948,7 +2149,23 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_compare(args: argparse.Namespace) -> int:
-    """Compare two campaigns side by side."""
+    """Compare two or more campaigns side by side.
+
+    When ``--outdirs`` is given, uses CrossRunAggregator to produce
+    KPI-level statistics across all campaigns.
+    Otherwise falls back to registry-based metadata comparison for
+    two campaigns identified by registry IDs.
+    """
+    if args.outdirs:
+        return _cmd_compare_outdirs(args)
+
+    if args.id1 is None or args.id2 is None:
+        print(
+            "error: compare requires either --outdirs or two campaign IDs",
+            file=sys.stderr,
+        )
+        return 1
+
     registry_path = args.registry if args.registry else None
     reg = CampaignRegistry(db_path=registry_path)
     result = reg.compare(args.id1, args.id2)
@@ -1983,6 +2200,185 @@ def _cmd_compare(args: argparse.Namespace) -> int:
         lv = _format_field(left, key)
         rv = _format_field(right, key)
         print(f"{label:<16} {lv:<{col_w}} {rv:<{col_w}}")
+
+    return 0
+
+
+def _cmd_compare_outdirs(args: argparse.Namespace) -> int:  # noqa: PLR0912
+    """Compare N campaigns using CrossRunAggregator (KPI-level comparison)."""
+    import json as json_mod  # noqa: PLC0415
+
+    if len(args.outdirs) < 2:
+        print("error: --outdirs requires at least two campaign directories", file=sys.stderr)
+        return 1
+
+    # Build label list
+    labels: list[str | None]
+    if args.labels:
+        if len(args.labels) != len(args.outdirs):
+            print(
+                f"error: --labels ({len(args.labels)}) must match --outdirs ({len(args.outdirs)})",
+                file=sys.stderr,
+            )
+            return 1
+        labels = list(args.labels)
+    else:
+        labels = [None] * len(args.outdirs)
+
+    aggregator = CrossRunAggregator(campaigns=list(zip(args.outdirs, labels, strict=True)))
+    aggregator.load()
+    if not aggregator._runs:
+        print("error: No valid campaigns found (missing aggregated_results.csv)", file=sys.stderr)
+        return 1
+
+    stats = aggregator.compute_cross_run_stats()
+    combined_df = aggregator.get_combined_dataframe()
+
+    # Optional CSV export
+    if args.export:
+        aggregator.export_combined_csv(args.export)
+        print(f"Exported combined CSV to {args.export}")
+
+    # Filter KPIs if requested
+    kpis_to_show = set(args.kpis) if args.kpis else set(stats.keys())
+
+    # Header
+    campaign_labels = list(aggregator._runs.keys())
+    col_w = 14
+    kpi_col_w = 16
+
+    print(f"\nCross-run KPI comparison ({len(campaign_labels)} campaigns)")
+    print("=" * (kpi_col_w + col_w * len(campaign_labels) + 4))
+
+    # KPI comparison table
+    print(f"{'KPI':<{kpi_col_w}}", end="")
+    for lbl in campaign_labels:
+        print(f" {lbl[:col_w]:<{col_w}}", end="")
+    print()
+    print("-" * (kpi_col_w + col_w * len(campaign_labels) + 4))
+
+    for kpi, s in stats.items():
+        if kpi not in kpis_to_show:
+            continue
+        print(f"{kpi[:kpi_col_w]:<{kpi_col_w}}", end="")
+        for label in campaign_labels:
+            val = s.values.get(label)
+            cell = "N/A" if val is None else f"{val:.4f}"
+            print(f" {cell[:col_w]:<{col_w}}", end="")
+        print()
+
+    # Best/worst per KPI
+    print("\nBest/worst per KPI:")
+    print("-" * 60)
+    for kpi, s in stats.items():
+        if kpi not in kpis_to_show:
+            continue
+        best_val = s.values.get(s.best_campaign) if s.best_campaign else None
+        if best_val is not None:
+            print(
+                f"  {kpi:<20} best={s.best_campaign} ({best_val:.4f}), "
+                f"worst={s.worst_campaign} ({s.values.get(s.worst_campaign or '') or 0:.4f})"
+            )
+
+    # Cross-run summary statistics
+    print("\nCross-run statistics:")
+    print("-" * 60)
+    for kpi, s in stats.items():
+        if kpi not in kpis_to_show:
+            continue
+        print(
+            f"  {kpi:<20} mean={s.overall_mean:.4f} std={s.overall_std:.4f} "
+            f"min={s.overall_min:.4f} max={s.overall_max:.4f}"
+        )
+
+    # Combined DataFrame info
+    print(
+        f"\nCombined dataset: {len(combined_df)} total rows "
+        f"({', '.join(f'{lbl}={r.n_samples}' for lbl, r in aggregator._runs.items())})"
+    )
+
+    # JSON summary
+    summary = aggregator.summary()
+    print(f"\nJSON summary: {json_mod.dumps(summary, indent=2, default=str)}")
+
+    return 0
+
+
+def _cmd_aggregate_runs(args: argparse.Namespace) -> int:
+    """Aggregate KPI results from two or more campaign runs into a combined dataset.
+
+    Loads ``aggregated_results.csv`` from each campaign directory, merges them
+    into a single DataFrame with campaign labels, and prints cross-run statistics.
+    Optionally exports the combined CSV to a user-specified path.
+    """
+    if len(args.outdirs) < 2:
+        print(
+            "error: aggregate-runs requires at least two campaign directories",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Build label list
+    labels: list[str | None]
+    if args.labels is not None and len(args.labels) > 0:
+        if len(args.labels) != len(args.outdirs):
+            print(
+                f"error: --labels ({len(args.labels)}) must match "
+                f"positional outdirs ({len(args.outdirs)})",
+                file=sys.stderr,
+            )
+            return 1
+        labels = list(args.labels)
+    else:
+        labels = [None] * len(args.outdirs)
+
+    aggregator = CrossRunAggregator(campaigns=list(zip(args.outdirs, labels, strict=True)))
+    aggregator.load()
+
+    loaded = aggregator._runs
+    if not loaded:
+        print(
+            "error: No valid campaigns found. Check that each outdir contains "
+            "an aggregated_results.csv file.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Determine output path
+    output_path = args.output
+    if output_path is None:
+        first = args.outdirs[0].resolve()
+        output_path = first.parent / "aggregated_combined.csv"
+
+    aggregator.export_combined_csv(output_path)
+
+    stats = aggregator.compute_cross_run_stats()
+    combined_df = aggregator.get_combined_dataframe()
+
+    print(f"\nAggregated {len(loaded)} campaigns:")
+    for label, run in loaded.items():
+        print(f"  - {label}: {run.n_samples} samples from {run.outdir}")
+
+    print(f"\nCombined dataset: {len(combined_df)} rows -> {output_path}")
+
+    # Filter KPIs if requested
+    kpis_to_show = set(args.kpis) if args.kpis else set(stats.keys())
+
+    if stats:
+        print(f"\nCross-run statistics ({len(kpis_to_show)} KPIs):")
+        print("-" * 80)
+        for kpi, s in stats.items():
+            if kpi not in kpis_to_show:
+                continue
+            vals = {k: v for k, v in s.values.items() if v is not None}
+            if vals:
+                print(
+                    f"  {kpi:<24} overall_mean={s.overall_mean:>10.4f}  "
+                    f"std={s.overall_std:>8.4f}  "
+                    f"range=[{s.overall_min:>10.4f}, {s.overall_max:>10.4f}]"
+                )
+                for lbl, val in sorted(vals.items(), key=lambda x: x[1]):
+                    print(f"    {lbl:<22} mean={val:.4f}")
 
     return 0
 
@@ -2472,6 +2868,91 @@ def _cmd_measure_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_query_results(args: argparse.Namespace) -> int:
+    """Query aggregated results across multiple campaigns (issue #585)."""
+    import json as json_mod  # noqa: PLC0415
+
+    from osimflow.api.results_query import query_results_cli  # noqa: PLC0415
+
+    campaign_ids = None
+    if args.campaign_ids:
+        campaign_ids = [c.strip() for c in args.campaign_ids.split(",") if c.strip()]
+
+    outdirs = None
+    if args.outdirs:
+        outdirs = [o.strip() for o in args.outdirs.split(",") if o.strip()]
+
+    result = query_results_cli(
+        campaign_ids=campaign_ids,
+        outdirs=outdirs,
+        filter_expr=args.filter_expr,
+        page=args.page,
+        per_page=args.per_page,
+        format=args.format,
+    )
+
+    if not result["rows"]:
+        print("No results found.")
+        return 0
+
+    if args.format == "json":
+        print(
+            json_mod.dumps(
+                {
+                    "rows": result["rows"],
+                    "total": result["total"],
+                    "columns": result["columns"],
+                    "campaigns_queried": result["campaigns_queried"],
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return 0
+
+    # table format
+    columns = result["columns"]
+    if not columns:
+        print("No columns available.")
+        return 0
+
+    # Print header
+    header = "  ".join(f"{c[:20]:<20}" for c in columns)
+    print(f"{'COLUMN':<20}  " + header)
+    print("-" * 100)
+
+    for i, row in enumerate(result["rows"]):
+        print(f"Row {i + 1}: " + "  ".join(f"{str(row.get(c, ''))[:20]:<20}" for c in columns))
+
+    print(
+        f"\nTotal: {result['total']} result(s), page {args.page}/{max(1, (result['total'] + args.per_page - 1) // args.per_page)}"
+    )
+    print(f"Campaigns queried: {result['campaigns_queried']}")
+    return 0
+
+
+def _cmd_export_results(args: argparse.Namespace) -> int:
+    """Export aggregated results to CSV or JSON (issue #585)."""
+    from osimflow.api.results_query import export_results_cli  # noqa: PLC0415
+
+    campaign_ids = None
+    if args.campaign_ids:
+        campaign_ids = [c.strip() for c in args.campaign_ids.split(",") if c.strip()]
+
+    outdirs = None
+    if args.outdirs:
+        outdirs = [o.strip() for o in args.outdirs.split(",") if o.strip()]
+
+    return export_results_cli(  # type: ignore[no-any-return]
+        campaign_ids=campaign_ids,
+        outdirs=outdirs,
+        filter_expr=args.filter_expr,
+        format=args.format,
+        output_path=args.output,
+        include_failed=args.include_failed,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -2486,6 +2967,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "list": _cmd_list,
         "show": _cmd_show,
         "compare": _cmd_compare,
+        "aggregate-runs": _cmd_aggregate_runs,
         "status": _cmd_status,
         "download": _cmd_download,
         "cancel": _cmd_cancel,
@@ -2498,6 +2980,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0912, PLR0915
         "health": _cmd_health,
         "warm-cache": _cmd_warm_cache,
         "measure": _cmd_measure_list,
+        "query-results": _cmd_query_results,
+        "export-results": _cmd_export_results,
     }
     handler = dispatch.get(args.command)
     if handler is not None:

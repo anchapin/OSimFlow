@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OSimFlow Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <style>
 /* ── Reset & Base ────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -181,6 +182,25 @@ tr:hover td { background: var(--surface-alt); }
   transition: width 0.4s ease;
   background: linear-gradient(90deg, var(--primary-dim), var(--primary));
 }
+
+/* ── Pie Chart ───────────────────────────────────────────── */
+#pie-chart-wrap {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+#pie-chart-wrap svg { flex-shrink: 0; }
+#pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.legend-value { font-weight: 600; margin-left: auto; }
+#pie-eta { font-size: 0.82rem; color: var(--text-muted); margin-top: 4px; }
 
 /* ── Plots ───────────────────────────────────────────────── */
 .plots-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 20px; }
@@ -511,6 +531,19 @@ tr:hover td { background: var(--surface-alt); }
         <div class="card">
           <div class="card-label">Progress</div>
           <div class="card-value" id="live-pct" style="color:var(--primary)">0%</div>
+        </div>
+        <div class="card">
+          <div class="card-label">ETA</div>
+          <div class="card-value" id="live-eta" style="color:var(--text-muted)">—</div>
+        </div>
+      </div>
+
+      <!-- D3 pie chart (issue #586) -->
+      <div id="pie-chart-wrap">
+        <svg id="status-pie" width="140" height="140" viewBox="0 0 140 140"></svg>
+        <div>
+          <div id="pie-legend"></div>
+          <div id="pie-eta"></div>
         </div>
       </div>
 
@@ -919,6 +952,7 @@ async function loadLivePage() {
   state.liveTotal = 0;
   state.liveCompleted = 0;
   state.liveFailed = 0;
+  state.liveCached = 0;
   state.liveRunning = 0;
   state.liveStartTime = Date.now();
 
@@ -938,8 +972,9 @@ async function loadLivePage() {
     if (samplesResp.ok) {
       const samplesData = await samplesResp.json();
       state.liveTotal = samplesData.total || 0;
-      state.liveCompleted = samplesData.samples ? samplesData.samples.filter(function(s) { return s.status === 'ok' || s.status === 'failed' || s.status === 'cached'; }).length : 0;
+      state.liveCompleted = samplesData.samples ? samplesData.samples.filter(function(s) { return s.status === 'ok'; }).length : 0;
       state.liveFailed = samplesData.samples ? samplesData.samples.filter(function(s) { return s.status === 'failed'; }).length : 0;
+      state.liveCached = samplesData.samples ? samplesData.samples.filter(function(s) { return s.status === 'cached'; }).length : 0;
       state.liveRunning = state.liveTotal - state.liveCompleted;
     }
   } catch (err) {
@@ -957,6 +992,7 @@ function updateLiveStats() {
   var total = state.liveTotal;
   var completed = state.liveCompleted;
   var failed = state.liveFailed;
+  var cached = state.liveCached;
   var running = state.liveRunning;
   var pct = total > 0 ? Math.round((completed / total) * 100) : 0;
   document.getElementById('live-total').textContent = total || '—';
@@ -969,10 +1005,51 @@ function updateLiveStats() {
     ? completed + ' / ' + total + ' samples completed (' + pct + '%)'
     : 'Waiting for campaign data...';
 
+  // ETA (issue #586)
+  var etaEl = document.getElementById('live-eta');
+  if (state.liveStartTime && completed > 0 && running > 0) {
+    var elapsed = Math.floor((Date.now() - state.liveStartTime) / 1000);
+    var rate = completed / elapsed; // samples per second
+    var remaining = total - completed;
+    if (rate > 0) {
+      var etaSeconds = Math.round(remaining / rate);
+      etaEl.textContent = formatDuration(etaSeconds);
+      etaEl.style.color = 'var(--text)';
+    } else {
+      etaEl.textContent = '—';
+      etaEl.style.color = 'var(--text-muted)';
+    }
+  } else if (running === 0 && completed > 0) {
+    etaEl.textContent = 'done';
+    etaEl.style.color = 'var(--success)';
+  } else {
+    etaEl.textContent = '—';
+    etaEl.style.color = 'var(--text-muted)';
+  }
+
   // Update elapsed time
   if (state.liveStartTime) {
     var elapsed = Math.floor((Date.now() - state.liveStartTime) / 1000);
     document.getElementById('sse-elapsed').textContent = 'Elapsed: ' + formatDuration(elapsed);
+  }
+
+  // D3 pie chart (issue #586)
+  renderPieChart({ ok: completed, failed: failed, cached: cached, running: running });
+  updatePieLegend({ ok: completed, failed: failed, cached: cached, running: running }, total);
+
+  // Update ETA footer
+  var etaEl = document.getElementById('pie-eta');
+  if (state.liveStartTime && completed > 0 && running > 0) {
+    var elapsed = Math.floor((Date.now() - state.liveStartTime) / 1000);
+    var rate = completed / elapsed;
+    var remaining = total - completed;
+    if (rate > 0) {
+      etaEl.textContent = '~' + formatDuration(Math.round(remaining / rate)) + ' remaining at current rate';
+    } else {
+      etaEl.textContent = '';
+    }
+  } else {
+    etaEl.textContent = '';
   }
 }
 
@@ -987,6 +1064,8 @@ function updateLiveFromEvent(eventType, data) {
       state.liveRunning = Math.max(0, state.liveRunning - 1);
       if (data.status === 'failed') {
         state.liveFailed++;
+      } else if (data.status === 'cached') {
+        state.liveCached++;
       }
       break;
     case 'campaign.completed':
@@ -995,6 +1074,69 @@ function updateLiveFromEvent(eventType, data) {
       break;
   }
   updateLiveStats();
+}
+
+// ── D3 Pie Chart (issue #586) ─────────────────────────────
+var pieColors = { ok: '#4ade80', failed: '#f87171', cached: '#a78bfa', running: '#fbbf24' };
+
+function renderPieChart(statuses) {
+  var svg = d3.select('#status-pie');
+  svg.selectAll('*').remove();
+  var width = 140, height = 140, radius = Math.min(width, height) / 2;
+  var g = svg.append('g').attr('transform', 'translate(' + width / 2 + ',' + height / 2 + ')');
+
+  var data = [
+    { key: 'ok', value: statuses.ok },
+    { key: 'failed', value: statuses.failed },
+    { key: 'cached', value: statuses.cached },
+    { key: 'running', value: statuses.running }
+  ].filter(function(d) { return d.value > 0; });
+
+  if (data.length === 0) {
+    g.append('circle').attr('r', radius).attr('fill', 'var(--surface-alt)');
+    g.append('text').attr('text-anchor', 'middle').attr('dy', '0.35em')
+      .attr('fill', 'var(--text-muted)').attr('font-size', '12px').text('No data');
+    return;
+  }
+
+  var pie = d3.pie().value(function(d) { return d.value; }).sort(null);
+  var arc = d3.arc().innerRadius(radius * 0.5).outerRadius(radius);
+  var arcHover = d3.arc().innerRadius(radius * 0.5).outerRadius(radius * 1.05);
+
+  var arcs = g.selectAll('path').data(pie(data)).enter().append('path')
+    .attr('d', arc)
+    .attr('fill', function(d) { return pieColors[d.data.key] || '#888'; })
+    .attr('stroke', 'var(--bg)')
+    .attr('stroke-width', 2)
+    .style('cursor', 'default')
+    .on('mouseover', function(d) { d3.select(this).attr('d', arcHover); })
+    .on('mouseout', function(d) { d3.select(this).attr('d', arc); });
+
+  // Center text: total completed
+  var totalDone = (statuses.ok || 0) + (statuses.failed || 0) + (statuses.cached || 0);
+  g.append('text').attr('text-anchor', 'middle').attr('dy', '-0.2em')
+    .attr('fill', 'var(--text)').attr('font-size', '18px').attr('font-weight', '700')
+    .text(totalDone);
+  g.append('text').attr('text-anchor', 'middle').attr('dy', '1.1em')
+    .attr('fill', 'var(--text-muted)').attr('font-size', '10px')
+    .text('done');
+}
+
+function updatePieLegend(statuses, total) {
+  var legend = document.getElementById('pie-legend');
+  var items = [
+    { key: 'ok', label: 'Succeeded', color: pieColors.ok },
+    { key: 'failed', label: 'Failed', color: pieColors.failed },
+    { key: 'cached', label: 'Cached', color: pieColors.cached },
+    { key: 'running', label: 'Running', color: pieColors.running }
+  ];
+  legend.innerHTML = items.map(function(item) {
+    return '<div class="legend-item">' +
+      '<span class="legend-dot" style="background:' + item.color + '"></span>' +
+      '<span class="legend-label">' + item.label + '</span>' +
+      '<span class="legend-value">' + (statuses[item.key] || 0) + '</span>' +
+      '</div>';
+  }).join('');
 }
 
 // ── Live SSE ───────────────────────────────────────────────

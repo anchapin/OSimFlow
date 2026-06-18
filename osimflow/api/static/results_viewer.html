@@ -87,6 +87,8 @@ tr:hover td{background:var(--surface-alt)}
       <a href="#" data-page="overview" class="active"><span class="icon">&#9632;</span> Overview</a>
       <a href="#" data-page="histogram"><span class="icon">&#9650;</span> Histogram</a>
       <a href="#" data-page="scatter"><span class="icon">&#9679;</span> Scatter</a>
+      <a href="#" data-page="scatter_matrix"><span class="icon">&#9634;</span> Scatter Matrix</a>
+      <a href="#" data-page="radar"><span class="icon">&#9711;</span> Radar Chart</a>
       <a href="#" data-page="parallel"><span class="icon">&#8776;</span> Parallel Coords</a>
       <a href="#" data-page="timeseries"><span class="icon">&#8810;</span> Time-series</a>
       <a href="#" data-page="failures"><span class="icon">&#9888;</span> Failures</a>
@@ -167,6 +169,28 @@ tr:hover td{background:var(--surface-alt)}
       <p class="subtitle">High-dimensional view of variables and KPIs — drag axes to filter</p>
       <div class="chart-container">
         <div id="parallel-plot" class="chart-plot"></div>
+      </div>
+    </div>
+
+    <!-- Scatter Matrix Page -->
+    <div id="page-scatter_matrix" class="page">
+      <h1>Scatter Plot Matrix</h1>
+      <p class="subtitle">Pairwise relationships between all variables and KPIs</p>
+      <div class="chart-container">
+        <div id="scatter-matrix-plot" class="chart-plot"></div>
+      </div>
+    </div>
+
+    <!-- Radar Chart Page -->
+    <div id="page-radar" class="page">
+      <h1>Radar Chart</h1>
+      <p class="subtitle">Multi-dimensional KPI comparison across samples — normalised 0-1 scale</p>
+      <div class="chart-container">
+        <div class="chart-controls">
+          <label for="radar-kpis">KPIs shown:</label>
+          <span id="radar-kpi-count" style="color:var(--text-muted);font-size:0.85rem">—</span>
+        </div>
+        <div id="radar-plot" class="chart-plot"></div>
       </div>
     </div>
 
@@ -278,6 +302,8 @@ async function loadPage(page) {
       case 'overview': await loadOverview(); break;
       case 'histogram': await initHistogram(); break;
       case 'scatter': await initScatter(); break;
+      case 'scatter_matrix': await initScatterMatrix(); break;
+      case 'radar': await initRadar(); break;
       case 'parallel': await initParallel(); break;
       case 'timeseries': initTimeseries(); break;
       case 'failures': await loadFailures(); break;
@@ -480,6 +506,141 @@ async function initParallel() {
       margin: { l: 60, r: 40, t: 50, b: 30 },
     };
     Plotly.newPlot('parallel-plot', traces, layout, {responsive: true});
+  } catch (err) { console.error(err); }
+}
+
+// ── Scatter Matrix ─────────────────────────────────────────────
+async function initScatterMatrix() {
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/scatter_matrix`);
+    if (!resp.ok) {
+      document.getElementById('scatter-matrix-plot').innerHTML = '<p style="color:var(--danger);padding:20px">Scatter matrix data not available.</p>';
+      return;
+    }
+    const d = await resp.json();
+    if (!d.traces || !d.traces.length) {
+      document.getElementById('scatter-matrix-plot').innerHTML = '<p style="color:var(--text-muted);padding:20px">No data for scatter matrix.</p>';
+      return;
+    }
+    const nVars = d.variables.length;
+    const nKpis = d.kpis.length;
+    const nCols = Math.min(nKpis, 3);
+    const nRows = Math.ceil(nVars * nKpis / nCols);
+
+    const cols = nCols <= 1 ? ['x'] : Array.from({length: nCols}, (_, i) => i === 0 ? 'x' : `x${i+1}`);
+    const rows = nRows <= 1 ? ['y'] : Array.from({length: nRows}, (_, i) => i === 0 ? 'y' : `y${i+1}`);
+    const subplotTypes = Array(cols.length).fill('xy');
+
+    const plotTraces = [];
+    const colors = ['#6c8cff','#4ade80','#f87171','#fbbf24','#a78bfa','#f472b6','#38bdf8','#34d399'];
+    let traceIdx = 0;
+    for (let ki = 0; ki < nKpis; ki++) {
+      for (let vi = 0; vi < nVars; vi++) {
+        const t = d.traces[traceIdx++];
+        const row = Math.floor(vi * nKpis + ki) % nRows;
+        const col = Math.floor((vi * nKpis + ki) / nRows) % nCols;
+        const xanchor = `x${col === 0 ? '' : col + 1}`;
+        const yanchor = `y${row === 0 ? '' : row + 1}`;
+        plotTraces.push({
+          x: t.x,
+          y: t.y,
+          mode: 'markers',
+          type: 'scatter',
+          marker: { color: colors[(traceIdx - 1) % colors.length], size: 6, opacity: 0.65 },
+          name: t.variable,
+          xaxis: xanchor,
+          yaxis: yanchor,
+          text: t.x.map((vx, i) => `${t.variable}: ${vx.toFixed(3)}<br>${t.kpi}: ${t.y[i].toFixed(2)}`),
+          hoverinfo: 'text',
+          showlegend: false,
+        });
+      }
+    }
+
+    const layout = {
+      title: { text: `Scatter Matrix — ${nVars} variables × ${nKpis} KPIs  (r correlation)`, font: { color: '#e2e4eb' } },
+      paper_bgcolor: 'transparent',
+      font: { color: '#e2e4eb', family: 'inherit' },
+      margin: { l: 60, r: 20, t: 50, b: 50 },
+      grid: { rows: nRows, columns: nCols, subplot_types: subplotTypes },
+      annotations: [],
+      showlegend: false,
+    };
+
+    // Add axis labels as annotations
+    for (let ki = 0; ki < nKpis; ki++) {
+      for (let vi = 0; vi < nVars; vi++) {
+        const row = Math.floor(vi * nKpis + ki) % nRows;
+        const col = Math.floor((vi * nKpis + ki) / nRows) % nCols;
+        const t = d.traces[vi * nKpis + ki];
+        layout.annotations.push({
+          text: `${t.variable} vs ${t.kpi}<br>r=${t.correlation.toFixed(2)}`,
+          x: (col + 0.5) / nCols,
+          y: 1 - row / nRows + 0.02,
+          xref: 'paper',
+          yref: 'paper',
+          showarrow: false,
+          font: { color: '#8b8fa3', size: 10 },
+          align: 'center',
+        });
+      }
+    }
+
+    Plotly.newPlot('scatter-matrix-plot', plotTraces, layout, {responsive: true});
+  } catch (err) { console.error(err); }
+}
+
+// ── Radar Chart ───────────────────────────────────────────────
+async function initRadar() {
+  try {
+    const resp = await apiFetch(`/results/${state.campaignId}/radar`);
+    if (!resp.ok) {
+      document.getElementById('radar-plot').innerHTML = '<p style="color:var(--danger);padding:20px">Radar chart data not available.</p>';
+      return;
+    }
+    const d = await resp.json();
+    if (!d.samples || !d.samples.length) {
+      document.getElementById('radar-plot').innerHTML = '<p style="color:var(--text-muted);padding:20px">No data for radar chart.</p>';
+      return;
+    }
+    document.getElementById('radar-kpi-count').textContent = `${d.kpis.length} KPIs · ${d.samples.length} samples`;
+
+    const colors = ['#6c8cff','#4ade80','#f87171','#fbbf24','#a78bfa','#f472b6','#38bdf8','#34d399','#f97316','#e879f9'];
+    const traces = d.samples.slice(0, 30).map((s, i) => ({
+      type: 'scatterpolar',
+      r: s.values,
+      theta: d.kpis,
+      mode: 'lines+markers',
+      fill: 'toself',
+      fillcolor: colors[i % colors.length] + '33',
+      line: { color: colors[i % colors.length], width: 1.5 },
+      marker: { color: colors[i % colors.length], size: 4 },
+      name: s.sample_id,
+      text: s.raw.map((v, vi) => `${d.kpis[vi]}: ${v.toFixed(2)}`).join('<br>'),
+      hoverinfo: 'text+name',
+    }));
+
+    const layout = {
+      title: { text: `Radar Chart — ${d.kpis.length} KPIs · ${Math.min(d.samples.length, 30)} samples shown`, font: { color: '#e2e4eb' } },
+      paper_bgcolor: 'transparent',
+      font: { color: '#e2e4eb', family: 'inherit' },
+      margin: { l: 60, r: 60, t: 50, b: 60 },
+      polar: {
+        bgcolor: 'rgba(0,0,0,0)',
+        angularaxis: { tickfont: { color: '#e2e4eb', size: 11 }, linecolor: '#2e3345' },
+        radialaxis: {
+          tickfont: { color: '#8b8fa3', size: 9 },
+          linecolor: '#2e3345',
+          gridcolor: '#2e3345',
+          range: [0, 1],
+          ticksuffix: '',
+        },
+      },
+      showlegend: d.samples.length <= 10,
+      legend: d.samples.length <= 10 ? { font: { color: '#e2e4eb', size: 10 } } : {},
+    };
+
+    Plotly.newPlot('radar-plot', traces, layout, {responsive: true});
   } catch (err) { console.error(err); }
 }
 

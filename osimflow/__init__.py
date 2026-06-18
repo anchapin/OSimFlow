@@ -27,6 +27,7 @@ from .chaos import (
 )
 from .config import CampaignConfig, ResourceQuota, coerce_variable_type, load_config
 from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
+from .cross_run_aggregator import CrossRunAggregator
 from .data_point_manager import DataPoint, DataPointManager, DataPointStatus
 from .distributed_cache import DistributedCache, build_cache
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
@@ -112,6 +113,7 @@ __all__ = [
     "CacheStats",
     "SQLiteCache",
     "Campaign",
+    "CrossRunAggregator",
     "CampaignConfig",
     "ResourceQuota",
     "coerce_variable_type",

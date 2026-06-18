@@ -31,6 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
@@ -43,7 +45,6 @@ from osimflow.api.schemas import (
     BatchUploadResponse,
     CampaignCancelResponse,
     CampaignComparisonEntry,
-    CampaignComparisonResponse,
     CampaignCreateRequest,
     CampaignCreateResponse,
     CampaignDetailResponse,
@@ -61,6 +62,7 @@ from osimflow.api.schemas import (
     SampleSummary,
 )
 from osimflow.audit import AuditLogger, api_actor_from_request
+from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.validation import (
     ValidationError,
     sanitize_filename,
@@ -443,72 +445,141 @@ def _launch_campaign_background(
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/campaigns/compare — compare two campaigns side by side
+# GET /api/v1/campaigns/compare — multi-campaign KPI comparison (issue #588)
 # ---------------------------------------------------------------------------
 
 
 @campaigns_router.get(
     "/api/v1/campaigns/compare",
-    response_model=CampaignComparisonResponse,
+    response_model=MultiCampaignComparisonResponse,
 )
-async def compare_campaigns(
+async def compare_campaigns_get(
     request: Request,
-    id1: str = Query(..., description="First campaign ID"),
-    id2: str = Query(..., description="Second campaign ID"),
-) -> CampaignComparisonResponse:
-    """Compare two campaigns side by side by their campaign IDs.
+    outdir: list[str] = Query(
+        ...,
+        alias="outdir",
+        min_length=2,
+        description="Two or more campaign output directory paths to compare "
+        "(can be specified multiple times or as a comma-separated list)",
+    ),
+) -> MultiCampaignComparisonResponse:
+    """Compare two or more campaigns by their output directories using KPI data.
 
-    Both campaigns must exist under the campaigns base directory.
-    Returns ``null`` for whichever campaign is not found.
+    Each ``outdir`` parameter should point to a campaign output directory
+    containing ``run.json`` and ``aggregated_results.csv``.  The endpoint
+    reads KPI statistics from all campaigns, aligns them into a comparison
+    table, and returns per-campaign metadata alongside cross-run statistics.
+
+    This is the GET counterpart of ``POST /api/v1/campaigns/compare``,
+    designed for simple browser access and shell-scripting without a request body.
+
+    Unlike the legacy GET endpoint (which accepted ``id1``/``id2`` registry
+    IDs), this version supports N campaigns and uses ``CrossRunAggregator``
+    internally to compute aligned KPI statistics across all runs (issue #588).
     """
-    base = _campaigns_base_dir(request)
+    # Normalise: accept comma-separated or repeated query params
+    raw_dirs: list[str] = []
+    for item in outdir:
+        raw_dirs.extend([d.strip() for d in item.split(",") if d.strip()])
 
-    left: CampaignDetailResponse | None = None
-    right: CampaignDetailResponse | None = None
-
-    # Load left campaign
-    try:
-        left_dir = _campaign_dir_from_id(base, id1)
-        left_data = _load_campaign_json(left_dir)
-        left = CampaignDetailResponse(
-            campaign_id=left_data.get("campaign_id", id1),
-            status=_derive_status(left_data),
-            started_at=left_data.get("started_at"),
-            finished_at=left_data.get("finished_at"),
-            elapsed_s=left_data.get("elapsed_s"),
-            config=left_data.get("config") or left_data.get("config_summary"),
-            summary=left_data.get("summary"),
-            quality_summary=left_data.get("quality_summary"),
-            baseline_comparison=left_data.get("baseline_comparison"),
-            total_cost_usd=left_data.get("total_cost_usd"),
-            spot_savings_usd=left_data.get("spot_savings_usd"),
-            steps=left_data.get("steps", []),
+    if len(raw_dirs) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="At least two campaign directories are required",
         )
-    except HTTPException:
-        pass  # Campaign not found — return None
 
-    # Load right campaign
-    try:
-        right_dir = _campaign_dir_from_id(base, id2)
-        right_data = _load_campaign_json(right_dir)
-        right = CampaignDetailResponse(
-            campaign_id=right_data.get("campaign_id", id2),
-            status=_derive_status(right_data),
-            started_at=right_data.get("started_at"),
-            finished_at=right_data.get("finished_at"),
-            elapsed_s=right_data.get("elapsed_s"),
-            config=right_data.get("config") or right_data.get("config_summary"),
-            summary=right_data.get("summary"),
-            quality_summary=right_data.get("quality_summary"),
-            baseline_comparison=right_data.get("baseline_comparison"),
-            total_cost_usd=right_data.get("total_cost_usd"),
-            spot_savings_usd=right_data.get("spot_savings_usd"),
-            steps=right_data.get("steps", []),
-        )
-    except HTTPException:
-        pass  # Campaign not found — return None
+    # Build CrossRunAggregator from the outdir list
+    campaigns_spec: list[tuple[Path, str | None]] = []
+    for d in raw_dirs:
+        resolved = _resolve_campaign_dir(request, campaign_id=None, outdir=d)
+        if resolved is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Campaign directory not found: {d}",
+            )
+        campaigns_spec.append((resolved, None))
 
-    return CampaignComparisonResponse(left=left, right=right)
+    aggregator = CrossRunAggregator(campaigns=campaigns_spec)
+    aggregator.load()
+
+    entries: list[CampaignComparisonEntry] = []
+
+    for outdir_path, _label in campaigns_spec:
+        label_hint = outdir_path.stem
+        # Resolve the label from run.json
+        run_json = outdir_path / "run.json"
+        campaign_id = label_hint
+        if run_json.exists():
+            try:
+                data = json.loads(run_json.read_text())
+                campaign_id = data.get("campaign_id", label_hint)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        entry_label = str(outdir_path)
+        run = None
+        if label_hint in aggregator._runs:
+            run = aggregator._runs[label_hint]
+        else:
+            for _lbl, r in aggregator._runs.items():
+                if r.outdir == outdir_path:
+                    run = r
+                    break
+
+        if run is not None:
+            # Compute KPI stats for this run
+            kpi_stats: dict[str, KpiMetricStats] = {}
+            for kpi_col in run.df.columns:
+                if kpi_col in (
+                    "sample_id",
+                    "Unnamed: 0",
+                    "campaign",
+                    "global_sample_id",
+                ):
+                    continue
+                series = run.df[kpi_col].dropna()
+                if series.empty:
+                    continue
+                if pd.api.types.is_numeric_dtype(series):
+                    kpi_stats[kpi_col] = KpiMetricStats(
+                        mean=round(float(series.mean()), 6),
+                        min=round(float(series.min()), 6),
+                        max=round(float(series.max()), 6),
+                        std=round(float(series.std()), 6) if len(series) > 1 else 0.0,
+                        count=int(len(series)),
+                    )
+
+            entries.append(
+                CampaignComparisonEntry(
+                    identifier=entry_label,
+                    found=True,
+                    campaign_id=campaign_id,
+                    status=None,
+                    started_at=None,
+                    finished_at=None,
+                    elapsed_s=None,
+                    config=None,
+                    step_timing=[],
+                    sample_summary={"n_samples": run.n_samples},
+                    kpi_stats=kpi_stats,
+                )
+            )
+        else:
+            entries.append(
+                CampaignComparisonEntry(
+                    identifier=entry_label,
+                    found=False,
+                    error=f"No aggregated_results.csv found in {outdir_path}",
+                )
+            )
+
+    kpi_comparison = _build_kpi_comparison(entries)
+
+    return MultiCampaignComparisonResponse(
+        campaigns=entries,
+        kpi_comparison=kpi_comparison,
+        total=len(entries),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -624,11 +695,6 @@ def _compute_kpi_stats(campaign_dir: Path) -> dict[str, KpiMetricStats]:
     """
     csv_path = campaign_dir / "aggregated_results.csv"
     if not csv_path.exists():
-        return {}
-
-    try:
-        import pandas as pd  # noqa: PLC0415
-    except ImportError:
         return {}
 
     try:
@@ -1121,6 +1187,46 @@ _BUNDLE_ROOT_FILES = frozenset(
 )
 _BUNDLE_PLOT_GLOB = "*.png"
 _BUNDLE_SQL_GLOB = "eplusout.sql"
+_BUNDLE_KPI_NAMES = ("kpi.json", "kpis.json")
+
+
+def _iter_sample_files(
+    campaign_dir: Path,
+    suffix: str,
+    *,
+    samples_prefix: str = "samples",
+) -> tuple[tuple[str, Path], ...]:
+    """Iterate over per-sample files matching a suffix in the sim/ subdirectory.
+
+    Yields ``(archive_path, file_path)`` pairs.
+    """
+    work_dir = campaign_dir / "work"
+    sim_dir = work_dir / "sim"
+    if not sim_dir.is_dir():
+        return
+    for sample_dir in sim_dir.iterdir():
+        if not sample_dir.is_dir():
+            continue
+        file_path = sample_dir / suffix
+        if file_path.is_file():
+            rel = f"{samples_prefix}/{sample_dir.name}/{suffix}"
+            yield (rel, file_path)
+
+
+def _iter_plot_files(
+    base_dir: Path,
+    pattern: str,
+    *,
+    prefix: str = "",
+) -> tuple[tuple[str, Path], ...]:
+    """Iterate over plot files matching pattern in base_dir.
+
+    Yields ``(archive_path, file_path)`` pairs.
+    """
+    for plot_file in base_dir.glob(pattern):
+        if plot_file.is_file() and plot_file.name not in _BUNDLE_ROOT_FILES:
+            archive_path = f"{prefix}/{plot_file.name}" if prefix else plot_file.name
+            yield (archive_path, plot_file)
 
 
 def _iter_sample_bundle(sample_dir: Path, include_sql: bool) -> tuple[tuple[str, Path], ...]:
@@ -1154,24 +1260,21 @@ def _iter_campaign_bundle(
         if f.is_file():
             yield (name, f)
 
-    # Per-sample KPI JSONs and eplusout.sql
-    work_dir = campaign_dir / "work"
-    sim_dir = work_dir / "sim"
-    if sim_dir.is_dir():
-        for sample_dir in sim_dir.iterdir():
-            if sample_dir.is_dir():
-                yield from _iter_sample_bundle(sample_dir, include_sql)
+    # Per-sample KPI JSONs
+    for rel, file_path in _iter_sample_files(campaign_dir, _BUNDLE_KPI_NAMES[0]):
+        yield (rel, file_path)
+    for rel, file_path in _iter_sample_files(campaign_dir, _BUNDLE_KPI_NAMES[1]):
+        yield (rel, file_path)
 
-    # Plot files — campaign root
-    for plot_file in campaign_dir.glob(_BUNDLE_PLOT_GLOB):
-        if plot_file.is_file() and plot_file.name != "run.json":
-            yield (plot_file.name, plot_file)
-    # Plot files — plots/ subdirectory
+    # Plot files — campaign root and plots/ subdirectory
+    yield from _iter_plot_files(campaign_dir, _BUNDLE_PLOT_GLOB)
     plots_dir = campaign_dir / "plots"
     if plots_dir.is_dir():
-        yield from (
-            (f"plots/{p.name}", p) for p in plots_dir.glob(_BUNDLE_PLOT_GLOB) if p.is_file()
-        )
+        yield from _iter_plot_files(plots_dir, _BUNDLE_PLOT_GLOB, prefix="plots")
+
+    # Per-sample eplusout.sql (only when --archive_intermediates was used)
+    if include_sql:
+        yield from _iter_sample_files(campaign_dir, _BUNDLE_SQL_GLOB)
 
 
 @campaigns_router.get("/api/v1/campaigns/{campaign_id}/download")

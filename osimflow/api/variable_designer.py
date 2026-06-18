@@ -20,14 +20,15 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, RedirectResponse
+from fastapi import APIRouter
+from fastapi.responses import RedirectResponse
 
 log = logging.getLogger("osimflow.api.variable_designer")
 
 variable_designer_router = APIRouter()
 
 
-@variable_designer_router.get("/ui/designer/")
+@variable_designer_router.get("/ui/designer/")  # type: ignore[untyped-decorator]
 async def variable_designer_redirect() -> RedirectResponse:
     """Redirect /ui/designer/ to the Variable Designer HTML page."""
     return RedirectResponse(url="/static/variable_designer.html")

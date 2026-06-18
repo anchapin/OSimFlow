@@ -38,6 +38,7 @@ from osimflow.algorithms import (
     _sample_with_engine,
     _write_empty_samples,
 )
+from osimflow.algorithms.qdiscrete import qdiscrete
 
 # AlgorithmRegistry-mutating tests must run on the same xdist worker.
 pytestmark = pytest.mark.xdist_group("algorithm_registry")
@@ -232,6 +233,19 @@ class TestApplyDistribution:
         values = ["a", "b", "c"]
         result = _apply_distribution(0.5, "categorical", {"values": values})
         assert result in values
+
+    def test_discrete_with_pmf_uses_qdiscrete(self) -> None:
+        pmf = {"low": 0.1, "medium": 0.6, "high": 0.3}
+        result = _apply_distribution(
+            0.5, "discrete", {"values": ["low", "medium", "high"], "pmf": pmf}
+        )
+        assert result == "medium"
+
+    def test_discrete_with_pmf_reproducible(self) -> None:
+        pmf = {"a": 0.3, "b": 0.7}
+        result1 = qdiscrete(pmf, n=1, seed=42)[0]
+        result2 = qdiscrete(pmf, n=1, seed=42)[0]
+        assert result1 == result2
 
     def test_conditional_raises(self) -> None:
         with pytest.raises(NotImplementedError, match="conditional"):
@@ -966,6 +980,13 @@ class TestExtractBounds:
 
 class TestSequentialSearchAlgorithm:
     """Tests for the SequentialSearchAlgorithm (issue #550, GAP-006)."""
+
+    _VARIABLES: dict[str, Any] = {
+        "variables": [
+            {"name": "x", "distribution": "uniform", "min": 0.0, "max": 1.0},
+            {"name": "y", "distribution": "normal", "mean": 0.0, "sigma": 1.0},
+        ]
+    }
 
     def test_name(self) -> None:
         algo = SequentialSearchAlgorithm()
