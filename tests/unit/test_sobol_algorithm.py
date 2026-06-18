@@ -250,6 +250,44 @@ class TestSobolGenerateSamples:
         r2 = algo.generate_samples(_VARIABLES_2D, n_samples=4, seed=2, outdir=tmp_path / "r2")
         assert json.loads(r1.read_text()) != json.loads(r2.read_text())
 
+    def test_normal_distribution_sampling(self, tmp_path: Path) -> None:
+        """Normal distribution produces samples within ±3σ bounds."""
+        algo = SobolAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        for s in data["samples"]:
+            assert 2.0 <= s["values"]["x"] <= 8.0  # mean ± 3σ
+
+    def test_lognormal_distribution_sampling(self, tmp_path: Path) -> None:
+        """Lognormal distribution produces samples within ±3σ bounds."""
+        algo = SobolAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "lognormal", "mean": 5.0, "sigma": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) > 0
+
+    def test_triangular_distribution_sampling(self, tmp_path: Path) -> None:
+        """Triangular distribution produces samples within min/max bounds."""
+        algo = SobolAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "triangular", "min": 0.0, "max": 10.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        for s in data["samples"]:
+            assert 0.0 <= s["values"]["x"] <= 10.0
+
 
 class TestHaltonGenerateSamples:
     """Generate-samples tests for HaltonAlgorithm."""
@@ -541,7 +579,7 @@ class TestSobolSensitivityIndices:
     ) -> None:
         """Raises RuntimeError when no numeric KPIs are found for a sample."""
         kpi_values: dict[str, dict[str, float]] = {
-            f"{(i + 1):04d}": {"eui": "not_a_number"} for i in range(8)
+            f"{(i + 1):04d}": {"eui": "not_a_number"} for i in range(32)
         }
         with pytest.raises(RuntimeError, match="no numeric KPI found"):
             algo.compute_sensitivity_indices(
