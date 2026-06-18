@@ -733,6 +733,14 @@ class CoordinatorHandoffPayload(BaseModel):
             "variable names to sampled values."
         ),
     )
+    notification_email: str | None = Field(
+        default=None,
+        description="Email address to notify when the campaign completes",
+    )
+    sns_topic_arn: str | None = Field(
+        default=None,
+        description="SNS topic ARN to publish to when the campaign completes",
+    )
 
 
 class CoordinatorHandoffResponse(BaseModel):
@@ -797,4 +805,72 @@ class CoordinatorArraySubmitResponse(BaseModel):
     campaign_id: str
     array_job_id: str = Field(description="AWS Batch array job ID")
     status: str = Field(default="pending", description="Initial status")
+    message: str
+
+
+# Phase 4: Result aggregation and user notifications (issue #604)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorPollArrayResponse(BaseModel):
+    """Response for GET /campaigns/{id}/poll-array — array job completion status."""
+
+    campaign_id: str
+    array_job_id: str
+    status: str = Field(
+        default="pending",
+        description="Array job status: pending | running | complete | failed",
+    )
+    succeeded: int = Field(ge=0, description="Number of child jobs that succeeded")
+    failed: int = Field(ge=0, description="Number of child jobs that failed")
+    pending: int = Field(ge=0, description="Number of child jobs still pending/running")
+    total: int = Field(ge=0, description="Total number of child jobs")
+    result_bucket: str | None = Field(
+        default=None, description="S3 bucket where results are stored"
+    )
+    message: str
+
+
+class CoordinatorResultFile(BaseModel):
+    """A single result file reference returned by GET /campaigns/{id}/results."""
+
+    sample_index: int | None = Field(
+        default=None, description="Sample index, or null for aggregated results"
+    )
+    file_key: str = Field(description="S3 object key or local path")
+    file_type: str = Field(description="csv | json | sql | parquet")
+    size_bytes: int | None = Field(default=None, description="File size in bytes")
+
+
+class CoordinatorResultsResponse(BaseModel):
+    """Response for GET /campaigns/{id}/results — all result files for a campaign."""
+
+    campaign_id: str
+    status: str = Field(description="aggregating | complete | failed | unavailable")
+    result_bucket: str | None = Field(default=None, description="S3 bucket")
+    aggregated_results_key: str | None = Field(
+        default=None, description="S3 key for aggregated CSV"
+    )
+    kpi_files: list[CoordinatorResultFile] = Field(
+        default_factory=list, description="Per-sample KPI JSON files"
+    )
+    message: str
+
+
+class CoordinatorNotifyRequest(BaseModel):
+    """Request for POST /campaigns/{id}/notify — trigger a notification."""
+
+    notification_type: str = Field(
+        default="sns",
+        description="Type: sns | email | webhook",
+    )
+    subject: str | None = Field(default=None, description="Notification subject (SNS/email)")
+
+
+class CoordinatorNotifyResponse(BaseModel):
+    """Response from a notification trigger."""
+
+    campaign_id: str
+    notification_type: str
+    status: str = Field(default="sent", description="sent | failed | skipped")
     message: str
