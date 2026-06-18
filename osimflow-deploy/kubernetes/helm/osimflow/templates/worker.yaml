@@ -1,0 +1,131 @@
+# Campaign worker Deployment (optional — issue #583).
+# Deploys an in-cluster coordinator that runs OSimFlow campaigns using
+# KubernetesExecutor, fanning out per-sample Jobs natively within the cluster.
+#
+# Usage:
+#   helm install osimflow ./helm/osimflow \
+#     --set worker.enabled=true \
+#     --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100"
+#     --set openstudio.version=3.11.0
+#
+# For multi-replica workers with Redis-backed coordination:
+#   helm install osimflow ./helm/osimflow \
+#     --set worker.enabled=true \
+#     --set worker.job_queue=redis \
+#     --set worker.redis.enabled=true \
+#     --set worker.campaign_args="..."
+
+{{- if .Values.worker.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osimflow.worker.name" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "osimflow.name" . }}
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: osimflow
+spec:
+  replicas: {{ .Values.worker.replica_count }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "osimflow.name" . }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "osimflow.name" . }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ .Values.executor.service_account }}
+      containers:
+        - name: worker
+          image: {{ include "osimflow.worker.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - osimflow
+            - run
+            - --executor
+            - kubernetes
+            {{- if ne .Values.worker.job_queue "none" }}
+            - --task-queue
+            - {{ .Values.worker.job_queue }}
+            {{- end }}
+            {{- if eq .Values.worker.job_queue "redis" }}
+            - --redis-host
+            - {{ .Values.worker.redis.host }}
+            - --redis-port
+            - {{ .Values.worker.redis.port | quote }}
+            {{- if .Values.worker.redis.password }}
+            - --redis-password
+            - {{ .Values.worker.redis.password }}
+            {{- end }}
+            {{- end }}
+            {{- if eq .Values.worker.job_queue "dask" }}
+            - --dask-scheduler-address
+            - {{ .Values.worker.dask.scheduler_address }}
+            {{- end }}
+            {{- if .Values.worker.campaign_args }}
+            {{- range $arg := splitList " " .Values.worker.campaign_args }}
+            - {{ $arg }}
+            {{- end }}
+            {{- end }}
+          env:
+            - name: OSIMFLOW_OUTDIR
+              value: /data/results
+            - name: OSIMFLOW_OS_VERSION
+              value: {{ .Values.openstudio.version | quote }}
+            - name: OSIMFLOW_CONTAINER
+              value: "{{ .Values.openstudio.repository }}:{{ .Values.openstudio.version }}"
+            - name: OSIMFLOW_KUBERNETES_NAMESPACE
+              value: {{ .Values.executor.namespace | quote }}
+            - name: OSIMFLOW_KUBERNETES_POLL_INTERVAL_S
+              value: {{ .Values.executor.poll_interval_s | quote }}
+            - name: OSIMFLOW_KUBERNETES_MAX_POLL_INTERVAL_S
+              value: {{ .Values.executor.max_poll_interval_s | quote }}
+            {{- if eq .Values.worker.job_queue "redis" }}
+            - name: REDIS_HOST
+              value: {{ .Values.worker.redis.host | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.worker.redis.port | quote }}
+            {{- if .Values.worker.redis.password }}
+            - name: REDIS_PASSWORD
+              value: {{ .Values.worker.redis.password | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if eq .Values.worker.job_queue "dask" }}
+            - name: DASK_SCHEDULER_ADDRESS
+              value: {{ .Values.worker.dask.scheduler_address | quote }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.worker.resources.requests.cpu }}
+              memory: {{ .Values.worker.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.worker.resources.limits.cpu }}
+              memory: {{ .Values.worker.resources.limits.memory }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "osimflow.worker.name" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "osimflow.name" . }}
+    app.kubernetes.io/component: worker
+spec:
+  type: {{ .Values.worker.service_type }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector:
+    app.kubernetes.io/name: {{ include "osimflow.name" . }}
+    app.kubernetes.io/component: worker
+{{- end }}
