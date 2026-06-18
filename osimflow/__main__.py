@@ -2008,6 +2008,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         ui_enabled=args.ui,
         variable_editor=args.editor,
         results_viewer=args.dashboard,
+        dashboard=args.dashboard,
         registry_path=args.registry,
     )
     if args.host not in ("127.0.0.1", "localhost"):
