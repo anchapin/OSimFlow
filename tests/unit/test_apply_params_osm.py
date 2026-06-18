@@ -185,12 +185,6 @@ def _make_mock_openstudio() -> types.ModuleType:
     core = types.ModuleType("openstudio.openstudiomodelcore")
     mock_os.openstudiomodelcore = core  # type: ignore[attr-defined]
 
-    # Model.load returns a mock model
-    mock_model = MagicMock()
-    mock_model.save = MagicMock()
-    core.Model = MagicMock()
-    core.Model.load = MagicMock(return_value=mock_model)
-
     # SpaceType mock
     st_mock = MagicMock()
     st_mock.nameString.return_value = "Office"
@@ -199,21 +193,16 @@ def _make_mock_openstudio() -> types.ModuleType:
     lpd_result.get.return_value = 8.0
     st_mock.lightingPowerPerFloorArea.return_value = lpd_result
     st_mock.setLightingPowerPerFloorArea = MagicMock(return_value=True)
-    core.SpaceType = MagicMock()
-    core.SpaceType.getSpaceTypes = MagicMock(return_value=[st_mock])
 
     # ThermalZone mock
     tz_mock = MagicMock()
     tz_mock.nameString.return_value = "Core Zone"
-    tz_mock.model.return_value = mock_model
     clg_result = MagicMock()
     clg_result.is_initialized.return_value = True
     tz_mock.coolingSetpointTemperatureSchedule.return_value = clg_result
     htg_result = MagicMock()
     htg_result.is_initialized.return_value = True
     tz_mock.heatingSetpointTemperatureSchedule.return_value = htg_result
-    core.ThermalZone = MagicMock()
-    core.ThermalZone.getThermalZones = MagicMock(return_value=[tz_mock])
 
     # Construction mock
     c_mock = MagicMock()
@@ -223,8 +212,6 @@ def _make_mock_openstudio() -> types.ModuleType:
     uf_result.get.return_value = 0.5
     c_mock.thermalConductance.return_value = uf_result
     c_mock.setThermalConductance = MagicMock(return_value=True)
-    core.Construction = MagicMock()
-    core.Construction.getConstructions = MagicMock(return_value=[c_mock])
 
     # Lights mock
     lt_mock = MagicMock()
@@ -234,8 +221,6 @@ def _make_mock_openstudio() -> types.ModuleType:
     ll_result.get.return_value = 100.0
     lt_mock.lightingLevel.return_value = ll_result
     lt_mock.setLightingLevel = MagicMock(return_value=True)
-    core.Lights = MagicMock()
-    core.Lights.getLights = MagicMock(return_value=[lt_mock])
 
     # People mock
     p_mock = MagicMock()
@@ -245,6 +230,37 @@ def _make_mock_openstudio() -> types.ModuleType:
     ppd_result.get.return_value = 0.05
     p_mock.peopleperSpaceFloorArea.return_value = ppd_result
     p_mock.setPeopleperSpaceFloorArea = MagicMock(return_value=True)
+
+    # Model.load returns an OptionalValue-like object
+    # (our branch uses model_opt.is_initialized() and model_opt.get())
+    mock_model = MagicMock()
+    mock_model.save = MagicMock()
+    mock_model.getSpaceTypes = MagicMock(return_value=[st_mock])
+    mock_model.getThermalZones = MagicMock(return_value=[tz_mock])
+    mock_model.getConstructions = MagicMock(return_value=[c_mock])
+    mock_model.getLights = MagicMock(return_value=[lt_mock])
+    mock_model.getPeople = MagicMock(return_value=[p_mock])
+    mock_model.model = MagicMock()  # for ThermalZone.model() accessor if needed
+
+    mock_model_opt = MagicMock()
+    mock_model_opt.is_initialized = MagicMock(return_value=True)
+    mock_model_opt.get = MagicMock(return_value=mock_model)
+
+    core.Model = MagicMock()
+    core.Model.load = MagicMock(return_value=mock_model_opt)
+
+    core.SpaceType = MagicMock()
+    core.SpaceType.getSpaceTypes = MagicMock(return_value=[st_mock])
+
+    core.ThermalZone = MagicMock()
+    core.ThermalZone.getThermalZones = MagicMock(return_value=[tz_mock])
+
+    core.Construction = MagicMock()
+    core.Construction.getConstructions = MagicMock(return_value=[c_mock])
+
+    core.Lights = MagicMock()
+    core.Lights.getLights = MagicMock(return_value=[lt_mock])
+
     core.People = MagicMock()
     core.People.getPeople = MagicMock(return_value=[p_mock])
 
@@ -396,7 +412,7 @@ class TestMutateOsmProduction:
             {},
         )
         core = mock_openstudio.openstudiomodelcore
-        model = core.Model.load.return_value
+        model = core.Model.load.return_value.get.return_value
         model.save.assert_called_once_with(str(osm), overwrite=True)
 
     def test_unresolved_object_raises_osm_attribute_error(
@@ -470,7 +486,10 @@ class TestPreflightValidateOsmPaths:
 
     def test_valid_dotted_path_passes(self, mock_openstudio: types.ModuleType) -> None:
         """A path referencing an existing model object passes validation."""
+        st_mock = MagicMock()
+        st_mock.nameString.return_value = "Office"
         mock_model = MagicMock()
+        mock_model.getSpaceTypes.return_value = [st_mock]
         mappings = {
             "SpaceType_Office.lpd": MappedParameter(
                 name="SpaceType_Office.lpd",
@@ -479,7 +498,6 @@ class TestPreflightValidateOsmPaths:
                 object_name="Office",
             )
         }
-        # The mock SpaceType.getSpaceTypes returns an object with nameString="Office"
         result = preflight_validate_osm_paths(
             {"SpaceType_Office.lpd": 10.0},
             mappings,
@@ -489,7 +507,10 @@ class TestPreflightValidateOsmPaths:
 
     def test_invalid_object_name_raises(self, mock_openstudio: types.ModuleType) -> None:
         """A path referencing a non-existent object name raises."""
+        st_mock = MagicMock()
+        st_mock.nameString.return_value = "Office"  # not "Ghost"
         mock_model = MagicMock()
+        mock_model.getSpaceTypes.return_value = [st_mock]
         mappings = {
             "SpaceType_Ghost.lpd": MappedParameter(
                 name="SpaceType_Ghost.lpd",
@@ -508,6 +529,7 @@ class TestPreflightValidateOsmPaths:
     def test_simple_names_skip_validation(self, mock_openstudio: types.ModuleType) -> None:
         """Simple attribute names (no object_type) are not validated."""
         mock_model = MagicMock()
+        mock_model.getSpaceTypes.return_value = []
         mappings = {
             "lighting_power_density": MappedParameter(
                 name="lighting_power_density", kind="attribute"
@@ -536,14 +558,19 @@ class TestResolveModelObject:
 
     def test_resolves_existing_object(self, mock_openstudio: types.ModuleType) -> None:
         """Finds an object by type and name."""
+        st_mock = MagicMock()
+        st_mock.nameString.return_value = "Office"
         mock_model = MagicMock()
-        # SpaceType mock has nameString="Office"
+        mock_model.getSpaceTypes.return_value = [st_mock]
         result = _resolve_model_object(mock_model, mock_openstudio, "SpaceType", "Office")
         assert result is not None
 
     def test_returns_none_for_missing_object(self, mock_openstudio: types.ModuleType) -> None:
         """Returns None when the named object does not exist."""
+        st_mock = MagicMock()
+        st_mock.nameString.return_value = "Office"
         mock_model = MagicMock()
+        mock_model.getSpaceTypes.return_value = [st_mock]
         result = _resolve_model_object(mock_model, mock_openstudio, "SpaceType", "DoesNotExist")
         assert result is None
 
@@ -562,7 +589,10 @@ class TestApplyOsmMutation:
 
     def test_applies_dotted_name_mutation(self, mock_openstudio: types.ModuleType) -> None:
         """A dotted name resolves to the correct object and calls its setter."""
+        st_mock = MagicMock()
+        st_mock.nameString.return_value = "Office"
         mock_model = MagicMock()
+        mock_model.getSpaceTypes.return_value = [st_mock]
         mapping = MappedParameter(
             name="SpaceType_Office.lighting_power_density",
             kind="attribute",
@@ -571,13 +601,14 @@ class TestApplyOsmMutation:
             object_name="Office",
         )
         _apply_osm_mutation(mock_model, mock_openstudio, mapping, 12.0)
-        core = mock_openstudio.openstudiomodelcore
-        st = core.SpaceType.getSpaceTypes(MagicMock())[0]
-        st.setLightingPowerPerFloorArea.assert_called_once_with(12.0)
+        st_mock.setLightingPowerPerFloorArea.assert_called_once_with(12.0)
 
     def test_raises_for_missing_object(self, mock_openstudio: types.ModuleType) -> None:
         """Raises OSMAttributeError if the object cannot be resolved."""
+        st_mock = MagicMock()
+        st_mock.nameString.return_value = "Office"  # not "Missing"
         mock_model = MagicMock()
+        mock_model.getSpaceTypes.return_value = [st_mock]
         mapping = MappedParameter(
             name="SpaceType_Missing.lpd",
             kind="attribute",
