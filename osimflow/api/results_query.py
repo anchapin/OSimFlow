@@ -14,7 +14,6 @@ in ``osimflow.__main__``.
 
 from __future__ import annotations
 
-import csv
 import io
 import json
 import logging
@@ -28,7 +27,6 @@ from fastapi.responses import Response
 from osimflow.api.campaigns import (
     _campaign_dir_from_id,
     _campaigns_base_dir,
-    _load_campaign_json,
 )
 
 log = logging.getLogger("osimflow.api.results_query")
@@ -51,7 +49,7 @@ def _load_aggregated_results(campaign_dir: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _apply_filter(df: pd.DataFrame, filter_spec: dict[str, Any]) -> pd.DataFrame:
+def _apply_filter(df: pd.DataFrame, filter_spec: dict[str, Any]) -> pd.DataFrame:  # noqa: PLR0912
     """Apply a MongoDB-style filter spec to a DataFrame.
 
     Supports:
@@ -69,27 +67,24 @@ def _apply_filter(df: pd.DataFrame, filter_spec: dict[str, Any]) -> pd.DataFrame
 
         if isinstance(value, dict):
             for op, op_val in value.items():
-                if op == "$eq":
+                if op == "$eq":  # noqa: PLR0912
                     df = df[df[key] == op_val]
-                elif op == "$ne":
+                elif op == "$ne":  # noqa: PLR0912
                     df = df[df[key] != op_val]
-                elif op == "$gt":
+                elif op == "$gt":  # noqa: PLR0912
                     df = df[df[key] > op_val]
-                elif op == "$gte":
+                elif op == "$gte":  # noqa: PLR0912
                     df = df[df[key] >= op_val]
-                elif op == "$lt":
+                elif op == "$lt":  # noqa: PLR0912
                     df = df[df[key] < op_val]
-                elif op == "$lte":
+                elif op == "$lte":  # noqa: PLR0912
                     df = df[df[key] <= op_val]
-                elif op == "$in":
+                elif op == "$in":  # noqa: PLR0912
                     df = df[df[key].isin(op_val)]
-                elif op == "$nin":
+                elif op == "$nin":  # noqa: PLR0912
                     df = df[~df[key].isin(op_val)]
-                elif op == "$exists":
-                    if op_val:
-                        df = df[df[key].notna()]
-                    else:
-                        df = df[df[key].isna()]
+                elif op == "$exists":  # noqa: PLR0912
+                    df = df[df[key].notna()] if op_val else df[df[key].isna()]
                 else:
                     log.warning("unknown filter operator: %s", op)
         else:
@@ -246,7 +241,7 @@ async def export_campaign_results(
 # ---------------------------------------------------------------------------
 
 
-def query_results_cli(
+def query_results_cli(  # noqa: PLR0912
     campaign_ids: list[str] | None = None,
     outdirs: list[str] | None = None,
     filter_expr: str | None = None,
@@ -350,7 +345,7 @@ def query_results_cli(
     }
 
 
-def export_results_cli(
+def export_results_cli(  # noqa: PLR0912
     campaign_ids: list[str] | None = None,
     outdirs: list[str] | None = None,
     filter_expr: str | None = None,
