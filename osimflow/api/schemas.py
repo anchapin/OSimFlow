@@ -725,6 +725,14 @@ class CoordinatorHandoffPayload(BaseModel):
     extra: dict[str, Any] | None = Field(
         default=None, description="Additional executor-specific settings"
     )
+    samples: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Pre-computed LHS sample parameter sets. If omitted, the Coordinator "
+            "generates samples using the algorithm and n_samples. Each dict maps "
+            "variable names to sampled values."
+        ),
+    )
 
 
 class CoordinatorHandoffResponse(BaseModel):
@@ -754,3 +762,39 @@ class CoordinatorCampaignRecord(BaseModel):
     n_samples: int = 0
     executor: str = ""
     openstudio_version: str = ""
+
+
+# Phase 3: Array job submission (issue #603)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorSampleRecord(BaseModel):
+    """A single sample's parameter set, returned by GET /campaigns/{id}/samples/{index}."""
+
+    index: int = Field(ge=0, description="Zero-based sample index")
+    parameters: dict[str, Any] = Field(description="Map of variable name to sampled value")
+    status: str = Field(default="pending", description="pending | running | complete | failed")
+
+
+class CoordinatorSamplesResponse(BaseModel):
+    """Response for GET /campaigns/{id}/samples — all sample parameter sets."""
+
+    campaign_id: str
+    samples: list[CoordinatorSampleRecord]
+
+
+class CoordinatorArraySubmitRequest(BaseModel):
+    """Request for POST /campaigns/{id}/submit-array — trigger array job submission."""
+
+    job_queue: str = Field(description="AWS Batch job queue name")
+    job_definition: str = Field(description="AWS Batch job definition name")
+    array_size: int = Field(ge=1, description="Number of array job children")
+
+
+class CoordinatorArraySubmitResponse(BaseModel):
+    """Response from array job submission."""
+
+    campaign_id: str
+    array_job_id: str = Field(description="AWS Batch array job ID")
+    status: str = Field(default="pending", description="Initial status")
+    message: str
