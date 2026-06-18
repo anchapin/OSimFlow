@@ -60,7 +60,6 @@ def _compute_campaign_status(data: dict[str, Any]) -> str:
     return "unknown"
 
 
-
 @dashboard_router.get("/dashboard")
 async def get_dashboard_html() -> HTMLResponse:
     """Return the real-time HTML dashboard page."""
