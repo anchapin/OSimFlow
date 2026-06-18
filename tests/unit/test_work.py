@@ -106,6 +106,7 @@ class TestDefaultApplyParameters:
         with (
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -318,6 +319,7 @@ class TestRunOpenstudioSimRealCli:
         with (
             patch.dict(os.environ, _env_without_stub(), clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
             patch("osimflow.work.run_subprocess") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(

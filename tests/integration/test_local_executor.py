@@ -33,6 +33,7 @@ import pytest
 import yaml
 
 from osimflow import Campaign, CampaignConfig
+from osimflow.apply_params import _build_mappings, preflight_check
 from osimflow.executors import LocalExecutor
 
 # Mark as slow: runs a real 3-sample campaign (30-60s). Excluded by `make test-fast`.
@@ -45,7 +46,6 @@ pytestmark = pytest.mark.slow
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
-EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
 
 
 @pytest.fixture
@@ -53,9 +53,15 @@ def workdir(tmp_path: Path) -> Path:
     """Clean per-test work directory."""
     wd = tmp_path / "work"
     wd.mkdir()
-    # Copy the project's example variables.yml so we get the canonical
-    # three-variable set (window_u_value / infiltration_rate / hvac_setpoint).
-    (wd / "variables.yml").write_text(EXAMPLE_VARS_YML.read_text())
+    (wd / "variables.yml").write_text(
+        "algorithm: lhs\n"
+        "variables:\n"
+        "  - name: wwr\n"
+        "    distribution: uniform\n"
+        "    min: 0.2\n"
+        "    max: 0.6\n"
+        "    measure_argument: SetEnvelopePerformance.wwr\n"
+    )
     return wd
 
 
@@ -118,14 +124,12 @@ def test_three_sample_campaign_via_local_executor_produces_all_artifacts(
     declared = {
         v["name"] for v in yaml.safe_load((workdir / "variables.yml").read_text())["variables"]
     }
-    attributes = set(
-        json.loads((outdir.parent / "template" / "model.osm").read_text())["attributes"].keys()
-    )
-    missing = declared - attributes
+    mappings = _build_mappings(workdir / "template")
+    missing = declared - set(mappings.keys())
     assert not missing, (
         f"variables {missing} declared in variables.yml but missing from "
-        f"example_package/model.osm — pre-flight should have failed. "
-        f"Declared: {declared}, attributes: {attributes}"
+        f"example_package — pre-flight should have failed. "
+        f"Declared: {declared}, available: {set(mappings.keys())}"
     )
 
     # --- Run the campaign ---------------------------------------------

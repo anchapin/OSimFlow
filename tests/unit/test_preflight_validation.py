@@ -195,6 +195,7 @@ class TestValidateModelGeometry:
         with (
             patch("osimflow.work._is_openstudio_available", return_value=True),
             patch("osimflow.work._is_stub_mode", return_value=False),
+            patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
             patch("osimflow.work.subprocess.run") as mock_run,
         ):
             mock_run.return_value = subprocess.CompletedProcess(

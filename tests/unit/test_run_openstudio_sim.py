@@ -200,9 +200,9 @@ def test_real_cli_invoked_when_available(
     with (
         patch.dict(os.environ, env, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=True),
+        patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
         patch("osimflow.work.run_subprocess") as mock_run,
     ):
-        # Simulate a successful CLI run — the real CLI writes eplusout.sql
         mock_run.return_value = subprocess.CompletedProcess(
             args=["openstudio.cli", "run", "-w", str(sim_package / "workflow.osw")],
             returncode=0,
@@ -220,7 +220,6 @@ def test_real_cli_invoked_when_available(
             stderr_path=stderr_path,
         )
 
-    # Verify openstudio.cli was invoked with correct args
     mock_run.assert_called_once()
     call_args = mock_run.call_args
     cmd = call_args[0][0] if call_args[0] else call_args.kwargs.get("cmd", [])
@@ -242,6 +241,7 @@ def test_real_cli_does_not_write_placeholder_sql(
     with (
         patch.dict(os.environ, env, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=True),
+        patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
         patch("osimflow.work.run_subprocess") as mock_run,
     ):
         mock_run.return_value = subprocess.CompletedProcess(

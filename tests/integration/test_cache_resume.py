@@ -35,14 +35,21 @@ from osimflow.executors import LocalExecutor
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
-EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
 
 
 @pytest.fixture
 def workdir(tmp_path: Path) -> Path:
     wd = tmp_path / "work"
     wd.mkdir()
-    (wd / "variables.yml").write_text(EXAMPLE_VARS_YML.read_text())
+    (wd / "variables.yml").write_text(
+        "algorithm: lhs\n"
+        "variables:\n"
+        "  - name: wwr\n"
+        "    distribution: uniform\n"
+        "    min: 0.2\n"
+        "    max: 0.6\n"
+        "    measure_argument: SetEnvelopePerformance.wwr\n"
+    )
     return wd
 
 
