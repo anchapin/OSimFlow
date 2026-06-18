@@ -34,11 +34,10 @@ def workdir(tmp_path: Path) -> Path:
     (wd / "variables.yml").write_text(
         "algorithm: lhs\n"
         "variables:\n"
-        "  - name: wwr\n"
+        "  - name: window_u_value\n"
         "    distribution: uniform\n"
-        "    min: 0.2\n"
-        "    max: 0.6\n"
-        "    measure_argument: SetEnvelopePerformance.wwr\n"
+        "    min: 1.8\n"
+        "    max: 3.5\n"
     )
     return wd
 
