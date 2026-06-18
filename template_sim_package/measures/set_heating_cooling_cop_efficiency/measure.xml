@@ -1,0 +1,245 @@
+<?xml version="1.0"?>
+<measure>
+  <schema_version>3.1</schema_version>
+  <name>set_heating_cooling_cop_efficiency</name>
+  <uid>75fb5b28-a902-4071-89b5-b99075550952</uid>
+  <version_id>fbd9c8a0-2583-4ab5-9307-1bcbdff7711c</version_id>
+  <version_modified>2024-09-26T18:43:56Z</version_modified>
+  <xml_checksum>A2F4ED33</xml_checksum>
+  <class_name>SetHeatingCoolingCopEfficiency</class_name>
+  <display_name>Set Heating Efficiency</display_name>
+  <description>Set Heating Efficiency</description>
+  <modeler_description>Change the HVAC components to make their properties match the selected template using the OpenStudio Standards methods.  Will replace the existing properties where present.</modeler_description>
+  <arguments>
+    <argument>
+      <name>cooling_cop</name>
+      <display_name>Cooling DX Coil COP</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>3.7</default_value>
+    </argument>
+    <argument>
+      <name>heating_cop</name>
+      <display_name>Heating DX Coil COP</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>3.7</default_value>
+    </argument>
+    <argument>
+      <name>efficiency</name>
+      <display_name>Heating Gas Coil Efficiency</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>0.8</default_value>
+    </argument>
+    <argument>
+      <name>boiler_efficiency</name>
+      <display_name>Boiler Thermal Efficiency</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>0.8</default_value>
+    </argument>
+    <argument>
+      <name>chiller_cop</name>
+      <display_name>Chiller Reference COP</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>5.3</default_value>
+    </argument>
+  </arguments>
+  <outputs />
+  <provenances />
+  <tags>
+    <tag>HVAC.Heating</tag>
+  </tags>
+  <attributes>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Measure Type</name>
+      <value>ModelMeasure</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+  </attributes>
+  <files>
+    <file>
+      <filename>LICENSE.md</filename>
+      <filetype>md</filetype>
+      <usage_type>license</usage_type>
+      <checksum>91185A2B</checksum>
+    </file>
+    <file>
+      <filename>README.md</filename>
+      <filetype>md</filetype>
+      <usage_type>readme</usage_type>
+      <checksum>280EF8EA</checksum>
+    </file>
+    <file>
+      <filename>README.md.erb</filename>
+      <filetype>erb</filetype>
+      <usage_type>readmeerb</usage_type>
+      <checksum>78789F4B</checksum>
+    </file>
+    <file>
+      <version>
+        <software_program>OpenStudio</software_program>
+        <identifier>2.6.0</identifier>
+        <min_compatible>2.6.0</min_compatible>
+      </version>
+      <filename>measure.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>script</usage_type>
+      <checksum>559050C2</checksum>
+    </file>
+    <file>
+      <filename>measure_test.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>test</usage_type>
+      <checksum>ABB11737</checksum>
+    </file>
+    <file>
+      <filename>mediumoffice-PSZ_AC.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>6632E7D2</checksum>
+    </file>
+    <file>
+      <filename>mediumoffice-PVAV_boiler.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>BDE3DD01</checksum>
+    </file>
+    <file>
+      <filename>mediumoffice-PVAV_gas_electric.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>0A8C5E7B</checksum>
+    </file>
+    <file>
+      <filename>mediumoffice-VAV_chiller_boiler.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>83A95A9B</checksum>
+    </file>
+    <file>
+      <filename>primaryschool-PSZ-AC_with_electric_coil.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>2F5DD7DE</checksum>
+    </file>
+    <file>
+      <filename>primaryschool-PSZ-AC_with_gas_coil.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>9F11BD6F</checksum>
+    </file>
+    <file>
+      <filename>primaryschool-PVAV_with_PFP_boxes.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>140CAB35</checksum>
+    </file>
+    <file>
+      <filename>retailstripmall-PSZ-AC_with_electric_coil.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>72FD101F</checksum>
+    </file>
+    <file>
+      <filename>retailstripmall-PSZ-AC_with_gas_coil.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>8DCAEC92</checksum>
+    </file>
+    <file>
+      <filename>retailstripmall-PVAV_gas_electric.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>3C57D9E7</checksum>
+    </file>
+    <file>
+      <filename>smalloffice-PSZ-AC_with_electric_coil.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>58C5410E</checksum>
+    </file>
+    <file>
+      <filename>smalloffice-PSZ-AC_with_gas_coil.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>FA614C00</checksum>
+    </file>
+    <file>
+      <filename>smalloffice-PSZ-HP.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>F846EC0E</checksum>
+    </file>
+    <file>
+      <filename>warehouse-PSZ-HP.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>71DB7160</checksum>
+    </file>
+    <file>
+      <filename>warehouse-PTAC_with_gas_coil.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>0B0AEA72</checksum>
+    </file>
+    <file>
+      <filename>warehouse-PTHP.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>E20A20E8</checksum>
+    </file>
+  </files>
+</measure>

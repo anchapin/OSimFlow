@@ -882,6 +882,10 @@ class TestIslandModelGAAlgorithm:
         assert "samples" in data
         assert len(data["samples"]) == 10
 
+    def test_generate_samples_empty_variables(self, tmp_path: Path) -> None:
+        algo = IslandModelGAAlgorithm()
+        algo.generate_samples({}, n_samples=0, seed=42, outdir=tmp_path)
+
 
 # SequentialSearchAlgorithm
 # ---------------------------------------------------------------------------

@@ -1,0 +1,134 @@
+ExpandObjects Started.
+No expanded file generated.
+ExpandObjects Finished. Time:     0.035
+EnergyPlus Starting
+EnergyPlus, Version 25.1.0-1c11a3d85f, YMD=2026.06.17 08:23
+Initializing Response Factors
+Calculating CTFs for "INTERIORFURNISHINGS"
+Calculating CTFs for "TYPICAL IEAD ROOF - HIGHLY REFLECTIVE R-15.87 ADJ ROOF INSULATION"
+Calculating CTFs for "TYPICAL INSULATED STEEL FRAMED EXTERIOR WALL R-8.06 ADJ EXT WALL INSULATION"
+Calculating CTFs for "TYPICAL INTERIOR WALL"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 0.79M AREA 3.38M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 19.83M AREA 48.31M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 2.19M AREA 151.71M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 20.37M AREA 50.6M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 22.47M AREA 59.64M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 5.1M AREA 21.93M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 5.27M AREA 22.67M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 5.38M AREA 23.13M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 5.98M AREA 25.73M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 7.93M AREA 34.1M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 72.62M AREA 222.64M2"
+Calculating CTFs for "FOUNDATION F 1.26W/M*K PERIM 9.89M AREA 42.55M2"
+Initializing Window Optical Properties
+Initializing Solar Calculations
+Allocate Solar Module Arrays
+Initializing Zone and Enclosure Report Variables
+Initializing Surface (Shading) Report Variables
+Computing Interior Solar Absorption Factors
+Determining Shadowing Combinations
+Computing Window Shade Absorption Factors
+Proceeding with Initializing Solar Calculations
+Initializing Surfaces
+Initializing Outdoor environment for Surfaces
+Setting up Surface Reporting Variables
+Initializing Temperature and Flux Histories
+Initializing Window Shading
+Computing Interior Absorption Factors
+Computing Interior Diffuse Solar Absorption Factors
+Initializing Solar Heat Gains
+Initializing Internal Heat Gains
+Initializing Interior Solar Distribution
+Initializing Interior Convection Coefficients
+Gathering Information for Predefined Reporting
+Completed Initializing Surface Heat Balance
+Calculate Outside Surface Heat Balance
+Calculate Inside Surface Heat Balance
+Calculate Air Heat Balance
+Initializing HVAC
+Warming up
+Warming up
+Warming up
+Warming up
+Performing Zone Sizing Simulation
+...for Sizing Period: #1 HONOLULU INTL ARPT ANN CLG .4% CONDNS DB=>MWB 1
+Warming up
+Warming up
+Warming up
+Warming up
+Performing Zone Sizing Simulation
+...for Sizing Period: #2 HONOLULU INTL ARPT ANN CLG .4% CONDNS WB=>MDB 1
+Warming up
+Warming up
+Warming up
+Warming up
+Warming up
+Warming up
+Warming up
+Performing Zone Sizing Simulation
+...for Sizing Period: #3 HONOLULU INTL ARPT ANN HTG 99.6% CONDNS DB 1
+Calculating System sizing
+...for Sizing Period: #1 HONOLULU INTL ARPT ANN CLG .4% CONDNS DB=>MWB 1
+Calculating System sizing
+...for Sizing Period: #2 HONOLULU INTL ARPT ANN CLG .4% CONDNS WB=>MDB 1
+Calculating System sizing
+...for Sizing Period: #3 HONOLULU INTL ARPT ANN HTG 99.6% CONDNS DB 1
+Adjusting Air System Sizing
+Adjusting Standard 62.1 Ventilation Sizing
+Initializing Simulation
+Reporting Surfaces
+Beginning HVAC Sizing Simulation
+Initializing New Environment Parameters, HVAC Sizing Simulation
+Warming up {1}
+Warming up {2}
+Warming up {3}
+Warming up {4}
+Starting HVAC Sizing Simulation at 08/21 for HONOLULU INTL ARPT ANN CLG .4% CONDNS DB=>MWB 1 HVAC Sizing Pass 1
+Initializing New Environment Parameters, HVAC Sizing Simulation
+Warming up {1}
+Warming up {2}
+Warming up {3}
+Warming up {4}
+Starting HVAC Sizing Simulation at 08/21 for HONOLULU INTL ARPT ANN CLG .4% CONDNS WB=>MDB 1 HVAC Sizing Pass 1
+Initializing New Environment Parameters, HVAC Sizing Simulation
+Warming up {1}
+Warming up {2}
+Warming up {3}
+Warming up {4}
+Warming up {5}
+Warming up {6}
+Warming up {7}
+Warming up {8}
+Warming up {9}
+Warming up {10}
+Starting HVAC Sizing Simulation at 02/21 for HONOLULU INTL ARPT ANN HTG 99.6% CONDNS DB 1 HVAC Sizing Pass 1
+Beginning Primary Simulation
+Initializing New Environment Parameters
+Warming up {1}
+Warming up {2}
+Warming up {3}
+Warming up {4}
+Starting Simulation at 08/21 for HONOLULU INTL ARPT ANN CLG .4% CONDNS DB=>MWB 1
+Initializing New Environment Parameters
+Warming up {1}
+Warming up {2}
+Warming up {3}
+Warming up {4}
+Starting Simulation at 08/21 for HONOLULU INTL ARPT ANN CLG .4% CONDNS WB=>MDB 1
+Initializing New Environment Parameters
+Warming up {1}
+Warming up {2}
+Warming up {3}
+Warming up {4}
+Warming up {5}
+Warming up {6}
+Warming up {7}
+Warming up {8}
+Warming up {9}
+Warming up {10}
+Starting Simulation at 02/21 for HONOLULU INTL ARPT ANN HTG 99.6% CONDNS DB 1
+Writing tabular output file results using HTML format.
+Computing Life Cycle Costs and Reporting
+Writing final SQL reports
+EnergyPlus Run Time=00hr 00min  1.42sec
+EnergyPlus Completed Successfully.

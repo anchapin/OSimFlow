@@ -7,9 +7,20 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ## [Unreleased]
 
+### Changed
+- Nomad compatibility mode deprecation messaging now explicitly documents a one-minor-release migration window for `--no-nomad-remote-results-only`.
+
+### Tests
+- Broadened Nomad remote-first baseline coverage for:
+  - deprecation warning guidance in compatibility mode
+  - remote-first behavior (local callable bypass in default mode)
+  - dispatch metadata propagation for result transport/object-storage settings
+
 ### Documentation
 - `docs/compatibility-matrix.md` — OpenStudio compatibility matrix (fixes #260)
 - `docs/release-process.md` — release management, versioning, and deprecation policy (fixes #260)
+- `docs/user-guide.md` — Nomad remote-first behavior and compatibility-toggle migration guidance
+- `docs/nomad-production.md` — production-focused Nomad remote-first/deprecation policy update
 
 ### Added
 - Ongoing development tracking in `CHANGELOG.md`

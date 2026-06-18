@@ -239,6 +239,15 @@ class Campaign:
         else:
             self.extract_fn = extract_kpis
         self.cache = SQLiteCache(cfg.cache_db)
+        self._python_container_image = os.environ.get(
+            "OSIMFLOW_PYTHON_CONTAINER_IMAGE",
+            CONTAINER_PY,
+        )
+        if self._python_container_image != CONTAINER_PY:
+            log.info(
+                "using override for Python container image: %s",
+                self._python_container_image,
+            )
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
@@ -259,11 +268,18 @@ class Campaign:
                     str(cfg.custom_kpi_extractor) if cfg.custom_kpi_extractor else None
                 ),
                 "baseline_sample_id": (str(cfg.baseline["sample_id"]) if cfg.baseline else None),
+                "shard_count": cfg.shard_count,
+                "shard_index": cfg.shard_index,
+                "shard_start": cfg.shard_start,
+                "shard_end": cfg.shard_end,
+                "nomad_fanout_submit_rate_per_sec": cfg.nomad_fanout_submit_rate_per_sec,
+                "nomad_fanout_submit_chunk_size": cfg.nomad_fanout_submit_chunk_size,
             },
         )
         # Per-sample accumulator. The three per-sample steps write here;
         # we emit SampleTrace rows in _finalize_samples().
         self._sample_state: dict[str, dict[str, object]] = {}
+        self._latest_samples_file: Path = self.cfg.samples_file
         log.info("max_workers=%d (fan-out parallelism)", self.max_workers)
         # Job queue for crash recovery (issue #263) + distributed coordination
         # (issue #393). When redis_url is set, build_job_queue returns a
@@ -316,6 +332,17 @@ class Campaign:
                     cfg.result_storage_bucket,
                     exc,
                 )
+        self._executor_submit_transport_kwargs: dict[str, Any] = {
+            "result_transport_mode": "shared_fs",
+        }
+        if self.executor.name == "nomad" and self._result_storage is not None:
+            self._executor_submit_transport_kwargs = {
+                "result_transport_mode": "object_storage",
+                "result_storage_backend": cfg.result_storage_backend,
+                "result_storage_bucket": cfg.result_storage_bucket,
+                "result_storage_prefix": str(cfg.outdir.name),
+                "result_storage_endpoint": cfg.result_storage_endpoint,
+            }
 
         # Cost tracking (issue #447). Built here so the correct backend is
         # always used.  None when enable_cost_tracking is False (zero overhead).
@@ -1276,7 +1303,81 @@ class Campaign:
         base["OSIMFLOW_N_SAMPLES"] = str(self.cfg.n_samples)
         base["OSIMFLOW_EXECUTOR"] = self.executor.name
         base["OSIMFLOW_ALGORITHM"] = self.cfg.algorithm
+        if self.cfg.shard_count is not None and self.cfg.shard_index is not None:
+            base["OSIMFLOW_SHARD_COUNT"] = str(self.cfg.shard_count)
+            base["OSIMFLOW_SHARD_INDEX"] = str(self.cfg.shard_index)
+        if self.cfg.shard_start is not None and self.cfg.shard_end is not None:
+            base["OSIMFLOW_SHARD_START"] = str(self.cfg.shard_start)
+            base["OSIMFLOW_SHARD_END"] = str(self.cfg.shard_end)
         return base
+
+    def _shard_label(self) -> str | None:
+        if self.cfg.shard_count is not None and self.cfg.shard_index is not None:
+            return f"part-{self.cfg.shard_index}-of-{self.cfg.shard_count}"
+        if self.cfg.shard_start is not None and self.cfg.shard_end is not None:
+            return f"range-{self.cfg.shard_start}-{self.cfg.shard_end}"
+        return None
+
+    def _samples_manifest_path(self) -> Path:
+        label = self._shard_label()
+        if label is None:
+            return self.cfg.samples_file
+        return self.cfg.work_dir / f"samples.{label}.json"
+
+    def _apply_sharding(
+        self,
+        samples: list[SampleSpec],
+        *,
+        generation: int,
+    ) -> list[SampleSpec]:
+        """Return only samples assigned to this shard (if sharding configured)."""
+        if self.cfg.shard_count is not None and self.cfg.shard_index is not None:
+            shard_count = self.cfg.shard_count
+            shard_index = self.cfg.shard_index
+            selected = [s for idx, s in enumerate(samples) if idx % shard_count == shard_index]
+            log.info(
+                "sharding(partition): generation=%d selected %d/%d samples (index=%d count=%d)",
+                generation,
+                len(selected),
+                len(samples),
+                shard_index,
+                shard_count,
+            )
+            return selected
+        if self.cfg.shard_start is not None and self.cfg.shard_end is not None:
+            start = self.cfg.shard_start
+            end = self.cfg.shard_end
+            selected = samples[start:end]
+            log.info(
+                "sharding(range): generation=%d selected %d/%d samples (start=%d end=%d)",
+                generation,
+                len(selected),
+                len(samples),
+                start,
+                end,
+            )
+            return selected
+        return samples
+
+    def _fanout_submit_chunk_size(self, total: int) -> int:
+        """Compute bounded chunk size for fan-out submission."""
+        if total <= 0:
+            return 1
+        if self.executor.name != "nomad":
+            return total
+        chunk = self.cfg.nomad_fanout_submit_chunk_size
+        if chunk <= 0:
+            return total
+        return min(total, max(1, chunk))
+
+    def _fanout_submit_interval_s(self) -> float:
+        """Compute per-submit pacing interval for fan-out submission."""
+        if self.executor.name != "nomad":
+            return 0.0
+        rate = self.cfg.nomad_fanout_submit_rate_per_sec
+        if rate is None or rate <= 0:
+            return 0.0
+        return 1.0 / rate
 
     # ------------------------------------------------------------------
     # Manifest writers (issue #277)
@@ -1313,6 +1414,13 @@ class Campaign:
             "campaign_id": self.trace.campaign_id,
             "algorithm": self.cfg.algorithm,
             "n_samples": self.cfg.n_samples,
+            "shard": {
+                "count": self.cfg.shard_count,
+                "index": self.cfg.shard_index,
+                "start": self.cfg.shard_start,
+                "end": self.cfg.shard_end,
+                "label": self._shard_label(),
+            },
             "openstudio_version": self.cfg.openstudio_version,
             "executor_type": self.executor.name,
             "input_variables": {
@@ -1341,7 +1449,7 @@ class Campaign:
             "n_samples": self.cfg.n_samples,
             "max_generations": self.cfg.max_generations,
         }
-        samples_file = self.cfg.samples_file
+        samples_file = self._latest_samples_file
         if samples_file.exists():
             try:
                 samples_data = json.loads(samples_file.read_text())
@@ -1357,6 +1465,14 @@ class Campaign:
         provenance: dict[str, object] = {
             "campaign_id": self.trace.campaign_id,
             "sampling": sampling_details,
+            "shard": {
+                "count": self.cfg.shard_count,
+                "index": self.cfg.shard_index,
+                "start": self.cfg.shard_start,
+                "end": self.cfg.shard_end,
+                "label": self._shard_label(),
+                "samples_file": str(samples_file),
+            },
             "code_hashes": self.code_hashes,
             "environment": {
                 "osimflow_version": _osimflow_version(),
@@ -1733,6 +1849,7 @@ class Campaign:
             # self.trace.status will be "cancelled" — propagate that to
             # campaign_status so the caller sees the correct final state.
             campaign_status = "cancelled" if self.trace.status == "cancelled" else "success"
+            self.trace.status = campaign_status
             return result
         except KeyboardInterrupt:
             campaign_status = "cancelled"
@@ -1751,6 +1868,14 @@ class Campaign:
             # status. Re-raising would crash the worker in concurrent mode
             # and cause test_cancel_during_generation_loop_stops to fail.
             return {"status": "cancelled", "trace": self.trace}
+        except Exception:
+            campaign_status = "failure"
+            self.trace.status = "failure"
+            self.trace.finalize()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+            log.exception("campaign failed")
+            raise
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
             self._restore_signal_handlers()
@@ -1813,8 +1938,11 @@ class Campaign:
         # GAP-009: inject per-sample seed_model / weather_file overrides
         # from the DataPointManager before processing.
         samples = self._inject_dp_overrides(samples)
-        self.cfg.samples_file.parent.mkdir(parents=True, exist_ok=True)
-        self.cfg.samples_file.write_text(json.dumps({"samples": samples}, indent=2))
+        samples = self._apply_sharding(samples, generation=0)
+        samples_path = self._samples_manifest_path()
+        samples_path.parent.mkdir(parents=True, exist_ok=True)
+        samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+        self._latest_samples_file = samples_path
         parameterized: SampleDict = self.step_apply_parameters(samples)
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
         kpi_files: list[Path] = self.step_extract_kpis(simulated)
@@ -1863,7 +1991,7 @@ class Campaign:
         """Single-sample mode: run only sample N through steps 2-4."""
         sample_idx = self.cfg.sample
         assert sample_idx is not None
-        samples_file = self.cfg.samples_file
+        samples_file = self._samples_manifest_path()
         if not samples_file.exists():
             raise FileNotFoundError(
                 f"samples.json not found at {samples_file}. "
@@ -2024,9 +2152,11 @@ class Campaign:
         # GAP-009: inject per-sample seed_model / weather_file overrides
         # from the DataPointManager before processing.
         samples = self._inject_dp_overrides(samples)
-        samples_link = self.cfg.samples_file
+        samples = self._apply_sharding(samples, generation=generation)
+        samples_link = self._samples_manifest_path()
         samples_link.parent.mkdir(parents=True, exist_ok=True)
         samples_link.write_text(json.dumps({"samples": samples}, indent=2))
+        self._latest_samples_file = samples_link
 
         if generation == 0:
             self.step_preflight_run_model()
@@ -2368,7 +2498,7 @@ class Campaign:
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
             code_sha256=self.code_hashes["bin"],
-            container_digest=CONTAINER_PY,
+            container_digest=self._python_container_image,
             generation=generation,
         )
         cached = self.cache.lookup(key)
@@ -2599,7 +2729,7 @@ class Campaign:
         )
         self._obs.record_step_duration("VALIDATE_MEASURE_VARIABLES", time.time() - t0)
 
-    def step_apply_parameters(  # noqa: PLR0915
+    def step_apply_parameters(  # noqa: PLR0912, PLR0915
         self,
         samples: list[SampleSpec],
         generation: int = 0,
@@ -2710,7 +2840,7 @@ class Campaign:
                 openstudio_version="N/A",
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
-                container_digest=CONTAINER_PY,
+                container_digest=self._python_container_image,
                 generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
@@ -2731,73 +2861,83 @@ class Campaign:
                 "seed_model_override": seed_model_override,
             }
 
-        # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
-        for sid, ctx in pending.items():
-            # Soft pause (issue #553): if pause is requested, stop submitting new
-            # samples. Pending samples will be re-evaluated on resume.
+        # --- Phase 2/3: bounded submit and await in chunks ---
+        pending_items = list(pending.items())
+        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        submit_interval_s = self._fanout_submit_interval_s()
+        next_submit_at = 0.0
+        for chunk_start in range(0, len(pending_items), chunk_size):
             if self._check_pause_requested():
                 break
-            handle: Handle | TQHandle
-            # GAP-009: use per-sample seed_model override if set,
-            # otherwise fall back to the campaign-level template_sim_package.
-            template_pkg: Path = (
-                Path(ctx["seed_model_override"])
-                if ctx["seed_model_override"]
-                else self.cfg.template_sim_package
-            )
-            if self.task_queue is not None:
-                handle = self.task_queue.submit(
-                    self.apply_fn,
-                    template_pkg,
-                    ctx["resolved_params"],
-                    sid,
-                    ctx["out_dir"],
+            submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
+            chunk = pending_items[chunk_start : chunk_start + chunk_size]
+            for sid, ctx in chunk:
+                if self._check_pause_requested():
+                    break
+                if submit_interval_s > 0.0:
+                    now = time.monotonic()
+                    if now < next_submit_at:
+                        time.sleep(next_submit_at - now)
+                    next_submit_at = max(next_submit_at, now) + submit_interval_s
+                handle: Handle | TQHandle
+                # GAP-009: use per-sample seed_model override if set,
+                # otherwise fall back to the campaign-level template_sim_package.
+                template_pkg: Path = (
+                    Path(ctx["seed_model_override"])
+                    if ctx["seed_model_override"]
+                    else self.cfg.template_sim_package
                 )
-            else:
-                handle = self.executor.submit(
-                    self.apply_fn,
-                    template_pkg,
-                    ctx["resolved_params"],
-                    sid,
-                    ctx["out_dir"],
-                    name=f"apply_{sid}",
-                    cpus=1,
-                    memory_mb=512,
-                    time_min=5,
-                    container=CONTAINER_PY,
-                )
-
-            # Build the on-success callback (captures per-sample context).
-            key = ctx["key"]
-            state = ctx["state"]
-            out_dir = ctx["out_dir"]
-            archive = self.cfg.archive_intermediates
-
-            def _on_success(
-                result_path: Any,
-                _sid: str = sid,
-                _key: CacheKey = key,
-                _state: dict[str, object] = state,
-                _out_dir: Path = out_dir,
-                _archive: bool = archive,
-            ) -> None:
-                self.cache.store(_key, Path(result_path), exit_code=0)
-                out[_sid] = Path(result_path)
-                _state["apply_exit_code"] = 0
-                _state["apply_status"] = "ok"
-                self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
-                # Archive modified .osw/.osm when flag is set
-                if _archive:
-                    archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
-                    self._archive_sample_artifacts(
-                        Path(result_path), archive_dst, ["*.osw", "*.osm"]
+                if self.task_queue is not None:
+                    handle = self.task_queue.submit(
+                        self.apply_fn,
+                        template_pkg,
+                        ctx["resolved_params"],
+                        sid,
+                        ctx["out_dir"],
+                    )
+                else:
+                    handle = self.executor.submit(
+                        self.apply_fn,
+                        template_pkg,
+                        ctx["resolved_params"],
+                        sid,
+                        ctx["out_dir"],
+                        name=f"apply_{sid}",
+                        cpus=1,
+                        memory_mb=512,
+                        time_min=5,
+                        container=self._python_container_image,
+                        result_hint=Path(ctx["out_dir"]) / sid,
+                        **self._executor_submit_transport_kwargs,
                     )
 
-            submissions[sid] = (handle, _on_success)
+                # Build the on-success callback (captures per-sample context).
+                key = ctx["key"]
+                state = ctx["state"]
+                out_dir = ctx["out_dir"]
+                archive = self.cfg.archive_intermediates
 
-        # --- Phase 3: await all results concurrently ---
-        self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
+                def _on_success(
+                    result_path: Any,
+                    _sid: str = sid,
+                    _key: CacheKey = key,
+                    _state: dict[str, object] = state,
+                    _out_dir: Path = out_dir,
+                    _archive: bool = archive,
+                ) -> None:
+                    self.cache.store(_key, Path(result_path), exit_code=0)
+                    out[_sid] = Path(result_path)
+                    _state["apply_exit_code"] = 0
+                    _state["apply_status"] = "ok"
+                    self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
+                    if _archive:
+                        archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
+                        self._archive_sample_artifacts(
+                            Path(result_path), archive_dst, ["*.osw", "*.osm"]
+                        )
+
+                submissions[sid] = (handle, _on_success)
+            self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
         total_cost = sum(
             float(str(_v)) if _v is not None else 0.0
             for _v in (s.get("cost_usd") for s in self._sample_state.values())
@@ -2824,7 +2964,7 @@ class Campaign:
         self._obs.record_step_duration("APPLY_PARAMETERS", time.time() - t0, generation=generation)
         return out
 
-    def step_run_openstudio_sim(  # noqa: PLR0915
+    def step_run_openstudio_sim(  # noqa: PLR0912, PLR0915
         self,
         parameterized: SampleDict,
         generation: int = 0,
@@ -2912,117 +3052,7 @@ class Campaign:
                 "stderr_log": stderr_log,
             }
 
-        # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
-        for sid, ctx in pending.items():
-            # Soft pause (issue #553): stop submitting new samples.
-            if self._check_pause_requested():
-                break
-            handle: Handle | TQHandle
-            if self.task_queue is not None:
-                handle = self.task_queue.submit(
-                    run_openstudio_sim,
-                    ctx["mod_pkg"],
-                    sid,
-                    os_version,
-                    ctx["out_dir"],
-                    openstudio_version=os_version,
-                    stdout_path=ctx["stdout_log"],
-                    stderr_path=ctx["stderr_log"],
-                    max_retries=self.cfg.max_sample_retries,
-                    worker_id="local",
-                )
-            else:
-                handle = self.executor.submit(
-                    run_openstudio_sim,
-                    ctx["mod_pkg"],
-                    sid,
-                    os_version,
-                    ctx["out_dir"],
-                    name=f"sim_{sid}",
-                    cpus=4,
-                    memory_mb=8 * 1024,
-                    time_min=240,
-                    container=CONTAINER_OS.format(version=os_version),
-                    openstudio_version=os_version,
-                    stdout_path=ctx["stdout_log"],
-                    stderr_path=ctx["stderr_log"],
-                    max_retries=self.cfg.max_sample_retries,
-                    worker_id="local",
-                )
-
-            # Build the on-success callback (captures per-sample context).
-            key = ctx["key"]
-            state = ctx["state"]
-            archive = self.cfg.archive_intermediates
-            h = handle
-
-            def _on_success(
-                result_path: Any,
-                _sid: str = sid,
-                _key: CacheKey = key,
-                _state: dict[str, object] = state,
-                _archive: bool = archive,
-                _handle: Handle | TQHandle = h,
-            ) -> None:
-                # Intermediate-file optimization (PRD §1.4): drop empty
-                # `.err` (the eplusout.err from the OpenStudio run). The
-                # per-sample `stderr.log` is the *replacement* and is
-                # preserved regardless of size.
-                err = result_path / "eplusout.err"
-                if err.exists() and err.stat().st_size == 0:
-                    err.unlink()
-                # NOTE(issue #274): eplusout.sql is preserved unconditionally.
-                # It is NEVER deleted after a successful simulation because it
-                # contains the full 8760-hour raw time-series needed by the
-                # time-series API. The file lives at
-                #   {outdir}/work/sim/{sample_id}/eplusout.sql
-                # and is available for querying even when --archive_intermediates
-                # is not set. Storage implications: 5-200+ MB per sample.
-                self.cache.store(_key, Path(result_path), exit_code=0)
-                out[_sid] = Path(result_path)
-                _state["sim_exit_code"] = 0
-                _state["sim_status"] = "ok"
-                _state["eplusout_sql"] = str(result_path / "eplusout.sql")
-                # Worker tracking (issue #105): capture from the sim handle.
-                # TaskHandle only has worker_id; Handle has full worker tracking.
-                _state["worker_id"] = _handle.worker_id
-                _state["worker_ip"] = getattr(_handle, "worker_ip", None)
-                _state["worker_region"] = getattr(_handle, "worker_region", None)
-                # Cost tracking (issue #126): capture from the sim handle.
-                _state["cost_usd"] = getattr(_handle, "cost_usd", None)
-                _state["billed_duration_seconds"] = getattr(
-                    _handle, "billed_duration_seconds", None
-                )
-                self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
-                # Archive eplusout.sql when flag is set
-                if _archive:
-                    archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
-                    self._archive_sample_artifacts(Path(result_path), archive_dst, ["eplusout.sql"])
-                # Result storage upload (issue #339): upload eplusout.sql after
-                # successful simulation when a remote backend is configured.
-                if self._result_storage is not None:
-                    sql_path = result_path / "eplusout.sql"
-                    if sql_path.is_file():
-                        try:
-                            self._result_storage.upload_file(
-                                sql_path,
-                                f"sim/{_sid}/eplusout.sql",
-                            )
-                            log.debug(
-                                "result storage: uploaded eplusout.sql for sample %s",
-                                _sid,
-                            )
-                        except OSError as exc:
-                            log.warning(
-                                "result storage: upload failed for sample %s: %s",
-                                _sid,
-                                exc,
-                            )
-
-            submissions[sid] = (handle, _on_success)
-
-        # --- Phase 3: await all results concurrently ---
+        # --- Phase 2/3: bounded submit and await in chunks ---
         # Worker auto-recovery (issue #443): set up recovery manager and resubmit
         # callback when auto-recovery is enabled.
         recovery_manager: WorkerRecoveryManager | None = None
@@ -3049,7 +3079,6 @@ class Campaign:
                         sid,
                         os_version,
                         ctx["out_dir"],
-                        openstudio_version=os_version,
                         stdout_path=ctx["stdout_log"],
                         stderr_path=ctx["stderr_log"],
                         max_retries=self.cfg.max_sample_retries,
@@ -3072,14 +3101,122 @@ class Campaign:
                         stderr_path=ctx["stderr_log"],
                         max_retries=self.cfg.max_sample_retries,
                         worker_id="local",
+                        result_hint=Path(ctx["out_dir"]) / sid,
+                        **self._executor_submit_transport_kwargs,
                     )
 
-        self._submit_and_await_all(
-            submissions,
-            "RUN_OPENSTUDIO_SIM",
-            recovery_manager=recovery_manager,
-            resubmit_callback=resubmit_callback,
-        )
+        pending_items = list(pending.items())
+        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        submit_interval_s = self._fanout_submit_interval_s()
+        next_submit_at = 0.0
+        for chunk_start in range(0, len(pending_items), chunk_size):
+            if self._check_pause_requested():
+                break
+            submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
+            chunk = pending_items[chunk_start : chunk_start + chunk_size]
+            for sid, ctx in chunk:
+                if self._check_pause_requested():
+                    break
+                if submit_interval_s > 0.0:
+                    now = time.monotonic()
+                    if now < next_submit_at:
+                        time.sleep(next_submit_at - now)
+                    next_submit_at = max(next_submit_at, now) + submit_interval_s
+                handle: Handle | TQHandle
+                if self.task_queue is not None:
+                    handle = self.task_queue.submit(
+                        run_openstudio_sim,
+                        ctx["mod_pkg"],
+                        sid,
+                        os_version,
+                        ctx["out_dir"],
+                        stdout_path=ctx["stdout_log"],
+                        stderr_path=ctx["stderr_log"],
+                        max_retries=self.cfg.max_sample_retries,
+                        worker_id="local",
+                    )
+                else:
+                    handle = self.executor.submit(
+                        run_openstudio_sim,
+                        ctx["mod_pkg"],
+                        sid,
+                        os_version,
+                        ctx["out_dir"],
+                        name=f"sim_{sid}",
+                        cpus=4,
+                        memory_mb=8 * 1024,
+                        time_min=240,
+                        container=CONTAINER_OS.format(version=os_version),
+                        openstudio_version=os_version,
+                        stdout_path=ctx["stdout_log"],
+                        stderr_path=ctx["stderr_log"],
+                        max_retries=self.cfg.max_sample_retries,
+                        worker_id="local",
+                        result_hint=Path(ctx["out_dir"]) / sid,
+                        **self._executor_submit_transport_kwargs,
+                    )
+
+                key = ctx["key"]
+                state = ctx["state"]
+                archive = self.cfg.archive_intermediates
+                h = handle
+
+                def _on_success(
+                    result_path: Any,
+                    _sid: str = sid,
+                    _key: CacheKey = key,
+                    _state: dict[str, object] = state,
+                    _archive: bool = archive,
+                    _handle: Handle | TQHandle = h,
+                ) -> None:
+                    err = result_path / "eplusout.err"
+                    if err.exists() and err.stat().st_size == 0:
+                        err.unlink()
+                    self.cache.store(_key, Path(result_path), exit_code=0)
+                    out[_sid] = Path(result_path)
+                    _state["sim_exit_code"] = 0
+                    _state["sim_status"] = "ok"
+                    _state["eplusout_sql"] = str(result_path / "eplusout.sql")
+                    _state["worker_id"] = _handle.worker_id
+                    _state["worker_ip"] = getattr(_handle, "worker_ip", None)
+                    _state["worker_region"] = getattr(_handle, "worker_region", None)
+                    _state["cost_usd"] = getattr(_handle, "cost_usd", None)
+                    _state["billed_duration_seconds"] = getattr(
+                        _handle, "billed_duration_seconds", None
+                    )
+                    self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
+                    if _archive:
+                        archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
+                        self._archive_sample_artifacts(
+                            Path(result_path), archive_dst, ["eplusout.sql"]
+                        )
+                    if self._result_storage is not None:
+                        sql_path = result_path / "eplusout.sql"
+                        if sql_path.is_file():
+                            try:
+                                self._result_storage.upload_file(
+                                    sql_path,
+                                    f"sim/{_sid}/eplusout.sql",
+                                )
+                                log.debug(
+                                    "result storage: uploaded eplusout.sql for sample %s",
+                                    _sid,
+                                )
+                            except OSError as exc:
+                                log.warning(
+                                    "result storage: upload failed for sample %s: %s",
+                                    _sid,
+                                    exc,
+                                )
+
+                submissions[sid] = (handle, _on_success)
+
+            self._submit_and_await_all(
+                submissions,
+                "RUN_OPENSTUDIO_SIM",
+                recovery_manager=recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
         total_cost = sum(
             float(str(_v)) if _v is not None else 0.0
             for _v in (s.get("cost_usd") for s in self._sample_state.values())
@@ -3108,7 +3245,7 @@ class Campaign:
         )
         return out
 
-    def step_extract_kpis(  # noqa: PLR0915
+    def step_extract_kpis(  # noqa: PLR0912, PLR0915
         self,
         simulated: SampleDict,
         generation: int = 0,
@@ -3138,7 +3275,7 @@ class Campaign:
                 openstudio_version="N/A",
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
-                container_digest=CONTAINER_PY,
+                container_digest=self._python_container_image,
                 generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
@@ -3158,73 +3295,82 @@ class Campaign:
                 "state": state,
             }
 
-        # --- Phase 2: submit all non-cached samples at once ---
-        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
-        for sid, ctx in pending.items():
-            # Soft pause (issue #553): stop submitting new samples.
+        # --- Phase 2/3: bounded submit and await in chunks ---
+        pending_items = list(pending.items())
+        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        submit_interval_s = self._fanout_submit_interval_s()
+        next_submit_at = 0.0
+        for chunk_start in range(0, len(pending_items), chunk_size):
             if self._check_pause_requested():
                 break
-            handle: Handle | TQHandle
-            if self.task_queue is not None:
-                handle = self.task_queue.submit(
-                    self.extract_fn,
-                    ctx["sim_dir"],
-                    sid,
-                    ctx["kpi_dir"],
-                )
-            else:
-                handle = self.executor.submit(
-                    self.extract_fn,
-                    ctx["sim_dir"],
-                    sid,
-                    ctx["kpi_dir"],
-                    name=f"kpi_{sid}",
-                    cpus=1,
-                    memory_mb=1024,
-                    time_min=10,
-                    container=CONTAINER_PY,
-                )
+            submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
+            chunk = pending_items[chunk_start : chunk_start + chunk_size]
+            for sid, ctx in chunk:
+                if self._check_pause_requested():
+                    break
+                if submit_interval_s > 0.0:
+                    now = time.monotonic()
+                    if now < next_submit_at:
+                        time.sleep(next_submit_at - now)
+                    next_submit_at = max(next_submit_at, now) + submit_interval_s
+                handle: Handle | TQHandle
+                if self.task_queue is not None:
+                    handle = self.task_queue.submit(
+                        self.extract_fn,
+                        ctx["sim_dir"],
+                        sid,
+                        ctx["kpi_dir"],
+                    )
+                else:
+                    handle = self.executor.submit(
+                        self.extract_fn,
+                        ctx["sim_dir"],
+                        sid,
+                        ctx["kpi_dir"],
+                        name=f"kpi_{sid}",
+                        cpus=1,
+                        memory_mb=1024,
+                        time_min=10,
+                        container=self._python_container_image,
+                        result_hint=Path(ctx["kpi_dir"]) / f"kpi_{sid}.json",
+                        **self._executor_submit_transport_kwargs,
+                    )
 
-            # Build the on-success callback (captures per-sample context).
-            key = ctx["key"]
-            state = ctx["state"]
+                key = ctx["key"]
+                state = ctx["state"]
 
-            def _on_success(
-                result_path: Any,
-                _sid: str = sid,
-                _key: CacheKey = key,
-                _state: dict[str, object] = state,
-            ) -> None:
-                self.cache.store(_key, Path(result_path), exit_code=0)
-                out.append(Path(result_path))
-                _state["extract_exit_code"] = 0
-                _state["extract_status"] = "ok"
-                self.trace.step_item_done("EXTRACT_KPIS", status="ok")
-                # Result storage upload (issue #339): upload KPI JSON after
-                # successful extraction when a remote backend is configured.
-                if self._result_storage is not None:
-                    kpi_path = Path(result_path)
-                    if kpi_path.is_file():
-                        try:
-                            self._result_storage.upload_file(
-                                kpi_path,
-                                f"kpis/{kpi_path.name}",
-                            )
-                            log.debug(
-                                "result storage: uploaded KPI for sample %s",
-                                _sid,
-                            )
-                        except OSError as exc:
-                            log.warning(
-                                "result storage: upload failed for KPI sample %s: %s",
-                                _sid,
-                                exc,
-                            )
+                def _on_success(
+                    result_path: Any,
+                    _sid: str = sid,
+                    _key: CacheKey = key,
+                    _state: dict[str, object] = state,
+                ) -> None:
+                    self.cache.store(_key, Path(result_path), exit_code=0)
+                    out.append(Path(result_path))
+                    _state["extract_exit_code"] = 0
+                    _state["extract_status"] = "ok"
+                    self.trace.step_item_done("EXTRACT_KPIS", status="ok")
+                    if self._result_storage is not None:
+                        kpi_path = Path(result_path)
+                        if kpi_path.is_file():
+                            try:
+                                self._result_storage.upload_file(
+                                    kpi_path,
+                                    f"kpis/{kpi_path.name}",
+                                )
+                                log.debug(
+                                    "result storage: uploaded KPI for sample %s",
+                                    _sid,
+                                )
+                            except OSError as exc:
+                                log.warning(
+                                    "result storage: upload failed for KPI sample %s: %s",
+                                    _sid,
+                                    exc,
+                                )
 
-            submissions[sid] = (handle, _on_success)
-
-        # --- Phase 3: await all results concurrently ---
-        self._submit_and_await_all(submissions, "EXTRACT_KPIS")
+                submissions[sid] = (handle, _on_success)
+            self._submit_and_await_all(submissions, "EXTRACT_KPIS")
         total_cost = sum(
             float(str(_v)) if _v is not None else 0.0
             for _v in (s.get("cost_usd") for s in self._sample_state.values())
@@ -3500,7 +3646,7 @@ class Campaign:
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
             code_sha256=self.code_hashes["bin"],
-            container_digest=CONTAINER_PY,
+            container_digest=self._python_container_image,
         )
         cached = self.cache.lookup(key)
         if cached:
@@ -3528,7 +3674,13 @@ class Campaign:
             cpus=2,
             memory_mb=4 * 1024,
             time_min=15,
-            container=CONTAINER_PY,
+            container=self._python_container_image,
+            result_hint={
+                "csv": self.cfg.outdir / "aggregated_results.csv",
+                "parquet": self.cfg.outdir / "aggregated_results.parquet",
+                "failed": self.cfg.outdir / "failed_simulations.csv",
+            },
+            **self._executor_submit_transport_kwargs,
         )
         result_obj: object = handle.result(timeout=300)
         result = cast_aggregate_result(result_obj)
@@ -3573,7 +3725,9 @@ class Campaign:
             cpus=1,
             memory_mb=1024,
             time_min=10,
-            container=CONTAINER_PY,
+            container=self._python_container_image,
+            result_hint=[],
+            **self._executor_submit_transport_kwargs,
         )
         result_obj: object = handle.result(timeout=120)
         result = cast_plot_paths(result_obj)

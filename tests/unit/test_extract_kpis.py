@@ -155,6 +155,201 @@ def _make_eplusout_sql(
     return path
 
 
+def _make_indexed_tabular_sql(
+    path: Path,
+    *,
+    site_energy_mj_per_m2: float = 433.8,
+    total_site_energy_mj: float = 43380.0,
+    net_site_energy_mj_per_m2: float = 400.0,
+    floor_area_m2: float = 100.0,
+    end_uses: dict[tuple[str, str], float] | None = None,
+    peak_demand_w: float | None = 45000.0,
+    unmet_heating: float | None = 0.0,
+    unmet_cooling: float | None = 12.0,
+) -> Path:
+    """Create an indexed EnergyPlus tabular schema (TabularData + Strings)."""
+    conn = sqlite3.connect(str(path))
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE StringTypes (
+            StringTypeIndex INTEGER PRIMARY KEY,
+            Value TEXT
+        )
+    """)
+    cur.executemany(
+        "INSERT INTO StringTypes VALUES (?, ?)",
+        [
+            (1, "ReportName"),
+            (2, "ReportForString"),
+            (3, "TableName"),
+            (4, "RowName"),
+            (5, "ColumnName"),
+            (6, "Units"),
+        ],
+    )
+    cur.execute("""
+        CREATE TABLE Strings (
+            StringIndex INTEGER,
+            StringTypeIndex INTEGER,
+            Value TEXT,
+            PRIMARY KEY (StringTypeIndex, StringIndex)
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE TabularData (
+            TabularDataIndex INTEGER PRIMARY KEY,
+            ReportNameIndex INTEGER,
+            ReportForStringIndex INTEGER,
+            TableNameIndex INTEGER,
+            RowNameIndex INTEGER,
+            ColumnNameIndex INTEGER,
+            UnitsIndex INTEGER,
+            SimulationIndex INTEGER,
+            RowId INTEGER,
+            ColumnId INTEGER,
+            Value TEXT
+        )
+    """)
+    cur.execute("CREATE TABLE Zones (ZoneIndex INTEGER, FloorArea REAL)")
+    cur.execute("INSERT INTO Zones VALUES (1, ?)", (floor_area_m2,))
+
+    next_index: dict[int, int] = {i: 1 for i in range(1, 7)}
+    value_to_index: dict[tuple[int, str], int] = {}
+
+    def _string_index(string_type_index: int, value: str) -> int:
+        key = (string_type_index, value)
+        if key in value_to_index:
+            return value_to_index[key]
+        idx = next_index[string_type_index]
+        next_index[string_type_index] += 1
+        cur.execute(
+            "INSERT INTO Strings (StringIndex, StringTypeIndex, Value) VALUES (?, ?, ?)",
+            (idx, string_type_index, value),
+        )
+        value_to_index[key] = idx
+        return idx
+
+    tabular_index = 1
+
+    def _insert(
+        report: str,
+        table: str,
+        row: str,
+        col: str,
+        value: str,
+        units: str = "",
+        report_for: str = "Entire Facility",
+    ) -> None:
+        nonlocal tabular_index
+        cur.execute(
+            """
+            INSERT INTO TabularData (
+                TabularDataIndex,
+                ReportNameIndex,
+                ReportForStringIndex,
+                TableNameIndex,
+                RowNameIndex,
+                ColumnNameIndex,
+                UnitsIndex,
+                SimulationIndex,
+                RowId,
+                ColumnId,
+                Value
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?)
+            """,
+            (
+                tabular_index,
+                _string_index(1, report),
+                _string_index(2, report_for),
+                _string_index(3, table),
+                _string_index(4, row),
+                _string_index(5, col),
+                _string_index(6, units),
+                value,
+            ),
+        )
+        tabular_index += 1
+
+    _insert(
+        "AnnualBuildingUtilityPerformanceSummary",
+        "Site and Source Energy",
+        "Total Site Energy",
+        "Energy Per Total Building Area",
+        str(site_energy_mj_per_m2),
+        "MJ/m2",
+    )
+    _insert(
+        "AnnualBuildingUtilityPerformanceSummary",
+        "Site and Source Energy",
+        "Total Site Energy",
+        "Total Energy",
+        str(total_site_energy_mj),
+        "MJ",
+    )
+    _insert(
+        "AnnualBuildingUtilityPerformanceSummary",
+        "Site and Source Energy",
+        "Net Site Energy",
+        "Energy Per Total Building Area",
+        str(net_site_energy_mj_per_m2),
+        "MJ/m2",
+    )
+
+    if end_uses:
+        for (row_name, col_name), val in end_uses.items():
+            _insert(
+                "AnnualBuildingUtilityPerformanceSummary",
+                "End Uses",
+                row_name,
+                col_name,
+                str(val),
+                "GJ",
+            )
+        total_elec = sum(v for (r, c), v in end_uses.items() if c == "Electricity")
+        _insert(
+            "AnnualBuildingUtilityPerformanceSummary",
+            "End Uses",
+            "Total End Uses",
+            "Electricity",
+            str(total_elec),
+            "GJ",
+        )
+
+    if peak_demand_w is not None:
+        _insert(
+            "DemandEndUseComponentsSummary",
+            "End Uses",
+            "Total End Uses",
+            "Electricity",
+            str(peak_demand_w),
+            "W",
+        )
+
+    if unmet_heating is not None:
+        _insert(
+            "AnnualBuildingUtilityPerformanceSummary",
+            "Comfort and Setpoint Not Met Summary",
+            "Time Setpoint Not Met During Occupied Heating",
+            "Facility",
+            str(unmet_heating),
+            "Hours",
+        )
+    if unmet_cooling is not None:
+        _insert(
+            "AnnualBuildingUtilityPerformanceSummary",
+            "Comfort and Setpoint Not Met Summary",
+            "Time Setpoint Not Met During Occupied Cooling",
+            "Facility",
+            str(unmet_cooling),
+            "Hours",
+        )
+
+    conn.commit()
+    conn.close()
+    return path
+
+
 @pytest.fixture()
 def full_sql(tmp_path: Path) -> Path:
     """A synthetic eplusout.sql with all KPI categories populated."""
@@ -185,6 +380,25 @@ def minimal_sql(tmp_path: Path) -> Path:
         peak_demand_w=None,
         unmet_heating=None,
         unmet_cooling=None,
+    )
+
+
+@pytest.fixture()
+def indexed_sql(tmp_path: Path) -> Path:
+    """An eplusout.sql with indexed TabularData schema (no TabularDataWithStrings)."""
+    return _make_indexed_tabular_sql(
+        tmp_path / "indexed_eplusout.sql",
+        site_energy_mj_per_m2=360.0,
+        total_site_energy_mj=36000.0,
+        net_site_energy_mj_per_m2=300.0,
+        floor_area_m2=200.0,
+        end_uses={
+            ("Heating", "Electricity"): 0.050,
+            ("Cooling", "Electricity"): 0.070,
+        },
+        peak_demand_w=60000.0,
+        unmet_heating=5.0,
+        unmet_cooling=20.0,
     )
 
 
@@ -240,6 +454,22 @@ class TestExtractKpisFromSql:
 
         result = ek.extract_kpis_from_sql(sql_path)
         assert result.get("error") == "missing_TabularDataWithStrings"
+
+    def test_indexed_tabular_schema_extraction(self, indexed_sql: Path) -> None:
+        result = ek.extract_kpis_from_sql(indexed_sql)
+
+        assert "error" not in result
+        assert result["eui_kwh_m2_yr"] == pytest.approx(100.0, abs=0.01)
+        assert result["total_site_energy_kwh"] == pytest.approx(10000.0, abs=0.1)
+        assert result["floor_area_m2"] == 200.0
+
+        assert "end_uses" in result
+        assert result["end_uses"]["cooling_electricity_kwh"] > 0
+        assert result["peak_demand_kw"] == pytest.approx(60.0, abs=0.01)
+        assert result["peak_demand_w_per_m2"] == pytest.approx(300.0, abs=0.1)
+
+        assert result["unmet_hours_heating"] == 5.0
+        assert result["unmet_hours_cooling"] == 20.0
 
     def test_corrupt_database(self, tmp_path: Path) -> None:
         sql_path = tmp_path / "eplusout.sql"

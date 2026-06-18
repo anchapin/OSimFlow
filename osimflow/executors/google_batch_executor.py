@@ -41,6 +41,7 @@ from concurrent.futures import Future
 from typing import Any
 
 from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.transport import resolve_result_for_callback
 
 log = logging.getLogger("osimflow.executors.google_batch")
 
@@ -60,11 +61,14 @@ class _GoogleBatchHandle(Handle):
         job_name: str,
         executor: GoogleBatchExecutor,
         submit_params: dict[str, Any],
+        *,
+        result_hint: Any = None,
     ) -> None:
         self.job_id = job_name
         self.job_name = job_name
         self._executor = executor
         self._submit_params = submit_params
+        self._result_hint = result_hint
         self._future: Future[Any] = Future()
         self.worker_id: str | None = job_name
         self.worker_ip: str | None = None
@@ -83,8 +87,9 @@ class _GoogleBatchHandle(Handle):
 
             status = job.status.state
             if status == self._executor._batch_v1.JobStatus.State.SUCCEEDED:
-                self._future.set_result(None)
-                return None
+                resolved = resolve_result_for_callback(self._result_hint, default=None)
+                self._future.set_result(resolved)
+                return resolved
 
             if status == self._executor._batch_v1.JobStatus.State.FAILED:
                 status_details = str(job.status.status_details or "")
@@ -121,8 +126,9 @@ class _GoogleBatchHandle(Handle):
                             raise
                         status = job.status.state
                         if status == self._executor._batch_v1.JobStatus.State.SUCCEEDED:
-                            self._future.set_result(None)
-                            return None
+                            resolved = resolve_result_for_callback(self._result_hint, default=None)
+                            self._future.set_result(resolved)
+                            return resolved
                         status_details = str(job.status.status_details or "unknown reason")
                         msg = (
                             f"Google Batch job {self.job_name!r} failed after fallback: "
@@ -354,6 +360,7 @@ class GoogleBatchExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         openstudio_version = kwargs.get("openstudio_version")
+        result_hint = kwargs.get("result_hint")
 
         log.info(
             "google_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -384,6 +391,7 @@ class GoogleBatchExecutor(BaseExecutor):
             job_name=job_name,
             executor=self,
             submit_params=submit_params,
+            result_hint=result_hint,
         )
 
     def shutdown(self) -> None:

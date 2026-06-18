@@ -80,10 +80,102 @@ The `NomadExecutor` in `osimflow/executors/__init__.py` reads:
 
 - `NOMAD_ADDR` — the cluster HTTP endpoint (default `http://127.0.0.1:4646`)
 - `NOMAD_TOKEN` — the ACL token (required when ACL is enabled)
+- `OSIMFLOW_PYTHON_CONTAINER_IMAGE` — optional override for the Python
+  post-processing container used by APPLY/KPI/AGGREGATE/PLOTS steps.
+  Use this when GHCR access is restricted on Nomad clients (for example,
+  point to a mirrored/private registry image or a preloaded local tag).
+
+Nomad result handling is **remote-first**. The default CLI behavior
+(`--nomad-remote-results-only`) keeps result resolution on remote artifacts
+(shared filesystem result hints or object-storage materialization when
+`result_storage_backend` is configured). The legacy local-callable compatibility
+mode remains available via `--no-nomad-remote-results-only` but is deprecated
+and retained for only one minor release to support migration.
+
+### OpenStack preload path (local-tag strategy)
+
+If your Nomad workers cannot pull GHCR images directly, preload the Python
+image and force OSimFlow to use a local tag:
+
+```bash
+# On each Nomad node
+export PYTHON_IMAGE_SOURCE=ghcr.io/anchapin/scientific_python_image:latest
+export PYTHON_IMAGE_LOCAL_TAG=scientific_python_image:local
+export GHCR_USERNAME=<ghcr-username>        # optional if image is public to your env
+export GHCR_TOKEN=<ghcr-read-token>         # optional if image is public to your env
+
+./scripts/setup_nomad_vm.sh
+```
+
+The setup script verifies the local tag is runnable and writes:
+
+```bash
+/etc/profile.d/osimflow_nomad_env.sh
+```
+
+which exports `OSIMFLOW_PYTHON_CONTAINER_IMAGE=scientific_python_image:local`
+for campaign runs on that node.
 
 No constructor kwarg accepts a token — this matches the security
 model of `AWSBatchExecutor` (IAM role) and `SlurmExecutor` (SSH key):
 credentials come from the environment, not from code.
+
+## Scale hardening playbook (Nomad campaigns)
+
+OSimFlow now includes built-in Nomad scale controls for dispatch mode,
+fan-out pacing/chunking, and coordinator sharding.
+
+### Dispatch policy at scale
+
+`--nomad-dispatch-policy` controls whether OSimFlow uses Nomad parameterized
+dispatch jobs:
+
+- `keep_manual` (default): keep direct job submission unless explicitly
+  requested elsewhere.
+- `force_dispatch`: always use dispatch mode.
+- `auto_prefer_dispatch`: auto-switch to dispatch when estimated run size
+  crosses the executor threshold (chunk-size driven; defaults to dispatching
+  for larger fan-outs).
+
+For large campaigns (thousands of samples), prefer `force_dispatch` to avoid
+registering many near-identical job specs.
+
+### 10k sample recommendation: shard first
+
+For 10k-scale campaigns, run multiple coordinators with built-in sharding
+instead of a single coordinator:
+
+- Partition mode: `--shard-count N --shard-index K`
+- Range mode: `--shard-start A --shard-end B`
+
+This keeps each coordinator’s active fan-out, polling, and result staging
+bounded.
+
+### Staged load ramp (recommended)
+
+Before launching full production scale, ramp in stages:
+
+1. 500 samples
+2. 2,000 samples
+3. 5,000 samples
+4. 10,000 samples
+
+At each stage, validate queue depth, submission latency, allocation resolution
+latency, and object-storage upload latency/error rate before increasing load.
+
+### Operational considerations (polling, submission, storage)
+
+- **Polling pressure:** tune `--nomad-poll-interval-s` and
+  `--nomad-max-poll-interval-s` to reduce API thundering at high concurrency.
+- **Submission backpressure:** use `--nomad-fanout-submit-chunk-size` and
+  `--nomad-fanout-submit-rate-per-sec` to bound burst size and smooth submit
+  rate.
+- **Allocation resolution timeout:** adjust
+  `--nomad-allocation-resolution-timeout-s` for busy clusters with delayed
+  scheduling.
+- **Result-storage backpressure:** keep remote storage enabled and monitor
+  upload queue/retry behavior (bounded queue + retry with exponential
+  backoff) so storage slowdowns do not destabilize the coordinator.
 
 ## Files
 

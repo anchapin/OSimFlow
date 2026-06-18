@@ -608,13 +608,13 @@ class MeasureRegistry:
         (
             "Boolean",
             re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeBooleanArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
+                r'OpenStudio::Measure::OSArgument\.makeBool(?:ean)?Argument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
             ),
         ),
         (
             "Choice",
             re.compile(
-                r'OpenStudio::Measure::OSArgument\.makeChoiceArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
+                r'OpenStudio::Measure::OSArgument\.makeChoiceArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*[^,]+\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
             ),
         ),
         (
@@ -671,7 +671,7 @@ class MeasureRegistry:
         (
             "Boolean",
             re.compile(
-                r'openstudio\.measure\.OSArgument\.makeBooleanArgument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
+                r'openstudio\.measure\.OSArgument\.makeBool(?:ean)?Argument\s*\(\s*["\']([^"\']+)["\']\s*,\s*([Tt]rue|[Ff]alse)\s*\)'
             ),
         ),
         (

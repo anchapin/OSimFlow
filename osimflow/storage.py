@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import queue
+import threading
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -632,20 +635,47 @@ def build_result_storage(
 
 
 class ResultStorageUploader:
-    """Synchronous wrapper that provides upload_file/upload_dir for any ResultStorage.
+    """Bounded, retrying upload queue for any ResultStorage backend."""
 
-    This class exists because AzureBlobStorage's underlying operations are
-    async, but the Campaign's step callbacks are synchronous.  The wrapper
-    uses a ``ThreadPoolExecutor`` to bridge sync → async for Azure, and is
-    a thin pass-through for S3/GCS/local backends.
-    """
-
-    def __init__(self, storage: ResultStorage) -> None:
+    def __init__(
+        self,
+        storage: ResultStorage,
+        *,
+        max_queue_size: int = 128,
+        worker_count: int = 2,
+        max_retries: int = 3,
+        retry_backoff_s: float = 0.5,
+    ) -> None:
         self._storage = storage
         self._azure_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._queue: queue.Queue[tuple[Path, str] | None] = queue.Queue(
+            maxsize=max(1, max_queue_size)
+        )
+        self._worker_count = max(1, worker_count)
+        self._max_retries = max(0, max_retries)
+        self._retry_backoff_s = max(0.0, retry_backoff_s)
+        self._closed = False
+        self._close_lock = threading.Lock()
+        self._errors: list[str] = []
+        self._error_lock = threading.Lock()
+        self._workers: list[threading.Thread] = []
+        for idx in range(self._worker_count):
+            worker = threading.Thread(
+                target=self._worker_loop,
+                name=f"osimflow-upload-{idx}",
+                daemon=True,
+            )
+            worker.start()
+            self._workers.append(worker)
 
-    def upload_file(self, local_path: Path, remote_path: str) -> None:
-        """Synchronously upload a single file, delegating to the backend."""
+    def _raise_if_failed(self) -> None:
+        with self._error_lock:
+            if not self._errors:
+                return
+            sample = "; ".join(self._errors[:3])
+        raise OSError(f"result storage uploader has failed uploads: {sample}")
+
+    def _upload_once(self, local_path: Path, remote_path: str) -> None:
         if isinstance(self._storage, AzureBlobStorage):
             import asyncio  # noqa: PLC0415
             import concurrent.futures  # noqa: PLC0415
@@ -663,8 +693,53 @@ class ResultStorageUploader:
         else:
             self._storage.upload_file(local_path, remote_path)
 
+    def _worker_loop(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                self._queue.task_done()
+                return
+            local_path, remote_path = item
+            try:
+                last_error: Exception | None = None
+                for attempt in range(self._max_retries + 1):
+                    try:
+                        self._upload_once(local_path, remote_path)
+                        last_error = None
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = exc
+                        if attempt < self._max_retries:
+                            sleep_s = min(60.0, self._retry_backoff_s * (2**attempt))
+                            log.warning(
+                                "result storage: retry %d/%d for %s -> %s after %s",
+                                attempt + 1,
+                                self._max_retries,
+                                local_path,
+                                remote_path,
+                                exc,
+                            )
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
+                if last_error is not None:
+                    msg = f"{local_path} -> {remote_path}: {last_error}"
+                    with self._error_lock:
+                        self._errors.append(msg)
+                    log.error("result storage: upload failed after retries: %s", msg)
+            finally:
+                self._queue.task_done()
+
+    def upload_file(self, local_path: Path, remote_path: str) -> None:
+        """Enqueue a single file upload, applying backpressure when full."""
+        self._raise_if_failed()
+        with self._close_lock:
+            if self._closed:
+                raise OSError("result storage uploader is closed")
+        self._queue.put((local_path, remote_path))
+        self._raise_if_failed()
+
     def upload_dir(self, local_dir: Path, remote_prefix: str) -> None:
-        """Synchronously upload a directory of files, delegating to the backend."""
+        """Enqueue a directory tree for upload."""
         if not local_dir.is_dir():
             return
         for file_path in sorted(local_dir.rglob("*")):
@@ -674,7 +749,18 @@ class ResultStorageUploader:
                 self.upload_file(file_path, remote_path)
 
     def close(self) -> None:
-        """Close the ThreadPoolExecutor used for Azure async uploads."""
+        """Drain the upload queue, stop workers, and surface upload failures."""
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._queue.join()
+        for _ in self._workers:
+            self._queue.put(None)
+        for worker in self._workers:
+            worker.join()
+        self._workers = []
         if self._azure_executor is not None:
             self._azure_executor.shutdown(wait=True)
             self._azure_executor = None
+        self._raise_if_failed()

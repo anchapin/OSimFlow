@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -139,6 +140,12 @@ class TestGoogleBatchHandle:
     def test_result_succeeded(self) -> None:
         handle, _ = self._make_handle(state="SUCCEEDED")
         assert handle.result() is None
+
+    def test_result_succeeded_returns_result_hint(self) -> None:
+        handle, _ = self._make_handle(state="SUCCEEDED")
+        hint = Path("/tmp/osimflow/sim/0001")
+        handle._result_hint = hint  # noqa: SLF001
+        assert handle.result() == hint
 
     def test_result_failed_raises(self) -> None:
         handle, _ = self._make_handle(state="FAILED", status_details="resource not found")

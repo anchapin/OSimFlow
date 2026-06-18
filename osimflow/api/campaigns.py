@@ -1229,6 +1229,20 @@ def _iter_plot_files(
             yield (archive_path, plot_file)
 
 
+def _iter_sample_bundle(sample_dir: Path, include_sql: bool) -> tuple[tuple[str, Path], ...]:
+    """Yield (archive_path, file_path) pairs for a single sample directory."""
+    results: list[tuple[str, Path]] = []
+    for kpi_name in ("kpi.json", "kpis.json"):
+        kpi_file = sample_dir / kpi_name
+        if kpi_file.is_file():
+            results.append((f"samples/{sample_dir.name}/{kpi_name}", kpi_file))
+    if include_sql:
+        sql_file = sample_dir / _BUNDLE_SQL_GLOB
+        if sql_file.is_file():
+            results.append((f"samples/{sample_dir.name}/{_BUNDLE_SQL_GLOB}", sql_file))
+    return tuple(results)
+
+
 def _iter_campaign_bundle(
     campaign_dir: Path,
     *,

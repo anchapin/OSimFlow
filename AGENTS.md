@@ -150,6 +150,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/google_batch_executor.py` | `GoogleBatchExecutor` — Google Cloud Batch executor using the Google Cloud SDK. |
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254). |
 | `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
+| `osimflow/executors/transport.py` | Shared transport/result helpers for remote executors; defines executor-agnostic result reference contract for remote handles. |
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
 | `osimflow/measures.py` | `MeasureRegistry`, `Measure`, `MeasureArgument`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError` — measure discovery, argument introspection, and variable validation for parametric campaigns (issue #532). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
@@ -244,11 +245,16 @@ The 7-step DAG that the `Campaign` class drives:
 - `--dask-cluster-type`, `--dask-min-workers`, `--dask-max-workers`, `--dask-cpus-per-worker`, `--dask-memory-per-worker`, `--dask-walltime`, `--dask-queue`, `--dask-project` (Dask-JobQueue elastic HPC executor configuration; issue #338)
 - `--task-queue` (distributed task queue backend: `none` (default) or `dask`; issue #335)
 - `--dask-scheduler-address` (Dask scheduler address for task queue; issue #335)
+- `--shard-count`, `--shard-index`, `--shard-start`, `--shard-end` (coordinator shard configuration for distributed campaign execution)
 - `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
 - `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
 - `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)
 - `--nomad-address`, `--nomad-datacentre`
+- `--nomad-remote-results-only` (deprecated compatibility toggle; defaults to remote-result mode. Use `--no-nomad-remote-results-only` only to temporarily enable legacy local-callable behavior)
 - `--nomad-ca-cert`, `--nomad-cert`, `--nomad-key`, `--nomad-tls`, `--nomad-tls-verify` (Nomad TLS configuration; issue #344)
+- `--nomad-poll-interval-s`, `--nomad-max-poll-interval-s`, `--nomad-allocation-resolution-timeout-s` (Nomad polling and allocation configuration)
+- `--nomad-dispatch-policy` (Nomad job dispatch policy; default: `keep_manual`)
+- `--nomad-fanout-submit-chunk-size`, `--nomad-fanout-submit-rate-per-sec` (Nomad fanout submission tuning for large-scale campaigns)
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
