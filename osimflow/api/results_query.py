@@ -218,9 +218,7 @@ async def export_campaign_results(
         return Response(
             content=content,
             media_type="application/json",
-            headers={
-                "Content-Disposition": f'attachment; filename="{campaign_id}_results.json"'
-            },
+            headers={"Content-Disposition": f'attachment; filename="{campaign_id}_results.json"'},
         )
 
     # CSV format
@@ -230,9 +228,7 @@ async def export_campaign_results(
     return Response(
         content=csv_content,
         media_type="text/csv",
-        headers={
-            "Content-Disposition": f'attachment; filename="{campaign_id}_results.csv"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{campaign_id}_results.csv"'},
     )
 
 
@@ -436,7 +432,11 @@ def export_results_cli(  # noqa: PLR0912
 
     if format == "json":
         records = json.loads(combined.to_json(orient="records"))
-        content = json.dumps({"campaigns": [label for _, label in paths_to_query], "rows": records}, indent=2, default=str)
+        content = json.dumps(
+            {"campaigns": [label for _, label in paths_to_query], "rows": records},
+            indent=2,
+            default=str,
+        )
     else:
         output = io.StringIO()
         combined.to_csv(output, index=False)

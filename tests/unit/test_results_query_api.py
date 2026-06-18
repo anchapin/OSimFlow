@@ -79,7 +79,9 @@ def multi_campaign_client(tmp_path: Path) -> TestClient:
             "per_sample": [],
         }
         (campaign_dir / "run.json").write_text(json.dumps(run_json))
-        csv_content = f"sample_id,status,kpi.eui,kpi.cost\ns{i:04d},ok,{150 + i:.1f},{1000 + i * 100:.0f}\n"
+        csv_content = (
+            f"sample_id,status,kpi.eui,kpi.cost\ns{i:04d},ok,{150 + i:.1f},{1000 + i * 100:.0f}\n"
+        )
         (campaign_dir / "aggregated_results.csv").write_text(csv_content)
 
     app = create_app(campaigns_base_dir=base)
@@ -134,9 +136,7 @@ class TestQueryCampaignResults:
     def test_query_filter_by_json(self, client: TestClient) -> None:
         """MongoDB-style JSON filter works."""
         filter_json = json.dumps({"status": "ok"})
-        resp = client.get(
-            f"/api/v1/campaigns/test-campaign-001/results/query?filter={filter_json}"
-        )
+        resp = client.get(f"/api/v1/campaigns/test-campaign-001/results/query?filter={filter_json}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 3
@@ -146,9 +146,7 @@ class TestQueryCampaignResults:
     def test_query_filter_numeric_gt(self, client: TestClient) -> None:
         """Numeric $gt filter works."""
         filter_json = json.dumps({"kpi.eui": {"$gt": 150}})
-        resp = client.get(
-            f"/api/v1/campaigns/test-campaign-001/results/query?filter={filter_json}"
-        )
+        resp = client.get(f"/api/v1/campaigns/test-campaign-001/results/query?filter={filter_json}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 3  # 150.5, 155.8, 200.0
@@ -157,9 +155,7 @@ class TestQueryCampaignResults:
 
     def test_query_invalid_filter_json(self, client: TestClient) -> None:
         """Invalid filter JSON returns 400."""
-        resp = client.get(
-            "/api/v1/campaigns/test-campaign-001/results/query?filter=not-valid-json"
-        )
+        resp = client.get("/api/v1/campaigns/test-campaign-001/results/query?filter=not-valid-json")
         assert resp.status_code == 400
 
 
@@ -187,9 +183,7 @@ class TestExportCampaignResults:
 
     def test_export_filter_by_status(self, client: TestClient) -> None:
         """Export respects status filter."""
-        resp = client.get(
-            "/api/v1/campaigns/test-campaign-001/results/export?status=ok"
-        )
+        resp = client.get("/api/v1/campaigns/test-campaign-001/results/export?status=ok")
         assert resp.status_code == 200
         if resp.headers["content-type"].startswith("text/csv"):
             lines = resp.text.strip().split("\n")
@@ -201,9 +195,7 @@ class TestExportCampaignResults:
 
     def test_export_exclude_failed(self, client: TestClient) -> None:
         """include_failed=false excludes failed rows."""
-        resp = client.get(
-            "/api/v1/campaigns/test-campaign-001/results/export?include_failed=false"
-        )
+        resp = client.get("/api/v1/campaigns/test-campaign-001/results/export?include_failed=false")
         assert resp.status_code == 200
         if resp.headers["content-type"].startswith("text/csv"):
             lines = resp.text.strip().split("\n")

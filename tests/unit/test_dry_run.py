@@ -79,9 +79,7 @@ def test_dry_run_does_not_produce_aggregated_csv(
     assert not (outdir / "plots").exists()
 
 
-def test_dry_run_writes_run_json(
-    campaign_workdir: Path, template_pkg: Path, outdir: Path
-) -> None:
+def test_dry_run_writes_run_json(campaign_workdir: Path, template_pkg: Path, outdir: Path) -> None:
     cfg = CampaignConfig(
         input_variables=campaign_workdir / "variables.yml",
         template_sim_package=template_pkg,

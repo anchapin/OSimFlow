@@ -706,15 +706,25 @@ class CoordinatorHandoffPayload(BaseModel):
     executor: str = Field(description="Executor type: local | slurm | aws_batch | nomad | ...")
     openstudio_version: str = Field(description="OpenStudio version tag (e.g., 3.11.0)")
     input_variables: str | None = Field(default=None, description="URL or path to variables.yml")
-    template_sim_package: str | None = Field(default=None, description="URL or path to template sim package")
+    template_sim_package: str | None = Field(
+        default=None, description="URL or path to template sim package"
+    )
     algorithm: str = Field(default="lhs", description="Sampling algorithm")
     max_generations: int = Field(default=1, ge=1, description="Max DAG generations")
-    custom_apply_script: str | None = Field(default=None, description="URL to custom apply_params script")
-    custom_kpi_extractor: str | None = Field(default=None, description="URL to custom KPI extractor script")
+    custom_apply_script: str | None = Field(
+        default=None, description="URL to custom apply_params script"
+    )
+    custom_kpi_extractor: str | None = Field(
+        default=None, description="URL to custom KPI extractor script"
+    )
     archive_intermediates: bool = Field(default=False, description="Archive intermediate files")
     result_storage_backend: str | None = Field(default=None, description="Result storage backend")
-    result_storage_bucket: str | None = Field(default=None, description="Result storage bucket/container")
-    extra: dict[str, Any] | None = Field(default=None, description="Additional executor-specific settings")
+    result_storage_bucket: str | None = Field(
+        default=None, description="Result storage bucket/container"
+    )
+    extra: dict[str, Any] | None = Field(
+        default=None, description="Additional executor-specific settings"
+    )
 
 
 class CoordinatorHandoffResponse(BaseModel):

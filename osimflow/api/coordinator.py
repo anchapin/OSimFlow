@@ -81,7 +81,12 @@ async def coordinator_handoff(
     }
 
     _campaigns[campaign_id] = record
-    log.info("Campaign %s handed off: name=%s, n_samples=%d", campaign_id, payload.name, payload.n_samples)
+    log.info(
+        "Campaign %s handed off: name=%s, n_samples=%d",
+        campaign_id,
+        payload.name,
+        payload.n_samples,
+    )
 
     return CoordinatorHandoffResponse(
         campaign_id=campaign_id,

@@ -3111,7 +3111,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
             "algorithm": cfg.algorithm,
             "max_generations": cfg.max_generations,
             "input_variables": str(cfg.input_variables) if cfg.input_variables else None,
-            "template_sim_package": str(cfg.template_sim_package) if cfg.template_sim_package else None,
+            "template_sim_package": str(cfg.template_sim_package)
+            if cfg.template_sim_package
+            else None,
             "custom_apply_script": args.custom_apply_script,
             "custom_kpi_extractor": args.custom_kpi_extractor,
             "archive_intermediates": cfg.archive_intermediates,
@@ -3131,10 +3133,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            print(f"error: Coordinator returned {exc.response.status_code}: {exc.response.text}", file=sys.stderr)
+            print(
+                f"error: Coordinator returned {exc.response.status_code}: {exc.response.text}",
+                file=sys.stderr,
+            )
             return 1
         except httpx.RequestError as exc:
-            print(f"error: Failed to reach Coordinator at {args.coordinator_url}: {exc}", file=sys.stderr)
+            print(
+                f"error: Failed to reach Coordinator at {args.coordinator_url}: {exc}",
+                file=sys.stderr,
+            )
             return 1
         result_data = response.json()
         campaign_id = result_data.get("campaign_id", "unknown")
