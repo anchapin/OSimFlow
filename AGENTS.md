@@ -43,7 +43,7 @@ Orchestrator → Executor → Work function
   drives the 6-step DAG.
 - **Executor** — `osimflow/executors/__init__.py` provides
   `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
-  `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, and `DockerSwarmExecutor` implementations.
+`AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, and `DockerSwarmExecutor` implementations.
 - **Work function** — `osimflow/work.py` (per-step logic) and
   `bin/*.py` (CLI scripts invoked by the work layer) implement the
   actual step work.
@@ -152,6 +152,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254). |
 | `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
 | `osimflow/executors/transport.py` | Shared transport/result helpers for remote executors; defines executor-agnostic result reference contract for remote handles. |
+| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the Docker Python SDK; creates a Swarm Service per call and polls tasks with exponential backoff (issue #582).
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
 | `osimflow/measures.py` | `MeasureRegistry`, `Measure`, `MeasureArgument`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError` — measure discovery, argument introspection, and variable validation for parametric campaigns (issue #532). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
@@ -258,6 +259,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--nomad-fanout-submit-chunk-size`, `--nomad-fanout-submit-rate-per-sec` (Nomad fanout submission tuning for large-scale campaigns)
 - `--docker-swarm-image`, `--docker-swarm-network`, `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s` (Docker Swarm executor configuration)
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
+- `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s`, `--docker-swarm-image`, `--docker-swarm-network` (Docker Swarm executor configuration; issue #582)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
 - `--nsga2-reference-points` (comma-separated aspiration fractions for R-NSGA-II, e.g. `0.25,0.5,0.75`; issue #529)
@@ -289,6 +291,11 @@ The 7-step DAG that the `Campaign` class drives:
 - `--result-storage-backend` (result storage backend: `local` (default), `s3`, `gs`, `azure`; issue #339)
 - `--result-storage-bucket` (bucket/container name for result storage; issue #339)
 - `--result-storage-endpoint` (custom S3-compatible endpoint URL for result storage; issue #339)
+- `--s3-artifact-bucket` (S3 bucket name for centralized artifact storage; issue #601)
+- `--s3-artifact-prefix` (S3 key prefix for artifact organization; issue #601)
+- `--s3-artifact-region` (AWS region for S3 artifact bucket; issue #601)
+- `--s3-artifact-endpoint` (custom S3 endpoint URL for S3 artifact storage; issue #601)
+- `--s3-artifact-presigned-url-expiration` (presigned URL expiration time in seconds for S3 artifact access; issue #601)
 - `--log_level`
 - `--alert-destinations` (alert receiver endpoints for campaign events)
 - `--alert-rules` (alert routing rules for campaign events)

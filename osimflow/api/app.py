@@ -36,6 +36,7 @@ from osimflow.api.auth import (
     validate_api_key,
 )
 from osimflow.api.campaigns import campaigns_router
+from osimflow.api.dashboard import dashboard_router
 from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
@@ -1179,6 +1180,7 @@ def create_app(
     ui_enabled: bool = False,
     variable_editor: bool = False,
     results_viewer: bool = False,
+    dashboard: bool = False,
     registry_path: Path | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
@@ -1231,6 +1233,10 @@ def create_app(
         Enable the web UI router (issue #337).
     variable_editor
         Enable the Variable Designer web UI at /ui/designer/ (issue #587).
+    dashboard
+        Enable the real-time HTML campaign dashboard at /dashboard (issue #586).
+        The dashboard shows live sample counts, step progress, and a status pie
+        chart updated via SSE events from ``/api/v1/events``.
     registry_path
         Path to the campaign registry database (issue #404).  When set,
         the ``POST /api/v1/campaigns/compare`` endpoint can resolve
@@ -1346,6 +1352,9 @@ def create_app(
         async def variable_designer_redirect() -> RedirectResponse:
             """Redirect /ui/designer/ to the Variable Designer HTML page."""
             return RedirectResponse(url="/static/variable_designer.html")
+
+    if dashboard:
+        app.include_router(dashboard_router)
 
     app.include_router(measures_router)
 

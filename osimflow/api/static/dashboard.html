@@ -1,52 +1,64 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OSimFlow — Real-Time Dashboard</title>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0f1117;--surface:#1a1d27;--surface-alt:#222633;--border:#2e3345;
-  --text:#e2e4eb;--text-muted:#8b8fa3;--primary:#6c8cff;--primary-dim:#4a67d6;
-  --success:#4ade80;--warning:#fbbf24;--danger:#f87171;--cached:#a78bfa;
-  --radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-}
-html{font-size:15px}
-body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
-.app{max-width:1400px;margin:0 auto;padding:24px 32px}
-.hdr{display:flex;align-items:center;gap:16px;margin-bottom:28px;flex-wrap:wrap}
-.hdr h1{font-size:1.5rem;font-weight:700;color:var(--primary);flex:1}
-.conn-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:12px;font-size:0.8rem;background:var(--surface-alt);border:1px solid var(--border)}
-.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted)}
-.conn-badge.connected .conn-dot{background:var(--success)}
-.conn-badge.error .conn-dot{background:var(--danger)}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:28px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px}
-.card-label{font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px}
-.card-value{font-size:1.8rem;font-weight:700;line-height:1.1}
-.card-value.ok{color:var(--success)}.card-value.fail{color:var(--danger)}
-.card-value.cached{color:var(--cached)}.card-value.run{color:var(--warning)}
-.card-value.neutral{color:var(--text-muted)}
-.pct-row{display:flex;gap:16px;margin-top:8px;font-size:0.8rem;color:var(--text-muted)}
-.pct-row span{color:var(--text)}
-.section-title{font-size:1.05rem;font-weight:600;margin:32px 0 14px;color:var(--text)}
-.section-title:first-of-type{margin-top:0}
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OSimFlow Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #334155;
+      --ok: #22c55e;
+      --fail: #ef4444;
+      --cached: #60a5fa;
+      --running: #f59e0b;
+      --healthy: #22c55e;
+      --degraded: #f59e0b;
+      --unhealthy: #ef4444;
+      --unknown: #94a3b8;
+      --accent: #3b82f6;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+    .app { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+    .header { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; flex-wrap: wrap; }
+    .header h1 { font-size: 1.5rem; font-weight: 700; color: var(--accent); flex: 1; }
+    .conn-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; background: var(--card-bg); border: 1px solid var(--border); }
+    .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .conn-badge.connected .conn-dot { background: var(--ok); }
+    .conn-badge.error .conn-dot { background: var(--fail); }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; }
+    .card-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .card-value { font-size: 1.8rem; font-weight: 700; line-height: 1.1; }
+    .card-value.ok { color: var(--ok); }
+    .card-value.fail { color: var(--fail); }
+    .card-value.cached { color: var(--cached); }
+    .card-value.run { color: var(--running); }
+    .card-value.neutral { color: var(--muted); }
+    .pct-row { display: flex; gap: 16px; margin-top: 8px; font-size: 0.8rem; color: var(--muted); }
+    .pct-row span { color: var(--text); }
+    .section-title { font-size: 1.05rem; font-weight: 600; margin: 32px 0 14px; color: var(--text); }
+    .section-title:first-of-type { margin-top: 0; }
 
-/* Chart layout */
-.chart-layout{display:grid;grid-template-columns:1fr 1.4fr;gap:32px;align-items:start}
-@media(max-width:900px){.chart-layout{grid-template-columns:1fr}}
-.chart-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px}
-.chart-panel h3{font-size:0.95rem;font-weight:600;margin-bottom:16px;color:var(--text-muted)}
-#pie-chart{width:100%;max-width:320px;margin:0 auto;display:block}
-.chart-legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:16px;justify-content:center}
-.legend-item{display:flex;align-items:center;gap:6px;font-size:0.82rem}
-.legend-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+    /* Chart layout */
+    .chart-layout { display: grid; grid-template-columns: 1fr 1.4fr; gap: 32px; align-items: start; }
+    @media (max-width: 900px) { .chart-layout { grid-template-columns: 1fr; } }
+    .chart-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; }
+    .chart-panel h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 16px; color: var(--muted); }
+    #pie-chart { width: 100%; max-width: 320px; margin: 0 auto; display: block; }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; justify-content: center; }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
-/* Campaign list */
-.campaign-list{display:flex;flex-direction:column;gap:12px}
-.campaign-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px}
-.campaign-item-header{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+    /* Campaign list */
+    .campaign-list { display: flex; flex-direction: column; gap: 12px; }
+    .campaign-item { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; }
+    .campaign-item-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .campaign-item-name{font-weight:600;font-size:0.95rem;flex:1}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600}
 .badge-run{background:rgba(251,191,36,0.15);color:var(--warning)}
@@ -529,6 +541,389 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:
   }
 
 })();
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #334155;
+      --ok: #22c55e;
+      --fail: #ef4444;
+      --cached: #60a5fa;
+      --running: #f59e0b;
+      --healthy: #22c55e;
+      --degraded: #f59e0b;
+      --unhealthy: #ef4444;
+      --unknown: #94a3b8;
+      --accent: #3b82f6;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1.5rem; }
+    h1 { font-size: 1.4rem; margin-bottom: 1.2rem; color: var(--accent); letter-spacing: -0.02em; }
+    h2 { font-size: 1rem; color: var(--muted); margin-bottom: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    .status-badge { font-size: 0.8rem; font-weight: 700; padding: 0.3rem 0.8rem; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .status-badge.healthy { background: rgba(34,197,94,0.15); color: var(--healthy); border: 1px solid var(--healthy); }
+    .status-badge.degraded { background: rgba(245,158,11,0.15); color: var(--degraded); border: 1px solid var(--degraded); }
+    .status-badge.unhealthy { background: rgba(239,68,68,0.15); color: var(--unhealthy); border: 1px solid var(--unhealthy); }
+    .status-badge.unknown { background: rgba(148,163,184,0.1); color: var(--unknown); border: 1px solid var(--border); }
+    .status-badge.running { background: rgba(245,158,11,0.15); color: var(--running); border: 1px solid var(--running); }
+    .status-badge.success { background: rgba(34,197,94,0.1); color: var(--ok); border: 1px solid var(--ok); }
+    .status-badge.failed { background: rgba(239,68,68,0.1); color: var(--fail); border: 1px solid var(--fail); }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+    .card-title { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.5rem; }
+    .card-value { font-size: 2rem; font-weight: 700; line-height: 1; }
+    .card-value.small { font-size: 1.2rem; }
+
+    .stat-row { display: flex; gap: 0.5rem; margin-top: 0.4rem; flex-wrap: wrap; }
+    .stat-chip { display: flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; padding: 0.2rem 0.6rem; border-radius: 99px; background: rgba(255,255,255,0.05); }
+    .stat-chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .stat-chip.ok { color: var(--ok); }
+    .stat-chip.ok .dot { background: var(--ok); }
+    .stat-chip.fail { color: var(--fail); }
+    .stat-chip.fail .dot { background: var(--fail); }
+    .stat-chip.cached { color: var(--cached); }
+    .stat-chip.cached .dot { background: var(--cached); }
+    .stat-chip.running { color: var(--running); }
+    .stat-chip.running .dot { background: var(--running); }
+
+    .progress-section { margin-bottom: 1.5rem; }
+    .progress-bar-wrap { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+    .progress-label { font-size: 0.8rem; width: 60px; flex-shrink: 0; }
+    .progress-track { flex: 1; height: 12px; background: var(--border); border-radius: 6px; overflow: hidden; display: flex; }
+    .progress-fill { height: 100%; transition: width 0.4s ease; border-radius: 6px; }
+    .progress-fill.ok { background: var(--ok); }
+    .progress-fill.fail { background: var(--fail); }
+    .progress-fill.cached { background: var(--cached); }
+    .progress-fill.running { background: var(--running); }
+    .progress-pct { font-size: 0.75rem; width: 36px; text-align: right; color: var(--muted); }
+
+    .pie-section { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1.5rem; }
+    .pie-chart { flex-shrink: 0; }
+    .pie-chart svg { display: block; }
+    .pie-legend { display: flex; flex-direction: column; gap: 0.4rem; }
+    .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+    .legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+
+    .steps-section { margin-bottom: 1.5rem; }
+    .step-list { display: flex; flex-direction: column; gap: 0.4rem; }
+    .step-item { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.75rem; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
+    .step-icon { font-size: 1rem; flex-shrink: 0; width: 20px; text-align: center; }
+    .step-icon.ok { color: var(--ok); }
+    .step-icon.fail { color: var(--fail); }
+    .step-icon.pending { color: var(--muted); }
+    .step-name { flex: 1; font-size: 0.85rem; }
+    .step-time { font-size: 0.75rem; color: var(--muted); }
+    .step-cache { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 4px; background: rgba(59,130,246,0.15); color: var(--accent); }
+
+    .timestamp { font-size: 0.7rem; color: var(--muted); margin-top: 0.5rem; }
+    .live-indicator { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--ok); }
+    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .no-data { color: var(--muted); font-style: italic; padding: 2rem; text-align: center; }
+    .error-banner { background: rgba(239,68,68,0.1); border: 1px solid var(--fail); color: var(--fail); padding: 0.6rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; }
+
+    .campaign-meta { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); margin-bottom: 1rem; }
+    .campaign-meta span { display: flex; align-items: center; gap: 0.3rem; }
+
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } .pie-section { flex-direction: column; } }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>OSimFlow Campaign Dashboard</h1>
+  <span id="live-indicator" class="live-indicator" style="display:none">
+    <span class="live-dot"></span> Live
+  </span>
+</div>
+
+<div id="error-banner" class="error-banner" style="display:none"></div>
+
+<div class="campaign-meta" id="campaign-meta"></div>
+
+<div class="grid" id="counts-grid">
+  <div class="card">
+    <div class="card-title">Total Samples</div>
+    <div class="card-value" id="count-total">—</div>
+    <div class="stat-row" id="stat-row"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Overall Status</div>
+    <div style="margin-top:0.4rem"><span class="status-badge unknown" id="overall-status">UNKNOWN</span></div>
+    <div class="stat-row" style="margin-top:0.6rem">
+      <span class="status-badge" id="campaign-status" style="font-size:0.7rem">—</span>
+    </div>
+  </div>
+</div>
+
+<div class="progress-section" id="progress-section">
+  <h2>Sample Progress</h2>
+  <div class="progress-bar-wrap">
+    <span class="progress-label">Progress</span>
+    <div class="progress-track">
+      <div class="progress-fill ok" id="prog-ok" style="width:0%"></div>
+      <div class="progress-fill fail" id="prog-fail" style="width:0%"></div>
+      <div class="progress-fill cached" id="prog-cached" style="width:0%"></div>
+    </div>
+    <span class="progress-pct" id="prog-pct">0%</span>
+  </div>
+</div>
+
+<div class="pie-section" id="pie-section">
+  <div class="pie-chart">
+    <svg id="pie-svg" width="140" height="140" viewBox="0 0 140 140"></svg>
+  </div>
+  <div class="pie-legend" id="pie-legend"></div>
+</div>
+
+<div class="steps-section" id="steps-section">
+  <h2>Steps</h2>
+  <div class="step-list" id="step-list"></div>
+</div>
+
+<div class="timestamp" id="timestamp"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ─── State ────────────────────────────────────────────────────────────────
+  let currentData = null;
+  let sseConnected = false;
+
+  // ─── DOM helpers ──────────────────────────────────────────────────────────
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => document.querySelectorAll(sel);
+
+  // ─── Rendering ────────────────────────────────────────────────────────────
+  function renderDashboard(data) {
+    currentData = data;
+
+    // Meta
+    const meta = $('#campaign-meta');
+    const elapsed = data.elapsed_s != null ? fmtDuration(data.elapsed_s) : '—';
+    meta.innerHTML = [
+      span('ID: ' + (data.campaign_id || '—')),
+      span('Started: ' + (data.started_at || '—')),
+      span('Elapsed: ' + elapsed),
+    ].join('');
+
+    // Overall status badge
+    const os = $('#overall-status');
+    os.textContent = (data.overall_status || 'unknown').toUpperCase();
+    os.className = 'status-badge ' + (data.overall_status || 'unknown');
+
+    // Campaign status
+    const cs = $('#campaign-status');
+    cs.textContent = (data.campaign_status || 'unknown').toUpperCase();
+    cs.className = 'status-badge ' + (data.campaign_status === 'running' ? 'running' : data.campaign_status === 'success' ? 'success' : data.campaign_status === 'failed' ? 'failed' : 'unknown');
+
+    // Sample counts
+    const s = data.samples || {};
+    const total = s.total || 0;
+    $('#count-total').textContent = total || '—';
+
+    const statRow = $('#stat-row');
+    statRow.innerHTML = [
+      chip('ok', s.success || 0, 'Completed'),
+      chip('fail', s.failed || 0, 'Failed'),
+      chip('cached', s.cached || 0, 'Cached'),
+      chip('running', s.running || 0, 'Running'),
+    ].join('');
+
+    // Progress bar
+    if (total > 0) {
+      const okPct = ((s.success || 0) / total * 100).toFixed(1);
+      const failPct = ((s.failed || 0) / total * 100).toFixed(1);
+      const cachedPct = ((s.cached || 0) / total * 100).toFixed(1);
+      $('#prog-ok').style.width = okPct + '%';
+      $('#prog-fail').style.width = failPct + '%';
+      $('#prog-cached').style.width = cachedPct + '%';
+      const done = (s.success || 0) + (s.failed || 0) + (s.cached || 0);
+      const running = (s.running || 0);
+      $('#prog-pct').textContent = total > 0 ? Math.round(done / total * 100) + '% (' + running + ' running)' : '0%';
+    } else {
+      ['prog-ok', 'prog-fail', 'prog-cached'].forEach(id => { $(`#${id}`).style.width = '0%'; });
+      $('#prog-pct').textContent = '—';
+    }
+
+    // Pie chart
+    renderPie(s);
+
+    // Steps
+    renderSteps(data.steps || []);
+
+    // Timestamp
+    $('#timestamp').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+  }
+
+  function renderPie(samples) {
+    const total = samples.total || 0;
+    const legend = $('#pie-legend');
+    const segments = [
+      { key: 'ok', label: 'Completed', value: samples.success || 0, color: '#22c55e' },
+      { key: 'fail', label: 'Failed', value: samples.failed || 0, color: '#ef4444' },
+      { key: 'cached', label: 'Cached', value: samples.cached || 0, color: '#60a5fa' },
+      { key: 'running', label: 'Running', value: samples.running || 0, color: '#f59e0b' },
+    ].filter(seg => seg.value > 0);
+
+    if (total === 0 || segments.length === 0) {
+      legend.innerHTML = '<div class="no-data">No samples yet</div>';
+      $('#pie-svg').innerHTML = '';
+      return;
+    }
+
+    // Build pie slices using SVG arc paths
+    const cx = 70, cy = 70, r = 60;
+    let startAngle = -Math.PI / 2;
+    const paths = [];
+
+    segments.forEach(seg => {
+      const pct = seg.value / total;
+      const angle = pct * 2 * Math.PI;
+      const endAngle = startAngle + angle;
+      const x1 = cx + r * Math.cos(startAngle);
+      const y1 = cy + r * Math.sin(startAngle);
+      const x2 = cx + r * Math.cos(endAngle);
+      const y2 = cy + r * Math.sin(endAngle);
+      const large = angle > Math.PI ? 1 : 0;
+      paths.push(
+        `<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large},1 ${x2},${y2} Z" fill="${seg.color}" opacity="0.85"/>`
+      );
+      startAngle = endAngle;
+    });
+
+    $('#pie-svg').innerHTML = paths.join('');
+
+    legend.innerHTML = segments.map(seg =>
+      `<div class="legend-item">
+        <span class="legend-swatch" style="background:${seg.color}"></span>
+        <span>${seg.label}: <strong>${seg.value}</strong></span>
+      </div>`
+    ).join('');
+  }
+
+  function renderSteps(steps) {
+    const list = $('#step-list');
+    if (!steps.length) {
+      list.innerHTML = '<div class="no-data">No steps recorded</div>';
+      return;
+    }
+    list.innerHTML = steps.map(step => {
+      const icon = step.status === 'ok'
+        ? iconCheck()
+        : step.status === 'failed'
+          ? iconX()
+          : iconClock();
+      const cls = step.status === 'ok' ? 'ok' : step.status === 'failed' ? 'fail' : 'pending';
+      const cache = step.cache ? `<span class="step-cache">${step.cache}</span>` : '';
+      const time = step.elapsed_s != null ? fmtDuration(step.elapsed_s) : '';
+      return `
+        <div class="step-item">
+          <span class="step-icon ${cls}">${icon}</span>
+          <span class="step-name">${esc(step.step || '—')}</span>
+          ${cache}
+          <span class="step-time">${time}</span>
+        </div>`;
+    }).join('');
+  }
+
+  // ─── SSE ────────────────────────────────────────────────────────────────
+  function connectSSE() {
+    const es = new EventSource('/api/v1/events');
+
+    es.addEventListener('open', () => {
+      sseConnected = true;
+      $('#live-indicator').style.display = 'inline-flex';
+    });
+
+    es.addEventListener('ping', () => {
+      // heartbeat — just confirm connection alive
+    });
+
+    ['sample.started', 'sample.completed', 'sample.error', 'step.completed', 'campaign.completed'].forEach(evtType => {
+      es.addEventListener(evtType, (e) => {
+        // A real event means run.json changed — fetch fresh data
+        fetchStatus();
+      });
+    });
+
+    es.addEventListener('error', () => {
+      sseConnected = false;
+      $('#live-indicator').style.display = 'none';
+      // Attempt reconnect after 5s
+      setTimeout(connectSSE, 5000);
+    });
+  }
+
+  // ─── Polling fallback ────────────────────────────────────────────────────
+  async function fetchStatus() {
+    try {
+      const resp = await fetch('/api/v1/dashboard/status');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      renderDashboard(data);
+    } catch (err) {
+      showError('Could not load campaign status: ' + err.message);
+    }
+  }
+
+  // ─── Utilities ───────────────────────────────────────────────────────────
+  function fmtDuration(s) {
+    if (s == null || isNaN(s)) return '—';
+    if (s < 60) return s.toFixed(1) + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
+    return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  }
+
+  function esc(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function span(text) {
+    return '<span>' + esc(text) + '</span>';
+  }
+
+  function chip(color, value, label) {
+    return `<div class="stat-chip ${color}"><span class="dot"></span>${value} ${label}</div>`;
+  }
+
+  function iconCheck() {
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,8 6,12 14,4"/></svg>';
+  }
+
+  function iconX() {
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>';
+  }
+
+  function iconClock() {
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><polyline points="8,4 8,8 11,10"/></svg>';
+  }
+
+  function showError(msg) {
+    const el = $('#error-banner');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  // ─── Boot ────────────────────────────────────────────────────────────────
+  // Initial fetch, then connect SSE for live updates
+  fetchStatus();
+  connectSSE();
+
+  // Refresh full status every 30s as a fallback even with SSE
+  setInterval(fetchStatus, 30000);
+}());
 </script>
 </body>
 </html>
