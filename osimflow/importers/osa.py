@@ -301,9 +301,10 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     osa_variable_type = osa_var.get("variable_type", "variable")
     is_pivot = osa_variable_type == "pivot"
     osa_dist = osa_var.get("distribution")
-    if not osa_dist and "uncertainty_description" in osa_var:
-        if isinstance(osa_var["uncertainty_description"], dict):
-            osa_dist = _normalize_uncertainty_description(osa_var["uncertainty_description"])
+    if (not osa_dist
+            and "uncertainty_description" in osa_var
+            and isinstance(osa_var["uncertainty_description"], dict)):
+        osa_dist = _normalize_uncertainty_description(osa_var["uncertainty_description"])
 
     if not osa_dist or not isinstance(osa_dist, dict) or not osa_dist.get("type"):
         return _convert_static_variable(name, osa_var, osa_variable_type)
@@ -485,6 +486,51 @@ def parse_analysis_json(analysis_path: Path) -> dict[str, Any]:
     return parse_osa(analysis_path)
 
 
+def _extract_workflow_variables(workflow: list[Any]) -> list[dict[str, Any]]:
+    """Extract variables nested inside workflow measures.
+
+    Parameters
+    ----------
+    workflow : list
+        The workflow list from an OSA problem definition.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Extracted variables with measure information attached.
+    """
+    extracted: list[dict[str, Any]] = []
+    for measure in workflow:
+        if not isinstance(measure, dict):
+            continue
+        measure_vars = measure.get("variables", [])
+        if not isinstance(measure_vars, list):
+            continue
+        for mv in measure_vars:
+            if not isinstance(mv, dict):
+                continue
+            mv_copy = dict(mv)
+            m_dir = measure.get("measure_definition_directory") or measure.get(
+                "measure_definition_directory_local"
+            )
+            m_name = (
+                Path(m_dir).name
+                if m_dir
+                else (
+                    measure.get("measure_definition_name")
+                    or measure.get("name")
+                    or measure.get("measure_definition_class_name")
+                )
+            )
+            arg_name: str | None = None
+            if "argument" in mv_copy and isinstance(mv_copy["argument"], dict):
+                arg_name = mv_copy["argument"].get("name")
+            if m_name and arg_name:
+                mv_copy["measure"] = {"name": m_name, "argument": arg_name}
+            extracted.append(mv_copy)
+    return extracted
+
+
 def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
     """Convert parsed OSA data to an OSimFlow ``variables.yml`` file.
 
@@ -506,27 +552,7 @@ def osa_to_variables_yml(osa_data: dict[str, Any], output_path: Path) -> None:
 
     osa_variables = problem.get("variables", [])
     if not osa_variables:
-        # Check if variables are nested in workflow measures
-        extracted_variables = []
-        for measure in problem.get("workflow", []):
-            if isinstance(measure, dict):
-                measure_vars = measure.get("variables", [])
-                if isinstance(measure_vars, list):
-                    for mv in measure_vars:
-                        if isinstance(mv, dict):
-                            mv_copy = dict(mv)
-                            m_dir = measure.get("measure_definition_directory") or measure.get("measure_definition_directory_local")
-                            m_name = Path(m_dir).name if m_dir else (measure.get("measure_definition_name") or measure.get("name") or measure.get("measure_definition_class_name"))
-                            arg_name = None
-                            if "argument" in mv_copy and isinstance(mv_copy["argument"], dict):
-                                arg_name = mv_copy["argument"].get("name")
-                            if m_name and arg_name:
-                                mv_copy["measure"] = {
-                                    "name": m_name,
-                                    "argument": arg_name
-                                }
-                            extracted_variables.append(mv_copy)
-        osa_variables = extracted_variables
+        osa_variables = _extract_workflow_variables(problem.get("workflow", []))
 
     if not osa_variables:
         raise OSAImportError("No variables found in OSA problem definition or workflow measures")

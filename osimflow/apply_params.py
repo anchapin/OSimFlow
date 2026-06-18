@@ -40,6 +40,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,8 +51,9 @@ log = logging.getLogger("osimflow.apply_params")
 # Try to dynamically bind openstudio.openstudiomodelcore if openstudio is present
 # but openstudio.openstudiomodelcore is missing (as in macOS standalone installs).
 try:
-    import openstudio  # noqa: F401
     import sys
+
+    import openstudio  # noqa: F401
     try:
         import openstudio.openstudiomodelcore  # noqa: F401
     except ImportError:
@@ -743,7 +745,6 @@ def _check_cross_measure_conflicts(
             )
 
     if conflicts:
-        import os
         if not os.environ.get("OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT"):
             raise CrossMeasureConflictError(
                 "Pre-flight check failed: the same argument is specified for "
