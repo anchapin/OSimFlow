@@ -248,6 +248,8 @@ The 7-step DAG that the `Campaign` class drives:
 - `--task-queue` (distributed task queue backend: `none` (default) or `dask`; issue #335)
 - `--dask-scheduler-address` (Dask scheduler address for task queue; issue #335)
 - `--shard-count`, `--shard-index`, `--shard-start`, `--shard-end` (coordinator shard configuration for distributed campaign execution)
+- `--detach` (hand off campaign to Coordinator service and exit immediately; issue #602)
+- `--coordinator-url` (base URL of the Coordinator service; required when `--detach` is set; issue #602)
 - `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
 - `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
 - `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)
@@ -448,6 +450,17 @@ osimflow run \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 5 \
+  --outdir ./results
+
+# Fire-and-forget handoff to Coordinator service (Phase 2, issue #602).
+# CLI exits immediately after the Coordinator acknowledges the handoff.
+osimflow run \
+  --executor local \
+  --detach \
+  --coordinator-url https://coordinator.example.com \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 500 \
   --outdir ./results
 
 # REST API server (optional add-on, issue #138). Requires `pip install osimflow[api]`.
