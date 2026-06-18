@@ -36,9 +36,7 @@ def workdir(tmp_path: Path) -> Path:
 def template_pkg(workdir: Path) -> Path:
     pkg = workdir / "template"
     pkg.mkdir()
-    (pkg / "model.osm").write_text(
-        json.dumps({"attributes": {"x": 0.5}})
-    )
+    (pkg / "model.osm").write_text(json.dumps({"attributes": {"x": 0.5}}))
     (pkg / "workflow.osw").write_text(json.dumps({"name": "stub"}))
     return pkg
 

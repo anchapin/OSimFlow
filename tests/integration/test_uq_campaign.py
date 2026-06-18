@@ -37,9 +37,7 @@ def workdir(tmp_path: Path) -> Path:
 def template_pkg(workdir: Path) -> Path:
     pkg = workdir / "template"
     pkg.mkdir()
-    (pkg / "model.osm").write_text(
-        json.dumps({"attributes": {"u1": 0.5, "u2": 15.0}})
-    )
+    (pkg / "model.osm").write_text(json.dumps({"attributes": {"u1": 0.5, "u2": 15.0}}))
     (pkg / "workflow.osw").write_text(json.dumps({"name": "stub"}))
     return pkg
 
@@ -101,8 +99,7 @@ def test_uq_campaign_produces_uq_results_json(uq_cfg: CampaignConfig) -> None:
 
     uq_file = uq_cfg.outdir / "uq" / "uq_results.json"
     assert uq_file.is_file(), (
-        f"uq_results.json not found at {uq_file}; "
-        f"run.json: {uq_cfg.outdir / 'run.json'}"
+        f"uq_results.json not found at {uq_file}; run.json: {uq_cfg.outdir / 'run.json'}"
     )
     data = json.loads(uq_file.read_text())
     assert data.get("algorithm") == "uq"

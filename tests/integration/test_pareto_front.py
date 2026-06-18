@@ -96,10 +96,14 @@ def test_pareto_front_persisted_for_spea2(
     campaign.run()
 
     pareto_dir = outdir / "pareto"
-    assert pareto_dir.is_dir(), f"pareto dir not found; run.json: {(outdir / 'run.json').read_text()}"
+    assert pareto_dir.is_dir(), (
+        f"pareto dir not found; run.json: {(outdir / 'run.json').read_text()}"
+    )
 
     gen_files = sorted(pareto_dir.glob("gen_*.json"))
-    assert len(gen_files) >= 1, f"Expected at least pareto/gen_0.json, found: {list(pareto_dir.glob('*'))}"
+    assert len(gen_files) >= 1, (
+        f"Expected at least pareto/gen_0.json, found: {list(pareto_dir.glob('*'))}"
+    )
 
     for gf in gen_files:
         data = json.loads(gf.read_text())
