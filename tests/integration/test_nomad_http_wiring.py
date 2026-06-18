@@ -410,9 +410,9 @@ def test_nomad_polling_uses_exponential_backoff() -> None:
 
 def test_nomad_handle_uses_configured_allocation_resolution_timeout() -> None:
     fake_response = MagicMock()
-    fake_response.read.return_value = json.dumps({"JobID": "osimflow/t", "EvalID": "eval-t"}).encode(
-        "utf-8"
-    )
+    fake_response.read.return_value = json.dumps(
+        {"JobID": "osimflow/t", "EvalID": "eval-t"}
+    ).encode("utf-8")
     fake_response.__enter__ = lambda s: s
     fake_response.__exit__ = lambda s, *a: None
 

@@ -54,16 +54,19 @@ try:
     import sys
 
     import openstudio  # noqa: F401
+
     try:
         import openstudio.openstudiomodelcore  # noqa: F401
     except ImportError:
         try:
             import openstudiomodel
+
             sys.modules["openstudio.openstudiomodelcore"] = openstudiomodel
             openstudio.openstudiomodelcore = openstudiomodel
         except ImportError:
             try:
                 import openstudiomodelcore
+
                 sys.modules["openstudio.openstudiomodelcore"] = openstudiomodelcore
                 openstudio.openstudiomodelcore = openstudiomodelcore
             except ImportError:

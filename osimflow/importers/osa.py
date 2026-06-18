@@ -301,9 +301,11 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     osa_variable_type = osa_var.get("variable_type", "variable")
     is_pivot = osa_variable_type == "pivot"
     osa_dist = osa_var.get("distribution")
-    if (not osa_dist
-            and "uncertainty_description" in osa_var
-            and isinstance(osa_var["uncertainty_description"], dict)):
+    if (
+        not osa_dist
+        and "uncertainty_description" in osa_var
+        and isinstance(osa_var["uncertainty_description"], dict)
+    ):
         osa_dist = _normalize_uncertainty_description(osa_var["uncertainty_description"])
 
     if not osa_dist or not isinstance(osa_dist, dict) or not osa_dist.get("type"):
@@ -321,7 +323,6 @@ def _convert_variable(osa_var: dict[str, Any], index: int) -> tuple[dict[str, An
     entry.update(dist_entry)
     _attach_common_fields(entry, osa_var, name, osa_variable_type)
     return entry, []
-
 
 
 # Translation table: OSA algorithm type → OSimFlow registry name.

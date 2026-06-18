@@ -544,7 +544,9 @@ def _generate_interactive_report(
         mean_eui = results[eui_col].mean() if eui_col else None
         std_eui = results[eui_col].std() if eui_col else None
 
-        mean_eui_str = f"{mean_eui:.2f}" if (mean_eui is not None and not pd.isna(mean_eui)) else "N/A"
+        mean_eui_str = (
+            f"{mean_eui:.2f}" if (mean_eui is not None and not pd.isna(mean_eui)) else "N/A"
+        )
         std_eui_str = f"{std_eui:.2f}" if (std_eui is not None and not pd.isna(std_eui)) else "N/A"
 
         overview_html = f"""

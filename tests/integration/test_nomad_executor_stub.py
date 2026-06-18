@@ -212,7 +212,10 @@ def test_three_sample_campaign_via_nomad_stub_produces_artifacts(
        and per-sample blocks.
     4. Issue one ``POST /v1/jobs`` per fan-out task.
     """
-    with mocked_nomad_transport() as fake_transport, patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}):
+    with (
+        mocked_nomad_transport() as fake_transport,
+        patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}),
+    ):
         executor = _StubNomadExecutor(
             address="http://nomad.stub:4646",
             datacentre="dc1",

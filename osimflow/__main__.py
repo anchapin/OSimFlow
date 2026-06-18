@@ -419,10 +419,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--nomad-allocation-resolution-timeout-s",
         type=float,
         default=30.0,
-        help=(
-            "Timeout in seconds to resolve Nomad EvalID to Allocation ID "
-            "(default: 30.0)."
-        ),
+        help=("Timeout in seconds to resolve Nomad EvalID to Allocation ID (default: 30.0)."),
     )
     run.add_argument(
         "--nomad-poll-interval-s",
@@ -467,28 +464,19 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--shard-index",
         type=int,
         default=None,
-        help=(
-            "Zero-based shard index for partition mode. "
-            "Requires --shard-count."
-        ),
+        help=("Zero-based shard index for partition mode. Requires --shard-count."),
     )
     run.add_argument(
         "--shard-start",
         type=int,
         default=None,
-        help=(
-            "Inclusive sample index start for explicit range shard mode. "
-            "Requires --shard-end."
-        ),
+        help=("Inclusive sample index start for explicit range shard mode. Requires --shard-end."),
     )
     run.add_argument(
         "--shard-end",
         type=int,
         default=None,
-        help=(
-            "Exclusive sample index end for explicit range shard mode. "
-            "Requires --shard-start."
-        ),
+        help=("Exclusive sample index end for explicit range shard mode. Requires --shard-start."),
     )
     run.add_argument(
         "--nomad-tls-verify",

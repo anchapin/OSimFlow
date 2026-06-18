@@ -1364,9 +1364,7 @@ class _NomadHandle(Handle):
                 continue
             for event in state.get("Events", []) or []:
                 desc = (
-                    event.get("Description")
-                    or event.get("DisplayMessage")
-                    or event.get("Message")
+                    event.get("Description") or event.get("DisplayMessage") or event.get("Message")
                 )
                 if desc:
                     message = str(desc)
@@ -1465,7 +1463,9 @@ class NomadExecutor(BaseExecutor):
             else None
         )
         self.fanout_submit_chunk_size = max(int(fanout_submit_chunk_size), 0)
-        self.estimated_run_size = max(int(estimated_run_size), 0) if estimated_run_size is not None else None
+        self.estimated_run_size = (
+            max(int(estimated_run_size), 0) if estimated_run_size is not None else None
+        )
         self._auto_dispatch_threshold = (
             self.fanout_submit_chunk_size if self.fanout_submit_chunk_size > 0 else 25
         )
@@ -1621,6 +1621,7 @@ class NomadExecutor(BaseExecutor):
         )
         task_command = remote_command or "python -m osimflow.remote_runner"
         import uuid  # noqa: PLC0415
+
         job_id = _slugify_job_name(f"osimflow-{name}-{uuid.uuid4().hex[:8]}")
 
         return {

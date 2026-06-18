@@ -648,7 +648,9 @@ class ResultStorageUploader:
     ) -> None:
         self._storage = storage
         self._azure_executor: concurrent.futures.ThreadPoolExecutor | None = None
-        self._queue: queue.Queue[tuple[Path, str] | None] = queue.Queue(maxsize=max(1, max_queue_size))
+        self._queue: queue.Queue[tuple[Path, str] | None] = queue.Queue(
+            maxsize=max(1, max_queue_size)
+        )
         self._worker_count = max(1, worker_count)
         self._max_retries = max(0, max_retries)
         self._retry_backoff_s = max(0.0, retry_backoff_s)

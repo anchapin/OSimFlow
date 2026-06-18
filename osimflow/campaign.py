@@ -3187,7 +3187,9 @@ class Campaign:
                     self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
-                        self._archive_sample_artifacts(Path(result_path), archive_dst, ["eplusout.sql"])
+                        self._archive_sample_artifacts(
+                            Path(result_path), archive_dst, ["eplusout.sql"]
+                        )
                     if self._result_storage is not None:
                         sql_path = result_path / "eplusout.sql"
                         if sql_path.is_file():

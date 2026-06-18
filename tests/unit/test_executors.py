@@ -736,7 +736,9 @@ class TestNomadExecutor:
         mock_urlopen = self._mock_urlopen()
         with (
             patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect),
-            patch.dict(os.environ, {"OSIMFLOW_OPENSTUDIO_CONTAINER_IMAGE": "local/openstudio:3.11.0"}),
+            patch.dict(
+                os.environ, {"OSIMFLOW_OPENSTUDIO_CONTAINER_IMAGE": "local/openstudio:3.11.0"}
+            ),
         ):
             ex = NomadExecutor(address="http://127.0.0.1:4646")
             spec = ex._build_job_spec(  # noqa: SLF001

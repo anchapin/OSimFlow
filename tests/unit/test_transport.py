@@ -20,9 +20,7 @@ class _FakeStorage:
         return sorted(key for key in self._objects if key.startswith(prefix))
 
 
-def test_materialize_object_storage_downloads_file(
-    tmp_path: Path, monkeypatch: object
-) -> None:
+def test_materialize_object_storage_downloads_file(tmp_path: Path, monkeypatch: object) -> None:
     file_hint = tmp_path / "run-a" / "aggregated_results.csv"
     storage = _FakeStorage({"aggregated_results.csv": "sample_id,eui\n0001,10.0\n"})
     monkeypatch.setattr(

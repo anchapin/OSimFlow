@@ -695,12 +695,12 @@ class TestOsaToVariablesYmlAdditional:
                                     "attributes": [
                                         {"name": "lower_bounds", "value": 5.0},
                                         {"name": "upper_bounds", "value": 30.0},
-                                    ]
-                                }
+                                    ],
+                                },
                             }
-                        ]
+                        ],
                     }
-                ]
+                ],
             }
         }
         out = tmp_path / "variables.yml"
@@ -715,7 +715,6 @@ class TestOsaToVariablesYmlAdditional:
         assert v["min"] == 5.0
         assert v["max"] == 30.0
         assert v["measure_argument"] == "SetRValue.r_val"
-
 
 
 # ---------------------------------------------------------------------------
