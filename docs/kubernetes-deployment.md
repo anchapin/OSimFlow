@@ -126,3 +126,111 @@ samples with its own `--outdir`. Use a `JobSet` or `Flux` to manage the
 coordinator pool. Sample partitioning is handled by an external script
 or Apache Airflow DAG that submits N coordinator Jobs with
 non-overlapping sample ranges. See ADR-0003 §Pattern 2 for details.
+
+## Helm Chart Worker Deployment (issue #583)
+
+The OSimFlow Helm chart (`osimflow-deploy/kubernetes/helm/osimflow/`) can deploy a
+**worker Deployment** that runs the campaign coordinator natively within the
+cluster, using `KubernetesExecutor` to fan out per-sample Jobs. This enables
+fully containerized OSimFlow campaigns on Kubernetes without requiring an
+external executor (Slurm, AWS Batch).
+
+### Enable the Worker
+
+```bash
+helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+  --set worker.enabled=true \
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0" \
+  --set openstudio.version=3.11.0
+```
+
+### Worker Configuration
+
+| Value | Default | Description |
+|---|---|---|
+| `worker.enabled` | `false` | Enable the worker Deployment |
+| `worker.replica_count` | `1` | Number of worker replicas |
+| `worker.executor` | `kubernetes` | Executor type for fan-out (only `kubernetes` supported) |
+| `worker.job_queue` | `none` | Task queue backend: `none`, `redis`, or `dask` |
+| `worker.campaign_args` | `""` | Campaign arguments passed to `osimflow run` |
+| `worker.image` | openstudio image | Custom worker image (optional) |
+| `worker.redis.enabled` | `false` | Deploy a Redis sidecar for job queue |
+| `worker.redis.host` | `osimflow-redis` | Redis hostname |
+| `worker.dask.scheduler_address` | `""` | Dask scheduler address (e.g. `tcp://scheduler:8786`) |
+
+### Worker with Redis Job Queue
+
+For multi-replica worker deployments with Redis-backed coordination:
+
+```bash
+helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+  --set worker.enabled=true \
+  --set worker.replica_count=3 \
+  --set worker.job_queue=redis \
+  --set worker.redis.enabled=true \
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.11.0" \
+  --set openstudio.version=3.11.0
+```
+
+### Worker with Dask Job Queue
+
+```bash
+helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+  --set worker.enabled=true \
+  --set worker.job_queue=dask \
+  --set worker.dask.scheduler_address="tcp://dask-scheduler:8786" \
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.11.0" \
+  --set openstudio.version=3.11.0
+```
+
+### Mounting Campaign Data
+
+Campaign inputs (`variables.yml`, `template_sim_package`) are mounted at `/data`
+via an `emptyDir` volume by default. For production, replace the `emptyDir` volume
+with a `PersistentVolumeClaim` to persist results across pod restarts:
+
+```yaml
+# values-overrides.yaml
+worker:
+  enabled: true
+  campaign_args: "--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0"
+
+# In your overrides, replace the emptyDir with a PVC:
+volumes:
+  data:
+    persistentVolumeClaim:
+      claimName: osimflow-data-pvc
+```
+
+### Resource Limits
+
+Worker resources default to:
+
+```yaml
+worker:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+```
+
+Per-sample Jobs use the values from `resources.cpu` and `resources.memory` in
+`values.yaml`, which default to 1 CPU core and 2 GiB memory per sample.
+
+### REST API + Worker Together
+
+Deploy both the REST API server and the worker in the same Helm release:
+
+```bash
+helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
+  --set api.enabled=true \
+  --set worker.enabled=true \
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0" \
+  --set openstudio.version=3.11.0
+```
+
+The API server (`osimflow serve`) provides monitoring endpoints; the worker
+Deployment runs the actual campaign execution.

@@ -826,7 +826,7 @@ class TestLoadVariableDefs:
         defs = campaign._load_variable_defs()
         assert isinstance(defs, list)
         assert len(defs) >= 1
-        assert defs[0]["name"] == "window_u_value"
+        assert defs[0]["name"] == "heating_setpoint"
 
     def test_empty_yaml(self, tmp_path: Path, template_pkg: Path, outdir: Path) -> None:
         vyml = tmp_path / "empty.yml"

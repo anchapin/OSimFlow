@@ -22,6 +22,7 @@ from osimflow.executors import LocalExecutor
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
 EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
+TEST_VARS_YML = REPO_ROOT / "tests/unit/fixtures/test_variables.yml"
 
 
 # ---------------------------------------------------------------------------
@@ -43,11 +44,59 @@ def _session_example_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return dest
 
 
+_TEST_VARIABLES_YML = """\
+algorithm: lhs
+variables:
+- name: heating_setpoint
+  distribution: uniform
+  min: 18.0
+  max: 22.0
+  measure_argument: SetThermostatSchedule.heating_setpoint
+- name: cooling_setpoint
+  distribution: uniform
+  min: 23.0
+  max: 28.0
+  measure_argument: SetThermostatSchedule.cooling_setpoint
+- name: wwr
+  distribution: uniform
+  min: 0.2
+  max: 0.6
+  measure_argument: SetEnvelopePerformance.wwr
+- name: wall_r_value
+  distribution: uniform
+  min: 2.0
+  max: 5.0
+  measure_argument: SetEnvelopePerformance.wall_r_value
+"""
+
+
 @pytest.fixture(scope="session")
 def _session_variables_yml(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Copy ``variables.yml`` once per test session."""
+    """Write test-compatible ``variables.yml`` matching example_package measures.
+
+    The repo-root ``variables.yml`` references measures not present in
+    ``example_package/workflow.osw``, causing pre-flight validation to fail.
+    This fixture writes a test-specific variables file that uses only the
+    measure arguments actually exposed by the two example_package steps:
+    SetThermostatSchedule (heating_setpoint, cooling_setpoint) and
+    SetEnvelopePerformance (wwr, wall_r_value).
+    """
     dest = tmp_path_factory.mktemp("session_vars") / "variables.yml"
-    shutil.copy2(EXAMPLE_VARS_YML, dest)
+    dest.write_text(_TEST_VARIABLES_YML)
+    return dest
+
+
+@pytest.fixture(scope="session")
+def _session_campaign_variables_yml(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Copy ``tests/unit/fixtures/test_variables.yml`` once per test session.
+
+    This fixture provides variables that match the measures available in
+    ``example_package/workflow.osw`` (SetThermostatSchedule and
+    SetEnvelopePerformance), avoiding pre-flight validation failures when
+    running campaign simulations against the minimal example package.
+    """
+    dest = tmp_path_factory.mktemp("session_campaign_vars") / "test_variables.yml"
+    shutil.copy2(TEST_VARS_YML, dest)
     return dest
 
 
@@ -134,6 +183,27 @@ def workdir(tmp_path: Path, _session_variables_yml: Path) -> Path:
     wd = tmp_path / "work"
     wd.mkdir()
     (wd / "variables.yml").write_text(_session_variables_yml.read_text())
+    return wd
+
+
+@pytest.fixture
+def campaign_workdir(tmp_path: Path, _session_campaign_variables_yml: Path) -> Path:
+    """Work directory with ``test_variables.yml`` pre-populated.
+
+    Use this fixture for tests that run full campaign simulations
+    (dry-run, cache integration, DAG ordering, etc.) against
+    ``example_package``.  This fixture uses variables that match
+    the two measures in ``example_package/workflow.osw``:
+    SetThermostatSchedule (heating_setpoint, cooling_setpoint) and
+    SetEnvelopePerformance (wwr, wall_r_value).
+
+    This avoids ``UnmappedParameterError`` during pre-flight validation
+    when the repo-root ``variables.yml`` contains ``measure_argument``
+    fields referencing measures not present in ``example_package``.
+    """
+    wd = tmp_path / "work"
+    wd.mkdir()
+    (wd / "variables.yml").write_text(_session_campaign_variables_yml.read_text())
     return wd
 
 

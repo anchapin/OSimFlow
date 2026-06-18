@@ -44,6 +44,7 @@ from .executors import (
     AzureBatchExecutor,
     BaseExecutor,
     DaskJobQueueExecutor,
+    DockerSwarmExecutor,
     GoogleBatchExecutor,
     KubernetesExecutor,
     LocalExecutor,
@@ -78,6 +79,7 @@ from .storage import (
     LocalStorage,
     ResultStorage,
     ResultStorageUploader,
+    S3ArtifactStorage,
     S3Storage,
     build_result_storage,
 )
@@ -128,6 +130,7 @@ __all__ = [
     "AWSBatchExecutor",
     "AzureBatchExecutor",
     "DaskJobQueueExecutor",
+    "DockerSwarmExecutor",
     "GoogleBatchExecutor",
     "KubernetesExecutor",
     "NomadExecutor",

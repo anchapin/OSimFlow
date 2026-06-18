@@ -46,6 +46,31 @@ helm install osimflow ./helm/osimflow \
   --set openstudio.version=3.11.0
 ```
 
+### Campaign worker Deployment (issue #583)
+
+Deploy a worker that runs OSimFlow campaigns natively on Kubernetes:
+
+```bash
+helm install osimflow ./helm/osimflow \
+  --set worker.enabled=true \
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0" \
+  --set openstudio.version=3.11.0
+```
+
+Multi-replica workers with Redis-backed coordination:
+
+```bash
+helm install osimflow ./helm/osimflow \
+  --set worker.enabled=true \
+  --set worker.replica_count=3 \
+  --set worker.job_queue=redis \
+  --set worker.redis.enabled=true \
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.11.0" \
+  --set openstudio.version=3.11.0
+```
+
+See [docs/kubernetes-deployment.md](../../docs/kubernetes-deployment.md) for full documentation.
+
 ## KubernetesExecutor
 
 The `KubernetesExecutor` in `osimflow/executors/` submits each sample as a separate Kubernetes Job. It:

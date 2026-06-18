@@ -30,6 +30,7 @@ from osimflow import (
     CampaignRecord,
     CampaignRegistry,
     DaskJobQueueExecutor,
+    DockerSwarmExecutor,
     GoogleBatchExecutor,
     KubernetesExecutor,
     LocalExecutor,
@@ -267,6 +268,13 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             queue=args.dask_queue,
             project=args.dask_project,
         )
+    if args.executor == "docker_swarm":
+        return DockerSwarmExecutor(
+            poll_interval_s=args.docker_swarm_poll_interval_s,
+            max_poll_interval_s=args.docker_swarm_max_poll_interval_s,
+            image=args.docker_swarm_image,
+            network=args.docker_swarm_network,
+        )
 
     # Fall back to the ExecutorRegistry for plugin-discovered executors
     # (issue #432).  Third-party executors registered via entry_points
@@ -314,6 +322,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "kubernetes",
             "pbs",
             "dask_jobqueue",
+            "docker_swarm",
         ],
         default="local",
         help="Executor backend (default: local). See --preset for quick-start bundles.",
@@ -729,6 +738,29 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "When omitted and --task-queue is 'dask', an embedded "
             "single-process LocalCluster is started automatically."
         ),
+    )
+    # Docker Swarm executor flags (issue #582)
+    run.add_argument(
+        "--docker-swarm-poll-interval-s",
+        type=float,
+        default=5.0,
+        help="Docker Swarm polling interval in seconds (default: 5.0).",
+    )
+    run.add_argument(
+        "--docker-swarm-max-poll-interval-s",
+        type=float,
+        default=60.0,
+        help="Docker Swarm max polling interval in seconds (default: 60.0).",
+    )
+    run.add_argument(
+        "--docker-swarm-image",
+        default="nrel/openstudio:latest",
+        help="Docker image for Swarm services (default: nrel/openstudio:latest).",
+    )
+    run.add_argument(
+        "--docker-swarm-network",
+        default=None,
+        help="Docker network to attach Swarm services to.",
     )
     # Cost tracking flags (issue #447)
     run.add_argument(
@@ -1151,6 +1183,55 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Format: 'kpi_name=threshold_value' (e.g., 'eui=150'). "
             "Can be specified multiple times for multiple KPIs. "
             "Used when --algorithm uq is set."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-bucket",
+        default=None,
+        help=(
+            "S3 bucket name for centralized artifact storage (issue #601). "
+            "When set, base simulation assets (.osm, .epw) are uploaded to S3 "
+            "once at campaign creation. Remote executor nodes download them "
+            "directly via pre-signed URLs, eliminating the local-machine bottleneck "
+            "for large fan-out campaigns."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-prefix",
+        default=None,
+        help=(
+            "S3 prefix within the artifact bucket for this campaign (issue #601). "
+            "Example: 'campaign-123' or 'project Q1/run-456'. "
+            "Required when --s3-artifact-bucket is set."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-region",
+        default=None,
+        help=(
+            "AWS region for the S3 artifact bucket (issue #601). "
+            "When omitted, uses the region from the IAM role or default "
+            "credential chain. Required for pre-signed URL generation "
+            "with some bucket configurations."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-endpoint",
+        default=None,
+        help=(
+            "Custom S3-compatible endpoint URL for artifact storage (issue #601). "
+            "Use for MinIO, Cloudflare R2, or other S3-compatible stores. "
+            "Only valid when --s3-artifact-bucket is set."
+        ),
+    )
+    run.add_argument(
+        "--s3-artifact-presigned-url-expiration",
+        type=int,
+        default=3600,
+        help=(
+            "Expiration time in seconds for pre-signed URLs (issue #601). "
+            "Remote executor nodes must download artifacts within this window. "
+            "Default: 3600 (1 hour). Min: 60, Max: 43200 (12 hours)."
         ),
     )
 
@@ -1974,6 +2055,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         ui_enabled=args.ui,
         variable_editor=args.editor,
         results_viewer=args.dashboard,
+        dashboard=args.dashboard,
         registry_path=args.registry,
     )
     if args.host not in ("127.0.0.1", "localhost"):
