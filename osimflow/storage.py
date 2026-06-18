@@ -679,9 +679,7 @@ class S3ArtifactStorage:
             When the upload fails.
         """
         if not local_path.is_file():
-            raise FileNotFoundError(
-                f"S3ArtifactStorage: local file not found: {local_path}"
-            )
+            raise FileNotFoundError(f"S3ArtifactStorage: local file not found: {local_path}")
         remote = self._remote(remote_path)
         log.debug(
             "S3ArtifactStorage: upload %s -> s3://%s/%s",
@@ -704,9 +702,7 @@ class S3ArtifactStorage:
                 remote,
                 exc,
             )
-            raise OSError(
-                f"S3ArtifactStorage: upload failed for {remote_path}"
-            ) from exc
+            raise OSError(f"S3ArtifactStorage: upload failed for {remote_path}") from exc
 
     def generate_presigned_url(
         self,

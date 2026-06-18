@@ -998,7 +998,13 @@ def load_config(args: dict[str, object]) -> CampaignConfig:
         validate_measures=bool(args.get("validate_measures", False)),
         s3_artifact_bucket=str(args.get("s3_artifact_bucket", "")),
         s3_artifact_prefix=str(args.get("s3_artifact_prefix", "")),
-        s3_artifact_region=str(args["s3_artifact_region"]) if args.get("s3_artifact_region") else None,
-        s3_artifact_endpoint=str(args["s3_artifact_endpoint"]) if args.get("s3_artifact_endpoint") else None,
-        s3_artifact_presigned_url_expiration=int(str(args["s3_artifact_presigned_url_expiration"])) if args.get("s3_artifact_presigned_url_expiration") is not None else 3600,
+        s3_artifact_region=str(args["s3_artifact_region"])
+        if args.get("s3_artifact_region")
+        else None,
+        s3_artifact_endpoint=str(args["s3_artifact_endpoint"])
+        if args.get("s3_artifact_endpoint")
+        else None,
+        s3_artifact_presigned_url_expiration=int(str(args["s3_artifact_presigned_url_expiration"]))
+        if args.get("s3_artifact_presigned_url_expiration") is not None
+        else 3600,
     )

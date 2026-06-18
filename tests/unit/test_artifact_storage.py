@@ -38,7 +38,7 @@ class TestS3ArtifactStorage:
         """Create a sample .osm file."""
         osm_path = temp_dir / "model.osm"
         osm_path.write_text(
-            "<OpenStudioModel>\n  <Version VersionId=\"3.11.0\"/>\n</OpenStudioModel>",
+            '<OpenStudioModel>\n  <Version VersionId="3.11.0"/>\n</OpenStudioModel>',
             encoding="utf-8",
         )
         return osm_path
@@ -63,6 +63,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -84,6 +85,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -111,6 +113,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -130,6 +133,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -147,6 +151,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -165,6 +170,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -185,6 +191,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -207,6 +214,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -230,6 +238,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -255,6 +264,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -283,6 +293,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -291,9 +302,7 @@ class TestS3ArtifactStorage:
                 with pytest.raises(OSError, match="presigned URL generation failed"):
                     store.generate_presigned_url("base/model.osm")
 
-    def test_artifact_exists_true(
-        self, mock_boto3: tuple[MagicMock, MagicMock, MagicMock]
-    ) -> None:
+    def test_artifact_exists_true(self, mock_boto3: tuple[MagicMock, MagicMock, MagicMock]) -> None:
         """Test artifact_exists returns True when artifact exists."""
         fake_boto3, fake_session, fake_client = mock_boto3
 
@@ -302,6 +311,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -325,6 +335,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -341,15 +352,23 @@ class TestS3ArtifactStorage:
 
         mock_paginator = MagicMock()
         fake_client.get_paginator.return_value = mock_paginator
-        mock_paginator.paginate.return_value = iter([
-            {"Contents": [{"Key": "campaign-123/base/model.osm"}, {"Key": "campaign-123/weather.epw"}]},
-        ])
+        mock_paginator.paginate.return_value = iter(
+            [
+                {
+                    "Contents": [
+                        {"Key": "campaign-123/base/model.osm"},
+                        {"Key": "campaign-123/weather.epw"},
+                    ]
+                },
+            ]
+        )
 
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -366,15 +385,18 @@ class TestS3ArtifactStorage:
 
         mock_paginator = MagicMock()
         fake_client.get_paginator.return_value = mock_paginator
-        mock_paginator.paginate.return_value = iter([
-            {"Contents": [{"Key": "campaign-123/base/model.osm"}]},
-        ])
+        mock_paginator.paginate.return_value = iter(
+            [
+                {"Contents": [{"Key": "campaign-123/base/model.osm"}]},
+            ]
+        )
 
         with patch("boto3.Session", return_value=fake_session):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -384,9 +406,7 @@ class TestS3ArtifactStorage:
                 assert artifacts == ["base/model.osm"]
                 fake_client.get_paginator.assert_called_with("list_objects_v2")
 
-    def test_list_artifacts_empty(
-        self, mock_boto3: tuple[MagicMock, MagicMock, MagicMock]
-    ) -> None:
+    def test_list_artifacts_empty(self, mock_boto3: tuple[MagicMock, MagicMock, MagicMock]) -> None:
         """Test list_artifacts returns empty list when no artifacts."""
         fake_boto3, fake_session, fake_client = mock_boto3
 
@@ -399,6 +419,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -419,6 +440,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -437,6 +459,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -458,6 +481,7 @@ class TestS3ArtifactStorage:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
@@ -493,6 +517,7 @@ class TestS3ArtifactStorageIntegration:
                 import importlib
 
                 import osimflow.storage as storage_mod
+
                 importlib.reload(storage_mod)
                 from osimflow.storage import S3ArtifactStorage
 
