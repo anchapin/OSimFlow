@@ -36,6 +36,7 @@ from osimflow.api.auth import (
     validate_api_key,
 )
 from osimflow.api.campaigns import campaigns_router
+from osimflow.api.coordinator import coordinator_router
 from osimflow.api.events import events_router
 from osimflow.api.files import files_router
 from osimflow.api.measures import measures_router
@@ -1324,6 +1325,7 @@ def create_app(
     app.include_router(router)
     app.include_router(events_router)
     app.include_router(campaigns_router)
+    app.include_router(coordinator_router)
     app.include_router(pat_compat_router)
     app.include_router(files_router)
     app.include_router(timeseries_router)
