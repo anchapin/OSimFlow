@@ -491,7 +491,9 @@ async def get_campaign_results(
     try:
         s3 = boto3.client("s3")
         paginator = s3.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=bucket, Prefix="results/kpi_", PaginationConfig={"page_size": 100})
+        pages = paginator.paginate(
+            Bucket=bucket, Prefix="results/kpi_", PaginationConfig={"page_size": 100}
+        )
         for page in pages:
             for obj in page.get("Contents", []):
                 key: str = obj["Key"]
@@ -518,7 +520,8 @@ async def get_campaign_results(
         kpi_files=kpi_files,
         message=(
             f"Found {len(kpi_files)} KPI files in s3://{bucket}/results/"
-            if bucket else "No result storage configured."
+            if bucket
+            else "No result storage configured."
         ),
     )
 

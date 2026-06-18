@@ -864,9 +864,7 @@ class CoordinatorNotifyRequest(BaseModel):
         default="sns",
         description="Type: sns | email | webhook",
     )
-    subject: str | None = Field(
-        default=None, description="Notification subject (SNS/email)"
-    )
+    subject: str | None = Field(default=None, description="Notification subject (SNS/email)")
 
 
 class CoordinatorNotifyResponse(BaseModel):
