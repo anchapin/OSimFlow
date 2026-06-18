@@ -508,7 +508,9 @@ class TestCancelCampaign:
 class TestCompareCampaigns:
     """Tests for campaign comparison via GET /api/v1/campaigns/compare (issue #386/#588)."""
 
-    def test_compare_both_found(self, client_kpis: TestClient, campaigns_base_with_kpis: Path) -> None:
+    def test_compare_both_found(
+        self, client_kpis: TestClient, campaigns_base_with_kpis: Path
+    ) -> None:
         """When both campaign directories exist with KPI data, return both details."""
         resp = client_kpis.get(
             "/api/v1/campaigns/compare",
@@ -912,7 +914,9 @@ class TestCompareCampaignsPost:
             assert entry["config"] is not None
             assert "executor" in entry["config"]
 
-    def test_compare_get_endpoint_still_works(self, client_kpis: TestClient, campaigns_base_with_kpis: Path) -> None:
+    def test_compare_get_endpoint_still_works(
+        self, client_kpis: TestClient, campaigns_base_with_kpis: Path
+    ) -> None:
         """The GET /compare endpoint works with outdir params."""
         resp = client_kpis.get(
             "/api/v1/campaigns/compare",
