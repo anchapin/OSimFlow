@@ -43,7 +43,7 @@ Orchestrator → Executor → Work function
   drives the 6-step DAG.
 - **Executor** — `osimflow/executors/__init__.py` provides
   `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
-  `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, and `PBSExecutor` implementations.
+  `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, and `DockerSwarmExecutor` implementations.
 - **Work function** — `osimflow/work.py` (per-step logic) and
   `bin/*.py` (CLI scripts invoked by the work layer) implement the
   actual step work.
@@ -143,7 +143,8 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
-| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
+| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor` + `DockerSwarmExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
+| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the official Docker SDK (issue #582). |
 | `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
 | `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
@@ -225,7 +226,7 @@ The 7-step DAG that the `Campaign` class drives:
 
 ### CLI flags (referenced from `osimflow/__main__.py`)
 
-- `--executor` (local / slurm / aws_batch / azure_batch / google_batch / dask_jobqueue / nomad)
+- `--executor` (local / slurm / aws_batch / azure_batch / google_batch / dask_jobqueue / nomad / docker_swarm)
 - `--preset` (named preset of recommended flags; reduces 50+ CLI surface for common use cases. Individual flags override preset values. Issue #384)
 - `--max-workers` (local executor parallelism)
 - `--slurm-partition`, `--slurm-account`, `--slurm-real`
@@ -255,6 +256,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--nomad-poll-interval-s`, `--nomad-max-poll-interval-s`, `--nomad-allocation-resolution-timeout-s` (Nomad polling and allocation configuration)
 - `--nomad-dispatch-policy` (Nomad job dispatch policy; default: `keep_manual`)
 - `--nomad-fanout-submit-chunk-size`, `--nomad-fanout-submit-rate-per-sec` (Nomad fanout submission tuning for large-scale campaigns)
+- `--docker-swarm-image`, `--docker-swarm-network`, `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s` (Docker Swarm executor configuration)
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)

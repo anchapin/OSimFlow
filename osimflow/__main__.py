@@ -2853,66 +2853,6 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_query_results(args: argparse.Namespace) -> int:
-    """Handle the query-results CLI command (issue #585)."""
-    campaign_ids = args.campaign_ids.split(",") if args.campaign_ids else None
-    outdirs = args.outdirs.split(",") if args.outdirs else None
-
-    result = query_results_cli(
-        campaign_ids=campaign_ids,
-        outdirs=outdirs,
-        filter_expr=args.filter,
-        page=args.page,
-        per_page=args.per_page,
-        format=args.format,
-    )
-
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        if not result["rows"]:
-            print("No results found.")
-            return 0
-        try:
-            import rich.console  # noqa: PLC0415
-            import rich.table  # noqa: PLC0415
-        except ImportError:
-            pass
-        else:
-            table = rich.table.Table(title=f"Query Results ({result['total']} total)")
-            for col in result["columns"]:
-                table.add_column(col, style="cyan")
-            for row in result["rows"]:
-                table.add_row(*[str(row.get(c, "")) for c in result["columns"]])
-            console = rich.console.Console()
-            console.print(table)
-            return 0
-
-        # Fallback plain text
-        cols = result["columns"]
-        print("  ".join(cols))
-        for row in result["rows"]:
-            print("  ".join(str(row.get(c, "")) for c in cols))
-
-    return 0
-
-
-def _cmd_export_results(args: argparse.Namespace) -> int:
-    """Handle the export-results CLI command (issue #585)."""
-    campaign_ids = args.campaign_ids.split(",") if args.campaign_ids else None
-    outdirs = args.outdirs.split(",") if args.outdirs else None
-
-    result = export_results_cli(
-        campaign_ids=campaign_ids,
-        outdirs=outdirs,
-        filter_expr=args.filter,
-        format=args.format,
-        output_path=args.output,
-        include_failed=args.include_failed,
-    )
-    return result
-
-
 def _cmd_measure_list(args: argparse.Namespace) -> int:
     """List available measures in a template simulation package (issue #532)."""
     import json as json_mod  # noqa: PLC0415
