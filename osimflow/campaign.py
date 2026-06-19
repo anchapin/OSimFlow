@@ -1909,10 +1909,13 @@ class Campaign:
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
 
-            # Close the SQLite cache: checkpoints the WAL and removes the
-            # auxiliary .sqlite-wal / .sqlite-shm files so pytest-xdist
-            # parallel teardown does not see "FileNotFoundError" on those
-            # files. Safe to call multiple times (close() is idempotent).
+            # Close the SQLite cache. ``close()`` runs a PASSIVE WAL
+            # checkpoint and the connection; it never raises and never
+            # removes the auxiliary ``.sqlite-wal`` / ``.sqlite-shm``
+            # files, so peer worker processes sharing the same cache
+            # during campaign cancellation do not crash with
+            # ``FileNotFoundError`` (issue #620). Safe to call multiple
+            # times (close() is idempotent and thread-safe).
             self.cache.close()
 
             # Close the result storage uploader (issue #339).
