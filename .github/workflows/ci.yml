@@ -246,6 +246,57 @@ jobs:
           path: coverage.xml
 
   # ---------------------------------------------------------------------------
+  # Slow tests: @pytest.mark.slow only (issue #623)
+  # ---------------------------------------------------------------------------
+  # tests/unit/test_manifest_files.py is marked ``@pytest.mark.slow`` because
+  # each of its ~25 cases runs a full 3-sample campaign. Running them in the
+  # fast `test` job (which uses ``-m "not nomad_e2e and not slow"``) pushed
+  # that job past its timeout. They are excluded from the fast gate and run
+  # here instead so the manifest-writing code cannot rot. This job is
+  # intentionally NOT a required gate — it runs the same stub-mode campaigns
+  # as the fast job, just more of them, so a flake here should not block PRs.
+  # ---------------------------------------------------------------------------
+  slow:
+    name: slow (@pytest.mark.slow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + all extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+          uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
+
+      - name: pytest -m slow
+        run: |
+          .venv/bin/pytest \
+            -m slow \
+            -n 2 \
+            --dist loadgroup \
+            --timeout=300 \
+            --no-cov \
+            -q
+
+  # ---------------------------------------------------------------------------
   # G16a: AWS Batch mocked integration tests (issue #149)
   # ---------------------------------------------------------------------------
   # Runs moto-based tests that exercise the real boto3 wire format against

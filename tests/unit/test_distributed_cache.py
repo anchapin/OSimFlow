@@ -24,6 +24,20 @@ import pytest
 from osimflow.cache import CacheKey, SQLiteCache
 from osimflow.distributed_cache import DistributedCache, build_cache
 
+# Detect the optional `redis` extra ONCE at import time. The previous
+# implementation used a mutable module-level global (``_HAS_REDIS: bool |
+# None``) mutated by a ``_check_redis()`` helper — shared state that can
+# leak across test modules under pytest-xdist and produce inconsistent
+# skip decisions. A plain import-time constant has no mutation surface
+# and is the standard pytest pattern (mirrors ``_HAS_KUBERNETES`` in
+# test_kubernetes_executor.py). Issue #623.
+try:
+    import redis.asyncio  # noqa: F401
+
+    _HAS_REDIS = True
+except ImportError:
+    _HAS_REDIS = False
+
 
 class TestBuildCache:
     def test_returns_sqlite_cache_when_redis_url_is_none(self, tmp_path: Path) -> None:
@@ -138,6 +152,24 @@ class TestDistributedCacheInterface:
 
 class TestDistributedCacheInvalidation:
     """Test that invalidate_* calls broadcast to Redis and affect local cache."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_subscriber(self) -> Any:
+        """Prevent the real Redis subscriber thread from starting.
+
+        ``invalidate_step`` / ``invalidate_sample`` (production code)
+        unconditionally call ``_start_subscriber()`` before publishing.
+        That spawns a daemon thread which imports ``redis.asyncio`` and
+        runs its own ``asyncio.run`` event loop. The thread outlives the
+        test, leaks its event loop across tests, and — when the redis
+        extra is absent — raises ``ModuleNotFoundError`` inside the
+        thread, surfaced by pytest as a ``PytestUnhandledThreadException
+        Warning``. Patching ``_start_subscriber`` here keeps every test
+        self-contained (issue #623). The per-test ``_publish`` patches
+        below assert the broadcast contract directly.
+        """
+        with patch.object(DistributedCache, "_start_subscriber"):
+            yield
 
     @pytest.fixture
     def dist_cache(self, tmp_path: Path) -> DistributedCache:
@@ -259,23 +291,32 @@ class TestDistributedCacheSubscriberLifecycle:
         assert dist_cache._subscriber_thread is None
 
 
-_HAS_REDIS: bool | None = None
-
-
-def _check_redis() -> bool:
-    global _HAS_REDIS
-    if _HAS_REDIS is None:
-        try:
-            import redis.asyncio  # noqa: F401
-
-            _HAS_REDIS = True
-        except Exception:
-            _HAS_REDIS = False
-    return _HAS_REDIS
-
-
 class TestDistributedCachePublish:
     """Test Redis publish behaviour."""
+
+    @pytest.fixture(autouse=True)
+    def _eager_publish_thread(self) -> Any:
+        """Run ``_publish``'s background thread eagerly and join it.
+
+        In a sync context ``DistributedCache._publish`` spawns a daemon
+        thread that calls ``asyncio.run(_pub())``. If that thread has not
+        been scheduled by the time the test asserts on the mock, the
+        assertions race the thread and flap; the daemon also leaks its
+        event loop across tests. Replacing ``threading.Thread`` with a
+        subclass that ``start()``s then ``join()``s forces the publish
+        coroutine to complete (and its loop to close) inside the test,
+        so every test owns a self-contained event loop and the mock
+        assertions are deterministic (issue #623).
+        """
+        real_thread = threading.Thread
+
+        class _JoinedThread(real_thread):
+            def start(self) -> None:
+                super().start()
+                self.join(timeout=5.0)
+
+        with patch("osimflow.distributed_cache.threading.Thread", _JoinedThread):
+            yield
 
     @pytest.fixture
     def dist_cache(self, tmp_path: Path) -> DistributedCache:
@@ -287,7 +328,7 @@ class TestDistributedCachePublish:
                 campaign_id="test-campaign-123",
             )
 
-    @pytest.mark.skipif(not _check_redis(), reason="redis extra not installed")
+    @pytest.mark.skipif(not _HAS_REDIS, reason="redis extra not installed")
     def test_publish_invalidate_step(self, dist_cache: DistributedCache) -> None:
         # Patch _redis_client directly so the asyncio.run() context sees the mock
         mock_client = AsyncMock()
@@ -301,7 +342,7 @@ class TestDistributedCachePublish:
             assert payload["action"] == "invalidate_step"
             assert payload["step"] == "RUN_OPENSTUDIO_SIM"
 
-    @pytest.mark.skipif(not _check_redis(), reason="redis extra not installed")
+    @pytest.mark.skipif(not _HAS_REDIS, reason="redis extra not installed")
     def test_publish_invalidate_sample(self, dist_cache: DistributedCache) -> None:
         mock_client = AsyncMock()
         with patch.object(dist_cache, "_redis_client", mock_client):
