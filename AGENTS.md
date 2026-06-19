@@ -194,11 +194,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
 | `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
 | `docs/observability.md` | Pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry): configuration, usage, and extension guide (issue #145, #127). |
-| `infra/nomad/examples/ha/` | Docker Compose HA cluster for Nomad (3 server + 2 client) with ACL bootstrap (issue #123). |
-| `infra/nomad/examples/ha/docker-compose.yml` | 3-server + 2-client Docker Compose with named volumes and bridge networking. |
-| `infra/nomad/examples/ha/server*.hcl` | Per-server HCL configs with `bootstrap_expect=3` and `retry_join`. |
-| `infra/nomad/examples/ha/client.hcl` | Client HCL config with Docker task driver and server join. |
-| `infra/nomad/examples/ha/bootstrap.sh` | ACL bootstrap script: generates management + worker tokens, registers policies. |
+| `infra/nomad/examples/ha/` | Native host-OS HA cluster recipe for Nomad (3-server Raft quorum on bare metal/VMs) with ACL bootstrap (issues #123, #619). Nested containerization (`hind` / Docker-in-Docker) is deprecated and removed. |
+| `infra/nomad/examples/ha/server.hcl` | Shared native server config template; per-node identity via `-node`/`-bind` flags, `bootstrap_expect=3`, `retry_join`, mTLS template. |
+| `infra/nomad/examples/ha/client.hcl` | Native client config: unprivileged Docker task driver (`allow_privileged=false`), ACL, mTLS template. |
+| `infra/nomad/examples/ha/bootstrap.sh` | ACL bootstrap script (cluster-agnostic): generates management + worker tokens, registers policies. |
+| `infra/nomad/examples/ha/README.md` | Native bring-up procedure, systemd unit, and migration path from the removed `hind` (Docker Compose) setup (issue #619). |
 | `infra/nomad/acl/policies/agent.hcl` | Read-only agent/node ACL policy for operators. |
 | `infra/nomad/acl/policies/worker.hcl` | Least-privilege job submission ACL policy for the NomadExecutor. |
 | `infra/nomad/acl/tokens/` | Generated ACL tokens (git-ignored). Never commit. |

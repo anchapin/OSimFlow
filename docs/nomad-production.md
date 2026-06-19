@@ -1,46 +1,78 @@
 # Nomad Production Deployment (issue #123)
 
-This directory contains the production-grade Nomad HA bootstrap recipe
-for OSimFlow. It complements the basic `NomadExecutor` in
-`osimflow/executors/__init__.py` with cluster topology, ACL policies,
-and a bootstrap script.
+This guide documents OSimFlow's **native** production-grade Nomad HA
+deployment: cluster topology, ACL policies, native mTLS, and the bootstrap
+recipe. It complements the `NomadExecutor` in
+`osimflow/executors/__init__.py`.
+
+> **Native host-OS topology (issue #619).** The Nomad control plane —
+> servers and client agents — runs **directly on the host OS** (bare metal
+> or VMs). The previous nested-containerization approach (a `hind` /
+> Hashistack-in-Docker `docker-compose.yml` that ran the Nomad servers and
+> client agents *inside* Docker containers, then bind-mounted the Docker
+> socket so those containers could launch further containers) has been
+> **removed**. OpenStudio simulations are highly compute-intensive, and
+> Docker-in-Docker introduced significant, unnecessary performance overhead
+> and a convoluted trust boundary. Isolation is now provided by strict ACL
+> policies and native mTLS rather than nested containerization boundaries.
+> The OpenStudio **workloads** still run as unprivileged Docker tasks via
+> Nomad's Docker task driver — that is the normal Nomad execution model and
+> is *not* nested containerization.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Nomad HA Cluster                         │
+│              Nomad HA Cluster (native host OS)              │
 │                                                             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐                 │
-│  │ Server 1 │◄─┤ Server 2 │◄─┤ Server 3 │   Raft quorum   │
-│  │ (leader) │──►│(follower)│──►│(follower)│   (3/3)        │
-│  └────┬─────┘  └──────────┘  └──────────┘                 │
-│       │ HTTP API (:4646)                                     │
-│  ┌────┴──────────────────────────────────┐                  │
-│  │                                       │                  │
-│  ▼                                       ▼                  │
-│  ┌──────────┐                     ┌──────────┐             │
-│  │ Client 1 │                     │ Client 2 │             │
-│  │ (docker) │                     │ (docker) │             │
-│  └──────────┘                     └──────────┘             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
+│  │  Server 1    │◄─┤  Server 2    │◄─┤  Server 3    │       │
+│  │ nomad agent  │──►│ nomad agent  │──►│ nomad agent  │ Raft │
+│  │  (leader)    │   │ (follower)   │   │ (follower)   │ 3/3  │
+│  └──────┬───────┘   └──────────────┘   └──────────────┘       │
+│         │ HTTP API (:4646) — mTLS (issue #344)                │
+│  ┌──────┴───────────────────────────────────┐                │
+│  │                                          │                │
+│  ▼                                          ▼                │
+│  ┌──────────────┐                   ┌──────────────┐         │
+│  │  Client 1    │                   │  Client 2    │         │
+│  │ nomad agent  │                   │ nomad agent  │         │
+│  │ (host OS)    │                   │ (host OS)    │         │
+│  │ ──────────── │                   │ ──────────── │         │
+│  │ Docker task  │                   │ Docker task  │         │
+│  │ driver       │                   │ driver       │         │
+│  │ (unpriv.)    │                   │ (unpriv.)    │         │
+│  └──────────────┘                   └──────────────┘         │
 │                                                             │
-│  Each client mounts /var/run/docker.sock                    │
-│  for the Docker task driver.                                │
+│  Each client agent runs natively on the host. Only the      │
+│  OpenStudio *workload* containers are launched by the       │
+│  unprivileged Docker task driver (privileged = false).      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Quick start (local development)
+## Quick start (native bring-up)
+
+The full native bring-up procedure — including a systemd unit, per-node
+identity flags, and the join-list configuration — lives in
+`infra/nomad/examples/ha/README.md`. In summary:
 
 ```bash
+# 1. On each of 3 server hosts (edit retry_join IPs in server.hcl first):
+nomad agent -config=server.hcl -node=nomad-server-1 -bind=10.0.0.11
+
+# 2. On each compute (client) host:
+nomad agent -config=client.hcl -node=<this-node> -bind=<this-node-ip>
+
+# 3. Bootstrap ACLs + policies against any server:
+export NOMAD_ADDR=http://10.0.0.11:4646
 cd infra/nomad/examples/ha
-docker compose up -d
 ./bootstrap.sh
 ```
 
 After bootstrap, set the environment variables the NomadExecutor reads:
 
 ```bash
-export NOMAD_ADDR=http://localhost:4646
+export NOMAD_ADDR=http://10.0.0.11:4646
 export NOMAD_TOKEN=<worker token from bootstrap output>
 ```
 
@@ -67,9 +99,11 @@ is attached to the anonymous token.
 - [x] Worker token scoped to `default` namespace with minimum capabilities
 - [x] Anonymous token retains deny-all default
 - [x] `NOMAD_TOKEN` sourced from environment (same pattern as AWS IAM roles)
-- [x] Docker socket mounted read-write only on client nodes (not servers)
-- [x] `allow_privileged = false` in Docker plugin config
+- [x] Control plane runs natively on the host OS — no nested containerization (issue #619)
+- [x] Docker task driver `allow_privileged = false` on client nodes; workload jobs `privileged = false`
+- [x] Docker socket consumed locally by the agent — not shared across a nested container boundary
 - [x] **Production**: TLS enabled for HTTP API (issue #344)
+- [x] **Production**: native mTLS is the primary isolation/trust boundary (replaces nested containerization)
 - [ ] **Production**: Enable Gossip encryption with a pre-shared key
 - [ ] **Production**: Store management token in Vault or a secrets manager
 - [ ] **Production**: Set worker token `ExpiryTTL` to match your rotation schedule
@@ -181,12 +215,11 @@ latency, and object-storage upload latency/error rate before increasing load.
 
 | Path | Purpose |
 |---|---|
-| `infra/nomad/examples/ha/docker-compose.yml` | 3-server + 2-client Docker Compose |
-| `infra/nomad/examples/ha/server.hcl` | Server 1 config |
-| `infra/nomad/examples/ha/server2.hcl` | Server 2 config |
-| `infra/nomad/examples/ha/server3.hcl` | Server 3 config |
-| `infra/nomad/examples/ha/client.hcl` | Client config (shared) |
-| `infra/nomad/examples/ha/bootstrap.sh` | ACL bootstrap + policy registration |
+| `infra/nomad/examples/ha/server.hcl` | Native server config template (shared by all 3 quorum nodes; per-node identity via `-node`/`-bind` flags) |
+| `infra/nomad/examples/ha/client.hcl` | Native client config — unprivileged Docker task driver, ACL, mTLS template |
+| `infra/nomad/examples/ha/bootstrap.sh` | ACL bootstrap + policy/token registration (cluster-agnostic) |
+| `infra/nomad/examples/ha/README.md` | Native bring-up procedure, systemd unit, and migration path from the removed `hind` setup |
+| `infra/nomad/osimflow_worker.hcl` | Parameterized OpenStudio workload job spec (`privileged = false`) |
 | `infra/nomad/acl/policies/agent.hcl` | Read-only agent/node policy |
 | `infra/nomad/acl/policies/worker.hcl` | Least-privilege job submission policy |
 | `infra/nomad/acl/tokens/` | Generated tokens (git-ignored) |
@@ -195,7 +228,9 @@ latency, and object-storage upload latency/error rate before increasing load.
 
 Nomad supports TLS for all HTTP, RPC, and Serf communications. For production
 deployments, enable TLS with mTLS (mutual TLS) so that both the client and
-server present certificates to each other.
+server present certificates to each other. **Native mTLS is the primary
+isolation and trust boundary for the cluster** — it replaces the boundary
+that nested containerization (`hind`) attempted to provide.
 
 ### Certificate generation
 
@@ -216,7 +251,9 @@ Alternatively, use your organization's internal PKI.
 
 ### Server configuration
 
-Add to each `server*.hcl` and `infra/nomad/examples/ha/client.hcl` in `infra/nomad/examples/ha/`:
+Uncomment and configure the `tls {}` block in
+`infra/nomad/examples/ha/server.hcl` (the shared server template; applies to
+all three quorum nodes):
 
 ```hcl
 tls {
@@ -232,7 +269,8 @@ tls {
 }
 ```
 
-For clients, use client certificates instead of server certificates:
+For clients, use client certificates instead of server certificates in
+`infra/nomad/examples/ha/client.hcl`:
 
 ```hcl
 tls {
