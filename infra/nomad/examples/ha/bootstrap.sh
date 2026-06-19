@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # bootstrap.sh — Nomad HA ACL bootstrap + policy registration (issue #123)
 #
-# Run after `docker compose up -d` has started the 3-server cluster.
+# Native host-OS deployment (issue #619). Run this once against an
+# already-running native 3-server Nomad quorum (the servers and clients
+# are started directly on the host OS, NOT via Docker Compose / `hind`).
+# See README.md in this directory for the native bring-up procedure.
+#
 # This script:
 #   1. Waits for Raft quorum (server leader election).
 #   2. Bootstraps the ACL system (generates the initial management token).
@@ -11,7 +15,8 @@
 #
 # Prerequisites:
 #   - curl, jq on PATH
-#   - NOMAD_ADDR pointing at the cluster (default: http://localhost:4646)
+#   - NOMAD_ADDR pointing at a server (default: http://127.0.0.1:4646).
+#     For a remote cluster, set this to one of your server endpoints.
 #
 # Security notes:
 #   - The generated tokens are written to a git-ignored directory.
@@ -21,7 +26,7 @@
 #     policy. Never grant anonymous access in production.
 set -euo pipefail
 
-NOMAD_ADDR="${NOMAD_ADDR:-http://localhost:4646}"
+NOMAD_ADDR="${NOMAD_ADDR:-http://127.0.0.1:4646}"
 TOKEN_DIR="$(cd "$(dirname "$0")" && pwd)/../acl/tokens"
 POLICY_DIR="$(cd "$(dirname "$0")" && pwd)/../acl/policies"
 MAX_WAIT=120  # seconds to wait for quorum
@@ -111,5 +116,5 @@ echo "To use with OSimFlow:"
 echo "  export NOMAD_ADDR=${NOMAD_ADDR}"
 echo "  export NOMAD_TOKEN=${worker_token}"
 echo ""
-echo "To tear down:"
-echo "  docker compose down -v"
+echo "To tear down the cluster (native, per node):"
+echo "  sudo systemctl stop nomad   # on each server and client node"
