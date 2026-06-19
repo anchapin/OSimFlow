@@ -108,10 +108,20 @@ class SQLiteCache:
     """The campaign's resume cache. Append-only on hits, INSERT OR REPLACE on misses.
 
     The cache uses a single persistent connection in WAL mode for the
-    lifetime of the instance. This avoids the race condition where
-    concurrent connections fighting over the same ``.sqlite-wal`` and
-    ``.sqlite-shm`` auxiliary files cause ``FileNotFoundError`` during
-    pytest-xdist parallel test teardown.
+    lifetime of the instance. Within a single process, this avoids the
+    race condition where concurrent connections fighting over the same
+    ``.sqlite-wal`` and ``.sqlite-shm`` auxiliary files cause
+    ``FileNotFoundError`` during pytest-xdist parallel test teardown.
+
+    **Cross-process safety (issue #620).** In a multi-worker campaign
+    each worker is a separate process with its own ``SQLiteCache``
+    instance pointed at the same ``db_path``. The connection PRAGMAs
+    below (``WAL`` + ``synchronous=NORMAL`` + ``busy_timeout`` +
+    ``locking_mode=NORMAL``) are the SQLite-recommended set for that
+    shared-database shape, and ``close()`` uses a ``PASSIVE`` checkpoint
+    that **never removes** the ``-wal``/``-shm`` aux files. Removing
+    them out from under peer processes during campaign cancellation
+    was the root cause of ``FileNotFoundError: cache.sqlite-shm``.
 
     The cache is itself a context manager — use it with ``with`` to ensure
     the WAL is checkpointed and the connection is closed when done::
@@ -131,28 +141,56 @@ class SQLiteCache:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
-        self._lock = threading.Lock()
+        # RLock (reentrant): the operation methods (store/lookup/...)
+        # hold this lock and then access ``self.connection``, which in
+        # turn acquires the lock again inside ``_ensure_conn``. A plain
+        # Lock would deadlock on that re-entrancy (issue #620).
+        self._lock = threading.RLock()
         self._stats = CacheStats()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         log.info("cache opened at %s", db_path)
 
     def _init_db(self) -> None:
-        conn = self._connect()
+        # Use the persistent connection (lazily opened) rather than a
+        # transient open/close. Every extra open/close churns the WAL
+        # aux files (-wal/-shm) and contributes to multi-process races
+        # during campaign cancellation (issue #620).
+        conn = self._ensure_conn()
         conn.executescript(SCHEMA)
-        conn.close()
+        conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
+        # WAL + this PRAGMA combination is the SQLite-recommended set
+        # for a database shared across multiple processes (issue #620):
+        #   * journal_mode=WAL    — readers never block the writer and
+        #                           the writer never blocks readers.
+        #   * synchronous=NORMAL  — safe with WAL (much faster than FULL)
+        #                           and durable across OS crashes.
+        #   * busy_timeout=5000   — writers wait up to 5s for a lock
+        #                           held by a peer process instead of
+        #                           raising ``database is locked``.
+        #   * locking_mode=NORMAL — the default, stated explicitly so a
+        #                           future edit can never silently flip
+        #                           to EXCLUSIVE and starve peer workers.
         c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
         c.execute("PRAGMA busy_timeout=5000")
+        c.execute("PRAGMA locking_mode=NORMAL")
         c.row_factory = sqlite3.Row
         return c
 
     def _ensure_conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = self._connect()
-        return self._conn
+        # RLock makes this safe to call from inside the operation methods
+        # (which already hold the lock). The lock guards both the
+        # initial-open race (two threads must not open two connections
+        # and leak one) and the close-vs-operate race (close sets
+        # ``_conn = None`` under the same lock — issue #620).
+        with self._lock:
+            if self._conn is None:
+                self._conn = self._connect()
+            return self._conn
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -160,34 +198,73 @@ class SQLiteCache:
         return self._ensure_conn()
 
     def close(self) -> None:
-        """Checkpoint the WAL, run ``PRAGMA optimize``, and close the connection.
+        """Best-effort WAL checkpoint and connection teardown.
 
-        After this method returns, the WAL auxiliary files (``.sqlite-wal``
-        and ``.sqlite-shm``) are removed and the database is in a clean
-        state. Subsequent operations will re-open the connection.
+        Uses ``PRAGMA wal_checkpoint(PASSIVE)`` — the SQLite default. A
+        PASSIVE checkpoint copies as much WAL content as it can back into
+        the main DB **without blocking** and **without removing** the
+        auxiliary ``-wal``/``-shm`` files. Those files are left in place
+        for SQLite to manage cooperatively across every process that
+        shares the cache. This is what makes ``close()`` safe to call
+        during multi-worker campaign cancellation while peer processes
+        still have the cache open (issue #620): the previous
+        ``wal_checkpoint(TRUNCATE)`` removed the aux files out from under
+        peers and crashed them with ``FileNotFoundError: cache.sqlite-shm``.
 
-        Safe to call multiple times.
+        The method is:
+
+        * **thread-safe** — guarded by ``_lock`` so a concurrent
+          ``store``/``lookup`` cannot observe a half-closed connection.
+        * **idempotent** — calling it on an already-closed cache is a
+          no-op. Subsequent operations re-open the connection lazily.
+        * **non-raising** — ``sqlite3.OperationalError`` and
+          ``FileNotFoundError`` raised during the best-effort checkpoint
+          are logged and swallowed so a ``finally:`` block can call this
+          without masking the campaign's original status.
         """
-        if self._conn is None:
-            return
+        with self._lock:
+            conn = self._conn
+            if conn is None:
+                return
+            # Drop the reference under the lock so any concurrent
+            # operation that is already mid-flight (holding the lock)
+            # finishes with its locally-captured connection reference;
+            # the next operation will re-open lazily.
+            self._conn = None
         try:
-            # Commit any pending transaction before checkpointing.
-            # Without this, the WAL checkpoint may fail because
-            # uncommitted data is still in the WAL and the database
-            # is locked by the active transaction.
-            self._conn.commit()
-            # TRUNCATE checkpoint writes WAL content back to the main DB
-            # and removes the auxiliary WAL/shm files. This is the cleanup
-            # that prevents "FileNotFoundError" race conditions with
-            # pytest-xdist parallel test teardown.
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            self._conn.execute("PRAGMA optimize")
-        except Exception:
-            pass  # best-effort during shutdown
-        with contextlib.suppress(Exception):
-            self._conn.close()
-        self._conn = None
-        log.debug("cache closed at %s", self.db_path)
+            # Commit any pending transaction before checkpointing. Without
+            # this the WAL checkpoint may report that uncommitted data is
+            # still in the WAL.
+            conn.commit()
+            # PASSIVE checkpoint: writes back as much WAL content as
+            # possible without blocking peers and WITHOUT removing the
+            # aux files. The old TRUNCATE checkpoint was the bug — it
+            # removed -wal/-shm out from under peer processes during
+            # campaign cancellation (issue #620).
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            conn.execute("PRAGMA optimize")
+        except sqlite3.OperationalError:
+            # e.g. "database is locked" because a peer is mid-write.
+            # Best-effort shutdown: log and fall through to close().
+            log.warning(
+                "cache checkpoint failed at %s (best-effort close)",
+                self.db_path,
+                exc_info=True,
+            )
+        except FileNotFoundError:
+            # A peer process removed a transient aux file between our
+            # open and our checkpoint. Non-fatal: SQLite recreates the
+            # aux files on the next access.
+            log.warning(
+                "cache aux file missing during close at %s "
+                "(likely a peer checkpoint; non-fatal)",
+                self.db_path,
+                exc_info=True,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+            log.debug("cache closed at %s", self.db_path)
 
     def __enter__(self) -> SQLiteCache:
         return self
