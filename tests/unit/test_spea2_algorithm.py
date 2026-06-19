@@ -52,17 +52,13 @@ class TestExtractBounds:
         assert bounds == [(2.0, 8.0)]  # mean ± 3σ
 
     def test_lognormal(self) -> None:
-        vars_def = [
-            {"name": "x", "distribution": "lognormal", "mean": 5.0, "sigma": 1.0}
-        ]
+        vars_def = [{"name": "x", "distribution": "lognormal", "mean": 5.0, "sigma": 1.0}]
         bounds = _extract_bounds(vars_def)
         assert len(bounds) == 1
         assert bounds[0][1] == 8.0  # 5 + 3*1
 
     def test_triangular(self) -> None:
-        vars_def = [
-            {"name": "x", "distribution": "triangular", "min": 0.0, "max": 10.0}
-        ]
+        vars_def = [{"name": "x", "distribution": "triangular", "min": 0.0, "max": 10.0}]
         assert _extract_bounds(vars_def) == [(0.0, 10.0)]
 
     def test_unknown_fallback(self) -> None:
@@ -256,17 +252,17 @@ class TestSignObjectives:
 
 @pymoo_required
 class TestObserve:
-    def _make_history(
-        self, tmp_path: Path, n: int = 10
-    ) -> list[dict[str, Any]]:
+    def _make_history(self, tmp_path: Path, n: int = 10) -> list[dict[str, Any]]:
         """Create a history with n samples + KPI files."""
         samples: list[dict[str, Any]] = []
         kpi_files: list[str] = []
         for i in range(n):
             x1 = 1.0 + 9.0 * (i / n)
             x2 = 0.1 + 0.8 * ((i % 3) / 3)
-            samples.append({"sample_id": f"{i+1:04d}", "values": {"wall_r": x1, "window_shgc": x2}})
-            kpi_path = tmp_path / f"kpi_{i+1:04d}.json"
+            samples.append(
+                {"sample_id": f"{i + 1:04d}", "values": {"wall_r": x1, "window_shgc": x2}}
+            )
+            kpi_path = tmp_path / f"kpi_{i + 1:04d}.json"
             # Simple synthetic KPIs: eui increases with x1, cost decreases.
             eui = 100.0 + x1 * 5
             cost = 200.0 - x1 * 3
