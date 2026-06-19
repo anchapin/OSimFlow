@@ -336,3 +336,93 @@ Returns `403` in read-only mode (default).
 | 403 | Forbidden (read-only mode, mutation not allowed) |
 | 404 | Resource not found (run.json, CSV, pareto data) |
 | 503 | Service unavailable (no output directory configured) |
+
+## Coordinator (fire-and-forget `--detach`)
+
+When a campaign is handed off to a remote Coordinator (`osimflow run --detach
+--coordinator-url ...`), the CLI exits immediately and the campaign runs on the
+Coordinator. The CLI persists a local handoff record (`.coordinator_handoff.json`)
+under the outdir so `osimflow status` / `osimflow download` can reconnect to the
+remote campaign from a fresh shell or a rebooted machine.
+
+### POST /api/v1/coordinator/handoff  →  `202 Accepted`
+
+Accepts a campaign configuration and returns immediately with a `campaign_id`.
+The response carries an absolute `status_url` the CLI persists to the local
+handoff record.
+
+**Idempotent** on the `Idempotency-Key` header (issue #630): a duplicate
+handoff carrying the same key as a prior, accepted request returns the
+*original* `campaign_id` and `status_url` instead of creating a second
+campaign. The CLI derives the key deterministically from the campaign config +
+outdir, so re-running the same `osimflow run --detach ...` command after a lost
+HTTP response safely reuses the campaign the Coordinator already created.
+Omitting the header preserves the legacy behaviour (a new campaign each call).
+
+```jsonc
+// 202 response
+{
+  "campaign_id": "3fe851f6-...",
+  "status": "pending",
+  "message": "Campaign 'my-run' accepted. Use GET https://.../campaigns/3fe851f6-... to poll status.",
+  "status_url": "https://coordinator.example.com/api/v1/coordinator/campaigns/3fe851f6-..."
+}
+```
+
+Returns `403` in read-only mode.
+
+### GET /api/v1/coordinator/campaigns/{campaign_id}
+
+Live status for a handed-off campaign — the URL the CLI stores in
+`status_url`. `osimflow status <outdir>` resolves the `campaign_id` from the
+local handoff record and calls this.
+
+### GET /api/v1/coordinator/campaigns/{campaign_id}/results
+
+Enumerates result files and, once aggregation is complete, returns a short-lived
+`aggregated_results_url` (presigned GET, signed by the Coordinator's IAM role).
+`osimflow download <outdir>` fetches **only** the aggregated CSV via that URL —
+per-sample bytes are intentionally not downloaded (issue #630).
+
+### Local handoff record (`.coordinator_handoff.json`)
+
+```jsonc
+{
+  "version": 1,
+  "campaign_id": "3fe851f6-...",
+  "coordinator_url": "https://coordinator.example.com",
+  "submitted_at": 1718240400.0,
+  "status_url": "https://coordinator.example.com/api/v1/coordinator/campaigns/3fe851f6-...",
+  "idempotency_key": "osimflow-<sha256[:32]>"
+}
+```
+
+If `osimflow status` / `osimflow download` is run on an outdir with no record,
+the error is: *no Coordinator campaign associated with this outdir; did you run
+with `--detach`?*.
+
+### Manual-verify checklist (issue #630)
+
+End-to-end checks against a running Coordinator (the unit tests cover the
+logic with a stubbed transport; these verify the live UX):
+
+1. **Idempotent handoff** — run `osimflow run --detach --coordinator-url <url>
+   ...` twice with identical args; the second invocation prints the *same*
+   `campaign_id` (local-record fast path, no second campaign created).
+2. **202 + clean exit** — after handoff the CLI prints `campaign_id` +
+   `status_url` and exits; `ps` shows no lingering `osimflow` process and
+   the `.coordinator_handoff.json` record exists under the outdir.
+3. **Reconnect from a fresh shell** — open a new terminal and run
+   `osimflow status <outdir>`; it resolves the `campaign_id` from the record and
+   prints the Coordinator's live status (no `run.json` needed).
+4. **Download aggregated-only** — `osimflow download <outdir>` fetches only
+   `aggregated_results.csv` via the presigned URL; no per-sample bytes land in
+   the output directory.
+5. **Failure: Coordinator unreachable** — with the Coordinator stopped,
+   `osimflow run --detach ...` exits 1 with an actionable "could not reach"
+   message and writes **no** handoff record.
+6. **Failure: 4xx config** — a malformed config returns exit 1 with "No
+   campaign was created".
+7. **Recovery: 5xx** — a server error returns exit 1 with a message noting the
+   `Idempotency-Key` recovery path, and re-running the same command recovers.
+

@@ -53,6 +53,7 @@ from osimflow.api.schemas import (
     CoordinatorSampleRecord,
     CoordinatorSamplesResponse,
 )
+from osimflow.handoff_record import IDEMPOTENCY_KEY_HEADER
 
 log = logging.getLogger("osimflow.api.coordinator")
 
@@ -63,6 +64,20 @@ coordinator_router = APIRouter(prefix="/api/v1/coordinator", tags=["coordinator"
 # This is intentionally minimal — just enough to pass the Phase 2 acceptance
 # criteria: "CLI returns within seconds after uploading the config."
 _campaigns: dict[str, dict[str, Any]] = {}
+
+# Idempotency-key index for POST /handoff (issue #630). Maps the client-supplied
+# ``Idempotency-Key`` header value to the ``campaign_id`` it first produced, so a
+# retried/duplicate handoff for the same key returns the original campaign
+# instead of minting a second one. Lives alongside ``_campaigns`` and is cleared
+# by the same test fixtures. A request with *no* key always creates a new
+# campaign (preserves the pre-idempotency behaviour for callers that don't send
+# the header).
+_idempotency_keys: dict[str, str] = {}
+
+# Header name + the absolute poll path returned in ``status_url``. The header
+# constant is imported from the dependency-light :mod:`osimflow.handoff_record`
+# so the CLI and server agree on it without the CLI importing FastAPI.
+_CAMPAIGN_STATUS_PATH = "/api/v1/coordinator/campaigns/{campaign_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -344,31 +359,110 @@ def _campaign_or_404(campaign_id: str) -> dict[str, Any]:
     return rec
 
 
+def _presign_aggregated_get(bucket: str | None, key: str | None, expires: int = 3600) -> str | None:
+    """Return a short-lived presigned GET URL for the aggregated-results object.
+
+    Used by ``GET /campaigns/{id}/results`` (issue #630) so the CLI's
+    ``osimflow download`` can fetch *only* the final aggregated CSV via a URL
+    the Coordinator's IAM role signs — the downloading client needs no AWS
+    credentials of its own.
+
+    Returns ``None`` (rather than raising) when there is nothing to sign or
+    S3 is unavailable, so the results listing still succeeds.
+    """
+    if not bucket or not key:
+        return None
+    try:
+        return str(
+            boto3.client("s3").generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": key},
+                ExpiresIn=expires,
+            )
+        )
+    except Exception as exc:  # pragma: no cover - botocore exceptions
+        log.warning(
+            "Could not presign aggregated results URL for s3://%s/%s: %s",
+            bucket,
+            key,
+            exc,
+        )
+        return None
+
+
 @coordinator_router.post(
     "/handoff",
     response_model=CoordinatorHandoffResponse,
+    status_code=202,
     summary="Handoff a campaign to the Coordinator",
     description=(
-        "Accepts a campaign configuration and returns immediately with a "
-        "campaign_id. The Coordinator takes ownership of the campaign lifecycle. "
-        "Use GET /api/v1/coordinator/campaigns/{campaign_id} to poll status."
+        "Accepts a campaign configuration and returns immediately (HTTP 202) "
+        "with a campaign_id. The Coordinator takes ownership of the campaign "
+        "lifecycle. Use GET /api/v1/coordinator/campaigns/{campaign_id} to "
+        "poll status.\n\n"
+        "**Idempotent** on the `Idempotency-Key` header (issue #630): a "
+        "duplicate handoff carrying the same key as a prior, accepted request "
+        "returns the *original* campaign_id and status_url instead of creating "
+        "a second campaign. Callers that omit the header get the legacy "
+        "behaviour (a new campaign every time)."
     ),
 )
 async def coordinator_handoff(
     payload: CoordinatorHandoffPayload,
     request: Request,
+    idempotency_key: str | None = Header(default=None, alias=IDEMPOTENCY_KEY_HEADER),
 ) -> CoordinatorHandoffResponse:
     """Handle campaign handoff from the CLI.
 
     Validates the payload, assigns a campaign_id, stores the campaign
-    metadata, and returns immediately. The CLI can exit after receiving
-    the response.
+    metadata, and returns immediately so the CLI can exit cleanly. The
+    response carries an absolute ``status_url`` the CLI persists to its local
+    handoff record for later reconnection.
+
+    Idempotency (issue #630): if an ``Idempotency-Key`` header is supplied and
+    a campaign was already created for that key, the original campaign is
+    returned unchanged. This makes a CLI retry after a lost response safe —
+    the user never ends up with two campaigns for one intended run.
     """
     if not get_user_permission(request, "write"):
         raise HTTPException(status_code=403, detail="Insufficient permissions for campaign handoff")
 
+    # --- Idempotent replay: same key -> same campaign (issue #630) ---
+    if idempotency_key and idempotency_key in _idempotency_keys:
+        existing_id = _idempotency_keys[idempotency_key]
+        existing = _campaigns.get(existing_id)
+        if existing is not None:
+            status_url = str(existing.get("status_url") or "")
+            log.info(
+                "Idempotent handoff replay for key=%s -> returning existing campaign %s",
+                idempotency_key,
+                existing_id,
+            )
+            return CoordinatorHandoffResponse(
+                campaign_id=existing_id,
+                status=existing.get("status", "pending"),
+                message=(
+                    f"Campaign '{existing.get('name', '')}' already accepted "
+                    f"(idempotent replay of key {idempotency_key})."
+                ),
+                status_url=status_url or None,
+            )
+        # Fallthrough guard: the index pointed at a since-removed campaign
+        # (only possible via direct store manipulation in tests). Drop the
+        # stale entry and create a fresh campaign below.
+        _idempotency_keys.pop(idempotency_key, None)
+
     campaign_id = str(uuid.uuid4())
     now = time.time()
+
+    # Absolute status URL built from the request's scheme + host so it is
+    # correct behind proxies and usable by TestClient. ``request.base_url``
+    # carries a trailing slash while the path carries a leading slash, so we
+    # strip one to avoid a ``//`` join.
+    status_url = (
+        f"{str(request.base_url).rstrip('/')}"
+        f"{_CAMPAIGN_STATUS_PATH.format(campaign_id=campaign_id)}"
+    )
 
     user_id: str = getattr(request.state, "user_id", None) or "anonymous"
     samples: list[dict[str, Any]] = payload.samples or []
@@ -392,20 +486,29 @@ async def coordinator_handoff(
         "array_job_id": None,
         "result_status": "unavailable",
         "aggregated_results_key": None,
+        # Persisted on the record so an idempotent replay can rebuild the
+        # exact same response (incl. status_url) without re-deriving the URL.
+        "status_url": status_url,
+        "idempotency_key": idempotency_key,
     }
 
     _campaigns[campaign_id] = record
+    if idempotency_key:
+        _idempotency_keys[idempotency_key] = campaign_id
+
     log.info(
-        "Campaign %s handed off: name=%s, n_samples=%d",
+        "Campaign %s handed off: name=%s, n_samples=%d, idempotency_key=%s",
         campaign_id,
         payload.name,
         payload.n_samples,
+        idempotency_key or "(none)",
     )
 
     return CoordinatorHandoffResponse(
         campaign_id=campaign_id,
         status="pending",
-        message=f"Campaign '{payload.name}' accepted. Use GET /api/v1/coordinator/campaigns/{campaign_id} to poll status.",
+        message=f"Campaign '{payload.name}' accepted. Use GET {status_url} to poll status.",
+        status_url=status_url,
     )
 
 
@@ -740,6 +843,13 @@ async def get_campaign_results(
     result_status = rec.get("result_status", "unavailable")
     aggregated_key = rec.get("aggregated_results_key")
 
+    # Short-lived presigned GET URL for the aggregated CSV (issue #630). Signed
+    # by the Coordinator's IAM role so the downloading CLI needs no AWS
+    # credentials of its own. Only present when an aggregated object exists;
+    # any S3 failure degrades gracefully to ``None`` rather than failing the
+    # whole results listing.
+    aggregated_url = _presign_aggregated_get(bucket, aggregated_key)
+
     kpi_files: list[CoordinatorResultFile] = []
     try:
         s3 = boto3.client("s3")
@@ -770,6 +880,7 @@ async def get_campaign_results(
         status=result_status,
         result_bucket=bucket,
         aggregated_results_key=aggregated_key,
+        aggregated_results_url=aggregated_url,
         kpi_files=kpi_files,
         message=(
             f"Found {len(kpi_files)} KPI files in s3://{bucket}/results/"

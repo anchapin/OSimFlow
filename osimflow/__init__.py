@@ -52,6 +52,15 @@ from .executors import (
     PBSExecutor,
     SlurmExecutor,
 )
+from .handoff_record import (
+    HANDOFF_RECORD_NAME,
+    IDEMPOTENCY_KEY_HEADER,
+    HandoffRecord,
+    NoHandoffRecordError,
+    handoff_record_exists,
+    read_handoff_record,
+    write_handoff_record,
+)
 from .jobqueue import JobQueue
 from .logging import get_logger, setup_logging
 from .measures import (
@@ -136,6 +145,14 @@ __all__ = [
     "NomadExecutor",
     "PBSExecutor",
     "JobQueue",
+    # Coordinator handoff record (issue #630, Epic #624)
+    "HANDOFF_RECORD_NAME",
+    "IDEMPOTENCY_KEY_HEADER",
+    "HandoffRecord",
+    "NoHandoffRecordError",
+    "handoff_record_exists",
+    "read_handoff_record",
+    "write_handoff_record",
     "RunTrace",
     "StepTrace",
     "ObservabilityBackend",
