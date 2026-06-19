@@ -12,9 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors import KubernetesExecutor
-from osimflow.executors.kubernetes_executor import _KubernetesHandle
-
+# Detect the optional `kubernetes` SDK BEFORE importing the executor module
+# so that the skip marker below is authoritative and — critically — a future
+# non-lazy ``import kubernetes`` inside ``osimflow.executors.kubernetes_executor``
+# cannot crash test *collection* with ModuleNotFoundError before the guard is
+# evaluated (issue #623). pytest's ``skipif`` only suppresses test execution,
+# not import-time failures, so the check must win the race against any import.
 try:
     from kubernetes import client  # noqa: F401
 
@@ -22,11 +25,21 @@ try:
 except ImportError:
     _HAS_KUBERNETES = False
 
+# Imported after the guard above. ``noqa: E402`` because the SDK detection
+# block intentionally precedes these imports (see comment above).
+from osimflow.executors import KubernetesExecutor  # noqa: E402
+from osimflow.executors.kubernetes_executor import _KubernetesHandle  # noqa: E402
+
+# Whole-module skip when the SDK is absent. The executor's heavy tests
+# (submit / _submit_job / _wait_for_terminal) construct real Kubernetes
+# client types, and a module-level marker — rather than a single class
+# marker — guarantees collection can never crash on ``ModuleNotFoundError``
+# even if the production import later becomes non-lazy (issue #623).
+pytestmark = pytest.mark.skipif(not _HAS_KUBERNETES, reason="kubernetes SDK not installed")
+
 
 class TestKubernetesExecutor:
     """KubernetesExecutor wraps the K8s BatchV1Api."""
-
-    pytestmark = pytest.mark.skipif(not _HAS_KUBERNETES, reason="kubernetes not installed")
 
     def _make_mock_client(self) -> MagicMock:
         mock_client = MagicMock()

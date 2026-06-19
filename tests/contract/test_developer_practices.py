@@ -16,6 +16,7 @@ Each test corresponds to one acceptance criterion in issue #15:
   8. docs/ cross-references resolve               -> test_docs_sync
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,49 @@ def _run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         check=False,
         **kwargs,
     )
+
+
+# Regex anchoring on the ``TOTAL`` summary line emitted by ``coverage report``.
+# The coverage token is the LAST percentage on that line and may be a plain
+# number, ``inf``/``nan`` (zero-statement modules), or a no-data dash. We
+# match liberally and normalise in :func:`parse_total_coverage_pct`.
+_TOTAL_LINE_RE = re.compile(r"^\s*TOTAL\b.*$", re.MULTILINE)
+_TOTAL_PCT_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?|inf|nan|-+)\s*%\s*$")
+
+
+def parse_total_coverage_pct(stdout: str) -> float | None:
+    """Tolerantly extract the TOTAL coverage percentage from ``coverage report``.
+
+    The CI gate surfaces this number from coverage CLI output, and naive
+    parsers flap on two edge cases (issue #623):
+
+    * **``inf%`` / ``nan%``** — coverage emits these for modules with zero
+      statements. An empty module is fully covered by convention, so we map
+      them to ``100.0`` (never let a degenerate module trip the parser).
+    * **Leading/trailing whitespace** — CI runners and colourised output can
+      indent the ``TOTAL`` line; we ``strip()`` before extracting the token.
+
+    A no-data marker (``-``/``---``) or a missing ``TOTAL`` line yields
+    ``None`` so callers can skip the numeric assertion rather than crash.
+
+    Returns the percentage as a float in ``[0, 100]``, or ``None``.
+    """
+    line_match = _TOTAL_LINE_RE.search(stdout)
+    if line_match is None:
+        return None
+    line = line_match.group(0).strip()
+    pct_match = _TOTAL_PCT_RE.search(line)
+    if pct_match is None:
+        return None
+    raw = pct_match.group(1)
+    if raw in ("inf", "nan"):
+        return 100.0
+    if set(raw) <= {"-"}:  # '-', '--', '---' (no data)
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 @pytest.fixture(scope="module")
@@ -62,6 +106,16 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
     # Exclude nomad_e2e: those tests require a Docker-based Nomad cluster
     # and hang indefinitely when the cluster isn't available (local dev).
     # CI runs them in a separate workflow with Docker pre-provisioned.
+    #
+    # NOTE: we deliberately do NOT add ``-m "not slow"`` here even though
+    # tests/unit/test_manifest_files.py is ``@pytest.mark.slow``. Those
+    # tests contribute ~1pp of unique coverage of the manifest-writing
+    # code in campaign.py; excluding them drops total coverage to 84%,
+    # below the 85% gate this fixture enforces. The slow manifest tests
+    # are instead kept out of the *fast* CI gate (the `test` job runs
+    # ``-m "not nomad_e2e and not slow"``) and exercised in a dedicated
+    # `slow` CI job so they cannot rot (issue #623). ``--timeout`` bounds
+    # any individual test that regresses into hanging.
     return _run(
         [
             sys.executable,
@@ -75,6 +129,7 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
             "-q",
             "--no-cov",
             "--ignore=tests/integration/nomad_e2e",
+            "--timeout=300",
             "tests/integration",
             "tests/unit",
         ]
@@ -124,9 +179,36 @@ def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> N
             "--fail-under=85",
         ]
     )
+    # Tolerantly parse the TOTAL coverage percentage so the failure message
+    # surfaces the actual number. The parser degrades gracefully on the
+    # ``inf%``/leading-whitespace edge cases that crashed earlier CI output
+    # parsing (issue #623) and never itself raises.
+    parsed_pct = parse_total_coverage_pct(report.stdout)
     assert report.returncode == 0, (
-        f"coverage --fail-under=85 failed:\nstdout:\n{report.stdout}\nstderr:\n{report.stderr}"
+        f"coverage --fail-under=85 failed (parsed TOTAL={parsed_pct}%):\n"
+        f"stdout:\n{report.stdout}\nstderr:\n{report.stderr}"
     )
+
+
+def test_coverage_parser_handles_inf_and_leading_spaces() -> None:
+    """The CI coverage-output parser must tolerate ``inf%`` / ``nan%`` and
+    leading whitespace (issue #623 acceptance criterion #3). These edge
+    cases previously crashed naive numeric parsing of ``coverage report``
+    CLI output."""
+    # Standard coverage.py TOTAL line.
+    assert parse_total_coverage_pct("Name  Stmts  Miss  Cover\nTOTAL  1234  56  88%\n") == 88.0
+    # Leading whitespace (CI runners / colourised output indent the line).
+    assert parse_total_coverage_pct("    TOTAL    10    0   100%\n") == 100.0
+    # ``inf%`` / ``nan%`` from zero-statement modules -> treated as 100.0.
+    assert parse_total_coverage_pct("TOTAL  0  0  inf%\n") == 100.0
+    assert parse_total_coverage_pct("TOTAL  0  0  nan%\n") == 100.0
+    # No-data marker -> None (caller skips the numeric assertion).
+    assert parse_total_coverage_pct("TOTAL  0  0  -%\n") is None
+    assert parse_total_coverage_pct("TOTAL  0  0  --%\n") is None
+    # No TOTAL line at all -> None.
+    assert parse_total_coverage_pct("just some coverage output, no total") is None
+    # Trailing whitespace after the percent sign.
+    assert parse_total_coverage_pct("TOTAL  100  0  100%   \n") == 100.0
 
 
 def test_agents_md_contract() -> None:
