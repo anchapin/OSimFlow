@@ -744,11 +744,26 @@ class CoordinatorHandoffPayload(BaseModel):
 
 
 class CoordinatorHandoffResponse(BaseModel):
-    """Response from a successful campaign handoff."""
+    """Response from a successful campaign handoff.
+
+    The endpoint returns HTTP ``202 Accepted`` (issue #630): the campaign has
+    been received but not yet run. ``status_url`` is the absolute URL the CLI
+    should poll (and persist to the local handoff record) so that
+    ``osimflow status`` can reconnect from a fresh shell.
+    """
 
     campaign_id: str = Field(description="Assigned campaign identifier")
     status: str = Field(description="Initial status: pending")
     message: str = Field(description="Human-readable summary")
+    status_url: str | None = Field(
+        default=None,
+        description=(
+            "Absolute URL to poll for live status "
+            "(``GET /api/v1/coordinator/campaigns/{campaign_id}``). Present "
+            "so the CLI can persist it to the local handoff record and "
+            "reconnect later (issue #630)."
+        ),
+    )
 
 
 class CoordinatorSubmitResponse(BaseModel):
@@ -850,6 +865,15 @@ class CoordinatorResultsResponse(BaseModel):
     result_bucket: str | None = Field(default=None, description="S3 bucket")
     aggregated_results_key: str | None = Field(
         default=None, description="S3 key for aggregated CSV"
+    )
+    aggregated_results_url: str | None = Field(
+        default=None,
+        description=(
+            "Short-lived presigned GET URL for the aggregated CSV, signed by "
+            "the Coordinator's IAM role so the downloading client needs no "
+            "AWS credentials of its own (issue #630). Present only when the "
+            "campaign is complete and an aggregated object exists."
+        ),
     )
     kpi_files: list[CoordinatorResultFile] = Field(
         default_factory=list, description="Per-sample KPI JSON files"

@@ -1273,20 +1273,38 @@
           "coordinator"
         ],
         "summary": "Handoff a campaign to the Coordinator",
-        "description": "Accepts a campaign configuration and returns immediately with a campaign_id. The Coordinator takes ownership of the campaign lifecycle. Use GET /api/v1/coordinator/campaigns/{campaign_id} to poll status.",
+        "description": "Accepts a campaign configuration and returns immediately (HTTP 202) with a campaign_id. The Coordinator takes ownership of the campaign lifecycle. Use GET /api/v1/coordinator/campaigns/{campaign_id} to poll status.\n\n**Idempotent** on the `Idempotency-Key` header (issue #630): a duplicate handoff carrying the same key as a prior, accepted request returns the *original* campaign_id and status_url instead of creating a second campaign. Callers that omit the header get the legacy behaviour (a new campaign every time).",
         "operationId": "coordinator_handoff_api_v1_coordinator_handoff_post",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CoordinatorHandoffPayload"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -4538,6 +4556,18 @@
             "type": "string",
             "title": "Message",
             "description": "Human-readable summary"
+          },
+          "status_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Url",
+            "description": "Absolute URL to poll for live status (``GET /api/v1/coordinator/campaigns/{campaign_id}``). Present so the CLI can persist it to the local handoff record and reconnect later (issue #630)."
           }
         },
         "type": "object",
@@ -4547,7 +4577,7 @@
           "message"
         ],
         "title": "CoordinatorHandoffResponse",
-        "description": "Response from a successful campaign handoff."
+        "description": "Response from a successful campaign handoff.\n\nThe endpoint returns HTTP ``202 Accepted`` (issue #630): the campaign has\nbeen received but not yet run. ``status_url`` is the absolute URL the CLI\nshould poll (and persist to the local handoff record) so that\n``osimflow status`` can reconnect from a fresh shell."
       },
       "CoordinatorNotifyRequest": {
         "properties": {
@@ -4753,6 +4783,18 @@
             ],
             "title": "Aggregated Results Key",
             "description": "S3 key for aggregated CSV"
+          },
+          "aggregated_results_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregated Results Url",
+            "description": "Short-lived presigned GET URL for the aggregated CSV, signed by the Coordinator's IAM role so the downloading client needs no AWS credentials of its own (issue #630). Present only when the campaign is complete and an aggregated object exists."
           },
           "kpi_files": {
             "items": {

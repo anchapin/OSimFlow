@@ -45,6 +45,14 @@ from osimflow import (
 from osimflow.byos import ByosTrustLevel, load_user_function
 from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.exporters.osa import OSAExporter
+from osimflow.handoff_record import (
+    IDEMPOTENCY_KEY_HEADER,
+    HandoffRecord,
+    NoHandoffRecordError,
+    handoff_record_exists,
+    read_handoff_record,
+    write_handoff_record,
+)
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 
 log = logging.getLogger("osimflow.__main__")
@@ -2488,14 +2496,35 @@ def _cmd_aggregate_runs(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    """Show detailed status of a campaign by reading run.json."""
+    """Show detailed status of a campaign.
+
+    For a Coordinator-backed (``--detach``) campaign, resolves the
+    ``campaign_id`` from the local handoff record under ``outdir/`` and polls
+    the Coordinator for live status — works from a fresh shell / rebooted
+    machine (issue #630). Otherwise falls back to the local ``run.json`` view.
+    """
     import json as json_mod  # noqa: PLC0415
 
     outdir: Path = args.outdir.resolve()
+
+    # Coordinator-backed campaign: prefer the live Coordinator status. This
+    # path needs no run.json (a detached campaign never ran locally).
+    if handoff_record_exists(outdir):
+        try:
+            record = read_handoff_record(outdir)
+        except NoHandoffRecordError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        return _print_coordinator_status(record)
+
     run_json_path = outdir / "run.json"
 
     if not run_json_path.exists():
         print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        print(
+            "       (no Coordinator handoff record either; did you run with `--detach`?)",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -2557,15 +2586,51 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_download(args: argparse.Namespace) -> int:
-    """Download results from a completed campaign to a destination directory."""
+    """Download results from a completed campaign to a destination directory.
+
+    For a Coordinator-backed (``--detach``) campaign, fetches ONLY the final
+    aggregated artifacts via the Coordinator's presigned URL — per-sample
+    bytes are not downloaded (issue #630). Otherwise copies the local
+    artifacts from ``outdir/``.
+    """
+    outdir: Path = args.outdir.resolve()
+
+    # Coordinator-backed campaign: fetch aggregated artifacts via presigned
+    # URL from the Coordinator (no local run.json needed).
+    if handoff_record_exists(outdir):
+        try:
+            record = read_handoff_record(outdir)
+        except NoHandoffRecordError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        output_dir: Path = (
+            args.output_dir.resolve()
+            if args.output_dir
+            else outdir.parent / f"{outdir.name}-downloads" / record.campaign_id
+        )
+        return _download_coordinator_results(record, output_dir)
+
+    return _download_local_results(args, outdir)
+
+
+def _download_local_results(args: argparse.Namespace, outdir: Path) -> int:
+    """Copy local artifacts (run.json, CSVs, plots/, kpis/) from ``outdir/``.
+
+    This is the original ``osimflow download`` behaviour for campaigns that ran
+    locally (no Coordinator). Extracted from ``_cmd_download`` so the
+    Coordinator-backed path can short-circuit above.
+    """
     import json as json_mod  # noqa: PLC0415
     import shutil  # noqa: PLC0415
 
-    outdir: Path = args.outdir.resolve()
     run_json_path = outdir / "run.json"
 
     if not run_json_path.exists():
         print(f"error: run.json not found in {outdir}", file=sys.stderr)
+        print(
+            "       (no Coordinator handoff record either; did you run with `--detach`?)",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -2576,11 +2641,11 @@ def _cmd_download(args: argparse.Namespace) -> int:
         return 1
 
     campaign_id = run_data.get("campaign_id", outdir.name)
-    output_dir: Path
-    if args.output_dir:
-        output_dir = args.output_dir.resolve()
-    else:
-        output_dir = outdir.parent / f"{outdir.name}-downloads" / campaign_id
+    output_dir: Path = (
+        args.output_dir.resolve()
+        if args.output_dir
+        else outdir.parent / f"{outdir.name}-downloads" / campaign_id
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     log.info("Downloading campaign %s to %s", campaign_id, output_dir)
@@ -2624,6 +2689,341 @@ def _cmd_download(args: argparse.Namespace) -> int:
             log.info("  work/ -> %s", dest_work)
 
     print(f"\nDownloaded campaign '{campaign_id}' to:\n  {output_dir}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Coordinator (``--detach``) reconnect helpers — issue #630, Epic #624
+# ---------------------------------------------------------------------------
+#
+# These functions implement the detach handoff + CLI reconnect UX:
+#
+#   * ``_build_coordinator_payload`` / ``_coordinator_idempotency_key`` build
+#     a deterministic handoff payload + ``Idempotency-Key`` so a retried
+#     handoff (e.g. after a lost response) returns the *same* campaign.
+#   * ``_perform_detach_handoff`` is the ``osimflow run --detach`` flow: it
+#     POSTs to the Coordinator, writes a local handoff record, and exits.
+#   * ``_print_coordinator_status`` / ``_download_coordinator_results`` power
+#     ``osimflow status`` / ``osimflow download`` for Coordinator-backed
+#     campaigns, reading the campaign_id from the local handoff record so
+#     they work from a fresh shell / rebooted machine.
+#
+# httpx is imported at module top; boto3 / json / hashlib are lazy-imported
+# inside the few helpers that need them to keep CLI cold-start cheap.
+
+
+def _coordinator_status_url(coordinator_url: str, campaign_id: str) -> str:
+    """Build the absolute campaign-status URL for a Coordinator campaign."""
+    return f"{coordinator_url.rstrip('/')}/api/v1/coordinator/campaigns/{campaign_id}"
+
+
+def _build_coordinator_payload(args: argparse.Namespace, cfg: CampaignConfig) -> dict[str, Any]:
+    """Build the JSON payload posted to ``POST /coordinator/handoff``.
+
+    Factored out so the payload shape and the idempotency-key derivation share
+    one source of truth.
+    """
+    return {
+        "name": str(cfg.outdir.name) if cfg.outdir else f"campaign-{int(time.time())}",
+        "n_samples": cfg.n_samples,
+        "executor": args.executor or "local",
+        "openstudio_version": cfg.openstudio_version or "3.11.0",
+        "algorithm": cfg.algorithm,
+        "max_generations": cfg.max_generations,
+        "input_variables": str(cfg.input_variables) if cfg.input_variables else None,
+        "template_sim_package": str(cfg.template_sim_package) if cfg.template_sim_package else None,
+        "custom_apply_script": args.custom_apply_script,
+        "custom_kpi_extractor": args.custom_kpi_extractor,
+        "archive_intermediates": cfg.archive_intermediates,
+        "result_storage_backend": cfg.result_storage_backend,
+        "result_storage_bucket": cfg.result_storage_bucket,
+        "extra": {
+            "slurm_partition": getattr(args, "slurm_partition", None),
+            "aws_batch_queue": getattr(args, "aws_batch_queue", None),
+            "nomad_datacentre": getattr(args, "nomad_datacentre", None),
+        },
+    }
+
+
+def _coordinator_idempotency_key(payload: dict[str, Any], outdir: Path | None) -> str:
+    """Derive a deterministic ``Idempotency-Key`` for a handoff.
+
+    Hashing the resolved payload + the outdir means re-running the *same*
+    ``osimflow run --detach ...`` command produces the *same* key, so a retry
+    after a lost HTTP response reuses the campaign the Coordinator already
+    created instead of minting a second one (issue #630). Changing any
+    campaign parameter (or the outdir) yields a different key -> a new
+    campaign, which is the desired behaviour.
+    """
+    import hashlib  # noqa: PLC0415
+    import json as json_mod  # noqa: PLC0415
+
+    digest = hashlib.sha256()
+    digest.update(json_mod.dumps(payload, sort_keys=True, default=str).encode("utf-8"))
+    if outdir is not None:
+        digest.update(str(outdir.resolve()).encode("utf-8"))
+    return f"osimflow-{digest.hexdigest()[:32]}"
+
+
+def _perform_detach_handoff(args: argparse.Namespace) -> int:
+    """Execute the ``osimflow run --detach`` fire-and-forget handoff.
+
+    Posts the campaign config to the Coordinator with a deterministic
+    ``Idempotency-Key``, writes a local handoff record under ``outdir``, and
+    exits cleanly. Failure modes (Coordinator unreachable, 4xx config error,
+    5xx server error) surface a clear, actionable message; 4xx leaves no
+    remote state, while 5xx/idempotency lets the user safely re-run the same
+    command to recover.
+    """
+    coordinator_url = (args.coordinator_url or "").rstrip("/")
+    if not coordinator_url:
+        print("error: --detach requires --coordinator-url", file=sys.stderr)
+        return 1
+
+    # Idempotent fast path: this outdir is already associated with a remote
+    # campaign. Return the existing campaign_id without loading the config or
+    # hitting the network. (Checked before load_config so a stale/invalid
+    # config doesn't block reconnecting to an already-handed-off campaign.)
+    outdir_raw = getattr(args, "outdir", None)
+    outdir: Path | None = Path(outdir_raw).resolve() if outdir_raw else None
+    if outdir is not None and handoff_record_exists(outdir):
+        rec = read_handoff_record(outdir)
+        print(f"Campaign already handed off to Coordinator: {rec.campaign_id}")
+        print(f"  Status URL: {rec.status_url}")
+        print(
+            "  (outdir already associated with a Coordinator campaign; "
+            "use `osimflow status <outdir>` to monitor it.)"
+        )
+        return 0
+
+    cfg = load_config(vars(args))
+    outdir = cfg.outdir
+
+    payload = _build_coordinator_payload(args, cfg)
+    idem_key = _coordinator_idempotency_key(payload, outdir)
+    handoff_url = f"{coordinator_url}/api/v1/coordinator/handoff"
+
+    try:
+        response = httpx.post(
+            handoff_url,
+            json=payload,
+            headers={IDEMPOTENCY_KEY_HEADER: idem_key},
+            timeout=30.0,
+        )
+    except httpx.RequestError as exc:
+        # ConnectError is a subclass of RequestError; surface the more
+        # actionable "is it running?" hint for connection failures.
+        if isinstance(exc, httpx.ConnectError):
+            detail = f"could not reach Coordinator at {coordinator_url}: {exc}"
+            hint = "Is the Coordinator running and reachable?"
+        else:
+            detail = f"handoff request to {coordinator_url} failed: {exc}"
+            hint = "Re-run the same command to retry."
+        print(
+            f"error: {detail}\n"
+            f"       {hint} No campaign was created; the handoff is "
+            "idempotent, so re-running the same command is safe.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 4xx: the Coordinator rejected the config before creating any state.
+    if 400 <= response.status_code < 500:
+        print(
+            f"error: Coordinator rejected the handoff "
+            f"(HTTP {response.status_code}).\n"
+            f"       Response: {response.text}\n"
+            "       Fix the campaign configuration and re-run. "
+            "No campaign was created.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 5xx: server error — the campaign may or may not exist on the server.
+    if response.status_code >= 500:
+        print(
+            f"error: Coordinator returned HTTP {response.status_code}: "
+            f"{response.text}\n"
+            "       The campaign may or may not have been created on the "
+            "server.\n"
+            "       Re-run the SAME command to recover — the Idempotency-Key "
+            "reuses any\n"
+            "       campaign already created for this configuration.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 2xx (202 Accepted expected) — success. Persist the handoff record so
+    # ``osimflow status`` / ``osimflow download`` can reconnect later.
+    result_data = response.json()
+    campaign_id = str(result_data.get("campaign_id", ""))
+    status_url = str(
+        result_data.get("status_url") or _coordinator_status_url(coordinator_url, campaign_id)
+    )
+    if outdir is not None:
+        write_handoff_record(
+            outdir,
+            HandoffRecord(
+                campaign_id=campaign_id,
+                coordinator_url=coordinator_url,
+                submitted_at=time.time(),
+                status_url=status_url,
+                idempotency_key=idem_key,
+            ),
+        )
+
+    print(f"Campaign handed off to Coordinator: {campaign_id}")
+    print(f"  Status URL: {status_url}")
+    print("  The CLI has exited; the campaign runs on the Coordinator.")
+    if outdir is not None:
+        print(f"  Monitor with: osimflow status {outdir}")
+        print(f"  Download with: osimflow download {outdir}")
+    else:
+        print("  Monitor with: osimflow status <outdir>")
+    return 0
+
+
+def _print_coordinator_status(record: HandoffRecord) -> int:
+    """Poll the Coordinator for live status of a detached campaign.
+
+    Reads the ``campaign_id`` + Coordinator URL from the local handoff record
+    (so it works from a fresh shell / rebooted machine) and prints the live
+    status returned by ``GET /api/v1/coordinator/campaigns/{id}``.
+    """
+    status_url = record.status_url or _coordinator_status_url(
+        record.coordinator_url, record.campaign_id
+    )
+    try:
+        response = httpx.get(status_url, timeout=15.0)
+    except httpx.RequestError as exc:
+        print(
+            f"error: could not reach Coordinator at {record.coordinator_url} to "
+            f"fetch status: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if response.status_code == 404:
+        print(
+            f"error: Coordinator has no campaign {record.campaign_id} (HTTP 404). "
+            "It may have been deleted, or the Coordinator was reset.",
+            file=sys.stderr,
+        )
+        return 1
+    if response.status_code >= 400:
+        print(
+            f"error: Coordinator returned HTTP {response.status_code} for "
+            f"campaign {record.campaign_id}: {response.text}",
+            file=sys.stderr,
+        )
+        return 1
+
+    data = response.json()
+    print("Coordinator-backed campaign (detached)")
+    print(f"  Campaign ID:  {data.get('campaign_id', record.campaign_id)}")
+    print(f"  Name:         {data.get('name', 'unknown')}")
+    print(f"  Status:       {data.get('status', 'unknown')}")
+    print(f"  Executor:     {data.get('executor', 'unknown')}")
+    print(f"  OpenStudio:   {data.get('openstudio_version', 'unknown')}")
+    print(f"  Samples:      {data.get('n_samples', 'unknown')}")
+    created = data.get("created_at")
+    if isinstance(created, (int, float)) and created:
+        print(
+            f"  Created:      {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(float(created)))}"
+        )
+    updated = data.get("updated_at")
+    if isinstance(updated, (int, float)) and updated:
+        print(
+            f"  Updated:      {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(float(updated)))}"
+        )
+    print(f"  Status URL:   {status_url}")
+    print("  Download:     osimflow download <outdir>")
+    return 0
+
+
+def _download_coordinator_results(
+    record: HandoffRecord, output_dir: Path, *, http_get: Any = None
+) -> int:
+    """Download ONLY the final aggregated artifacts for a detached campaign.
+
+    Fetches ``GET /api/v1/coordinator/campaigns/{id}/results`` and downloads
+    the aggregated-results CSV via the Coordinator-provided presigned URL —
+    per-sample bytes are deliberately NOT downloaded (issue #630).
+
+    ``http_get`` is an optional injectable callable ``(url, *, timeout,
+    follow_redirects) -> response`` used only by tests; production callers
+    leave it as ``None`` to use ``httpx.get``.
+    """
+    results_url = (
+        f"{record.coordinator_url.rstrip('/')}"
+        f"/api/v1/coordinator/campaigns/{record.campaign_id}/results"
+    )
+    fetch = http_get if http_get is not None else httpx.get
+
+    try:
+        results_response = fetch(results_url, timeout=15.0, follow_redirects=True)
+    except httpx.RequestError as exc:
+        print(
+            f"error: could not reach Coordinator at {record.coordinator_url} to "
+            f"list results: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    if results_response.status_code >= 400:
+        print(
+            f"error: Coordinator returned HTTP {results_response.status_code} "
+            f"listing results: {results_response.text}",
+            file=sys.stderr,
+        )
+        return 1
+
+    body = results_response.json()
+    result_status = str(body.get("status", "unknown"))
+    presigned = body.get("aggregated_results_url")
+    agg_key = body.get("aggregated_results_key")
+
+    if not presigned:
+        # Nothing to download yet (still running, or aggregation produced no
+        # aggregated object). Give the user an actionable, status-aware hint.
+        print(
+            f"Campaign {record.campaign_id} has no aggregated results to "
+            f"download yet (status: {result_status})."
+        )
+        if result_status in ("pending", "running", "aggregating"):
+            print("The campaign is not finished. Re-run this command once it reaches `complete`.")
+        elif agg_key:
+            print(
+                f"An aggregated key is referenced ({agg_key}) but the "
+                "Coordinator did not return a presigned URL; check the "
+                "Coordinator's S3 permissions."
+            )
+        return 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dest = output_dir / "aggregated_results.csv"
+    try:
+        file_response = fetch(presigned, timeout=120.0, follow_redirects=True)
+    except httpx.RequestError as exc:
+        print(f"error: failed to download aggregated results: {exc}", file=sys.stderr)
+        return 1
+    if file_response.status_code >= 400:
+        print(
+            f"error: aggregated-results download failed "
+            f"(HTTP {file_response.status_code}): {file_response.text}",
+            file=sys.stderr,
+        )
+        return 1
+
+    with open(dest, "wb") as fh:
+        fh.write(file_response.content)
+    log.info("Downloaded aggregated results for campaign %s -> %s", record.campaign_id, dest)
+
+    print(f"\nDownloaded aggregated results for campaign '{record.campaign_id}' to:")
+    print(f"  {dest}")
+    print(
+        "  (Per-sample bytes were intentionally not downloaded. Run the "
+        "campaign locally or query the Coordinator's per-sample API to get them.)"
+    )
     return 0
 
 
@@ -3096,62 +3496,13 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     # Apply preset before load_config so preset values are in place.
     _apply_preset(args)
 
-    # --- Fire-and-forget handoff (Phase 2 — issue #602) ---
+    # --- Fire-and-forget handoff (Phase 2 — issue #602; hardened #630) ---
+    # Idempotent POST with a deterministic Idempotency-Key, local handoff
+    # record under outdir/, clean exit. See _perform_detach_handoff.
     if args.detach:
-        if not args.coordinator_url:
-            print("error: --detach requires --coordinator-url", file=sys.stderr)
-            return 1
-        cfg: CampaignConfig = load_config(vars(args))
+        return _perform_detach_handoff(args)
 
-        coordinator_payload = {
-            "name": str(cfg.outdir.name) if cfg.outdir else f"campaign-{int(time.time())}",
-            "n_samples": cfg.n_samples,
-            "executor": args.executor or "local",
-            "openstudio_version": cfg.openstudio_version or "3.11.0",
-            "algorithm": cfg.algorithm,
-            "max_generations": cfg.max_generations,
-            "input_variables": str(cfg.input_variables) if cfg.input_variables else None,
-            "template_sim_package": str(cfg.template_sim_package)
-            if cfg.template_sim_package
-            else None,
-            "custom_apply_script": args.custom_apply_script,
-            "custom_kpi_extractor": args.custom_kpi_extractor,
-            "archive_intermediates": cfg.archive_intermediates,
-            "result_storage_backend": cfg.result_storage_backend,
-            "result_storage_bucket": cfg.result_storage_bucket,
-            "extra": {
-                "slurm_partition": getattr(args, "slurm_partition", None),
-                "aws_batch_queue": getattr(args, "aws_batch_queue", None),
-                "nomad_datacentre": getattr(args, "nomad_datacentre", None),
-            },
-        }
-        try:
-            response = httpx.post(
-                f"{args.coordinator_url.rstrip('/')}/api/v1/coordinator/handoff",
-                json=coordinator_payload,
-                timeout=30.0,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            print(
-                f"error: Coordinator returned {exc.response.status_code}: {exc.response.text}",
-                file=sys.stderr,
-            )
-            return 1
-        except httpx.RequestError as exc:
-            print(
-                f"error: Failed to reach Coordinator at {args.coordinator_url}: {exc}",
-                file=sys.stderr,
-            )
-            return 1
-        result_data = response.json()
-        campaign_id = result_data.get("campaign_id", "unknown")
-        print(f"Campaign handed off to Coordinator: {campaign_id}")
-        print(f"  Status: {result_data.get('status', 'unknown')}")
-        print(f"  Poll: {args.coordinator_url}/api/v1/coordinator/campaigns/{campaign_id}")
-        return 0
-
-    cfg: CampaignConfig = load_config(vars(args))  # type: ignore[no-redef]
+    cfg: CampaignConfig = load_config(vars(args))
     executor: BaseExecutor
     if cfg.dry_run:
         executor = LocalExecutor(max_workers=1)
