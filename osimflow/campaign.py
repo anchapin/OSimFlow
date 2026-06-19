@@ -1922,8 +1922,56 @@ class Campaign:
             if self._result_storage is not None:
                 self._result_storage.close()
 
+    def _abort_run_path_cancel(
+        self,
+        t0: float,
+        samples: list[SampleSpec],
+        kpi_files: list[Path],
+    ) -> dict[str, object]:
+        """Write a partial cancelled trace and return a cancelled result dict.
+
+        Called by the dry-run and single-sample run paths (issue #621)
+        when an inter-step cancellation check fires.  Both paths bypass
+        the generation loop in ``_run_full_campaign``, so they need their
+        own mid-flight polling — without it a ``.stop`` file written
+        between two steps is ignored until the path returns, by which
+        point a ``status="ok"`` trace has already been written.
+
+        The partial-trace write here mirrors the cancellation handling
+        in ``_finalize_full_campaign`` (lines ~2355-2368) so the cleanup
+        from #620 (PASSIVE WAL checkpoint, thread-safe cache close) runs
+        cleanly in ``run()``'s ``finally`` block.  ``run()`` propagates
+        ``trace.status == "cancelled"`` into ``campaign_status`` so the
+        caller observes the correct final state.
+        """
+        log.warning("cancellation requested mid-run-path — writing partial trace")
+        self._finalize_samples()
+        self.trace.status = "cancelled"
+        self.trace.finalize()
+        self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+        self.trace.write(self.cfg.outdir / "run.json")
+        return {
+            "samples": samples,
+            "kpis": kpi_files,
+            "aggregated": {"csv": None, "failed": None},
+            "plots": [],
+            "elapsed_s": time.time() - t0,
+            "run_json": self.cfg.outdir / "run.json",
+        }
+
     def _run_dry_run(self, t0: float) -> dict[str, object]:
-        """Dry-run mode: 1 sample, local executor, steps 1-4 only."""
+        """Dry-run mode: 1 sample, local executor, steps 1-4 only.
+
+        Cancellation is polled between every step (issue #621).  The
+        dry-run path bypasses the generation loop in
+        ``_run_full_campaign`` (which already polls ``_check_cancel_requested()``
+        at the top of each iteration), so these inter-step checks are the
+        only place a ``.stop`` file or in-memory cancel flag is honoured
+        mid-flight.  On cancel a partial trace is written with
+        ``status="cancelled"`` and the method returns cleanly — the
+        ``run()`` caller observes the cancelled state without unwinding
+        the stack via ``KeyboardInterrupt``.
+        """
         original_n = self.cfg.n_samples
         self.cfg = dataclasses.replace(self.cfg, n_samples=1)
         log.info("DRY RUN: overriding n_samples from %d to 1", original_n)
@@ -1936,8 +1984,15 @@ class Campaign:
             if self.cfg.nsga2_reference_directions is not None:
                 algo_kwargs["ref_dirs"] = self.cfg.nsga2_reference_directions
 
+        samples: list[SampleSpec] = []
+        kpi_files: list[Path] = []
+
+        # Pre-step check: cancel requested before the dry-run starts.
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, samples, kpi_files)
+
         algo = AlgorithmRegistry.get(self.cfg.algorithm, **algo_kwargs)
-        samples: list[SampleSpec] = self.step_generate_samples(algo)
+        samples = self.step_generate_samples(algo)
         # GAP-009: inject per-sample seed_model / weather_file overrides
         # from the DataPointManager before processing.
         samples = self._inject_dp_overrides(samples)
@@ -1946,9 +2001,35 @@ class Campaign:
         samples_path.parent.mkdir(parents=True, exist_ok=True)
         samples_path.write_text(json.dumps({"samples": samples}, indent=2))
         self._latest_samples_file = samples_path
+
+        # Inter-step check: cancel requested during sample generation /
+        # manifest write, before APPLY_PARAMETERS.
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, samples, kpi_files)
+
         parameterized: SampleDict = self.step_apply_parameters(samples)
+
+        # Inter-step check: cancel requested during APPLY_PARAMETERS,
+        # before the long-running RUN_OPENSTUDIO_SIM step.
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, samples, kpi_files)
+
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+
+        # Inter-step check: cancel requested during RUN_OPENSTUDIO_SIM,
+        # before EXTRACT_KPIS.
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, samples, kpi_files)
+
+        kpi_files = self.step_extract_kpis(simulated)
+
+        # Post-step check: cancel requested during EXTRACT_KPIS (after
+        # that step's own entry check has passed).  Without this guard
+        # the trace.write below would record status="ok" and the cancel
+        # signal would be silently lost (issue #621).
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, samples, kpi_files)
+
         t1 = time.time()
 
         self._finalize_samples()
@@ -1991,7 +2072,14 @@ class Campaign:
         }
 
     def _run_single_sample(self, t0: float) -> dict[str, object]:
-        """Single-sample mode: run only sample N through steps 2-4."""
+        """Single-sample mode: run only sample N through steps 2-4.
+
+        Cancellation is polled between every step (issue #621).  Like the
+        dry-run path, this path bypasses the generation loop in
+        ``_run_full_campaign``, so the inter-step checks here are the
+        only place a ``.stop`` file or in-memory cancel flag is honoured
+        mid-flight.
+        """
         sample_idx = self.cfg.sample
         assert sample_idx is not None
         samples_file = self._samples_manifest_path()
@@ -2009,9 +2097,35 @@ class Campaign:
         target = all_samples[sample_idx]
         log.info("SINGLE SAMPLE: running sample %d (id=%s)", sample_idx, target["sample_id"])
 
+        kpi_files: list[Path] = []
+
+        # Pre-step check: cancel requested before the sample starts.
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, [target], kpi_files)
+
         parameterized: SampleDict = self.step_apply_parameters([target])
+
+        # Inter-step check: cancel requested during APPLY_PARAMETERS,
+        # before the long-running RUN_OPENSTUDIO_SIM step.
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, [target], kpi_files)
+
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
-        kpi_files: list[Path] = self.step_extract_kpis(simulated)
+
+        # Inter-step check: cancel requested during RUN_OPENSTUDIO_SIM,
+        # before EXTRACT_KPIS.
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, [target], kpi_files)
+
+        kpi_files = self.step_extract_kpis(simulated)
+
+        # Post-step check: cancel requested during EXTRACT_KPIS (after
+        # that step's own entry check has passed).  Without this guard
+        # the trace.write below would record status="ok" and the cancel
+        # signal would be silently lost (issue #621).
+        if self._check_cancel_requested():
+            return self._abort_run_path_cancel(t0, [target], kpi_files)
+
         t1 = time.time()
 
         self._finalize_samples()
