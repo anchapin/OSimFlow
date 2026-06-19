@@ -26,7 +26,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from osimflow import Campaign, CampaignConfig
-from osimflow.campaign import _cancel_registry, _CancelRegistry
+from osimflow.campaign import SampleSpec, _cancel_registry, _CancelRegistry
 from osimflow.executors import BaseExecutor, Handle
 
 
@@ -371,6 +371,141 @@ class TestCampaignCancellation:
 
         campaign.run()
 
+        run_json = outdir / "run.json"
+        assert run_json.exists()
+        data = json.loads(run_json.read_text())
+        assert data["status"] == "cancelled"
+
+    def test_cancel_during_dry_run_stops(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """A ``.stop`` file planted mid-dry-run halts the run cleanly (issue #621).
+
+        Mirrors ``test_cancel_during_generation_loop_stops`` but exercises
+        the ``_run_dry_run`` path, which bypasses the generation loop in
+        ``_run_full_campaign``.  The ``.stop`` file is written as a side
+        effect of ``step_extract_kpis`` *after* that step's own entry
+        check has already passed — so without the inter-step check added
+        in this fix, the cancel signal would be silently lost and the
+        trace written as ``status="ok"``.
+        """
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign = Campaign(cfg=cfg, executor=StubExecutor())
+
+        extract_calls = 0
+        original_extract = campaign.step_extract_kpis
+
+        def extract_then_request_cancel(*args: Any, **kwargs: Any) -> Any:
+            nonlocal extract_calls
+            result = original_extract(*args, **kwargs)
+            extract_calls += 1
+            # Simulate the REST API / external tooling writing .stop
+            # mid-flight, AFTER the last step's entry check has passed.
+            (outdir / ".stop").touch()
+            return result
+
+        campaign.step_extract_kpis = extract_then_request_cancel
+
+        # Must not raise — cancellation is handled gracefully and the
+        # trace is written with status="cancelled".
+        campaign.run()
+
+        assert extract_calls == 1, "step_extract_kpis should have run once"
+        assert campaign.trace.status == "cancelled"
+        run_json = outdir / "run.json"
+        assert run_json.exists()
+        data = json.loads(run_json.read_text())
+        assert data["status"] == "cancelled"
+
+    def test_cancel_during_dry_run_before_sim_skips_sim(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Cancel before RUN_OPENSTUDIO_SIM halts the dry-run mid-flight.
+
+        Patches ``_check_cancel_requested`` to latch True after the first
+        few calls so the inter-step check between APPLY_PARAMETERS and
+        RUN_OPENSTUDIO_SIM fires.  Asserts the long-running sim step is
+        never reached (no unhandled exception) and a partial cancelled
+        trace is written.
+        """
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign = Campaign(cfg=cfg, executor=StubExecutor())
+
+        sim_calls = 0
+        original_sim = campaign.step_run_openstudio_sim
+
+        def sim_spy(*args: Any, **kwargs: Any) -> Any:
+            nonlocal sim_calls
+            sim_calls += 1
+            return original_sim(*args, **kwargs)
+
+        campaign.step_run_openstudio_sim = sim_spy
+
+        call_count = 0
+        original_check = campaign._check_cancel_requested
+
+        def patched_check() -> bool:
+            nonlocal call_count
+            call_count += 1
+            # Latch True after the inter-step check that fires between
+            # APPLY_PARAMETERS and RUN_OPENSTUDIO_SIM.  Without the new
+            # inter-step check this would only be caught at the next
+            # step's entry — but the sim step would still run.
+            if call_count >= 5:
+                return True
+            return original_check()
+
+        campaign._check_cancel_requested = patched_check
+
+        campaign.run()  # must not raise
+
+        assert sim_calls == 0, "RUN_OPENSTUDIO_SIM must not run after cancel"
+        assert campaign.trace.status == "cancelled"
+        run_json = outdir / "run.json"
+        assert run_json.exists()
+        data = json.loads(run_json.read_text())
+        assert data["status"] == "cancelled"
+
+    def test_cancel_during_single_sample_stops(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """A ``.stop`` file planted mid-single-sample halts the run (issue #621).
+
+        ``_run_single_sample`` has the same bypass-the-generation-loop
+        shape as ``_run_dry_run``, so it needs the same inter-step
+        cancellation polling.  Plants ``.stop`` as a side effect of
+        ``step_extract_kpis`` and asserts the post-step check catches
+        it before the trace is written as ``status="ok"``.
+
+        Uses ``LocalExecutor`` (matching the existing single-sample
+        tests) rather than ``StubExecutor`` so the executor consumes
+        its own bookkeeping kwargs (e.g. ``result_hint``) instead of
+        forwarding them to the work function.
+        """
+        from osimflow.executors import LocalExecutor
+
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=False, sample=0)
+        campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+
+        # Single-sample mode requires a pre-existing samples.json.
+        campaign.cfg.work_dir.mkdir(parents=True, exist_ok=True)
+        samples: list[SampleSpec] = [
+            {"sample_id": f"s{i:04d}", "values": {"window_u_value": float(i)}} for i in range(3)
+        ]
+        campaign.cfg.samples_file.write_text(json.dumps({"samples": samples}))
+
+        original_extract = campaign.step_extract_kpis
+
+        def extract_then_request_cancel(*args: Any, **kwargs: Any) -> Any:
+            result = original_extract(*args, **kwargs)
+            (outdir / ".stop").touch()
+            return result
+
+        campaign.step_extract_kpis = extract_then_request_cancel
+
+        campaign.run()  # must not raise
+
+        assert campaign.trace.status == "cancelled"
         run_json = outdir / "run.json"
         assert run_json.exists()
         data = json.loads(run_json.read_text())
