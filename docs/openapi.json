@@ -651,31 +651,24 @@
     },
     "/api/v1/campaigns/compare": {
       "get": {
-        "summary": "Compare Campaigns",
-        "description": "Compare two campaigns side by side by their campaign IDs.\n\nBoth campaigns must exist under the campaigns base directory.\nReturns ``null`` for whichever campaign is not found.",
-        "operationId": "compare_campaigns_api_v1_campaigns_compare_get",
+        "summary": "Compare Campaigns Get",
+        "description": "Compare two or more campaigns by their output directories using KPI data.\n\nEach ``outdir`` parameter should point to a campaign output directory\ncontaining ``run.json`` and ``aggregated_results.csv``.  The endpoint\nreads KPI statistics from all campaigns, aligns them into a comparison\ntable, and returns per-campaign metadata alongside cross-run statistics.\n\nThis is the GET counterpart of ``POST /api/v1/campaigns/compare``,\ndesigned for simple browser access and shell-scripting without a request body.\n\nUnlike the legacy GET endpoint (which accepted ``id1``/``id2`` registry\nIDs), this version supports N campaigns and uses ``CrossRunAggregator``\ninternally to compute aligned KPI statistics across all runs (issue #588).",
+        "operationId": "compare_campaigns_get_api_v1_campaigns_compare_get",
         "parameters": [
           {
-            "name": "id1",
+            "name": "outdir",
             "in": "query",
             "required": true,
             "schema": {
-              "type": "string",
-              "description": "First campaign ID",
-              "title": "Id1"
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "description": "Two or more campaign output directory paths to compare (can be specified multiple times or as a comma-separated list)",
+              "title": "Outdir"
             },
-            "description": "First campaign ID"
-          },
-          {
-            "name": "id2",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "Second campaign ID",
-              "title": "Id2"
-            },
-            "description": "Second campaign ID"
+            "description": "Two or more campaign output directory paths to compare (can be specified multiple times or as a comma-separated list)"
           }
         ],
         "responses": {
@@ -684,7 +677,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CampaignComparisonResponse"
+                  "$ref": "#/components/schemas/MultiCampaignComparisonResponse"
                 }
               }
             }
@@ -1257,6 +1250,525 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SampleRequeueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/handoff": {
+      "post": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Handoff a campaign to the Coordinator",
+        "description": "Accepts a campaign configuration and returns immediately with a campaign_id. The Coordinator takes ownership of the campaign lifecycle. Use GET /api/v1/coordinator/campaigns/{campaign_id} to poll status.",
+        "operationId": "coordinator_handoff_api_v1_coordinator_handoff_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorHandoffPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorHandoffResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns": {
+      "get": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "List all Coordinator campaigns",
+        "description": "Return all campaigns known to the Coordinator.",
+        "operationId": "list_coordinator_campaigns_api_v1_coordinator_campaigns_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CoordinatorCampaignRecord"
+                  },
+                  "type": "array",
+                  "title": "Response List Coordinator Campaigns Api V1 Coordinator Campaigns Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}": {
+      "get": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Get Coordinator campaign status",
+        "description": "Return the current status of a Coordinator campaign.",
+        "operationId": "get_coordinator_campaign_api_v1_coordinator_campaigns__campaign_id__get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorCampaignRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/status": {
+      "patch": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Update Coordinator campaign status (internal)",
+        "description": "Update the status of a Coordinator campaign.\n\nThis endpoint is intended for internal use by the Coordinator's own\nworker processes (Phase 3/4). It is not exposed to the public API\nwithout authentication.",
+        "operationId": "update_coordinator_campaign_status_api_v1_coordinator_campaigns__campaign_id__status_patch",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorCampaignRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/samples": {
+      "get": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "List all sample parameter sets for a campaign",
+        "description": "Return all sample parameter sets for a campaign.\n\nUsed by the Coordinator to inspect all samples before submitting an array job,\nand by array job children to enumerate available sample indices.",
+        "operationId": "list_campaign_samples_api_v1_coordinator_campaigns__campaign_id__samples_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorSamplesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/samples/{index}": {
+      "get": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Get a specific sample's parameters by index",
+        "description": "Return the parameter set for a specific sample index.\n\nThis is the endpoint that array job children call to retrieve their\nparameters. The child reads AWS_BATCH_JOB_ARRAY_INDEX from its environment\nand uses that as the {index}.\n\nReturns 404 if the campaign does not exist or the index is out of range.",
+        "operationId": "get_campaign_sample_api_v1_coordinator_campaigns__campaign_id__samples__index__get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorSampleRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/submit-array": {
+      "post": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Submit a campaign as an AWS Batch array job",
+        "description": "Submit a campaign as an AWS Batch array job.\n\nConstructs a single ``submit_job`` call with ``arrayProperties.size`` equal\nto the number of samples. Each array child will set\n``AWS_BATCH_JOB_ARRAY_INDEX`` to its zero-based index, then call\n``GET /campaigns/{campaign_id}/samples/{index}`` to retrieve its\nparameter set.\n\nThis replaces N individual ``submit_job`` calls with a single call,\nsatisfying the Phase 3 acceptance criterion: *one submission API call for\na 50,000-run campaign*.\n\nRequires AWS credentials with permissions to call ``batch.submit-job``.",
+        "operationId": "submit_campaign_array_job_api_v1_coordinator_campaigns__campaign_id__submit_array_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorArraySubmitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorArraySubmitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/poll-array": {
+      "get": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Poll AWS Batch for array job completion status",
+        "description": "Poll AWS Batch for the status of an array job submitted via POST /submit-array.\n\nReturns per-child counts: succeeded, failed, pending. A job is *complete*\n(not *succeeded*) once ``succeeded + failed == arrayProperties.size`` \u2014\npartial failures still advance the campaign to ``aggregating`` and the\nsucceeded/failed split is recorded for the aggregator. This shares the\nexact same transition logic as the EventBridge webhook\n(``POST /array-complete``), so the two paths are idempotent: whichever\nfires first flips ``running -> aggregating``; the other is a no-op.\n\nRequires ``admin`` permission and a stored ``array_job_id`` on the campaign.",
+        "operationId": "poll_array_job_api_v1_coordinator_campaigns__campaign_id__poll_array_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorPollArrayResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/results": {
+      "get": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Fetch aggregated and per-sample result files for a campaign",
+        "description": "Return references to all result files for a campaign.\n\nFor Phase 4, result files are stored in the campaign's S3 bucket under keys:\n\n- ``results/aggregated_results.csv`` \u2014 combined CSV of all sample KPIs\n- ``results/kpi_<index>.json`` \u2014 per-sample KPI JSON files\n\nWorkers upload their results directly to S3; this endpoint lets the user or\na downstream aggregator enumerate and download them without going through the\nCoordinator process.\n\nReturns ``status: unavailable`` if no result bucket is configured.",
+        "operationId": "get_campaign_results_api_v1_coordinator_campaigns__campaign_id__results_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorResultsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/notify": {
+      "post": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "Trigger a completion notification for a campaign",
+        "description": "Send a notification for a completed campaign.\n\nSupports two notification channels:\n- **SNS**: publishes a JSON message to ``sns_topic_arn`` if configured\n- **Email**: sends a plain-text email to ``notification_email`` if configured\n\nThe notification payload includes the ``campaign_id``, final status, and a\nsigned S3 URL (valid 24 h) to the aggregated results CSV.",
+        "operationId": "notify_campaign_api_v1_coordinator_campaigns__campaign_id__notify_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorNotifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorNotifyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/coordinator/campaigns/{campaign_id}/array-complete": {
+      "post": {
+        "tags": [
+          "coordinator"
+        ],
+        "summary": "EventBridge webhook: declare an array job complete",
+        "description": "Target of an EventBridge rule firing on a Batch array-job state change. Validates the EventBridge signature/source, confirms via `describe_jobs` that every array child reached a terminal state (SUCCEEDED or FAILED), and flips the campaign `running -> aggregating`. Idempotent with the polling fallback: a late webhook after a poll-driven transition is a 200 no-op.",
+        "operationId": "array_complete_api_v1_coordinator_campaigns__campaign_id__array_complete_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "X-OSimFLOW-Webhook-Secret",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Osimflow-Webhook-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorArrayCompleteEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorArrayCompleteResponse"
                 }
               }
             }
@@ -1927,6 +2439,173 @@
         }
       }
     },
+    "/api/v1/campaigns/{campaign_id}/results/query": {
+      "get": {
+        "summary": "Query Campaign Results",
+        "description": "Query aggregated results for a campaign with optional filters.\n\nReads ``aggregated_results.csv`` from the campaign directory and applies\nserver-side filtering and pagination. Supports MongoDB-style filter\noperators in the ``filter`` query parameter as a JSON object.\n\nFilter examples::\n\n    ?filter={\"status\": \"ok\"}\n    ?filter={\"kpi.eui\": {\"$gt\": 100}}\n    ?filter={\"kpi.eui\": {\"$gte\": 50, \"$lte\": 200}}\n\nReturns a paginated list of result rows with total count.",
+        "operationId": "query_campaign_results_api_v1_campaigns__campaign_id__results_query_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number (1-indexed)",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number (1-indexed)"
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "Items per page (max 1000)",
+              "default": 50,
+              "title": "Per Page"
+            },
+            "description": "Items per page (max 1000)"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by sample status (ok/failed/running)",
+              "title": "Status"
+            },
+            "description": "Filter by sample status (ok/failed/running)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Query Campaign Results Api V1 Campaigns  Campaign Id  Results Query Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/campaigns/{campaign_id}/results/export": {
+      "get": {
+        "summary": "Export Campaign Results",
+        "description": "Export aggregated results for a campaign as CSV or JSON.\n\nOptionally filters by status. Returns the full result set (no pagination)\nfor export purposes.\n\nQuery parameters:\n  - ``format``: ``csv`` (default) or ``json``\n  - ``status``: filter by sample status (``ok``, ``failed``)\n  - ``include_failed``: include failed simulations (default True)",
+        "operationId": "export_campaign_results_api_v1_campaigns__campaign_id__results_export_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Export format: csv or json",
+              "default": "csv",
+              "title": "Format"
+            },
+            "description": "Export format: csv or json"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by sample status",
+              "title": "Status"
+            },
+            "description": "Filter by sample status"
+          },
+          {
+            "name": "include_failed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include failed simulations",
+              "default": true,
+              "title": "Include Failed"
+            },
+            "description": "Include failed simulations"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/measures/upload": {
       "post": {
         "summary": "Upload Measure",
@@ -2498,35 +3177,6 @@
         ],
         "title": "CampaignComparisonEntry",
         "description": "One campaign's data within a multi-campaign comparison."
-      },
-      "CampaignComparisonResponse": {
-        "properties": {
-          "left": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CampaignDetailResponse"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Left campaign details (or null if not found)"
-          },
-          "right": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CampaignDetailResponse"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Right campaign details (or null if not found)"
-          }
-        },
-        "type": "object",
-        "title": "CampaignComparisonResponse",
-        "description": "Side-by-side comparison of two campaigns."
       },
       "CampaignCreateRequest": {
         "properties": {
@@ -3406,6 +4056,776 @@
         ],
         "title": "CompareCampaignsPostRequest",
         "description": "Request body for ``POST /api/v1/campaigns/compare`` (issue #404).\n\nAccepts two or more campaign identifiers.  Each identifier may\nreference a campaign by registry ID, by campaign directory name\n(under the campaigns base directory), or by explicit ``outdir``\npath."
+      },
+      "CoordinatorArrayCompleteEvent": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version",
+            "description": "EventBridge envelope version"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "EventBridge event ID"
+          },
+          "detail-type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail-Type",
+            "description": "Expected value: \"Batch Job State Change\""
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "Expected value: \"aws.batch\""
+          },
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account"
+          },
+          "time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "resources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resources"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail",
+            "description": "Batch job detail. Must include ``jobId``."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "CoordinatorArrayCompleteEvent",
+        "description": "EventBridge ``Batch Job State Change`` envelope posted to the array-complete webhook.\n\nEventBridge fires this event when an AWS Batch array job reaches a terminal\nstate. The Coordinator re-queries ``describe_jobs`` for the array parent\n(the source of truth) rather than trusting the event payload alone, so most\nfields here are informational. The two fields the handler actually inspects\nare ``source`` (must be ``aws.batch``) and ``detail.jobId`` (must match the\ncampaign's stored ``array_job_id`` or one of its children)."
+      },
+      "CoordinatorArrayCompleteResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "array_job_id": {
+            "type": "string",
+            "title": "Array Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "aggregating (this call flipped running->aggregating) | already_aggregating (idempotent duplicate, no-op) | pending (children still running) | failed"
+          },
+          "succeeded": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Succeeded",
+            "description": "Child jobs that succeeded"
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Failed",
+            "description": "Child jobs that failed"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total",
+            "description": "arrayProperties.size of the parent job"
+          },
+          "transitioned": {
+            "type": "boolean",
+            "title": "Transitioned",
+            "description": "True iff this call performed the running->aggregating transition.",
+            "default": false
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "array_job_id",
+          "status",
+          "succeeded",
+          "failed",
+          "total",
+          "message"
+        ],
+        "title": "CoordinatorArrayCompleteResponse",
+        "description": "Response for ``POST /campaigns/{id}/array-complete`` and the polling fallback.\n\nThe ``transitioned`` flag is the idempotency signal: a webhook that arrives\nafter the poller already advanced the campaign returns ``transitioned=False``\nwith HTTP 200 (a no-op)."
+      },
+      "CoordinatorArraySubmitRequest": {
+        "properties": {
+          "job_queue": {
+            "type": "string",
+            "title": "Job Queue",
+            "description": "AWS Batch job queue name"
+          },
+          "job_definition": {
+            "type": "string",
+            "title": "Job Definition",
+            "description": "AWS Batch job definition name"
+          },
+          "array_size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Array Size",
+            "description": "Number of array job children"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_queue",
+          "job_definition",
+          "array_size"
+        ],
+        "title": "CoordinatorArraySubmitRequest",
+        "description": "Request for POST /campaigns/{id}/submit-array \u2014 trigger array job submission."
+      },
+      "CoordinatorArraySubmitResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "array_job_id": {
+            "type": "string",
+            "title": "Array Job Id",
+            "description": "AWS Batch array job ID"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Initial status",
+            "default": "pending"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "array_job_id",
+          "message"
+        ],
+        "title": "CoordinatorArraySubmitResponse",
+        "description": "Response from array job submission."
+      },
+      "CoordinatorCampaignRecord": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "pending | running | aggregating | complete | failed"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "n_samples": {
+            "type": "integer",
+            "title": "N Samples",
+            "default": 0
+          },
+          "executor": {
+            "type": "string",
+            "title": "Executor",
+            "default": ""
+          },
+          "openstudio_version": {
+            "type": "string",
+            "title": "Openstudio Version",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "name",
+          "status"
+        ],
+        "title": "CoordinatorCampaignRecord",
+        "description": "A Coordinator campaign record returned by GET /campaigns/{id}."
+      },
+      "CoordinatorHandoffPayload": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Human-readable campaign name"
+          },
+          "n_samples": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "N Samples",
+            "description": "Number of samples to run"
+          },
+          "executor": {
+            "type": "string",
+            "title": "Executor",
+            "description": "Executor type: local | slurm | aws_batch | nomad | ..."
+          },
+          "openstudio_version": {
+            "type": "string",
+            "title": "Openstudio Version",
+            "description": "OpenStudio version tag (e.g., 3.11.0)"
+          },
+          "input_variables": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Variables",
+            "description": "URL or path to variables.yml"
+          },
+          "template_sim_package": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Sim Package",
+            "description": "URL or path to template sim package"
+          },
+          "algorithm": {
+            "type": "string",
+            "title": "Algorithm",
+            "description": "Sampling algorithm",
+            "default": "lhs"
+          },
+          "max_generations": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Generations",
+            "description": "Max DAG generations",
+            "default": 1
+          },
+          "custom_apply_script": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Apply Script",
+            "description": "URL to custom apply_params script"
+          },
+          "custom_kpi_extractor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Kpi Extractor",
+            "description": "URL to custom KPI extractor script"
+          },
+          "archive_intermediates": {
+            "type": "boolean",
+            "title": "Archive Intermediates",
+            "description": "Archive intermediate files",
+            "default": false
+          },
+          "result_storage_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Storage Backend",
+            "description": "Result storage backend"
+          },
+          "result_storage_bucket": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Storage Bucket",
+            "description": "Result storage bucket/container"
+          },
+          "extra": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra",
+            "description": "Additional executor-specific settings"
+          },
+          "samples": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Samples",
+            "description": "Pre-computed LHS sample parameter sets. If omitted, the Coordinator generates samples using the algorithm and n_samples. Each dict maps variable names to sampled values."
+          },
+          "notification_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notification Email",
+            "description": "Email address to notify when the campaign completes"
+          },
+          "sns_topic_arn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sns Topic Arn",
+            "description": "SNS topic ARN to publish to when the campaign completes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "n_samples",
+          "executor",
+          "openstudio_version"
+        ],
+        "title": "CoordinatorHandoffPayload",
+        "description": "Payload for handing off a campaign to the Coordinator (Phase 2).\n\nThis is the JSON schema the CLI posts when the ``--detach`` flag is used."
+      },
+      "CoordinatorHandoffResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id",
+            "description": "Assigned campaign identifier"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Initial status: pending"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "status",
+          "message"
+        ],
+        "title": "CoordinatorHandoffResponse",
+        "description": "Response from a successful campaign handoff."
+      },
+      "CoordinatorNotifyRequest": {
+        "properties": {
+          "notification_type": {
+            "type": "string",
+            "title": "Notification Type",
+            "description": "Type: sns | email | webhook",
+            "default": "sns"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject",
+            "description": "Notification subject (SNS/email)"
+          }
+        },
+        "type": "object",
+        "title": "CoordinatorNotifyRequest",
+        "description": "Request for POST /campaigns/{id}/notify \u2014 trigger a notification."
+      },
+      "CoordinatorNotifyResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "notification_type": {
+            "type": "string",
+            "title": "Notification Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "sent | failed | skipped",
+            "default": "sent"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "notification_type",
+          "message"
+        ],
+        "title": "CoordinatorNotifyResponse",
+        "description": "Response from a notification trigger."
+      },
+      "CoordinatorPollArrayResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "array_job_id": {
+            "type": "string",
+            "title": "Array Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Array job status: pending | running | complete | failed",
+            "default": "pending"
+          },
+          "succeeded": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Succeeded",
+            "description": "Number of child jobs that succeeded"
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Failed",
+            "description": "Number of child jobs that failed"
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending",
+            "description": "Number of child jobs still pending/running"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total",
+            "description": "Total number of child jobs"
+          },
+          "result_bucket": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Bucket",
+            "description": "S3 bucket where results are stored"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "array_job_id",
+          "succeeded",
+          "failed",
+          "pending",
+          "total",
+          "message"
+        ],
+        "title": "CoordinatorPollArrayResponse",
+        "description": "Response for GET /campaigns/{id}/poll-array \u2014 array job completion status."
+      },
+      "CoordinatorResultFile": {
+        "properties": {
+          "sample_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Index",
+            "description": "Sample index, or null for aggregated results"
+          },
+          "file_key": {
+            "type": "string",
+            "title": "File Key",
+            "description": "S3 object key or local path"
+          },
+          "file_type": {
+            "type": "string",
+            "title": "File Type",
+            "description": "csv | json | sql | parquet"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes",
+            "description": "File size in bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_key",
+          "file_type"
+        ],
+        "title": "CoordinatorResultFile",
+        "description": "A single result file reference returned by GET /campaigns/{id}/results."
+      },
+      "CoordinatorResultsResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "aggregating | complete | failed | unavailable"
+          },
+          "result_bucket": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Bucket",
+            "description": "S3 bucket"
+          },
+          "aggregated_results_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregated Results Key",
+            "description": "S3 key for aggregated CSV"
+          },
+          "kpi_files": {
+            "items": {
+              "$ref": "#/components/schemas/CoordinatorResultFile"
+            },
+            "type": "array",
+            "title": "Kpi Files",
+            "description": "Per-sample KPI JSON files"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "status",
+          "message"
+        ],
+        "title": "CoordinatorResultsResponse",
+        "description": "Response for GET /campaigns/{id}/results \u2014 all result files for a campaign."
+      },
+      "CoordinatorSampleRecord": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Index",
+            "description": "Zero-based sample index"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters",
+            "description": "Map of variable name to sampled value"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "pending | running | complete | failed",
+            "default": "pending"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "parameters"
+        ],
+        "title": "CoordinatorSampleRecord",
+        "description": "A single sample's parameter set, returned by GET /campaigns/{id}/samples/{index}."
+      },
+      "CoordinatorSamplesResponse": {
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "title": "Campaign Id"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/CoordinatorSampleRecord"
+            },
+            "type": "array",
+            "title": "Samples"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "samples"
+        ],
+        "title": "CoordinatorSamplesResponse",
+        "description": "Response for GET /campaigns/{id}/samples \u2014 all sample parameter sets."
       },
       "FileDeleteResponse": {
         "properties": {
