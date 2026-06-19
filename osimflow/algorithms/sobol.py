@@ -1,7 +1,7 @@
 """Sobol quasi-random sequence sampler (issue #139).
 
-Wraps ``scipy.stats.qmc.Sobol`` to produce low-discrepancy samples.
-Sobol sequences provide better uniformity than pseudo-random sampling
+Wraps ``SALib.sample.sobol.sample`` to produce low-discrepancy samples.
+Sobol sequences provide better space-filling than pseudo-random sampling
 for moderate-to-high dimensional spaces and are particularly effective
 when the sample count is a power of 2.
 
@@ -16,14 +16,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import scipy.stats.qmc
 
 from osimflow.algorithms import (
     BaseAlgorithm,
     _normalise_var_list,
     _partition_variables,
     _resolve_conditional,
-    _sample_with_engine,
     _write_empty_samples,
 )
 
@@ -70,7 +68,7 @@ def _build_salib_problem(
 
 
 class SobolAlgorithm(BaseAlgorithm):
-    """Sobol quasi-random sequence sampler using ``scipy.stats.qmc.Sobol``.
+    """Sobol quasi-random sequence sampler using ``SALib.sample.sobol``.
 
     Sobol sequences offer superior space-filling properties compared to
     pseudo-random sampling, with discrepancy decreasing as O(N⁻¹ logᵈN)
@@ -100,14 +98,19 @@ class SobolAlgorithm(BaseAlgorithm):
             return _write_empty_samples(samples_path)
 
         try:
-            samples = _sample_with_engine(
-                scipy.stats.qmc.Sobol,
-                independent_vars,
-                n_samples,
-                seed,
-            )
+            from SALib.sample.sobol import sample as sobol_sample  # noqa: PLC0415
+
+            problem = _build_salib_problem(independent_vars)
+            raw = sobol_sample(problem, N=n_samples, calc_second_order=False, seed=seed)
         except (ValueError, NotImplementedError) as exc:
             raise RuntimeError("generate_sobol failed") from exc
+
+        samples: list[dict[str, Any]] = []
+        for i in range(raw.shape[0]):
+            values: dict[str, Any] = {}
+            for j, var_def in enumerate(independent_vars):
+                values[var_def["name"]] = float(raw[i, j])
+            samples.append({"sample_id": f"{i + 1:04d}", "values": values})
 
         if conditional_vars:
             _resolve_conditional(samples, conditional_vars, n_samples)

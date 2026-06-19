@@ -569,6 +569,7 @@ async def compare_campaigns_get(
                 CampaignComparisonEntry(
                     identifier=entry_label,
                     found=False,
+                    campaign_id=campaign_id,
                     error=f"No aggregated_results.csv found in {outdir_path}",
                 )
             )

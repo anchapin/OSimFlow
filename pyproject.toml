@@ -157,6 +157,7 @@ addopts = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "nomad_e2e: marks tests requiring a Docker-based Nomad cluster",
+    "contract: marks contract / README staleness tests",
 ]
 
 [tool.coverage.run]

@@ -1873,7 +1873,6 @@ class Campaign:
             self.trace.status = "failure"
             self.trace.finalize()
             self.cfg.outdir.mkdir(parents=True, exist_ok=True)
-            self.trace.write(self.cfg.outdir / "run.json")
             log.exception("campaign failed")
             raise
         finally:

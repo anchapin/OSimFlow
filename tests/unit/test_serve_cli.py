@@ -97,6 +97,7 @@ class TestServeCLI:
             ui_enabled=False,
             variable_editor=False,
             results_viewer=False,
+            dashboard=False,
             registry_path=None,
         )
 
@@ -131,6 +132,7 @@ class TestServeCLI:
             ui_enabled=False,
             variable_editor=False,
             results_viewer=False,
+            dashboard=False,
             registry_path=None,
         )
 

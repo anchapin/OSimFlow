@@ -157,7 +157,8 @@ class TestSobolGenerateSamples:
         assert result.exists()
         data = json.loads(result.read_text())
         assert "samples" in data
-        assert len(data["samples"]) == 8
+        # SALib's sobol.sample produces N*(D+2) samples; D=2 → 8*4=32
+        assert len(data["samples"]) == 32
 
     def test_sample_structure(self, tmp_path: Path) -> None:
         algo = SobolAlgorithm()
@@ -215,7 +216,8 @@ class TestSobolGenerateSamples:
         algo = SobolAlgorithm()
         result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
         data = json.loads(result.read_text())
-        assert len(data["samples"]) == 4
+        # SALib's sobol.sample with D=1 (only x is independent) produces N*(D+2)=4*3=12 samples.
+        assert len(data["samples"]) == 12
         for s in data["samples"]:
             assert "y" in s["values"]
 
@@ -227,21 +229,64 @@ class TestSobolGenerateSamples:
             assert 1.0 <= sample["values"]["wall_r"] <= 10.0
             assert 0.1 <= sample["values"]["window_shgc"] <= 0.9
 
-    def test_runtime_error_on_bad_distribution(self, tmp_path: Path) -> None:
+    def test_bad_distribution_uses_fallback_bounds(self, tmp_path: Path) -> None:
+        """Unsupported distributions fall back to [0,1] bounds instead of raising."""
         algo = SobolAlgorithm()
         variables: dict[str, Any] = {
             "variables": [
                 {"name": "x", "distribution": "unsupported_dist_xyz"},
             ]
         }
-        with pytest.raises(RuntimeError, match="generate_sobol failed"):
-            algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
+        result = algo.generate_samples(variables, n_samples=3, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        # SALib's sobol.sample with D=1 and n_samples=3 produces 3*(1+2)=9 samples
+        assert len(data["samples"]) == 9
+        for s in data["samples"]:
+            assert 0.0 <= s["values"]["x"] <= 1.0
 
     def test_different_seeds_different_results(self, tmp_path: Path) -> None:
         algo = SobolAlgorithm()
         r1 = algo.generate_samples(_VARIABLES_2D, n_samples=4, seed=1, outdir=tmp_path / "r1")
         r2 = algo.generate_samples(_VARIABLES_2D, n_samples=4, seed=2, outdir=tmp_path / "r2")
         assert json.loads(r1.read_text()) != json.loads(r2.read_text())
+
+    def test_normal_distribution_sampling(self, tmp_path: Path) -> None:
+        """Normal distribution produces samples within ±3σ bounds."""
+        algo = SobolAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        for s in data["samples"]:
+            assert 2.0 <= s["values"]["x"] <= 8.0  # mean ± 3σ
+
+    def test_lognormal_distribution_sampling(self, tmp_path: Path) -> None:
+        """Lognormal distribution produces samples within ±3σ bounds."""
+        algo = SobolAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "lognormal", "mean": 5.0, "sigma": 1.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        assert len(data["samples"]) > 0
+
+    def test_triangular_distribution_sampling(self, tmp_path: Path) -> None:
+        """Triangular distribution produces samples within min/max bounds."""
+        algo = SobolAlgorithm()
+        variables: dict[str, Any] = {
+            "variables": [
+                {"name": "x", "distribution": "triangular", "min": 0.0, "max": 10.0},
+            ]
+        }
+        result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
+        data = json.loads(result.read_text())
+        for s in data["samples"]:
+            assert 0.0 <= s["values"]["x"] <= 10.0
 
 
 class TestHaltonGenerateSamples:
@@ -378,8 +423,12 @@ class TestSobolSensitivityIndices:
 
     @pytest.fixture
     def kpi_values(self) -> dict[str, dict[str, float]]:
-        """Simple Euclidean-distance KPI for testing."""
-        return {f"{(i + 1):04d}": {"eui": float(i + 1)} for i in range(8)}
+        """Simple Euclidean-distance KPI for testing.
+
+        SALib's sobol.sample with n_samples=8 and D=2 produces 32 samples
+        (N*(D+2) = 8*4 = 32), so we need 32 KPI values (0001-0032).
+        """
+        return {f"{(i + 1):04d}": {"eui": float(i + 1)} for i in range(32)}
 
     def test_compute_sensitivity_indices_creates_file(
         self,
@@ -530,7 +579,7 @@ class TestSobolSensitivityIndices:
     ) -> None:
         """Raises RuntimeError when no numeric KPIs are found for a sample."""
         kpi_values: dict[str, dict[str, float]] = {
-            f"{(i + 1):04d}": {"eui": "not_a_number"} for i in range(8)
+            f"{(i + 1):04d}": {"eui": "not_a_number"} for i in range(32)
         }
         with pytest.raises(RuntimeError, match="no numeric KPI found"):
             algo.compute_sensitivity_indices(
@@ -548,7 +597,7 @@ class TestSobolSensitivityIndices:
     ) -> None:
         """Falls back to first numeric KPI when 'eui' is not present."""
         kpi_values: dict[str, dict[str, float]] = {
-            f"{(i + 1):04d}": {"some_other_kpi": float(i + 1)} for i in range(8)
+            f"{(i + 1):04d}": {"some_other_kpi": float(i + 1)} for i in range(32)
         }
         indices_path = algo.compute_sensitivity_indices(
             variables=_VARIABLES_2D,

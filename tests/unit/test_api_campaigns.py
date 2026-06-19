@@ -506,66 +506,74 @@ class TestCancelCampaign:
 
 
 class TestCompareCampaigns:
-    """Tests for campaign comparison (issue #386)."""
+    """Tests for campaign comparison via GET /api/v1/campaigns/compare (issue #386/#588)."""
 
-    def test_compare_both_found(self, client_ro: TestClient, campaigns_base: Path) -> None:
-        """When both campaigns exist, return both details."""
-        resp = client_ro.get(
+    def test_compare_both_found(
+        self, client_kpis: TestClient, campaigns_base_with_kpis: Path
+    ) -> None:
+        """When both campaign directories exist with KPI data, return both details."""
+        resp = client_kpis.get(
             "/api/v1/campaigns/compare",
-            params={"id1": "campaign-aaa", "id2": "campaign-bbb"},
+            params={
+                "outdir": [
+                    str(campaigns_base_with_kpis / "campaign-aaa"),
+                    str(campaigns_base_with_kpis / "campaign-bbb"),
+                ]
+            },
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["left"] is not None
-        assert data["right"] is not None
-        assert data["left"]["campaign_id"] == "campaign-aaa"
-        assert data["right"]["campaign_id"] == "campaign-bbb"
-        assert data["left"]["status"] == "completed"
-        assert data["right"]["status"] == "running"
+        assert data["total"] == 2
+        assert len(data["campaigns"]) == 2
+        left = data["campaigns"][0]
+        right = data["campaigns"][1]
+        assert left["campaign_id"] == "campaign-aaa"
+        assert right["campaign_id"] == "campaign-bbb"
+        assert left["found"] is True
+        assert right["found"] is True
 
-    def test_compare_left_not_found(self, client_ro: TestClient) -> None:
-        """When left campaign is missing, return null for left."""
+    def test_compare_left_not_found(self, client_ro: TestClient, campaigns_base: Path) -> None:
+        """When left campaign directory does not exist, return 404."""
         resp = client_ro.get(
             "/api/v1/campaigns/compare",
-            params={"id1": "nonexistent", "id2": "campaign-aaa"},
+            params={
+                "outdir": [
+                    str(campaigns_base / "nonexistent"),
+                    str(campaigns_base / "campaign-aaa"),
+                ]
+            },
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["left"] is None
-        assert data["right"] is not None
-        assert data["right"]["campaign_id"] == "campaign-aaa"
+        assert resp.status_code == 404
 
-    def test_compare_right_not_found(self, client_ro: TestClient) -> None:
-        """When right campaign is missing, return null for right."""
+    def test_compare_right_not_found(self, client_ro: TestClient, campaigns_base: Path) -> None:
+        """When right campaign directory does not exist, return 404."""
         resp = client_ro.get(
             "/api/v1/campaigns/compare",
-            params={"id1": "campaign-aaa", "id2": "nonexistent"},
+            params={
+                "outdir": [
+                    str(campaigns_base / "campaign-aaa"),
+                    str(campaigns_base / "nonexistent"),
+                ]
+            },
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["left"] is not None
-        assert data["left"]["campaign_id"] == "campaign-aaa"
-        assert data["right"] is None
+        assert resp.status_code == 404
 
-    def test_compare_both_not_found(self, client_ro: TestClient) -> None:
-        """When neither campaign exists, return both as null."""
+    def test_compare_both_not_found(self, client_ro: TestClient, campaigns_base: Path) -> None:
+        """When neither campaign directory exists, return 404."""
         resp = client_ro.get(
             "/api/v1/campaigns/compare",
-            params={"id1": "nonexistent-1", "id2": "nonexistent-2"},
+            params={
+                "outdir": [
+                    str(campaigns_base / "nonexistent-1"),
+                    str(campaigns_base / "nonexistent-2"),
+                ]
+            },
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["left"] is None
-        assert data["right"] is None
+        assert resp.status_code == 404
 
-    def test_compare_missing_id1(self, client_ro: TestClient) -> None:
-        """When id1 is not provided, return 422 validation error."""
-        resp = client_ro.get("/api/v1/campaigns/compare", params={"id2": "campaign-aaa"})
-        assert resp.status_code == 422
-
-    def test_compare_missing_id2(self, client_ro: TestClient) -> None:
-        """When id2 is not provided, return 422 validation error."""
-        resp = client_ro.get("/api/v1/campaigns/compare", params={"id1": "campaign-aaa"})
+    def test_compare_missing_outdir(self, client_ro: TestClient) -> None:
+        """When outdir is not provided, return 422 validation error."""
+        resp = client_ro.get("/api/v1/campaigns/compare")
         assert resp.status_code == 422
 
 
@@ -906,16 +914,23 @@ class TestCompareCampaignsPost:
             assert entry["config"] is not None
             assert "executor" in entry["config"]
 
-    def test_compare_get_endpoint_still_works(self, client_ro: TestClient) -> None:
-        """The existing GET /compare endpoint remains backward compatible."""
-        resp = client_ro.get(
+    def test_compare_get_endpoint_still_works(
+        self, client_kpis: TestClient, campaigns_base_with_kpis: Path
+    ) -> None:
+        """The GET /compare endpoint works with outdir params."""
+        resp = client_kpis.get(
             "/api/v1/campaigns/compare",
-            params={"id1": "campaign-aaa", "id2": "campaign-bbb"},
+            params={
+                "outdir": [
+                    str(campaigns_base_with_kpis / "campaign-aaa"),
+                    str(campaigns_base_with_kpis / "campaign-bbb"),
+                ]
+            },
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert "left" in data
-        assert "right" in data
+        assert "campaigns" in data
+        assert len(data["campaigns"]) == 2
 
 
 # ---------------------------------------------------------------------------

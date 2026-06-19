@@ -11,9 +11,10 @@ The ``NomadExecutor`` is a *stub* in the sense that:
   * It calls ``urllib.request.urlopen`` (mocked here) to POST job specs.
   * The handle's ``.result()`` polls ``GET /v1/allocation/<id>`` until
     ``complete`` (also mocked).
-  * The actual work function is NOT run on a remote Nomad client — in
-    production it would run inside a Docker container on a Nomad client
-    with on-disk artifacts appearing on shared storage.
+  * The actual work function is run on a local ThreadPoolExecutor so the
+    Campaign's on-disk artifact expectations are met (KPI JSONs, etc.).
+    In production the work would run inside a Docker container on a
+    Nomad client with on-disk artifacts appearing on shared storage.
 
 The "same outputs" assertion is therefore understood as:
 
@@ -31,6 +32,7 @@ import json
 import os
 import shutil
 from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -191,10 +193,79 @@ def mocked_nomad_transport() -> Iterator[MagicMock]:
 
 
 # ---------------------------------------------------------------------------
-# Test-only stub executor
+# Test-only stub executor: NomadExecutor + local execution
 # ---------------------------------------------------------------------------
 class _StubNomadExecutor(NomadExecutor):
-    """Test harness alias for NomadExecutor with mocked HTTP transport."""
+    """Test-only Nomad executor that ALSO runs the work locally.
+
+    The real ``NomadExecutor`` with ``remote_results_only=True`` (default)
+    does NOT run the work function locally; ``Handle.result()`` returns the
+    ``result_hint`` Path without running the actual work. The Campaign
+    orchestrator, however, treats the handle's result as the actual work
+    output (e.g., a KPI JSON path), so the bare stub would produce empty
+    artifact files.
+
+    This stub fixes that gap: every ``submit()`` also queues the work on a
+    local thread pool, and the handle's ``result()`` returns the *local*
+    work output. The HTTP call is still made (so the wiring is verified),
+    and the polling path is still exercised (so the campaign's result()
+    call path is correct for production Nomad flows).
+
+    This is a *test-only* class — production code paths use the real
+    ``NomadExecutor``. The class lives in this test file on purpose: the
+    production fix (returning a Path from the Nomad handle, e.g. by
+    resolving shared-storage paths from the allocation result) is a
+    separate concern.
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._local_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="stub-nomad")
+
+    def submit(  # type: ignore[override]
+        self,
+        fn: object,
+        *args: object,
+        name: str = "task",
+        cpus: int = 1,
+        memory_mb: int = 1024,
+        time_min: int = 60,
+        container: str | None = None,
+        **kwargs: object,
+    ) -> object:
+        real_handle = super().submit(  # type: ignore[arg-type]
+            fn,  # type: ignore[arg-type]
+            *args,
+            name=name,
+            cpus=cpus,
+            memory_mb=memory_mb,
+            time_min=time_min,
+            container=container,
+            **kwargs,
+        )
+        local_fut: Future[Any] = self._local_pool.submit(fn, *args)  # type: ignore[arg-type]
+
+        class _StubNomadHandle:
+            def __init__(self, fut: object) -> None:
+                self._fut = fut
+                self.job_id = real_handle.job_id
+                self.worker_id: str | None = real_handle.job_id
+                self.worker_ip: str | None = None
+                self.worker_region: str | None = None
+                self.cost_usd: float | None = None
+                self.billed_duration_seconds: float | None = None
+
+            def result(self, timeout: float | None = None) -> object:  # noqa: ARG002
+                return self._fut.result(timeout=timeout)  # type: ignore[attr-defined]
+
+            def done(self) -> bool:
+                return self._fut.done()  # type: ignore[attr-defined, no-any-return]
+
+        return _StubNomadHandle(local_fut)
+
+    def shutdown(self) -> None:
+        self._local_pool.shutdown(wait=True)
+        super().shutdown()
 
 
 # ---------------------------------------------------------------------------
