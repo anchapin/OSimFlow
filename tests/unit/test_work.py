@@ -22,6 +22,8 @@ from unittest.mock import patch
 
 import pytest
 
+from osimflow.manifest import MANIFEST_FIELDS
+from osimflow.storage import ResultStorage
 from osimflow.work import (
     SevereEnergyPlusError,
     _extract_severe_error,
@@ -35,6 +37,7 @@ from osimflow.work import (
     generate_lhs,
     generate_plots,
     preflight_run_model,
+    publish_kpi_results,
     run_openstudio_sim,
 )
 
@@ -884,3 +887,217 @@ class TestIsStubMode:
     def test_false_not_one(self) -> None:
         with patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "0"}):
             assert _is_stub_mode() is False
+
+
+# ---------------------------------------------------------------------------
+# Worker direct-to-storage push (issue #625)
+# ---------------------------------------------------------------------------
+class _RecordingStorage(ResultStorage):
+    """Fake ResultStorage that records every upload in call order."""
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.uploads: list[str] = []
+        self.contents: dict[str, dict[str, object]] = {}
+
+    def upload_file(self, local_path: Path, remote_path: str) -> None:
+        self.uploads.append(remote_path)
+        try:
+            self.contents[remote_path] = json.loads(Path(local_path).read_text())
+        except (OSError, ValueError):
+            # Non-JSON payloads (e.g. eplusout.sql) are recorded as keys only.
+            pass
+
+    def download_file(self, remote_path: str, local_path: Path) -> None:
+        raise NotImplementedError
+
+    def list_results(self, prefix: str = "") -> list[str]:
+        return [k for k in self.uploads if k.startswith(prefix)]
+
+
+class TestPublishKpiResults:
+    """Worker direct-to-storage push: kpis.json + atomic _manifest.json (#625)."""
+
+    def test_publishes_kpis_then_manifest_with_contract_fields(self, tmp_path: Path) -> None:
+        storage = _RecordingStorage()
+        sim_dir = tmp_path / "sim" / "0001"
+        sim_dir.mkdir(parents=True)
+        kpi_path = tmp_path / "kpis" / "kpi_0001.json"
+        kpi_path.parent.mkdir(parents=True)
+        kpi_path.write_text(json.dumps({"sample_id": "0001", "kpis": {"eui": 100.0}}))
+
+        manifest_key = publish_kpi_results(
+            storage=storage,
+            campaign_id="camp-1",
+            sample_id="0001",
+            index=2,
+            simulation_dir=sim_dir,
+            kpi_path=kpi_path,
+            exit_code=0,
+            status="completed",
+            archive_intermediates=False,
+        )
+
+        kpis_key = "camp-1/samples/0001/kpis.json"
+        assert manifest_key == "camp-1/samples/0001/_manifest.json"
+        # Both keys present.
+        assert kpis_key in storage.uploads
+        assert manifest_key in storage.uploads
+        # Manifest written AFTER kpis.json (strict ordering).
+        assert storage.uploads.index(kpis_key) < storage.uploads.index(manifest_key)
+        # Manifest carries all §3.1 fields with correct values.
+        manifest = storage.contents[manifest_key]
+        for field in MANIFEST_FIELDS:
+            assert field in manifest, f"manifest missing field: {field}"
+        assert manifest["sample_id"] == "0001"
+        assert manifest["index"] == 2
+        assert manifest["status"] == "completed"
+        assert manifest["kpis_key"] == kpis_key
+        assert manifest["exit_code"] == 0
+        assert manifest["first_severe_error"] is None
+        assert isinstance(manifest["finished_at"], float)
+
+    def test_local_storage_is_a_noop(self, tmp_path: Path) -> None:
+        from osimflow.storage import LocalStorage
+
+        storage = LocalStorage()
+        kpi_path = tmp_path / "kpi_0001.json"
+        kpi_path.write_text("{}")
+
+        result = publish_kpi_results(
+            storage=storage,
+            campaign_id="camp-1",
+            sample_id="0001",
+            index=0,
+            simulation_dir=tmp_path,
+            kpi_path=kpi_path,
+            exit_code=0,
+            status="completed",
+            archive_intermediates=False,
+        )
+        # Local path unchanged: no key returned, no uploads, no manifest file.
+        assert result is None
+        assert not (tmp_path / "_manifest.json").exists()
+
+    def test_failure_records_severe_error_from_eplusout_err(self, tmp_path: Path) -> None:
+        storage = _RecordingStorage()
+        sim_dir = tmp_path / "sim" / "0002"
+        sim_dir.mkdir(parents=True)
+        (sim_dir / "eplusout.err").write_text(
+            "   Program Version,EnergyPlus\n"
+            "  * Severe ~  HVAC sizing failed in zone Z\n"
+            "  * Severe ~  Another problem\n"
+        )
+        # Failed extraction produced no kpi file.
+        manifest_key = publish_kpi_results(
+            storage=storage,
+            campaign_id="camp-1",
+            sample_id="0002",
+            index=1,
+            simulation_dir=sim_dir,
+            kpi_path=None,
+            exit_code=1,
+            status="failed",
+            archive_intermediates=False,
+        )
+        assert manifest_key == "camp-1/samples/0002/_manifest.json"
+        manifest = storage.contents[manifest_key]
+        assert manifest["status"] == "failed"
+        assert manifest["exit_code"] == 1
+        assert manifest["kpis_key"] is None
+        # first_severe_error = FIRST '  * Severe' line (PRD §6 #4).
+        assert manifest["first_severe_error"] == "* Severe ~  HVAC sizing failed in zone Z"
+        # No kpis.json uploaded on failure (no file existed).
+        assert "camp-1/samples/0002/kpis.json" not in storage.uploads
+
+    def test_archive_intermediates_uploads_sql_never_err_or_log(self, tmp_path: Path) -> None:
+        storage = _RecordingStorage()
+        sim_dir = tmp_path / "sim" / "0003"
+        sim_dir.mkdir(parents=True)
+        (sim_dir / "eplusout.sql").write_text("SQLITE-HEADER")
+        (sim_dir / "eplusout.err").write_text("  * Severe ~  boom")
+        (sim_dir / "eplusout.log").write_text("verbose log " * 1000)
+        kpi_path = tmp_path / "kpi_0003.json"
+        kpi_path.write_text(json.dumps({"sample_id": "0003", "kpis": {}}))
+
+        publish_kpi_results(
+            storage=storage,
+            campaign_id="camp-1",
+            sample_id="0003",
+            index=0,
+            simulation_dir=sim_dir,
+            kpi_path=kpi_path,
+            exit_code=0,
+            status="completed",
+            archive_intermediates=True,
+        )
+        keys = set(storage.uploads)
+        assert "camp-1/samples/0003/eplusout.sql" in keys
+        # Size guard (PRD §6 #1/#8): never upload .err / .log.
+        assert not any(k.endswith("eplusout.err") for k in keys)
+        assert not any(k.endswith("eplusout.log") for k in keys)
+
+    def test_coordinator_report_is_best_effort(self, tmp_path: Path) -> None:
+        storage = _RecordingStorage()
+        sim_dir = tmp_path / "sim" / "0004"
+        sim_dir.mkdir(parents=True)
+        kpi_path = tmp_path / "kpi_0004.json"
+        kpi_path.write_text("{}")
+
+        seen: dict[str, object] = {}
+
+        def _fake_patch(
+            url: str,
+            body: bytes,
+            headers: dict[str, str],
+            params: dict[str, str],
+            timeout_s: float,
+        ) -> None:
+            seen["url"] = url
+            seen["body"] = json.loads(body)
+            seen["params"] = params
+
+        with patch("osimflow.manifest._do_patch", side_effect=_fake_patch):
+            publish_kpi_results(
+                storage=storage,
+                campaign_id="camp-9",
+                sample_id="0004",
+                index=0,
+                simulation_dir=sim_dir,
+                kpi_path=kpi_path,
+                exit_code=0,
+                status="completed",
+                archive_intermediates=False,
+                coordinator_url="https://coordinator.example.com/",
+            )
+        assert seen["url"] == (
+            "https://coordinator.example.com/api/v1/coordinator/campaigns/camp-9/status"
+        )
+        assert seen["params"] == {"status": "completed"}
+        assert seen["body"]["sample_id"] == "0004"  # type: index
+
+    def test_coordinator_report_swallows_network_errors(self, tmp_path: Path) -> None:
+        """Telemetry must not break the worker when the Coordinator is down."""
+        storage = _RecordingStorage()
+        sim_dir = tmp_path / "sim" / "0005"
+        sim_dir.mkdir(parents=True)
+        kpi_path = tmp_path / "kpi_0005.json"
+        kpi_path.write_text("{}")
+
+        with patch("osimflow.manifest._do_patch", side_effect=ConnectionError("network down")):
+            # Must NOT raise even though the Coordinator is unreachable.
+            key = publish_kpi_results(
+                storage=storage,
+                campaign_id="camp-1",
+                sample_id="0005",
+                index=0,
+                simulation_dir=sim_dir,
+                kpi_path=kpi_path,
+                exit_code=0,
+                status="completed",
+                archive_intermediates=False,
+                coordinator_url="https://coordinator.example.com",
+            )
+        # Manifest still published locally to storage despite the report failure.
+        assert key == "camp-1/samples/0005/_manifest.json"

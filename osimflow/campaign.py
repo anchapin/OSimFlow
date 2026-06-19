@@ -102,6 +102,7 @@ from .work import (
     extract_kpis,
     generate_plots,
     preflight_run_model,
+    publish_kpi_results,
     run_openstudio_sim,
 )
 
@@ -3244,6 +3245,78 @@ class Campaign:
         )
         return out
 
+    # ------------------------------------------------------------------
+    # Worker direct-to-storage push (issue #625, Epic #624)
+    # ------------------------------------------------------------------
+    def _coordinator_url(self) -> str | None:
+        """Resolve the Coordinator base URL for worker status reporting.
+
+        Reads ``cfg.coordinator_url`` when present (forward-compatible with a
+        future CampaignConfig field) and otherwise falls back to the
+        ``OSIMFLOW_COORDINATOR_URL`` environment variable, which is the
+        established pattern for forwarding per-job config to distributed
+        workers (AGENTS.md §10).
+        """
+        cfg_url = getattr(self.cfg, "coordinator_url", None)
+        if cfg_url:
+            return str(cfg_url)
+        return os.environ.get("OSIMFLOW_COORDINATOR_URL")
+
+    def _coordinator_api_key(self) -> str | None:
+        """Resolve an optional bearer token for Coordinator PATCH calls."""
+        return os.environ.get("OSIMFLOW_API_KEY")
+
+    def _publish_sample_results(
+        self,
+        *,
+        sample_id: str,
+        index: int,
+        simulation_dir: Path,
+        kpi_path: Path | None,
+        exit_code: int,
+        status: str,
+    ) -> None:
+        """Push one sample's results directly to storage (issue #625).
+
+        Uploads ``kpis.json`` + an atomic ``_manifest.json`` to the configured
+        :class:`ResultStorage` backend and best-effort reports completion to
+        the Coordinator.  This is a no-op when no result storage is configured
+        or when the backend is :class:`LocalStorage` (local path unchanged).
+
+        Uses the **raw** synchronous backend (``ResultStorageUploader._storage``)
+        rather than the async upload queue, because the manifest must become
+        visible strictly after ``kpis.json`` — the async wrapper cannot
+        guarantee that ordering.
+        """
+        if self._result_storage is None:
+            return
+        # Access the raw sync backend that the async uploader wraps.
+        backend = getattr(self._result_storage, "_storage", None)
+        if backend is None:
+            return
+        try:
+            publish_kpi_results(
+                storage=backend,
+                campaign_id=self.trace.campaign_id,
+                sample_id=sample_id,
+                index=index,
+                simulation_dir=simulation_dir,
+                kpi_path=kpi_path,
+                exit_code=exit_code,
+                status=status,
+                archive_intermediates=self.cfg.archive_intermediates,
+                coordinator_url=self._coordinator_url(),
+                api_key=self._coordinator_api_key(),
+            )
+        except OSError as exc:
+            # Storage failures must not abort the extract step; the manifest
+            # is telemetry/coordination, not the primary result.
+            log.warning(
+                "EXTRACT_KPIS: direct-to-storage publish failed for %s: %s",
+                sample_id,
+                exc,
+            )
+
     def step_extract_kpis(  # noqa: PLR0912, PLR0915
         self,
         simulated: SampleDict,
@@ -3296,6 +3369,8 @@ class Campaign:
 
         # --- Phase 2/3: bounded submit and await in chunks ---
         pending_items = list(pending.items())
+        # Zero-based sample index within the campaign (issue #625 manifest field).
+        index_map: dict[str, int] = {sid: i for i, (sid, _c) in enumerate(pending_items)}
         chunk_size = self._fanout_submit_chunk_size(len(pending_items))
         submit_interval_s = self._fanout_submit_interval_s()
         next_submit_at = 0.0
@@ -3337,36 +3412,34 @@ class Campaign:
 
                 key = ctx["key"]
                 state = ctx["state"]
+                # Bind loop variables so each closure captures its own sample.
+                _sim_dir = ctx["sim_dir"]
+                _sample_index = index_map[sid]
 
                 def _on_success(
                     result_path: Any,
                     _sid: str = sid,
                     _key: CacheKey = key,
                     _state: dict[str, object] = state,
+                    _sim_dir: Path = _sim_dir,
+                    _index: int = _sample_index,
                 ) -> None:
                     self.cache.store(_key, Path(result_path), exit_code=0)
                     out.append(Path(result_path))
                     _state["extract_exit_code"] = 0
                     _state["extract_status"] = "ok"
                     self.trace.step_item_done("EXTRACT_KPIS", status="ok")
-                    if self._result_storage is not None:
-                        kpi_path = Path(result_path)
-                        if kpi_path.is_file():
-                            try:
-                                self._result_storage.upload_file(
-                                    kpi_path,
-                                    f"kpis/{kpi_path.name}",
-                                )
-                                log.debug(
-                                    "result storage: uploaded KPI for sample %s",
-                                    _sid,
-                                )
-                            except OSError as exc:
-                                log.warning(
-                                    "result storage: upload failed for KPI sample %s: %s",
-                                    _sid,
-                                    exc,
-                                )
+                    # Worker direct-to-storage push (issue #625): upload
+                    # kpis.json + atomic _manifest.json, then report to the
+                    # Coordinator. No-op for the LocalStorage backend.
+                    self._publish_sample_results(
+                        sample_id=_sid,
+                        index=_index,
+                        simulation_dir=_sim_dir,
+                        kpi_path=Path(result_path),
+                        exit_code=0,
+                        status="completed",
+                    )
 
                 submissions[sid] = (handle, _on_success)
             self._submit_and_await_all(submissions, "EXTRACT_KPIS")
@@ -3385,6 +3458,19 @@ class Campaign:
                 state["extract_status"] = "failed"
                 state["error_summary"] = "EXTRACT: unknown error during concurrent execution"
                 self.trace.step_item_done("EXTRACT_KPIS", status="failed")
+            # Worker direct-to-storage (issue #625): publish a 'failed'
+            # manifest for any sample that did not complete cleanly. Successful
+            # samples were already published in _on_success above and are
+            # skipped here (extract_status == "ok" / "cached").
+            if state.get("extract_status") == "failed":
+                self._publish_sample_results(
+                    sample_id=_sid,
+                    index=index_map.get(_sid, -1),
+                    simulation_dir=Path(ctx["sim_dir"]),
+                    kpi_path=None,
+                    exit_code=int(state.get("extract_exit_code", 1) or 1),
+                    status="failed",
+                )
 
         self.trace.step_finished(
             "EXTRACT_KPIS",

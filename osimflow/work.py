@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .executors import run_subprocess  # local helper (issue #6)
+from .storage import ResultStorage
 from .version_detection import VersionDetectionError, detect_openstudio_version
 from .weather import EPWValidationError, discover_epw_files, validate_epw_header
 
@@ -956,6 +957,187 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
         log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
         raise RuntimeError(f"extract_kpis failed for {sample_id}") from e
     return kpi_path
+
+
+# ---------------------------------------------------------------------------
+# Worker direct-to-storage push (issue #625, Epic #624)
+# ---------------------------------------------------------------------------
+def publish_kpi_results(
+    *,
+    storage: ResultStorage,
+    campaign_id: str,
+    sample_id: str,
+    index: int,
+    simulation_dir: Path,
+    kpi_path: Path | None,
+    exit_code: int,
+    status: str,
+    archive_intermediates: bool,
+    coordinator_url: str | None = None,
+    api_key: str | None = None,
+    tmp_dir: Path | None = None,
+) -> str | None:
+    """Push ``kpis.json`` + atomic ``_manifest.json`` directly to *storage*.
+
+    Implements the worker direct-to-storage flow (issue #625, Epic #624).
+    After KPI extraction, the worker uploads its results — plus an atomic
+    completion marker — directly to object storage so no result bytes return
+    to the submitting host.  The aggregation step later reads from storage
+    rather than from per-sample local files.
+
+    Local-executor preservation: when *storage* is a :class:`LocalStorage`
+    (i.e. ``--result-storage-backend local``) this function is a **no-op** and
+    returns ``None`` immediately, so the local path makes zero storage or
+    network calls and its on-disk outputs are unchanged.
+
+    Ordering & atomicity: ``kpis.json`` is uploaded *first*; the optional
+    ``eplusout.sql`` (only when ``archive_intermediates``) is uploaded next;
+    ``_manifest.json`` is written **last** (see
+    :func:`osimflow.manifest.write_manifest_atomically`) as the durability
+    fence.  ``eplusout.err`` / ``eplusout.log`` are **never** uploaded
+    (size guard, PRD §6 #1/#8 — AGENTS.md gotchas #1, #8).
+
+    .. note::
+
+       *storage* must be the **raw** :class:`ResultStorage` backend, NOT the
+       async :class:`~osimflow.storage.ResultStorageUploader` wrapper.  The
+       wrapper enqueues uploads to a background queue and therefore cannot
+       guarantee that the manifest becomes visible strictly after
+       ``kpis.json``.  Synchronous uploads here give that ordering guarantee.
+
+    Parameters
+    ----------
+    storage
+        Raw :class:`ResultStorage` backend.
+    campaign_id, sample_id, index
+        Identity of the sample; ``index`` is its zero-based position in the
+        campaign.
+    simulation_dir
+        Per-sample directory containing ``eplusout.sql`` / ``eplusout.err``.
+    kpi_path
+        Local path to the extracted ``kpi_{sample_id}.json`` (``None`` if
+        extraction itself failed before producing a file).
+    exit_code, status
+        Worker exit code and coarse status (``"completed"`` or ``"failed"``).
+    archive_intermediates
+        When true, upload ``eplusout.sql`` under the sample prefix.
+    coordinator_url
+        Optional Coordinator base URL; when set, a best-effort PATCH is sent
+        (contract §3.2).  ``None`` skips the report (no network).
+    api_key
+        Optional bearer token for the Coordinator PATCH.
+    tmp_dir
+        Directory used to stage the manifest temp file.  Defaults to
+        *simulation_dir*.
+
+    Returns
+    -------
+    str | None
+        The remote manifest key, or ``None`` for the local no-op.
+    """
+    # Local import keeps the module-import graph acyclic at import time.
+    from . import manifest as manifest_mod  # noqa: PLC0415
+    from .storage import LocalStorage  # noqa: PLC0415
+
+    # Local executor path is unchanged: zero storage / network calls.
+    if isinstance(storage, LocalStorage):
+        log.debug(
+            "publish_kpi_results: LocalStorage backend for %s — no-op (local path unchanged)",
+            sample_id,
+        )
+        return None
+
+    base = f"{campaign_id}/samples/{sample_id}"
+    kpis_key = f"{base}/kpis.json"
+    manifest_key = f"{base}/_manifest.json"
+    stage_dir = tmp_dir if tmp_dir is not None else simulation_dir
+
+    kpis_uploaded = False
+
+    # 1. Upload kpis.json FIRST (only if the file was produced).
+    if kpi_path is not None and kpi_path.is_file():
+        try:
+            storage.upload_file(kpi_path, kpis_key)
+            kpis_uploaded = True
+        except OSError as exc:
+            log.warning(
+                "publish_kpi_results: kpis.json upload failed for %s: %s",
+                sample_id,
+                exc,
+            )
+            # A failed KPI upload downgrades the sample to 'failed' so the
+            # Coordinator does not treat it as complete.
+            status = "failed"
+            exit_code = exit_code if exit_code != 0 else 1
+    elif status == "completed":
+        # Extraction succeeded but the KPI file is missing on disk — record
+        # the inconsistency rather than silently publishing an empty success.
+        log.warning(
+            "publish_kpi_results: %s marked completed but kpi file missing "
+            "at %s — publishing as failed",
+            sample_id,
+            kpi_path,
+        )
+        status = "failed"
+        exit_code = exit_code if exit_code != 0 else 1
+
+    # 2. Optional: archive eplusout.sql. NEVER .err / .log (size guard).
+    if archive_intermediates:
+        sql_path = simulation_dir / "eplusout.sql"
+        if sql_path.is_file():
+            try:
+                storage.upload_file(sql_path, f"{base}/eplusout.sql")
+            except OSError as exc:
+                log.warning(
+                    "publish_kpi_results: eplusout.sql upload skipped for %s: %s",
+                    sample_id,
+                    exc,
+                )
+        else:
+            log.debug(
+                "publish_kpi_results: no eplusout.sql to archive for %s",
+                sample_id,
+            )
+
+    # 3. Capture the first Severe error (PRD §6 #4) — present on failure,
+    #    None on clean completion.
+    first_severe = manifest_mod.first_severe_error(simulation_dir / "eplusout.err")
+
+    # 4. Build + atomically write the manifest LAST. It is the durability
+    #    fence signalling "this sample is complete".
+    record = manifest_mod.build_manifest(
+        sample_id=sample_id,
+        index=index,
+        status=status,
+        kpis_key=kpis_key if kpis_uploaded else None,
+        exit_code=exit_code,
+        first_severe_error=first_severe,
+    )
+    try:
+        manifest_mod.write_manifest_atomically(
+            storage,
+            manifest_key,
+            record,
+            local_tmp_dir=stage_dir,
+        )
+    except OSError as exc:
+        log.error(
+            "publish_kpi_results: atomic manifest write failed for %s: %s",
+            sample_id,
+            exc,
+        )
+        raise
+
+    # 5. Best-effort Coordinator status report (contract §3.2).
+    if coordinator_url:
+        manifest_mod.report_sample_completion(
+            coordinator_url=coordinator_url,
+            campaign_id=campaign_id,
+            manifest=record,
+            api_key=api_key,
+        )
+
+    return manifest_key
 
 
 # ---------------------------------------------------------------------------
