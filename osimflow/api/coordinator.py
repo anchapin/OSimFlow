@@ -23,17 +23,23 @@ Phase 4 scope (issue #604):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import secrets
 import time
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 import boto3
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
+    CoordinatorArrayCompleteEvent,
+    CoordinatorArrayCompleteResponse,
     CoordinatorArraySubmitRequest,
     CoordinatorArraySubmitResponse,
     CoordinatorCampaignRecord,
@@ -57,6 +63,285 @@ coordinator_router = APIRouter(prefix="/api/v1/coordinator", tags=["coordinator"
 # This is intentionally minimal — just enough to pass the Phase 2 acceptance
 # criteria: "CLI returns within seconds after uploading the config."
 _campaigns: dict[str, dict[str, Any]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Array-completion detection helpers (issue #626, Epic #624)
+# ---------------------------------------------------------------------------
+#
+# Two paths declare an array job complete:
+#   (a) EventBridge webhook -> POST /campaigns/{id}/array-complete
+#   (b) poll_array_job() exponential-backoff polling fallback
+#
+# Both paths funnel through ``_parse_array_completion`` +
+# ``_apply_completion_transition`` so the ``running -> aggregating`` flip is
+# provably idempotent and consistent regardless of which path fires first.
+
+# Campaign statuses that mean the running->aggregating transition has already
+# happened (or moved past it). A late webhook arriving after one of these is
+# an idempotent no-op.
+_TERMINAL_OR_AGGREGATING = ("aggregating", "complete", "completed", "failed")
+
+# Expected EventBridge envelope values for a Batch job state-change event.
+_EXPECTED_EVENT_SOURCE = "aws.batch"
+_EXPECTED_EVENT_DETAIL_TYPE = "Batch Job State Change"
+
+# Shared-secret header + env var name. Production MUST set
+# OSIMFLOW_EVENTBRIDGE_WEBHOOK_SECRET; an unset secret fails closed (401).
+_EVENTBRIDGE_SECRET_HEADER = "X-OSimFLOW-Webhook-Secret"
+_EVENTBRIDGE_SECRET_ENV = "OSIMFLOW_EVENTBRIDGE_WEBHOOK_SECRET"
+
+
+class ArrayJobLookupError(RuntimeError):
+    """Raised when the array parent job cannot be described from AWS Batch."""
+
+
+@dataclass(frozen=True)
+class ArrayCompletion:
+    """Per-child terminal-state breakdown of an array parent job.
+
+    ``complete`` is ``True`` once every child reached a terminal state
+    (``SUCCEEDED`` **or** ``FAILED``) — i.e. ``succeeded + failed ==
+    arrayProperties.size``. A partially-failed job is still *complete* (not
+    *succeeded*); the aggregator (a later step) decides the final
+    ``complete`` vs ``failed`` campaign status from the recorded split.
+    """
+
+    complete: bool
+    succeeded: int
+    failed: int
+    pending: int
+    total: int
+
+
+def _batch_client() -> Any:
+    """Return a ``boto3.client("batch")`` handle.
+
+    Raises :class:`ArrayJobLookupError` if the AWS SDK cannot build a client
+    (no credentials / no region). Centralised so the HTTP endpoints and the
+    polling fallback share one connection path.
+    """
+    try:
+        return boto3.client("batch")
+    except Exception as exc:  # pragma: no cover - boto3 raises botocore exceptions
+        raise ArrayJobLookupError(f"Cannot connect to AWS Batch: {exc}") from exc
+
+
+def _describe_array_job(array_job_id: str, *, client: Any | None = None) -> dict[str, Any]:
+    """Describe the array parent job.
+
+    Returns the raw ``jobs[0]`` dict from ``describe_jobs``. The dict is the
+    source of truth for ``arrayProperties.size`` and ``statusSummary``. Raises
+    :class:`ArrayJobLookupError` if the call fails or the job is absent.
+    """
+    batch = client if client is not None else _batch_client()
+    try:
+        resp = batch.describe_jobs(jobs=[array_job_id])
+    except Exception as exc:  # pragma: no cover - botocore exceptions
+        raise ArrayJobLookupError(f"AWS Batch describe_jobs failed: {exc}") from exc
+    jobs: list[dict[str, Any]] = resp.get("jobs") or []
+    if not jobs:
+        raise ArrayJobLookupError(f"Array job {array_job_id} not found")
+    return jobs[0]
+
+
+def _parse_array_completion(job: dict[str, Any]) -> ArrayCompletion:
+    """Compute the terminal-state breakdown of an array parent job.
+
+    Reads ``arrayProperties.size`` (the declared child count — the value both
+    paths must verify against per the issue) and ``statusSummary`` (a map of
+    child status -> count). ``statusSummary`` is read top-level on the job
+    (canonical ``describe_jobs`` shape for array parents) with a fallback to
+    ``jobSummary.statusSummary`` for the alternate/older shape.
+
+    The job is *complete* once ``SUCCEEDED + FAILED >= arrayProperties.size``.
+    Per the issue's partial-failure rule this is "complete (not succeeded)" —
+    even when ``FAILED > 0``.
+    """
+    array_props = job.get("arrayProperties") or {}
+    size = int(array_props.get("size", 0) or 0)
+    summary = job.get("statusSummary") or (job.get("jobSummary") or {}).get("statusSummary") or {}
+    succeeded = int(summary.get("SUCCEEDED", 0) or 0)
+    failed = int(summary.get("FAILED", 0) or 0)
+    total = size if size > 0 else succeeded + failed
+    terminal = succeeded + failed
+    complete = size > 0 and terminal >= size
+    pending = max(total - terminal, 0)
+    return ArrayCompletion(
+        complete=complete,
+        succeeded=succeeded,
+        failed=failed,
+        pending=pending,
+        total=total,
+    )
+
+
+def _apply_completion_transition(
+    rec: dict[str, Any],
+    completion: ArrayCompletion,
+    *,
+    source: str,
+) -> bool:
+    """Flip a campaign ``running -> aggregating`` once the array is complete.
+
+    Idempotent: once the campaign is already ``aggregating``/``complete``/
+    ``failed`` this is a no-op returning ``False``. Returns ``True`` only when
+    *this* call performed the transition. Partial failures (``failed > 0``)
+    still transition to ``aggregating``; the succeeded/failed split is recorded
+    on the record as ``array_completion`` for the downstream aggregator.
+    """
+    current = rec.get("status", "pending")
+    if current in _TERMINAL_OR_AGGREGATING:
+        return False
+    if not completion.complete:
+        return False
+    now = time.time()
+    rec["status"] = "aggregating"
+    rec["updated_at"] = now
+    rec["array_completion"] = {
+        "succeeded": completion.succeeded,
+        "failed": completion.failed,
+        "total": completion.total,
+        "completed_at": now,
+        "source": source,
+    }
+    log.info(
+        "Campaign %s array job complete (source=%s) — %d succeeded, %d failed of %d; "
+        "transitioned running -> aggregating",
+        rec.get("campaign_id"),
+        source,
+        completion.succeeded,
+        completion.failed,
+        completion.total,
+    )
+    return True
+
+
+def _job_id_matches(parent_job_id: str, reported_job_id: str) -> bool:
+    """Return True if *reported_job_id* is the array parent or one of its children.
+
+    AWS Batch array children have jobIds of the form ``<parentJobId>:<index>``
+    (e.g. ``abc123:0``). EventBridge may fire a state-change event for a child
+    rather than the parent, so we accept both.
+    """
+    if not reported_job_id:
+        return False
+    if reported_job_id == parent_job_id:
+        return True
+    return reported_job_id.startswith(f"{parent_job_id}:")
+
+
+def _verify_eventbridge_signature(
+    request: Request,
+    event: CoordinatorArrayCompleteEvent,
+) -> None:
+    """Authenticate + sanity-check an EventBridge webhook call.
+
+    Security model (issue #626 + AGENTS.md §10):
+
+    * **Shared secret.** The caller must send ``X-OSimFLOW-Webhook-Secret``
+      matching ``$OSIMFLOW_EVENTBRIDGE_WEBHOOK_SECRET`` (constant-time compare).
+      The EventBridge rule's API-destination target is configured with this
+      header. If the env var is **unset**, the endpoint fails **closed**
+      (HTTP 401) — unauthenticated state transitions are never accepted in
+      production. Tests set the env var explicitly.
+
+    * **Source / detail-type.** ``source`` must be ``aws.batch`` and
+      ``detail-type`` must be ``"Batch Job State Change"``. This rejects
+      mis-routed or replayed events from other rules.
+
+    Production hardening (documented, not enforced here): additionally verify
+    the AWS SigV4 signature on the raw body (e.g. via an API Gateway Lambda
+    authoriser in front of this endpoint), or terminate the EventBridge target
+    on a private service with VPC/mTLS. The shared-secret header is the
+    minimum bar enforced in-process.
+    """
+    expected = os.environ.get(_EVENTBRIDGE_SECRET_ENV)
+    if not expected:
+        log.error(
+            "EventBridge webhook rejected: %s is not set (fail-closed). "
+            "Set it to the shared secret configured on the EventBridge target.",
+            _EVENTBRIDGE_SECRET_ENV,
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="EventBridge webhook shared secret is not configured on the server.",
+        )
+    provided = request.headers.get(_EVENTBRIDGE_SECRET_HEADER)
+    if not provided or not secrets.compare_digest(provided, expected):
+        log.warning("EventBridge webhook rejected: invalid or missing shared secret")
+        raise HTTPException(status_code=401, detail="Invalid EventBridge webhook signature.")
+
+    source = event.source
+    detail_type = event.detail_type
+    if source != _EXPECTED_EVENT_SOURCE or detail_type != _EXPECTED_EVENT_DETAIL_TYPE:
+        log.warning(
+            "EventBridge webhook rejected: source=%r detail-type=%r (expected %r / %r)",
+            source,
+            detail_type,
+            _EXPECTED_EVENT_SOURCE,
+            _EXPECTED_EVENT_DETAIL_TYPE,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unexpected EventBridge event: source={source!r}, detail-type={detail_type!r}."
+            ),
+        )
+
+
+def _build_complete_response(
+    rec: dict[str, Any],
+    array_job_id: str,
+    completion: ArrayCompletion,
+    transitioned: bool,
+) -> CoordinatorArrayCompleteResponse:
+    """Build the response shared by the webhook and the polling fallback."""
+    status = rec.get("status", "pending")
+    response_status = (
+        "aggregating"
+        if transitioned
+        else ("already_aggregating" if status == "aggregating" else status)
+    )
+    if not completion.complete and not transitioned:
+        response_status = "pending"
+    return CoordinatorArrayCompleteResponse(
+        campaign_id=rec.get("campaign_id", ""),
+        array_job_id=array_job_id,
+        status=response_status,
+        succeeded=completion.succeeded,
+        failed=completion.failed,
+        total=completion.total,
+        transitioned=transitioned,
+        message=(
+            f"Array {array_job_id}: {completion.succeeded} succeeded, "
+            f"{completion.failed} failed of {completion.total} "
+            f"({'transitioned to aggregating' if transitioned else 'no-op'})"
+        ),
+    )
+
+
+def _lookup_http_array_job(array_job_id: str) -> dict[str, Any]:
+    """Describe an array job for an HTTP handler, translating lookup errors.
+
+    ``ArrayJobLookupError("...not found")`` -> HTTP 404; any other lookup
+    error -> HTTP 502 (bad gateway from Batch). Connection errors surface as
+    502 as well since the caller already passed the auth gate.
+    """
+    try:
+        return _describe_array_job(array_job_id)
+    except ArrayJobLookupError as exc:
+        message = str(exc)
+        code = 404 if "not found" in message else 502
+        raise HTTPException(status_code=code, detail=message) from exc
+
+
+def _campaign_or_404(campaign_id: str) -> dict[str, Any]:
+    """Return the campaign record or raise HTTP 404."""
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+    return rec
 
 
 @coordinator_router.post(
@@ -370,16 +655,19 @@ async def poll_array_job(
 ) -> CoordinatorPollArrayResponse:
     """Poll AWS Batch for the status of an array job submitted via POST /submit-array.
 
-    Returns per-child counts: succeeded, failed, pending. When all children are
-    SUCCEEDED the campaign can transition to the aggregation step.
+    Returns per-child counts: succeeded, failed, pending. A job is *complete*
+    (not *succeeded*) once ``succeeded + failed == arrayProperties.size`` —
+    partial failures still advance the campaign to ``aggregating`` and the
+    succeeded/failed split is recorded for the aggregator. This shares the
+    exact same transition logic as the EventBridge webhook
+    (``POST /array-complete``), so the two paths are idempotent: whichever
+    fires first flips ``running -> aggregating``; the other is a no-op.
 
     Requires ``admin`` permission and a stored ``array_job_id`` on the campaign.
     """
     if not get_user_permission(request, "admin"):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
-    rec = _campaigns.get(campaign_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+    rec = _campaign_or_404(campaign_id)
 
     array_job_id: str | None = rec.get("array_job_id")
     if not array_job_id:
@@ -388,60 +676,25 @@ async def poll_array_job(
             detail=f"Campaign {campaign_id} has no associated array job",
         )
 
-    try:
-        batch = boto3.client("batch")
-    except Exception as exc:
-        raise HTTPException(  # noqa: B904
-            status_code=503,
-            detail=f"Cannot connect to AWS Batch: {exc}",
-        )
+    job = _lookup_http_array_job(array_job_id)
+    completion = _parse_array_completion(job)
+    # Shared transition: advances running -> aggregating when complete.
+    _apply_completion_transition(rec, completion, source="poll")
 
-    try:
-        job_resp = batch.describe_jobs(jobs=[array_job_id])
-    except Exception as exc:
-        raise HTTPException(  # noqa: B904
-            status_code=502,
-            detail=f"AWS Batch describe_jobs failed: {exc}",
-        )
-
-    job = job_resp.get("jobs", [None])[0]
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Array job {array_job_id} not found")
-
-    job_status: str = job.get("status", "UNKNOWN")
-    summary = job.get("jobSummary", {})
-    status_counts = summary.get("statusSummary", {})
-    succeeded = status_counts.get("SUCCEEDED", 0)
-    failed = status_counts.get("FAILED", 0)
-    total = succeeded + failed + status_counts.get("RUNNING", 0) + status_counts.get("PENDING", 0)
-    pending = status_counts.get("RUNNING", 0) + status_counts.get("PENDING", 0)
-
-    if job_status == "SUCCEEDED":
-        rec["status"] = "aggregating"
-        rec["updated_at"] = time.time()
-        log.info(
-            "Campaign %s array job %s complete — %d succeeded, %d failed",
-            campaign_id,
-            array_job_id,
-            succeeded,
-            failed,
-        )
-    elif job_status == "FAILED":
-        rec["status"] = "failed"
-        rec["updated_at"] = time.time()
-
+    parent_status: str = job.get("status", "UNKNOWN")
     return CoordinatorPollArrayResponse(
         campaign_id=campaign_id,
         array_job_id=array_job_id,
-        status=job_status,
-        succeeded=succeeded,
-        failed=failed,
-        pending=pending,
-        total=total,
+        status="complete" if completion.complete else parent_status.lower(),
+        succeeded=completion.succeeded,
+        failed=completion.failed,
+        pending=completion.pending,
+        total=completion.total,
         result_bucket=rec.get("result_storage_bucket"),
         message=(
-            f"Array job {array_job_id}: {succeeded} succeeded, {failed} failed, "
-            f"{pending} pending of {total} total."
+            f"Array job {array_job_id}: {completion.succeeded} succeeded, "
+            f"{completion.failed} failed, {completion.pending} pending of "
+            f"{completion.total} total."
         ),
     )
 
@@ -592,4 +845,193 @@ async def notify_campaign(
         notification_type=notification_type,
         status="skipped",
         message=f"Notification type '{notification_type}' is not yet implemented.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Array-completion detection (issue #626, Epic #624)
+# ---------------------------------------------------------------------------
+
+
+@coordinator_router.post(
+    "/campaigns/{campaign_id}/array-complete",
+    response_model=CoordinatorArrayCompleteResponse,
+    summary="EventBridge webhook: declare an array job complete",
+    description=(
+        "Target of an EventBridge rule firing on a Batch array-job state "
+        "change. Validates the EventBridge signature/source, confirms via "
+        "`describe_jobs` that every array child reached a terminal state "
+        "(SUCCEEDED or FAILED), and flips the campaign `running -> "
+        "aggregating`. Idempotent with the polling fallback: a late webhook "
+        "after a poll-driven transition is a 200 no-op."
+    ),
+)
+async def array_complete(
+    campaign_id: str,
+    event: CoordinatorArrayCompleteEvent,
+    request: Request,
+    # Header declared explicitly so it shows up in the OpenAPI spec and so
+    # callers know the webhook is authenticated. The actual constant-time
+    # comparison happens inside ``_verify_eventbridge_signature``.
+    _webhook_secret: str | None = Header(default=None, alias=_EVENTBRIDGE_SECRET_HEADER),
+) -> CoordinatorArrayCompleteResponse:
+    """EventBridge webhook that declares a campaign's array job 100% complete.
+
+    Auth/security: see :func:`_verify_eventbridge_signature`. The request MUST
+    carry the ``X-OSimFLOW-Webhook-Secret`` header matching
+    ``$OSIMFLOW_EVENTBRIDGE_WEBHOOK_SECRET``, and the event ``source`` must be
+    ``aws.batch`` with ``detail-type == "Batch Job State Change"``. An unset
+    server secret fails **closed** (401) — never accept unauthenticated state
+    transitions in production.
+
+    The handler does **not** trust the event payload's status fields. It
+    re-queries ``describe_jobs`` for the array parent stored on the campaign
+    and verifies ``succeeded + failed == arrayProperties.size`` before
+    transitioning. Partial failures (``failed > 0``) still transition to
+    ``aggregating``; the succeeded/failed split is recorded for the aggregator.
+    """
+    # 1. Authenticate + validate EventBridge envelope (raises on failure).
+    _verify_eventbridge_signature(request, event)
+
+    # 2. Load campaign + validate the event's jobId belongs to it.
+    rec = _campaign_or_404(campaign_id)
+    parent_job_id: str | None = rec.get("array_job_id")
+    if not parent_job_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Campaign {campaign_id} has no associated array job",
+        )
+    reported_job_id = str(event.detail.get("jobId", ""))
+    if not _job_id_matches(parent_job_id, reported_job_id):
+        log.warning(
+            "Campaign %s: EventBridge jobId %r does not match stored array_job_id %r",
+            campaign_id,
+            reported_job_id,
+            parent_job_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"EventBridge jobId {reported_job_id!r} does not match the "
+                f"array job tracked by campaign {campaign_id}."
+            ),
+        )
+
+    # 3. Source of truth: re-query Batch for the parent array job.
+    job = _lookup_http_array_job(parent_job_id)
+    completion = _parse_array_completion(job)
+
+    # 4. Idempotent transition (running -> aggregating) if all children terminal.
+    transitioned = _apply_completion_transition(rec, completion, source="eventbridge")
+
+    return _build_complete_response(rec, parent_job_id, completion, transitioned)
+
+
+async def poll_array_job_to_completion(
+    campaign_id: str,
+    *,
+    initial_delay: float = 5.0,
+    max_delay: float = 60.0,
+    max_attempts: int = 1000,
+    batch_client: Any | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> CoordinatorArrayCompleteResponse:
+    """Exponential-backoff polling fallback for array-completion detection.
+
+    Used when the EventBridge webhook is absent (or as a belt-and-braces
+    backup). Polls ``describe_jobs`` for the campaign's array parent with
+    exponential backoff starting at ``initial_delay`` seconds, doubling each
+    iteration up to ``max_delay`` seconds (default 5s -> 60s per issue #626).
+    On the first poll that reports all children terminal, performs the exact
+    same ``running -> aggregating`` transition as the webhook and returns.
+
+    The two paths are idempotent: if the webhook already advanced the campaign,
+    the first poll sees ``status == "aggregating"`` and returns immediately
+    without re-transitioning.
+
+    Parameters
+    ----------
+    campaign_id
+        Campaign to poll. Must have a stored ``array_job_id``.
+    initial_delay
+        Seconds to wait before the first re-poll (default 5).
+    max_delay
+        Backoff cap in seconds (default 60).
+    max_attempts
+        Maximum number of poll iterations before giving up. At the default
+        5s->60s schedule this is many hours; lower it in tests.
+    batch_client
+        Optional injected ``boto3`` Batch client (for tests). If ``None`` a
+        client is built per poll via :func:`_batch_client`.
+    sleep
+        Async sleep function (for tests: inject an instant fake).
+
+    Returns
+    -------
+    CoordinatorArrayCompleteResponse
+        The completion breakdown + transition flag.
+
+    Raises
+    ------
+    LookupError
+        If the campaign or its array job is missing.
+    TimeoutError
+        If the array does not reach a terminal state within ``max_attempts``.
+    """
+    rec = _campaigns.get(campaign_id)
+    if rec is None:
+        raise LookupError(f"Campaign {campaign_id} not found")
+    array_job_id: str | None = rec.get("array_job_id")
+    if not array_job_id:
+        raise LookupError(f"Campaign {campaign_id} has no associated array job")
+
+    delay = initial_delay
+    last_completion = ArrayCompletion(False, 0, 0, 0, 0)
+    for attempt in range(1, max_attempts + 1):
+        # Idempotency: if the webhook (or a prior poll) already advanced us,
+        # stop immediately.
+        if rec.get("status", "pending") in _TERMINAL_OR_AGGREGATING:
+            job = _describe_array_job(array_job_id, client=batch_client)
+            last_completion = _parse_array_completion(job)
+            return _build_complete_response(rec, array_job_id, last_completion, False)
+
+        try:
+            job = _describe_array_job(array_job_id, client=batch_client)
+        except ArrayJobLookupError as exc:
+            # Transient AWS errors must not abort the poll loop; back off and retry.
+            log.warning(
+                "Campaign %s poll attempt %d failed: %s (retrying in %.1fs)",
+                campaign_id,
+                attempt,
+                exc,
+                delay,
+            )
+            last_completion = ArrayCompletion(False, 0, 0, 0, 0)
+            await sleep(delay)
+            delay = min(delay * 2, max_delay)
+            continue
+
+        last_completion = _parse_array_completion(job)
+        transitioned = _apply_completion_transition(rec, last_completion, source="poll")
+        if transitioned or last_completion.complete:
+            return _build_complete_response(rec, array_job_id, last_completion, transitioned)
+
+        log.debug(
+            "Campaign %s array job %s not yet complete: %d succeeded, %d failed, "
+            "%d pending of %d (attempt %d, next poll in %.1fs)",
+            campaign_id,
+            array_job_id,
+            last_completion.succeeded,
+            last_completion.failed,
+            last_completion.pending,
+            last_completion.total,
+            attempt,
+            delay,
+        )
+        await sleep(delay)
+        delay = min(delay * 2, max_delay)
+
+    raise TimeoutError(
+        f"Campaign {campaign_id} array job {array_job_id} did not reach a "
+        f"terminal state within {max_attempts} poll attempts."
     )

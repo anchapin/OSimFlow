@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Campaign list / status
@@ -873,4 +873,69 @@ class CoordinatorNotifyResponse(BaseModel):
     campaign_id: str
     notification_type: str
     status: str = Field(default="sent", description="sent | failed | skipped")
+    message: str
+
+
+# Phase 5: Array-completion detection (issue #626, Epic #624)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorArrayCompleteEvent(BaseModel):
+    """EventBridge ``Batch Job State Change`` envelope posted to the array-complete webhook.
+
+    EventBridge fires this event when an AWS Batch array job reaches a terminal
+    state. The Coordinator re-queries ``describe_jobs`` for the array parent
+    (the source of truth) rather than trusting the event payload alone, so most
+    fields here are informational. The two fields the handler actually inspects
+    are ``source`` (must be ``aws.batch``) and ``detail.jobId`` (must match the
+    campaign's stored ``array_job_id`` or one of its children).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    version: str | None = Field(default=None, description="EventBridge envelope version")
+    id: str | None = Field(default=None, description="EventBridge event ID")
+    detail_type: str | None = Field(
+        default=None,
+        alias="detail-type",
+        description='Expected value: "Batch Job State Change"',
+    )
+    source: str | None = Field(
+        default=None,
+        description='Expected value: "aws.batch"',
+    )
+    account: str | None = None
+    time: str | None = None
+    region: str | None = None
+    resources: list[str] | None = None
+    detail: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Batch job detail. Must include ``jobId``.",
+    )
+
+
+class CoordinatorArrayCompleteResponse(BaseModel):
+    """Response for ``POST /campaigns/{id}/array-complete`` and the polling fallback.
+
+    The ``transitioned`` flag is the idempotency signal: a webhook that arrives
+    after the poller already advanced the campaign returns ``transitioned=False``
+    with HTTP 200 (a no-op).
+    """
+
+    campaign_id: str
+    array_job_id: str
+    status: str = Field(
+        description=(
+            "aggregating (this call flipped running->aggregating) | "
+            "already_aggregating (idempotent duplicate, no-op) | "
+            "pending (children still running) | failed"
+        )
+    )
+    succeeded: int = Field(ge=0, description="Child jobs that succeeded")
+    failed: int = Field(ge=0, description="Child jobs that failed")
+    total: int = Field(ge=0, description="arrayProperties.size of the parent job")
+    transitioned: bool = Field(
+        default=False,
+        description="True iff this call performed the running->aggregating transition.",
+    )
     message: str
