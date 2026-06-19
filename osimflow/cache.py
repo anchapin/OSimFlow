@@ -256,8 +256,7 @@ class SQLiteCache:
             # open and our checkpoint. Non-fatal: SQLite recreates the
             # aux files on the next access.
             log.warning(
-                "cache aux file missing during close at %s "
-                "(likely a peer checkpoint; non-fatal)",
+                "cache aux file missing during close at %s (likely a peer checkpoint; non-fatal)",
                 self.db_path,
                 exc_info=True,
             )
