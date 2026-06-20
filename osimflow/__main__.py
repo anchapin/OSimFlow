@@ -1440,6 +1440,15 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
             "Default: ~/.osimflow/registry.db"
         ),
     )
+    serve.add_argument(
+        "--api-redis-url",
+        default=None,
+        help=(
+            "Redis URL for distributed rate limiting across multiple API instances "
+            "behind a load balancer (issue #663).  Example: redis://localhost:6379/0. "
+            "When not set, the in-process limiter is used (per-process only)."
+        ),
+    )
     serve.set_defaults(func=_cmd_serve)
 
 
@@ -2087,6 +2096,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         results_viewer=args.dashboard,
         dashboard=args.dashboard,
         registry_path=args.registry,
+        redis_url=args.api_redis_url,
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
