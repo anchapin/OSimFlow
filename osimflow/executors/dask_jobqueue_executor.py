@@ -190,10 +190,9 @@ class DaskJobQueueExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        openstudio_version: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        openstudio_version = kwargs.get("openstudio_version")
-
         log.info(
             "dask_jobqueue submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
             name,

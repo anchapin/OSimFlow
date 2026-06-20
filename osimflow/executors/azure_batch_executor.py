@@ -343,9 +343,9 @@ class AzureBatchExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        openstudio_version: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        openstudio_version = kwargs.get("openstudio_version")
         result_hint = kwargs.get("result_hint")
 
         log.info(

@@ -388,10 +388,9 @@ class DockerSwarmExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        openstudio_version: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        openstudio_version = kwargs.get("openstudio_version")
-
         # Check for stub mode: when Docker is unavailable or not in Swarm mode,
         # fall back to LocalExecutor so campaigns can still run in dev/CI.
         if self._stub_executor is not None:
@@ -411,6 +410,7 @@ class DockerSwarmExecutor(BaseExecutor):
                     memory_mb=memory_mb,
                     time_min=time_min,
                     container=container,
+                    openstudio_version=openstudio_version,
                     **kwargs,
                 ),
             )
@@ -446,6 +446,7 @@ class DockerSwarmExecutor(BaseExecutor):
                     memory_mb=memory_mb,
                     time_min=time_min,
                     container=container,
+                    openstudio_version=openstudio_version,
                     **kwargs,
                 ),
             )
@@ -470,6 +471,7 @@ class DockerSwarmExecutor(BaseExecutor):
                     memory_mb=memory_mb,
                     time_min=time_min,
                     container=container,
+                    openstudio_version=openstudio_version,
                     **kwargs,
                 ),
             )
