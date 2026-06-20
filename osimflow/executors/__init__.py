@@ -1279,6 +1279,13 @@ class _NomadHandle(Handle):
                     eval_id=self._eval_id,
                     job_id=self.job_id,
                 )
+            # Guard against resolve_allocation returning None (e.g. both calls
+            # failed and the TypeError was caught but allocation remains unresolved).
+            if self._allocation_id is None:
+                raise RuntimeError(
+                    f"resolve_allocation returned None for eval={self._eval_id!r} "
+                    f"job={self.job_id!r}; allocation could not be resolved"
+                )
         return self._allocation_id
 
     def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
