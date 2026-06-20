@@ -933,8 +933,14 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
     return samples_json
 
 
-def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
-    """Run the default KPI extractor. Returns path to the kpi JSON file."""
+def _extract_kpis_impl(
+    simulation_dir: Path,
+    sample_id: str,
+    out: Path,
+    *,
+    max_retries: int = 3,
+) -> Path:
+    """Internal implementation — wrapped with retry by ``extract_kpis``."""
     out.mkdir(parents=True, exist_ok=True)
     kpi_path = out / f"kpi_{sample_id}.json"
     try:
@@ -957,6 +963,38 @@ def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
         log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
         raise RuntimeError(f"extract_kpis failed for {sample_id}") from e
     return kpi_path
+
+
+def extract_kpis(
+    simulation_dir: Path,
+    sample_id: str,
+    out: Path,
+    *,
+    max_retries: int = 3,
+) -> Path:
+    """Run the default KPI extractor with exponential-backoff retry.
+
+    Transient failures (disk I/O, network, resource contention) are retried
+    up to ``max_retries`` attempts before surfacing the final error.
+
+    Args:
+        simulation_dir: directory containing simulation outputs (e.g. eplusout.sql).
+        sample_id: the sample's identifier (e.g. "0001").
+        out: directory where the KPI JSON file is written.
+        max_retries: maximum retry attempts for transient failures (default 3).
+
+    Returns:
+        Path to the kpi JSON file.
+    """
+    return run_with_retry(
+        _extract_kpis_impl,
+        simulation_dir,
+        sample_id,
+        out,
+        max_retries=max_retries,
+        sample_id=sample_id,
+        step_name="extract_kpis",
+    )
 
 
 # ---------------------------------------------------------------------------
