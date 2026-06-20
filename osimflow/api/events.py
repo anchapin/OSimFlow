@@ -8,6 +8,7 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import time
@@ -161,11 +162,16 @@ async def _event_generator(
         if await request.is_disconnected():
             break
 
-        # --- read current run.json ---
+        # --- read current run.json (shared lock so concurrent SSE readers don't race) ---
         current_snapshot: dict[str, Any] = {}
         if run_json_path.exists():
             try:
-                current_snapshot = json.loads(run_json_path.read_text())
+                with open(run_json_path) as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    try:
+                        current_snapshot = json.load(f)
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             except (json.JSONDecodeError, OSError):
                 current_snapshot = {}
 
