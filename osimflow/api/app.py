@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -28,6 +29,9 @@ from pydantic import BaseModel, Field
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
+
+if TYPE_CHECKING:
+    import redis.asyncio as redis_async
 
 from osimflow.api.auth import (
     MultiUserAPIKeyStore,
@@ -62,6 +66,18 @@ from osimflow.validation import (
 _OPENSTUDIO_VERSION_RE = re.compile(r"^\d+\.\d+")
 
 log = logging.getLogger("osimflow.api")
+
+# Lazy import holder for redis.asyncio — replaced in tests via patch().
+_redis_asyncio_module: dict[str, Any] = {}
+
+
+def _get_redis_asyncio() -> Any:
+    """Import and return the redis.asyncio module (lazy, cached)."""
+    if not _redis_asyncio_module:
+        import redis.asyncio as ra  # noqa: PLC0415
+
+        _redis_asyncio_module["module"] = ra
+    return _redis_asyncio_module["module"]
 
 
 def _get_real_remote_address(request: Request) -> str:
@@ -224,7 +240,7 @@ def _parse_rate_limit(rate_limit: str) -> tuple[int, int]:
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """In-process sliding-window rate limiter.
+    """Sliding-window rate limiter — in-process or Redis-backed.
 
     Replaces slowapi's ``SlowAPIMiddleware`` which did not reliably
     maintain its in-memory counter between sequential ``TestClient``
@@ -234,9 +250,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     so the counter is isolated per app — critical for tests that each
     build their own app.
 
-    The limiter uses a sliding-window counter: every request appends
-    a monotonic timestamp to a per-key bucket; entries older than the
-    window are pruned on each check.
+    When ``redis_url`` is set, the limiter uses Redis sorted sets for
+    a distributed sliding-window counter that works correctly across
+    multiple API instances behind a load balancer (issue #663).
+
+    When Redis is unavailable or ``redis_url`` is ``None``, the limiter
+    falls back to the in-process dict (backward-compatible).
     """
 
     def __init__(
@@ -245,36 +264,128 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         *,
         rate_limit: str,
         key_func: Callable[[Request], str] = _get_real_remote_address,
+        redis_url: str | None = None,
     ) -> None:
         super().__init__(app)
         self.max_requests, self.window_seconds = _parse_rate_limit(rate_limit)
         self.key_func = key_func
-        # Per-key list of monotonic timestamps of accepted requests.
+        self._redis_url = redis_url
+        # In-process fallback: per-key list of monotonic timestamps.
         self._hits: dict[str, list[float]] = defaultdict(list)
+        # Lazily-created async Redis client.
+        self._redis_client: redis_async.Redis | None = None
+        self._redis_lock = threading.Lock()
 
-    async def dispatch(
+    # ------------------------------------------------------------------
+    # Redis client (lazy, thread-safe)
+    # ------------------------------------------------------------------
+    def _get_redis(self) -> Any:
+        """Lazily create the async Redis client."""
+        if self._redis_client is None:
+            with self._redis_lock:
+                if self._redis_client is None:
+                    redis_async = _get_redis_asyncio()
+                    self._redis_client = redis_async.from_url(
+                        self._redis_url,  # type: ignore[arg-type]
+                        encoding="utf-8",
+                        decode_responses=True,
+                    )
+        return self._redis_client
+
+    # ------------------------------------------------------------------
+    # Redis-backed sliding window (issue #663)
+    # ------------------------------------------------------------------
+    async def _check_redis(
         self,
-        request: Request,
-        call_next: Any,  # noqa: ANN401 (Starlette callable)
-    ) -> Response:
-        key = self.key_func(request)
+        key: str,
+    ) -> tuple[bool, int]:
+        """Check and update rate limit using Redis sorted sets.
+
+        Returns (allowed, retry_after).  allowed=True means the request
+        should be let through; allowed=False means it was rate-limited
+        and retry_after is the seconds until the oldest entry expires.
+        """
+
+        redis_key = f"ratelimit:{key}:{self.window_seconds}"
         now = time.monotonic()
         cutoff = now - self.window_seconds
 
-        # Prune expired entries for this key.
+        client = self._get_redis()
+
+        # Use a pipeline for atomic prune + count + add.
+        pipe = client.pipeline()
+        # Remove entries older than the window.
+        pipe.zremrangebyscore(redis_key, 0, cutoff)
+        # Count entries in the current window.
+        pipe.zcard(redis_key)
+        # Add the current request with timestamp as score.
+        pipe.zadd(redis_key, {f"{now}": now})
+        # Set TTL on the key to auto-cleanup if no new requests arrive.
+        pipe.expire(redis_key, self.window_seconds * 2)
+        results = await pipe.execute()
+
+        count = cast(int, results[1])  # zcard result
+
+        if count >= self.max_requests:
+            # Fetch the oldest entry to compute retry_after.
+            oldest = await client.zrange(redis_key, 0, 0, withscores=True)
+            if oldest:
+                oldest_score = oldest[0][1]
+                retry_after = max(1, int(self.window_seconds - (now - oldest_score)) + 1)
+            else:
+                retry_after = self.window_seconds
+            return False, retry_after
+
+        return True, 0
+
+    # ------------------------------------------------------------------
+    # In-process fallback (unchanged behaviour)
+    # ------------------------------------------------------------------
+    def _check_inprocess(self, key: str) -> tuple[bool, int]:
+        """Check and update rate limit using the in-process dict."""
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+
         bucket = self._hits[key]
         fresh = [t for t in bucket if t > cutoff]
         self._hits[key] = fresh
 
         if len(fresh) >= self.max_requests:
             retry_after = max(1, int(self.window_seconds - (now - fresh[0])) + 1)
+            return False, retry_after
+
+        fresh.append(now)
+        return True, 0
+
+    # ------------------------------------------------------------------
+    # Dispatch
+    # ------------------------------------------------------------------
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Any,  # noqa: ANN401 (Starlette callable)
+    ) -> Response:
+        key = self.key_func(request)
+
+        if self._redis_url:
+            try:
+                allowed, retry_after = await self._check_redis(key)
+            except Exception as exc:
+                log.warning(
+                    "RateLimitMiddleware: Redis unavailable (%s); falling back to in-process",
+                    exc,
+                )
+                allowed, retry_after = self._check_inprocess(key)
+        else:
+            allowed, retry_after = self._check_inprocess(key)
+
+        if not allowed:
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded. Try again later."},
                 headers={"Retry-After": str(retry_after)},
             )
 
-        fresh.append(now)
         return cast(Response, await call_next(request))
 
 
@@ -1187,6 +1298,7 @@ def create_app(
     results_viewer: bool = False,
     dashboard: bool = False,
     registry_path: Path | None = None,
+    redis_url: str | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -1244,6 +1356,12 @@ def create_app(
         campaign IDs via the registry.  When ``None``, registry-based
         lookups are disabled and campaign IDs are resolved solely via
         ``campaigns_base_dir``.
+    redis_url
+        Redis connection URL for distributed rate limiting across multiple
+        API instances behind a load balancer (issue #663).  When ``None``
+        (default), the in-process sliding-window limiter is used, which
+        is per-process only and not suitable for horizontal scaling.
+        Example: ``redis://localhost:6379/0``.
     """
     app = FastAPI(
         title="OSimFlow API",
@@ -1316,6 +1434,7 @@ def create_app(
         RateLimitMiddleware,
         rate_limit=rate_limit,
         key_func=key_func,
+        redis_url=redis_url,
     )
 
     # Store a reference for tests / introspection.  The actual
