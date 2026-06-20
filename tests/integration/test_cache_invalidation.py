@@ -214,3 +214,4 @@ def test_stats(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     s = tmp_cache.stats()
     assert s["total"] == 2
     assert s["by_step"] == {"A": 1, "B": 1}
+
