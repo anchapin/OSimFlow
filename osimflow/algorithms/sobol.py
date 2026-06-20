@@ -12,10 +12,12 @@ total-effect (ST) sensitivity indices via SALib's ``sobol.analyze()``.
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import scipy.stats
 
 from osimflow.algorithms import (
     BaseAlgorithm,
@@ -34,36 +36,90 @@ def _build_salib_problem(
     """Build a SALib problem dict from OSimFlow variable definitions.
 
     SALib requires ``{"num_vars": N, "names": [...], "bounds": [...]}``.
-    Only *uniform* bounds are used for the problem spec; other
-    distributions are applied as a post-processing step on the unit
-    samples.
+    The bounds must match the distribution actually used by
+    ``_apply_distribution`` in ``osimflow/algorithms/__init__.py`` so that
+    SALib's quasi-random samples span the same range that the campaign
+    simulations will actually explore.
+
+    Continuous distributions use ppf(0.0005) / ppf(0.9995) as bounds
+    (captures 99.9% of the distribution).  Discrete/categorical variables
+    use the actual min/max of their value set.
     """
     names: list[str] = []
     bounds: list[tuple[float, float]] = []
+
+    # Tail quantiles for continuous distributions — captures 99.9% of the
+    # distribution while avoiding infinite bounds.
+    Q_LOW = 0.0005
+    Q_HIGH = 0.9995
+
     for var_def in independent_vars:
         var_name = var_def["name"]
         dist = var_def.get("distribution", "uniform")
         names.append(var_name)
+
         if dist == "uniform":
             bounds.append((float(var_def["min"]), float(var_def["max"])))
+
         elif dist == "normal":
-            # Use ±3σ as the sampling bounds for SALib
             mu = float(var_def["mean"])
             sigma = float(var_def["sigma"])
-            bounds.append((mu - 3 * sigma, mu + 3 * sigma))
+            bounds.append((
+                float(scipy.stats.norm.ppf(Q_LOW, loc=mu, scale=sigma)),
+                float(scipy.stats.norm.ppf(Q_HIGH, loc=mu, scale=sigma)),
+            ))
+
         elif dist == "lognormal":
-            # Use ±3σ around the log-mean for sampling bounds
-            log_mu = float(var_def["mean"])
+            # scipy.stats.lognorm.ppf(u, s=sigma, scale=exp(mu))
+            mu = float(var_def["mean"])
             sigma = float(var_def["sigma"])
-            lower = max(1e-10, log_mu - 3 * sigma)
-            upper = log_mu + 3 * sigma
+            scale = math.exp(mu)
+            lower = float(scipy.stats.lognorm.ppf(Q_LOW, s=sigma, scale=scale))
+            upper = float(scipy.stats.lognorm.ppf(Q_HIGH, s=sigma, scale=scale))
             bounds.append((lower, upper))
+
         elif dist == "triangular":
             bounds.append((float(var_def["min"]), float(var_def["max"])))
+
+        elif dist in ("discrete", "categorical"):
+            values: list[Any] = var_def["values"]
+            bounds.append((float(min(values)), float(max(values))))
+
+        elif dist == "beta":
+            a = float(var_def["alpha"])
+            b = float(var_def["beta"])
+            loc = float(var_def.get("loc", 0.0))
+            scale = float(var_def.get("scale", 1.0))
+            bounds.append((
+                float(scipy.stats.beta.ppf(Q_LOW, a, b, loc=loc, scale=scale)),
+                float(scipy.stats.beta.ppf(Q_HIGH, a, b, loc=loc, scale=scale)),
+            ))
+
+        elif dist == "gamma":
+            a = float(var_def["alpha"])
+            loc = float(var_def.get("loc", 0.0))
+            scale = float(var_def.get("scale", 1.0))
+            bounds.append((
+                float(scipy.stats.gamma.ppf(Q_LOW, a, loc=loc, scale=scale)),
+                float(scipy.stats.gamma.ppf(Q_HIGH, a, loc=loc, scale=scale)),
+            ))
+
+        elif dist == "exponential":
+            rate = float(var_def["rate"])
+            # scipy.stats.expon.ppf uses scale = 1/rate
+            scale = 1.0 / rate
+            bounds.append((
+                float(scipy.stats.expon.ppf(Q_LOW, scale=scale)),
+                float(scipy.stats.expon.ppf(Q_HIGH, scale=scale)),
+            ))
+
         else:
-            # Fallback: use a [0, 1] bound; the _apply_distribution
-            # step will handle the mapping.
+            # Should never reach here — all distributions are handled above.
+            # Fall back to [0, 1] to keep SALib happy; this indicates a
+            # missing-handler bug that should be fixed when the distribution
+            # type is added to _apply_distribution.
             bounds.append((0.0, 1.0))
+
     return {"num_vars": len(names), "names": names, "bounds": bounds}
 
 
