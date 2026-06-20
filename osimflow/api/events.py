@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -231,7 +232,16 @@ async def campaign_stop(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="No output directory configured")
 
     stop_file = outdir / ".stop"
-    stop_file.write_text(json.dumps({"requested_at": time.time()}))
+    # Atomic write to avoid TOCTOU race (issue #646)
+    tmp_path = outdir / f".stop.{os.getpid()}.tmp"
+    try:
+        with open(tmp_path, "w") as fh:
+            json.dump({"requested_at": time.time()}, fh)
+        os.replace(tmp_path, stop_file)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
     log.info("stop flag written to %s", stop_file)
     return {"status": "stopping"}
 
