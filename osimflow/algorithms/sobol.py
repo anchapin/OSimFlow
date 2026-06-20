@@ -64,10 +64,12 @@ def _build_salib_problem(
         elif dist == "normal":
             mu = float(var_def["mean"])
             sigma = float(var_def["sigma"])
-            bounds.append((
-                float(scipy.stats.norm.ppf(Q_LOW, loc=mu, scale=sigma)),
-                float(scipy.stats.norm.ppf(Q_HIGH, loc=mu, scale=sigma)),
-            ))
+            bounds.append(
+                (
+                    float(scipy.stats.norm.ppf(Q_LOW, loc=mu, scale=sigma)),
+                    float(scipy.stats.norm.ppf(Q_HIGH, loc=mu, scale=sigma)),
+                )
+            )
 
         elif dist == "lognormal":
             # scipy.stats.lognorm.ppf(u, s=sigma, scale=exp(mu))
@@ -90,28 +92,34 @@ def _build_salib_problem(
             b = float(var_def["beta"])
             loc = float(var_def.get("loc", 0.0))
             scale = float(var_def.get("scale", 1.0))
-            bounds.append((
-                float(scipy.stats.beta.ppf(Q_LOW, a, b, loc=loc, scale=scale)),
-                float(scipy.stats.beta.ppf(Q_HIGH, a, b, loc=loc, scale=scale)),
-            ))
+            bounds.append(
+                (
+                    float(scipy.stats.beta.ppf(Q_LOW, a, b, loc=loc, scale=scale)),
+                    float(scipy.stats.beta.ppf(Q_HIGH, a, b, loc=loc, scale=scale)),
+                )
+            )
 
         elif dist == "gamma":
             a = float(var_def["alpha"])
             loc = float(var_def.get("loc", 0.0))
             scale = float(var_def.get("scale", 1.0))
-            bounds.append((
-                float(scipy.stats.gamma.ppf(Q_LOW, a, loc=loc, scale=scale)),
-                float(scipy.stats.gamma.ppf(Q_HIGH, a, loc=loc, scale=scale)),
-            ))
+            bounds.append(
+                (
+                    float(scipy.stats.gamma.ppf(Q_LOW, a, loc=loc, scale=scale)),
+                    float(scipy.stats.gamma.ppf(Q_HIGH, a, loc=loc, scale=scale)),
+                )
+            )
 
         elif dist == "exponential":
             rate = float(var_def["rate"])
             # scipy.stats.expon.ppf uses scale = 1/rate
             scale = 1.0 / rate
-            bounds.append((
-                float(scipy.stats.expon.ppf(Q_LOW, scale=scale)),
-                float(scipy.stats.expon.ppf(Q_HIGH, scale=scale)),
-            ))
+            bounds.append(
+                (
+                    float(scipy.stats.expon.ppf(Q_LOW, scale=scale)),
+                    float(scipy.stats.expon.ppf(Q_HIGH, scale=scale)),
+                )
+            )
 
         else:
             # Should never reach here — all distributions are handled above.
