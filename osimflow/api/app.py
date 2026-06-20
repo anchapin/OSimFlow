@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
@@ -30,11 +30,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
 
 from osimflow.api.auth import (
-    APIKeyUser,
     MultiUserAPIKeyStore,
     extract_api_key,
     validate_api_key,
 )
+
+if TYPE_CHECKING:
+    pass
 from osimflow.api.campaigns import campaigns_router
 from osimflow.api.coordinator import coordinator_router
 from osimflow.api.dashboard import dashboard_router
@@ -325,7 +327,9 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     content={"detail": "Invalid or missing API key"},
                 )
-            request.state.api_user = APIKeyUser(key=provided or "", user_id="default", role=_ADMIN)
+            # Single-key auth: defer to server's read_only setting via get_user_permission()
+            # instead of hardcoding _ADMIN, so read_only=True correctly restricts writes (issue #644)
+            request.state.api_user = None
         elif isinstance(key_store, MultiUserAPIKeyStore):
             user = key_store.validate(provided)
             if user is None:
