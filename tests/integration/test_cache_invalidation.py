@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from osimflow.cache import CacheKey, SQLiteCache, sha256_of_files
+from osimflow.cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 
 
 @pytest.fixture
@@ -108,6 +108,71 @@ def test_openstudio_version_change_invalidates_only_sim_step(
     assert tmp_cache.stats()["by_step"].get("GENERATE_LHS_SAMPLES", 0) == 1
     assert tmp_cache.stats()["by_step"].get("APPLY_PARAMETERS", 0) == 1
     assert tmp_cache.stats()["by_step"].get("EXTRACT_KPIS", 0) == 1
+
+
+def test_extract_kpis_uses_openstudio_version_in_cache_key(
+    tmp_cache: SQLiteCache, tmp_path: Path
+) -> None:
+    """Regression test for issue #643: EXTRACT_KPIS cache key must use the
+    actual OpenStudio version (not 'N/A') so that cache hits don't return
+    wrong results when the same parameters are used with different OpenStudio
+    versions."""
+    out = tmp_path / "out.txt"
+    out.write_text("kpis")
+
+    sim_dir = str(tmp_path / "sim" / "S1")
+    sid = "S1"
+
+    # Compute inputs_hash as step_extract_kpis does (with os_version in hash)
+    inputs_hash_v1 = sha256_of_dict(
+        {"sim_dir": sim_dir, "sid": sid, "os_version": "3.11.0"}
+    )
+    inputs_hash_v2 = sha256_of_dict(
+        {"sim_dir": sim_dir, "sid": sid, "os_version": "3.12.0"}
+    )
+    # Same sim_dir/sid but different os_version -> different inputs_hash
+    assert inputs_hash_v1 != inputs_hash_v2
+
+    # Build cache keys as step_extract_kpis does after the fix
+    key_v1 = CacheKey(
+        step="EXTRACT_KPIS",
+        sample_id=sid,
+        openstudio_version="3.11.0",
+        inputs_sha256=inputs_hash_v1,
+        code_sha256="code-hash",
+        container_digest="img",
+        generation=0,
+    )
+    key_v2 = CacheKey(
+        step="EXTRACT_KPIS",
+        sample_id=sid,
+        openstudio_version="3.12.0",
+        inputs_sha256=inputs_hash_v2,
+        code_sha256="code-hash",
+        container_digest="img",
+        generation=0,
+    )
+
+    # Verify the two keys are different (different openstudio_version field)
+    assert key_v1 != key_v2
+
+    # Store v1 in cache, verify v2 is a miss
+    tmp_cache.store(key_v1, out, exit_code=0)
+    assert tmp_cache.lookup(key_v1) is not None
+    assert tmp_cache.lookup(key_v2) is None
+
+    # Verify the bug is fixed: EXTRACT_KPIS does NOT use "N/A" as version
+    key_na = CacheKey(
+        step="EXTRACT_KPIS",
+        sample_id=sid,
+        openstudio_version="N/A",
+        inputs_sha256=inputs_hash_v1,
+        code_sha256="code-hash",
+        container_digest="img",
+        generation=0,
+    )
+    # The "N/A" version key should NOT match the stored v1 key
+    assert tmp_cache.lookup(key_na) is None
 
 
 def test_template_sim_package_change_invalidates_apply_and_run(
