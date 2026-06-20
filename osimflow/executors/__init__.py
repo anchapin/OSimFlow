@@ -1328,7 +1328,11 @@ class _NomadHandle(Handle):
         status = alloc.get("ClientStatus", "unknown")
         task_states = alloc.get("TaskStates", {}) or {}
         if status == "complete":
-            local_result: Any = resolve_result_for_callback(self._result_hint, default=None)
+            local_result: Any = resolve_result_for_callback(
+                self._result_hint,
+                default=None,
+                transport_mode=self._result_transport_mode,
+            )
             local_result = materialize_object_storage_result(
                 local_result,
                 transport_mode=self._result_transport_mode,
