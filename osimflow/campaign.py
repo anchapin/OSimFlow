@@ -2954,7 +2954,7 @@ class Campaign:
             key = CacheKey(
                 step="APPLY_PARAMETERS",
                 sample_id=sid,
-                openstudio_version="N/A",
+                openstudio_version=self.cfg.openstudio_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=self._python_container_image,
