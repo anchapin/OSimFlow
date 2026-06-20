@@ -827,9 +827,7 @@ class AWSBatchExecutor(BaseExecutor):
 
         return cost_usd, spot_savings
 
-    def _wait_for_terminal(
-        self, job_id: str, timeout: float | None = None
-    ) -> dict[str, Any]:
+    def _wait_for_terminal(self, job_id: str, timeout: float | None = None) -> dict[str, Any]:
         """Poll `describe_jobs` with exponential backoff until the task
         reaches a terminal state. Returns the final job dict.
 
@@ -858,9 +856,7 @@ class AWSBatchExecutor(BaseExecutor):
                 elapsed = time.monotonic() - start
                 remaining = timeout - elapsed
                 if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
-                    )
+                    raise TimeoutError(f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}")
                 # Cap the sleep so we don't overshoot the timeout.
                 delay = min(delay, remaining)
 
