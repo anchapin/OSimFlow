@@ -8,8 +8,10 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -161,11 +163,16 @@ async def _event_generator(
         if await request.is_disconnected():
             break
 
-        # --- read current run.json ---
+        # --- read current run.json (shared lock so concurrent SSE readers don't race) ---
         current_snapshot: dict[str, Any] = {}
         if run_json_path.exists():
             try:
-                current_snapshot = json.loads(run_json_path.read_text())
+                with open(run_json_path) as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    try:
+                        current_snapshot = json.load(f)
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             except (json.JSONDecodeError, OSError):
                 current_snapshot = {}
 
@@ -179,7 +186,9 @@ async def _event_generator(
                 }
             last_snapshot = current_snapshot
 
-        # --- heartbeat ---
+        # --- heartbeat: fires every heartbeat_interval seconds based on elapsed
+        # time, NOT on snapshot equality. This ensures heartbeats continue
+        # even when the campaign is actively updating (issue #662).
         now = time.monotonic()
         if now - last_heartbeat >= heartbeat_interval:
             yield {"event": "ping", "data": ""}
@@ -229,7 +238,16 @@ async def campaign_stop(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="No output directory configured")
 
     stop_file = outdir / ".stop"
-    stop_file.write_text(json.dumps({"requested_at": time.time()}))
+    # Atomic write to avoid TOCTOU race (issue #646)
+    tmp_path = outdir / f".stop.{os.getpid()}.tmp"
+    try:
+        with open(tmp_path, "w") as fh:
+            json.dump({"requested_at": time.time()}, fh)
+        os.replace(tmp_path, stop_file)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
     log.info("stop flag written to %s", stop_file)
     return {"status": "stopping"}
 
