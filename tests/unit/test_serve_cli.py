@@ -99,6 +99,7 @@ class TestServeCLI:
             results_viewer=False,
             dashboard=False,
             registry_path=None,
+            redis_url=None,
         )
 
     def test_serve_read_only_default(self, tmp_path: Path) -> None:
@@ -134,6 +135,7 @@ class TestServeCLI:
             results_viewer=False,
             dashboard=False,
             registry_path=None,
+            redis_url=None,
         )
 
     def test_serve_import_error_returns_1(self, tmp_path: Path) -> None:
