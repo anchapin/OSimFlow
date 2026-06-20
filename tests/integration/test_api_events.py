@@ -255,9 +255,7 @@ class TestCampaignStop:
         assert resp1.json()["status"] == "stopping"
         assert resp2.json()["status"] == "stopping"
 
-    def test_stop_flag_file_write_is_atomic(
-        self, client_rw: TestClient, outdir: Path
-    ) -> None:
+    def test_stop_flag_file_write_is_atomic(self, client_rw: TestClient, outdir: Path) -> None:
         """Stop endpoint writes .stop atomically (no partial-file exposure).
 
         Regression test for issue #646: .stop file must be written via
@@ -326,9 +324,7 @@ class TestCampaignPause:
         resp = client_rw.post("/api/v1/campaign/pause")
         assert resp.status_code == 409
 
-    def test_pause_flag_file_write_is_atomic(
-        self, client_rw: TestClient, outdir: Path
-    ) -> None:
+    def test_pause_flag_file_write_is_atomic(self, client_rw: TestClient, outdir: Path) -> None:
         """Pause endpoint writes .pause atomically (no partial-file exposure).
 
         Regression test for issue #646: .pause file must be written via

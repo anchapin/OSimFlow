@@ -35,7 +35,7 @@ HEARTBEAT_INTERVAL_S = 15.0
 MAX_ITERATIONS_DEFAULT = 0  # 0 = unlimited
 
 
-def _atomic_write_json(path: Path, data: dict) -> None:
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     """Write ``data`` to ``path`` atomically via temp file + rename.
 
     Using a named temp file in the same directory and ``os.replace``
