@@ -741,6 +741,13 @@ class CoordinatorHandoffPayload(BaseModel):
         default=None,
         description="SNS topic ARN to publish to when the campaign completes",
     )
+    webhook_url: str | None = Field(
+        default=None,
+        description=(
+            "Webhook URL to POST the campaign-completion callback to "
+            "(issue #283; reused by the issue #628 notification dispatch)."
+        ),
+    )
 
 
 class CoordinatorHandoffResponse(BaseModel):
@@ -882,13 +889,27 @@ class CoordinatorResultsResponse(BaseModel):
 
 
 class CoordinatorNotifyRequest(BaseModel):
-    """Request for POST /campaigns/{id}/notify — trigger a notification."""
+    """Request for POST /campaigns/{id}/notify — trigger a notification.
+
+    Mirrors the API contract §3.5 ``campaign.succeeded`` payload: the
+    server builds the presigned ``download_url`` (whose lifetime is
+    ``expires_in_seconds``) and dispatches it through the selected
+    backend.
+    """
 
     notification_type: str = Field(
         default="sns",
         description="Type: sns | email | webhook",
     )
     subject: str | None = Field(default=None, description="Notification subject (SNS/email)")
+    expires_in_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description=(
+            "Lifetime of the presigned download_url in seconds "
+            "(default 3600). Mirrors --s3-artifact-presigned-url-expiration."
+        ),
+    )
 
 
 class CoordinatorNotifyResponse(BaseModel):
