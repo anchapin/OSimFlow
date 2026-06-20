@@ -3847,7 +3847,7 @@ class Campaign:
             sample_id="ALL",
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
-            code_sha256=self.code_hashes["bin"],
+            code_sha256=self.code_hashes["work"],
             container_digest=self._python_container_image,
         )
         cached = self.cache.lookup(key)
