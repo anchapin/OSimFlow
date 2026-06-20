@@ -253,9 +253,9 @@ class AzureBatchExecutor(BaseExecutor):
             job = self._get_job(job_id)
             if job.properties.execution_info.end_time is not None:
                 return job
+            delay = min(delay * 2, self.max_poll_interval_s)
             log.info("azure_batch poll jobId=%s (sleeping %.1fs)", job_id, delay)
             time.sleep(delay)
-            delay = min(delay * 2, self.max_poll_interval_s)
 
     def _build_environment(
         self,
