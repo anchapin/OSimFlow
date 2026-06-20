@@ -179,7 +179,9 @@ async def _event_generator(
                 }
             last_snapshot = current_snapshot
 
-        # --- heartbeat ---
+        # --- heartbeat: fires every heartbeat_interval seconds based on elapsed
+        # time, NOT on snapshot equality. This ensures heartbeats continue
+        # even when the campaign is actively updating (issue #662).
         now = time.monotonic()
         if now - last_heartbeat >= heartbeat_interval:
             yield {"event": "ping", "data": ""}
