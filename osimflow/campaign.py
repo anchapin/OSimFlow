@@ -2261,9 +2261,18 @@ class Campaign:
                         algo.name(),
                     )
             else:
+                # verify there is actually something to reuse before continuing
+                pending = getattr(algo, "_pending_proposed_samples", None)
+                if not pending:
+                    raise RuntimeError(
+                        f"observe() returned empty samples at generation {generation} "
+                        f"for algorithm {algo.name()!r} and no previous samples are "
+                        "available; cannot continue iterative optimisation"
+                    )
                 log.warning(
-                    "observe() returned empty samples at generation %d; reusing previous",
+                    "observe() returned empty samples at generation %d; reusing %d previous samples",
                     generation,
+                    len(pending),
                 )
 
         samples = self.step_generate_samples(algo, generation=generation)
