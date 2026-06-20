@@ -390,13 +390,21 @@ class SlurmExecutor(BaseExecutor):
             gres=self.gres,
         )
 
+        # Issue #654: capture values at closure-creation time to avoid
+        # late-binding in fast loops where the outer scope changes before
+        # _wrapped executes.
+        os_version = str(openstudio_version or "N/A")
+        cont = container
+        fn_to_call = fn
+        args_to_pass = args
+
         def _wrapped() -> Any:
             # Resource directive also becomes an env var so the task can
             # read it (e.g. OpenStudio CLI threading control).
-            os.environ["OSIMFLOW_OS_VERSION"] = str(openstudio_version or "N/A")
-            if container:
-                os.environ["OSIMFLOW_CONTAINER"] = container
-            return fn(*args)
+            os.environ["OSIMFLOW_OS_VERSION"] = os_version
+            if cont:
+                os.environ["OSIMFLOW_CONTAINER"] = cont
+            return fn_to_call(*args_to_pass)
 
         fut: Any = call_ex.submit(_wrapped)
         return Handle(
