@@ -469,19 +469,28 @@ class _AWSBatchHandle(Handle):
         if cost_usd > 0:
             self.cost_usd = cost_usd
 
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
-        # The polling itself doesn't take a `timeout` parameter; the
-        # Batch attempt-duration timeout (set on submit_job) is the
-        # substrate-level kill. `timeout` here is accepted for the
-        # base-class signature but not enforced — the existing
-        # LocalExecutor/SlurmExecutor take the same approach.
-        #
+    def result(self, timeout: float | None = None) -> Any:
+        # Timeout tracking: elapsed time is shared across spot-retry
+        # iterations so the caller-supplied deadline is honoured
+        # regardless of how many times the job is resubmitted.
+        start = time.monotonic()
+        remaining: float | None = None  # None means "no timeout"
+
         # Spot retry loop (issue #131): on Spot interruption, resubmit
         # up to max_retries times, then fall back to on-demand or fail.
         effective_max_retries = max(0, self._executor.max_retries)
         for attempt in range(effective_max_retries + 1):
+            # Compute remaining time for this poll iteration.
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for job {self.job_id!r}"
+                    )
+
             try:
-                job = self._executor._wait_for_terminal(self.job_id)  # noqa: SLF001
+                job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)  # noqa: SLF001
             except BaseException as exc:  # noqa: BLE001 — surface any poll error
                 self._future.set_exception(exc)
                 raise
@@ -523,7 +532,7 @@ class _AWSBatchHandle(Handle):
                     self.worker_id = self.job_id
                     # Poll the on-demand job (no more retries).
                     try:
-                        job = self._executor._wait_for_terminal(self.job_id)  # noqa: SLF001
+                        job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)  # noqa: SLF001
                     except BaseException as exc:  # noqa: BLE001
                         self._future.set_exception(exc)
                         raise
@@ -818,10 +827,17 @@ class AWSBatchExecutor(BaseExecutor):
 
         return cost_usd, spot_savings
 
-    def _wait_for_terminal(self, job_id: str) -> dict[str, Any]:
+    def _wait_for_terminal(
+        self, job_id: str, timeout: float | None = None
+    ) -> dict[str, Any]:
         """Poll `describe_jobs` with exponential backoff until the task
-        reaches a terminal state. Returns the final job dict."""
+        reaches a terminal state. Returns the final job dict.
+
+        Raises:
+            TimeoutError: if *timeout* seconds elapse before a terminal state.
+        """
         delay = self.poll_interval_s
+        start = time.monotonic()
         while True:
             # boto3's describe_jobs returns a TypedDict at runtime, but
             # the type is too granular to be useful here — we treat the
@@ -836,6 +852,18 @@ class AWSBatchExecutor(BaseExecutor):
             status = job.get("status", "UNKNOWN")
             if status in ("SUCCEEDED", "FAILED"):
                 return cast(dict[str, Any], job)
+
+            # Enforce timeout before sleeping.
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
+                    )
+                # Cap the sleep so we don't overshoot the timeout.
+                delay = min(delay, remaining)
+
             log.info("aws_batch poll jobId=%s status=%s (sleeping %.1fs)", job_id, status, delay)
             time.sleep(delay)
             # Exponential backoff, capped.
