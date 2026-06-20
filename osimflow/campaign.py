@@ -1630,13 +1630,14 @@ class Campaign:
         with self._cancel_lock:
             if self._cancel_requested:
                 return True
-        # Also check the .stop file (written by the API server).
-        stop_file = self.cfg.outdir / ".stop"
-        if stop_file.is_file():
-            log.warning(".stop file detected — requesting cancellation")
-            with self._cancel_lock:
+            # Also check the .stop file (written by the API server).
+            # Both the flag and the file check must be inside the same locked
+            # section to close the TOCTOU race window (issue #649).
+            stop_file = self.cfg.outdir / ".stop"
+            if stop_file.is_file():
+                log.warning(".stop file detected — requesting cancellation")
                 self._cancel_requested = True
-            return True
+                return True
         return False
 
     def _check_pause_requested(self) -> bool:
