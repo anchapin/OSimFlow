@@ -477,8 +477,11 @@ class DockerSwarmExecutor(BaseExecutor):
             )
 
         # Mark that stub mode is confirmed unavailable so future submits
-        # skip the check.
-        self._stub_executor = False
+        # skip the check. Use None (not False) so that shutdown()'s
+        # `hasattr(self._stub_executor, "shutdown")` check correctly
+        # returns False without needing an explicit boolean guard
+        # (hasattr(None, "shutdown") == False naturally). Fixes issue #656.
+        self._stub_executor = None
 
         del fn, args  # noqa: ARG002
 
