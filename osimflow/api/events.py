@@ -258,20 +258,7 @@ async def campaign_stop(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="No output directory configured")
 
     stop_file = outdir / ".stop"
-<<<<<<< HEAD
     _atomic_write_json(stop_file, {"requested_at": time.time()})
-=======
-    # Atomic write to avoid TOCTOU race (issue #646)
-    tmp_path = outdir / f".stop.{os.getpid()}.tmp"
-    try:
-        with open(tmp_path, "w") as fh:
-            json.dump({"requested_at": time.time()}, fh)
-        os.replace(tmp_path, stop_file)
-    except Exception:
-        if tmp_path.exists():
-            tmp_path.unlink()
-        raise
->>>>>>> origin/main
     log.info("stop flag written to %s", stop_file)
     return {"status": "stopping"}
 
