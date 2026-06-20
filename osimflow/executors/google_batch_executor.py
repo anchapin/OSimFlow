@@ -254,11 +254,11 @@ class GoogleBatchExecutor(BaseExecutor):
             state_str = str(state.name)
             if "SUCCEEDED" in state_str or "FAILED" in state_str:
                 return job
-            delay = min(delay * 2, self.max_poll_interval_s)
             log.info(
                 "google_batch poll job=%s state=%s (sleeping %.1fs)", job_name, state_str, delay
             )
             time.sleep(delay)
+            delay = min(delay * 2, self.max_poll_interval_s)
 
     def _build_environment(
         self,

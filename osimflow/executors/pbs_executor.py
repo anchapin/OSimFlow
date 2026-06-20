@@ -311,10 +311,10 @@ class PBSExecutor(BaseExecutor):
             if state in ("F", "E", "C"):
                 exit_code = self._parse_exit_status(job_id)
                 return state, exit_code
-            # Exponential backoff, capped.
-            delay = min(delay * 2, self.max_poll_interval_s)
             log.info("pbs poll jobId=%s state=%s (sleeping %.1fs)", job_id, state, delay)
             time.sleep(delay)
+            # Exponential backoff, capped.
+            delay = min(delay * 2, self.max_poll_interval_s)
 
     # -----------------------------------------------------------------------
     # submit / shutdown

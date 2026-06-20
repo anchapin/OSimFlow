@@ -836,10 +836,10 @@ class AWSBatchExecutor(BaseExecutor):
             status = job.get("status", "UNKNOWN")
             if status in ("SUCCEEDED", "FAILED"):
                 return cast(dict[str, Any], job)
-            # Exponential backoff, capped.
-            delay = min(delay * 2, self.max_poll_interval_s)
             log.info("aws_batch poll jobId=%s status=%s (sleeping %.1fs)", job_id, status, delay)
             time.sleep(delay)
+            # Exponential backoff, capped.
+            delay = min(delay * 2, self.max_poll_interval_s)
 
     def _submit_job(
         self,
