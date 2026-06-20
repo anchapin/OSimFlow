@@ -3511,6 +3511,7 @@ class Campaign:
                         ctx["sim_dir"],
                         sid,
                         ctx["kpi_dir"],
+                        max_retries=self.cfg.max_sample_retries,
                     )
                 else:
                     handle = self.executor.submit(
@@ -3524,6 +3525,7 @@ class Campaign:
                         time_min=10,
                         container=self._python_container_image,
                         result_hint=Path(ctx["kpi_dir"]) / f"kpi_{sid}.json",
+                        max_retries=self.cfg.max_sample_retries,
                         **self._executor_submit_transport_kwargs,
                     )
 
