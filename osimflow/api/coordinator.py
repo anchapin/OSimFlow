@@ -60,6 +60,14 @@ from osimflow.api.schemas import (
     CoordinatorSamplesResponse,
 )
 from osimflow.handoff_record import IDEMPOTENCY_KEY_HEADER
+from osimflow.notify import (
+    EmailNotifyBackend,
+    NotifyBackend,
+    NullNotifyBackend,
+    SNSNotifyBackend,
+    WebhookNotifyBackend,
+    build_notify_backend,
+)
 
 if TYPE_CHECKING:
     # Type-only imports to avoid importing the storage/aggregation graph at
@@ -495,6 +503,7 @@ async def coordinator_handoff(
         "samples": samples,
         "notification_email": payload.notification_email,
         "sns_topic_arn": payload.sns_topic_arn,
+        "webhook_url": payload.webhook_url,
         "result_storage_bucket": payload.result_storage_bucket,
         "array_job_id": None,
         "result_status": "unavailable",
@@ -913,14 +922,18 @@ async def notify_campaign(
     notify_req: CoordinatorNotifyRequest,
     request: Request,
 ) -> CoordinatorNotifyResponse:
-    """Send a notification for a completed campaign.
+    """Dispatch a completion notification via the configured backend (issue #628).
 
-    Supports two notification channels:
-    - **SNS**: publishes a JSON message to ``sns_topic_arn`` if configured
-    - **Email**: sends a plain-text email to ``notification_email`` if configured
+    Selects a :class:`osimflow.notify.NotifyBackend` from the request's
+    ``notification_type`` (``sns`` / ``email`` / ``webhook``) and the
+    campaign's stored ``sns_topic_arn`` / ``notification_email`` /
+    ``webhook_url``. The §3.5 payload carries the presigned
+    ``download_url`` whose lifetime is ``expires_in_seconds`` (mirrors
+    ``--s3-artifact-presigned-url-expiration``).
 
-    The notification payload includes the ``campaign_id``, final status, and a
-    signed S3 URL (valid 24 h) to the aggregated results CSV.
+    Failures in the backend are logged with ``exc_info=True`` and never
+    propagate: a notification mishap cannot flip a succeeded campaign
+    back to failed (issue #628 criterion #4 — best-effort).
     """
     if not get_user_permission(request, "admin"):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
@@ -928,48 +941,181 @@ async def notify_campaign(
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
 
-    notification_type = notify_req.notification_type
+    expires_in = max(60, int(notify_req.expires_in_seconds or 3600))
     subject = notify_req.subject or f"OSimFlow campaign '{rec.get('name', campaign_id)}' complete"
 
-    if notification_type == "sns":
-        sns_arn: str | None = rec.get("sns_topic_arn")
-        if not sns_arn:
-            return CoordinatorNotifyResponse(
-                campaign_id=campaign_id,
-                notification_type="sns",
-                status="skipped",
-                message="No sns_topic_arn configured for this campaign.",
-            )
-        bucket = rec.get("result_storage_bucket")
-        results_url = f"s3://{bucket}/results/aggregated_results.csv" if bucket else "N/A"
-        payload = {
-            "campaign_id": campaign_id,
-            "name": rec.get("name"),
-            "status": rec.get("status", "unknown"),
-            "results": results_url,
-        }
-        try:
-            sns = boto3.client("sns")
-            sns.publish(TopicArn=sns_arn, Subject=subject, Message=str(payload))
-            log.info("SNS notification sent for campaign %s to %s", campaign_id, sns_arn)
-            return CoordinatorNotifyResponse(
-                campaign_id=campaign_id,
-                notification_type="sns",
-                status="sent",
-                message=f"Notification published to {sns_arn}.",
-            )
-        except Exception as exc:
-            raise HTTPException(  # noqa: B904
-                status_code=502,
-                detail=f"SNS publish failed: {exc}",
-            )
+    aggregated_key = rec.get("aggregated_results_key")
+    bucket = rec.get("result_storage_bucket")
+    download_url = _presign_aggregated_get(bucket, aggregated_key, expires=expires_in)
 
+    payload = _build_notify_payload(
+        rec,
+        download_url=download_url,
+        expires_in_seconds=expires_in,
+    )
+
+    backend = build_notify_backend(
+        sns_topic_arn=rec.get("sns_topic_arn"),
+        notification_email=rec.get("notification_email"),
+        webhook_url=rec.get("webhook_url"),
+        notification_type=notify_req.notification_type,
+        subject=subject,
+    )
+
+    return _dispatch_notify(
+        backend,
+        event="campaign.succeeded",
+        payload=payload,
+        rec=rec,
+        notification_type=notify_req.notification_type,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Notification dispatch helpers (issue #628)
+# ---------------------------------------------------------------------------
+#
+# The pure dispatch logic is split out of the HTTP handler so the
+# aggregation endpoint can re-use it to auto-fire notifications on
+# completion (criterion #3) without going through the network. Both
+# paths share the same payload shape (§3.5) and the same best-effort
+# contract (criterion #4).
+
+
+def _build_notify_payload(
+    rec: dict[str, Any],
+    *,
+    download_url: str | None,
+    expires_in_seconds: int,
+) -> dict[str, Any]:
+    """Build the §3.5 ``campaign.succeeded`` payload for a campaign record."""
+    return {
+        "campaign_id": rec.get("campaign_id", ""),
+        "name": rec.get("name"),
+        "status": rec.get("status", "unknown"),
+        "download_url": download_url,
+        "expires_in_seconds": expires_in_seconds,
+        "aggregated_results_key": rec.get("aggregated_results_key"),
+        "result_storage_bucket": rec.get("result_storage_bucket"),
+        "osimflow_version": _osimflow_version(),
+    }
+
+
+def _osimflow_version() -> str:
+    """Return the installed OSimFlow version, or 'unknown'."""
+    try:
+        from importlib.metadata import version  # noqa: PLC0415
+
+        return version("osimflow")
+    except Exception:
+        return "unknown"
+
+
+def _dispatch_notify(
+    backend: NotifyBackend,
+    *,
+    event: str,
+    payload: dict[str, Any],
+    rec: dict[str, Any],
+    notification_type: str,
+) -> CoordinatorNotifyResponse:
+    """Send through *backend*; never raise (criterion #4).
+
+    Belt-and-braces: backends are themselves contract-bound to swallow
+    errors, but this wrapper still catches any leaked exception so a
+    buggy backend can never reach the HTTP layer / aggregation flow.
+    """
+    campaign_id = rec.get("campaign_id", "")
+    if isinstance(backend, NullNotifyBackend):
+        return CoordinatorNotifyResponse(
+            campaign_id=campaign_id,
+            notification_type=notification_type,
+            status="skipped",
+            message="No notification channel configured for this campaign.",
+        )
+    try:
+        backend.send(event, payload)
+    except Exception as exc:
+        log.warning(
+            "notify: %s.send raised (campaign %s, event %s): %s",
+            type(backend).__name__,
+            campaign_id,
+            event,
+            exc,
+            exc_info=True,
+        )
+        return CoordinatorNotifyResponse(
+            campaign_id=campaign_id,
+            notification_type=notification_type,
+            status="failed",
+            message=f"Notification dispatch failed: {exc}",
+        )
     return CoordinatorNotifyResponse(
         campaign_id=campaign_id,
         notification_type=notification_type,
-        status="skipped",
-        message=f"Notification type '{notification_type}' is not yet implemented.",
+        status="sent",
+        message=f"Notification dispatched via {type(backend).__name__}.",
     )
+
+
+def _notify_campaign_completion(rec: dict[str, Any]) -> None:
+    """Auto-fire completion notifications through every configured channel.
+
+    Called from the aggregation endpoint after the campaign status flips
+    to ``complete`` (issue #628 criterion #3). Iterates the channels
+    configured on the campaign record (SNS topic ARN → notification
+    email → webhook URL) and dispatches the §3.5 ``campaign.succeeded``
+    payload to each. Best-effort: a failure in any channel is logged
+    with ``exc_info=True`` and does not affect the others or the
+    campaign status (criterion #4).
+    """
+    campaign_id = rec.get("campaign_id", "")
+    # Default lifetime mirrors --s3-artifact-presigned-url-expiration.
+    expires_in = 3600
+
+    bucket = rec.get("result_storage_bucket")
+    aggregated_key = rec.get("aggregated_results_key")
+    download_url = _presign_aggregated_get(bucket, aggregated_key, expires=expires_in)
+
+    payload = _build_notify_payload(
+        rec,
+        download_url=download_url,
+        expires_in_seconds=expires_in,
+    )
+
+    configured: list[tuple[str, NotifyBackend]] = []
+    sns_arn = rec.get("sns_topic_arn")
+    if sns_arn:
+        configured.append(("sns", SNSNotifyBackend(topic_arn=sns_arn)))
+    email = rec.get("notification_email")
+    if email:
+        configured.append(("email", EmailNotifyBackend(recipient=email)))
+    webhook = rec.get("webhook_url")
+    if webhook:
+        configured.append(("webhook", WebhookNotifyBackend(url=webhook)))
+
+    if not configured:
+        log.info(
+            "Campaign %s completed but no notification channels are configured "
+            "— skipping auto-notify.",
+            campaign_id,
+        )
+        return
+
+    log.info(
+        "Campaign %s auto-notifying via %d channel(s): %s",
+        campaign_id,
+        len(configured),
+        ", ".join(ntype for ntype, _ in configured),
+    )
+    for ntype, backend in configured:
+        _dispatch_notify(
+            backend,
+            event="campaign.succeeded",
+            payload=payload,
+            rec=rec,
+            notification_type=ntype,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1357,6 +1503,20 @@ async def aggregate_campaign_results(
         failed_key=failed_key,
         pareto_key=pareto_key,
     )
+
+    # Auto-fire completion notifications (issue #628 criterion #3).
+    # Best-effort: a notification failure is logged and never reverts
+    # the status transition above (criterion #4). The wrapper catches
+    # defensively in addition to each backend's own error handling.
+    try:
+        _notify_campaign_completion(rec)
+    except Exception as exc:  # pragma: no cover — defensive double net
+        log.warning(
+            "Campaign %s auto-notify raised (suppressed, status unchanged): %s",
+            campaign_id,
+            exc,
+            exc_info=True,
+        )
 
     n_total = result.ok_count + result.failed_count
     return CoordinatorAggregateResponse(
