@@ -162,6 +162,59 @@ def test_local_executor_submits_with_kwargs() -> None:
     ex.shutdown()
 
 
+def test_local_executor_submit_no_duplicate_positional_kwarg() -> None:
+    """Regression for #622.
+
+    The campaign submits ``run_openstudio_sim`` with ``openstudio_version`` as
+    the 3rd POSITIONAL argument. It must NOT also be passed as a keyword, or
+    Python raises ``TypeError: got multiple values for argument
+    'openstudio_version'``. This sentinel mirrors ``run_openstudio_sim``'s
+    signature (3rd positional = ``openstudio_version``, keyword-only after
+    ``*``) to guard the binding contract at the executor level.
+    """
+    captured: dict[str, Any] = {}
+
+    def _sim_like(
+        mod_pkg: Path,
+        sample_id: str,
+        openstudio_version: str,
+        out: Path,
+        simulate_work_s: float = 2.0,
+        *,
+        stdout_path: Path | None = None,
+        stderr_path: Path | None = None,
+        max_retries: int = 3,
+        worker_id: str = "local",
+    ) -> Path:
+        captured["openstudio_version"] = openstudio_version
+        captured["sample_id"] = sample_id
+        return out
+
+    ex = LocalExecutor(max_workers=1)
+    try:
+        handle = ex.submit(
+            _sim_like,
+            Path("/pkg"),
+            "0001",
+            "3.11.0",  # 3rd positional -> binds openstudio_version
+            Path("/out"),
+            name="sim_0001",
+            cpus=1,
+            memory_mb=512,
+            time_min=1,
+            container="nrel/openstudio:3.11.0",
+            stdout_path=None,
+            stderr_path=None,
+            max_retries=0,
+            worker_id="local",
+        )
+        assert handle.result(timeout=5) == Path("/out")
+        assert captured["openstudio_version"] == "3.11.0"
+        assert captured["sample_id"] == "0001"
+    finally:
+        ex.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # SlurmExecutor (debug mode — no real Slurm)
 # ---------------------------------------------------------------------------

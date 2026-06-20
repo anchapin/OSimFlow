@@ -172,9 +172,13 @@ class LocalExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        openstudio_version: str | None = None,
         **kwargs: Any,
     ) -> Handle:
         # Resource directives are advisory on the local executor.
+        # ``openstudio_version`` is consumed here (not forwarded to ``fn``)
+        # so it never collides with the work function's positional param.
+        del openstudio_version  # noqa: ARG003
         import socket  # noqa: PLC0415
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
@@ -327,6 +331,7 @@ class SlurmExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        openstudio_version: str | None = None,
         **kwargs: Any,
     ) -> Handle:
         # Issue #4: per-submit resource directives. submitit 1.5+ does
@@ -388,7 +393,7 @@ class SlurmExecutor(BaseExecutor):
         def _wrapped() -> Any:
             # Resource directive also becomes an env var so the task can
             # read it (e.g. OpenStudio CLI threading control).
-            os.environ["OSIMFLOW_OS_VERSION"] = str(kwargs.get("openstudio_version", "N/A"))
+            os.environ["OSIMFLOW_OS_VERSION"] = str(openstudio_version or "N/A")
             if container:
                 os.environ["OSIMFLOW_CONTAINER"] = container
             return fn(*args)
@@ -878,9 +883,9 @@ class AWSBatchExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        openstudio_version: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        openstudio_version = kwargs.get("openstudio_version")
         result_hint = kwargs.get("result_hint")
 
         log.info(
@@ -1800,9 +1805,9 @@ class NomadExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        openstudio_version: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        openstudio_version = kwargs.get("openstudio_version")
         result_hint = kwargs.get("result_hint")
         remote_command = kwargs.get("remote_command")
         result_transport_mode = kwargs.get("result_transport_mode")
