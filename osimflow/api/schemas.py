@@ -963,3 +963,49 @@ class CoordinatorArrayCompleteResponse(BaseModel):
         description="True iff this call performed the running->aggregating transition.",
     )
     message: str
+
+
+class CoordinatorAggregateResponse(BaseModel):
+    """Response for ``POST /campaigns/{id}/aggregate`` (issue #627).
+
+    The endpoint compiles the terminal ``aggregated_results.csv`` +
+    ``failed_simulations.csv`` (and an optional Pareto front) from the
+    campaign's per-sample manifests and returns HTTP ``202 Accepted`` with a
+    synthetic ``aggregator_job_id``.  The job id is deterministic
+    (``{campaign_id}-aggregator``) so an idempotent re-call after a successful
+    aggregation can be correlated client-side.
+
+    For the MVP the aggregation runs **synchronously inside the endpoint**; a
+    future hardening pass may submit it as a real AWS Batch terminal job, in
+    which case ``aggregator_job_id`` will carry the Batch job id unchanged.
+    """
+
+    campaign_id: str
+    aggregator_job_id: str = Field(
+        description="Synthetic id of the terminal aggregation job (issue #627)."
+    )
+    status: str = Field(
+        description="Terminal campaign status after aggregation: complete | failed."
+    )
+    ok_count: int = Field(ge=0, description="Samples whose KPIs landed in aggregated_results.csv.")
+    failed_count: int = Field(
+        ge=0,
+        description="Samples that landed in failed_simulations.csv (incl. degraded ok).",
+    )
+    total_count: int = Field(ge=0, description="Total manifests processed.")
+    aggregated_results_key: str | None = Field(
+        default=None,
+        description="Object key of the written aggregated_results.csv (under _aggregated/).",
+    )
+    failed_simulations_key: str | None = Field(
+        default=None,
+        description="Object key of the written failed_simulations.csv (under _aggregated/).",
+    )
+    pareto_front_key: str | None = Field(
+        default=None,
+        description=(
+            "Object key of the optional Pareto-front JSON. Present only when "
+            "the campaign algorithm is multi-objective (nsga2/pso)."
+        ),
+    )
+    message: str

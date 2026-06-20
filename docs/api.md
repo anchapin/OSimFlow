@@ -384,6 +384,39 @@ Enumerates result files and, once aggregation is complete, returns a short-lived
 `osimflow download <outdir>` fetches **only** the aggregated CSV via that URL —
 per-sample bytes are intentionally not downloaded (issue #630).
 
+### POST /api/v1/coordinator/campaigns/{campaign_id}/aggregate
+
+Terminal aggregation step (issue #627, Epic #624). Triggered after
+`POST /array-complete` flips the campaign to `aggregating`. Lists every
+`{campaign_id}/samples/*/_manifest.json`, reads each referenced `kpis.json`,
+and compiles `aggregated_results.csv` (same column contract as
+`bin/aggregate_results.py`) plus `failed_simulations.csv` (first
+`  * Severe` line per failed manifest — PRD §6 #4). When the campaign
+algorithm is multi-objective (`nsga2`/`pso`) a Pareto-front JSON is also
+written. Artifacts land under `{campaign_id}/_aggregated/` and the campaign
+status flips `aggregating → complete`.
+
+```jsonc
+// 202 response
+{
+  "campaign_id": "01J0ABCDEFGH",
+  "aggregator_job_id": "01J0ABCDEFGH-aggregator",
+  "status": "complete",
+  "ok_count": 98,
+  "failed_count": 2,
+  "total_count": 100,
+  "aggregated_results_key": "01J0ABCDEFGH/_aggregated/aggregated_results.csv",
+  "failed_simulations_key": "01J0ABCDEFGH/_aggregated/failed_simulations.csv",
+  "pareto_front_key": null,
+  "message": "Aggregated 100 samples: 98 ok, 2 failed. Artifacts written to 01J0ABCDEFGH/_aggregated/."
+}
+```
+
+Returns `409` when the campaign is not in the `aggregating` state (already
+aggregated, or the array job has not yet been declared complete). An ok
+manifest whose `kpis.json` is missing is logged and counted as failed — it
+never crashes the aggregation (issue #627 criterion #5).
+
 ### Local handoff record (`.coordinator_handoff.json`)
 
 ```jsonc

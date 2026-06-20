@@ -18,6 +18,7 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -384,7 +385,7 @@ def _classify_line(line: str) -> str:
     return "generic_severe"
 
 
-def diagnose_error(error_line: str, err_file_path: Path) -> dict:
+def diagnose_error(error_line: str, err_file_path: Path) -> dict[str, Any]:
     """Diagnose an EnergyPlus error with domain-aware categorization.
 
     Takes the severe error line and the full .err file path, categorizes
@@ -424,7 +425,7 @@ def diagnose_error(error_line: str, err_file_path: Path) -> dict:
         }
 
 
-def parse_kpi_json(kpi_path: Path) -> dict:
+def parse_kpi_json(kpi_path: Path) -> dict[str, Any]:
     try:
         data = json.loads(kpi_path.read_text())
         res = {"sample_id": data.get("sample_id", kpi_path.stem.replace("kpi_", ""))}
@@ -468,7 +469,7 @@ def _load_samples_params(samples_json: Path) -> dict[str, dict[str, object]]:
     return result
 
 
-def extract_failure(sim_dir: Path) -> dict | None:
+def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
     err_path = sim_dir / "eplusout.err"
     err_summary = None
     if err_path.exists() and err_path.stat().st_size > 0:
@@ -483,7 +484,7 @@ def extract_failure(sim_dir: Path) -> dict | None:
 
     sql_path = sim_dir / "eplusout.sql"
     if err_summary or not sql_path.exists():
-        diagnosis: dict | None = None
+        diagnosis: dict[str, Any] | None = None
         if err_summary and err_path.exists():
             diagnosis = diagnose_error(err_summary, err_path)
 

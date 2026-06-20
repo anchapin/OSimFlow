@@ -24,20 +24,26 @@ Phase 4 scope (issue #604):
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import os
 import secrets
+import tempfile
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import boto3
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from osimflow.aggregation import compile_aggregation, parse_manifest
 from osimflow.api.auth import get_user_permission
 from osimflow.api.schemas import (
+    CoordinatorAggregateResponse,
     CoordinatorArrayCompleteEvent,
     CoordinatorArrayCompleteResponse,
     CoordinatorArraySubmitRequest,
@@ -54,6 +60,13 @@ from osimflow.api.schemas import (
     CoordinatorSamplesResponse,
 )
 from osimflow.handoff_record import IDEMPOTENCY_KEY_HEADER
+
+if TYPE_CHECKING:
+    # Type-only imports to avoid importing the storage/aggregation graph at
+    # module load (S3/GCS/Azure clients are lazily constructed on first use;
+    # ``AggregatedManifest`` appears only in a local annotation).
+    from osimflow.aggregation import AggregatedManifest
+    from osimflow.storage import ResultStorage
 
 log = logging.getLogger("osimflow.api.coordinator")
 
@@ -1036,6 +1049,332 @@ async def array_complete(
     transitioned = _apply_completion_transition(rec, completion, source="eventbridge")
 
     return _build_complete_response(rec, parent_job_id, completion, transitioned)
+
+
+# ---------------------------------------------------------------------------
+# Terminal aggregation (issue #627, Epic #624)
+# ---------------------------------------------------------------------------
+#
+# Once every array child reached a terminal state (S2/S5 ``array_complete``),
+# the Coordinator lists the per-sample ``_manifest.json`` files the workers
+# published (issue #625), compiles the campaign-level ``aggregated_results.csv``
+# + ``failed_simulations.csv`` (column-for-column compatible with the local
+# ``bin/aggregate_results.py`` path), optionally computes a Pareto front for
+# multi-objective algorithms, writes everything to ``_aggregated/``, and flips
+# the campaign ``aggregating -> complete``.
+#
+# The storage-heavy logic lives in the pure, storage-agnostic
+# :mod:`osimflow.aggregation` module so it is unit-testable without S3.  The
+# endpoint below is a thin adapter: it resolves the :class:`ResultStorage`
+# backend, wires a ``kpi_fetcher`` that downloads + parses each ``kpis.json``
+# through the ABC, uploads the produced artifacts, and performs the status
+# transition.
+
+#: Terminal statuses that mean aggregation has already run.  A second
+#: ``/aggregate`` call against one of these is rejected with HTTP 409 (the
+#: contract allows only ``aggregating`` to advance).
+_AGGREGATION_DONE = ("complete", "completed", "failed", "succeeded")
+
+
+def _storage_from_campaign(rec: dict[str, Any]) -> ResultStorage | None:
+    """Build the campaign's :class:`ResultStorage` from its handoff payload.
+
+    Returns ``None`` when no ``result_storage_bucket`` is configured (the
+    endpoint then 409s with a helpful message — aggregation is impossible
+    without object storage).  Workers embed the ``campaign_id`` in every key
+    (``{campaign_id}/samples/{sample_id}/...``), so the backend is built with
+    an empty prefix and campaign-relative keys are used throughout.
+    """
+    payload = rec.get("payload") or {}
+    backend = (payload.get("result_storage_backend") or "s3").lower()
+    bucket = rec.get("result_storage_bucket") or payload.get("result_storage_bucket")
+    if not bucket:
+        return None
+    endpoint = (
+        payload.get("extra", {}).get("result_storage_endpoint")
+        if isinstance(payload.get("extra"), dict)
+        else None
+    )
+    from osimflow.storage import build_result_storage  # noqa: PLC0415
+
+    try:
+        return build_result_storage(
+            backend=backend,
+            bucket=str(bucket),
+            prefix="",
+            endpoint_url=endpoint,
+        )
+    except ValueError as exc:
+        log.warning("aggregate: unknown result_storage_backend %r: %s", backend, exc)
+        return None
+
+
+def _make_kpi_fetcher(
+    storage: ResultStorage, tmp_root: Path
+) -> Callable[[str], dict[str, Any] | None]:
+    """Build a ``kpi_fetcher`` for :func:`compile_aggregation`.
+
+    Downloads the referenced ``kpis.json`` object to a unique temp file under
+    *tmp_root* and parses it.  Returns ``None`` (rather than raising) on any
+    download/parse error so the aggregation core can honour the criterion-#5
+    robustness contract (ok manifest + missing kpis → counted as failed, not a
+    crash).
+    """
+
+    def fetch(key: str) -> dict[str, Any] | None:
+        if not key:
+            return None
+        # Sanitize the (unique) object key into a stable local filename so
+        # distinct samples never collide on the same temp file.
+        local = tmp_root / key.replace("/", "_")
+        try:
+            storage.download_file(key, local)
+        except OSError as exc:
+            log.warning("aggregate: could not download kpis.json at %s: %s", key, exc)
+            return None
+        try:
+            data = json.loads(local.read_text())
+        except (OSError, ValueError) as exc:
+            log.warning("aggregate: could not parse kpis.json at %s: %s", key, exc)
+            return None
+        finally:
+            with contextlib.suppress(OSError):
+                local.unlink(missing_ok=True)
+        if not isinstance(data, dict):
+            log.warning("aggregate: kpis.json at %s is not a JSON object", key)
+            return None
+        return data
+
+    return fetch
+
+
+def _write_aggregated_object(
+    storage: ResultStorage, remote_key: str, payload: str, tmp_root: Path
+) -> None:
+    """Stage *payload* (a string) to a temp file and upload it via the ABC.
+
+    :class:`ResultStorage` only exposes path-based ``upload_file``, so every
+    artifact is written to a temp file under *tmp_root* first.  For
+    :class:`~osimflow.storage.LocalStorage` the upload is a no-op; callers that
+    need the bytes materialised on disk should use a real remote backend in
+    production.
+    """
+    tmp = tmp_root / remote_key.replace("/", "_")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(payload, encoding="utf-8")
+    storage.upload_file(tmp, remote_key)
+
+
+def _apply_aggregation_transition(
+    rec: dict[str, Any],
+    *,
+    ok_count: int,
+    failed_count: int,
+    aggregated_key: str,
+    failed_key: str | None,
+    pareto_key: str | None,
+) -> None:
+    """Flip the campaign ``aggregating -> complete`` and record artifact keys.
+
+    Mirrors the idempotent-transition shape of
+    :func:`_apply_completion_transition`: the record is mutated in place
+    (single-process store under the GIL).  The transition is *not* guarded
+    here — the endpoint enforces the precondition (``status == aggregating``)
+    before calling, and a duplicate call would have already returned 409.
+    """
+    now = time.time()
+    rec["status"] = "complete"
+    rec["updated_at"] = now
+    rec["completed_at"] = now
+    rec["result_status"] = "available"
+    rec["aggregated_results_key"] = aggregated_key
+    rec["failed_simulations_key"] = failed_key
+    rec["pareto_front_key"] = pareto_key
+    rec["aggregation_summary"] = {
+        "ok": ok_count,
+        "failed": failed_count,
+        "total": ok_count + failed_count,
+        "completed_at": now,
+    }
+    log.info(
+        "Campaign %s aggregation complete — %d ok, %d failed; aggregated_results=%s",
+        rec.get("campaign_id"),
+        ok_count,
+        failed_count,
+        aggregated_key,
+    )
+
+
+@coordinator_router.post(
+    "/campaigns/{campaign_id}/aggregate",
+    response_model=CoordinatorAggregateResponse,
+    status_code=202,
+    summary="Compile terminal aggregated_results.csv + failed_simulations.csv from manifests",
+    description=(
+        "Terminal aggregation step of Epic #624.  Lists every "
+        "`{campaign_id}/samples/*/_manifest.json`, reads each referenced "
+        "`kpis.json`, and compiles `aggregated_results.csv` (same column "
+        "contract as `bin/aggregate_results.py`) plus `failed_simulations.csv` "
+        "(first `  * Severe` line per failed manifest — PRD §6 #4).  When the "
+        "campaign algorithm is multi-objective (nsga2/pso) a Pareto-front JSON "
+        "is also written.  Artifacts land under `{campaign_id}/_aggregated/` "
+        "and the campaign status flips `aggregating -> complete`.\n\n"
+        "**Precondition**: campaign status MUST be `aggregating` (i.e. the "
+        "array job was declared complete via `/array-complete`).  A call "
+        "against any other status returns HTTP 409.  For the MVP the "
+        "aggregation runs synchronously inside the endpoint and returns 202 "
+        "with a synthetic `aggregator_job_id`."
+    ),
+)
+async def aggregate_campaign_results(
+    campaign_id: str,
+    request: Request,
+) -> CoordinatorAggregateResponse:
+    """Compile + publish the terminal campaign artifacts from sample manifests.
+
+    Robustness contract (issue #627 criterion #5): a manifest that claims
+    ``status="ok"`` but whose ``kpis.json`` is missing is logged with
+    ``exc_info=True`` and counted as **failed** — it never crashes the
+    aggregation or blocks the status transition.
+    """
+    if not get_user_permission(request, "write"):
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions to aggregate campaign results"
+        )
+
+    rec = _campaign_or_404(campaign_id)
+
+    status = str(rec.get("status", "pending"))
+    if status in _AGGREGATION_DONE:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Campaign {campaign_id} is already {status!r} — aggregation "
+                f"has run (or the campaign failed). Re-running is not supported."
+            ),
+        )
+    if status != "aggregating":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Campaign {campaign_id} is {status!r}; aggregation requires "
+                f"status 'aggregating' (call POST /array-complete first)."
+            ),
+        )
+
+    storage = _storage_from_campaign(rec)
+    if storage is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Campaign {campaign_id} has no result_storage_bucket configured "
+                f"— cannot aggregate without object storage."
+            ),
+        )
+
+    # Discover every manifest the workers published under this campaign.
+    manifest_prefix = f"{campaign_id}/samples/"
+    try:
+        candidate_keys = storage.list_results(manifest_prefix)
+    except OSError as exc:
+        raise HTTPException(  # pragma: no cover - storage listing failure
+            status_code=502,
+            detail=f"Failed to list sample manifests: {exc}",
+        ) from exc
+
+    manifest_keys = [k for k in candidate_keys if k.endswith("/_manifest.json")]
+    if not manifest_keys:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No sample manifests found under {manifest_prefix} — the array "
+                f"job may not have produced any results yet."
+            ),
+        )
+
+    # Download + parse each manifest, then compile the campaign artifacts.
+    with tempfile.TemporaryDirectory(prefix="osimflow_agg_") as tmp_dir_str:
+        tmp_root = Path(tmp_dir_str)
+        manifests: list[AggregatedManifest] = []
+        for key in manifest_keys:
+            local = tmp_root / ("manifest_" + key.replace("/", "_"))
+            try:
+                storage.download_file(key, local)
+                raw = json.loads(local.read_text())
+            except (OSError, ValueError) as exc:
+                log.warning(
+                    "aggregate: skipping unparseable manifest at %s: %s",
+                    key,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            finally:
+                with contextlib.suppress(OSError):
+                    local.unlink(missing_ok=True)
+            manifests.append(parse_manifest(raw))
+
+        payload = rec.get("payload") or {}
+        algorithm = payload.get("algorithm")
+        # Optional per-KPI objective map (e.g. {"eui": "minimize"}).  Passed
+        # through verbatim; the aggregation core defaults to all-minimize.
+        kpi_objectives_raw = (
+            payload.get("extra", {}).get("kpi_objectives")
+            if isinstance(payload.get("extra"), dict)
+            else None
+        )
+
+        result = compile_aggregation(
+            manifests,
+            _make_kpi_fetcher(storage, tmp_root),
+            algorithm=algorithm,
+            kpi_objectives=kpi_objectives_raw,
+        )
+
+        # Surface criterion-#5 downgrades explicitly (one log line per sample).
+        for sid in result.degraded_ok_samples:
+            log.warning(
+                "aggregate: campaign %s sample %s claimed status=ok but its "
+                "kpis.json was missing/unreadable — counted as failed",
+                campaign_id,
+                sid,
+            )
+
+        aggregated_key = f"{campaign_id}/_aggregated/aggregated_results.csv"
+        failed_key = f"{campaign_id}/_aggregated/failed_simulations.csv"
+        pareto_key: str | None = None
+        _write_aggregated_object(storage, aggregated_key, result.aggregated_results_csv, tmp_root)
+        _write_aggregated_object(storage, failed_key, result.failed_simulations_csv, tmp_root)
+        if result.pareto_json is not None:
+            pareto_key = f"{campaign_id}/_aggregated/pareto_front.json"
+            _write_aggregated_object(storage, pareto_key, result.pareto_json, tmp_root)
+
+    _apply_aggregation_transition(
+        rec,
+        ok_count=result.ok_count,
+        failed_count=result.failed_count,
+        aggregated_key=aggregated_key,
+        failed_key=failed_key,
+        pareto_key=pareto_key,
+    )
+
+    n_total = result.ok_count + result.failed_count
+    return CoordinatorAggregateResponse(
+        campaign_id=campaign_id,
+        aggregator_job_id=f"{campaign_id}-aggregator",
+        status="complete",
+        ok_count=result.ok_count,
+        failed_count=result.failed_count,
+        total_count=n_total,
+        aggregated_results_key=aggregated_key,
+        failed_simulations_key=failed_key,
+        pareto_front_key=pareto_key,
+        message=(
+            f"Aggregated {n_total} samples: {result.ok_count} ok, "
+            f"{result.failed_count} failed. Artifacts written to "
+            f"{campaign_id}/_aggregated/."
+        ),
+    )
 
 
 async def poll_array_job_to_completion(
