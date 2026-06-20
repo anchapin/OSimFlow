@@ -1630,13 +1630,14 @@ class Campaign:
         with self._cancel_lock:
             if self._cancel_requested:
                 return True
-        # Also check the .stop file (written by the API server).
-        stop_file = self.cfg.outdir / ".stop"
-        if stop_file.is_file():
-            log.warning(".stop file detected — requesting cancellation")
-            with self._cancel_lock:
+            # Also check the .stop file (written by the API server).
+            # Both the flag and the file check must be inside the same locked
+            # section to close the TOCTOU race window (issue #649).
+            stop_file = self.cfg.outdir / ".stop"
+            if stop_file.is_file():
+                log.warning(".stop file detected — requesting cancellation")
                 self._cancel_requested = True
-            return True
+                return True
         return False
 
     def _check_pause_requested(self) -> bool:
@@ -2260,9 +2261,18 @@ class Campaign:
                         algo.name(),
                     )
             else:
+                # verify there is actually something to reuse before continuing
+                pending = getattr(algo, "_pending_proposed_samples", None)
+                if not pending:
+                    raise RuntimeError(
+                        f"observe() returned empty samples at generation {generation} "
+                        f"for algorithm {algo.name()!r} and no previous samples are "
+                        "available; cannot continue iterative optimisation"
+                    )
                 log.warning(
-                    "observe() returned empty samples at generation %d; reusing previous",
+                    "observe() returned empty samples at generation %d; reusing %d previous samples",
                     generation,
+                    len(pending),
                 )
 
         samples = self.step_generate_samples(algo, generation=generation)
@@ -2746,7 +2756,7 @@ class Campaign:
             sample_id="ALL",
             openstudio_version=os_version,
             inputs_sha256=inputs_hash,
-            code_sha256=self.code_hashes["work"],
+            code_sha256=self.code_hashes["bin"],
             container_digest=CONTAINER_OS.format(version=os_version),
         )
         cached = self.cache.lookup(key)
@@ -2954,7 +2964,7 @@ class Campaign:
             key = CacheKey(
                 step="APPLY_PARAMETERS",
                 sample_id=sid,
-                openstudio_version="N/A",
+                openstudio_version=self.cfg.openstudio_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=self._python_container_image,
@@ -3461,7 +3471,7 @@ class Campaign:
             key = CacheKey(
                 step="EXTRACT_KPIS",
                 sample_id=sid,
-                openstudio_version="N/A",
+                openstudio_version=self.cfg.openstudio_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=self._python_container_image,
@@ -3849,7 +3859,7 @@ class Campaign:
             sample_id="ALL",
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
-            code_sha256=self.code_hashes["bin"],
+            code_sha256=self.code_hashes["work"],
             container_digest=self._python_container_image,
         )
         cached = self.cache.lookup(key)
