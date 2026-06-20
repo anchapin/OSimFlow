@@ -3466,12 +3466,15 @@ class Campaign:
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
+        os_version = self.cfg.openstudio_version
         for sid, sim_dir in simulated.items():
-            inputs_hash = sha256_of_dict({"sim_dir": str(sim_dir), "sid": sid})
+            inputs_hash = sha256_of_dict(
+                {"sim_dir": str(sim_dir), "sid": sid, "os_version": os_version}
+            )
             key = CacheKey(
                 step="EXTRACT_KPIS",
                 sample_id=sid,
-                openstudio_version=self.cfg.openstudio_version,
+                openstudio_version=os_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=self._python_container_image,
