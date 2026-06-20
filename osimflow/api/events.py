@@ -12,6 +12,7 @@ import fcntl
 import json
 import logging
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,25 @@ events_router = APIRouter()
 POLL_INTERVAL_S = 1.0
 HEARTBEAT_INTERVAL_S = 15.0
 MAX_ITERATIONS_DEFAULT = 0  # 0 = unlimited
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    """Write ``data`` to ``path`` atomically via temp file + rename.
+
+    Using a named temp file in the same directory and ``os.replace``
+    ensures the rename is atomic on POSIX filesystems (rename is
+    guaranteed atomic when dst and src are on the same filesystem),
+    eliminating the TOCTOU window between check and write that exists
+    when using ``Path.write_text()`` directly.
+    """
+    dir_path = path.parent
+    fd, tmp_path_str = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+    try:
+        os.write(fd, json.dumps(data).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp_path_str, path)
 
 
 def diff_events(
@@ -238,16 +258,7 @@ async def campaign_stop(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="No output directory configured")
 
     stop_file = outdir / ".stop"
-    # Atomic write to avoid TOCTOU race (issue #646)
-    tmp_path = outdir / f".stop.{os.getpid()}.tmp"
-    try:
-        with open(tmp_path, "w") as fh:
-            json.dump({"requested_at": time.time()}, fh)
-        os.replace(tmp_path, stop_file)
-    except Exception:
-        if tmp_path.exists():
-            tmp_path.unlink()
-        raise
+    _atomic_write_json(stop_file, {"requested_at": time.time()})
     log.info("stop flag written to %s", stop_file)
     return {"status": "stopping"}
 
@@ -290,7 +301,7 @@ async def campaign_pause(request: Request) -> dict[str, str]:
             return {"status": "already_paused"}
 
     pause_file = outdir / ".pause"
-    pause_file.write_text(json.dumps({"requested_at": time.time()}))
+    _atomic_write_json(pause_file, {"requested_at": time.time()})
     log.info("pause flag written to %s", pause_file)
     return {"status": "pausing"}
 

@@ -255,6 +255,27 @@ class TestCampaignStop:
         assert resp1.json()["status"] == "stopping"
         assert resp2.json()["status"] == "stopping"
 
+    def test_stop_flag_file_write_is_atomic(self, client_rw: TestClient, outdir: Path) -> None:
+        """Stop endpoint writes .stop atomically (no partial-file exposure).
+
+        Regression test for issue #646: .stop file must be written via
+        atomic rename (temp file + os.replace), not Path.write_text(),
+        to prevent TOCTOU race conditions where another process sees a
+        partially-written file.
+        """
+        stop_file = outdir / ".stop"
+        resp = client_rw.post("/api/v1/campaign/stop")
+        assert resp.status_code == 200
+
+        # The file must exist and be readable as valid JSON
+        assert stop_file.exists()
+        content = json.loads(stop_file.read_text())
+        assert content["requested_at"] > 0
+
+        # No leftover temp files should remain after atomic write
+        tmp_files = list(outdir.glob(".stop.*.tmp"))
+        assert tmp_files == [], f"Temp files leaked after atomic write: {tmp_files}"
+
 
 # ---------------------------------------------------------------------------
 # Campaign pause
@@ -302,6 +323,27 @@ class TestCampaignPause:
         (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=2000.0)))
         resp = client_rw.post("/api/v1/campaign/pause")
         assert resp.status_code == 409
+
+    def test_pause_flag_file_write_is_atomic(self, client_rw: TestClient, outdir: Path) -> None:
+        """Pause endpoint writes .pause atomically (no partial-file exposure).
+
+        Regression test for issue #646: .pause file must be written via
+        atomic rename (temp file + os.replace), not Path.write_text(),
+        to prevent TOCTOU race conditions where another process sees a
+        partially-written file.
+        """
+        pause_file = outdir / ".pause"
+        resp = client_rw.post("/api/v1/campaign/pause")
+        assert resp.status_code == 200
+
+        # The file must exist and be readable as valid JSON
+        assert pause_file.exists()
+        content = json.loads(pause_file.read_text())
+        assert content["requested_at"] > 0
+
+        # No leftover temp files should remain after atomic write
+        tmp_files = list(outdir.glob(".pause.*.tmp"))
+        assert tmp_files == [], f"Temp files leaked after atomic write: {tmp_files}"
 
 
 # ---------------------------------------------------------------------------
