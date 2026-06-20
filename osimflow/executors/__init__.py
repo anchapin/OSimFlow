@@ -1351,9 +1351,21 @@ class _NomadHandle(Handle):
         status = alloc.get("ClientStatus", "")
         if status not in ("complete", "failed", "lost"):
             return False
+        # An allocation in a terminal Nomad state is "done" only when the
+        # local future also finished without raising.  A FAILED/CANCELLED
+        # local future must still report done() == False so that result()
+        # gets called and propagates the error instead of silently succeeding.
+        # Use result() instead of done() to distinguish FAILED (raises) from
+        # COMPLETED (returns normally) per the done()/result() contract.
         if self._local_future is None:
             return True
-        return self._local_future.done()
+        done: bool
+        try:
+            self._local_future.result()
+            done = True
+        except Exception:
+            done = False
+        return done
 
     @staticmethod
     def _extract_failure_description(task_states: dict[str, Any]) -> str:
