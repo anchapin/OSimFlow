@@ -143,6 +143,18 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
+| `osimflow/algorithms/custom.py` | `CustomDOEAlgorithm` — custom sample pattern loader from CSV or Python callable (issue #406). |
+| `osimflow/algorithms/rgenoud.py` | `RgenoudAlgorithm` — hybrid genetic algorithm with BFGS local search (issue #545). |
+| `osimflow/algorithms/spea2.py` | `SPEA2Algorithm` — Strength Pareto Evolutionary Algorithm II using `pymoo` (issue #271). Iterative. |
+| `osimflow/algorithms/uq.py` | UQ algorithm — Monte Carlo propagation, probability of failure, and confidence interval analysis (issue #530). |
+| `osimflow/algorithms/gaisl.py` | Island-model parallel Genetic Algorithm (GAISL) with migration (issue #549). Iterative. |
+| `osimflow/algorithms/factorial.py` | `FullFactorialAlgorithm` and `GridSamplingAlgorithm` — full factorial and grid DOE (issue #272). |
+| `osimflow/algorithms/random_sampling.py` | `RandomSamplingAlgorithm` — pure Monte Carlo random sampling (issue #285). |
+| `osimflow/algorithms/sequential_search.py` | `SequentialSearchAlgorithm` — deterministic parameter sweep with optional adaptive sampling (issue #550). |
+| `osimflow/algorithms/calibration.py` | `CalibrationAlgorithm` — BM25-based energy model calibration using utility bill data (issue #528). Iterative. |
+| `osimflow/algorithms/qdiscrete.py` | `qdiscrete` — inverse-CDF (quantile) sampling for discrete distributions; Python equivalent of R's `DoE.base::qdiscrete()`. |
+| `osimflow/algorithms/repeat_all.py` | `RepeatAllAlgorithm` — repeats the same sample set N times for stochastic analysis (issue #285). |
+| `osimflow/algorithms/diag.py` | `DiagAlgorithm` — one-at-a-time (OAT) diagnostic analysis, equivalent to openstudio-server's `diag.rb` (issue #581). |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor` + `DockerSwarmExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
 | `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the official Docker SDK (issue #582). |
 | `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
@@ -158,6 +170,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/handoff_record.py` | Local handoff record for Coordinator-backed (`--detach`) campaigns (issue #630, Epic #624): `HandoffRecord`, `NoHandoffRecordError`, `IDEMPOTENCY_KEY_HEADER`, `HANDOFF_RECORD_NAME`, `read_handoff_record`, `write_handoff_record`, `handoff_record_exists`. Persists `{campaign_id, coordinator_url, submitted_at, status_url}` to `outdir/.coordinator_handoff.json` so `osimflow status` / `osimflow download` can reconnect to a remote campaign from a fresh shell. |
 | `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
+| `osimflow/_work_scripts/` | Standalone work scripts: `generate_lhs.py`, `apply_params_to_model.py`, `extract_kpis.py`, `aggregate_results.py`, `generate_plots.py`, `excel_to_variables.py`. These are the CLI wrappers invoked by the Campaign's work layer. |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
 | `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
