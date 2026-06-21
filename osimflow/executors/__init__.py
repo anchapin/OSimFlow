@@ -573,7 +573,9 @@ class _AWSBatchHandle(Handle):
             response = self._executor._get_client().describe_jobs(  # noqa: SLF001
                 jobs=[self.job_id]
             )
-        except Exception:  # noqa: BLE001 — never raise from done()
+        except Exception as exc:  # noqa: BLE001 — never raise from done()
+            log.warning("Polling error for %s: %s", self.job_id, exc)
+            self.error = exc
             return False
         jobs = response.get("jobs", [])
         if not jobs:
@@ -827,7 +829,7 @@ class AWSBatchExecutor(BaseExecutor):
             if queried_price > 0:
                 spot_price = queried_price
         except Exception as exc:
-            log.debug("could not query Spot price for cost calc, using default: %s", exc)
+            log.warning("could not query Spot price for cost calc, using default: %s", exc)
 
         on_demand_price = self.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
         cost_usd = duration_hours * vcpus * on_demand_price
@@ -1375,7 +1377,9 @@ class _NomadHandle(Handle):
         if self._allocation_id is None:
             try:
                 self._ensure_allocation_id()
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Polling error for %s: %s", self.job_id, exc)
+                self.error = exc
                 return False
         # Do a single non-blocking allocation lookup. If
         # the task is in a terminal state, we've already finished;
@@ -1384,7 +1388,9 @@ class _NomadHandle(Handle):
         assert self._allocation_id is not None  # guaranteed after _ensure
         try:
             alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
-        except Exception:  # noqa: BLE001 — never raise from done()
+        except Exception as exc:  # noqa: BLE001 — never raise from done()
+            log.warning("Polling error for %s: %s", self.job_id, exc)
+            self.error = exc
             return False
         status = alloc.get("ClientStatus", "")
         if status not in ("complete", "failed", "lost"):
