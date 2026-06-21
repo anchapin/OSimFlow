@@ -35,7 +35,7 @@ from typing import Any, ClassVar, Optional, cast
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
 from osimflow.executors.dask_jobqueue_executor import DaskJobQueueExecutor as DaskJobQueueExecutor
-from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor as DockerSwarmExecutor
+from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor as GoogleBatchExecutor
 from osimflow.executors.kubernetes_executor import KubernetesExecutor as KubernetesExecutor
 from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
