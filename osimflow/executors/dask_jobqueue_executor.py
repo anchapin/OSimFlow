@@ -191,8 +191,25 @@ class DaskJobQueueExecutor(BaseExecutor):
         time_min: int = 60,
         container: str | None = None,
         openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        env: dict[str, str] | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
+        del result_hint, remote_command, result_transport_mode  # noqa: F841
+        del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
+        del result_storage_endpoint, variables_json, env  # noqa: F841
+        del stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841
         log.info(
             "dask_jobqueue submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
             name,

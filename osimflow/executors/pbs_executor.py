@@ -330,9 +330,26 @@ class PBSExecutor(BaseExecutor):
         time_min: int = 60,
         container: str | None = None,
         openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        env: dict[str, str] | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        result_hint = kwargs.get("result_hint")
+        del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
+        del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
+        del variables_json, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
+        # env is used in debug mode; result_hint is used throughout.
+        local_env: dict[str, str] = env if env is not None else {}
 
         if self.debug:
             # In debug mode, run locally via submitit.DebugExecutor-like
@@ -348,7 +365,6 @@ class PBSExecutor(BaseExecutor):
             import socket
 
             local_job_id = f"pbs-debug-{socket.gethostname()}-{id(fn)}"
-            env = kwargs.get("env", {})
 
             def _run_locally() -> Any:
                 import os
@@ -356,7 +372,7 @@ class PBSExecutor(BaseExecutor):
                 os.environ["OSIMFLOW_OS_VERSION"] = str(openstudio_version or "N/A")
                 if container:
                     os.environ["OSIMFLOW_CONTAINER"] = container
-                for k, v in env.items():
+                for k, v in local_env.items():
                     if v is not None:
                         os.environ[k] = v
                 return fn(*args)  # noqa: F821
