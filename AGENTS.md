@@ -91,9 +91,9 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Layer | Technology | Notes |
 |---|---|---|
 | Workflow orchestration | **Custom Python driver** (`osimflow/`) | ~300 LoC `Campaign` class; subcommand CLI `osimflow run`. |
-| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `NomadExecutor`, `PBSExecutor` | All conform to the same `submit()` → `Handle` interface. |
+| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, `DockerSwarmExecutor` | All conform to the same `submit()` → `Handle` interface. |
 | Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
-| AWS Batch backend | **`boto3`** (future) | Stub today; `AWSBatchExecutor.submit()` is a placeholder. |
+| AWS Batch backend | **`boto3`** | Full implementation via `AWSBatchExecutor`. |
 | Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
 | Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
 | Statistical sampling | **`scipy.stats`** | Latin Hypercube Sampling (LHS) of design variables. |
