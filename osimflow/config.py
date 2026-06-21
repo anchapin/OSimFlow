@@ -386,100 +386,499 @@ def _coerce_variables_yml_file(path: Path) -> bool:  # noqa: PLR0912
     return changed
 
 
+# ======================================================================
+# Executor-specific configuration dataclasses (issue #724)
+#
+# These dataclasses group executor-specific fields into dedicated config
+# objects, reducing coupling in CampaignConfig. Each executor config is
+# a frozen dataclass with sensible defaults. CampaignConfig maintains
+# backward compatibility via __getattr__ delegation.
+# ======================================================================
+
+
+@dataclasses.dataclass(frozen=True)
+class SlurmConfig:
+    """Slurm executor configuration.
+
+    Attributes
+    ----------
+    qos
+        Quality of Service for the Slurm job.
+    constraint
+        Constraint for the Slurm job (e.g., "gpu").
+    gres
+        Generic resource specification (e.g., "gpu:1").
+    cost_per_node_hour
+        Cost per node-hour in USD for cost tracking.
+    """
+
+    qos: str | None = None
+    constraint: str | None = None
+    gres: str | None = None
+    cost_per_node_hour: float = 0.0
+
+
+@dataclasses.dataclass(frozen=True)
+class AWSBatchConfig:
+    """AWS Batch executor configuration.
+
+    Attributes
+    ----------
+    max_spot_price_usd
+        Maximum Spot price in USD per vCPU-hour. When set, the executor
+        queries the current Spot price before submitting and rejects jobs
+        that would exceed the ceiling.
+    fallback_to_on_demand
+        Whether to fall back to on-demand instances when Spot price
+        exceeds the ceiling or max retries are exhausted.
+    max_retries
+        Maximum number of times a spot-interrupted job is retried before
+        falling back or failing.
+    """
+
+    max_spot_price_usd: float | None = None
+    fallback_to_on_demand: bool = False
+    max_retries: int = 3
+
+
+@dataclasses.dataclass(frozen=True)
+class AzureBatchConfig:
+    """Azure Batch executor configuration.
+
+    Attributes
+    ----------
+    account_name
+        Azure Batch account name.
+    account_url
+        Azure Batch account URL.
+    pool_id
+        Azure Batch pool ID.
+    location
+        Azure region location.
+    use_spot
+        Whether to use Spot/Low-priority instances.
+    fallback_to_on_demand
+        Whether to fall back to on-demand instances when Spot is unavailable.
+    max_retries
+        Maximum number of retries for failed jobs.
+    """
+
+    account_name: str | None = None
+    account_url: str | None = None
+    pool_id: str = "osimflow-pool"
+    location: str = "eastus"
+    use_spot: bool = False
+    fallback_to_on_demand: bool = False
+    max_retries: int = 3
+
+
+@dataclasses.dataclass(frozen=True)
+class GoogleBatchConfig:
+    """Google Cloud Batch executor configuration.
+
+    Attributes
+    ----------
+    project_id
+        Google Cloud project ID.
+    region
+        Google Cloud region.
+    service_account
+        Service account email for the job.
+    use_spot
+        Whether to use Spot/Preemptible instances.
+    fallback_to_on_demand
+        Whether to fall back to on-demand instances when Spot is unavailable.
+    max_retries
+        Maximum number of retries for failed jobs.
+    """
+
+    project_id: str | None = None
+    region: str = "us-central1"
+    service_account: str | None = None
+    use_spot: bool = False
+    fallback_to_on_demand: bool = False
+    max_retries: int = 3
+
+
+@dataclasses.dataclass(frozen=True)
+class NomadConfig:
+    """Nomad executor configuration.
+
+    Attributes
+    ----------
+    dispatch_policy
+        Dispatch policy for job submission.
+    allocation_resolution_timeout_s
+        Timeout for allocation ID resolution.
+    poll_interval_s
+        Polling interval for allocation status.
+    max_poll_interval_s
+        Maximum polling interval (exponential backoff cap).
+    fanout_submit_rate_per_sec
+        Rate limit for fan-out submissions (jobs per second).
+    fanout_submit_chunk_size
+        Chunk size for fan-out submissions.
+    tls
+        Whether to use TLS for Nomad connection.
+    cert
+        Path to client certificate file.
+    key
+        Path to client key file.
+    ca_cert
+        Path to CA certificate file.
+    """
+
+    dispatch_policy: str = "keep_manual"
+    allocation_resolution_timeout_s: float = 30.0
+    poll_interval_s: float = 5.0
+    max_poll_interval_s: float = 60.0
+    fanout_submit_rate_per_sec: float | None = None
+    fanout_submit_chunk_size: int = 0
+    tls: bool = False
+    cert: Path | None = None
+    key: Path | None = None
+    ca_cert: Path | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class LocalConfig:
+    """Local executor configuration.
+
+    Attributes
+    ----------
+    max_workers
+        Maximum number of parallel workers (stored separately, accessed
+        via CLI --max-workers, not this config).
+    """
+
+    max_workers: int = 1
+
+
+# ======================================================================
+# CampaignConfig with backward-compatible attribute delegation
+# ======================================================================
+
+
 @dataclasses.dataclass
 class CampaignConfig:
+    """Campaign configuration with executor-specific config groups.
+
+    This dataclass bundles all settings for a campaign run. To reduce
+    coupling and improve IDE support, executor-specific fields are
+    grouped into dedicated config dataclasses (issue #724):
+
+    - ``slurm`` :class:`SlurmConfig` for Slurm executor settings
+    - ``aws_batch`` :class:`AWSBatchConfig` for AWS Batch settings
+    - ``azure_batch`` :class:`AzureBatchConfig` for Azure Batch settings
+    - ``google_batch`` :class:`GoogleBatchConfig` for Google Cloud Batch settings
+    - ``nomad`` :class:`NomadConfig` for Nomad executor settings
+
+    For backward compatibility, all executor-specific fields are also
+    accessible directly as flat attributes on CampaignConfig (e.g.,
+    ``cfg.slurm_qos`` instead of ``cfg.slurm.qos``). This is achieved
+    via ``__getattr__`` delegation. New code should prefer the grouped
+    config objects.
+
+    Attributes
+    ----------
+    input_variables
+        Path to the variables.yml file defining parametric variables.
+    template_sim_package
+        Path to the template simulation package directory.
+    n_samples
+        Number of LHS samples to generate.
+    outdir
+        Output directory for campaign results.
+    openstudio_version
+        OpenStudio version string (e.g., "3.11.0").
+    project
+        Project name for campaign organization (issue #390).
+    archive_intermediates
+        Whether to archive intermediate simulation files.
+    custom_apply_script
+        Path to custom parameter application script.
+    custom_kpi_extractor
+        Path to custom KPI extraction script.
+    mlflow_tracking_uri
+        MLflow tracking server URI.
+    redis_url
+        Redis URL for distributed cache invalidation (issue #330).
+    baseline
+        Baseline comparison configuration (issue #64).
+    weather_dir
+        Subdirectory name for weather files.
+    dry_run
+        Dry-run mode flag (issue #59).
+    sample
+        Single-sample mode index (issue #59).
+    algorithm
+        Sampling algorithm name (issue #121).
+    init_script
+        Path to pre-campaign initialization script.
+    finalize_script
+        Path to post-campaign finalization script.
+    skip_preflight
+        Whether to skip the preflight model run (issue #107).
+    max_generations
+        Maximum number of DAG generations (issue #122).
+    ecr_repository
+        ECR repository URI for OpenStudio images (issue #144).
+    byos_trust_level
+        BYOS script trust level (issue #269).
+    observability
+        Observability backend name (issue #132).
+    cloudwatch_namespace
+        CloudWatch metric namespace.
+    cloudwatch_log_group
+        CloudWatch log group name.
+    log_aggregation_url
+        Log aggregation URL for distributed logging.
+    prometheus_port
+        Prometheus metrics HTTP port.
+    otel_endpoint
+        OpenTelemetry OTLP endpoint URL.
+    registry_path
+        Campaign registry database path.
+    objective
+        Objective function configuration (issue #282).
+    constraints
+        Constraint definitions (issue #282).
+    nsga2_reference_points
+        R-NSGA-II reference points (issue #529).
+    nsga2_reference_directions
+        R-NSGA-II reference direction strategy (issue #529).
+    max_sample_retries
+        Maximum per-sample retry attempts (issue #252).
+    worker_auto_recovery
+        Enable worker auto-recovery (issue #443).
+    offline
+        Air-gapped/offline mode flag (issue #261).
+    offline_bundle
+        Path to offline bundle directory.
+    webhook_url
+        Campaign completion webhook URL.
+    shard_count
+        Number of shards for campaign partitioning.
+    shard_index
+        Shard index for this worker.
+    shard_start
+        Sample index range start.
+    shard_end
+        Sample index range end.
+    byos_resource_limits
+        BYOS subprocess resource limits (issue #343).
+    result_storage_backend
+        Result storage backend name (issue #339).
+    result_storage_bucket
+        Storage bucket/container name.
+    result_storage_endpoint
+        S3-compatible endpoint URL.
+    task_queue
+        Distributed task queue backend (issue #335).
+    dask_scheduler_address
+        Dask scheduler address.
+    resource_quota
+        Resource quota limits (issue #446).
+    enable_cost_tracking
+        Enable cost tracking (issue #447).
+    cost_on_demand_price
+        On-demand price per vCPU-hour.
+    cost_spot_price
+        Spot price per vCPU-hour.
+    alert_rules
+        Alert rules YAML file path.
+    alert_destinations
+        Alert destinations YAML file path.
+    max_step_retries
+        Maximum cross-step retry attempts (issue #416).
+    uq_method
+        UQ sampling method (issue #530).
+    uq_n_samples
+        Number of UQ samples (issue #530).
+    uq_failure_thresholds
+        Failure thresholds for UQ analysis (issue #530).
+    bcl_api_key
+        NREL BCL API key (issue #580).
+    validate_measures
+        Validate measures against BCL taxonomy (issue #580).
+    s3_artifact_bucket
+        S3 artifact storage bucket (issue #601).
+    s3_artifact_prefix
+        S3 artifact key prefix.
+    s3_artifact_region
+        AWS region for S3 artifact storage.
+    s3_artifact_endpoint
+        S3-compatible endpoint for artifact storage.
+    s3_artifact_presigned_url_expiration
+        Pre-signed URL expiration in seconds.
+    nsga2_ref_points
+        R-NSGA-II reference points (issue #529).
+    nsga2_ref_dirs_strategy
+        R-NSGA-II reference direction strategy (issue #529).
+    slurm
+        Slurm executor configuration (grouped).
+    aws_batch
+        AWS Batch executor configuration (grouped).
+    azure_batch
+        Azure Batch executor configuration (grouped).
+    google_batch
+        Google Cloud Batch executor configuration (grouped).
+    nomad
+        Nomad executor configuration (grouped).
+    """
+
+    # --- Core required fields ---
     input_variables: Path
     template_sim_package: Path
     n_samples: int
     outdir: Path
     openstudio_version: str
-    # Project hierarchy support (issue #390). Groups campaigns under a named
-    # project, enabling multi-campaign organization. When set, the campaign
-    # is associated with the given project name in the registry.
+
+    # --- Project hierarchy (issue #390) ---
     project: str = ""
+
+    # --- Archive and custom scripts ---
     archive_intermediates: bool = False
     custom_apply_script: Path | None = None
     custom_kpi_extractor: Path | None = None
-    # Optional MLflow tracking server (issue #7). When None, the campaign
-    # runs without any MLflow integration (no mlflow import, no logging).
-    # When set, the Campaign begins an MLflow run at start and ends it at
-    # completion, logging params / metrics / artifacts.
+
+    # --- MLflow tracking (issue #7) ---
     mlflow_tracking_uri: str | None = None
-    # Optional Redis URL for distributed cache invalidation (issue #330).
-    # When None, a single-node SQLiteCache is used. When set (e.g.,
-    # "redis://localhost:6379/0"), a DistributedCache is used that
-    # broadcasts invalidation events across all campaign workers via
-    # Redis pub/sub, enabling coherent cache state on multi-node
-    # Slurm/AWS Batch campaigns.
+
+    # --- Redis for distributed cache (issue #330) ---
     redis_url: str | None = None
-    # Optional Slurm advanced directives (issue #4). Forwarded to
-    # `SlurmExecutor` when `--executor slurm` is selected. All default
-    # to `None`; submitit omits unset directives from the sbatch header.
+
+    # --- Baseline comparison (issue #64) ---
+    baseline: dict[str, object] | None = None
+
+    # --- Weather file subdirectory (issue #63) ---
+    weather_dir: str = "weather"
+
+    # --- Dry-run and single-sample modes (issue #59) ---
+    dry_run: bool = False
+    sample: int | None = None
+
+    # --- Sampling algorithm (issue #121) ---
+    algorithm: str = "lhs"
+
+    # --- Pre/post campaign hooks (issue #108) ---
+    init_script: Path | None = None
+    finalize_script: Path | None = None
+
+    # --- Skip preflight (issue #107) ---
+    skip_preflight: bool = False
+
+    # --- Generation loop (issue #122) ---
+    max_generations: int = 1
+
+    # --- ECR repository (issue #144) ---
+    ecr_repository: str | None = None
+
+    # --- BYOS trust level (issue #269) ---
+    byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
+
+    # --- Observability backends (issue #132) ---
+    observability: str = "none"
+    cloudwatch_namespace: str = "OSimFlow"
+    cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
+    prometheus_port: int = 9090
+    otel_endpoint: str | None = None
+
+    # --- Campaign registry (issue #266) ---
+    registry_path: Path | None = None
+
+    # --- Objective and constraints (issue #282) ---
+    objective: dict[str, object] | None = None
+    constraints: list[dict[str, object]] | None = None
+
+    # --- R-NSGA-II options (issue #529) ---
+    nsga2_reference_points: str | None = None
+    nsga2_reference_directions: str | None = None
+    nsga2_ref_points: str | None = None
+    nsga2_ref_dirs_strategy: str | None = None
+
+    # --- Retry configuration (issue #252, #416) ---
+    max_sample_retries: int = 3
+    max_step_retries: int = 2
+    worker_auto_recovery: bool = True
+
+    # --- Offline mode (issue #261) ---
+    offline: bool = False
+    offline_bundle: Path | None = None
+
+    # --- Webhook (issue #283) ---
+    webhook_url: str | None = None
+
+    # --- Coordinator sharding ---
+    shard_count: int | None = None
+    shard_index: int | None = None
+    shard_start: int | None = None
+    shard_end: int | None = None
+
+    # --- BYOS resource limits (issue #343) ---
+    byos_resource_limits: dict[str, int] | None = None
+
+    # --- Result storage (issue #339) ---
+    result_storage_backend: str = "local"
+    result_storage_bucket: str = ""
+    result_storage_endpoint: str | None = None
+
+    # --- Task queue (issue #335) ---
+    task_queue: str = "none"
+    dask_scheduler_address: str | None = None
+
+    # --- Resource quota (issue #446) ---
+    resource_quota: ResourceQuota | None = None
+
+    # --- Cost tracking (issue #447) ---
+    enable_cost_tracking: bool = False
+    cost_on_demand_price: float = 0.05
+    cost_spot_price: float = 0.03
+
+    # --- Alerting (issue #438) ---
+    alert_rules: Path | None = None
+    alert_destinations: Path | None = None
+
+    # --- UQ configuration (issue #530) ---
+    uq_method: str = "latin_hypercube"
+    uq_n_samples: int | None = None
+    uq_failure_thresholds: list[str] | None = None
+
+    # --- BCL API (issue #580) ---
+    bcl_api_key: str | None = None
+    validate_measures: bool = False
+
+    # --- S3 artifact storage (issue #601) ---
+    s3_artifact_bucket: str = ""
+    s3_artifact_prefix: str = ""
+    s3_artifact_region: str | None = None
+    s3_artifact_endpoint: str | None = None
+    s3_artifact_presigned_url_expiration: int = 3600
+
+    # --- Executor-specific configs (grouped, issue #724) ---
+    # These are the new grouped config objects. They are initialized
+    # in __post_init__ from the flat fields for backward compatibility.
+    slurm: SlurmConfig | None = None
+    aws_batch: AWSBatchConfig | None = None
+    azure_batch: AzureBatchConfig | None = None
+    google_batch: GoogleBatchConfig | None = None
+    nomad: NomadConfig | None = None
+
+    # --- Legacy flat executor fields (for backward compatibility) ---
+    # These fields are still accepted in the constructor and are used
+    # to initialize the grouped config objects above. They are
+    # deprecated in favor of the grouped configs but maintained for
+    # backward compatibility with existing code.
     slurm_qos: str | None = None
     slurm_constraint: str | None = None
     slurm_gres: str | None = None
-    # Optional ASHRAE 90.1 baseline comparison mode (issue #64).
-    # When a `baseline` section is defined in variables.yml, the
-    # campaign injects a fixed-parameter baseline sample alongside
-    # the LHS parametric samples, computes percentage improvement
-    # for each KPI, and adds baseline reference data to outputs.
-    # The dict has keys: "sample_id" (str) and "parameters" (dict).
-    # When None, baseline comparison is disabled and behaviour is
-    # unchanged.
-    baseline: dict[str, object] | None = None
-    # Weather file subdirectory convention (issue #63).
-    # Name of the subdirectory inside template_sim_package that holds
-    # .epw weather files. Defaults to "weather". The pre-flight
-    # validation pass checks that all .epw files referenced in
-    # variables.yml exist under this directory and validates their
-    # EPW format (header line starts with "LOCATION").
-    weather_dir: str = "weather"
-    # Dry-run mode (issue #59): run exactly 1 sample locally to validate
-    # setup before committing to a full campaign. Forces n_samples=1 and
-    # LocalExecutor regardless of CLI flags. Runs steps 1-4 only (no
-    # aggregation or plots) and prints a summary.
-    dry_run: bool = False
-    # Single-sample mode (issue #59): run only the sample at 0-based index
-    # N through steps 2-4. Skips GENERATE_LHS_SAMPLES (reuses existing
-    # samples.json). Useful for debugging a specific failed sample.
-    sample: int | None = None
-    # Sampling algorithm name (issue #121). Dispatched through
-    # AlgorithmRegistry.get(). Defaults to "lhs" for backward
-    # compatibility. Future options: "sobol", "morris", etc.
-    algorithm: str = "lhs"
-    # Pre/post campaign shell hooks (issue #108).
-    # --init-script: runs before the first campaign step. Must exit 0
-    # or the campaign aborts. Useful for S3 sync, Slack notifications.
-    init_script: Path | None = None
-    # --finalize-script: runs after the last campaign step. Best-effort:
-    # a non-zero exit code is logged but does NOT fail the campaign.
-    # Useful for cleanup, upload, notification, DynamoDB writes.
-    finalize_script: Path | None = None
-    # Skip preflight model run (issue #107). When True, the
-    # PREFLIGHT_RUN_MODEL step is skipped, allowing the campaign to
-    # proceed without validating the seed model first. Useful when the
-    # model is known-good or when iterating on downstream steps.
-    skip_preflight: bool = False
-    # Generation loop (issue #122). Iterative/optimization algorithms
-    # (NSGA-II, Bayesian optimisation) loop the fan-out steps multiple
-    # times.  Default 1 = single-generation (backward compatible with
-    # LHS).  Set >1 to run the fan-out DAG for that many generations.
-    max_generations: int = 1
-    # Spot instance retry + price ceiling for AWS Batch (issue #131).
-    # When aws_batch_max_spot_price_usd is set, the executor queries the
-    # current Spot price before submitting and rejects jobs that would
-    # exceed the ceiling (unless fallback to on-demand is enabled).
-    # aws_batch_fallback_to_on_demand switches to the on-demand queue
-    # after spot price rejection or max retries exhausted.
-    # aws_batch_max_retries controls how many times a spot-interrupted
-    # job is retried before falling back or failing.
+    slurm_cost_per_node_hour: float = 0.0
+
     aws_batch_max_spot_price_usd: float | None = None
     aws_batch_fallback_to_on_demand: bool = False
     aws_batch_max_retries: int = 3
-    ecr_repository: str | None = (
-        None  # e.g. "123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio"
-    )
-    # Azure Batch configuration (issue #254, issue #352).
+
     azure_batch_account_name: str | None = None
     azure_batch_account_url: str | None = None
     azure_batch_pool_id: str = "osimflow-pool"
@@ -487,209 +886,140 @@ class CampaignConfig:
     azure_use_spot: bool = False
     azure_fallback_to_on_demand: bool = False
     azure_max_retries: int = 3
-    # Google Cloud Batch configuration (issue #254, issue #352).
+
     google_batch_project_id: str | None = None
     google_batch_region: str = "us-central1"
     google_batch_service_account: str | None = None
     google_use_spot: bool = False
     google_fallback_to_on_demand: bool = False
     google_max_retries: int = 3
-    # BYOS trust level (issue #269). Controls how user-supplied scripts
-    # are executed. Default is SUBPROCESS (isolated child process) for
-    # security. INPROCESS (legacy) loads the script directly into the
-    # orchestrator process — use only when the user explicitly trusts
-    # the script.
-    byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
-    # Observability backend selection (issue #132 / G20c).
-    # When "none" (default), NullBackend is used — zero overhead.
-    # Supported: "none", "cloudwatch", "prometheus", "opentelemetry".
-    observability: str = "none"
-    # CloudWatch backend options (issue #132).
-    cloudwatch_namespace: str = "OSimFlow"
-    cloudwatch_log_group: str | None = None
-    log_aggregation_url: str | None = None
-    # Prometheus backend options (issue #132).
-    prometheus_port: int = 9090
-    # OpenTelemetry backend options (issue #132).
-    otel_endpoint: str | None = None
-    # Campaign registry path (issue #266). When None, the default
-    # ~/.osimflow/registry.db is used. Override via --registry flag
-    # or OSIMFLOW_REGISTRY env var.
-    registry_path: Path | None = None
-    # Objective function configuration (issue #282).
-    # objective: {name: <kpi_name>, direction: minimize|maximize, weight: <float>}
-    # For single-objective optimizers (DE, DA). Multi-objective algorithms
-    # (NSGA-II, PSO, SPEA2) read weights from the variables dict directly.
-    objective: dict[str, object] | None = None
-    # Constraint definitions (issue #282).
-    # List of {name: <kpi_name>, max: <float>, min: <float>|None}.
-    # During objective evaluation, constraint violations are penalised with
-    # a large positive value (1e9) added to the objective.
-    constraints: list[dict[str, object]] | None = None
-    # R-NSGA-II reference points (issue #529). Comma-separated fractions
-    # representing aspiration points on the Pareto front, e.g.,
-    # "0.25,0.5,0.75" for 2 objectives. Only used with --algorithm nsga2.
-    nsga2_reference_points: str | None = None
-    # R-NSGA-II reference direction strategy (issue #529). Supported:
-    # das-dennis, energy, wedge, incremental. Only used with --algorithm nsga2.
-    nsga2_reference_directions: str | None = None
-    # Per-sample retry configuration (issue #252).
-    # max_sample_retries: maximum retry attempts for transient per-sample
-    # failures (network timeout, resource contention, etc.). A value of 0
-    # disables retries. Each retry uses exponential backoff starting at
-    # base_delay seconds (default 1.0), doubling each attempt up to 60s cap.
-    max_sample_retries: int = 3
-    # Worker auto-recovery (issue #443). When True and a job fails, OSimFlow
-    # checks if the worker's heartbeat is stale (no update for 60+ seconds).
-    # If stale, the job is automatically resubmitted (up to max_sample_retries).
-    # This handles worker crashes without manual intervention. When False,
-    # failed jobs are marked as failed without auto-recovery.
-    worker_auto_recovery: bool = True
-    # Air-gapped / offline mode (issue #261). When True, OSimFlow skips
-    # Docker Hub pulls, PyPI version checks, and online weather downloads.
-    # It reads pip wheels from --offline_bundle/pip/ and uses pre-loaded
-    # Docker images from the local registry.
-    offline: bool = False
-    # Path to the offline bundle directory (issue #261). Contains pip/,
-    # docker/, and weather/ subdirectories created by
-    # scripts/bundle_offline.py. When set alongside --offline, the campaign
-    # uses this path instead of reaching out to the internet.
-    offline_bundle: Path | None = None
-    # Webhook URL for campaign completion callbacks (issue #283).
-    # When set, OSimFlow POSTs a JSON summary to this URL after the
-    # GENERATE_BASIC_PLOTS step completes. Best-effort: delivery failures
-    # are logged but do not affect campaign status.
-    webhook_url: str | None = None
-    # Nomad TLS configuration (issue #344). When nomad_tls is True, the
-    # NomadExecutor uses HTTPS to connect to the Nomad cluster. The
-    # nomad_cert, nomad_key, and nomad_ca_cert fields specify client
-    # certificate, key, and CA certificate paths for mTLS authentication.
-    # Nomad scale-control wiring (nomad-scale-cli-config):
-    # - dispatch policy controls whether submit() uses direct jobs or dispatch API.
-    # - allocation resolution timeout controls how long to wait for EvalID -> Allocation ID.
-    # - polling controls the backoff window for allocation terminal-state polling.
-    # - fan-out controls are campaign-level knobs for future rate/chunked submit pacing.
+
     nomad_dispatch_policy: str = "keep_manual"
     nomad_allocation_resolution_timeout_s: float = 30.0
     nomad_poll_interval_s: float = 5.0
     nomad_max_poll_interval_s: float = 60.0
     nomad_fanout_submit_rate_per_sec: float | None = None
     nomad_fanout_submit_chunk_size: int = 0
-    # Coordinator sharding controls for scale-out campaign orchestration.
-    # Backward compatible defaults (all None) disable sharding.
-    # - shard_count + shard_index: partition samples by modulo index.
-    # - shard_start + shard_end: process an explicit sample index range [start, end).
-    shard_count: int | None = None
-    shard_index: int | None = None
-    shard_start: int | None = None
-    shard_end: int | None = None
     nomad_tls: bool = False
     nomad_cert: Path | None = None
     nomad_key: Path | None = None
     nomad_ca_cert: Path | None = None
-    # BYOS resource limits (issue #343). A dict mapping rlimit names to
-    # integer values (e.g. {"RLIMIT_CPU": 300, "RLIMIT_AS": 4294967296}).
-    # Applied via resource.setrlimit before the BYOS subprocess is
-    # spawned. resource.error from impossible limits is caught and
-    # logged as a warning (non-fatal).
-    byos_resource_limits: dict[str, int] | None = None
-    # Result storage backend (issue #339). When set to a non-local value
-    # (s3/gs/azure), simulation outputs (eplusout.sql) and KPI JSONs are
-    # uploaded to the configured bucket after each successful step.
-    result_storage_backend: str = "local"
-    # Bucket/container name for result storage (issue #339).
-    # For S3: the bucket name. For GCS: the bucket name. For Azure: the container.
-    # Ignored when result_storage_backend is "local".
-    result_storage_bucket: str = ""
-    # S3-compatible endpoint URL for result storage (issue #339).
-    # Used for MinIO, Cloudflare R2, and other S3-compatible stores.
-    result_storage_endpoint: str | None = None
-    # Distributed task queue backend (issue #335). When "none" (default),
-    # fan-out steps submit directly to the configured executor. When
-    # "dask", work is submitted to a Dask scheduler via DaskTaskQueue.
-    task_queue: str = "none"
-    # Dask scheduler address (issue #335). E.g. "tcp://scheduler:8786".
-    # When None and task_queue="dask", an embedded LocalCluster is used.
-    dask_scheduler_address: str | None = None
-    # Resource quota limits for the campaign (issue #446).
-    # When None, no quota enforcement is applied.
-    # When set, the campaign fails fast at start and/or skips further
-    # sample submissions when the quota is exhausted.
-    resource_quota: ResourceQuota | None = None
-    # Cost tracking configuration (issue #447). When True, the campaign
-    # tracks estimated and actual costs for cloud/HPC resources and writes
-    # a cost summary to run.json. When False (default), cost tracking
-    # is disabled for backward compatibility.
-    enable_cost_tracking: bool = False
-    # On-demand price per vCPU-hour for cost estimation. Used when cloud
-    # provider APIs are unavailable. Default $0.05/vCPU·h.
-    cost_on_demand_price: float = 0.05
-    # Spot price per vCPU-hour for cost estimation. Default $0.03/vCPU·h
-    # (40% savings vs on-demand).
-    cost_spot_price: float = 0.03
-    # Slurm cost per node-hour for cost estimation. Default $0.0 (free).
-    slurm_cost_per_node_hour: float = 0.0
-    # Alert rules YAML file path (issue #438). When set, custom alert rules
-    # are loaded from this file in addition to the built-in rules.
-    alert_rules: Path | None = None
-    # Alert destinations YAML file path (issue #438). When set, alert
-    # destinations are loaded from this file.
-    alert_destinations: Path | None = None
-    # Cross-step retry configuration (issue #416). When a fan-out step
-    # (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS) fails with a
-    # transient error, retry that specific step up to max_step_retries
-    # times before aborting the campaign. A value of 0 disables retries.
-    # Only transient errors trigger retry; permanent errors (invalid input,
-    # missing files) abort immediately.
-    max_step_retries: int = 2
-    # UQ (Uncertainty Quantification) configuration (issue #530).
-    # uq_method: sampling method for UQ analysis. Default 'latin_hypercube'.
-    uq_method: str = "latin_hypercube"
-    # uq_n_samples: number of Monte Carlo samples for UQ analysis.
-    # When None, defaults to n_samples.
-    uq_n_samples: int | None = None
-    # uq_failure_thresholds: list of 'kpi=threshold' strings defining
-    # failure thresholds for probability of failure (POF) computation.
-    # Example: ['eui=150', 'cooling=5000']
-    uq_failure_thresholds: list[str] | None = None
-    # BCL API key for the NREL Building Component Library (issue #580).
-    # Can also be set via the BCL_API_KEY env var.
-    # Some BCL API endpoints require authentication.
-    bcl_api_key: str | None = None
-    # Validate measure arguments against BCL taxonomy when discovering
-    # measures from BCL (issue #580). When True, warnings are logged
-    # for measures with incomplete metadata or unexpected argument types.
-    validate_measures: bool = False
-    # S3 artifact storage configuration (issue #601). When set, base
-    # simulation assets (.osm, .epw) are uploaded to S3 once at campaign
-    # creation and pre-signed URLs are generated for remote executor
-    # nodes to download directly, eliminating the local-machine bottleneck.
-    s3_artifact_bucket: str = ""
-    # S3 artifact storage prefix within the bucket (issue #601).
-    s3_artifact_prefix: str = ""
-    # AWS region for S3 artifact storage (issue #601). When None,
-    # uses the region from the IAM role or default credential chain.
-    s3_artifact_region: str | None = None
-    # Custom S3-compatible endpoint URL for artifact storage (issue #601).
-    # Used for MinIO, Cloudflare R2, and other S3-compatible stores.
-    s3_artifact_endpoint: str | None = None
-    # Expiration time in seconds for pre-signed URLs (issue #601).
-    # Default 3600 (1 hour). Remote nodes must download artifacts
-    # within this window.
-    s3_artifact_presigned_url_expiration: int = 3600
 
-    # R-NSGA-II reference points (issue #529). Comma-separated fractions
-    # along the Pareto front for 2-objective problems, or explicit reference
-    # point coordinates for higher dimensions. When set, the NSGA2Algorithm
-    # uses pymoo's RNSGA2 with these reference points instead of standard
-    # crowding distance. Example: "0.25,0.5,0.75" for three reference points.
-    nsga2_ref_points: str | None = None
-    # R-NSGA-II reference direction generation strategy (issue #529).
-    # When set alongside nsga2_ref_points, the specified reference direction
-    # strategy is used to generate reference points. Supported values:
-    # "das_dennis" (Das-Dennis decomposition), "wedge" (wedge pattern),
-    # "adaptive" (adaptive update during evolution).
-    nsga2_ref_dirs_strategy: str | None = None
+    def __post_init__(self) -> None:
+        """Initialize grouped executor configs from flat fields."""
+        # Slurm config
+        if self.slurm is None:
+            self.slurm = SlurmConfig(
+                qos=self.slurm_qos,
+                constraint=self.slurm_constraint,
+                gres=self.slurm_gres,
+                cost_per_node_hour=self.slurm_cost_per_node_hour,
+            )
+
+        # AWS Batch config
+        if self.aws_batch is None:
+            self.aws_batch = AWSBatchConfig(
+                max_spot_price_usd=self.aws_batch_max_spot_price_usd,
+                fallback_to_on_demand=self.aws_batch_fallback_to_on_demand,
+                max_retries=self.aws_batch_max_retries,
+            )
+
+        # Azure Batch config
+        if self.azure_batch is None:
+            self.azure_batch = AzureBatchConfig(
+                account_name=self.azure_batch_account_name,
+                account_url=self.azure_batch_account_url,
+                pool_id=self.azure_batch_pool_id,
+                location=self.azure_batch_location,
+                use_spot=self.azure_use_spot,
+                fallback_to_on_demand=self.azure_fallback_to_on_demand,
+                max_retries=self.azure_max_retries,
+            )
+
+        # Google Batch config
+        if self.google_batch is None:
+            self.google_batch = GoogleBatchConfig(
+                project_id=self.google_batch_project_id,
+                region=self.google_batch_region,
+                service_account=self.google_batch_service_account,
+                use_spot=self.google_use_spot,
+                fallback_to_on_demand=self.google_fallback_to_on_demand,
+                max_retries=self.google_max_retries,
+            )
+
+        # Nomad config
+        if self.nomad is None:
+            self.nomad = NomadConfig(
+                dispatch_policy=self.nomad_dispatch_policy,
+                allocation_resolution_timeout_s=self.nomad_allocation_resolution_timeout_s,
+                poll_interval_s=self.nomad_poll_interval_s,
+                max_poll_interval_s=self.nomad_max_poll_interval_s,
+                fanout_submit_rate_per_sec=self.nomad_fanout_submit_rate_per_sec,
+                fanout_submit_chunk_size=self.nomad_fanout_submit_chunk_size,
+                tls=self.nomad_tls,
+                cert=self.nomad_cert,
+                key=self.nomad_key,
+                ca_cert=self.nomad_ca_cert,
+            )
+
+    # Static mapping: legacy flat attribute name -> (config_attr_name, field_name)
+    # Used by __getattr__ to delegate to grouped executor configs.
+    _DELEGATED_ATTRS: dict[str, tuple[str, str]] = dataclasses.field(
+        init=False, repr=False, compare=False
+    )
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate attribute access to grouped executor configs for backward compatibility.
+
+        This allows both `cfg.slurm_qos` (legacy flat access) and
+        `cfg.slurm.qos` (grouped access) to work.
+        """
+        # Build delegation map lazily on first access
+        if "_DELEGATED_ATTRS" not in self.__dict__:
+            self._DELEGATED_ATTRS = {
+                # Slurm
+                "slurm_qos": ("slurm", "qos"),
+                "slurm_constraint": ("slurm", "constraint"),
+                "slurm_gres": ("slurm", "gres"),
+                "slurm_cost_per_node_hour": ("slurm", "cost_per_node_hour"),
+                # AWS Batch
+                "aws_batch_max_spot_price_usd": ("aws_batch", "max_spot_price_usd"),
+                "aws_batch_fallback_to_on_demand": ("aws_batch", "fallback_to_on_demand"),
+                "aws_batch_max_retries": ("aws_batch", "max_retries"),
+                # Azure Batch
+                "azure_batch_account_name": ("azure_batch", "account_name"),
+                "azure_batch_account_url": ("azure_batch", "account_url"),
+                "azure_batch_pool_id": ("azure_batch", "pool_id"),
+                "azure_batch_location": ("azure_batch", "location"),
+                "azure_use_spot": ("azure_batch", "use_spot"),
+                "azure_fallback_to_on_demand": ("azure_batch", "fallback_to_on_demand"),
+                "azure_max_retries": ("azure_batch", "max_retries"),
+                # Google Batch
+                "google_batch_project_id": ("google_batch", "project_id"),
+                "google_batch_region": ("google_batch", "region"),
+                "google_batch_service_account": ("google_batch", "service_account"),
+                "google_use_spot": ("google_batch", "use_spot"),
+                "google_fallback_to_on_demand": ("google_batch", "fallback_to_on_demand"),
+                "google_max_retries": ("google_batch", "max_retries"),
+                # Nomad
+                "nomad_dispatch_policy": ("nomad", "dispatch_policy"),
+                "nomad_allocation_resolution_timeout_s": (
+                    "nomad",
+                    "allocation_resolution_timeout_s",
+                ),
+                "nomad_poll_interval_s": ("nomad", "poll_interval_s"),
+                "nomad_max_poll_interval_s": ("nomad", "max_poll_interval_s"),
+                "nomad_fanout_submit_rate_per_sec": ("nomad", "fanout_submit_rate_per_sec"),
+                "nomad_fanout_submit_chunk_size": ("nomad", "fanout_submit_chunk_size"),
+                "nomad_tls": ("nomad", "tls"),
+                "nomad_cert": ("nomad", "cert"),
+                "nomad_key": ("nomad", "key"),
+                "nomad_ca_cert": ("nomad", "ca_cert"),
+            }
+        if name in self._DELEGATED_ATTRS:
+            config_attr, field_name = self._DELEGATED_ATTRS[name]
+            return getattr(getattr(self, config_attr), field_name)
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
     @property
     def work_dir(self) -> Path:
@@ -769,11 +1099,7 @@ def _parse_baseline(variables_yml: Path) -> dict[str, object] | None:
                 )
                 return baseline
     except Exception as exc:
-        log.warning(
-            "Failed to parse baseline section from %s: %s. Using default (None).",
-            variables_yml,
-            exc,
-        )
+        log.warning("could not parse baseline section from %s: %s", variables_yml, exc)
     return None
 
 
@@ -926,11 +1252,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             yml_data if isinstance(yml_data, dict) else {}
         )
     except Exception as exc:
-        log.warning(
-            "Failed to parse objective/constraints from %s: %s. Using defaults (objective=None, constraints=None).",
-            variables_yml,
-            exc,
-        )
+        log.warning("could not parse objective/constraints from %s: %s", variables_yml, exc)
         objective, constraints = None, None
 
     return CampaignConfig(
