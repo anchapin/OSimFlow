@@ -62,17 +62,17 @@ The Minimum Viable Product (MVP) for OSimFlow will **focus on delivering a robus
 *   Custom web-based UI for workflow submission or monitoring.
 *   Integration with advanced optimization algorithms (beyond sampling).
 *   First-class support for *all* esoteric OpenStudio CLI commands; the initial focus is on `openstudio.cli run`.
-*   Deep, first-class support for PBS Pro (prioritized for future phases and community contribution; new executors can be added by subclassing `BaseExecutor` in `osimflow/executors/`).
+*   Deep, first-class support for Azure Batch or PBS Pro (prioritized for future phases and community contribution; new executors can be added by subclassing `BaseExecutor` in `osimflow/executors/`).
 *   Direct support for generating EnergyPlus Input Data Files (`.idf`) or Weather Files (`.epw`); OSimFlow operates on `.osm` models or `.osw` workflows primarily.
 
 ## 4. Technical Architecture Overview
 
-OSimFlow's architecture is a **custom Python driver** (`osimflow/campaign.py`) that owns an 8-step DAG of independent steps (plus 2 optional conditional steps for Sobol sensitivity analysis and UQ analysis algorithms). Each step submits its work to a `BaseExecutor` (`osimflow/executors/`), which can target local threads, Slurm, AWS Batch, or any future substrate that conforms to the same `submit()` → `Handle` interface. Caching is explicit and SQLite-backed (`osimflow/cache.py`), with content-hashed keys covering inputs, code, and container digest.
+OSimFlow's architecture is a **custom Python driver** (`osimflow/campaign.py`) that owns an 11-step DAG of independent steps. Each step submits its work to a `BaseExecutor` (`osimflow/executors/`), which can target local threads, Slurm, AWS Batch, or any future substrate that conforms to the same `submit()` → `Handle` interface. Caching is explicit and SQLite-backed (`osimflow/cache.py`), with content-hashed keys covering inputs, code, and container digest.
 
 > **Why a custom driver?** The architecture decision record at `.agents/results/architecture/0001-workflow-framework.md` documents the rationale. The empirical spike results in `.agents/results/decision-verdict.md` confirm the chosen path satisfies the §5.2 MVP acceptance criteria. The PRD scope, target audience, and MVP deliverables are unchanged by the framework choice.
 
 ### 4.1. Core Workflow (`osimflow/campaign.py`)
-The `Campaign` class owns the 8-step DAG (see below). Its `run()` method is the public entry point:
+The `Campaign` class owns the 11-step DAG. Its `run()` method is the public entry point:
 
 ```python
 from osimflow import Campaign, CampaignConfig, LocalExecutor, load_config
@@ -83,22 +83,24 @@ campaign = Campaign(cfg, executor)
 result = campaign.run()
 ```
 
-The DAG:
+The 11-step DAG:
 
 ```
-   variables.yml ──> GENERATE_SAMPLES ──┐
-                                          │
-                                          ├──> PREFLIGHT_RUN_MODEL (gen 0 only) ──┐
-                                          │                                        │
-                                          ├──> APPLY_PARAMETERS ───────────────────┼──> RUN_OPENSTUDIO_SIM ──┐
-                                          │                                        │                        │
-                                          ├──> VALIDATE_MEASURE_VARIABLES (gen 0) ─┘                        ├──> EXTRACT_KPIS ──┐
-                                                                                                             │                   ├──> AGGREGATE_RESULTS ──> GENERATE_BASIC_PLOTS
-                                                                                                             └───────────────────┘
-
-   Optional (algorithm-dependent):
-     • COMPUTE_SENSITIVITY_INDICES (sobol algorithm)
-     • COMPUTE_UQ_INDICES (uq algorithm)
+variables.yml ──► GENERATE_SAMPLES ──► PREFLIGHT_RUN_MODEL ──► VALIDATE_MEASURE_VARIABLES
+                                          (gen 0)                (always)
+                                                      │
+                                                      ▼
+                                          APPLY_PARAMETERS ──► RUN_OPENSTUDIO_SIM ──► EXTRACT_KPIS
+                                                                    │
+                                                                    ▼
+                                                     AGGREGATE_RESULTS ──► GENERATE_BASIC_PLOTS
+                                                            │
+                        ┌───────────────────────────────────┘
+                        ▼
+          COMPUTE_SENSITIVITY_INDICES (sobol only)
+                        │
+                        ▼
+             COMPUTE_UQ_INDICES (uq only)
 ```
 
 The actual step bodies live in `osimflow/work.py` and call the existing `bin/*.py` stubs as subprocesses (so the BYOS contract is identical to the public function signature).
