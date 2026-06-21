@@ -911,7 +911,11 @@ class TestNomadHandle:
 
     def test_done_lost(self) -> None:
         handle, _ = self._make_handle(alloc_status="lost")
-        assert handle.done() is True
+        assert handle.done() is False
+
+    def test_done_failed(self) -> None:
+        handle, _ = self._make_handle(alloc_status="failed")
+        assert handle.done() is False
 
     def test_result_complete_materializes_object_storage_hint(self) -> None:
         class _ClientStub:
