@@ -880,7 +880,7 @@ def _run_real_openstudio(
             cmd,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
-            cwd=sim_out,
+            cwd=modified_sim_package,
         )
     except subprocess.SubprocessError as e:
         log.error(
