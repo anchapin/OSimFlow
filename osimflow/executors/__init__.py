@@ -1398,7 +1398,7 @@ class _NomadHandle(Handle):
         # Failed/lost allocations must return False so callers invoke result()
         # and receive the error.
         if self._local_future is None:
-            return status == "complete"
+            return cast(bool, status == "complete")
         done: bool
         try:
             self._local_future.result()
