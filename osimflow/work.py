@@ -254,7 +254,7 @@ def run_with_retry(
             time.sleep(delay)
 
     if last_exc is not None:
-        raise last_exc from None
+        raise last_exc
     raise RuntimeError("run_with_retry: unexpected code path")  # pragma: no cover
 
 
@@ -437,7 +437,7 @@ def _apply_parameters_stub(
         )
     except subprocess.CalledProcessError as e:
         log.error("apply_params failed for %s: %s", sample_id, e.stderr)
-        raise RuntimeError(f"apply_params failed for {sample_id}") from e
+        raise RuntimeError(f"apply_params failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return out_dir
 
 
@@ -930,7 +930,7 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
         )
     except subprocess.CalledProcessError as e:
         log.error("generate_lhs failed: %s", e.stderr)
-        raise RuntimeError("generate_lhs failed") from e
+        raise RuntimeError(f"generate_lhs failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return samples_json
 
 
@@ -962,7 +962,7 @@ def _extract_kpis_impl(
         )
     except subprocess.CalledProcessError as e:
         log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
-        raise RuntimeError(f"extract_kpis failed for {sample_id}") from e
+        raise RuntimeError(f"extract_kpis failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return kpi_path
 
 
@@ -1241,7 +1241,7 @@ def aggregate_results(
         )
     except subprocess.CalledProcessError as e:
         log.error("aggregate_results failed: %s", e.stderr)
-        raise RuntimeError("aggregate_results failed") from e
+        raise RuntimeError(f"aggregate_results failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return {
         "csv": csv_path,
         "parquet": parquet_path,
@@ -1558,6 +1558,6 @@ def _extract_severe_error(output: str) -> str:
     match, or an empty string if none found.
     """
     for line in output.splitlines():
-        if re.search(r"^\s*\d+\s+\*+\s*Severe", line, re.IGNORECASE):
+        if re.search(r"^\s*(?:\d+\s+)?\*+\s*Severe", line, re.IGNORECASE):
             return line.strip()
     return ""
