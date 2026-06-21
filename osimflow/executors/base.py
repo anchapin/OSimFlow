@@ -26,6 +26,9 @@ class Handle:
     at submit time so the Campaign can attribute every sample to the
     worker that processed it — essential for cost attribution and
     debugging large campaigns.
+
+    Error tracking (issue #721): polling errors are captured here so
+    callers can distinguish "still running" from "failed with error".
     """
 
     job_id: str
@@ -35,6 +38,7 @@ class Handle:
     worker_region: str | None = None
     cost_usd: float | None = None
     billed_duration_seconds: float | None = None
+    error: Exception | None = None
 
     def result(self, timeout: float | None = None) -> Any:
         try:
@@ -47,6 +51,10 @@ class Handle:
             return self._future.done()
         except AttributeError:
             return getattr(self._future, "_completed", False)
+
+    def is_failed(self) -> bool:
+        """Return True if a polling error has been captured."""
+        return self.error is not None
 
 
 class BaseExecutor(abc.ABC):
