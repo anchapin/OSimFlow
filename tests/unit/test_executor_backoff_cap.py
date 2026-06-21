@@ -112,7 +112,9 @@ class TestBackoffCapAppliedBeforeSleep:
         def capture_sleep(duration: float) -> None:
             sleep_durations.append(duration)
 
-        with patch("osimflow.executors.google_batch_executor.time.sleep", side_effect=capture_sleep):
+        with patch(
+            "osimflow.executors.google_batch_executor.time.sleep", side_effect=capture_sleep
+        ):
             job = ex._wait_for_terminal("test-job")
 
         assert job.status.state == ex._batch_v1.JobStatus.State.SUCCEEDED
@@ -181,9 +183,7 @@ class TestBackoffCapAppliedBeforeSleep:
         result4 = MagicMock(items=[pending_pod])
         result5 = MagicMock(items=[succeeded_pod])
 
-        ex._client.list_namespaced_pod.side_effect = [
-            result1, result2, result3, result4, result5
-        ]
+        ex._client.list_namespaced_pod.side_effect = [result1, result2, result3, result4, result5]
 
         sleep_durations: list[float] = []
 
@@ -232,7 +232,9 @@ class TestBackoffCapAppliedBeforeSleep:
         def capture_sleep(duration: float) -> None:
             sleep_durations.append(duration)
 
-        with patch("osimflow.executors.docker_swarm_executor.time.sleep", side_effect=capture_sleep):
+        with patch(
+            "osimflow.executors.docker_swarm_executor.time.sleep", side_effect=capture_sleep
+        ):
             task = ex._wait_for_terminal("test-service")
 
         assert task["status"]["State"] == "complete"
