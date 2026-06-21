@@ -110,61 +110,104 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Path | Purpose |
 |---|---|
 | `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `DistributedCache`, `build_cache`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, `CacheStats`, `QuotaExceededError`, `ResourceQuota`, `DiscoveredMeasure`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError`, `CrossRunAggregator`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`, `DOEAnalysis`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), the alerting helpers (`AlertManager`, `build_alert_manager`), the cost tracking helpers (`CostEstimate`, `CostTracker`, `CampaignCostSummary`), the data point lifecycle helpers (`DataPoint`, `DataPointManager`, `DataPointStatus` for issues #418/#419/#420), the version detection helpers (`VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`), and logging setup (`get_logger`, `setup_logging`). |
-| `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
+| `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
+| `osimflow/aggregation.py` | Terminal aggregation: compiles per-sample results into campaign CSVs (`aggregated_results.csv`, `failed_simulations.csv`) from S3 manifest objects (issue #627). |
+| `osimflow/alerting.py` | `AlertManager` + `build_alert_manager` — Alert routing for campaign events (Slack, PagerDuty, email). |
+| `osimflow/apply_params.py` | Pure logic for applying a parameter set to a template simulation package; the importable core of `bin/apply_params_to_model.py` (issue #36). |
+| `osimflow/audit.py` | Immutable audit trail for campaign operations; writes `${outdir}/audit.jsonl` with pre-defined events for campaign lifecycle, per-sample lifecycle, config/secrets, and executor operations (issue #439). |
+| `osimflow/byos.py` | Canonical BYOS (Bring Your Own Script) loader with subprocess isolation (`load_user_function`); security model treats user scripts as untrusted (issue #269, AGENTS.md §10). |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` + `CacheStats` — explicit, testable resume semantics and hit rate statistics (issue #426). |
+| `osimflow/campaign.py` | The orchestrator class. Owns the multi-step DAG driving the 6 campaign phases. |
+| `osimflow/chaos.py` | Opt-in chaos testing framework with `ChaosEngine` and `FaultInjector` subclasses (kill switch, network delay, CPU spike, memory pressure) for resilience validation (issue #597). |
+| `osimflow/client.py` | Typed async Python client for the REST API (issue #433): `OSimFlowClient` (httpx-based), Pydantic response models (`HealthResponse`, `CampaignResponse`, `StepsResponse`, `SamplesResponse`, etc.), and typed exception hierarchy (`AuthenticationError`, `NotFoundError`, `RateLimitError`, `ServerError`). Optional `[api]` extra (httpx). |
+| `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()` + `coerce_variable_type` + `ResourceQuota` (issue #409 type auto-coercion). |
+| `osimflow/cost_tracking.py` | `CostEstimate` + `CostTracker` + `CampaignCostSummary` — Cloud/HPC resource cost estimation and tracking (issue #447). |
+| `osimflow/cross_run_aggregator.py` | `CrossRunAggregator` — merges per-campaign `aggregated_results.csv` files into a combined DataFrame with campaign labels and cross-run summary statistics; CLI: `osimflow aggregate-runs` (issue #588). |
 | `osimflow/data_point_manager.py` | `DataPoint` + `DataPointManager` + `DataPointStatus` — JSON-persisted data point lifecycle manager for reanalysis, merging, and priority ordering (issues #418, #419, #420). |
-| `osimflow/document_store.py` | `DocumentStore` ABC + `SQLiteDocumentStore` — MongoDB-equivalent document store using SQLite JSON1; provides `insert_one`, `find_one`, `find_many`, `update_one`, `delete_one`, `create_index`, and `aggregate` for campaign data persistence (issue #389). |
 | `osimflow/distributed_cache.py` | `DistributedCache` + `build_cache` — Redis pub/sub wrapper for cross-node cache invalidation in multi-node campaigns (issue #330). |
 | `osimflow/distributed_jobqueue.py` | `DistributedJobQueue` + `build_job_queue` — Redis pub/sub wrapper for cross-node job queue coordination in multi-node campaigns (issue #393). |
-| `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()` + `coerce_variable_type` + `ResourceQuota` (issue #409 type auto-coercion). |
-| `osimflow/storage.py` | `ResultStorage` ABC, `LocalStorage` (no-op), `S3Storage` (boto3), `GCSStorage` (google-cloud-storage), `AzureBlobStorage` (azure-storage-blob async), `ResultStorageUploader` (sync wrapper), and `build_result_storage` factory (issue #339). |
-| `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
+| `osimflow/document_store.py` | `DocumentStore` ABC + `SQLiteDocumentStore` — MongoDB-equivalent document store using SQLite JSON1; provides `insert_one`, `find_one`, `find_many`, `update_one`, `delete_one`, `create_index`, and `aggregate` for campaign data persistence (issue #389). |
+| `osimflow/event_log.py` | Append-only campaign event log for auditing and state replay; writes `${outdir}/events.jsonl` with ISO8601 timestamps, event types, trace IDs, and full state transition history (issue #396). |
+| `osimflow/handoff_record.py` | Local handoff record for Coordinator-backed (`--detach`) campaigns (issue #630, Epic #624): `HandoffRecord`, `NoHandoffRecordError`, `IDEMPOTENCY_KEY_HEADER`, `HANDOFF_RECORD_NAME`, `read_handoff_record`, `write_handoff_record`, `handoff_record_exists`. Persists `{campaign_id, coordinator_url, submitted_at, status_url}` to `outdir/.coordinator_handoff.json`. |
+| `osimflow/health.py` | CLI health check module (issue #411): `CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`, `run_health_checks`, `format_results`, `to_json`, `get_exit_code`. Powers the `osimflow health` subcommand — verifies Python version, core packages, SQLite, write permissions, disk space, external tools (OpenStudio/Docker/Podman), optional packages, and network connectivity. |
+| `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger`, `setup_logging`, and `LogAggregator`. |
+| `osimflow/manifest.py` | Per-sample manifest construction and atomic publishing (issue #625). Each worker pushes KPIs plus an atomic `_manifest.json` completion marker directly to object storage via `ResultStorage` backends. |
+| `osimflow/measure_resolver.py` | Automatic measure dependency resolution — scans Ruby (`.rb`) and Python (`.py`) measure files, extracts `require`/`import` statements, checks availability, and optionally auto-installs missing packages via `gem install`/`pip install`. |
+| `osimflow/measures.py` | `MeasureRegistry`, `Measure`, `MeasureArgument`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError` — measure discovery, argument introspection, and variable validation for parametric campaigns (issue #532). |
+| `osimflow/measure_versioning.py` | Measure versioning support (issue #430): version detection from `measure.rb`/`measure.py` files, version info stored alongside campaign results, comparison of required vs installed versions. |
+| `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
+| `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
+| `osimflow/notify.py` | Notification backends for campaign completion events (issue #628): `SNSNotifyBackend` (AWS SNS), `EmailNotifyBackend` (SMTP), `WebhookNotifyBackend` (HTTPS POST). All backends are best-effort. |
 | `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend` + `new_trace_id` (per-sample trace-ID helper); plug-in metrics backends (issue #145, #127). |
 | `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
 | `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, `osimflow compare`, `osimflow backup`, and `osimflow restore` subcommands. Registry backup/export/import methods: `export_registry()`, `import_registry()`, `backup()` (issue #440). |
- | `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, `detect_climate_zone_from_stat`, plus `EPWValidationError` / `EPWDownloadError` (issue #424). |
-| `osimflow/health.py` | CLI health check module (issue #411): `CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`, `run_health_checks`, `format_results`, `to_json`, `get_exit_code`. Powers the `osimflow health` subcommand — verifies Python version, core packages, SQLite, write permissions, disk space, external tools (OpenStudio/Docker/Podman), optional packages, and network connectivity. |
+| `osimflow/remote_runner.py` | Remote step runner for Nomad-dispatched fan-out work; stdlib-only so it can run in remote containers without extra orchestration dependencies. |
+| `osimflow/results_db.py` | SQLite-backed results database for OSimFlow campaign runs (issue #614). Phase 1 of GAP-008/OPS-003: `${outdir}/results.db` survives across campaign re-runs, enabling historical analysis and cross-campaign comparison. |
+| `osimflow/storage.py` | `ResultStorage` ABC, `LocalStorage` (no-op), `S3Storage` (boto3), `GCSStorage` (google-cloud-storage), `AzureBlobStorage` (azure-storage-blob async), `ResultStorageUploader` (sync wrapper), and `build_result_storage` factory (issue #339). |
+| `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
+| `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
+| `osimflow/validation.py` | Input validation for OSimFlow (issue #278): `ValidationError`, `validate_path_within`, `validate_variables_yml`, `validate_template_package`, `sanitize_sample_id`, `sanitize_filename`. |
+| `osimflow/version_detection.py` | `VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility` — OpenStudio version detection and container tag resolution. |
+| `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, `detect_climate_zone_from_stat`, plus `EPWValidationError` / `EPWDownloadError` (issue #424). |
+| `osimflow/webhook.py` | Webhook client for campaign completion callbacks (issue #283). Delivers a POST to a user-configured URL when a campaign completes; retries up to 3 times with exponential backoff (1s, 2s, 4s). |
+| `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
 | `osimflow/api/__init__.py` | REST API public surface: `create_app`. Optional `[api]` extra (issue #138). |
 | `osimflow/api/app.py` | FastAPI application factory with `/health`, `/ready`, `/api/v1/campaign`, `/api/v1/steps` endpoints (issue #138, G23a). |
+| `osimflow/api/auth.py` | Authentication and authorization helpers for the REST API (issue #268, #395): API key validation, multi-user API key store with per-user permission levels, permission checking decorators. |
+| `osimflow/api/campaigns.py` | Campaign CRUD and per-sample result endpoints (issue #267, #395): `GET/POST /api/v1/campaigns`, `GET /api/v1/campaigns/compare`, `GET/POST /api/v1/campaigns/{campaign_id}`, `GET /api/v1/campaigns/{campaign_id}/samples`, `POST /api/v1/campaigns/{campaign_id}/cancel`, `POST /api/v1/campaigns/{campaign_id}/pause`. |
+| `osimflow/api/coordinator.py` | Coordinator protocol endpoints for remote campaign handoff and status updates (Epic #624, issue #602): `PATCH /api/v1/coordinator/campaigns/{id}/status`, `POST /api/v1/coordinator/campaigns/{id}/notify`. |
+| `osimflow/api/dashboard.py` | Dashboard-specific API endpoints for the Streamlit dashboard (issue #607). |
 | `osimflow/api/events.py` | SSE live events and campaign stop endpoints (issue #143): `GET /api/v1/events` (Server-Sent Events stream watching `run.json`), `POST /api/v1/campaign/stop` (writes `.stop` flag to halt a running campaign). |
-| `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
-| `osimflow/alerting.py` | `AlertManager` + `build_alert_manager` — Alert routing for campaign events (Slack, PagerDuty, email). |
-| `osimflow/cost_tracking.py` | `CostEstimate` + `CostTracker` + `CampaignCostSummary` — Cloud/HPC resource cost estimation and tracking (issue #447). |
-| `osimflow/version_detection.py` | `VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility` — OpenStudio version detection and container tag resolution. |
+| `osimflow/api/files.py` | File download and upload endpoints for campaign artifacts (issue #555). |
+| `osimflow/api/measures.py` | Measure browsing and BCL (Building Component Library) integration endpoints (issue #580): `GET /api/v1/measures`, `GET /api/v1/measures/bcl`. |
+| `osimflow/api/pat_compat.py` | PAT (OpenStudio Analysis) compatibility layer endpoints (issue #134). |
+| `osimflow/api/results_query.py` | Query endpoint for campaign results with filtering and pagination (issue #585). |
+| `osimflow/api/results_viewer.py` | Results viewer API for browsing per-sample KPI results (issue #614). |
+| `osimflow/api/schemas.py` | Pydantic request/response schemas for the REST API (issue #433). |
+| `osimflow/api/timeseries.py` | Time-series data endpoints for per-sample simulation outputs (issue #614). |
+| `osimflow/api/variables.py` | Variable management endpoints for the Variable Designer web UI (issue #587). |
+| `osimflow/api/static/` | Static assets served by the REST API. |
+| `osimflow/api/templates/` | Jinja2 templates for the REST API. |
 | `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. `AlgorithmRegistry.discover_plugins()` auto-discovers third-party algorithms via `entry_points` group `osimflow.algorithms` (issue #432). |
-| `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
-| `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
-| `osimflow/algorithms/de.py` | `DifferentialEvolutionAlgorithm` — Differential evolution optimizer using `scipy.optimize.differential_evolution` (issue #125). Iterative. |
+| `osimflow/algorithms/calibration.py` | `CalibrationAlgorithm` — BM25-based energy model calibration using utility bill data; supports ASHRAE 14 compliance metrics (NMBE, CVRMSE) (issue #528). |
+| `osimflow/algorithms/custom.py` | `CustomDOEAlgorithm` — loads user-provided sample points from a CSV file or accepts a Python callable that generates samples at runtime (issue #406). |
 | `osimflow/algorithms/da.py` | `DualAnnealingAlgorithm` — Dual annealing optimizer using `scipy.optimize.dual_annealing` (issue #125). Iterative. |
+| `osimflow/algorithms/de.py` | `DifferentialEvolutionAlgorithm` — Differential evolution optimizer using `scipy.optimize.differential_evolution` (issue #125). Iterative. |
+| `osimflow/algorithms/diag.py` | `DiagAlgorithm` — one-at-a-time (OAT) diagnostic analysis; holds all variables at baseline while varying one at a time (issue #581). |
+| `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
+| `osimflow/algorithms/factorial.py` | `FactorialAlgorithm` — full factorial design of experiments sampler (issue #522). |
+| `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
+| `osimflow/algorithms/gaisl.py` | `GAISLAlgorithm` — genetic algorithm for incremental sequential learning (issue #523). |
 | `osimflow/algorithms/ga.py` | `GeneticAlgorithm` — canonical Genetic Algorithm using DEAP with tournament selection, SBX crossover, and polynomial mutation (issue #345). Iterative. Optional `[ga]` extra. |
+| `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
+| `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/nsga2.py` | `NSGA2Algorithm` — NSGA-II multi-objective optimizer using `pymoo` (issue #140). Iterative. Optional `[optimization]` extra. |
 | `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
-| `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
-| `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
-| `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
+| `osimflow/algorithms/qdiscrete.py` | `QDiscreteAlgorithm` — quasi-discrete sampling strategy (issue #524). |
+| `osimflow/algorithms/random_sampling.py` | `RandomSamplingAlgorithm` — simple random sampling baseline (issue #525). |
+| `osimflow/algorithms/repeat_all.py` | `RepeatAllAlgorithm` — repeats all sample points for variance analysis (issue #526). |
+| `osimflow/algorithms/rgenoud.py` | `RGenoudAlgorithm` — genetic algorithm optimization using the `rgenoud` engine (issue #527). |
+| `osimflow/algorithms/sequential_search.py` | `SequentialSearchAlgorithm` — sequential search optimization (issue #520). |
+| `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
+| `osimflow/algorithms/spea2.py` | `SPEA2Algorithm` — Strength Pareto Evolutionary Algorithm 2 for multi-objective optimization (issue #521). |
+| `osimflow/algorithms/uq.py` | `UQAlgorithm` — uncertainty quantification sampler using Latin Hypercube (issue #530). |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor` + `DockerSwarmExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
-| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the official Docker SDK (issue #582). |
-| `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
-| `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
 | `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
+| `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
+| `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
+| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the Docker Python SDK; creates a Swarm Service per call and polls tasks with exponential backoff (issue #582). |
 | `osimflow/executors/google_batch_executor.py` | `GoogleBatchExecutor` — Google Cloud Batch executor using the Google Cloud SDK. |
-| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254). |
+| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254, #377). |
 | `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
 | `osimflow/executors/transport.py` | Shared transport/result helpers for remote executors; defines executor-agnostic result reference contract for remote handles. |
-| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the Docker Python SDK; creates a Swarm Service per call and polls tasks with exponential backoff (issue #582).
-| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
-| `osimflow/measures.py` | `MeasureRegistry`, `Measure`, `MeasureArgument`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError` — measure discovery, argument introspection, and variable validation for parametric campaigns (issue #532). |
-| `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
-| `osimflow/handoff_record.py` | Local handoff record for Coordinator-backed (`--detach`) campaigns (issue #630, Epic #624): `HandoffRecord`, `NoHandoffRecordError`, `IDEMPOTENCY_KEY_HEADER`, `HANDOFF_RECORD_NAME`, `read_handoff_record`, `write_handoff_record`, `handoff_record_exists`. Persists `{campaign_id, coordinator_url, submitted_at, status_url}` to `outdir/.coordinator_handoff.json` so `osimflow status` / `osimflow download` can reconnect to a remote campaign from a fresh shell. |
-| `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
+| `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
+| `osimflow/exporters/osa.py` | `OSAExporter` — export campaign config to PAT-compatible analysis.json (issue #142) and `.osa` ZIP archives (issue #134). `pack_osa()` bundles analysis.json + seed model + measures + weather into a portable `.osa` file. Reverse of `importers/osa.py`. |
+| `osimflow/exporters/r_dataframe.py` | R DataFrame export for statistical analysis compatibility (issue #589). |
 | `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
 | `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
-| `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
-| `osimflow/exporters/osa.py` | `OSAExporter` — export campaign config to PAT-compatible analysis.json (issue #142) and ``.osa`` ZIP archives (issue #134). ``pack_osa()`` bundles analysis.json + seed model + measures + weather into a portable ``.osa`` file. Reverse of `importers/osa.py`. |
-| `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
-| `osimflow/client.py` | Typed async Python client for the REST API (issue #433): `OSimFlowClient` (httpx-based), Pydantic response models (`HealthResponse`, `CampaignResponse`, `StepsResponse`, `SamplesResponse`, etc.), and typed exception hierarchy (`AuthenticationError`, `NotFoundError`, `RateLimitError`, `ServerError`). Optional `[api]` extra (httpx). |
-| `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
+| `osimflow/viz/__init__.py` | Visualization package init. |
+| `osimflow/viz/dashboard.py` | Streamlit-based local dashboard for OSimFlow campaign results; self-contained process spawned by `osimflow dashboard` CLI subcommand (issue #607). |
 | `scripts/generate_openapi.py` | Export the OpenAPI spec from the FastAPI app to `docs/openapi.json` (issue #433). Run: `python scripts/generate_openapi.py --output docs/openapi.json`. |
 | `docs/openapi.json` | Auto-generated OpenAPI 3.1 spec for the OSimFlow REST API (issue #433). Regenerate after adding/modifying API endpoints. Consumable by code generators (openapi-generator, etc.). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats). |
@@ -173,7 +216,6 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `bin/aggregate_results.py` | Result aggregation + error-summary extraction. |
 | `bin/generate_plots.py` | Matplotlib/seaborn plot generator. |
 | `bin/excel_to_variables.py` | PAT/Analysis Gem Excel spreadsheet to ``variables.yml`` converter. Reads a PAT-style ``.xlsx`` and produces a OSimFlow ``variables.yml`` with support for uniform, normal, lognormal, triangular, discrete, categorical, and static distributions. |
-| `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
