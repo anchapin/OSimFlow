@@ -1393,8 +1393,12 @@ class _NomadHandle(Handle):
         # gets called and propagates the error instead of silently succeeding.
         # Use result() instead of done() to distinguish FAILED (raises) from
         # COMPLETED (returns normally) per the done()/result() contract.
+        # When there is no local future, we can only report done() == True
+        # if the allocation itself succeeded (status == "complete").
+        # Failed/lost allocations must return False so callers invoke result()
+        # and receive the error.
         if self._local_future is None:
-            return True
+            return cast(bool, status == "complete")
         done: bool
         try:
             self._local_future.result()
