@@ -638,7 +638,7 @@ class TestRateLimiting:
         fall back to the in-process counter so the API remains available even if
         Redis goes down.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
 
