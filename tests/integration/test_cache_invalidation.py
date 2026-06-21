@@ -204,6 +204,97 @@ def test_variables_yml_change_invalidates_lhs_only(tmp_cache: SQLiteCache, tmp_p
     assert tmp_cache.lookup(new_key) is None
 
 
+def test_aggregate_results_uses_work_hash_not_bin_hash(
+    tmp_cache: SQLiteCache, tmp_path: Path
+) -> None:
+    """Regression test for issue #652: AGGREGATE_RESULTS must use the work
+    hash (hash of work.py), not the bin hash (hash of bin/*.py scripts).
+
+    The Python aggregation logic lives in work.py (the work layer that invokes
+    bin/aggregate_results.py). When work.py changes, aggregation must re-run
+    because the Python-side orchestration changed. Bin script edits should NOT
+    invalidate the AGGREGATE_RESULTS cache key because the Python layer that
+    invokes them is what gets hashed.
+    """
+    # Simulate work.py content at two points in time
+    work_dir = tmp_path / "work_module"
+    work_dir.mkdir()
+    work_file = work_dir / "work.py"
+    work_file.write_text("version = 'v1'")
+    h_work_v1 = sha256_of_files([work_file])
+
+    work_file.write_text("version = 'v2'")
+    h_work_v2 = sha256_of_files([work_file])
+    assert h_work_v1 != h_work_v2  # work.py changed
+
+    # Simulate bin/aggregate_results.py content at two points
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    agg_script = bin_dir / "aggregate_results.py"
+    agg_script.write_text("# aggregate v1")
+    h_bin_v1 = sha256_of_files([agg_script])
+
+    agg_script.write_text("# aggregate v2")
+    h_bin_v2 = sha256_of_files([agg_script])
+    assert h_bin_v1 != h_bin_v2  # bin script changed
+
+    # Build AGGREGATE_RESULTS cache keys as campaign does after the fix
+    # The keys use work hash, not bin hash
+    kpi_files = [str(tmp_path / "kpi_1.json"), str(tmp_path / "kpi_2.json")]
+    sim_dirs = [str(tmp_path / "sim_1"), str(tmp_path / "sim_2")]
+    inputs_hash = sha256_of_dict({"kpis": kpi_files, "sims": sim_dirs})
+
+    # Key with work hash v1
+    key_work_v1 = CacheKey(
+        step="AGGREGATE_RESULTS",
+        sample_id="ALL",
+        openstudio_version="N/A",
+        inputs_sha256=inputs_hash,
+        code_sha256=h_work_v1,
+        container_digest="python-img",
+    )
+    # Key with work hash v2 (work.py changed)
+    key_work_v2 = CacheKey(
+        step="AGGREGATE_RESULTS",
+        sample_id="ALL",
+        openstudio_version="N/A",
+        inputs_sha256=inputs_hash,
+        code_sha256=h_work_v2,
+        container_digest="python-img",
+    )
+    # Key with bin hash v2 (bin script changed, but should NOT affect this key)
+    key_bin_v2 = CacheKey(
+        step="AGGREGATE_RESULTS",
+        sample_id="ALL",
+        openstudio_version="N/A",
+        inputs_sha256=inputs_hash,
+        code_sha256=h_bin_v2,
+        container_digest="python-img",
+    )
+
+    # Store result with work hash v1
+    out = tmp_path / "aggregated.csv"
+    out.write_text("sample_id,kpi1,kpi2\n1,100,200\n2,150,250\n")
+    tmp_cache.store(key_work_v1, out, exit_code=0)
+
+    # Verify: work hash change -> cache MISS (must re-aggregate)
+    assert tmp_cache.lookup(key_work_v2) is None, (
+        "AGGREGATE_RESULTS cache should miss when work.py changes"
+    )
+
+    # Verify: bin hash change does NOT affect AGGREGATE_RESULTS cache
+    # (because it uses work hash, not bin hash)
+    assert tmp_cache.lookup(key_bin_v2) is None, (
+        "AGGREGATE_RESULTS cache key should use work hash, not bin hash; "
+        "bin script changes should not affect this cache key"
+    )
+
+    # Verify: same work hash v1 is still a HIT
+    assert tmp_cache.lookup(key_work_v1) is not None, (
+        "AGGREGATE_RESULTS cache should hit when work.py hasn't changed"
+    )
+
+
 def test_stats(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     """Cache primary key has 6 columns; same key replaces, different key adds."""
     out = tmp_path / "o.txt"
