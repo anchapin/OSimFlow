@@ -52,6 +52,11 @@ class ObservabilityManager:
     def __init__(self, cfg: CampaignConfig) -> None:
         self._backend: ObservabilityBackend = self._build_backend(cfg)
 
+    @property
+    def backend(self) -> ObservabilityBackend:
+        """The underlying observability backend (read-only)."""
+        return self._backend
+
     # ------------------------------------------------------------------
     # Backend construction
     # ------------------------------------------------------------------

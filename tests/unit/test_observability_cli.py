@@ -22,6 +22,7 @@ from osimflow import (
     CampaignConfig,
     CloudWatchBackend,
     NullBackend,
+    ObservabilityManager,
     OpenTelemetryBackend,
     PrometheusBackend,
 )
@@ -259,11 +260,11 @@ class TestCampaignConfigFields:
 
 
 class TestBackendInstantiation:
-    """Test that Campaign._build_observability_backend produces the correct backend."""
+    """Test that ObservabilityManager._build_backend produces the correct backend."""
 
     def test_none_produces_null_backend(self) -> None:
         cfg = _make_cfg(observability="none")
-        backend = Campaign._build_observability_backend(cfg)
+        backend = ObservabilityManager._build_backend(cfg)
         assert isinstance(backend, NullBackend)
 
     def test_cloudwatch_produces_cloudwatch_backend(self) -> None:
@@ -271,7 +272,7 @@ class TestBackendInstantiation:
             observability="cloudwatch",
             cloudwatch_namespace="TestNS",
         )
-        backend = Campaign._build_observability_backend(cfg)
+        backend = ObservabilityManager._build_backend(cfg)
         assert isinstance(backend, CloudWatchBackend)
         assert backend._namespace == "TestNS"
 
@@ -280,7 +281,7 @@ class TestBackendInstantiation:
             observability="prometheus",
             prometheus_port=9091,
         )
-        backend = Campaign._build_observability_backend(cfg)
+        backend = ObservabilityManager._build_backend(cfg)
         assert isinstance(backend, PrometheusBackend)
         assert backend._url == "localhost:9091"
 
@@ -289,7 +290,7 @@ class TestBackendInstantiation:
             observability="opentelemetry",
             otel_endpoint="http://collector:4317",
         )
-        backend = Campaign._build_observability_backend(cfg)
+        backend = ObservabilityManager._build_backend(cfg)
         assert isinstance(backend, OpenTelemetryBackend)
         assert backend._endpoint == "http://collector:4317"
 
@@ -297,14 +298,14 @@ class TestBackendInstantiation:
         cfg = _make_cfg(
             observability="opentelemetry",
         )
-        backend = Campaign._build_observability_backend(cfg)
+        backend = ObservabilityManager._build_backend(cfg)
         assert isinstance(backend, OpenTelemetryBackend)
         assert backend._endpoint == "http://localhost:4317"
 
     def test_unknown_backend_raises_value_error(self) -> None:
         cfg = _make_cfg(observability="datadog")  # type: ignore[call-arg]
         with pytest.raises(ValueError, match="unknown observability backend"):
-            Campaign._build_observability_backend(cfg)
+            ObservabilityManager._build_backend(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +361,7 @@ class TestCampaignBackendWiring:
 
         cfg = _make_cfg(observability="none")
         campaign = Campaign(cfg, self._make_mock_executor())
-        assert isinstance(campaign._obs, NullBackend)
+        assert isinstance(campaign._obs.backend, NullBackend)
 
     @patch("osimflow.campaign.SQLiteCache")
     def test_campaign_uses_cloudwatch_backend(
@@ -376,8 +377,8 @@ class TestCampaignBackendWiring:
             cloudwatch_namespace="TestNS",
         )
         campaign = Campaign(cfg, self._make_mock_executor())
-        assert isinstance(campaign._obs, CloudWatchBackend)
-        assert campaign._obs._namespace == "TestNS"
+        assert isinstance(campaign._obs.backend, CloudWatchBackend)
+        assert campaign._obs.backend._namespace == "TestNS"
 
     @patch("osimflow.campaign.SQLiteCache")
     def test_campaign_uses_prometheus_backend(
@@ -393,7 +394,7 @@ class TestCampaignBackendWiring:
             prometheus_port=9091,
         )
         campaign = Campaign(cfg, self._make_mock_executor())
-        assert isinstance(campaign._obs, PrometheusBackend)
+        assert isinstance(campaign._obs.backend, PrometheusBackend)
 
     @patch("osimflow.campaign.SQLiteCache")
     def test_campaign_uses_otel_backend(
@@ -409,7 +410,7 @@ class TestCampaignBackendWiring:
             otel_endpoint="http://collector:4317",
         )
         campaign = Campaign(cfg, self._make_mock_executor())
-        assert isinstance(campaign._obs, OpenTelemetryBackend)
+        assert isinstance(campaign._obs.backend, OpenTelemetryBackend)
 
 
 # ---------------------------------------------------------------------------
