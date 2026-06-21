@@ -1311,11 +1311,13 @@ class _NomadHandle(Handle):
                     eval_id=self._eval_id,
                     job_id=self.job_id,
                 )
-            # Guard against resolve_allocation returning None (e.g. both calls
-            # failed and the TypeError was caught but allocation remains unresolved).
-            if self._allocation_id is None:
+            # Guard against resolve_allocation returning None or "None" (the
+            # str(None) string, e.g. when resolve_allocation itself had a bug
+            # and called str() on a None result).  Both are invalid allocation
+            # IDs that would cause downstream NoneType errors.
+            if self._allocation_id is None or self._allocation_id == "None":
                 raise RuntimeError(
-                    f"resolve_allocation returned None for eval={self._eval_id!r} "
+                    f"resolve_allocation returned {self._allocation_id!r} for eval={self._eval_id!r} "
                     f"job={self.job_id!r}; allocation could not be resolved"
                 )
         return self._allocation_id
