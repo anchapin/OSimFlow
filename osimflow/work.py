@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .executors import run_subprocess  # local helper (issue #6)
+from .json_utils import safe_json_dumps
 from .storage import ResultStorage
 from .version_detection import VersionDetectionError, detect_openstudio_version
 from .weather import EPWValidationError, discover_epw_files, validate_epw_header
@@ -323,7 +324,7 @@ def default_apply_parameters(
     out_dir = out / sample_id
     out_dir.mkdir(parents=True, exist_ok=True)
     param_file = out / f"{sample_id}.params.json"
-    param_file.write_text(json.dumps(parameters, sort_keys=True))
+    safe_json_dumps(parameters, param_file, sort_keys=True)
 
     use_real_cli = _is_openstudio_available() and not _is_stub_mode()
 
@@ -892,7 +893,7 @@ def _run_real_openstudio(
     register_values = _parse_register_values(stdout_path)
     if register_values is not None:
         rv_path = sim_out / "register_values.json"
-        rv_path.write_text(json.dumps(register_values, indent=2, default=str))
+        safe_json_dumps(register_values, rv_path, default=str, indent=2)
         log.info(
             "captured %d runner.registerValue outputs for sample=%s",
             len(register_values),

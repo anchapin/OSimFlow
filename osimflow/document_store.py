@@ -543,7 +543,16 @@ class SQLiteDocumentStore(DocumentStore):
         if row is None:
             return None
 
-        doc = cast(dict[str, Any], json.loads(row["doc"]))
+        try:
+            doc = cast(dict[str, Any], json.loads(row["doc"]))
+        except (json.JSONDecodeError, TypeError) as exc:
+            log.warning(
+                "find_one: corrupted doc in collection=%s filter=%s: %s",
+                collection,
+                filter_spec,
+                exc,
+            )
+            return None
         log.debug("find_one: collection=%s filter=%s -> found", collection, filter_spec)
         return doc
 
@@ -592,7 +601,14 @@ class SQLiteDocumentStore(DocumentStore):
             c = self.connection
             rows = c.execute(query, params).fetchall()
 
-        docs = [json.loads(row["doc"]) for row in rows]
+        docs = []
+        for row in rows:
+            try:
+                docs.append(json.loads(row["doc"]))
+            except (json.JSONDecodeError, TypeError) as exc:
+                log.warning(
+                    "find_many: skipped corrupted doc in collection=%s: %s", collection, exc
+                )
         log.debug(
             "find_many: collection=%s filter=%s limit=%d skip=%d -> %d docs",
             collection,
