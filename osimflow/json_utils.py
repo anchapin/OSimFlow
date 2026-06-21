@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,7 @@ def safe_json_dumps(
     obj: Any,
     path: Path,
     *,
-    default: str | None = None,
+    default: Callable[[Any], Any] | None = None,
     indent: int | None = None,
     sort_keys: bool = False,
     raise_on_error: bool = False,
@@ -73,7 +74,7 @@ def safe_json_dumps(
         Destination file path.
     default
         Passed through to ``json.dumps`` as the *default* kwarg.
-        When None, no ``default`` is passed (equivalent to ``default=str``).
+        When None, no ``default`` is passed to ``json.dumps``.
     indent
         Passed through to ``json.dumps`` as the *indent* kwarg.
     sort_keys
