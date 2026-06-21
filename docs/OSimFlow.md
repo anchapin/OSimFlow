@@ -62,7 +62,7 @@ The Minimum Viable Product (MVP) for OSimFlow will **focus on delivering a robus
 *   Custom web-based UI for workflow submission or monitoring.
 *   Integration with advanced optimization algorithms (beyond sampling).
 *   First-class support for *all* esoteric OpenStudio CLI commands; the initial focus is on `openstudio.cli run`.
-*   Deep, first-class support for Azure Batch or PBS Pro (prioritized for future phases and community contribution; new executors can be added by subclassing `BaseExecutor` in `osimflow/executors/`).
+*   Deep, first-class support for PBS Pro (prioritized for future phases and community contribution; new executors can be added by subclassing `BaseExecutor` in `osimflow/executors/`).
 *   Direct support for generating EnergyPlus Input Data Files (`.idf`) or Weather Files (`.epw`); OSimFlow operates on `.osm` models or `.osw` workflows primarily.
 
 ## 4. Technical Architecture Overview
