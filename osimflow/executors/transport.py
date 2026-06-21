@@ -63,15 +63,24 @@ def resolve_result_for_callback(
     result_hint: Any,  # noqa: ANN401
     *,
     default: Any = None,  # noqa: ANN401
+    transport_mode: str = "auto",
 ) -> Any:  # noqa: ANN401
     """Return callback-facing result value for remote handles.
 
     If ``result_hint`` is set, it is decoded through the transport value
     decoder to normalize tagged path payloads. Otherwise ``default`` is
     returned to preserve existing executor behavior.
+
+    When ``transport_mode`` is ``"object_storage"``, the result hint
+    contains placeholder paths that will be resolved by
+    ``materialize_object_storage_result``; no decoding is applied in that
+    case to avoid double-translating the payload.
     """
     if result_hint is None:
         return default
+    mode = coerce_transport_mode(transport_mode)
+    if mode == "object_storage":
+        return result_hint
     return decode_transport_value(result_hint)
 
 

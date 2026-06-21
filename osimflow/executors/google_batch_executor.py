@@ -257,8 +257,8 @@ class GoogleBatchExecutor(BaseExecutor):
             log.info(
                 "google_batch poll job=%s state=%s (sleeping %.1fs)", job_name, state_str, delay
             )
-            time.sleep(delay)
             delay = min(delay * 2, self.max_poll_interval_s)
+            time.sleep(delay)
 
     def _build_environment(
         self,
