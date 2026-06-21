@@ -542,16 +542,16 @@ def _resolve_conditional(
             if parent_val is None:
                 continue
             for rule in var_def.get("conditions", []):
-                    try:
-                        matched = safe_eval(str(cond.get("match", "True")), {"val": parent_val})
-                    except (ExpressionError, SyntaxError):
-                        matched = False
-                    if matched:
-                        rule_dist = rule.get("distribution", "uniform")
-                    rule_params = {k: v for k, v in rule.items() if k != "distribution"}
-                    sample["values"][var_name] = _apply_distribution(0.5, rule_dist, rule_params)
-                    resolved_count += 1
-                    break
+                try:
+                    matched = safe_eval(str(cond.get("match", "True")), {"val": parent_val})
+                except (ExpressionError, SyntaxError):
+                    matched = False
+                if matched:
+                    rule_dist = rule.get("distribution", "uniform")
+                rule_params = {k: v for k, v in rule.items() if k != "distribution"}
+                sample["values"][var_name] = _apply_distribution(0.5, rule_dist, rule_params)
+                resolved_count += 1
+                break
         if resolved_count < n_samples:
             queue.append(idx)
         iteration += 1
