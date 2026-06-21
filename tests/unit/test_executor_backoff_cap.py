@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor
