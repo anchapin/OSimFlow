@@ -201,8 +201,8 @@ class KubernetesExecutor(BaseExecutor):
                 pod_status = self._get_pod_status(job_name)
             except Exception as exc:
                 log.warning("error getting pod status for %s: %s", job_name, exc)
-                time.sleep(delay)
                 delay = min(delay * 2, self.max_poll_interval_s)
+                time.sleep(delay)
                 continue
 
             phase = pod_status.get("status", {}).get("phase", "")
@@ -215,8 +215,8 @@ class KubernetesExecutor(BaseExecutor):
                 phase,
                 delay,
             )
-            time.sleep(delay)
             delay = min(delay * 2, self.max_poll_interval_s)
+            time.sleep(delay)
 
     def _get_pod_status(self, job_name: str) -> dict[str, Any]:
         """Get the pod status for a job's pod.
