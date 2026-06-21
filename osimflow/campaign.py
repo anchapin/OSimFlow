@@ -2877,8 +2877,9 @@ class Campaign:
                 variables = raw.get("variables", [])
             else:
                 variables = []
-        except Exception:
-            return
+        except Exception as exc:
+            log.error(f"Variable validation failed: {exc}")
+            raise ValueError(f"Variable validation failed: {exc}") from exc
 
         if not variables:
             return
