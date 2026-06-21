@@ -389,6 +389,19 @@ class DockerSwarmExecutor(BaseExecutor):
         time_min: int = 60,
         container: str | None = None,
         openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        env: dict[str, str] | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
         # Check for stub mode: when Docker is unavailable or not in Swarm mode,
@@ -411,6 +424,19 @@ class DockerSwarmExecutor(BaseExecutor):
                     time_min=time_min,
                     container=container,
                     openstudio_version=openstudio_version,
+                    result_hint=result_hint,
+                    remote_command=remote_command,
+                    result_transport_mode=result_transport_mode,
+                    result_storage_backend=result_storage_backend,
+                    result_storage_bucket=result_storage_bucket,
+                    result_storage_prefix=result_storage_prefix,
+                    result_storage_endpoint=result_storage_endpoint,
+                    variables_json=variables_json,
+                    env=env,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    max_retries=max_retries,
+                    worker_id=worker_id,
                     **kwargs,
                 ),
             )
@@ -447,6 +473,19 @@ class DockerSwarmExecutor(BaseExecutor):
                     time_min=time_min,
                     container=container,
                     openstudio_version=openstudio_version,
+                    result_hint=result_hint,
+                    remote_command=remote_command,
+                    result_transport_mode=result_transport_mode,
+                    result_storage_backend=result_storage_backend,
+                    result_storage_bucket=result_storage_bucket,
+                    result_storage_prefix=result_storage_prefix,
+                    result_storage_endpoint=result_storage_endpoint,
+                    variables_json=variables_json,
+                    env=env,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    max_retries=max_retries,
+                    worker_id=worker_id,
                     **kwargs,
                 ),
             )
@@ -472,6 +511,19 @@ class DockerSwarmExecutor(BaseExecutor):
                     time_min=time_min,
                     container=container,
                     openstudio_version=openstudio_version,
+                    result_hint=result_hint,
+                    remote_command=remote_command,
+                    result_transport_mode=result_transport_mode,
+                    result_storage_backend=result_storage_backend,
+                    result_storage_bucket=result_storage_bucket,
+                    result_storage_prefix=result_storage_prefix,
+                    result_storage_endpoint=result_storage_endpoint,
+                    variables_json=variables_json,
+                    env=env,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    max_retries=max_retries,
+                    worker_id=worker_id,
                     **kwargs,
                 ),
             )
@@ -484,6 +536,12 @@ class DockerSwarmExecutor(BaseExecutor):
         self._stub_executor = None
 
         del fn, args  # noqa: ARG002
+        # Unused in Docker Swarm mode: result_hint, remote_command, result_transport_mode,
+        # result_storage_*, variables_json, env, stdout/stderr_path, max_retries, worker_id.
+        del result_hint, remote_command, result_transport_mode  # noqa: F841
+        del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
+        del result_storage_endpoint, variables_json, env  # noqa: F841
+        del stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841
 
         submit_params: dict[str, Any] = {
             "name": name,

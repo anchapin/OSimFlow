@@ -173,12 +173,28 @@ class LocalExecutor(BaseExecutor):
         time_min: int = 60,
         container: str | None = None,
         openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        env: dict[str, str] | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
         # Resource directives are advisory on the local executor.
         # ``openstudio_version`` is consumed here (not forwarded to ``fn``)
         # so it never collides with the work function's positional param.
-        del openstudio_version  # noqa: ARG003
+        del openstudio_version, result_hint, remote_command, result_transport_mode  # noqa: F841
+        del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
+        del result_storage_endpoint, variables_json, env, stdout_path, stderr_path  # noqa: F841
+        del max_retries, worker_id, kwargs  # noqa: F841, ARG002
         import socket  # noqa: PLC0415
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
@@ -332,6 +348,19 @@ class SlurmExecutor(BaseExecutor):
         time_min: int = 60,
         container: str | None = None,
         openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        env: dict[str, str] | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
         # Issue #4: per-submit resource directives. submitit 1.5+ does
@@ -343,6 +372,9 @@ class SlurmExecutor(BaseExecutor):
         # per-sample resources (different memory ceilings for a heavy
         # sample, etc.) are honored in the resulting sbatch header, not
         # just logged.
+        # Unused fields: result_hint, remote_command, result_transport_mode,
+        # result_storage_*, variables_json, env, stdout/stderr_path, max_retries,
+        # worker_id — accepted for API compatibility but not consumed locally.
         if container:
             log.info(
                 "slurm submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -918,9 +950,24 @@ class AWSBatchExecutor(BaseExecutor):
         time_min: int = 60,
         container: str | None = None,
         openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        env: dict[str, str] | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        result_hint = kwargs.get("result_hint")
+        del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
+        del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
+        del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
 
         log.info(
             "aws_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -1873,31 +1920,26 @@ class NomadExecutor(BaseExecutor):
         time_min: int = 60,
         container: str | None = None,
         openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        env: dict[str, str] | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        result_hint = kwargs.get("result_hint")
-        remote_command = kwargs.get("remote_command")
-        result_transport_mode = kwargs.get("result_transport_mode")
-        result_storage_backend = kwargs.get("result_storage_backend")
-        result_storage_bucket = kwargs.get("result_storage_bucket")
-        result_storage_prefix = kwargs.get("result_storage_prefix")
-        result_storage_endpoint = kwargs.get("result_storage_endpoint")
-        local_callable_kwargs = {
-            key: value
-            for key, value in kwargs.items()
-            if key
-            not in {
-                "openstudio_version",
-                "variables_json",
-                "result_hint",
-                "remote_command",
-                "result_transport_mode",
-                "result_storage_backend",
-                "result_storage_bucket",
-                "result_storage_prefix",
-                "result_storage_endpoint",
-            }
-        }
+        # Assemble local_callable_kwargs from the explicit fields we received.
+        # stdout_path, stderr_path, env are for the campaign's use (not Nomad's env).
+        local_callable_kwargs: dict[str, Any] = {}
+        del kwargs  # noqa: F841, ARG002
+
         step_name = self._infer_step_name(name)
         task_payload = self._build_task_payload(
             step_name=step_name,
@@ -1945,7 +1987,6 @@ class NomadExecutor(BaseExecutor):
                 "openstudio_version": str(openstudio_version or ""),
                 "container_image": image,
             }
-            variables_json = kwargs.get("variables_json")
             if variables_json is not None:
                 meta["variables_json"] = (
                     variables_json
