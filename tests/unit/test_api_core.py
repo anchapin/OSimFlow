@@ -574,7 +574,9 @@ class TestRateLimiting:
         mock_ra.from_url.return_value = mock_client
 
         with patch("osimflow.api.app._get_redis_asyncio", return_value=mock_ra):
-            app = create_app(outdir=tmp_path, rate_limit="10/minute", redis_url="redis://localhost:6379/0")
+            app = create_app(
+                outdir=tmp_path, rate_limit="10/minute", redis_url="redis://localhost:6379/0"
+            )
             client = TestClient(app)
 
         # Requests under limit should succeed
@@ -620,7 +622,9 @@ class TestRateLimiting:
         mock_ra.from_url.return_value = mock_client
 
         with patch("osimflow.api.app._get_redis_asyncio", return_value=mock_ra):
-            app = create_app(outdir=tmp_path, rate_limit="2/minute", redis_url="redis://localhost:6379/0")
+            app = create_app(
+                outdir=tmp_path, rate_limit="2/minute", redis_url="redis://localhost:6379/0"
+            )
             client = TestClient(app)
 
         # First two requests should succeed
@@ -647,14 +651,18 @@ class TestRateLimiting:
         mock_ra.from_url.side_effect = Exception("Redis connection refused")
 
         with patch("osimflow.api.app._get_redis_asyncio", return_value=mock_ra):
-            app = create_app(outdir=tmp_path, rate_limit="2/minute", redis_url="redis://localhost:6379/0")
+            app = create_app(
+                outdir=tmp_path, rate_limit="2/minute", redis_url="redis://localhost:6379/0"
+            )
             client = TestClient(app)
 
         # Should fall back to in-process and work normally
         assert client.get("/health").status_code == 200
         assert client.get("/health").status_code == 200
         resp = client.get("/health")
-        assert resp.status_code == 429, f"Expected 429 (fallback to in-process) but got {resp.status_code}"
+        assert resp.status_code == 429, (
+            f"Expected 429 (fallback to in-process) but got {resp.status_code}"
+        )
 
 
 class TestReadOnlyDefault:
