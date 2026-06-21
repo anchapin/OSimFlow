@@ -769,7 +769,11 @@ def _parse_baseline(variables_yml: Path) -> dict[str, object] | None:
                 )
                 return baseline
     except Exception as exc:
-        log.warning("could not parse baseline section from %s: %s", variables_yml, exc)
+        log.warning(
+            "Failed to parse baseline section from %s: %s. Using default (None).",
+            variables_yml,
+            exc,
+        )
     return None
 
 
@@ -922,7 +926,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             yml_data if isinstance(yml_data, dict) else {}
         )
     except Exception as exc:
-        log.warning("could not parse objective/constraints from %s: %s", variables_yml, exc)
+        log.warning(
+            "Failed to parse objective/constraints from %s: %s. Using defaults (objective=None, constraints=None).",
+            variables_yml,
+            exc,
+        )
         objective, constraints = None, None
 
     return CampaignConfig(
