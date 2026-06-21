@@ -62,6 +62,8 @@ from typing import Any
 
 import yaml
 
+from osimflow._eval_safe import ExpressionError, safe_eval
+
 log = logging.getLogger("osimflow.alerting")
 
 
@@ -491,8 +493,8 @@ def _make_expr_condition(expr: str) -> Callable[[dict[str, Any]], bool]:
 
     def condition(context: dict[str, Any]) -> bool:
         try:
-            return bool(eval(expr, {"__builtins__": {}}, context))  # noqa: PGH001, S307
-        except Exception as exc:
+            return bool(safe_eval(expr, context))
+        except (ExpressionError, SyntaxError) as exc:
             log.warning("condition expression %r raised: %s — treating as False", expr, exc)
             return False
 

@@ -46,6 +46,7 @@ import numpy as np
 import scipy.stats
 import scipy.stats.qmc
 
+from osimflow._eval_safe import ExpressionError, safe_eval
 from osimflow.algorithms.qdiscrete import qdiscrete
 
 log = logging.getLogger("osimflow.algorithms")
@@ -541,16 +542,16 @@ def _resolve_conditional(
             if parent_val is None:
                 continue
             for rule in var_def.get("conditions", []):
-                if eval(  # noqa: S307
-                    str(cond.get("match", "True")),
-                    {"__builtins__": {}},
-                    {"val": parent_val},
-                ):
+                try:
+                    matched = safe_eval(str(cond.get("match", "True")), {"val": parent_val})
+                except (ExpressionError, SyntaxError):
+                    matched = False
+                if matched:
                     rule_dist = rule.get("distribution", "uniform")
-                    rule_params = {k: v for k, v in rule.items() if k != "distribution"}
-                    sample["values"][var_name] = _apply_distribution(0.5, rule_dist, rule_params)
-                    resolved_count += 1
-                    break
+                rule_params = {k: v for k, v in rule.items() if k != "distribution"}
+                sample["values"][var_name] = _apply_distribution(0.5, rule_dist, rule_params)
+                resolved_count += 1
+                break
         if resolved_count < n_samples:
             queue.append(idx)
         iteration += 1
