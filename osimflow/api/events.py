@@ -12,6 +12,7 @@ import fcntl
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -33,6 +34,43 @@ events_router = APIRouter()
 POLL_INTERVAL_S = 1.0
 HEARTBEAT_INTERVAL_S = 15.0
 MAX_ITERATIONS_DEFAULT = 0  # 0 = unlimited
+
+
+# ---------------------------------------------------------------------------
+# Cross-platform file locking helpers
+# ---------------------------------------------------------------------------
+
+
+def _read_json_with_lock(path: Path) -> dict[str, Any]:
+    """Read a JSON file with a shared (non-exclusive) lock.
+
+    Uses fcntl.flock on Unix and msvcrt.locking on Windows to prevent
+    race conditions when multiple SSE clients or the campaign writer
+    access run.json concurrently (issue #645).
+    """
+    data: dict[str, Any] = {}
+    if not path.exists():
+        return data
+    try:
+        with path.open("r") as fh:
+            if sys.platform == "win32":
+                import msvcrt  # noqa: PLC0415
+
+                msvcrt.locking(fh.fileno(), msvcrt.LK_RLCK, 0)
+            else:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
+            try:
+                data = json.loads(fh.read())
+            finally:
+                if sys.platform == "win32":
+                    import msvcrt  # noqa: PLC0415
+
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except (json.JSONDecodeError, OSError):
+        pass
+    return data
 
 
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
@@ -183,18 +221,8 @@ async def _event_generator(
         if await request.is_disconnected():
             break
 
-        # --- read current run.json (shared lock so concurrent SSE readers don't race) ---
-        current_snapshot: dict[str, Any] = {}
-        if run_json_path.exists():
-            try:
-                with open(run_json_path) as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                    try:
-                        current_snapshot = json.load(f)
-                    finally:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            except (json.JSONDecodeError, OSError):
-                current_snapshot = {}
+        # --- read current run.json with shared lock to prevent race condition (issue #645) ---
+        current_snapshot = _read_json_with_lock(run_json_path)
 
         # --- diff and emit ---
         if current_snapshot != last_snapshot:
@@ -287,18 +315,14 @@ async def campaign_pause(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="No output directory configured")
 
     run_json_path = outdir / "run.json"
-    if run_json_path.exists():
-        try:
-            run_data = json.loads(run_json_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            run_data = {}
-        if run_data.get("finished_at") is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="campaign has already completed",
-            )
-        if run_data.get("status") == "paused":
-            return {"status": "already_paused"}
+    run_data = _read_json_with_lock(run_json_path)
+    if run_data.get("finished_at") is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="campaign has already completed",
+        )
+    if run_data.get("status") == "paused":
+        return {"status": "already_paused"}
 
     pause_file = outdir / ".pause"
     _atomic_write_json(pause_file, {"requested_at": time.time()})
@@ -329,16 +353,12 @@ async def campaign_resume(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=503, detail="No output directory configured")
 
     run_json_path = outdir / "run.json"
-    if run_json_path.exists():
-        try:
-            run_data = json.loads(run_json_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            run_data = {}
-        if run_data.get("status") != "paused":
-            raise HTTPException(
-                status_code=409,
-                detail=f"campaign is not paused (status={run_data.get('status')})",
-            )
+    run_data = _read_json_with_lock(run_json_path)
+    if run_data and run_data.get("status") != "paused":
+        raise HTTPException(
+            status_code=409,
+            detail=f"campaign is not paused (status={run_data.get('status')})",
+        )
 
     pause_file = outdir / ".pause"
     if pause_file.exists():

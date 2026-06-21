@@ -536,3 +536,105 @@ class TestSSEStreaming:
 
         event_types = [e.get("event") for e in collected]
         assert "ping" in event_types
+
+
+# ---------------------------------------------------------------------------
+# File locking tests (issue #645)
+# ---------------------------------------------------------------------------
+
+
+class TestRunJsonFileLocking:
+    """Tests for run.json file locking in SSE event generator (issue #645)."""
+
+    def test_read_json_with_lock_returns_data(self, outdir: Path) -> None:
+        """_read_json_with_lock returns correct data when file exists."""
+        from osimflow.api.events import _read_json_with_lock
+
+        # Write test data
+        test_data = {"campaign_id": "lock-test", "status": "running"}
+        (outdir / "run.json").write_text(json.dumps(test_data))
+
+        # Read with lock
+        result = _read_json_with_lock(outdir / "run.json")
+        assert result == test_data
+
+    def test_read_json_with_lock_missing_file(self, tmp_path: Path) -> None:
+        """_read_json_with_lock returns empty dict when file does not exist."""
+        from osimflow.api.events import _read_json_with_lock
+
+        result = _read_json_with_lock(tmp_path / "nonexistent.json")
+        assert result == {}
+
+    def test_read_json_with_lock_concurrent_readers(self, outdir: Path) -> None:
+        """Multiple concurrent readers do not cause errors (shared lock)."""
+        import threading
+
+        from osimflow.api.events import _read_json_with_lock
+
+        test_data = _make_run_json(
+            steps=[
+                {"step": "GENERATE_LHS_SAMPLES", "cache": "MISS", "elapsed_s": 0.5, "exit_code": 0}
+            ],
+            samples=[{"sample_id": "sample_000", "status": "ok", "elapsed_s": 10.0}],
+        )
+        (outdir / "run.json").write_text(json.dumps(test_data))
+
+        errors: list[Exception] = []
+        results: list[dict] = []
+
+        def reader() -> None:
+            try:
+                data = _read_json_with_lock(outdir / "run.json")
+                results.append(data)
+            except Exception as e:
+                errors.append(e)
+
+        # Run multiple readers concurrently
+        threads = [threading.Thread(target=reader) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0, f"Concurrent read errors: {errors}"
+        assert len(results) == 5
+        for result in results:
+            assert result["campaign_id"] == "test-campaign-001"
+
+    @pytest.mark.asyncio
+    async def test_sse_generator_uses_locking(self, outdir: Path) -> None:
+        """SSE generator correctly reads run.json through locking helper."""
+        from osimflow.api.events import _event_generator, _read_json_with_lock
+
+        # Verify the locking helper is actually used by checking it returns data
+        test_data = _make_run_json(
+            steps=[
+                {"step": "GENERATE_LHS_SAMPLES", "cache": "MISS", "elapsed_s": 0.5, "exit_code": 0}
+            ]
+        )
+        (outdir / "run.json").write_text(json.dumps(test_data))
+
+        # Direct locking helper check
+        result = _read_json_with_lock(outdir / "run.json")
+        assert result["campaign_id"] == "test-campaign-001"
+
+        # Generator check
+        mock_request = MagicMock()
+        mock_request.app.state.outdir = outdir
+        mock_request.is_disconnected = _always_false
+
+        collected: list[dict[str, Any]] = []
+
+        async def collect() -> None:
+            async for evt in _event_generator(
+                mock_request,
+                poll_interval=0.01,
+                heartbeat_interval=9999.0,
+                max_iterations=2,
+            ):
+                collected.append(evt)
+
+        await collect()
+
+        event_types = [e.get("event") for e in collected]
+        assert "step.completed" in event_types

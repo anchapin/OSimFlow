@@ -124,12 +124,8 @@ def test_extract_kpis_uses_openstudio_version_in_cache_key(
     sid = "S1"
 
     # Compute inputs_hash as step_extract_kpis does (with os_version in hash)
-    inputs_hash_v1 = sha256_of_dict(
-        {"sim_dir": sim_dir, "sid": sid, "os_version": "3.11.0"}
-    )
-    inputs_hash_v2 = sha256_of_dict(
-        {"sim_dir": sim_dir, "sid": sid, "os_version": "3.12.0"}
-    )
+    inputs_hash_v1 = sha256_of_dict({"sim_dir": sim_dir, "sid": sid, "os_version": "3.11.0"})
+    inputs_hash_v2 = sha256_of_dict({"sim_dir": sim_dir, "sid": sid, "os_version": "3.12.0"})
     # Same sim_dir/sid but different os_version -> different inputs_hash
     assert inputs_hash_v1 != inputs_hash_v2
 
