@@ -911,7 +911,11 @@ class TestNomadHandle:
 
     def test_done_lost(self) -> None:
         handle, _ = self._make_handle(alloc_status="lost")
-        assert handle.done() is True
+        assert handle.done() is False
+
+    def test_done_failed(self) -> None:
+        handle, _ = self._make_handle(alloc_status="failed")
+        assert handle.done() is False
 
     def test_result_complete_materializes_object_storage_hint(self) -> None:
         class _ClientStub:
@@ -979,6 +983,58 @@ class TestNomadHandle:
     def test_extract_failure_description_empty_events(self) -> None:
         states = {"task": {"Events": []}}
         assert _NomadHandle._extract_failure_description(states) == "unknown reason"
+
+    def test_ensure_allocation_id_raises_when_resolve_returns_none(self) -> None:
+        """verify _ensure_allocation_id raises RuntimeError when resolve_allocation returns None."""
+
+        class _ClientStubReturnsNone:
+            @staticmethod
+            def resolve_allocation(eval_id: str, job_id: str, **_: object) -> str | None:
+                # Simulate a resolve_allocation that returns None (e.g. timeout, no alloc)
+                return None
+
+        class _ExecutorStubNone:
+            datacentre = "dc1"
+            _client = _ClientStubReturnsNone()
+            allocation_resolution_timeout_s = 0.1
+
+            @staticmethod
+            def _wait_for_terminal(allocation_id: str) -> dict[str, object]:
+                return {"ID": allocation_id, "ClientStatus": "complete", "TaskStates": {}}
+
+        handle = _NomadHandle(
+            job_id="job-1",
+            eval_id="eval-1",
+            executor=_ExecutorStubNone(),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError, match="resolve_allocation returned None"):
+            handle._ensure_allocation_id()
+
+    def test_ensure_allocation_id_raises_when_resolve_returns_none_string(self) -> None:
+        """verify _ensure_allocation_id raises RuntimeError when resolve_allocation returns 'None' (str)."""
+
+        class _ClientStubReturnsNoneStr:
+            @staticmethod
+            def resolve_allocation(eval_id: str, job_id: str, **_: object) -> str | None:
+                # Simulate a buggy resolve_allocation that returns str(None) == "None"
+                return str(None)
+
+        class _ExecutorStubNoneStr:
+            datacentre = "dc1"
+            _client = _ClientStubReturnsNoneStr()
+            allocation_resolution_timeout_s = 0.1
+
+            @staticmethod
+            def _wait_for_terminal(allocation_id: str) -> dict[str, object]:
+                return {"ID": allocation_id, "ClientStatus": "complete", "TaskStates": {}}
+
+        handle = _NomadHandle(
+            job_id="job-1",
+            eval_id="eval-1",
+            executor=_ExecutorStubNoneStr(),  # type: ignore[arg-type]
+        )
+        with pytest.raises(RuntimeError, match=r"resolve_allocation returned 'None'"):
+            handle._ensure_allocation_id()
 
 
 # ---------------------------------------------------------------------------

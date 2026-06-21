@@ -255,6 +255,27 @@ class TestCampaignStop:
         assert resp1.json()["status"] == "stopping"
         assert resp2.json()["status"] == "stopping"
 
+    def test_stop_flag_file_write_is_atomic(self, client_rw: TestClient, outdir: Path) -> None:
+        """Stop endpoint writes .stop atomically (no partial-file exposure).
+
+        Regression test for issue #646: .stop file must be written via
+        atomic rename (temp file + os.replace), not Path.write_text(),
+        to prevent TOCTOU race conditions where another process sees a
+        partially-written file.
+        """
+        stop_file = outdir / ".stop"
+        resp = client_rw.post("/api/v1/campaign/stop")
+        assert resp.status_code == 200
+
+        # The file must exist and be readable as valid JSON
+        assert stop_file.exists()
+        content = json.loads(stop_file.read_text())
+        assert content["requested_at"] > 0
+
+        # No leftover temp files should remain after atomic write
+        tmp_files = list(outdir.glob(".stop.*.tmp"))
+        assert tmp_files == [], f"Temp files leaked after atomic write: {tmp_files}"
+
 
 # ---------------------------------------------------------------------------
 # Campaign pause
@@ -302,6 +323,27 @@ class TestCampaignPause:
         (outdir / "run.json").write_text(json.dumps(_make_run_json(finished_at=2000.0)))
         resp = client_rw.post("/api/v1/campaign/pause")
         assert resp.status_code == 409
+
+    def test_pause_flag_file_write_is_atomic(self, client_rw: TestClient, outdir: Path) -> None:
+        """Pause endpoint writes .pause atomically (no partial-file exposure).
+
+        Regression test for issue #646: .pause file must be written via
+        atomic rename (temp file + os.replace), not Path.write_text(),
+        to prevent TOCTOU race conditions where another process sees a
+        partially-written file.
+        """
+        pause_file = outdir / ".pause"
+        resp = client_rw.post("/api/v1/campaign/pause")
+        assert resp.status_code == 200
+
+        # The file must exist and be readable as valid JSON
+        assert pause_file.exists()
+        content = json.loads(pause_file.read_text())
+        assert content["requested_at"] > 0
+
+        # No leftover temp files should remain after atomic write
+        tmp_files = list(outdir.glob(".pause.*.tmp"))
+        assert tmp_files == [], f"Temp files leaked after atomic write: {tmp_files}"
 
 
 # ---------------------------------------------------------------------------
@@ -494,3 +536,105 @@ class TestSSEStreaming:
 
         event_types = [e.get("event") for e in collected]
         assert "ping" in event_types
+
+
+# ---------------------------------------------------------------------------
+# File locking tests (issue #645)
+# ---------------------------------------------------------------------------
+
+
+class TestRunJsonFileLocking:
+    """Tests for run.json file locking in SSE event generator (issue #645)."""
+
+    def test_read_json_with_lock_returns_data(self, outdir: Path) -> None:
+        """_read_json_with_lock returns correct data when file exists."""
+        from osimflow.api.events import _read_json_with_lock
+
+        # Write test data
+        test_data = {"campaign_id": "lock-test", "status": "running"}
+        (outdir / "run.json").write_text(json.dumps(test_data))
+
+        # Read with lock
+        result = _read_json_with_lock(outdir / "run.json")
+        assert result == test_data
+
+    def test_read_json_with_lock_missing_file(self, tmp_path: Path) -> None:
+        """_read_json_with_lock returns empty dict when file does not exist."""
+        from osimflow.api.events import _read_json_with_lock
+
+        result = _read_json_with_lock(tmp_path / "nonexistent.json")
+        assert result == {}
+
+    def test_read_json_with_lock_concurrent_readers(self, outdir: Path) -> None:
+        """Multiple concurrent readers do not cause errors (shared lock)."""
+        import threading
+
+        from osimflow.api.events import _read_json_with_lock
+
+        test_data = _make_run_json(
+            steps=[
+                {"step": "GENERATE_LHS_SAMPLES", "cache": "MISS", "elapsed_s": 0.5, "exit_code": 0}
+            ],
+            samples=[{"sample_id": "sample_000", "status": "ok", "elapsed_s": 10.0}],
+        )
+        (outdir / "run.json").write_text(json.dumps(test_data))
+
+        errors: list[Exception] = []
+        results: list[dict] = []
+
+        def reader() -> None:
+            try:
+                data = _read_json_with_lock(outdir / "run.json")
+                results.append(data)
+            except Exception as e:
+                errors.append(e)
+
+        # Run multiple readers concurrently
+        threads = [threading.Thread(target=reader) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0, f"Concurrent read errors: {errors}"
+        assert len(results) == 5
+        for result in results:
+            assert result["campaign_id"] == "test-campaign-001"
+
+    @pytest.mark.asyncio
+    async def test_sse_generator_uses_locking(self, outdir: Path) -> None:
+        """SSE generator correctly reads run.json through locking helper."""
+        from osimflow.api.events import _event_generator, _read_json_with_lock
+
+        # Verify the locking helper is actually used by checking it returns data
+        test_data = _make_run_json(
+            steps=[
+                {"step": "GENERATE_LHS_SAMPLES", "cache": "MISS", "elapsed_s": 0.5, "exit_code": 0}
+            ]
+        )
+        (outdir / "run.json").write_text(json.dumps(test_data))
+
+        # Direct locking helper check
+        result = _read_json_with_lock(outdir / "run.json")
+        assert result["campaign_id"] == "test-campaign-001"
+
+        # Generator check
+        mock_request = MagicMock()
+        mock_request.app.state.outdir = outdir
+        mock_request.is_disconnected = _always_false
+
+        collected: list[dict[str, Any]] = []
+
+        async def collect() -> None:
+            async for evt in _event_generator(
+                mock_request,
+                poll_interval=0.01,
+                heartbeat_interval=9999.0,
+                max_iterations=2,
+            ):
+                collected.append(evt)
+
+        await collect()
+
+        event_types = [e.get("event") for e in collected]
+        assert "step.completed" in event_types

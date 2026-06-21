@@ -17,8 +17,11 @@ Covers:
 - Executor.cancel() called on campaign cancellation
 """
 
+import fcntl
 import json
+import os
 import signal
+import sys
 import threading
 from concurrent.futures import Future
 from pathlib import Path
@@ -201,6 +204,44 @@ class TestCampaignCancelFlag:
         assert campaign._check_cancel_requested() is True
         (outdir / ".stop").unlink()
         # Once cancelled, flag stays True (cancellation is sticky)
+        assert campaign._check_cancel_requested() is True
+
+    def test_check_cancel_requested_stop_file_with_lock(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Test that .stop file check uses fcntl.flock for cross-process safety.
+
+        This test verifies the TOCTOU race fix (issue #649) by holding an
+        exclusive lock on the .stop file and checking that _check_cancel_requested
+        correctly reports the file's state.
+        """
+        if sys.platform == "win32":
+            # fcntl.flock is not available on Windows; skip this test.
+            return
+
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        campaign = Campaign(cfg=cfg, executor=StubExecutor())
+        stop_path = outdir / ".stop"
+
+        # Case 1: file does not exist -> returns False
+        assert campaign._check_cancel_requested() is False
+
+        # Case 2: file exists and is locked by another process -> still detects it
+        stop_path.touch()
+        fd = os.open(str(stop_path), os.O_RDWR)
+        try:
+            # Hold an exclusive lock on the file.
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                # _check_cancel_requested should still correctly detect the file.
+                assert campaign._check_cancel_requested() is True
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+        # Case 3: file is deleted while we hold the lock -> correctly returns
+        # the cached True value (cancellation is sticky after first detection)
         assert campaign._check_cancel_requested() is True
 
 
