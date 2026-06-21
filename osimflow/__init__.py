@@ -9,10 +9,12 @@ API; everything else is an implementation detail.
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass
+
+from osimflow.logging import setup_logging
 
 # Lazy loading map: public name -> (module_path, attribute_name)
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
@@ -296,8 +298,10 @@ __all__ = [
     "build_notify_backend",
 ]
 
+setup_logging()
 
-def __getattr__(name: str):
+
+def __getattr__(name: str) -> Any:
     """Lazy loading: import only when an attribute is accessed."""
     if name in _LAZY_IMPORTS:
         module_path, obj_name = _LAZY_IMPORTS[name]
