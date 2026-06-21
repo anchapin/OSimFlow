@@ -1003,7 +1003,10 @@ class CampaignConfig:
                 "google_max_retries": ("google_batch", "max_retries"),
                 # Nomad
                 "nomad_dispatch_policy": ("nomad", "dispatch_policy"),
-                "nomad_allocation_resolution_timeout_s": ("nomad", "allocation_resolution_timeout_s"),
+                "nomad_allocation_resolution_timeout_s": (
+                    "nomad",
+                    "allocation_resolution_timeout_s",
+                ),
                 "nomad_poll_interval_s": ("nomad", "poll_interval_s"),
                 "nomad_max_poll_interval_s": ("nomad", "max_poll_interval_s"),
                 "nomad_fanout_submit_rate_per_sec": ("nomad", "fanout_submit_rate_per_sec"),
