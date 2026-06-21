@@ -21,8 +21,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 
 
