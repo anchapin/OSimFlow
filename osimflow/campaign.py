@@ -55,6 +55,8 @@ from typing import Any, TypedDict
 
 import yaml
 
+from ._campaign_cost_tracker import CampaignCostTracker
+from ._campaign_observability import ObservabilityManager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
     EPW_FILE_KEY,
@@ -63,7 +65,6 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
-from .cost_tracking import build_cost_tracker
 from .data_point_manager import DataPointManager
 from .distributed_jobqueue import build_job_queue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
@@ -83,14 +84,7 @@ from .monitoring import (
     WorkerRecoveryManager,
     sample_log_paths,
 )
-from .observability import (
-    CloudWatchBackend,
-    NullBackend,
-    ObservabilityBackend,
-    OpenTelemetryBackend,
-    PrometheusBackend,
-    new_trace_id,
-)
+from .observability import new_trace_id
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
@@ -297,9 +291,10 @@ class Campaign:
             campaign_id=self.trace.campaign_id,
         )
         # Observability backend (issue #132). Built from cfg so the
+        # Observability backend (issue #132). Built from cfg so the
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
-        self._obs: ObservabilityBackend = self._build_observability_backend(cfg)
+        self._obs = ObservabilityManager(cfg)
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -350,17 +345,10 @@ class Campaign:
 
         # Cost tracking (issue #447). Built here so the correct backend is
         # always used.  None when enable_cost_tracking is False (zero overhead).
-        self._cost_tracker = build_cost_tracker(
+        self._cost_tracker = CampaignCostTracker(
             campaign_id=self.trace.campaign_id,
-            executor_type=executor.name,
-            result_storage_backend=cfg.result_storage_backend,
-            result_storage_bucket=cfg.result_storage_bucket,
-            result_storage_prefix=str(cfg.outdir.name),
-            result_storage_endpoint=cfg.result_storage_endpoint,
-            track_costs=cfg.enable_cost_tracking,
-            aws_on_demand_per_vcpu_hour=cfg.cost_on_demand_price,
-            aws_spot_per_vcpu_hour=cfg.cost_spot_price,
-            slurm_cost_per_node_hour=getattr(cfg, "slurm_cost_per_node_hour", 0.0),
+            cfg=cfg,
+            executor_name=executor.name,
         )
 
         # Graceful shutdown (issue #255): cancellation flag and lock.
@@ -372,29 +360,6 @@ class Campaign:
         # Original signal handlers — restored on exit.
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
-
-    @staticmethod
-    def _build_observability_backend(cfg: CampaignConfig) -> ObservabilityBackend:
-        """Instantiate the correct observability backend from config.
-
-        Returns NullBackend when ``cfg.observability == "none"`` (zero
-        overhead — all methods are empty ``pass`` bodies).
-        """
-        backend_type = cfg.observability
-        if backend_type == "none":
-            return NullBackend()
-        if backend_type == "cloudwatch":
-            return CloudWatchBackend(
-                namespace=cfg.cloudwatch_namespace,
-            )
-        if backend_type == "prometheus":
-            return PrometheusBackend(
-                pushgateway_url=f"localhost:{cfg.prometheus_port}",
-            )
-        if backend_type == "opentelemetry":
-            endpoint = cfg.otel_endpoint or "http://localhost:4317"
-            return OpenTelemetryBackend(endpoint=endpoint)
-        raise ValueError(f"unknown observability backend: {backend_type}")
 
     def _enforce_start_quota(self) -> None:
         """Fail fast if the campaign's resource quota is already exceeded at start.
@@ -939,7 +904,7 @@ class Campaign:
         """
         if self._cost_tracker is None:
             return
-        self._cost_tracker.record_actual(step_name, cost_usd, spot_savings_usd)
+        self._cost_tracker.record_step_costs(step_name, cost_usd, spot_savings_usd)
 
     def _finalize_costs(self) -> None:
         """Build and persist the campaign cost summary.
@@ -948,12 +913,10 @@ class Campaign:
         """
         if self._cost_tracker is None:
             return
-        try:
-            summary = self._cost_tracker.finalize()
-            self.trace.cost_summary = summary.to_dict()
+        summary_dict = self._cost_tracker.finalize()
+        if summary_dict is not None:
+            self.trace.cost_summary = summary_dict
             log.info("campaign cost summary written to run.json")
-        except Exception as exc:
-            log.warning("could not finalize cost summary: %s", exc, exc_info=True)
 
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
