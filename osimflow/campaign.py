@@ -67,6 +67,7 @@ from .cost_tracking import build_cost_tracker
 from .data_point_manager import DataPointManager
 from .distributed_jobqueue import build_job_queue
 from .executors import AWSBatchExecutor, BaseExecutor, Handle
+from .json_utils import safe_json_dumps, safe_json_loads
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
     log_mlflow_artifacts,
@@ -1488,7 +1489,7 @@ class Campaign:
         }
         out_path = self.cfg.outdir / "provenance.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(provenance, indent=2, default=str))
+        safe_json_dumps(provenance, out_path, default=str, indent=2)
         log.info("wrote provenance to %s", out_path)
 
     def _write_artifact_manifest(self) -> None:
@@ -1566,7 +1567,7 @@ class Campaign:
         }
         out_path = self.cfg.outdir / "artifact_manifest.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(manifest, indent=2, default=str))
+        safe_json_dumps(manifest, out_path, default=str, indent=2)
         log.info("wrote artifact manifest to %s (%d files)", out_path, len(artifacts))
 
     # ------------------------------------------------------------------
@@ -1772,7 +1773,7 @@ class Campaign:
         Thread-safe and idempotent.
         """
         pause_file = self.cfg.outdir / ".pause"
-        pause_file.write_text(json.dumps({"requested_at": time.time()}))
+        safe_json_dumps({"requested_at": time.time()}, pause_file)
         self.trace.status = "paused"
         self.trace.paused_at = time.time()
         self.trace.write(self.cfg.outdir / "run.json")
@@ -2040,7 +2041,7 @@ class Campaign:
         samples = self._apply_sharding(samples, generation=0)
         samples_path = self._samples_manifest_path()
         samples_path.parent.mkdir(parents=True, exist_ok=True)
-        samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+        safe_json_dumps({"samples": samples}, samples_path, indent=2, raise_on_error=True)
         self._latest_samples_file = samples_path
 
         # Inter-step check: cancel requested during sample generation /
@@ -2129,7 +2130,13 @@ class Campaign:
                 f"samples.json not found at {samples_file}. "
                 "Run a full campaign (or --dry-run) first to generate samples."
             )
-        all_samples = cast_samples(json.loads(samples_file.read_text())["samples"])
+        all_samples_raw = safe_json_loads(samples_file, default=None, log_warnings=False)
+        if all_samples_raw is None:
+            raise ValueError(
+                f"samples.json at {samples_file} is corrupted or unreadable. "
+                "Run a full campaign (or --dry-run) first to generate valid samples."
+            )
+        all_samples = cast_samples(all_samples_raw["samples"])
         if sample_idx < 0 or sample_idx >= len(all_samples):
             raise IndexError(
                 f"Sample index {sample_idx} out of range [0, {len(all_samples) - 1}]. "
@@ -2322,7 +2329,7 @@ class Campaign:
         samples = self._apply_sharding(samples, generation=generation)
         samples_link = self._samples_manifest_path()
         samples_link.parent.mkdir(parents=True, exist_ok=True)
-        samples_link.write_text(json.dumps({"samples": samples}, indent=2))
+        safe_json_dumps({"samples": samples}, samples_link, indent=2, raise_on_error=True)
         self._latest_samples_file = samples_link
 
         if generation == 0:
@@ -2670,16 +2677,19 @@ class Campaign:
         )
         cached = self.cache.lookup(key)
         if cached:
-            samples_obj: object = json.loads(cached.read_text())["samples"]
-            samples_from_cache = cast_samples(samples_obj)
-            self.trace.step_finished(
-                step_label,
-                cache="HIT",
-                elapsed_s=time.time() - t0,
-                exit_code=0,
-            )
-            self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
-            return samples_from_cache
+            samples_data = safe_json_loads(cached, default=None)
+            if samples_data is not None:
+                samples_obj: object = samples_data["samples"]
+                samples_from_cache = cast_samples(samples_obj)
+                self.trace.step_finished(
+                    step_label,
+                    cache="HIT",
+                    elapsed_s=time.time() - t0,
+                    exit_code=0,
+                )
+                self._obs.record_step_duration(step_label, time.time() - t0, generation=generation)
+                return samples_from_cache
+            log.warning("Cache entry %s is corrupted; treating as cache-miss", key)
 
         out_dir = self.cfg.work_dir / algo.name()
         result_path = algo.generate_samples(
@@ -2690,7 +2700,10 @@ class Campaign:
         )
         try:
             self.cache.store(key, Path(result_path), exit_code=0)
-            run_samples_obj: object = json.loads(Path(result_path).read_text())["samples"]
+            run_samples_data = safe_json_loads(Path(result_path), default=None, log_warnings=False)
+            if run_samples_data is None:
+                raise ValueError(f"Generated samples file {result_path} is corrupted")
+            run_samples_obj: object = run_samples_data["samples"]
             samples = cast_samples(run_samples_obj)
 
             # Inject baseline sample (issue #64): when cfg.baseline is
