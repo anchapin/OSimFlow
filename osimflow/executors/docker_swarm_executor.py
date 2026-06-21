@@ -248,8 +248,8 @@ class DockerSwarmExecutor(BaseExecutor):
                     exc,
                     delay,
                 )
-                time.sleep(delay)
                 delay = min(delay * 2, self.max_poll_interval_s)
+                time.sleep(delay)
                 continue
 
             tasks = service_status.get("tasks", []) or []
@@ -260,8 +260,8 @@ class DockerSwarmExecutor(BaseExecutor):
                     service_name,
                     delay,
                 )
-                time.sleep(delay)
                 delay = min(delay * 2, self.max_poll_interval_s)
+                time.sleep(delay)
                 continue
 
             # Check if all tasks are in terminal states.
@@ -285,8 +285,8 @@ class DockerSwarmExecutor(BaseExecutor):
                 current_state,
                 delay,
             )
-            time.sleep(delay)
             delay = min(delay * 2, self.max_poll_interval_s)
+            time.sleep(delay)
 
     def _submit_service(
         self,
@@ -477,8 +477,11 @@ class DockerSwarmExecutor(BaseExecutor):
             )
 
         # Mark that stub mode is confirmed unavailable so future submits
-        # skip the check.
-        self._stub_executor = False
+        # skip the check. Use None (not False) so that shutdown()'s
+        # `hasattr(self._stub_executor, "shutdown")` check correctly
+        # returns False without needing an explicit boolean guard
+        # (hasattr(None, "shutdown") == False naturally). Fixes issue #656.
+        self._stub_executor = None
 
         del fn, args  # noqa: ARG002
 
@@ -515,5 +518,5 @@ class DockerSwarmExecutor(BaseExecutor):
 
     def shutdown(self) -> None:
         # Docker client holds a socket; clean up on GC. Nothing to do.
-        if self._stub_executor and hasattr(self._stub_executor, "shutdown"):
+        if self._stub_executor is not None and hasattr(self._stub_executor, "shutdown"):
             self._stub_executor.shutdown()

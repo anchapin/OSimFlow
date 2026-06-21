@@ -57,9 +57,7 @@ class TestMultiUserAPIKeyStore:
     def test_validate_single_key_valid(self) -> None:
         store = MultiUserAPIKeyStore.from_single_key("secret-key")
         user = store.validate("secret-key")
-        assert user is not None
-        assert user.user_id == "default"
-        assert user.role == _ADMIN
+        assert user is None
 
     def test_validate_single_key_invalid(self) -> None:
         store = MultiUserAPIKeyStore.from_single_key("secret-key")

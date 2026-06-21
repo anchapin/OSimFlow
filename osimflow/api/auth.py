@@ -166,8 +166,10 @@ class MultiUserAPIKeyStore:
         # Check single key mode first (backward compatible)
         if self.single_key is not None:
             if validate_api_key(provided_key, self.single_key):
-                # In single-key mode, we don't know the user_id
-                return APIKeyUser(key=provided_key, user_id="default", role=_ADMIN)
+                # In single-key mode, role is determined by server's read_only setting
+                # (checked by get_user_permission() via request.app.state.read_only).
+                # Return None so callers cannot infer a specific role.
+                return None
             return None
 
         # Multi-user mode
@@ -212,8 +214,8 @@ def get_user_permission(request: Request, required: str) -> bool:
     api_user: APIKeyUser | None = getattr(request.state, "api_user", None)
 
     if api_user is None:
-        # No auth configured or single-key mode with admin access
-        # Fall back to server-level read_only
+        # No auth configured or single-key auth (api_user=None defers to server read_only).
+        # Fall back to server-level read_only setting.
         return not getattr(request.app.state, "read_only", True)
 
     # Multi-user mode: check per-user role
