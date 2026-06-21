@@ -166,7 +166,8 @@ class _SafeVisitor(ast.NodeVisitor):
             self.visit(node.orelse)
         elif isinstance(node, ast.Dict):
             for k, v in zip(node.keys, node.values, strict=True):
-                self.visit(k)
+                if k is not None:
+                    self.visit(k)
                 self.visit(v)
         elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
             for elt in node.elts:

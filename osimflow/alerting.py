@@ -62,6 +62,8 @@ from typing import Any
 
 import yaml
 
+from osimflow._eval_safe import ExpressionError, safe_eval
+
 log = logging.getLogger("osimflow.alerting")
 
 
@@ -488,7 +490,6 @@ def load_alert_rules_from_yaml(path: Path) -> list[AlertRule]:
 
 def _make_expr_condition(expr: str) -> Callable[[dict[str, Any]], bool]:
     """Create a condition callable from a Python expression string."""
-    from osimflow._eval_safe import ExpressionError, safe_eval  # local import to avoid cycle
 
     def condition(context: dict[str, Any]) -> bool:
         try:

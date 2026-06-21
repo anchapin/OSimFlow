@@ -46,6 +46,7 @@ import numpy as np
 import scipy.stats
 import scipy.stats.qmc
 
+from osimflow._eval_safe import ExpressionError, safe_eval
 from osimflow.algorithms.qdiscrete import qdiscrete
 
 log = logging.getLogger("osimflow.algorithms")
@@ -541,8 +542,6 @@ def _resolve_conditional(
             if parent_val is None:
                 continue
             for rule in var_def.get("conditions", []):
-                    from osimflow._eval_safe import ExpressionError, safe_eval
-
                     try:
                         matched = safe_eval(str(cond.get("match", "True")), {"val": parent_val})
                     except (ExpressionError, SyntaxError):
