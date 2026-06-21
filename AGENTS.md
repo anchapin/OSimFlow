@@ -40,7 +40,7 @@ Orchestrator → Executor → Work function
 ```
 
 - **Orchestrator** — `osimflow/campaign.py` (the `Campaign` class)
-  drives the 6-step DAG.
+  drives the 8-step DAG (plus 2 optional conditional steps for Sobol/UQ algorithms).
 - **Executor** — `osimflow/executors/__init__.py` provides
   `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
 `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, and `DockerSwarmExecutor` implementations.
@@ -91,9 +91,9 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Layer | Technology | Notes |
 |---|---|---|
 | Workflow orchestration | **Custom Python driver** (`osimflow/`) | ~300 LoC `Campaign` class; subcommand CLI `osimflow run`. |
-| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `NomadExecutor`, `PBSExecutor` | All conform to the same `submit()` → `Handle` interface. |
+| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, `DockerSwarmExecutor` | All conform to the same `submit()` → `Handle` interface. |
 | Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
-| AWS Batch backend | **`boto3`** (future) | Stub today; `AWSBatchExecutor.submit()` is a placeholder. |
+| AWS Batch backend | **`boto3`** | Full implementation via `AWSBatchExecutor`. |
 | Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
 | Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
 | Statistical sampling | **`scipy.stats`** | Latin Hypercube Sampling (LHS) of design variables. |
@@ -110,7 +110,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Path | Purpose |
 |---|---|
 | `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `DistributedCache`, `build_cache`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, `CacheStats`, `QuotaExceededError`, `ResourceQuota`, `DiscoveredMeasure`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError`, `CrossRunAggregator`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`, `DOEAnalysis`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), the alerting helpers (`AlertManager`, `build_alert_manager`), the cost tracking helpers (`CostEstimate`, `CostTracker`, `CampaignCostSummary`), the data point lifecycle helpers (`DataPoint`, `DataPointManager`, `DataPointStatus` for issues #418/#419/#420), the version detection helpers (`VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`), and logging setup (`get_logger`, `setup_logging`). |
-| `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
+| `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 8-step DAG. |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` + `CacheStats` — explicit, testable resume semantics and hit rate statistics (issue #426). |
 | `osimflow/data_point_manager.py` | `DataPoint` + `DataPointManager` + `DataPointStatus` — JSON-persisted data point lifecycle manager for reanalysis, merging, and priority ordering (issues #418, #419, #420). |
 | `osimflow/document_store.py` | `DocumentStore` ABC + `SQLiteDocumentStore` — MongoDB-equivalent document store using SQLite JSON1; provides `insert_one`, `find_one`, `find_many`, `update_one`, `delete_one`, `create_index`, and `aggregate` for campaign data persistence (issue #389). |
@@ -216,15 +216,18 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 ### DAG step names (referenced from `osimflow/campaign.py`)
 
-The 7-step DAG that the `Campaign` class drives:
+The 8-step DAG that the `Campaign` class drives (plus 2 optional conditional steps):
 
-- `GENERATE_LHS_SAMPLES` — single-shot, no fan-out.
-- `PREFLIGHT_RUN_MODEL` — single-shot, validates seed model before cloud spend (issue #107).
+- `GENERATE_SAMPLES` — single-shot, no fan-out (replaces deprecated `step_generate_lhs`).
+- `PREFLIGHT_RUN_MODEL` — single-shot, validates seed model before cloud spend (issue #107); skipped with `--skip-preflight`.
+- `VALIDATE_MEASURE_VARIABLES` — single-shot, validates variables.yml against discovered measure arguments (generation 0 only, unless `--skip-preflight`).
 - `APPLY_PARAMETERS` — fan-out over N samples.
 - `RUN_OPENSTUDIO_SIM` — fan-out over N samples (heavy).
 - `EXTRACT_KPIS` — fan-out over N samples.
 - `AGGREGATE_RESULTS` — one shot after all KPIs.
 - `GENERATE_BASIC_PLOTS` — one shot after aggregation.
+- `COMPUTE_SENSITIVITY_INDICES` — conditional, only when `--algorithm sobol` is set.
+- `COMPUTE_UQ_INDICES` — conditional, only when `--algorithm uq` is set.
 
 ### CLI flags (referenced from `osimflow/__main__.py`)
 
@@ -323,7 +326,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `backup` — `--output` (custom backup file path), `--registry` (registry DB path), `--log_level`
 - `restore` — `<backup_file>` (positional), `--registry` (registry DB path), `--merge` (merge instead of replace), `--log_level`
 
-**Subcommands:** `run` (campaign execution), `warm-cache` (pre-populate the simulation cache before a campaign; issue #427), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `dashboard` (launch local ephemeral Streamlit dashboard for campaign results), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `aggregate-runs` (merge two or more campaign result sets into a combined CSV; issue #588), `status` (campaign run.json status), `download` (download campaign results), `cancel` (request graceful cancellation of a running campaign), `pause` (request graceful pause of a running campaign; issue #444), `resume` (request resume of a paused campaign; issue #444), `mark-for-reanalysis` (mark a completed/failed sample for re-running; issue #420), `merge` (merge multiple data points into a single target; issue #418), `backup` (registry backup; issue #440), `restore` (registry restore/import; issue #440), `health` (system health checks; issue #411), `measure` (list measures from a template package; issue #532), `query-results` (query campaign results with filters and pagination; issue #585), `export-results` (export campaign results to CSV/JSON with filtering; issue #585). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, `--rate-limit`, `--tls-cert`, `--tls-key`, `--ui`, `--editor`, and `--dashboard` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`. The `warm-cache` subcommand accepts the same arguments as `run` plus `--n_warm` (number of pilot samples to run for cache warming, default: 10). The `cancel` subcommand accepts `<outdir>` (campaign output directory). The `pause` subcommand accepts `<outdir>` (campaign output directory). The `resume` subcommand accepts `<outdir>` (campaign output directory). The `backup` subcommand accepts `--output` (custom backup path) and `--registry`; it creates a timestamped SQLite backup using the online backup API. The `restore` subcommand accepts `<backup_file>`, `--registry`, and `--merge` (merge vs. replace mode). The `health` subcommand accepts `--outdir` (directory to check write permissions/disk space; default: cwd), `--json` (machine-readable JSON output), and `--offline` (skip network connectivity check). The `mark-for-reanalysis` subcommand accepts `<outdir>`, `<sample_id>` (must be COMPLETED or FAILED), and `--priority` (default 0). The `merge` subcommand accepts `<outdir>`, `--source-ids` (one or more source sample IDs), `--target-id` (target sample ID), and `--target-work-dir` (path to target work directory).
+**Subcommands:** `run` (campaign execution), `warm-cache` (pre-populate the simulation cache before a campaign; issue #427), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `dashboard` (launch local ephemeral Streamlit dashboard for campaign results), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `aggregate-runs` (merge two or more campaign result sets into a combined CSV; issue #588), `status` (campaign run.json status), `download` (download campaign results), `cancel` (request graceful cancellation of a running campaign), `pause` (request graceful pause of a running campaign; issue #444), `resume` (request resume of a paused campaign; issue #444), `mark-for-reanalysis` (mark a completed/failed sample for re-running; issue #420), `merge` (merge multiple data points into a single target; issue #418), `backup` (registry backup; issue #440), `restore` (registry restore/import; issue #440), `health` (system health checks; issue #411), `measure` (list measures from a template package; issue #532), `list-measures` (browse and search the NREL BCL online; issue #580), `query-results` (query campaign results with filters and pagination; issue #585), `export-results` (export campaign results to CSV/JSON with filtering; issue #585). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--api-redis-url` (Redis URL for distributed rate limiting across multiple API instances; issue #663), `--cors-origins`, `--rate-limit`, `--tls-cert`, `--tls-key`, `--ui`, `--editor`, and `--dashboard` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`. The `warm-cache` subcommand accepts the same arguments as `run` plus `--n_warm` (number of pilot samples to run for cache warming, default: 10). The `cancel` subcommand accepts `<outdir>` (campaign output directory). The `backup` subcommand accepts `--output` (custom backup path) and `--registry`; it creates a timestamped SQLite backup using the online backup API. The `restore` subcommand accepts `<backup_file>`, `--registry`, and `--merge` (merge vs. replace mode). The `health` subcommand accepts `--outdir` (directory to check write permissions/disk space; default: cwd), `--json` (machine-readable JSON output), and `--offline` (skip network connectivity check).
 
 ### Developer workflow targets (Makefile)
 

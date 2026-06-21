@@ -251,7 +251,11 @@ class TestSobolGenerateSamples:
         assert json.loads(r1.read_text()) != json.loads(r2.read_text())
 
     def test_normal_distribution_sampling(self, tmp_path: Path) -> None:
-        """Normal distribution produces samples within ±3σ bounds."""
+        """Normal distribution produces samples within ppf(0.0005)/ppf(0.9995) bounds.
+
+        The bounds use ±3.29σ (ppf quantiles capturing 99.9%) rather than ±3σ.
+        For mean=5, sigma=1, bounds are approximately [1.71, 8.29].
+        """
         algo = SobolAlgorithm()
         variables: dict[str, Any] = {
             "variables": [
@@ -261,7 +265,8 @@ class TestSobolGenerateSamples:
         result = algo.generate_samples(variables, n_samples=4, seed=42, outdir=tmp_path)
         data = json.loads(result.read_text())
         for s in data["samples"]:
-            assert 2.0 <= s["values"]["x"] <= 8.0  # mean ± 3σ
+            # ppf(0.0005) ≈ 1.71, ppf(0.9995) ≈ 8.29 for mean=5, sigma=1
+            assert 1.7 <= s["values"]["x"] <= 8.3
 
     def test_lognormal_distribution_sampling(self, tmp_path: Path) -> None:
         """Lognormal distribution produces samples within ±3σ bounds."""
@@ -608,3 +613,138 @@ class TestSobolSensitivityIndices:
         assert indices_path.exists()
         data = json.loads(indices_path.read_text())
         assert "S1" in data["indices"]
+
+
+# ======================================================================
+# Bounds consistency tests (issue #661)
+# ======================================================================
+
+
+class TestBuildSalibProblemBounds:
+    """Verify _build_salib_problem returns bounds consistent with _apply_distribution."""
+
+    def test_uniform_bounds_match_min_max(self) -> None:
+        """Uniform bounds are exactly [min, max]."""
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "uniform", "min": 1.0, "max": 10.0}]
+        problem = _build_salib_problem(vars_)
+        assert problem["bounds"] == [(1.0, 10.0)]
+
+    def test_normal_bounds_use_ppf_quantiles(self) -> None:
+        """Normal bounds use ppf(0.0005) / ppf(0.9995), not just ±3σ."""
+        import math
+
+        import scipy.stats
+
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "normal", "mean": 5.0, "sigma": 1.0}]
+        problem = _build_salib_problem(vars_)
+        lower, upper = problem["bounds"][0]
+        expected_lower = scipy.stats.norm.ppf(0.0005, loc=5.0, scale=1.0)
+        expected_upper = scipy.stats.norm.ppf(0.9995, loc=5.0, scale=1.0)
+        assert math.isclose(lower, expected_lower, abs_tol=1e-9)
+        assert math.isclose(upper, expected_upper, abs_tol=1e-9)
+        # Bounds use ±3.29σ (ppf quantiles) rather than ±3σ
+        # ppf(0.0005) ≈ -3.29σ, so lower ≈ 1.71 < 2.0 (the old ±3σ bound)
+        # This confirms the fix: we use proper quantiles instead of hardcoded ±3σ
+        assert lower < 2.0
+        assert upper > 8.0
+
+    def test_lognormal_bounds_use_ppf_quantiles(self) -> None:
+        """Lognormal bounds use lognorm ppf, not just exp(mu±3σ)."""
+        import math
+
+        import scipy.stats
+
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "lognormal", "mean": 5.0, "sigma": 1.0}]
+        problem = _build_salib_problem(vars_)
+        lower, upper = problem["bounds"][0]
+        scale = math.exp(5.0)
+        expected_lower = scipy.stats.lognorm.ppf(0.0005, s=1.0, scale=scale)
+        expected_upper = scipy.stats.lognorm.ppf(0.9995, s=1.0, scale=scale)
+        assert math.isclose(lower, expected_lower, abs_tol=1e-9)
+        assert math.isclose(upper, expected_upper, abs_tol=1e-9)
+
+    def test_triangular_bounds_match_min_max(self) -> None:
+        """Triangular bounds are [min, max]."""
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "triangular", "min": 0.0, "max": 10.0}]
+        problem = _build_salib_problem(vars_)
+        assert problem["bounds"] == [(0.0, 10.0)]
+
+    def test_discrete_bounds_match_value_range(self) -> None:
+        """Discrete bounds are [min, max] of the values list."""
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "discrete", "values": [1, 5, 10]}]
+        problem = _build_salib_problem(vars_)
+        assert problem["bounds"] == [(1.0, 10.0)]
+
+    def test_categorical_bounds_match_value_range(self) -> None:
+        """Categorical bounds are [min, max] of the values list."""
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "categorical", "values": [2, 4, 6, 8]}]
+        problem = _build_salib_problem(vars_)
+        assert problem["bounds"] == [(2.0, 8.0)]
+
+    def test_beta_bounds_use_ppf_quantiles(self) -> None:
+        """Beta bounds use ppf(0.0005) / ppf(0.9995)."""
+        import math
+
+        import scipy.stats
+
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "beta", "alpha": 2.0, "beta": 5.0}]
+        problem = _build_salib_problem(vars_)
+        lower, upper = problem["bounds"][0]
+        expected_lower = scipy.stats.beta.ppf(0.0005, 2.0, 5.0)
+        expected_upper = scipy.stats.beta.ppf(0.9995, 2.0, 5.0)
+        assert math.isclose(lower, expected_lower, abs_tol=1e-9)
+        assert math.isclose(upper, expected_upper, abs_tol=1e-9)
+
+    def test_gamma_bounds_use_ppf_quantiles(self) -> None:
+        """Gamma bounds use ppf(0.0005) / ppf(0.9995)."""
+        import math
+
+        import scipy.stats
+
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "gamma", "alpha": 2.0}]
+        problem = _build_salib_problem(vars_)
+        lower, upper = problem["bounds"][0]
+        expected_lower = scipy.stats.gamma.ppf(0.0005, 2.0)
+        expected_upper = scipy.stats.gamma.ppf(0.9995, 2.0)
+        assert math.isclose(lower, expected_lower, abs_tol=1e-9)
+        assert math.isclose(upper, expected_upper, abs_tol=1e-9)
+
+    def test_exponential_bounds_use_ppf_quantiles(self) -> None:
+        """Exponential bounds use ppf(0.0005) / ppf(0.9995)."""
+        import math
+
+        import scipy.stats
+
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "exponential", "rate": 2.0}]
+        problem = _build_salib_problem(vars_)
+        lower, upper = problem["bounds"][0]
+        expected_lower = scipy.stats.expon.ppf(0.0005, scale=1.0 / 2.0)
+        expected_upper = scipy.stats.expon.ppf(0.9995, scale=1.0 / 2.0)
+        assert math.isclose(lower, expected_lower, abs_tol=1e-9)
+        assert math.isclose(upper, expected_upper, abs_tol=1e-9)
+
+    def test_fallback_unknown_distribution(self) -> None:
+        """Unknown distribution falls back to [0, 1] bounds."""
+        from osimflow.algorithms.sobol import _build_salib_problem
+
+        vars_ = [{"name": "x", "distribution": "unknown_dist"}]
+        problem = _build_salib_problem(vars_)
+        assert problem["bounds"] == [(0.0, 1.0)]

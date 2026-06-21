@@ -34,6 +34,7 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 import concurrent.futures
 import contextlib
 import dataclasses
+import fcntl
 import hashlib
 import inspect
 import json
@@ -43,6 +44,7 @@ import platform
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 import warnings
@@ -1627,16 +1629,55 @@ class Campaign:
         Returns:
             ``True`` if cancellation is requested, ``False`` otherwise.
         """
+        # Fast path: check the in-memory flag first (no file I/O).
         with self._cancel_lock:
             if self._cancel_requested:
                 return True
-        # Also check the .stop file (written by the API server).
+
+        # Check the .stop file with cross-process file locking to close the
+        # TOCTOU race window (issue #649). Using fcntl.flock() ensures that
+        # between checking "does .stop file exist" and acting on that check,
+        # no other process can interfere (on POSIX systems).
         stop_file = self.cfg.outdir / ".stop"
-        if stop_file.is_file():
-            log.warning(".stop file detected — requesting cancellation")
-            with self._cancel_lock:
-                self._cancel_requested = True
-            return True
+        try:
+            # Open existing file (fail if it doesn't exist; we don't create it).
+            # O_NOFOLLOW prevents symlink attacks.
+            fd = os.open(str(stop_file), os.O_RDWR | os.O_NOFOLLOW)
+        except OSError:
+            # File does not exist or is not accessible — no cancel requested.
+            return False
+
+        try:
+            if sys.platform == "win32":
+                # On Windows, msvcrt.locking does not support exclusive locks.
+                # Fall back to a simple existence check inside the open fd.
+                # The advisory locking on Windows is less robust than POSIX
+                # flock, so we rely on the atomic rename from the API server
+                # for safety.
+                file_exists = True
+            else:
+                try:
+                    # Acquire exclusive lock (non-blocking). If we get it, we're
+                    # the sole accessor and can safely check the file state.
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    file_exists = stop_file.is_file()
+                except BlockingIOError:
+                    # Another process holds a conflicting lock — we cannot
+                    # safely read the file state. Treat as cancel requested
+                    # (conservative: better to cancel when we shouldn't than
+                    # to miss a cancel request).
+                    file_exists = True
+            try:
+                if file_exists:
+                    log.warning(".stop file detected — requesting cancellation")
+                    with self._cancel_lock:
+                        self._cancel_requested = True
+                    return True
+            finally:
+                if sys.platform != "win32":
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
         return False
 
     def _check_pause_requested(self) -> bool:
@@ -2260,9 +2301,18 @@ class Campaign:
                         algo.name(),
                     )
             else:
+                # verify there is actually something to reuse before continuing
+                pending = getattr(algo, "_pending_proposed_samples", None)
+                if not pending:
+                    raise RuntimeError(
+                        f"observe() returned empty samples at generation {generation} "
+                        f"for algorithm {algo.name()!r} and no previous samples are "
+                        "available; cannot continue iterative optimisation"
+                    )
                 log.warning(
-                    "observe() returned empty samples at generation %d; reusing previous",
+                    "observe() returned empty samples at generation %d; reusing %d previous samples",
                     generation,
+                    len(pending),
                 )
 
         samples = self.step_generate_samples(algo, generation=generation)
@@ -2746,7 +2796,7 @@ class Campaign:
             sample_id="ALL",
             openstudio_version=os_version,
             inputs_sha256=inputs_hash,
-            code_sha256=self.code_hashes["work"],
+            code_sha256=self.code_hashes["bin"],
             container_digest=CONTAINER_OS.format(version=os_version),
         )
         cached = self.cache.lookup(key)
@@ -2954,7 +3004,7 @@ class Campaign:
             key = CacheKey(
                 step="APPLY_PARAMETERS",
                 sample_id=sid,
-                openstudio_version="N/A",
+                openstudio_version=self.cfg.openstudio_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=self._python_container_image,
@@ -3456,12 +3506,15 @@ class Campaign:
 
         # --- Phase 1: cache check for all samples ---
         pending: dict[str, dict[str, Any]] = {}
+        os_version = self.cfg.openstudio_version
         for sid, sim_dir in simulated.items():
-            inputs_hash = sha256_of_dict({"sim_dir": str(sim_dir), "sid": sid})
+            inputs_hash = sha256_of_dict(
+                {"sim_dir": str(sim_dir), "sid": sid, "os_version": os_version}
+            )
             key = CacheKey(
                 step="EXTRACT_KPIS",
                 sample_id=sid,
-                openstudio_version="N/A",
+                openstudio_version=os_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
                 container_digest=self._python_container_image,
@@ -3849,7 +3902,7 @@ class Campaign:
             sample_id="ALL",
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
-            code_sha256=self.code_hashes["bin"],
+            code_sha256=self.code_hashes["work"],
             container_digest=self._python_container_image,
         )
         cached = self.cache.lookup(key)

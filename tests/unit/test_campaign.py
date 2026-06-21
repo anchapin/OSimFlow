@@ -1272,7 +1272,7 @@ class TestPreflightStep:
             sample_id="ALL",
             openstudio_version=cfg.openstudio_version,
             inputs_sha256=inputs_hash,
-            code_sha256=campaign.code_hashes["work"],
+            code_sha256=campaign.code_hashes["bin"],
             container_digest=CONTAINER_OS.format(version=cfg.openstudio_version),
         )
         campaign.cache.store(key, marker, exit_code=0)
