@@ -40,7 +40,7 @@ Orchestrator → Executor → Work function
 ```
 
 - **Orchestrator** — `osimflow/campaign.py` (the `Campaign` class)
-  drives the 8-step DAG (plus 2 optional conditional steps for Sobol/UQ algorithms).
+  drives the 11-step DAG.
 - **Executor** — `osimflow/executors/__init__.py` provides
   `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
 `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, and `DockerSwarmExecutor` implementations.
@@ -91,9 +91,9 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Layer | Technology | Notes |
 |---|---|---|
 | Workflow orchestration | **Custom Python driver** (`osimflow/`) | ~300 LoC `Campaign` class; subcommand CLI `osimflow run`. |
-| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, `DockerSwarmExecutor` | All conform to the same `submit()` → `Handle` interface. |
+| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `DockerSwarmExecutor`, `PBSExecutor` | All conform to the same `submit()` → `Handle` interface. |
 | Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
-| AWS Batch backend | **`boto3`** | Full implementation via `AWSBatchExecutor`. |
+| AWS Batch backend | **`boto3`** | Full implementation: spot interruption detection, exponential backoff, on-demand fallback, IAM role auth. |
 | Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
 | Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
 | Statistical sampling | **`scipy.stats`** | Latin Hypercube Sampling (LHS) of design variables. |
@@ -110,7 +110,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | Path | Purpose |
 |---|---|
 | `osimflow/__init__.py` | Public API: `Campaign`, `SQLiteCache`, `DistributedCache`, `build_cache`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, `CacheStats`, `QuotaExceededError`, `ResourceQuota`, `DiscoveredMeasure`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError`, `CrossRunAggregator`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`, `DOEAnalysis`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), the alerting helpers (`AlertManager`, `build_alert_manager`), the cost tracking helpers (`CostEstimate`, `CostTracker`, `CampaignCostSummary`), the data point lifecycle helpers (`DataPoint`, `DataPointManager`, `DataPointStatus` for issues #418/#419/#420), the version detection helpers (`VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`), and logging setup (`get_logger`, `setup_logging`). |
-| `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 8-step DAG. |
+| `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 11-step DAG. |
 | `osimflow/cache.py` | `SQLiteCache` + `CacheKey` + `CacheStats` — explicit, testable resume semantics and hit rate statistics (issue #426). |
 | `osimflow/data_point_manager.py` | `DataPoint` + `DataPointManager` + `DataPointStatus` — JSON-persisted data point lifecycle manager for reanalysis, merging, and priority ordering (issues #418, #419, #420). |
 | `osimflow/document_store.py` | `DocumentStore` ABC + `SQLiteDocumentStore` — MongoDB-equivalent document store using SQLite JSON1; provides `insert_one`, `find_one`, `find_many`, `update_one`, `delete_one`, `create_index`, and `aggregate` for campaign data persistence (issue #389). |
@@ -143,20 +143,8 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
 | `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
-| `osimflow/algorithms/diag.py` | `DiagAlgorithm` — One-at-a-time (OAT) diagnostic sensitivity analysis. Varies one variable at a time around its baseline (mode) value; produces ``n_samples × n_variables`` total samples. Mirrors openstudio-server's `diag.rb`. Single-shot (issue #581). |
-| `osimflow/algorithms/factorial.py` | `FullFactorialAlgorithm` — full cartesian product over discrete variable levels (issue #272); `GridSamplingAlgorithm` — evenly-spaced grid over continuous ranges. Both single-shot. |
-| `osimflow/algorithms/rgenoud.py` | `RgenoudAlgorithm` — hybrid genetic algorithm with BFGS/L-BFGS-B local search (GA + gradient descent), using `scipy.optimize.differential_evolution` with `polish=True`. Iterative (issue #545). |
-| `osimflow/algorithms/spea2.py` | `SPEA2Algorithm` — Strength Pareto Evolutionary Algorithm II multi-objective optimizer using `pymoo`. Maintains an external Pareto archive with crowding distance. Iterative; `is_multi_objective()` returns `True` (issue #271). |
-| `osimflow/algorithms/gaisl.py` | `IslandModelGAAlgorithm` (`gaisl`) — island-model parallel GA with subpopulations evolving independently and exchanging individuals via ring migration. Uses DEAP. Iterative. Optional `[ga]` extra. |
-| `osimflow/algorithms/repeat_all.py` | `RepeatAllAlgorithm` — repeats a base LHS sample set N times for stochastic analysis. Single-shot (issue #285). |
-| `osimflow/algorithms/random_sampling.py` | `RandomSamplingAlgorithm` — pure Monte Carlo sampling (uniform random draws through distribution PPF). Single-shot (issue #285). |
-| `osimflow/algorithms/custom.py` | `CustomDOEAlgorithm` — loads user-provided sample points from a CSV file or a Python callable. Single-shot (issue #406). |
-| `osimflow/algorithms/uq.py` | `UncertaintyQuantification` — single-shot LHS sampler that also computes post-simulation UQ indices: probability of failure (POF), confidence intervals (t-distribution), and distribution summaries. Implements `compute_uq_indices()` (issue #530). |
-| `osimflow/algorithms/calibration.py` | `BM25CalibrationAlgorithm` (`calibration`) — iterative energy model calibration that minimises error between simulated and measured utility data using BM25 scoring. Supports ASHRAE 14 NMBE/CVRMSE thresholds. Iterative (issue #528). |
-| `osimflow/algorithms/sequential_search.py` | `SequentialSearchAlgorithm` — deterministic parameter sweep with optional adaptive refinement around best-performing regions. Iterative when `adaptive_sampling=True` (issue #550, GAP-006). |
-| `osimflow/algorithms/qdiscrete.py` | `qdiscrete` — inverse-CDF weighted discrete/categorical sampling matching R's `DoE.base::qdiscrete()`. Used by `FullFactorialAlgorithm` for PMF-weighted discrete variables (issue #579). |
 | `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor` + `DockerSwarmExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
-| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the official Docker SDK; creates a Swarm Service per call and polls tasks with exponential backoff (issue #582). |
+| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the official Docker SDK (issue #582). |
 | `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
 | `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
 | `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
@@ -164,6 +152,8 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issue #254). |
 | `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
 | `osimflow/executors/transport.py` | Shared transport/result helpers for remote executors; defines executor-agnostic result reference contract for remote handles. |
+| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the Docker Python SDK; creates a Swarm Service per call and polls tasks with exponential backoff (issue #582).
+| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes-native executor using the official Kubernetes Python client (issue #377). |
 | `osimflow/measures.py` | `MeasureRegistry`, `Measure`, `MeasureArgument`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError` — measure discovery, argument introspection, and variable validation for parametric campaigns (issue #532). |
 | `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
 | `osimflow/handoff_record.py` | Local handoff record for Coordinator-backed (`--detach`) campaigns (issue #630, Epic #624): `HandoffRecord`, `NoHandoffRecordError`, `IDEMPOTENCY_KEY_HEADER`, `HANDOFF_RECORD_NAME`, `read_handoff_record`, `write_handoff_record`, `handoff_record_exists`. Persists `{campaign_id, coordinator_url, submitted_at, status_url}` to `outdir/.coordinator_handoff.json` so `osimflow status` / `osimflow download` can reconnect to a remote campaign from a fresh shell. |
@@ -226,18 +216,18 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 ### DAG step names (referenced from `osimflow/campaign.py`)
 
-The 8-step DAG that the `Campaign` class drives (plus 2 optional conditional steps):
+The 11-step DAG that the `Campaign` class drives:
 
-- `GENERATE_SAMPLES` — single-shot, no fan-out (replaces deprecated `step_generate_lhs`).
-- `PREFLIGHT_RUN_MODEL` — single-shot, validates seed model before cloud spend (issue #107); skipped with `--skip-preflight`.
-- `VALIDATE_MEASURE_VARIABLES` — single-shot, validates variables.yml against discovered measure arguments (generation 0 only, unless `--skip-preflight`).
+- `GENERATE_SAMPLES` — single-shot, no fan-out (algorithm-dispatched; `GENERATE_LHS_SAMPLES` is a deprecated alias).
+- `PREFLIGHT_RUN_MODEL` — single-shot on generation 0 only, validates seed model before cloud spend (issue #107).
+- `VALIDATE_MEASURE_VARIABLES` — validates measure arguments against discovered variables before simulation.
 - `APPLY_PARAMETERS` — fan-out over N samples.
 - `RUN_OPENSTUDIO_SIM` — fan-out over N samples (heavy).
 - `EXTRACT_KPIS` — fan-out over N samples.
 - `AGGREGATE_RESULTS` — one shot after all KPIs.
 - `GENERATE_BASIC_PLOTS` — one shot after aggregation.
-- `COMPUTE_SENSITIVITY_INDICES` — conditional, only when `--algorithm sobol` is set.
-- `COMPUTE_UQ_INDICES` — conditional, only when `--algorithm uq` is set.
+- `COMPUTE_SENSITIVITY_INDICES` — conditional; runs only for `sobol` algorithm (issue #346).
+- `COMPUTE_UQ_INDICES` — conditional; runs only for `uq` algorithm (issue #530).
 
 ### CLI flags (referenced from `osimflow/__main__.py`)
 
@@ -290,6 +280,7 @@ The 8-step DAG that the `Campaign` class drives (plus 2 optional conditional ste
 - `--byos-resource-limits` (CPU/memory limits for BYOS subprocess wrapper; issue #343)
 - `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
 - `--rate-limit-key` (rate limit key type: `ip` (default), `user`, or `campaign`; issue #445)
+- `--api-redis-url` (Redis URL for distributed rate limiting across multiple API instances behind a load balancer; issue #663)
 - `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
 - `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
 - `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
@@ -323,18 +314,20 @@ The 8-step DAG that the `Campaign` class drives (plus 2 optional conditional ste
 - `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
 - `--slurm-cost-per-node-hour` (Slurm cost in USD per node-hour for cost tracking; issue #447)
 - `--resource-quota` (resource quota limits for campaign execution)
+- `--bcl-api-key` (API key for the NREL Building Component Library (BCL); issue #580)
 - `--campaign-ids` (comma-separated campaign IDs for query-results and export-results subcommands; issue #585)
 - `--editor` (enable Variable Designer web UI at /ui/designer/ for editing variable YAML files; issue #587)
 - `--include-failed` / `--no-include-failed` (include or exclude failed simulations in export-results output; issue #585)
 - `--labels` (optional labels for each --outdirs path in compare and aggregate-runs subcommands)
 - `--outdirs` (two or more campaign output directories for compare, query-results, or export-results subcommands)
 - `--page` / `--per-page` (pagination for query-results subcommand; issue #585)
+- `--validate-measures` (validate measure arguments against BCL taxonomy when discovering BCL measures; issue #580)
 
 **Backup subcommand flags** (issue #440):
 - `backup` — `--output` (custom backup file path), `--registry` (registry DB path), `--log_level`
 - `restore` — `<backup_file>` (positional), `--registry` (registry DB path), `--merge` (merge instead of replace), `--log_level`
 
-**Subcommands:** `run` (campaign execution), `warm-cache` (pre-populate the simulation cache before a campaign; issue #427), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `dashboard` (launch local ephemeral Streamlit dashboard for campaign results), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `aggregate-runs` (merge two or more campaign result sets into a combined CSV; issue #588), `status` (campaign run.json status), `download` (download campaign results), `cancel` (request graceful cancellation of a running campaign), `pause` (request graceful pause of a running campaign; issue #444), `resume` (request resume of a paused campaign; issue #444), `mark-for-reanalysis` (mark a completed/failed sample for re-running; issue #420), `merge` (merge multiple data points into a single target; issue #418), `backup` (registry backup; issue #440), `restore` (registry restore/import; issue #440), `health` (system health checks; issue #411), `measure` (list measures from a template package; issue #532), `list-measures` (browse and search the NREL BCL online; issue #580), `query-results` (query campaign results with filters and pagination; issue #585), `export-results` (export campaign results to CSV/JSON with filtering; issue #585). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--api-redis-url` (Redis URL for distributed rate limiting across multiple API instances; issue #663), `--cors-origins`, `--rate-limit`, `--tls-cert`, `--tls-key`, `--ui`, `--editor`, and `--dashboard` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`. The `warm-cache` subcommand accepts the same arguments as `osimflow run` for specifying the campaign configuration. The `cancel` subcommand accepts `<outdir>`. The `pause` subcommand accepts `<outdir>`. The `resume` subcommand accepts `<outdir>`. The `backup` subcommand accepts `--output` (custom backup path) and `--registry`; it creates a timestamped SQLite backup using the online backup API. The `restore` subcommand accepts `<backup_file>`, `--registry`, and `--merge` (merge vs. replace mode). The `health` subcommand accepts `--outdir` (directory to check write permissions/disk space; default: cwd), `--json` (machine-readable JSON output), and `--offline` (skip network connectivity check). The `mark-for-reanalysis` subcommand accepts `<outdir>`, `<sample_id>` (must be COMPLETED or FAILED), and `--priority` (default 0). The `merge` subcommand accepts `<outdir>`, `--source-ids` (one or more source sample IDs), `--target-id` (target sample ID), and `--target-work-dir` (path to target work directory).
+**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results), `backup` (registry backup; issue #440), `restore` (registry restore/import; issue #440), `health` (system health checks; issue #411), `mark-for-reanalysis` (mark a completed/failed sample for re-running; issue #420), `merge` (merge multiple data points into a single target; issue #418), `measure` (list measures from a template package; issue #532), `list-measures` (browse and search the NREL BCL online; issue #580), `aggregate-runs` (merge two or more campaign result sets into a combined CSV; issue #588), `query-results` (query campaign results with filters and pagination; issue #585), `export-results` (export campaign results to CSV/JSON with filtering; issue #585). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, `--rate-limit`, `--api-redis-url`, `--tls-cert`, `--tls-key`, `--ui`, `--editor`, and `--dashboard` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`. The `backup` subcommand accepts `--output` (custom backup path) and `--registry`; it creates a timestamped SQLite backup using the online backup API. The `restore` subcommand accepts `<backup_file>`, `--registry`, and `--merge` (merge vs. replace mode). The `health` subcommand accepts `--outdir` (directory to check write permissions/disk space; default: cwd), `--json` (machine-readable JSON output), and `--offline` (skip network connectivity check). The `mark-for-reanalysis` subcommand accepts `<outdir>`, `<sample_id>` (must be COMPLETED or FAILED), and `--priority` (default 0). The `merge` subcommand accepts `<outdir>`, `--source-ids` (one or more source sample IDs), `--target-id` (target sample ID), and `--target-work-dir` (path to target work directory).
 
 ### Developer workflow targets (Makefile)
 
