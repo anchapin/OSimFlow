@@ -1294,7 +1294,7 @@ def generate_plots(
         )
     except subprocess.CalledProcessError as e:
         log.error("generate_plots failed: %s", e.stderr)
-        raise RuntimeError("generate_plots failed") from e
+        raise RuntimeError(f"generate_plots failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return sorted(out.glob("*.png")) + sorted(out.glob("*.pdf"))
 
 
