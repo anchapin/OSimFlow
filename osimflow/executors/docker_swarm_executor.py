@@ -518,5 +518,5 @@ class DockerSwarmExecutor(BaseExecutor):
 
     def shutdown(self) -> None:
         # Docker client holds a socket; clean up on GC. Nothing to do.
-        if self._stub_executor and hasattr(self._stub_executor, "shutdown"):
+        if self._stub_executor is not None and hasattr(self._stub_executor, "shutdown"):
             self._stub_executor.shutdown()
