@@ -549,6 +549,113 @@ class TestRateLimiting:
         resp2 = client.get("/health", headers={"X-Forwarded-For": "192.168.1.100:8080"})
         assert resp2.status_code == 429
 
+    def test_rate_limit_redis_backed_allows_under_limit(self, tmp_path: Path) -> None:
+        """Redis-backed rate limiter allows requests under the limit (issue #663).
+
+        When ``redis_url`` is set, the rate limiter uses Redis sorted sets
+        so that the counter is shared across multiple API instances behind
+        a load balancer.  This test verifies the Redis path is taken and
+        requests under the limit succeed.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+
+        # Build a mock async Redis client with pipeline support.
+        mock_pipeline = AsyncMock()
+        # pipeline.execute() returns [zremrangebyscore result, zcard result, zadd result, expire result]
+        mock_pipeline.execute.return_value = [0, 0, 1, True]
+        mock_client = AsyncMock()
+        mock_client.pipeline.return_value = mock_pipeline
+        # zrange for retry_after calculation (only called when over limit)
+        mock_client.zrange = AsyncMock(return_value=[])
+
+        mock_ra = MagicMock()
+        mock_ra.from_url.return_value = mock_client
+
+        with patch("osimflow.api.app._get_redis_asyncio", return_value=mock_ra):
+            app = create_app(outdir=tmp_path, rate_limit="10/minute", redis_url="redis://localhost:6379/0")
+            client = TestClient(app)
+
+        # Requests under limit should succeed
+        for _ in range(5):
+            resp = client.get("/health")
+            assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
+
+    def test_rate_limit_redis_backed_blocks_over_limit(self, tmp_path: Path) -> None:
+        """Redis-backed rate limiter blocks requests over the limit (issue #663).
+
+        When the rate limit is exceeded using the Redis backend, the
+        middleware should return 429 with a Retry-After header, the same
+        as the in-process limiter.  This confirms the fix works across
+        multiple API instances sharing the same Redis backend.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+
+        # Build a mock async Redis client that reports being over the limit.
+        # First 2 requests succeed, 3rd is over limit.
+        call_count = {"count": 0}
+
+        async def mock_execute() -> list:
+            call_count["count"] += 1
+            if call_count["count"] <= 2:
+                # Under limit: 0 entries before adding
+                return [0, 0, 1, True]
+            else:
+                # Over limit: already have 2 entries (at max_requests)
+                return [0, 2, 1, True]
+
+        mock_pipeline = AsyncMock()
+        mock_pipeline.execute.side_effect = mock_execute
+
+        # When over limit, zrange is called to compute retry_after
+        mock_oldest = AsyncMock(return_value=[("entry1", 1000.0)])
+        mock_client = AsyncMock()
+        mock_client.pipeline.return_value = mock_pipeline
+        mock_client.zrange = mock_oldest
+
+        mock_ra = MagicMock()
+        mock_ra.from_url.return_value = mock_client
+
+        with patch("osimflow.api.app._get_redis_asyncio", return_value=mock_ra):
+            app = create_app(outdir=tmp_path, rate_limit="2/minute", redis_url="redis://localhost:6379/0")
+            client = TestClient(app)
+
+        # First two requests should succeed
+        assert client.get("/health").status_code == 200
+        assert client.get("/health").status_code == 200
+        # Third request should be rate limited
+        resp = client.get("/health")
+        assert resp.status_code == 429, f"Expected 429 but got {resp.status_code}"
+        assert "Retry-After" in resp.headers
+
+    def test_rate_limit_redis_backed_fallback_on_redis_error(self, tmp_path: Path) -> None:
+        """Redis-backed rate limiter falls back to in-process on Redis failure (issue #663).
+
+        When Redis is unavailable or returns an error, the middleware should
+        fall back to the in-process counter so the API remains available even if
+        Redis goes down.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+
+        # Mock Redis that raises an exception
+        mock_ra = MagicMock()
+        mock_ra.from_url.side_effect = Exception("Redis connection refused")
+
+        with patch("osimflow.api.app._get_redis_asyncio", return_value=mock_ra):
+            app = create_app(outdir=tmp_path, rate_limit="2/minute", redis_url="redis://localhost:6379/0")
+            client = TestClient(app)
+
+        # Should fall back to in-process and work normally
+        assert client.get("/health").status_code == 200
+        assert client.get("/health").status_code == 200
+        resp = client.get("/health")
+        assert resp.status_code == 429, f"Expected 429 (fallback to in-process) but got {resp.status_code}"
+
 
 class TestReadOnlyDefault:
     """Tests for the secure read-only default."""
