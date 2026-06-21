@@ -488,11 +488,12 @@ def load_alert_rules_from_yaml(path: Path) -> list[AlertRule]:
 
 def _make_expr_condition(expr: str) -> Callable[[dict[str, Any]], bool]:
     """Create a condition callable from a Python expression string."""
+    from osimflow._eval_safe import ExpressionError, safe_eval  # local import to avoid cycle
 
     def condition(context: dict[str, Any]) -> bool:
         try:
-            return bool(eval(expr, {"__builtins__": {}}, context))  # noqa: PGH001, S307
-        except Exception as exc:
+            return bool(safe_eval(expr, context))
+        except (ExpressionError, SyntaxError) as exc:
             log.warning("condition expression %r raised: %s — treating as False", expr, exc)
             return False
 

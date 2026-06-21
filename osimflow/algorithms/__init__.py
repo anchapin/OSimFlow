@@ -541,12 +541,14 @@ def _resolve_conditional(
             if parent_val is None:
                 continue
             for rule in var_def.get("conditions", []):
-                if eval(  # noqa: S307
-                    str(cond.get("match", "True")),
-                    {"__builtins__": {}},
-                    {"val": parent_val},
-                ):
-                    rule_dist = rule.get("distribution", "uniform")
+                    from osimflow._eval_safe import ExpressionError, safe_eval
+
+                    try:
+                        matched = safe_eval(str(cond.get("match", "True")), {"val": parent_val})
+                    except (ExpressionError, SyntaxError):
+                        matched = False
+                    if matched:
+                        rule_dist = rule.get("distribution", "uniform")
                     rule_params = {k: v for k, v in rule.items() if k != "distribution"}
                     sample["values"][var_name] = _apply_distribution(0.5, rule_dist, rule_params)
                     resolved_count += 1
