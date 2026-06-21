@@ -248,8 +248,8 @@ class DockerSwarmExecutor(BaseExecutor):
                     exc,
                     delay,
                 )
-                time.sleep(delay)
                 delay = min(delay * 2, self.max_poll_interval_s)
+                time.sleep(delay)
                 continue
 
             tasks = service_status.get("tasks", []) or []
@@ -260,8 +260,8 @@ class DockerSwarmExecutor(BaseExecutor):
                     service_name,
                     delay,
                 )
-                time.sleep(delay)
                 delay = min(delay * 2, self.max_poll_interval_s)
+                time.sleep(delay)
                 continue
 
             # Check if all tasks are in terminal states.
@@ -285,8 +285,8 @@ class DockerSwarmExecutor(BaseExecutor):
                 current_state,
                 delay,
             )
-            time.sleep(delay)
             delay = min(delay * 2, self.max_poll_interval_s)
+            time.sleep(delay)
 
     def _submit_service(
         self,
