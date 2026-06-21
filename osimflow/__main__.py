@@ -2075,7 +2075,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     elif args.enable_writes and not api_key:
         # Auto-generate a key when writes are enabled but none was provided.
         api_key = generate_api_key()
-        log.warning("No --api-key provided; auto-generated key for write access: %s", api_key)
+        # Print the key to stdout once so the user can capture it.
+        # Never log the key itself — only a fingerprint for audit purposes.
+        print(f"API key generated: {api_key}", file=sys.stdout)
+        log.info("API key fingerprint: %.8s...", api_key)
 
     # Parse CORS origins.
     cors_origins: list[str] | None = None
