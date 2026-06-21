@@ -63,7 +63,7 @@ log = logging.getLogger("osimflow.manifest")
 
 #: Regex for the first EnergyPlus ``  * Severe`` line (PRD §6 #4).
 #: Two leading spaces, an asterisk, whitespace, then the word ``Severe``.
-_SEVERE_RE = re.compile(r"^[ \t]{2}\*[ \t]+Severe[^\n]*", re.MULTILINE)
+_SEVERE_RE = re.compile(r"^[ \t]{2}\*+[ \t]+Severe[^\n]*", re.MULTILINE)
 
 #: The §3.1 manifest fields, in canonical (emission) order.
 MANIFEST_FIELDS: tuple[str, ...] = (
