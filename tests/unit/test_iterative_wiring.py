@@ -105,7 +105,9 @@ def _stub_apply(
     return out_dir
 
 
-def _stub_extract(sim_dir: Path, sample_id: str, kpi_dir: Path, os_version: str | None = None) -> Path:
+def _stub_extract(
+    sim_dir: Path, sample_id: str, kpi_dir: Path, os_version: str | None = None
+) -> Path:
     kpi_dir.mkdir(parents=True, exist_ok=True)
     # Vary EUI by sample_id hash so optimizers see different values.
     eui = 100.0 + (hash(sample_id) % 50)
