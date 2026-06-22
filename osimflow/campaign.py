@@ -650,8 +650,7 @@ class Campaign:
         # ratio ($0.05 on-demand vs $0.03 spot).
         if total > 0:
             savings_ratio = (
-                DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-                - DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+                DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR - DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
             ) / DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
             self.trace.spot_savings_usd = round(total * savings_ratio, 6)
         else:
