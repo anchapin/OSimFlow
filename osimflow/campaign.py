@@ -65,9 +65,13 @@ from .apply_params import (
 )
 from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
+from .cost_tracking import (
+    DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
+    DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
+)
 from .data_point_manager import DataPointManager
 from .distributed_jobqueue import build_job_queue
-from .executors import AWSBatchExecutor, BaseExecutor, Handle
+from .executors import BaseExecutor, Handle
 from .json_utils import safe_json_dumps, safe_json_loads
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
@@ -646,9 +650,9 @@ class Campaign:
         # ratio ($0.05 on-demand vs $0.03 spot).
         if total > 0:
             savings_ratio = (
-                AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-                - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
-            ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+                DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+                - DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+            ) / DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
             self.trace.spot_savings_usd = round(total * savings_ratio, 6)
         else:
             self.trace.spot_savings_usd = 0.0
