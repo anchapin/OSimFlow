@@ -3038,7 +3038,10 @@ class Campaign:
 
         # --- Phase 2/3: bounded submit and await in chunks ---
         pending_items = list(pending.items())
-        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        if pending_items:
+            chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        else:
+            chunk_size = 1  # unused when pending_items is empty, but avoids range(0,0,0)
         submit_interval_s = self._fanout_submit_interval_s()
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
@@ -3281,7 +3284,10 @@ class Campaign:
                     )
 
         pending_items = list(pending.items())
-        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        if pending_items:
+            chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        else:
+            chunk_size = 1  # unused when pending_items is empty, but avoids range(0,0,0)
         submit_interval_s = self._fanout_submit_interval_s()
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
@@ -3549,7 +3555,10 @@ class Campaign:
         pending_items = list(pending.items())
         # Zero-based sample index within the campaign (issue #625 manifest field).
         index_map: dict[str, int] = {sid: i for i, (sid, _c) in enumerate(pending_items)}
-        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        if pending_items:
+            chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        else:
+            chunk_size = 1  # unused when pending_items is empty, but avoids range(0,0,0)
         submit_interval_s = self._fanout_submit_interval_s()
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
