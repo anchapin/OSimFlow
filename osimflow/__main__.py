@@ -14,6 +14,7 @@ After `pip install -e .`, also available as:
 """
 
 import argparse
+import json
 import logging
 import sys
 import threading
@@ -182,11 +183,28 @@ def _apply_preset(args: argparse.Namespace) -> None:
             setattr(args, key, preset_value)
 
 
+def _extract_max_concurrent_samples(resource_quota: str | None) -> int | None:
+    """Extract max_concurrent_samples from a JSON resource_quota string."""
+    if resource_quota is None:
+        return None
+    try:
+        quota: dict[str, object] = json.loads(resource_quota)
+        value = quota.get("max_concurrent_samples")
+        if isinstance(value, int):
+            return value
+        return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
     """Dispatch to the correct executor based on ``args.executor``."""
-    # Local executor — no extra config needed.
+    max_concurrent_samples = _extract_max_concurrent_samples(args.resource_quota)
     if args.executor == "local":
-        return LocalExecutor(max_workers=args.max_workers)
+        return LocalExecutor(
+            max_workers=args.max_workers,
+            max_concurrent_samples=max_concurrent_samples,
+        )
     # Slurm executor — partition, account, and submitit debug flag.
     if args.executor == "slurm":
         return SlurmExecutor(
