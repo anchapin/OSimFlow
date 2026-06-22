@@ -46,6 +46,14 @@ from osimflow.executors.transport import resolve_result_for_callback
 log = logging.getLogger("osimflow.executors.google_batch")
 
 
+def _google_error_code(exc: Exception) -> int:
+    """Extract HTTP status code from a Google API error, or 0 if not applicable."""
+    try:
+        return getattr(exc, "status_code", 0) or 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 class _GoogleBatchHandle(Handle):
     """Handle that polls Google Cloud Batch on `.result()`.
 
@@ -156,7 +164,29 @@ class _GoogleBatchHandle(Handle):
             job = self._executor._get_job(self.job_name)
             state_name = str(job.status.state.name)
             return "SUCCEEDED" in state_name or "FAILED" in state_name
-        except Exception:
+        except TimeoutError as exc:
+            log.debug("Google Batch done() timeout for job %s: %s", self.job_name, exc)
+            return False
+        except ConnectionError as exc:
+            log.debug("Google Batch done() connection error for job %s: %s", self.job_name, exc)
+            return False
+        except Exception as exc:
+            error_code = _google_error_code(exc)
+            if error_code in (401, 403, 404):
+                log.warning(
+                    "Google Batch done() permanent error for job %s: %s [code=%s]",
+                    self.job_name,
+                    exc,
+                    error_code,
+                )
+                self._future.set_exception(exc)
+                raise
+            log.debug(
+                "Google Batch done() transient error for job %s: %s [code=%s]",
+                self.job_name,
+                exc,
+                error_code,
+            )
             return False
 
 

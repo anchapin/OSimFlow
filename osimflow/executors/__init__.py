@@ -454,6 +454,22 @@ class SlurmExecutor(BaseExecutor):
         pass
 
 
+def _aws_error_code(exc: Exception) -> str:
+    """Extract AWS/boto error code from an exception, or empty string if not applicable."""
+    try:
+        return exc.response.get("Error", {}).get("Code", "") if hasattr(exc, "response") else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _nomad_error_code(exc: Exception) -> int:
+    """Extract HTTP status code from a Nomad/Consulate exception, or 0 if not applicable."""
+    try:
+        return getattr(exc, "status_code", 0) or 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 class _AWSBatchHandle(Handle):
     """Handle that polls Batch on `.result()`.
 

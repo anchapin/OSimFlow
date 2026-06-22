@@ -88,7 +88,24 @@ class _KubernetesHandle(Handle):
             pod_status = self._executor._get_pod_status(self._job_name)
             phase = pod_status.get("status", {}).get("phase", "")
             return phase in ("Succeeded", "Failed")
-        except Exception:
+        except TimeoutError as exc:
+            log.debug("Kubernetes done() timeout for job %s: %s", self._job_name, exc)
+            return False
+        except ConnectionError as exc:
+            log.debug("Kubernetes done() connection error for job %s: %s", self._job_name, exc)
+            return False
+        except Exception as exc:
+            status = getattr(exc, "status", 0)
+            if status in (401, 403, 404):
+                log.warning(
+                    "Kubernetes done() permanent error for job %s: %s [status=%s]",
+                    self._job_name,
+                    exc,
+                    status,
+                )
+                self._future.set_exception(exc)
+                raise
+            log.debug("Kubernetes done() transient error for job %s: %s", self._job_name, exc)
             return False
 
     def _extract_failure_reason(self, pod_status: dict[str, Any]) -> str:

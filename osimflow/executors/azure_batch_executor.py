@@ -41,6 +41,27 @@ from osimflow.executors.transport import resolve_result_for_callback
 log = logging.getLogger("osimflow.executors.azure_batch")
 
 
+class _AzureErrorInfo:
+    def __init__(self, code: str, is_permanent: bool):
+        self.code = code
+        self.is_permanent = is_permanent
+
+
+def _azure_error_info(exc: Exception) -> _AzureErrorInfo:
+    """Classify an Azure exception as permanent or transient."""
+    exc_name = type(exc).__name__
+    status_code = getattr(exc, "status_code", None) or 0
+    if (
+        "AuthenticationError" in exc_name
+        or status_code in (401, 403)
+        or "not found" in str(exc).lower()
+    ):
+        return _AzureErrorInfo(exc_name, True)
+    if "TooManyRequestsError" in exc_name or status_code == 429:
+        return _AzureErrorInfo(exc_name, False)
+    return _AzureErrorInfo(exc_name, False)
+
+
 class _AzureBatchHandle(Handle):
     """Handle that polls Azure Batch on `.result()`.
 
@@ -147,7 +168,29 @@ class _AzureBatchHandle(Handle):
             job = self._executor._get_job(self.job_id)
             if job.properties.execution_info.end_time is not None:
                 return True
-        except Exception:
+        except TimeoutError as exc:
+            log.debug("Azure Batch done() timeout for job %s: %s", self.job_id, exc)
+            return False
+        except ConnectionError as exc:
+            log.debug("Azure Batch done() connection error for job %s: %s", self.job_id, exc)
+            return False
+        except Exception as exc:
+            error_info = _azure_error_info(exc)
+            if error_info.is_permanent:
+                log.warning(
+                    "Azure Batch done() permanent error for job %s: %s [%s]",
+                    self.job_id,
+                    exc,
+                    error_info.code,
+                )
+                self._future.set_exception(exc)
+                raise
+            log.debug(
+                "Azure Batch done() transient error for job %s: %s [%s]",
+                self.job_id,
+                exc,
+                error_info.code,
+            )
             return False
         return False
 
