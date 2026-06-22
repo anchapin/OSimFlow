@@ -110,6 +110,16 @@ class MockExecutor(BaseExecutor):
 
 class NomadLikeMockExecutor(MockExecutor):
     name = "nomad"
+    _fanout_submit_chunk_size: int = 2
+
+    def get_bounded_fanout_chunk_size(self, total: int) -> int:
+        """Return the bounded chunk size for Nomad fan-out submission."""
+        if total <= 0:
+            return 1
+        chunk = self._fanout_submit_chunk_size
+        if chunk <= 0:
+            return total
+        return min(total, max(1, chunk))
 
 
 # -----------------------------------------------------------------------
