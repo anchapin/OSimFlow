@@ -940,8 +940,8 @@ def _extract_kpis_impl(
     simulation_dir: Path,
     sample_id: str,
     out: Path,
-    openstudio_version: str,
     *,
+    openstudio_version: str | None = None,
     max_retries: int = 3,
 ) -> Path:
     """Internal implementation — wrapped with retry by ``extract_kpis``."""
@@ -978,8 +978,8 @@ def extract_kpis(
     simulation_dir: Path,
     sample_id: str,
     out: Path,
-    openstudio_version: str | None = None,
     *,
+    openstudio_version: str | None = None,
     max_retries: int = 3,
 ) -> Path:
     """Run the default KPI extractor with exponential-backoff retry.
@@ -1002,7 +1002,7 @@ def extract_kpis(
         simulation_dir,
         sample_id,
         out,
-        openstudio_version,
+        openstudio_version=openstudio_version,
         max_retries=max_retries,
         sample_id=sample_id,
         step_name="extract_kpis",

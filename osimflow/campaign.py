@@ -3591,7 +3591,7 @@ class Campaign:
                         ctx["sim_dir"],
                         sid,
                         ctx["kpi_dir"],
-                        ctx["os_version"],
+                        openstudio_version=ctx["os_version"],
                         max_retries=self.cfg.max_sample_retries,
                     )
                 else:
@@ -3600,7 +3600,7 @@ class Campaign:
                         ctx["sim_dir"],
                         sid,
                         ctx["kpi_dir"],
-                        ctx["os_version"],
+                        openstudio_version=ctx["os_version"],
                         name=f"kpi_{sid}",
                         cpus=1,
                         memory_mb=1024,

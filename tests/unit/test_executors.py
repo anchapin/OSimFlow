@@ -559,6 +559,7 @@ class TestAWSBatchHandle:
         ex.max_retries = 0
         ex.fallback_to_on_demand = False
         ex._ec2_client = MagicMock()
+        ex._instance_type = None
         handle = _AWSBatchHandle(job_id="j-h", executor=ex, submit_params={})
         return handle, mock_client
 
