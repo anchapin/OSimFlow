@@ -195,25 +195,45 @@ class LocalExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        # Resource directives are advisory on the local executor.
-        # ``openstudio_version`` is consumed here (not forwarded to ``fn``)
-        # so it never collides with the work function's positional param.
+        import os
+        import socket
+
         del openstudio_version, result_hint, remote_command, result_transport_mode  # noqa: F841
         del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
-        del result_storage_endpoint, variables_json, env, stdout_path, stderr_path  # noqa: F841
+        del result_storage_endpoint, variables_json, stdout_path, stderr_path  # noqa: F841
         del max_retries, worker_id, kwargs  # noqa: F841, ARG002
-        import socket  # noqa: PLC0415
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
 
-        if self._semaphore is not None:
+        if env:
+
+            def _with_env() -> Any:
+                original = os.environ.copy()
+                os.environ.update(env)
+                try:
+                    return fn(*args)
+                finally:
+                    os.environ.clear()
+                    os.environ.update(original)
+
+            if self._semaphore is not None:
+                sem = self._semaphore
+
+                def _wrapped() -> Any:
+                    with sem:
+                        return _with_env()
+
+                fut: Future[Any] = self._pool.submit(_wrapped)
+            else:
+                fut = self._pool.submit(_with_env)
+        elif self._semaphore is not None:
             sem = self._semaphore
 
             def _wrapped() -> Any:
                 with sem:
                     return fn(*args)
 
-            fut: Future[Any] = self._pool.submit(_wrapped)
+            fut = self._pool.submit(_wrapped)
         else:
             fut = self._pool.submit(fn, *args)
         return Handle(
