@@ -256,6 +256,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--aws-batch-max-retries` (max Spot interruption retries; default 3. Issue #131)
 - `--aws-batch-spot-price` (AWS Batch Spot price in USD per vCPU-hour for cost tracking; issue #447)
 - `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
+- `--aws-batch-instance-type` (AWS EC2 instance type used for the Spot price ceiling check; issue #792)
 - `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-pool-id`, `--azure-batch-location` (Azure Batch executor configuration)
 - `--azure-use-spot`, `--azure-fallback-to-on-demand`, `--azure-max-retries` (Azure spot/preemptible instance handling; issue #352)
 - `--google-batch-project-id`, `--google-batch-region`, `--google-batch-service-account` (Google Cloud Batch executor configuration)
