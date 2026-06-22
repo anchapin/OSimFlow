@@ -650,6 +650,12 @@ def main() -> int:
         help="JSON string of quality threshold overrides "
         "(forwarded from variables.yml `quality_thresholds` section).",
     )
+    parser.add_argument(
+        "--openstudio_version",
+        type=str,
+        default=None,
+        help="OpenStudio version string to record in KPI JSON.",
+    )
     args = parser.parse_args()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -710,7 +716,7 @@ def main() -> int:
 
     output = {
         "sample_id": args.sample_id,
-        "openstudio_version": None,
+        "openstudio_version": args.openstudio_version,
         "kpis": kpis,
         "quality": quality,
     }

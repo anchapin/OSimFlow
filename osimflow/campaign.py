@@ -3543,6 +3543,7 @@ class Campaign:
                 "kpi_dir": kpi_dir,
                 "key": key,
                 "state": state,
+                "os_version": os_version,
             }
 
         # --- Phase 2/3: bounded submit and await in chunks ---
@@ -3572,6 +3573,7 @@ class Campaign:
                         ctx["sim_dir"],
                         sid,
                         ctx["kpi_dir"],
+                        ctx["os_version"],
                         max_retries=self.cfg.max_sample_retries,
                     )
                 else:
@@ -3580,6 +3582,7 @@ class Campaign:
                         ctx["sim_dir"],
                         sid,
                         ctx["kpi_dir"],
+                        ctx["os_version"],
                         name=f"kpi_{sid}",
                         cpus=1,
                         memory_mb=1024,

@@ -940,24 +940,28 @@ def _extract_kpis_impl(
     simulation_dir: Path,
     sample_id: str,
     out: Path,
+    openstudio_version: str,
     *,
     max_retries: int = 3,
 ) -> Path:
     """Internal implementation — wrapped with retry by ``extract_kpis``."""
     out.mkdir(parents=True, exist_ok=True)
     kpi_path = out / f"kpi_{sample_id}.json"
+    cmd = [
+        sys.executable,
+        str(_resolve_work_script("extract_kpis.py")),
+        "--simulation_dir",
+        str(simulation_dir),
+        "--sample_id",
+        sample_id,
+        "--out",
+        str(kpi_path),
+    ]
+    if openstudio_version is not None:
+        cmd.extend(["--openstudio_version", openstudio_version])
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
-            [
-                sys.executable,
-                str(_resolve_work_script("extract_kpis.py")),
-                "--simulation_dir",
-                str(simulation_dir),
-                "--sample_id",
-                sample_id,
-                "--out",
-                str(kpi_path),
-            ],
+            cmd,
             check=True,
             capture_output=True,
             text=True,
@@ -974,6 +978,7 @@ def extract_kpis(
     simulation_dir: Path,
     sample_id: str,
     out: Path,
+    openstudio_version: str | None = None,
     *,
     max_retries: int = 3,
 ) -> Path:
@@ -986,6 +991,7 @@ def extract_kpis(
         simulation_dir: directory containing simulation outputs (e.g. eplusout.sql).
         sample_id: the sample's identifier (e.g. "0001").
         out: directory where the KPI JSON file is written.
+        openstudio_version: optional OpenStudio version string to record in KPI JSON.
         max_retries: maximum retry attempts for transient failures (default 3).
 
     Returns:
@@ -996,6 +1002,7 @@ def extract_kpis(
         simulation_dir,
         sample_id,
         out,
+        openstudio_version,
         max_retries=max_retries,
         sample_id=sample_id,
         step_name="extract_kpis",
