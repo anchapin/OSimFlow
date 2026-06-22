@@ -361,6 +361,11 @@ class Campaign:
         self._prev_sigint: Any = None
         self._prev_sigterm: Any = None
 
+        # Consecutive checkpoint failure counter (issue #739). After N
+        # consecutive failures in _checkpoint_sample we abort instead of
+        # silently continuing.
+        self._consecutive_checkpoint_failures = 0
+
     def _enforce_start_quota(self) -> None:
         """Fail fast if the campaign's resource quota is already exceeded at start.
 
@@ -698,7 +703,24 @@ class Campaign:
             billed_duration_seconds=billed_duration_seconds,
             trace_id=self._trace_id_for(sid),
         )
-        self.trace.update_sample(trace)
+        try:
+            self.trace.update_sample(trace)
+        except Exception as exc:  # noqa: BLEAVE
+            self._consecutive_checkpoint_failures += 1
+            log.warning(
+                "checkpoint failed for sample %s (consecutive failures: %d): %s",
+                sid,
+                self._consecutive_checkpoint_failures,
+                exc,
+            )
+            if self._consecutive_checkpoint_failures >= 3:
+                log.error(
+                    "too many consecutive checkpoint failures (%d) — aborting campaign",
+                    self._consecutive_checkpoint_failures,
+                )
+                raise
+            return
+        self._consecutive_checkpoint_failures = 0
 
     def _submit_and_await_all(
         self,
