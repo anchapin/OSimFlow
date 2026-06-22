@@ -39,7 +39,15 @@ from .document_store import (
     build_document_store,
 )
 from .executors import (
+    AWSBatchExecutor,
+    AzureBatchExecutor,
+    DaskJobQueueExecutor,
+    DockerSwarmExecutor,
+    GoogleBatchExecutor,
+    KubernetesExecutor,
     LocalExecutor,
+    NomadExecutor,
+    PBSExecutor,
     SlurmExecutor,
 )
 from .executors.base import BaseExecutor, Handle
@@ -77,6 +85,7 @@ from .observability import (
     PrometheusBackend,
     new_trace_id,
 )
+from ._campaign_observability import ObservabilityManager
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
 from .taskqueue import (
@@ -157,7 +166,15 @@ __all__ = [
     "build_job_queue",
     "BaseExecutor",
     "Handle",
+    "AWSBatchExecutor",
+    "AzureBatchExecutor",
+    "DaskJobQueueExecutor",
+    "DockerSwarmExecutor",
+    "GoogleBatchExecutor",
+    "KubernetesExecutor",
     "LocalExecutor",
+    "NomadExecutor",
+    "PBSExecutor",
     "SlurmExecutor",
     "JobQueue",
     # Coordinator handoff record (issue #630, Epic #624)
@@ -174,6 +191,7 @@ __all__ = [
     "NullBackend",
     "PrometheusBackend",
     "new_trace_id",
+    "ObservabilityManager",
     "ParetoFront",
     "ParetoSolution",
     "CampaignRegistry",
