@@ -89,7 +89,14 @@ class _PBSHandle(Handle):
             return True
         try:
             state = self._executor._query_job_state(self.job_id)
-        except Exception:  # noqa: BLE001 — never raise from done()
+        except TimeoutError as exc:
+            log.debug("PBS done() timeout for job %s: %s", self.job_id, exc)
+            return False
+        except OSError as exc:
+            log.debug("PBS done() OS error for job %s: %s", self.job_id, exc)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            log.debug("PBS done() transient error for job %s: %s", self.job_id, exc)
             return False
         # Terminal states in PBS: F (finished), E (exiting),
         # Q (queued, but we only poll when done() is called which

@@ -34,6 +34,17 @@ from osimflow.executors.base import BaseExecutor, Handle
 log = logging.getLogger("osimflow.executors.docker_swarm")
 
 
+def _docker_error_code(exc: Exception) -> int:
+    """Extract HTTP status code from a docker API error, or 0 if not applicable."""
+    try:
+        response = getattr(exc, "response", None)
+        if response is None:
+            return 0
+        return getattr(response, "status_code", 0) or 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 class _DockerSwarmHandle(Handle):
     """Handle that polls Docker Swarm service tasks on `.result()`.
 
@@ -96,7 +107,28 @@ class _DockerSwarmHandle(Handle):
             # A service is "done" when all its tasks are in a terminal state.
             terminal_states = {"complete", "failed", "shutdown", "rejected"}
             return all(task.get("status", {}).get("State", "") in terminal_states for task in tasks)
-        except Exception:  # noqa: BLE001 — never raise from done()
+        except TimeoutError as exc:
+            log.debug("Docker Swarm done() timeout for service %s: %s", self._service_name, exc)
+            return False
+        except ConnectionError as exc:
+            log.debug(
+                "Docker Swarm done() connection error for service %s: %s", self._service_name, exc
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001
+            status_code = _docker_error_code(exc)
+            if status_code in (401, 403, 404):
+                log.warning(
+                    "Docker Swarm done() permanent error for service %s: %s [status=%s]",
+                    self._service_name,
+                    exc,
+                    status_code,
+                )
+                self._future.set_exception(exc)
+                raise
+            log.debug(
+                "Docker Swarm done() transient error for service %s: %s", self._service_name, exc
+            )
             return False
 
     @staticmethod

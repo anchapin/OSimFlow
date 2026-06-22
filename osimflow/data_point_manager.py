@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import fcntl
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -332,6 +331,7 @@ class DataPointManager:
                 try:
                     if sys.platform == "win32":
                         import msvcrt  # noqa: PLC0415
+
                         msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
                     else:
                         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
@@ -340,9 +340,7 @@ class DataPointManager:
 
                         original = self._data_points.get(sample_id)
                         if original is None:
-                            raise KeyError(
-                                f"Data point {sample_id!r} not found"
-                            )
+                            raise KeyError(f"Data point {sample_id!r} not found")
 
                         if original.status not in (
                             DataPointStatus.COMPLETED,
@@ -354,10 +352,7 @@ class DataPointManager:
                                 "or failed"
                             )
 
-                        new_id = (
-                            f"{sample_id}_reanalyze_"
-                            f"{original.reanalyze_count + 1}"
-                        )
+                        new_id = f"{sample_id}_reanalyze_{original.reanalyze_count + 1}"
                         original.reanalyze_count += 1
                         original.updated_at = time.time()
 
@@ -379,12 +374,13 @@ class DataPointManager:
                     finally:
                         if sys.platform == "win32":
                             import msvcrt  # noqa: PLC0415
+
                             msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0)
                         else:
                             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
                 finally:
                     fh.close()
-            except OSError as exc:
+            except OSError:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(0.05 * (attempt + 1))
                     continue
