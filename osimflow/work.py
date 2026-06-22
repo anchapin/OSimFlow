@@ -437,7 +437,9 @@ def _apply_parameters_stub(
         )
     except subprocess.CalledProcessError as e:
         log.error("apply_params failed for %s: %s", sample_id, e.stderr)
-        raise RuntimeError(f"apply_params failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}") from e
+        raise RuntimeError(
+            f"apply_params failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}"
+        ) from e
     return out_dir
 
 
@@ -962,7 +964,9 @@ def _extract_kpis_impl(
         )
     except subprocess.CalledProcessError as e:
         log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
-        raise RuntimeError(f"extract_kpis failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}") from e
+        raise RuntimeError(
+            f"extract_kpis failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}"
+        ) from e
     return kpi_path
 
 
@@ -1241,7 +1245,9 @@ def aggregate_results(
         )
     except subprocess.CalledProcessError as e:
         log.error("aggregate_results failed: %s", e.stderr)
-        raise RuntimeError(f"aggregate_results failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
+        raise RuntimeError(
+            f"aggregate_results failed: stdout={e.stdout!r} stderr={e.stderr!r}"
+        ) from e
     return {
         "csv": csv_path,
         "parquet": parquet_path,
