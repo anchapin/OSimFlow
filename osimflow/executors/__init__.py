@@ -161,8 +161,14 @@ class LocalExecutor(BaseExecutor):
 
     name = "local"
 
-    def __init__(self, max_workers: int = 4):
+    def __init__(self, max_workers: int = 4, max_concurrent_samples: int | None = None):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="osimflow")
+        if max_concurrent_samples is not None:
+            self._semaphore: threading.Semaphore | None = threading.BoundedSemaphore(
+                max_concurrent_samples
+            )
+        else:
+            self._semaphore = None
 
     def submit(
         self,
@@ -199,7 +205,17 @@ class LocalExecutor(BaseExecutor):
         import socket  # noqa: PLC0415
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
-        fut: Future[Any] = self._pool.submit(fn, *args)
+
+        if self._semaphore is not None:
+            sem = self._semaphore
+
+            def _wrapped() -> Any:
+                with sem:
+                    return fn(*args)
+
+            fut: Future[Any] = self._pool.submit(_wrapped)
+        else:
+            fut = self._pool.submit(fn, *args)
         return Handle(
             job_id=f"local-{id(fut)}",
             _future=fut,
