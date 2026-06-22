@@ -148,3 +148,21 @@ class BaseExecutor(abc.ABC):
         for executors that do not need explicit cancellation.
         """
         return None
+
+    def fanout_submit_chunk_size(self, total: int) -> int:
+        """Return the bounded chunk size for fan-out submission.
+
+        Override in executors that need to limit the number of
+        concurrent submissions (e.g., Nomad's rate-limiting).
+        The default returns *total* (no chunking).
+        """
+        return total
+
+    def fanout_submit_interval_s(self) -> float:
+        """Return the per-submit pacing interval for fan-out submission.
+
+        Override in executors that need to pace submissions
+        (e.g., Nomad's submit rate limiting). The default
+        returns 0.0 (no pacing).
+        """
+        return 0.0
