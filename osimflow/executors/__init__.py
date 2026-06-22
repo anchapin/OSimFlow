@@ -691,8 +691,9 @@ class AWSBatchExecutor(BaseExecutor):
     sources credentials from the IAM role attached to the Batch compute
     environment. The constructor does **not** accept
     `aws_access_key_id` / `aws_secret_access_key`; passing long-lived
-    keys would violate the security policy. Similarly, no region is
-    pinned — the IAM role's region (or `AWS_REGION` env var) decides.
+    keys would violate the security policy. The ``region_name`` parameter
+    pins the region passed to boto3; when ``None``, boto3 follows the
+    IAM role's region (or ``AWS_REGION`` env var / ``~/.aws/config``).
 
     Spot instance retry + price ceiling (issue #131):
     When `max_spot_price_usd` is set, the executor queries the current
