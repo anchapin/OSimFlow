@@ -2330,7 +2330,7 @@ class Campaign:
             self.step_preflight_run_model()
 
         parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
-        self.step_validate_measure_variables(generation=generation)
+        self.step_validate_measure_variables()
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
 
@@ -2848,7 +2848,7 @@ class Campaign:
         )
         self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
 
-    def step_validate_measure_variables(self, generation: int = 0) -> None:
+    def step_validate_measure_variables(self) -> None:
         """Validate variables.yml against discovered measure arguments.
 
         Runs before ``RUN_OPENSTUDIO_SIM`` as a pre-flight check (GAP-003).
