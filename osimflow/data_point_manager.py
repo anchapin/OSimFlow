@@ -17,7 +17,10 @@ survives process restarts and is shared across campaign runs that share an
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
+import sys
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -310,36 +313,83 @@ class DataPointManager:
         Creates a new data point with the same parameters but a new sample_id
         (``{original}_reanalyze_{n}``) and increments the parent's
         ``reanalyze_count``.
+
+        Uses file locking to ensure an atomic compare-and-swap: the in-memory
+        state is discarded and re-read from disk after acquiring the exclusive
+        lock, so if another process modified the data point between our
+        initial read and our write, we detect the stale state and raise
+        ``ValueError`` instead of silently overwriting.
         """
-        original = self._data_points[sample_id]
-        if original.status not in (
-            DataPointStatus.COMPLETED,
-            DataPointStatus.FAILED,
-        ):
-            raise ValueError(
-                f"Cannot reanalysis {sample_id!r}: status is {original.status.value}, "
-                "must be completed or failed"
-            )
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        (self.outdir / ".osimflow").mkdir(parents=True, exist_ok=True)
+        if not self._state_file.exists():
+            self._state_file.write_text("{}")
 
-        new_id = f"{sample_id}_reanalyze_{original.reanalyze_count + 1}"
-        original.reanalyze_count += 1
-        original.updated_at = time.time()
+        MAX_RETRIES = 5
+        for attempt in range(MAX_RETRIES):
+            try:
+                fh = self._state_file.open("r")
+                try:
+                    if sys.platform == "win32":
+                        import msvcrt  # noqa: PLC0415
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                    else:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                    try:
+                        self._load()
 
-        new_dp = DataPoint(
-            sample_id=new_id,
-            status=DataPointStatus.PENDING,
-            priority=original.priority,
-            work_dir=original.work_dir,  # will be overwritten on re-run
-            created_at=time.time(),
-            updated_at=time.time(),
-            reanalyze_count=0,
-            original_sample_id=sample_id,
-            seed_model=original.seed_model,
-            weather_file=original.weather_file,
-        )
-        self._data_points[new_id] = new_dp
-        self._save()
-        return new_dp
+                        original = self._data_points.get(sample_id)
+                        if original is None:
+                            raise KeyError(
+                                f"Data point {sample_id!r} not found"
+                            )
+
+                        if original.status not in (
+                            DataPointStatus.COMPLETED,
+                            DataPointStatus.FAILED,
+                        ):
+                            raise ValueError(
+                                f"Cannot reanalysis {sample_id!r}: status is "
+                                f"{original.status.value}, must be completed "
+                                "or failed"
+                            )
+
+                        new_id = (
+                            f"{sample_id}_reanalyze_"
+                            f"{original.reanalyze_count + 1}"
+                        )
+                        original.reanalyze_count += 1
+                        original.updated_at = time.time()
+
+                        new_dp = DataPoint(
+                            sample_id=new_id,
+                            status=DataPointStatus.PENDING,
+                            priority=original.priority,
+                            work_dir=original.work_dir,
+                            created_at=time.time(),
+                            updated_at=time.time(),
+                            reanalyze_count=0,
+                            original_sample_id=sample_id,
+                            seed_model=original.seed_model,
+                            weather_file=original.weather_file,
+                        )
+                        self._data_points[new_id] = new_dp
+                        self._save()
+                        return new_dp
+                    finally:
+                        if sys.platform == "win32":
+                            import msvcrt  # noqa: PLC0415
+                            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0)
+                        else:
+                            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                finally:
+                    fh.close()
+            except OSError as exc:
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
+        raise RuntimeError("Unexpected exit from mark_for_reanalysis retry loop")
 
     # -------------------------------------------------------------------------
     # Merging (#418)
