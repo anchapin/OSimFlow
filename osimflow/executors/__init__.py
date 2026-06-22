@@ -528,6 +528,8 @@ class _AWSBatchHandle(Handle):
     so we own the call site and don't need the dataclass machinery.
     """
 
+    _GHOST_RETRIES = 3
+
     def __init__(
         self,
         job_id: str,
@@ -653,18 +655,24 @@ class _AWSBatchHandle(Handle):
         # A single non-blocking `describe_jobs` is the cheapest probe.
         # If the task is in a terminal state, we've already finished;
         # otherwise we're still running. Anything else (UNKNOWN status,
-        # network blip) is treated as not-done.
-        try:
-            response = self._executor._get_client().describe_jobs(  # noqa: SLF001
-                jobs=[self.job_id]
-            )
-        except Exception as exc:  # noqa: BLE001 — never raise from done()
-            log.warning("Polling error for %s: %s", self.job_id, exc)
-            self.error = exc
-            return False
-        jobs = response.get("jobs", [])
-        if not jobs:
-            return False
+        # network blip) is treated as not-done. Ghost jobs (deleted or
+        # never-created) return an empty list — after N consecutive
+        # empty responses we raise to break the indefinite-wait loop.
+        for attempt in range(self._GHOST_RETRIES):
+            try:
+                response = self._executor._get_client().describe_jobs(  # noqa: SLF001
+                    jobs=[self.job_id]
+                )
+            except Exception as exc:  # noqa: BLE001 — never raise from done()
+                log.warning("Polling error for %s: %s", self.job_id, exc)
+                self.error = exc
+                return False
+            jobs = response.get("jobs", [])
+            if jobs:
+                break
+            log.debug("Empty describe_jobs for %s, attempt %d/%d", self.job_id, attempt + 1, self._GHOST_RETRIES)
+        else:
+            raise RuntimeError(f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries")
         status = jobs[0].get("status", "")
         return status in ("SUCCEEDED", "FAILED")
 
@@ -1360,6 +1368,8 @@ class _NomadHandle(Handle):
     through the cached Future.
     """
 
+    _GHOST_RETRIES = 3
+
     def __init__(
         self,
         job_id: str,
@@ -1484,17 +1494,24 @@ class _NomadHandle(Handle):
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False
-        # Do a single non-blocking allocation lookup. If
-        # the task is in a terminal state, we've already finished;
-        # otherwise we're still running. Any error here (network
-        # blip, missing alloc) is treated as not-done.
+        # Do a non-blocking allocation lookup. If the task is in a
+        # terminal state, we've already finished; otherwise we're still
+        # running. Ghost allocations (deleted or never-created) return
+        # an empty dict — after N consecutive empty responses we raise
+        # to break the indefinite-wait loop.
         assert self._allocation_id is not None  # guaranteed after _ensure
-        try:
-            alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
-        except Exception as exc:  # noqa: BLE001 — never raise from done()
-            log.warning("Polling error for %s: %s", self.job_id, exc)
-            self.error = exc
-            return False
+        for attempt in range(self._GHOST_RETRIES):
+            try:
+                alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
+            except Exception as exc:  # noqa: BLE001 — never raise from done()
+                log.warning("Polling error for %s: %s", self.job_id, exc)
+                self.error = exc
+                return False
+            if alloc:
+                break
+            log.debug("Empty allocation for %s, attempt %d/%d", self.job_id, attempt + 1, self._GHOST_RETRIES)
+        else:
+            raise RuntimeError(f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries")
         status = alloc.get("ClientStatus", "")
         if status not in ("complete", "failed", "lost"):
             return False
