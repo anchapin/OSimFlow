@@ -140,6 +140,15 @@ class QuotaExceededError(RuntimeError):
         self.current = current
 
 
+class CampaignError(RuntimeError):
+    """Raised when a critical campaign-level error should abort execution.
+
+    Unlike step-level errors that are caught and recorded in run.json,
+    a CampaignError signals an unrecoverable condition that should halt
+    the campaign immediately.
+    """
+
+
 # Type aliases — these are the schemas of intermediate DAG outputs.
 class SampleSpec(TypedDict, total=False):
     sample_id: str
@@ -2865,7 +2874,7 @@ class Campaign:
                 variables = []
         except Exception as exc:
             log.error(f"Variable validation failed: {exc}")
-            raise ValueError(f"Variable validation failed: {exc}") from exc
+            raise CampaignError(f"Variable validation failed: {exc}") from exc
 
         if not variables:
             return
