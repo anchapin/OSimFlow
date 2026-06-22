@@ -731,6 +731,11 @@ def _parse_objective_and_constraints(
                 objective["target"],
                 objective["scaling_factor"],
             )
+        else:
+            log.warning(
+                "objective in variables.yml is not a dict (got %s); ignoring and using default (None)",
+                type(raw_obj).__name__,
+            )
 
     if "constraints" in yml_data:
         raw_constraints = yml_data["constraints"]
@@ -746,6 +751,11 @@ def _parse_objective_and_constraints(
                         entry["min"] = float(c["min"])
                     constraints.append(entry)
             log.info("constraints config: %d constraint(s)", len(constraints))
+        else:
+            log.warning(
+                "constraints in variables.yml is not a list (got %s); ignoring and using default (None)",
+                type(raw_constraints).__name__,
+            )
 
     return objective, constraints
 
@@ -768,6 +778,12 @@ def _parse_baseline(variables_yml: Path) -> dict[str, object] | None:
                     len(baseline["parameters"]),
                 )
                 return baseline
+            else:
+                log.warning(
+                    "baseline section in %s is not a dict (got %s); ignoring and using default (None)",
+                    variables_yml,
+                    type(raw_baseline).__name__,
+                )
     except Exception as exc:
         log.warning(
             "Failed to parse baseline section from %s: %s. Using default (None).",
