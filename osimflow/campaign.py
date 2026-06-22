@@ -1681,20 +1681,16 @@ class Campaign:
         ``POST /api/v1/campaign/pause`` endpoint (issue #553) or by the
         CLI ``osimflow pause`` command.
 
-        Sets and latches ``_pause_requested`` so that subsequent checks
-        during the same fan-out pass return ``True`` immediately.
+        Unlike the cancelled flag, the pause flag is NOT latched — we
+        check the file existence on every call so that deleting the
+        ``.pause`` file immediately unblocks new submissions (issue #798).
 
         Returns:
             ``True`` if pause is requested, ``False`` otherwise.
         """
-        with self._pause_lock:
-            if self._pause_requested:
-                return True
         pause_file = self.cfg.outdir / ".pause"
         if pause_file.is_file():
             log.warning(".pause file detected — pausing new submissions")
-            with self._pause_lock:
-                self._pause_requested = True
             return True
         return False
 
@@ -1785,6 +1781,8 @@ class Campaign:
         pause_file = self.cfg.outdir / ".pause"
         if pause_file.is_file():
             pause_file.unlink()
+        with self._pause_lock:
+            self._pause_requested = False
         self.trace.status = "running"
         self.trace.paused_at = None
         self.trace.write(self.cfg.outdir / "run.json")
@@ -1828,6 +1826,11 @@ class Campaign:
 
         # Setup signal handlers for graceful shutdown.
         self._setup_signal_handlers()
+
+        # Reset pause flag so a paused campaign can be re-run without
+        # restarting (issue #798).
+        with self._pause_lock:
+            self._pause_requested = False
 
         run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
         if run_name is not None:
