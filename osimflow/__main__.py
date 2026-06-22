@@ -2077,8 +2077,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         api_key = generate_api_key()
         # Print the key to stdout once so the user can capture it.
         # Never log the key itself — only a fingerprint for audit purposes.
-        print(f"API key generated: {api_key}", file=sys.stdout)
-        log.info("API key fingerprint: %.8s...", api_key)
+        print("Auto-generated API key — write it down, it won't be shown again", file=sys.stdout)
+        log.debug("API key generated")
 
     # Parse CORS origins.
     cors_origins: list[str] | None = None
