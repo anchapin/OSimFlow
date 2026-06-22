@@ -670,9 +670,16 @@ class _AWSBatchHandle(Handle):
             jobs = response.get("jobs", [])
             if jobs:
                 break
-            log.debug("Empty describe_jobs for %s, attempt %d/%d", self.job_id, attempt + 1, self._GHOST_RETRIES)
+            log.debug(
+                "Empty describe_jobs for %s, attempt %d/%d",
+                self.job_id,
+                attempt + 1,
+                self._GHOST_RETRIES,
+            )
         else:
-            raise RuntimeError(f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries")
+            raise RuntimeError(
+                f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries"
+            )
         status = jobs[0].get("status", "")
         return status in ("SUCCEEDED", "FAILED")
 
@@ -1526,9 +1533,16 @@ class _NomadHandle(Handle):
                 return False
             if alloc:
                 break
-            log.debug("Empty allocation for %s, attempt %d/%d", self.job_id, attempt + 1, self._GHOST_RETRIES)
+            log.debug(
+                "Empty allocation for %s, attempt %d/%d",
+                self.job_id,
+                attempt + 1,
+                self._GHOST_RETRIES,
+            )
         else:
-            raise RuntimeError(f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries")
+            raise RuntimeError(
+                f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries"
+            )
         status = alloc.get("ClientStatus", "")
         if status not in ("complete", "failed", "lost"):
             return False

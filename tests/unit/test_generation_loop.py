@@ -170,7 +170,9 @@ def _stub_apply(
     return out_dir
 
 
-def _stub_extract(sim_dir: Path, sample_id: str, kpi_dir: Path) -> Path:
+def _stub_extract(
+    sim_dir: Path, sample_id: str, kpi_dir: Path, os_version: str | None = None
+) -> Path:
     kpi_dir.mkdir(parents=True, exist_ok=True)
     kpi_path = kpi_dir / f"kpi_{sample_id}.json"
     kpi_path.write_text(json.dumps({"sample_id": sample_id, "kpis": {"eui": 100.0}}))

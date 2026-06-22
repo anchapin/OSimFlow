@@ -105,7 +105,7 @@ def _stub_apply(
     return out_dir
 
 
-def _stub_extract(sim_dir: Path, sample_id: str, kpi_dir: Path) -> Path:
+def _stub_extract(sim_dir: Path, sample_id: str, kpi_dir: Path, os_version: str | None = None) -> Path:
     kpi_dir.mkdir(parents=True, exist_ok=True)
     # Vary EUI by sample_id hash so optimizers see different values.
     eui = 100.0 + (hash(sample_id) % 50)
@@ -723,7 +723,7 @@ class TestValidateMeasureVariables:
         executor = LocalExecutor(max_workers=1)
         campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
         # This should not raise even if variables.yml references non-existent measures.
-        campaign.step_validate_measure_variables(generation=0)
+        campaign.step_validate_measure_variables()
 
     def test_validate_measure_variables_no_variables_file(
         self, tmp_dirs: tuple[Path, Path, Path]
@@ -743,7 +743,7 @@ class TestValidateMeasureVariables:
         )
         executor = LocalExecutor(max_workers=1)
         campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
-        campaign.step_validate_measure_variables(generation=0)
+        campaign.step_validate_measure_variables()
 
     def test_validate_measure_variables_empty_variables(
         self, tmp_dirs: tuple[Path, Path, Path]
@@ -762,4 +762,4 @@ class TestValidateMeasureVariables:
         )
         executor = LocalExecutor(max_workers=1)
         campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
-        campaign.step_validate_measure_variables(generation=0)
+        campaign.step_validate_measure_variables()

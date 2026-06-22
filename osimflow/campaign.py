@@ -2333,7 +2333,7 @@ class Campaign:
             self.step_preflight_run_model()
 
         parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
-        self.step_validate_measure_variables(generation=generation)
+        self.step_validate_measure_variables()
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
 
@@ -2851,7 +2851,7 @@ class Campaign:
         )
         self._obs.record_step_duration("PREFLIGHT_RUN_MODEL", elapsed)
 
-    def step_validate_measure_variables(self, generation: int = 0) -> None:
+    def step_validate_measure_variables(self) -> None:
         """Validate variables.yml against discovered measure arguments.
 
         Runs before ``RUN_OPENSTUDIO_SIM`` as a pre-flight check (GAP-003).
@@ -3042,7 +3042,10 @@ class Campaign:
 
         # --- Phase 2/3: bounded submit and await in chunks ---
         pending_items = list(pending.items())
-        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        if pending_items:
+            chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        else:
+            chunk_size = 1  # unused when pending_items is empty, but avoids range(0,0,0)
         submit_interval_s = self._fanout_submit_interval_s()
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
@@ -3290,7 +3293,10 @@ class Campaign:
                     )
 
         pending_items = list(pending.items())
-        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        if pending_items:
+            chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        else:
+            chunk_size = 1  # unused when pending_items is empty, but avoids range(0,0,0)
         submit_interval_s = self._fanout_submit_interval_s()
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
@@ -3559,7 +3565,10 @@ class Campaign:
         pending_items = list(pending.items())
         # Zero-based sample index within the campaign (issue #625 manifest field).
         index_map: dict[str, int] = {sid: i for i, (sid, _c) in enumerate(pending_items)}
-        chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        if pending_items:
+            chunk_size = self._fanout_submit_chunk_size(len(pending_items))
+        else:
+            chunk_size = 1  # unused when pending_items is empty, but avoids range(0,0,0)
         submit_interval_s = self._fanout_submit_interval_s()
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
