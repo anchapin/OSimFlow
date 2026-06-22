@@ -109,7 +109,7 @@ def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float | 
 
     if dist == "exponential":
         rate = params["rate"]
-        return float(scipy.stats.expon.ppf(u, scale=rate))
+        return float(scipy.stats.expon.ppf(u, scale=1 / rate))
 
     if dist == "discrete":
         raw_values = params.get("values")
