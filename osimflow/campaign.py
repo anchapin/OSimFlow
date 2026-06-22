@@ -2855,10 +2855,11 @@ class Campaign:
         Raises ``UnmappedVariableError`` if any variable name in
         ``variables.yml`` does not correspond to a discovered measure
         argument.
-        """
-        if self.cfg.skip_preflight:
-            return
 
+        Note: Variable validation always runs regardless of ``skip_preflight``.
+        Only the actual preflight OpenStudio simulation run is skipped when
+        ``skip_preflight=True``.
+        """
         if not self.cfg.input_variables.exists():
             return
 
