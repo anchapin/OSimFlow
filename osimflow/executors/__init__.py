@@ -1056,9 +1056,8 @@ class AWSBatchExecutor(BaseExecutor):
             except RuntimeError:
                 raise
             except Exception as exc:
-                # Network / API errors: log but proceed — the Batch job
-                # itself may still succeed. Don't block submissions due to
-                # transient EC2 API issues.
+                if self.max_spot_price_usd is not None:
+                    raise
                 log.warning("could not check Spot price: %s", exc)
 
         # Submit the job to AWS Batch and return immediately (issue #262).
