@@ -152,6 +152,7 @@ def run_subprocess(
             check=check,
             timeout=timeout,
             text=True,
+            shell=False,
         )
 
 
