@@ -3188,6 +3188,11 @@ class Campaign:
             inputs_hash = sha256_of_dict(
                 {
                     "template": str(self.cfg.template_sim_package),
+                    # Per-sample modified_sim_package (issue #783). When
+                    # GAP-009 seed_model_override assigns different seed
+                    # models per sample, each sample must get its own
+                    # cache entry.
+                    "modified_sim_package": str(mod_pkg),
                     "sid": sid,
                     "os_version": os_version,
                     # Hash the log paths into the cache key so a user
