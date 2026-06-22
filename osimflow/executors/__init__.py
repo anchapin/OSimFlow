@@ -2070,7 +2070,7 @@ class NomadExecutor(BaseExecutor):
                 openstudio_version=(str(openstudio_version) if openstudio_version else None),
             )
             meta: dict[str, str] = {
-                "sample_id": name,
+                "sample_id": _slugify_job_name(name),
                 "openstudio_version": str(openstudio_version or ""),
                 "container_image": image,
             }
