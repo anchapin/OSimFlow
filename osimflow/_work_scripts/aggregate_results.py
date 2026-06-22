@@ -331,42 +331,34 @@ def _write_ts_output(
 # ---------------------------------------------------------------------------
 
 
-def _count_severe_errors(err_path: Path) -> int:
-    """Count total severe error lines in an EnergyPlus error file."""
-    count = 0
-    try:
-        with err_path.open() as f:
-            for line in f:
-                if "  * Severe" in line or "** Severe" in line:
-                    count += 1
-    except (OSError, UnicodeDecodeError):
-        log.warning("Could not read error file for counting: %s", err_path)
-    return count
+def _scan_err_file(err_path: Path) -> tuple[int, str]:
+    """Scan .err file in a single pass, returning severe count and root-cause line.
 
-
-def _find_root_cause_line(err_path: Path) -> str:
-    """Find the earliest root-cause line from an EnergyPlus error file.
-
-    Scans the .err file for the first line matching a known failure pattern.
-    Falls back to the first Severe Error line if no pattern matches.
+    Counts all "  * Severe" / "** Severe" lines and identifies the first
+    root-cause line matching a FAILURE_PATTERNS entry, falling back to the
+    first severe error line if no pattern matches.
 
     Returns:
-        The stripped root-cause line, or empty string if not found.
+        Tuple of (total_severe_count, root_cause_line).
     """
+    count = 0
     first_severe = ""
     try:
         with err_path.open() as f:
             for line in f:
+                is_severe = "  * Severe" in line or "** Severe" in line
+                if is_severe:
+                    count += 1
+                    if not first_severe:
+                        first_severe = line.strip()
                 stripped = line.strip()
-                if not first_severe and ("  * Severe" in line or "** Severe" in line):
-                    first_severe = stripped
                 for _cat, patterns in FAILURE_PATTERNS:
                     for pat in patterns:
                         if pat.search(stripped):
-                            return stripped
+                            return count, stripped
     except (OSError, UnicodeDecodeError):
-        log.warning("Could not read error file for root cause: %s", err_path)
-    return first_severe
+        log.warning("Could not read error file: %s", err_path)
+    return count, first_severe
 
 
 def _classify_line(line: str) -> str:
@@ -401,8 +393,7 @@ def diagnose_error(error_line: str, err_file_path: Path) -> dict[str, Any]:
     """
     try:
         category = _classify_line(error_line)
-        total_severe = _count_severe_errors(err_file_path)
-        root_cause = _find_root_cause_line(err_file_path)
+        total_severe, root_cause = _scan_err_file(err_file_path)
         suggestion = CATEGORY_SUGGESTIONS.get(category, CATEGORY_SUGGESTIONS["generic_severe"])
 
         return {
