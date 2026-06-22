@@ -1172,17 +1172,6 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
-        "--rate-limit-key",
-        choices=["ip", "user", "campaign"],
-        default="ip",
-        help=(
-            "Rate limit key type for per-user or per-campaign rate limiting (issue #445). "
-            '"ip" = per-IP address limiting (default). '
-            '"user" = per-API-key limiting (requires --api-keys-file or API key in X-API-Key header). '
-            '"campaign" = per-campaign-ID limiting (uses campaign ID from URL path).'
-        ),
-    )
-    run.add_argument(
         "--uq-method",
         default="latin_hypercube",
         help=(
@@ -1280,6 +1269,24 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Expiration time in seconds for pre-signed URLs (issue #601). "
             "Remote executor nodes must download artifacts within this window. "
             "Default: 3600 (1 hour). Min: 60, Max: 43200 (12 hours)."
+        ),
+    )
+    run.add_argument(
+        "--bcl-api-key",
+        default=None,
+        help=(
+            "API key for the NREL Building Component Library (BCL). "
+            "Required for accessing BCL measures when --validate-measures is set. "
+            "Can also be set via the BCL_API_KEY environment variable (issue #580)."
+        ),
+    )
+    run.add_argument(
+        "--validate-measures",
+        action="store_true",
+        help=(
+            "Validate measure arguments against the BCL taxonomy when discovering "
+            "BCL measures (issue #580). Logs warnings for argument name/type "
+            "deviations from the expected taxonomy."
         ),
     )
 
