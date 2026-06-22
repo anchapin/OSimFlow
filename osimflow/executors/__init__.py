@@ -1767,12 +1767,7 @@ class NomadExecutor(BaseExecutor):
             return self.estimated_run_size >= self._auto_dispatch_threshold
         return self._submit_count >= self._auto_dispatch_threshold
 
-    @property
-    def fanout_submit_chunk_size(self) -> int:
-        """Return the fan-out submit chunk size (raw config value)."""
-        return self._fanout_submit_chunk_size
-
-    def get_bounded_fanout_chunk_size(self, total: int) -> int:
+    def fanout_submit_chunk_size(self, total: int) -> int:
         """Return the bounded chunk size for Nomad fan-out submission."""
         if total <= 0:
             return 1

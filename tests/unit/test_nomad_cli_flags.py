@@ -82,7 +82,7 @@ def test_nomad_scale_flags_parse_and_wire_to_executor() -> None:
     assert executor.poll_interval_s == 2.5
     assert executor.max_poll_interval_s == 15.0
     assert executor.fanout_submit_rate_per_sec == 8.0
-    assert executor.fanout_submit_chunk_size == 12
+    assert executor.fanout_submit_chunk_size(25) == 12
     assert executor.estimated_run_size == 1
 
 
