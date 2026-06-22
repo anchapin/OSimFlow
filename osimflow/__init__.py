@@ -86,7 +86,6 @@ from .observability import (
     PrometheusBackend,
     new_trace_id,
 )
-from ._campaign_observability import ObservabilityManager
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
 from .taskqueue import (
