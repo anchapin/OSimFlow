@@ -1363,10 +1363,10 @@ class Campaign:
     def _fanout_submit_chunk_size(self, total: int) -> int:
         """Compute bounded chunk size for fan-out submission.
 
-        Delegates to the executor's fanout_submit_chunk_size method
+        Delegates to the executor's get_bounded_fanout_chunk_size method
         so the Campaign class remains executor-agnostic.
         """
-        return self.executor.fanout_submit_chunk_size(total)
+        return self.executor.get_bounded_fanout_chunk_size(total)
 
     def _fanout_submit_interval_s(self) -> float:
         """Compute per-submit pacing interval for fan-out submission.
