@@ -555,29 +555,227 @@ class LocalConfig:
 
 
 # ======================================================================
+# Focused configuration dataclasses (issue #767)
+#
+# These dataclasses split CampaignConfig into focused domains:
+# - DAGConfig: DAG execution, retries, sharding, BYOS, and hooks
+# - StorageConfig: result storage and S3 artifact settings
+# - ObservabilityConfig: monitoring, alerting, and MLflow tracking
+#
+# CampaignConfig composes these and maintains backward compatibility
+# via __getattr__ delegation for flat attribute access.
+# ======================================================================
+
+
+@dataclasses.dataclass
+class DAGConfig:
+    """DAG execution, parallelism, retry, sharding, and hook settings.
+
+    Attributes
+    ----------
+    project
+        Project name for campaign organization (issue #390).
+    algorithm
+        Sampling algorithm name (issue #121).
+    max_generations
+        Maximum number of DAG generations (issue #122).
+    max_sample_retries
+        Maximum per-sample retry attempts (issue #252).
+    max_step_retries
+        Maximum cross-step retry attempts (issue #416).
+    worker_auto_recovery
+        Enable worker auto-recovery (issue #443).
+    dry_run
+        Dry-run mode flag (issue #59).
+    sample
+        Single-sample mode index (issue #59).
+    skip_preflight
+        Whether to skip the preflight model run (issue #107).
+    init_script
+        Path to pre-campaign initialization script.
+    finalize_script
+        Path to post-campaign finalization script.
+    baseline
+        Baseline comparison configuration (issue #64).
+    weather_dir
+        Subdirectory name for weather files.
+    archive_intermediates
+        Whether to archive intermediate simulation files.
+    custom_apply_script
+        Path to custom parameter application script.
+    custom_kpi_extractor
+        Path to custom KPI extraction script.
+    shard_count
+        Number of shards for campaign partitioning.
+    shard_index
+        Shard index for this worker.
+    shard_start
+        Sample index range start.
+    shard_end
+        Sample index range end.
+    offline
+        Air-gapped/offline mode flag (issue #261).
+    offline_bundle
+        Path to offline bundle directory.
+    byos_trust_level
+        BYOS script trust level (issue #269).
+    byos_resource_limits
+        BYOS subprocess resource limits (issue #343).
+    ecr_repository
+        ECR repository URI for OpenStudio images (issue #144).
+    resource_quota
+        Resource quota limits (issue #446).
+    redis_url
+        Redis URL for distributed cache invalidation (issue #330).
+    task_queue
+        Distributed task queue backend (issue #335).
+    dask_scheduler_address
+        Dask scheduler address.
+    """
+
+    project: str = ""
+    algorithm: str = "lhs"
+    max_generations: int = 1
+    max_sample_retries: int = 3
+    max_step_retries: int = 2
+    worker_auto_recovery: bool = True
+    dry_run: bool = False
+    sample: int | None = None
+    skip_preflight: bool = False
+    init_script: Path | None = None
+    finalize_script: Path | None = None
+    baseline: dict[str, object] | None = None
+    weather_dir: str = "weather"
+    archive_intermediates: bool = False
+    custom_apply_script: Path | None = None
+    custom_kpi_extractor: Path | None = None
+    shard_count: int | None = None
+    shard_index: int | None = None
+    shard_start: int | None = None
+    shard_end: int | None = None
+    offline: bool = False
+    offline_bundle: Path | None = None
+    byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
+    byos_resource_limits: dict[str, int] | None = None
+    ecr_repository: str | None = None
+    resource_quota: ResourceQuota | None = None
+    redis_url: str | None = None
+    task_queue: str = "none"
+    dask_scheduler_address: str | None = None
+
+
+@dataclasses.dataclass
+class StorageConfig:
+    """Result storage and S3 artifact settings.
+
+    Attributes
+    ----------
+    result_storage_backend
+        Result storage backend name (issue #339).
+    result_storage_bucket
+        Storage bucket/container name.
+    result_storage_endpoint
+        S3-compatible endpoint URL.
+    s3_artifact_bucket
+        S3 artifact storage bucket (issue #601).
+    s3_artifact_prefix
+        S3 artifact key prefix.
+    s3_artifact_region
+        AWS region for S3 artifact storage.
+    s3_artifact_endpoint
+        S3-compatible endpoint for artifact storage.
+    s3_artifact_presigned_url_expiration
+        Pre-signed URL expiration in seconds.
+    """
+
+    result_storage_backend: str = "local"
+    result_storage_bucket: str = ""
+    result_storage_endpoint: str | None = None
+    s3_artifact_bucket: str = ""
+    s3_artifact_prefix: str = ""
+    s3_artifact_region: str | None = None
+    s3_artifact_endpoint: str | None = None
+    s3_artifact_presigned_url_expiration: int = 3600
+
+
+@dataclasses.dataclass
+class ObservabilityConfig:
+    """Observability, monitoring, alerting, and MLflow settings.
+
+    Attributes
+    ----------
+    observability
+        Observability backend name (issue #132).
+    cloudwatch_namespace
+        CloudWatch metric namespace.
+    cloudwatch_log_group
+        CloudWatch log group name.
+    log_aggregation_url
+        Log aggregation URL for distributed logging.
+    prometheus_port
+        Prometheus metrics HTTP port.
+    otel_endpoint
+        OpenTelemetry OTLP endpoint URL.
+    alert_rules
+        Alert rules YAML file path.
+    alert_destinations
+        Alert destinations YAML file path.
+    mlflow_tracking_uri
+        MLflow tracking server URI.
+    registry_path
+        Campaign registry database path.
+    webhook_url
+        Campaign completion webhook URL.
+    enable_cost_tracking
+        Enable cost tracking (issue #447).
+    cost_on_demand_price
+        On-demand price per vCPU-hour.
+    cost_spot_price
+        Spot price per vCPU-hour.
+    """
+
+    observability: str = "none"
+    cloudwatch_namespace: str = "OSimFlow"
+    cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
+    prometheus_port: int = 9090
+    otel_endpoint: str | None = None
+    alert_rules: Path | None = None
+    alert_destinations: Path | None = None
+    mlflow_tracking_uri: str | None = None
+    registry_path: Path | None = None
+    webhook_url: str | None = None
+    enable_cost_tracking: bool = False
+    cost_on_demand_price: float = 0.05
+    cost_spot_price: float = 0.03
+
+
+# ======================================================================
 # CampaignConfig with backward-compatible attribute delegation
 # ======================================================================
 
 
 @dataclasses.dataclass
 class CampaignConfig:
-    """Campaign configuration with executor-specific config groups.
+    """Campaign configuration with focused config groups.
 
     This dataclass bundles all settings for a campaign run. To reduce
-    coupling and improve IDE support, executor-specific fields are
-    grouped into dedicated config dataclasses (issue #724):
+    coupling and improve IDE support, fields are grouped into dedicated
+    config dataclasses (issue #767):
 
+    - ``dag`` :class:`DAGConfig` for DAG execution, sharding, retries, and hooks
+    - ``storage`` :class:`StorageConfig` for result storage and S3 artifact settings
+    - ``observability`` :class:`ObservabilityConfig` for monitoring and alerting
     - ``slurm`` :class:`SlurmConfig` for Slurm executor settings
     - ``aws_batch`` :class:`AWSBatchConfig` for AWS Batch settings
     - ``azure_batch`` :class:`AzureBatchConfig` for Azure Batch settings
     - ``google_batch`` :class:`GoogleBatchConfig` for Google Cloud Batch settings
     - ``nomad`` :class:`NomadConfig` for Nomad executor settings
 
-    For backward compatibility, all executor-specific fields are also
-    accessible directly as flat attributes on CampaignConfig (e.g.,
-    ``cfg.slurm_qos`` instead of ``cfg.slurm.qos``). This is achieved
-    via ``__getattr__`` delegation. New code should prefer the grouped
-    config objects.
+    For backward compatibility, all fields are also accessible directly as
+    flat attributes on CampaignConfig (e.g., ``cfg.project`` or
+    ``cfg.result_storage_backend``). This is achieved via ``__getattr__``
+    delegation. New code should prefer the grouped config objects.
 
     Attributes
     ----------
@@ -591,54 +789,12 @@ class CampaignConfig:
         Output directory for campaign results.
     openstudio_version
         OpenStudio version string (e.g., "3.11.0").
-    project
-        Project name for campaign organization (issue #390).
-    archive_intermediates
-        Whether to archive intermediate simulation files.
-    custom_apply_script
-        Path to custom parameter application script.
-    custom_kpi_extractor
-        Path to custom KPI extraction script.
-    mlflow_tracking_uri
-        MLflow tracking server URI.
-    redis_url
-        Redis URL for distributed cache invalidation (issue #330).
-    baseline
-        Baseline comparison configuration (issue #64).
-    weather_dir
-        Subdirectory name for weather files.
-    dry_run
-        Dry-run mode flag (issue #59).
-    sample
-        Single-sample mode index (issue #59).
-    algorithm
-        Sampling algorithm name (issue #121).
-    init_script
-        Path to pre-campaign initialization script.
-    finalize_script
-        Path to post-campaign finalization script.
-    skip_preflight
-        Whether to skip the preflight model run (issue #107).
-    max_generations
-        Maximum number of DAG generations (issue #122).
-    ecr_repository
-        ECR repository URI for OpenStudio images (issue #144).
-    byos_trust_level
-        BYOS script trust level (issue #269).
+    dag
+        Composed DAG execution, sharding, retries, and hook settings.
+    storage
+        Composed result storage and S3 artifact settings.
     observability
-        Observability backend name (issue #132).
-    cloudwatch_namespace
-        CloudWatch metric namespace.
-    cloudwatch_log_group
-        CloudWatch log group name.
-    log_aggregation_url
-        Log aggregation URL for distributed logging.
-    prometheus_port
-        Prometheus metrics HTTP port.
-    otel_endpoint
-        OpenTelemetry OTLP endpoint URL.
-    registry_path
-        Campaign registry database path.
+        Composed observability, monitoring, alerting, and MLflow settings.
     objective
         Objective function configuration (issue #282).
     constraints
@@ -647,50 +803,10 @@ class CampaignConfig:
         R-NSGA-II reference points (issue #529).
     nsga2_reference_directions
         R-NSGA-II reference direction strategy (issue #529).
-    max_sample_retries
-        Maximum per-sample retry attempts (issue #252).
-    worker_auto_recovery
-        Enable worker auto-recovery (issue #443).
-    offline
-        Air-gapped/offline mode flag (issue #261).
-    offline_bundle
-        Path to offline bundle directory.
-    webhook_url
-        Campaign completion webhook URL.
-    shard_count
-        Number of shards for campaign partitioning.
-    shard_index
-        Shard index for this worker.
-    shard_start
-        Sample index range start.
-    shard_end
-        Sample index range end.
-    byos_resource_limits
-        BYOS subprocess resource limits (issue #343).
-    result_storage_backend
-        Result storage backend name (issue #339).
-    result_storage_bucket
-        Storage bucket/container name.
-    result_storage_endpoint
-        S3-compatible endpoint URL.
-    task_queue
-        Distributed task queue backend (issue #335).
-    dask_scheduler_address
-        Dask scheduler address.
-    resource_quota
-        Resource quota limits (issue #446).
-    enable_cost_tracking
-        Enable cost tracking (issue #447).
-    cost_on_demand_price
-        On-demand price per vCPU-hour.
-    cost_spot_price
-        Spot price per vCPU-hour.
-    alert_rules
-        Alert rules YAML file path.
-    alert_destinations
-        Alert destinations YAML file path.
-    max_step_retries
-        Maximum cross-step retry attempts (issue #416).
+    nsga2_ref_points
+        R-NSGA-II reference points (alias, issue #529).
+    nsga2_ref_dirs_strategy
+        R-NSGA-II reference direction strategy (alias, issue #529).
     uq_method
         UQ sampling method (issue #530).
     uq_n_samples
@@ -701,20 +817,6 @@ class CampaignConfig:
         NREL BCL API key (issue #580).
     validate_measures
         Validate measures against BCL taxonomy (issue #580).
-    s3_artifact_bucket
-        S3 artifact storage bucket (issue #601).
-    s3_artifact_prefix
-        S3 artifact key prefix.
-    s3_artifact_region
-        AWS region for S3 artifact storage.
-    s3_artifact_endpoint
-        S3-compatible endpoint for artifact storage.
-    s3_artifact_presigned_url_expiration
-        Pre-signed URL expiration in seconds.
-    nsga2_ref_points
-        R-NSGA-II reference points (issue #529).
-    nsga2_ref_dirs_strategy
-        R-NSGA-II reference direction strategy (issue #529).
     slurm
         Slurm executor configuration (grouped).
     aws_batch
@@ -734,59 +836,10 @@ class CampaignConfig:
     outdir: Path
     openstudio_version: str
 
-    # --- Project hierarchy (issue #390) ---
-    project: str = ""
-
-    # --- Archive and custom scripts ---
-    archive_intermediates: bool = False
-    custom_apply_script: Path | None = None
-    custom_kpi_extractor: Path | None = None
-
-    # --- MLflow tracking (issue #7) ---
-    mlflow_tracking_uri: str | None = None
-
-    # --- Redis for distributed cache (issue #330) ---
-    redis_url: str | None = None
-
-    # --- Baseline comparison (issue #64) ---
-    baseline: dict[str, object] | None = None
-
-    # --- Weather file subdirectory (issue #63) ---
-    weather_dir: str = "weather"
-
-    # --- Dry-run and single-sample modes (issue #59) ---
-    dry_run: bool = False
-    sample: int | None = None
-
-    # --- Sampling algorithm (issue #121) ---
-    algorithm: str = "lhs"
-
-    # --- Pre/post campaign hooks (issue #108) ---
-    init_script: Path | None = None
-    finalize_script: Path | None = None
-
-    # --- Skip preflight (issue #107) ---
-    skip_preflight: bool = False
-
-    # --- Generation loop (issue #122) ---
-    max_generations: int = 1
-
-    # --- ECR repository (issue #144) ---
-    ecr_repository: str | None = None
-
-    # --- BYOS trust level (issue #269) ---
-    byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
-
-    # --- Observability backends (issue #132) ---
-    observability: str = "none"
-    cloudwatch_namespace: str = "OSimFlow"
-    cloudwatch_log_group: str | None = None
-    log_aggregation_url: str | None = None
-    prometheus_port: int = 9090
-    otel_endpoint: str | None = None
-
-    # --- Campaign registry (issue #266) ---
-    registry_path: Path | None = None
+    # --- Composed focused configs (issue #767, init=False for backward compat) ---
+    dag: DAGConfig = dataclasses.field(init=False)
+    storage: StorageConfig = dataclasses.field(init=False)
+    _observability: ObservabilityConfig = dataclasses.field(init=False)
 
     # --- Objective and constraints (issue #282) ---
     objective: dict[str, object] | None = None
@@ -798,48 +851,6 @@ class CampaignConfig:
     nsga2_ref_points: str | None = None
     nsga2_ref_dirs_strategy: str | None = None
 
-    # --- Retry configuration (issue #252, #416) ---
-    max_sample_retries: int = 3
-    max_step_retries: int = 2
-    worker_auto_recovery: bool = True
-
-    # --- Offline mode (issue #261) ---
-    offline: bool = False
-    offline_bundle: Path | None = None
-
-    # --- Webhook (issue #283) ---
-    webhook_url: str | None = None
-
-    # --- Coordinator sharding ---
-    shard_count: int | None = None
-    shard_index: int | None = None
-    shard_start: int | None = None
-    shard_end: int | None = None
-
-    # --- BYOS resource limits (issue #343) ---
-    byos_resource_limits: dict[str, int] | None = None
-
-    # --- Result storage (issue #339) ---
-    result_storage_backend: str = "local"
-    result_storage_bucket: str = ""
-    result_storage_endpoint: str | None = None
-
-    # --- Task queue (issue #335) ---
-    task_queue: str = "none"
-    dask_scheduler_address: str | None = None
-
-    # --- Resource quota (issue #446) ---
-    resource_quota: ResourceQuota | None = None
-
-    # --- Cost tracking (issue #447) ---
-    enable_cost_tracking: bool = False
-    cost_on_demand_price: float = 0.05
-    cost_spot_price: float = 0.03
-
-    # --- Alerting (issue #438) ---
-    alert_rules: Path | None = None
-    alert_destinations: Path | None = None
-
     # --- UQ configuration (issue #530) ---
     uq_method: str = "latin_hypercube"
     uq_n_samples: int | None = None
@@ -849,27 +860,47 @@ class CampaignConfig:
     bcl_api_key: str | None = None
     validate_measures: bool = False
 
-    # --- S3 artifact storage (issue #601) ---
-    s3_artifact_bucket: str = ""
-    s3_artifact_prefix: str = ""
-    s3_artifact_region: str | None = None
-    s3_artifact_endpoint: str | None = None
-    s3_artifact_presigned_url_expiration: int = 3600
-
     # --- Executor-specific configs (grouped, issue #724) ---
-    # These are the new grouped config objects. They are initialized
-    # in __post_init__ from the flat fields for backward compatibility.
     slurm: SlurmConfig | None = None
     aws_batch: AWSBatchConfig | None = None
     azure_batch: AzureBatchConfig | None = None
     google_batch: GoogleBatchConfig | None = None
     nomad: NomadConfig | None = None
 
+    # --- Legacy flat DAG fields (for backward compatibility) ---
+    # These fields are still accepted in the constructor. They are
+    # used to initialize the dag composed config in __post_init__.
+    project: str = ""
+    algorithm: str = "lhs"
+    max_generations: int = 1
+    max_sample_retries: int = 3
+    max_step_retries: int = 2
+    worker_auto_recovery: bool = True
+    dry_run: bool = False
+    sample: int | None = None
+    skip_preflight: bool = False
+    init_script: Path | None = None
+    finalize_script: Path | None = None
+    baseline: dict[str, object] | None = None
+    weather_dir: str = "weather"
+    archive_intermediates: bool = False
+    custom_apply_script: Path | None = None
+    custom_kpi_extractor: Path | None = None
+    shard_count: int | None = None
+    shard_index: int | None = None
+    shard_start: int | None = None
+    shard_end: int | None = None
+    offline: bool = False
+    offline_bundle: Path | None = None
+    byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
+    byos_resource_limits: dict[str, int] | None = None
+    ecr_repository: str | None = None
+    resource_quota: ResourceQuota | None = None
+    redis_url: str | None = None
+    task_queue: str = "none"
+    dask_scheduler_address: str | None = None
+
     # --- Legacy flat executor fields (for backward compatibility) ---
-    # These fields are still accepted in the constructor and are used
-    # to initialize the grouped config objects above. They are
-    # deprecated in favor of the grouped configs but maintained for
-    # backward compatibility with existing code.
     slurm_qos: str | None = None
     slurm_constraint: str | None = None
     slurm_gres: str | None = None
@@ -905,8 +936,97 @@ class CampaignConfig:
     nomad_key: Path | None = None
     nomad_ca_cert: Path | None = None
 
+    # --- Legacy flat storage fields (for backward compatibility) ---
+    result_storage_backend: str = "local"
+    result_storage_bucket: str = ""
+    result_storage_endpoint: str | None = None
+    s3_artifact_bucket: str = ""
+    s3_artifact_prefix: str = ""
+    s3_artifact_region: str | None = None
+    s3_artifact_endpoint: str | None = None
+    s3_artifact_presigned_url_expiration: int = 3600
+
+    # --- Legacy flat observability fields (for backward compatibility) ---
+    observability: str = "none"
+    cloudwatch_namespace: str = "OSimFlow"
+    cloudwatch_log_group: str | None = None
+    log_aggregation_url: str | None = None
+    prometheus_port: int = 9090
+    otel_endpoint: str | None = None
+    alert_rules: Path | None = None
+    alert_destinations: Path | None = None
+    mlflow_tracking_uri: str | None = None
+    registry_path: Path | None = None
+    webhook_url: str | None = None
+    enable_cost_tracking: bool = False
+    cost_on_demand_price: float = 0.05
+    cost_spot_price: float = 0.03
+
     def __post_init__(self) -> None:
-        """Initialize grouped executor configs from flat fields."""
+        """Initialize composed configs and executor configs from flat fields."""
+        # Initialize dag config from flat fields (always, since init=False)
+        self.dag = DAGConfig(
+            project=self.project,
+            algorithm=self.algorithm,
+            max_generations=self.max_generations,
+            max_sample_retries=self.max_sample_retries,
+            max_step_retries=self.max_step_retries,
+            worker_auto_recovery=self.worker_auto_recovery,
+            dry_run=self.dry_run,
+            sample=self.sample,
+            skip_preflight=self.skip_preflight,
+            init_script=self.init_script,
+            finalize_script=self.finalize_script,
+            baseline=self.baseline,
+            weather_dir=self.weather_dir,
+            archive_intermediates=self.archive_intermediates,
+            custom_apply_script=self.custom_apply_script,
+            custom_kpi_extractor=self.custom_kpi_extractor,
+            shard_count=self.shard_count,
+            shard_index=self.shard_index,
+            shard_start=self.shard_start,
+            shard_end=self.shard_end,
+            offline=self.offline,
+            offline_bundle=self.offline_bundle,
+            byos_trust_level=self.byos_trust_level,
+            byos_resource_limits=self.byos_resource_limits,
+            ecr_repository=self.ecr_repository,
+            resource_quota=self.resource_quota,
+            redis_url=self.redis_url,
+            task_queue=self.task_queue,
+            dask_scheduler_address=self.dask_scheduler_address,
+        )
+
+        # Initialize storage config from flat fields (always, since init=False)
+        self.storage = StorageConfig(
+            result_storage_backend=self.result_storage_backend,
+            result_storage_bucket=self.result_storage_bucket,
+            result_storage_endpoint=self.result_storage_endpoint,
+            s3_artifact_bucket=self.s3_artifact_bucket,
+            s3_artifact_prefix=self.s3_artifact_prefix,
+            s3_artifact_region=self.s3_artifact_region,
+            s3_artifact_endpoint=self.s3_artifact_endpoint,
+            s3_artifact_presigned_url_expiration=self.s3_artifact_presigned_url_expiration,
+        )
+
+        # Initialize observability config from flat fields (always, since init=False)
+        self._observability = ObservabilityConfig(
+            observability=self.observability,
+            cloudwatch_namespace=self.cloudwatch_namespace,
+            cloudwatch_log_group=self.cloudwatch_log_group,
+            log_aggregation_url=self.log_aggregation_url,
+            prometheus_port=self.prometheus_port,
+            otel_endpoint=self.otel_endpoint,
+            alert_rules=self.alert_rules,
+            alert_destinations=self.alert_destinations,
+            mlflow_tracking_uri=self.mlflow_tracking_uri,
+            registry_path=self.registry_path,
+            webhook_url=self.webhook_url,
+            enable_cost_tracking=self.enable_cost_tracking,
+            cost_on_demand_price=self.cost_on_demand_price,
+            cost_spot_price=self.cost_spot_price,
+        )
+
         # Slurm config
         if self.slurm is None:
             self.slurm = SlurmConfig(
@@ -962,31 +1082,92 @@ class CampaignConfig:
                 ca_cert=self.nomad_ca_cert,
             )
 
+    def _get_legacy_field(self, name: str, default: Any) -> Any:
+        """Get a legacy flat field value for composed config initialization."""
+        return getattr(self, name, default)
+
     # Static mapping: legacy flat attribute name -> (config_attr_name, field_name)
-    # Used by __getattr__ to delegate to grouped executor configs.
+    # Used by __getattr__ to delegate to grouped configs.
     _DELEGATED_ATTRS: dict[str, tuple[str, str]] = dataclasses.field(
         init=False, repr=False, compare=False
     )
 
     def __getattr__(self, name: str) -> Any:
-        """Delegate attribute access to grouped executor configs for backward compatibility.
+        """Delegate attribute access to grouped configs for backward compatibility.
 
-        This allows both `cfg.slurm_qos` (legacy flat access) and
-        `cfg.slurm.qos` (grouped access) to work.
+        This allows both `cfg.project` (legacy flat access) and
+        `cfg.dag.project` (grouped access) to work for all composed configs.
         """
         # Build delegation map lazily on first access
         if "_DELEGATED_ATTRS" not in self.__dict__:
             self._DELEGATED_ATTRS = {
-                # Slurm
+                # DAG config delegation
+                "project": ("dag", "project"),
+                "algorithm": ("dag", "algorithm"),
+                "max_generations": ("dag", "max_generations"),
+                "max_sample_retries": ("dag", "max_sample_retries"),
+                "max_step_retries": ("dag", "max_step_retries"),
+                "worker_auto_recovery": ("dag", "worker_auto_recovery"),
+                "dry_run": ("dag", "dry_run"),
+                "sample": ("dag", "sample"),
+                "skip_preflight": ("dag", "skip_preflight"),
+                "init_script": ("dag", "init_script"),
+                "finalize_script": ("dag", "finalize_script"),
+                "baseline": ("dag", "baseline"),
+                "weather_dir": ("dag", "weather_dir"),
+                "archive_intermediates": ("dag", "archive_intermediates"),
+                "custom_apply_script": ("dag", "custom_apply_script"),
+                "custom_kpi_extractor": ("dag", "custom_kpi_extractor"),
+                "shard_count": ("dag", "shard_count"),
+                "shard_index": ("dag", "shard_index"),
+                "shard_start": ("dag", "shard_start"),
+                "shard_end": ("dag", "shard_end"),
+                "offline": ("dag", "offline"),
+                "offline_bundle": ("dag", "offline_bundle"),
+                "byos_trust_level": ("dag", "byos_trust_level"),
+                "byos_resource_limits": ("dag", "byos_resource_limits"),
+                "ecr_repository": ("dag", "ecr_repository"),
+                "resource_quota": ("dag", "resource_quota"),
+                "redis_url": ("dag", "redis_url"),
+                "task_queue": ("dag", "task_queue"),
+                "dask_scheduler_address": ("dag", "dask_scheduler_address"),
+                # Storage config delegation
+                "result_storage_backend": ("storage", "result_storage_backend"),
+                "result_storage_bucket": ("storage", "result_storage_bucket"),
+                "result_storage_endpoint": ("storage", "result_storage_endpoint"),
+                "s3_artifact_bucket": ("storage", "s3_artifact_bucket"),
+                "s3_artifact_prefix": ("storage", "s3_artifact_prefix"),
+                "s3_artifact_region": ("storage", "s3_artifact_region"),
+                "s3_artifact_endpoint": ("storage", "s3_artifact_endpoint"),
+                "s3_artifact_presigned_url_expiration": (
+                    "storage",
+                    "s3_artifact_presigned_url_expiration",
+                ),
+                # Observability config delegation
+                "observability": ("_observability", "observability"),
+                "cloudwatch_namespace": ("observability", "cloudwatch_namespace"),
+                "cloudwatch_log_group": ("observability", "cloudwatch_log_group"),
+                "log_aggregation_url": ("observability", "log_aggregation_url"),
+                "prometheus_port": ("observability", "prometheus_port"),
+                "otel_endpoint": ("observability", "otel_endpoint"),
+                "alert_rules": ("observability", "alert_rules"),
+                "alert_destinations": ("observability", "alert_destinations"),
+                "mlflow_tracking_uri": ("observability", "mlflow_tracking_uri"),
+                "registry_path": ("observability", "registry_path"),
+                "webhook_url": ("observability", "webhook_url"),
+                "enable_cost_tracking": ("observability", "enable_cost_tracking"),
+                "cost_on_demand_price": ("observability", "cost_on_demand_price"),
+                "cost_spot_price": ("observability", "cost_spot_price"),
+                # Slurm executor delegation
                 "slurm_qos": ("slurm", "qos"),
                 "slurm_constraint": ("slurm", "constraint"),
                 "slurm_gres": ("slurm", "gres"),
                 "slurm_cost_per_node_hour": ("slurm", "cost_per_node_hour"),
-                # AWS Batch
+                # AWS Batch executor delegation
                 "aws_batch_max_spot_price_usd": ("aws_batch", "max_spot_price_usd"),
                 "aws_batch_fallback_to_on_demand": ("aws_batch", "fallback_to_on_demand"),
                 "aws_batch_max_retries": ("aws_batch", "max_retries"),
-                # Azure Batch
+                # Azure Batch executor delegation
                 "azure_batch_account_name": ("azure_batch", "account_name"),
                 "azure_batch_account_url": ("azure_batch", "account_url"),
                 "azure_batch_pool_id": ("azure_batch", "pool_id"),
@@ -994,14 +1175,14 @@ class CampaignConfig:
                 "azure_use_spot": ("azure_batch", "use_spot"),
                 "azure_fallback_to_on_demand": ("azure_batch", "fallback_to_on_demand"),
                 "azure_max_retries": ("azure_batch", "max_retries"),
-                # Google Batch
+                # Google Batch executor delegation
                 "google_batch_project_id": ("google_batch", "project_id"),
                 "google_batch_region": ("google_batch", "region"),
                 "google_batch_service_account": ("google_batch", "service_account"),
                 "google_use_spot": ("google_batch", "use_spot"),
                 "google_fallback_to_on_demand": ("google_batch", "fallback_to_on_demand"),
                 "google_max_retries": ("google_batch", "max_retries"),
-                # Nomad
+                # Nomad executor delegation
                 "nomad_dispatch_policy": ("nomad", "dispatch_policy"),
                 "nomad_allocation_resolution_timeout_s": (
                     "nomad",
