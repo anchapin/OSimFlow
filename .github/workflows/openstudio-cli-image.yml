@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Log in to ghcr.io
         if: false   # disabled until build is implemented
