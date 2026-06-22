@@ -343,6 +343,7 @@ def _scan_err_file(err_path: Path) -> tuple[int, str]:
     """
     count = 0
     first_severe = ""
+    root_cause = ""
     try:
         with err_path.open() as f:
             for line in f:
@@ -352,13 +353,38 @@ def _scan_err_file(err_path: Path) -> tuple[int, str]:
                     if not first_severe:
                         first_severe = line.strip()
                 stripped = line.strip()
-                for _cat, patterns in FAILURE_PATTERNS:
-                    for pat in patterns:
-                        if pat.search(stripped):
-                            return count, stripped
+                if not root_cause:
+                    for _cat, patterns in FAILURE_PATTERNS:
+                        for pat in patterns:
+                            if pat.search(stripped):
+                                root_cause = stripped
+                                break
+                        if root_cause:
+                            break
     except (OSError, UnicodeDecodeError):
         log.warning("Could not read error file: %s", err_path)
-    return count, first_severe
+    # Fall back to first severe line if no pattern matched
+    if not root_cause:
+        root_cause = first_severe
+    return count, root_cause
+
+
+def _count_severe_errors(err_path: Path) -> int:
+    """Count total severe error lines in an EnergyPlus error file.
+
+    This is a compatibility wrapper around _scan_err_file.
+    """
+    count, _ = _scan_err_file(err_path)
+    return count
+
+
+def _find_root_cause_line(err_path: Path) -> str:
+    """Find the earliest root-cause line from an EnergyPlus error file.
+
+    This is a compatibility wrapper around _scan_err_file.
+    """
+    _, root_cause = _scan_err_file(err_path)
+    return root_cause
 
 
 def _classify_line(line: str) -> str:
