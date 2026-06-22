@@ -723,7 +723,7 @@ class TestValidateMeasureVariables:
         executor = LocalExecutor(max_workers=1)
         campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
         # This should not raise even if variables.yml references non-existent measures.
-        campaign.step_validate_measure_variables(generation=0)
+        campaign.step_validate_measure_variables()
 
     def test_validate_measure_variables_no_variables_file(
         self, tmp_dirs: tuple[Path, Path, Path]
@@ -743,7 +743,7 @@ class TestValidateMeasureVariables:
         )
         executor = LocalExecutor(max_workers=1)
         campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
-        campaign.step_validate_measure_variables(generation=0)
+        campaign.step_validate_measure_variables()
 
     def test_validate_measure_variables_empty_variables(
         self, tmp_dirs: tuple[Path, Path, Path]
@@ -762,4 +762,4 @@ class TestValidateMeasureVariables:
         )
         executor = LocalExecutor(max_workers=1)
         campaign = Campaign(cfg, executor, apply_fn=_stub_apply, extract_fn=_stub_extract)
-        campaign.step_validate_measure_variables(generation=0)
+        campaign.step_validate_measure_variables()
