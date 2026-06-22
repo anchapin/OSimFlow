@@ -419,6 +419,7 @@ class TestAWSBatchSubmit:
         ex.fallback_to_on_demand = False
         ex.max_retries = 3
         ex.ecr_repository = None
+        ex._instance_type = None
         return ex
 
     def test_submit_succeeds(self) -> None:
