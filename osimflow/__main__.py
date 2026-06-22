@@ -230,6 +230,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             ),
             fallback_to_on_demand=args.aws_batch_fallback_to_on_demand,
             max_retries=args.aws_batch_max_retries,
+            instance_type=args.aws_batch_instance_type,
         )
     # Nomad executor — address and datacentre.
     if args.executor == "nomad":
@@ -409,6 +410,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Maximum number of retries on Spot interruption (default: 3). "
             "Each retry uses exponential backoff. After exhausting retries, "
             "the job fails unless --aws-batch-fallback-to-on-demand is set."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-instance-type",
+        default=None,
+        help=(
+            "AWS EC2 instance type used for the Spot price ceiling check "
+            "(e.g. 'm5.large'). When set, ``describe_spot_price_history`` "
+            "is scoped to this instance type so the ceiling check is "
+            "reliable. When omitted, the check uses the minimum price "
+            "across all instance types and a warning is logged (issue #792)."
         ),
     )
     run.add_argument(
@@ -1172,17 +1184,6 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
-        "--rate-limit-key",
-        choices=["ip", "user", "campaign"],
-        default="ip",
-        help=(
-            "Rate limit key type for per-user or per-campaign rate limiting (issue #445). "
-            '"ip" = per-IP address limiting (default). '
-            '"user" = per-API-key limiting (requires --api-keys-file or API key in X-API-Key header). '
-            '"campaign" = per-campaign-ID limiting (uses campaign ID from URL path).'
-        ),
-    )
-    run.add_argument(
         "--uq-method",
         default="latin_hypercube",
         help=(
@@ -1280,6 +1281,24 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Expiration time in seconds for pre-signed URLs (issue #601). "
             "Remote executor nodes must download artifacts within this window. "
             "Default: 3600 (1 hour). Min: 60, Max: 43200 (12 hours)."
+        ),
+    )
+    run.add_argument(
+        "--bcl-api-key",
+        default=None,
+        help=(
+            "API key for the NREL Building Component Library (BCL). "
+            "Required for accessing BCL measures when --validate-measures is set. "
+            "Can also be set via the BCL_API_KEY environment variable (issue #580)."
+        ),
+    )
+    run.add_argument(
+        "--validate-measures",
+        action="store_true",
+        help=(
+            "Validate measure arguments against the BCL taxonomy when discovering "
+            "BCL measures (issue #580). Logs warnings for argument name/type "
+            "deviations from the expected taxonomy."
         ),
     )
 

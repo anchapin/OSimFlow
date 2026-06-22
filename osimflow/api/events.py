@@ -1,8 +1,8 @@
 """SSE live events and campaign stop endpoints (issue #143, #395).
 
 Provides:
-  - GET /api/v1/events  — Server-Sent Events stream that watches run.json
-  - POST /api/v1/campaign/stop — write a ``.stop`` flag file to halt a campaign
+  - GET /events  — Server-Sent Events stream that watches run.json
+  - POST /campaign/stop — write a ``.stop`` flag file to halt a campaign
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from osimflow.api.auth import get_user_permission
 
 log = logging.getLogger("osimflow.api.events")
 
-events_router = APIRouter()
+events_router = APIRouter(prefix="/api/v1")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -250,7 +250,7 @@ async def _event_generator(
         await asyncio.sleep(poll_interval)
 
 
-@events_router.get("/api/v1/events")  # type: ignore[untyped-decorator]
+@events_router.get("/events")  # type: ignore[untyped-decorator]
 async def sse_events(request: Request) -> EventSourceResponse:
     """SSE endpoint streaming live campaign events.
 
@@ -265,11 +265,11 @@ async def sse_events(request: Request) -> EventSourceResponse:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/campaign/stop
+# POST /campaign/stop
 # ---------------------------------------------------------------------------
 
 
-@events_router.post("/api/v1/campaign/stop")  # type: ignore[untyped-decorator]
+@events_router.post("/campaign/stop")  # type: ignore[untyped-decorator]
 async def campaign_stop(request: Request) -> dict[str, str]:
     """Write a ``.stop`` flag file to request campaign cancellation.
 
@@ -292,11 +292,11 @@ async def campaign_stop(request: Request) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/campaign/pause
+# POST /campaign/pause
 # ---------------------------------------------------------------------------
 
 
-@events_router.post("/api/v1/campaign/pause")  # type: ignore[untyped-decorator]
+@events_router.post("/campaign/pause")  # type: ignore[untyped-decorator]
 async def campaign_pause(request: Request) -> dict[str, str]:
     """Write a ``.pause`` flag file to request campaign pause.
 
@@ -331,11 +331,11 @@ async def campaign_pause(request: Request) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# DELETE /api/v1/campaign/pause
+# DELETE /campaign/pause
 # ---------------------------------------------------------------------------
 
 
-@events_router.delete("/api/v1/campaign/pause")  # type: ignore[untyped-decorator]
+@events_router.delete("/campaign/pause")  # type: ignore[untyped-decorator]
 async def campaign_resume(request: Request) -> dict[str, str]:
     """Remove the ``.pause`` flag file to request campaign resume.
 

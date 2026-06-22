@@ -1681,20 +1681,16 @@ class Campaign:
         ``POST /api/v1/campaign/pause`` endpoint (issue #553) or by the
         CLI ``osimflow pause`` command.
 
-        Sets and latches ``_pause_requested`` so that subsequent checks
-        during the same fan-out pass return ``True`` immediately.
+        Unlike the cancelled flag, the pause flag is NOT latched — we
+        check the file existence on every call so that deleting the
+        ``.pause`` file immediately unblocks new submissions (issue #798).
 
         Returns:
             ``True`` if pause is requested, ``False`` otherwise.
         """
-        with self._pause_lock:
-            if self._pause_requested:
-                return True
         pause_file = self.cfg.outdir / ".pause"
         if pause_file.is_file():
             log.warning(".pause file detected — pausing new submissions")
-            with self._pause_lock:
-                self._pause_requested = True
             return True
         return False
 
@@ -1785,6 +1781,8 @@ class Campaign:
         pause_file = self.cfg.outdir / ".pause"
         if pause_file.is_file():
             pause_file.unlink()
+        with self._pause_lock:
+            self._pause_requested = False
         self.trace.status = "running"
         self.trace.paused_at = None
         self.trace.write(self.cfg.outdir / "run.json")
@@ -1828,6 +1826,11 @@ class Campaign:
 
         # Setup signal handlers for graceful shutdown.
         self._setup_signal_handlers()
+
+        # Reset pause flag so a paused campaign can be re-run without
+        # restarting (issue #798).
+        with self._pause_lock:
+            self._pause_requested = False
 
         run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
         if run_name is not None:
@@ -2855,10 +2858,11 @@ class Campaign:
         Raises ``UnmappedVariableError`` if any variable name in
         ``variables.yml`` does not correspond to a discovered measure
         argument.
-        """
-        if self.cfg.skip_preflight:
-            return
 
+        Note: Variable validation always runs regardless of ``skip_preflight``.
+        Only the actual preflight OpenStudio simulation run is skipped when
+        ``skip_preflight=True``.
+        """
         if not self.cfg.input_variables.exists():
             return
 
@@ -3187,6 +3191,11 @@ class Campaign:
             inputs_hash = sha256_of_dict(
                 {
                     "template": str(self.cfg.template_sim_package),
+                    # Per-sample modified_sim_package (issue #783). When
+                    # GAP-009 seed_model_override assigns different seed
+                    # models per sample, each sample must get its own
+                    # cache entry.
+                    "modified_sim_package": str(mod_pkg),
                     "sid": sid,
                     "os_version": os_version,
                     # Hash the log paths into the cache key so a user
@@ -3549,6 +3558,7 @@ class Campaign:
                 "kpi_dir": kpi_dir,
                 "key": key,
                 "state": state,
+                "os_version": os_version,
             }
 
         # --- Phase 2/3: bounded submit and await in chunks ---
@@ -3581,6 +3591,7 @@ class Campaign:
                         ctx["sim_dir"],
                         sid,
                         ctx["kpi_dir"],
+                        ctx["os_version"],
                         max_retries=self.cfg.max_sample_retries,
                     )
                 else:
@@ -3589,6 +3600,7 @@ class Campaign:
                         ctx["sim_dir"],
                         sid,
                         ctx["kpi_dir"],
+                        ctx["os_version"],
                         name=f"kpi_{sid}",
                         cpus=1,
                         memory_mb=1024,

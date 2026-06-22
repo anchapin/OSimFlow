@@ -195,25 +195,45 @@ class LocalExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        # Resource directives are advisory on the local executor.
-        # ``openstudio_version`` is consumed here (not forwarded to ``fn``)
-        # so it never collides with the work function's positional param.
+        import os
+        import socket
+
         del openstudio_version, result_hint, remote_command, result_transport_mode  # noqa: F841
         del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
-        del result_storage_endpoint, variables_json, env, stdout_path, stderr_path  # noqa: F841
+        del result_storage_endpoint, variables_json, stdout_path, stderr_path  # noqa: F841
         del max_retries, worker_id, kwargs  # noqa: F841, ARG002
-        import socket  # noqa: PLC0415
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
 
-        if self._semaphore is not None:
+        if env:
+
+            def _with_env() -> Any:
+                original = os.environ.copy()
+                os.environ.update(env)
+                try:
+                    return fn(*args)
+                finally:
+                    os.environ.clear()
+                    os.environ.update(original)
+
+            if self._semaphore is not None:
+                sem = self._semaphore
+
+                def _wrapped() -> Any:
+                    with sem:
+                        return _with_env()
+
+                fut: Future[Any] = self._pool.submit(_wrapped)
+            else:
+                fut = self._pool.submit(_with_env)
+        elif self._semaphore is not None:
             sem = self._semaphore
 
             def _wrapped() -> Any:
                 with sem:
                     return fn(*args)
 
-            fut: Future[Any] = self._pool.submit(_wrapped)
+            fut = self._pool.submit(_wrapped)
         else:
             fut = self._pool.submit(fn, *args)
         return Handle(
@@ -508,6 +528,8 @@ class _AWSBatchHandle(Handle):
     so we own the call site and don't need the dataclass machinery.
     """
 
+    _GHOST_RETRIES = 3
+
     def __init__(
         self,
         job_id: str,
@@ -633,18 +655,24 @@ class _AWSBatchHandle(Handle):
         # A single non-blocking `describe_jobs` is the cheapest probe.
         # If the task is in a terminal state, we've already finished;
         # otherwise we're still running. Anything else (UNKNOWN status,
-        # network blip) is treated as not-done.
-        try:
-            response = self._executor._get_client().describe_jobs(  # noqa: SLF001
-                jobs=[self.job_id]
-            )
-        except Exception as exc:  # noqa: BLE001 — never raise from done()
-            log.warning("Polling error for %s: %s", self.job_id, exc)
-            self.error = exc
-            return False
-        jobs = response.get("jobs", [])
-        if not jobs:
-            return False
+        # network blip) is treated as not-done. Ghost jobs (deleted or
+        # never-created) return an empty list — after N consecutive
+        # empty responses we raise to break the indefinite-wait loop.
+        for attempt in range(self._GHOST_RETRIES):
+            try:
+                response = self._executor._get_client().describe_jobs(  # noqa: SLF001
+                    jobs=[self.job_id]
+                )
+            except Exception as exc:  # noqa: BLE001 — never raise from done()
+                log.warning("Polling error for %s: %s", self.job_id, exc)
+                self.error = exc
+                return False
+            jobs = response.get("jobs", [])
+            if jobs:
+                break
+            log.debug("Empty describe_jobs for %s, attempt %d/%d", self.job_id, attempt + 1, self._GHOST_RETRIES)
+        else:
+            raise RuntimeError(f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries")
         status = jobs[0].get("status", "")
         return status in ("SUCCEEDED", "FAILED")
 
@@ -671,8 +699,9 @@ class AWSBatchExecutor(BaseExecutor):
     sources credentials from the IAM role attached to the Batch compute
     environment. The constructor does **not** accept
     `aws_access_key_id` / `aws_secret_access_key`; passing long-lived
-    keys would violate the security policy. Similarly, no region is
-    pinned — the IAM role's region (or `AWS_REGION` env var) decides.
+    keys would violate the security policy. The ``region_name`` parameter
+    pins the region passed to boto3; when ``None``, boto3 follows the
+    IAM role's region (or ``AWS_REGION`` env var / ``~/.aws/config``).
 
     Spot instance retry + price ceiling (issue #131):
     When `max_spot_price_usd` is set, the executor queries the current
@@ -717,6 +746,7 @@ class AWSBatchExecutor(BaseExecutor):
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
         ecr_repository: str | None = None,
+        instance_type: str | None = None,
     ):
         # Lazy import: keeps the boto3 import cost off the local /
         # slurm executor paths. ImportError here is intentional: the
@@ -741,6 +771,7 @@ class AWSBatchExecutor(BaseExecutor):
         self.fallback_to_on_demand = fallback_to_on_demand
         self.max_retries = max_retries
         self.ecr_repository = ecr_repository
+        self._instance_type = instance_type
 
     def _resolve_container_image(self, version: str | None) -> str:
         """Resolve the container image URI.
@@ -779,11 +810,19 @@ class AWSBatchExecutor(BaseExecutor):
         to get the most recent price. Returns the price in USD per
         instance-hour. Raises ``RuntimeError`` if the query fails or
         returns no results.
+
+        When ``_instance_type`` is set, the query is scoped to that
+        instance type so the ceiling check is reliable (issue #792).
+        When it is not set, the query returns the lowest price across
+        all instance types and a warning is logged.
         """
-        response = self._get_ec2_client().describe_spot_price_history(
-            MaxResults=1,
-            ProductDescriptions=["Linux/UNIX"],
-        )
+        kwargs: dict[str, Any] = {
+            "MaxResults": 1,
+            "ProductDescriptions": ["Linux/UNIX"],
+        }
+        if self._instance_type is not None:
+            kwargs["InstanceTypes"] = [self._instance_type]
+        response = self._get_ec2_client().describe_spot_price_history(**kwargs)
         histories = response.get("SpotPriceHistory", [])
         if not histories:
             raise RuntimeError("describe_spot_price_history returned no results")
@@ -1016,12 +1055,19 @@ class AWSBatchExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
         )
 
-        # --- Spot price ceiling check (issue #131) ---
+        # --- Spot price ceiling check (issue #131, #792) ---
         # Fast, non-blocking check: query the current Spot price and
         # either raise or fall back to on-demand. This gate runs before
         # any job submission so we don't waste a Batch task that would
         # immediately be more expensive than the ceiling.
         if self.max_spot_price_usd is not None:
+            if self._instance_type is None:
+                log.warning(
+                    "instance_type is not set — spot price ceiling check "
+                    "queries the minimum across all instance types and may "
+                    "not reflect the actual cost (issue #792). Set "
+                    "--aws-batch-instance-type to scope the check."
+                )
             try:
                 current_price = self._get_spot_price()
                 if current_price > self.max_spot_price_usd:
@@ -1036,9 +1082,8 @@ class AWSBatchExecutor(BaseExecutor):
             except RuntimeError:
                 raise
             except Exception as exc:
-                # Network / API errors: log but proceed — the Batch job
-                # itself may still succeed. Don't block submissions due to
-                # transient EC2 API issues.
+                if self.max_spot_price_usd is not None:
+                    raise
                 log.warning("could not check Spot price: %s", exc)
 
         # Submit the job to AWS Batch and return immediately (issue #262).
@@ -1340,6 +1385,8 @@ class _NomadHandle(Handle):
     through the cached Future.
     """
 
+    _GHOST_RETRIES = 3
+
     def __init__(
         self,
         job_id: str,
@@ -1464,17 +1511,24 @@ class _NomadHandle(Handle):
                 log.warning("Polling error for %s: %s", self.job_id, exc)
                 self.error = exc
                 return False
-        # Do a single non-blocking allocation lookup. If
-        # the task is in a terminal state, we've already finished;
-        # otherwise we're still running. Any error here (network
-        # blip, missing alloc) is treated as not-done.
+        # Do a non-blocking allocation lookup. If the task is in a
+        # terminal state, we've already finished; otherwise we're still
+        # running. Ghost allocations (deleted or never-created) return
+        # an empty dict — after N consecutive empty responses we raise
+        # to break the indefinite-wait loop.
         assert self._allocation_id is not None  # guaranteed after _ensure
-        try:
-            alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
-        except Exception as exc:  # noqa: BLE001 — never raise from done()
-            log.warning("Polling error for %s: %s", self.job_id, exc)
-            self.error = exc
-            return False
+        for attempt in range(self._GHOST_RETRIES):
+            try:
+                alloc = self._executor._client.get_allocation(self._allocation_id)  # noqa: SLF001
+            except Exception as exc:  # noqa: BLE001 — never raise from done()
+                log.warning("Polling error for %s: %s", self.job_id, exc)
+                self.error = exc
+                return False
+            if alloc:
+                break
+            log.debug("Empty allocation for %s, attempt %d/%d", self.job_id, attempt + 1, self._GHOST_RETRIES)
+        else:
+            raise RuntimeError(f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries")
         status = alloc.get("ClientStatus", "")
         if status not in ("complete", "failed", "lost"):
             return False
@@ -2050,7 +2104,7 @@ class NomadExecutor(BaseExecutor):
                 openstudio_version=(str(openstudio_version) if openstudio_version else None),
             )
             meta: dict[str, str] = {
-                "sample_id": name,
+                "sample_id": _slugify_job_name(name),
                 "openstudio_version": str(openstudio_version or ""),
                 "container_image": image,
             }
