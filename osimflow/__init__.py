@@ -8,6 +8,7 @@ API; everything else is an implementation detail.
 
 from typing import TYPE_CHECKING
 
+from ._campaign_observability import ObservabilityManager
 from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .cache import CacheKey, CacheStats, SQLiteCache
@@ -85,7 +86,6 @@ from .observability import (
     PrometheusBackend,
     new_trace_id,
 )
-from ._campaign_observability import ObservabilityManager
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
 from .taskqueue import (
