@@ -358,6 +358,9 @@ class ValidateConfigRequest(BaseModel):
     result_storage_bucket: str = ""
     result_storage_endpoint: str | None = None
     track_costs: bool = False
+    enable_cost_tracking: bool = False
+    cost_on_demand_price: float | None = None
+    cost_spot_price: float | None = None
     aws_batch_max_spot_price_usd: float | None = None
     aws_batch_fallback_to_on_demand: bool = False
     aws_batch_max_retries: int = 3
@@ -377,7 +380,27 @@ class ValidateConfigRequest(BaseModel):
     google_use_spot: bool = False
     google_fallback_to_on_demand: bool = False
     google_max_retries: int = 3
-    slurm_cost_per_node_hour: float = 0.10
+    slurm_cost_per_node_hour: float | None = None
+    nsga2_reference_points: str | None = None
+    nsga2_reference_directions: str | None = None
+    uq_method: str | None = None
+    uq_n_samples: int | None = None
+    uq_failure_thresholds: list[str] | None = None
+    bcl_api_key: str | None = None
+    validate_measures: bool = False
+    alert_destinations: str | None = None
+    alert_rules: str | None = None
+    nomad_dispatch_policy: str | None = None
+    nomad_allocation_resolution_timeout_s: float | None = None
+    nomad_poll_interval_s: float | None = None
+    nomad_max_poll_interval_s: float | None = None
+    nomad_fanout_submit_rate_per_sec: float | None = None
+    nomad_fanout_submit_chunk_size: int | None = None
+    s3_artifact_bucket: str | None = None
+    s3_artifact_prefix: str | None = None
+    s3_artifact_region: str | None = None
+    s3_artifact_endpoint: str | None = None
+    s3_artifact_presigned_url_expiration: int | None = None
 
 
 class ValidateConfigResponse(BaseModel):
