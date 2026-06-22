@@ -12,7 +12,7 @@ from ._campaign_observability import ObservabilityManager
 from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm, LHSAlgorithm
 from .cache import CacheKey, CacheStats, SQLiteCache
-from .campaign import Campaign, QuotaExceededError
+from .campaign import Campaign, CampaignError, QuotaExceededError
 from .chaos import (
     ChaosEngine,
     ChaosResult,
@@ -151,6 +151,7 @@ __all__ = [
     "BaseAlgorithm",
     "LHSAlgorithm",
     "Campaign",
+    "CampaignError",
     "QuotaExceededError",
     "CacheKey",
     "CacheStats",
