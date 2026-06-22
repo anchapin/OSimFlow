@@ -28,6 +28,7 @@ import enum
 import importlib.util
 import json
 import logging
+import os
 import resource
 import subprocess
 import sys
@@ -39,6 +40,28 @@ from typing import Any, cast
 
 log = logging.getLogger("osimflow.byos")
 
+# Whitelist of environment variables that BYOS subprocesses may receive.
+# This prevents accidental credential leakage (AWS keys, etc.) from the
+# parent process environment.  Each entry may be a bare variable name
+# (checked for presence) or a "VAR=default" string (used if VAR is absent).
+# See issue #764.
+_SAFE_ENV_WHITELIST = [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONIOENCODING",
+    "PYTHONUNBUFFERED",
+    "LANG",
+    "LC_ALL",
+    "USER",
+    "USERNAME",
+    "OSIMFLOW_STUB_SIM",
+]
+
 # The canonical function names a BYOS script must expose.  The first
 # match wins.  Order matters: ``apply_parameters`` is the primary name
 # documented in AGENTS.md; ``apply`` is kept as a fallback for
@@ -46,6 +69,23 @@ log = logging.getLogger("osimflow.byos")
 # ``osimflow.apply_params._load_custom_apply`` loader (removed in the
 # fix for issue #36).
 _CANDIDATE_NAMES = ("apply_parameters", "extract_kpis", "apply")
+
+
+def _sanitize_env() -> dict[str, str]:
+    """Return a sanitized environment for BYOS subprocesses.
+
+    Builds a clean env dict containing only the whitelisted variables from
+    the current environment.  This prevents accidental credential leakage
+    (AWS keys, secrets, etc.) from the parent process.  See issue #764.
+    """
+    clean: dict[str, str] = {}
+    for name in _SAFE_ENV_WHITELIST:
+        if "=" in name:
+            var, default = name.split("=", 1)
+            clean[var] = os.environ.get(var, default)
+        elif name in os.environ:
+            clean[name] = os.environ[name]
+    return clean
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +276,10 @@ def _run_byos_subprocess(
     child Python process that loads the user script and calls the target
     function, then reads the result path from stdout.
 
-    The subprocess inherits the current environment (so PATH, AWS
-    credentials from the IAM role, etc. are available) but does **not**
-    share the orchestrator's memory space.
+    The subprocess receives a **sanitized** environment containing only a
+    whitelisted subset of variables (``PATH``, ``HOME``, ``TMPDIR``, etc.).
+    Credentials (AWS keys, secrets, etc.) from the parent environment are
+    explicitly excluded.  See ``_sanitize_env`` and issue #764.
 
     When ``resource_limits`` is provided (issue #343), ``resource.setrlimit``
     is called before ``Popen`` to cap CPU time, address space, and open files.
@@ -300,6 +341,7 @@ def _run_byos_subprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=_sanitize_env(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=600)
