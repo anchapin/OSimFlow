@@ -838,6 +838,36 @@ class TestNomadExecutor:
         assert call_count == 2
         ex.shutdown()
 
+    def test_wait_for_terminal_timeout_raises(self) -> None:
+        """_wait_for_terminal must raise TimeoutError when timeout is exceeded."""
+        call_count = 0
+
+        def _resp(request: object, **_kw: object) -> object:
+            nonlocal call_count
+            req = request  # type: ignore[assignment]
+            method = req.get_method()  # type: ignore[attr-defined]
+            url = req.full_url  # type: ignore[attr-defined]
+
+            if method == "GET" and "/v1/allocation/" in url:
+                call_count += 1
+                result = {"ID": "alloc-1", "ClientStatus": "running"}
+            else:
+                result = {}
+
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(result).encode("utf-8")
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda s, *a: None
+            return resp
+
+        with patch("urllib.request.urlopen", side_effect=_resp):
+            ex = NomadExecutor(address="http://127.0.0.1:4646")
+            with patch("osimflow.executors.time.sleep"):
+                with pytest.raises(TimeoutError, match="Timed out"):
+                    ex._wait_for_terminal("alloc-1", timeout=0.05)
+        assert call_count >= 1
+        ex.shutdown()
+
 
 class TestNomadHandle:
     """_NomadHandle polls Nomad on .result() and .done()."""
@@ -932,7 +962,9 @@ class TestNomadHandle:
             _client = _ClientStub()
 
             @staticmethod
-            def _wait_for_terminal(allocation_id: str) -> dict[str, object]:  # noqa: ARG004
+            def _wait_for_terminal(
+                allocation_id: str, timeout: float | None = None
+            ) -> dict[str, object]:  # noqa: ARG004
                 return {"ID": "alloc-r", "ClientStatus": "complete", "TaskStates": {}}
 
         with patch("osimflow.executors.materialize_object_storage_result") as materialize:
@@ -1035,6 +1067,56 @@ class TestNomadHandle:
         )
         with pytest.raises(RuntimeError, match=r"resolve_allocation returned 'None'"):
             handle._ensure_allocation_id()
+
+    def test_result_timeout_raises(self) -> None:
+        """_NomadHandle.result() must raise TimeoutError when timeout is exceeded."""
+
+        class _ClientStub:
+            @staticmethod
+            def resolve_allocation(eval_id: str, job_id: str) -> str:
+                return "alloc-timeout"
+
+            @staticmethod
+            def get_allocation(allocation_id: str) -> dict[str, object]:
+                return {"ID": allocation_id, "ClientStatus": "running", "TaskStates": {}}
+
+        class _ExecutorStub:
+            datacentre = "dc1"
+            _client = _ClientStub()
+            poll_interval_s = 0.01
+            max_poll_interval_s = 0.1
+
+            def _wait_for_terminal(
+                self, allocation_id: str, timeout: float | None = None
+            ) -> dict[str, object]:
+                import time as time_mod
+
+                start = time_mod.monotonic()
+                while True:
+                    alloc = self._client.get_allocation(allocation_id)
+                    if alloc.get("ClientStatus") in ("complete", "failed", "lost"):
+                        return alloc
+                    if timeout is not None:
+                        elapsed = time_mod.monotonic() - start
+                        remaining = timeout - elapsed
+                        if remaining <= 0:
+                            raise TimeoutError(
+                                f"Timed out after {elapsed:.1f}s waiting for allocation {allocation_id!r}"
+                            )
+                        time_mod.sleep(min(0.01, remaining))
+                    else:
+                        time_mod.sleep(0.01)
+
+        class _ExecutorStubWithWait(_ExecutorStub):
+            pass
+
+        handle = _NomadHandle(
+            job_id="job-timeout",
+            eval_id="eval-timeout",
+            executor=_ExecutorStubWithWait(),  # type: ignore[arg-type]
+        )
+        with pytest.raises(TimeoutError, match="Timed out"):
+            handle.result(timeout=0.05)
 
 
 # ---------------------------------------------------------------------------

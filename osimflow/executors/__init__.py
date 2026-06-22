@@ -1388,16 +1388,19 @@ class _NomadHandle(Handle):
                 )
         return self._allocation_id
 
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
-        # The polling itself doesn't take a `timeout` parameter; the
-        # Nomad task-level ``KillTimeout`` (when set) is the
-        # substrate-level kill. `timeout` here is accepted for the
-        # base-class signature but not enforced — the existing
-        # LocalExecutor / SlurmExecutor / AWSBatchExecutor take the
-        # same approach.
+    def result(self, timeout: float | None = None) -> Any:
+        start = time.monotonic()
+        remaining: float | None = None
         alloc_id = self._ensure_allocation_id()
         try:
-            alloc = self._executor._wait_for_terminal(alloc_id)  # noqa: SLF001
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for allocation {alloc_id!r}"
+                    )
+            alloc = self._executor._wait_for_terminal(alloc_id, timeout=remaining)  # noqa: SLF001
         except BaseException as exc:  # noqa: BLE001 — surface any poll error
             self._future.set_exception(exc)
             raise
@@ -1890,17 +1893,23 @@ class NomadExecutor(BaseExecutor):
         self._client.register_job(spec)
         self._dispatch_job_registered = True
 
-    def _wait_for_terminal(self, allocation_id: str) -> dict[str, Any]:
+    def _wait_for_terminal(
+        self, allocation_id: str, timeout: float | None = None
+    ) -> dict[str, Any]:
         """Poll ``GET /v1/allocation/<id>`` with exponential backoff
         until the allocation reaches a terminal state (``complete`` /
-        ``failed`` / ``lost``). Returns the final allocation dict."""
+        ``failed`` / ``lost``). Returns the final allocation dict.
+
+        Raises:
+            TimeoutError: if *timeout* seconds elapse before a terminal state.
+        """
         delay = self.poll_interval_s
         phase_offset = 0.0
+        start = time.monotonic()
         with self._waiters_lock:
             self._active_waiters += 1
             active_waiters = self._active_waiters
         try:
-            # Deterministic offset only under concurrency to reduce poll bursts.
             if active_waiters > 1:
                 phase_offset = (sum(ord(ch) for ch in allocation_id) % 10) / 100.0
             while True:
@@ -1908,7 +1917,16 @@ class NomadExecutor(BaseExecutor):
                 status = alloc.get("ClientStatus", "UNKNOWN")
                 if status in ("complete", "failed", "lost"):
                     return alloc
-                sleep_for = min(delay + phase_offset, self.max_poll_interval_s)
+                if timeout is not None:
+                    elapsed = time.monotonic() - start
+                    remaining = timeout - elapsed
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"Timed out after {elapsed:.1f}s waiting for allocation {allocation_id!r}"
+                        )
+                    sleep_for = min(delay + phase_offset, remaining, self.max_poll_interval_s)
+                else:
+                    sleep_for = min(delay + phase_offset, self.max_poll_interval_s)
                 log.info(
                     "nomad poll alloc=%s status=%s (sleeping %.2fs, active_waiters=%d)",
                     allocation_id,
