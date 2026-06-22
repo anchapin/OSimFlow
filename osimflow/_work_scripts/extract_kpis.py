@@ -393,6 +393,7 @@ def extract_kpis_from_sql(sql_path: Path) -> dict[str, Any]:
 
     kpis: dict[str, Any] = {}
 
+    conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(str(sql_path))
         cur = conn.cursor()
@@ -457,14 +458,15 @@ def extract_kpis_from_sql(sql_path: Path) -> dict[str, Any]:
             kpis["end_uses"] = end_uses
         kpis.update(_extract_peak_demand(cur, floor_area))
         kpis.update(_extract_unmet_hours(cur))
-
-        conn.close()
     except sqlite3.DatabaseError as exc:
         log.error("Corrupt eplusout.sql at %s: %s", sql_path, exc)
         return {"error": "corrupt_database", "raw_error": str(exc)}
     except Exception as exc:
         log.error("Unexpected error reading %s: %s", sql_path, exc, exc_info=True)
         return {"error": "extraction_failed", "raw_error": str(exc)}
+    finally:
+        if conn is not None:
+            conn.close()
 
     return kpis
 
