@@ -1358,24 +1358,20 @@ class Campaign:
         return samples
 
     def _fanout_submit_chunk_size(self, total: int) -> int:
-        """Compute bounded chunk size for fan-out submission."""
-        if total <= 0:
-            return 1
-        if self.executor.name != "nomad":
-            return total
-        chunk = self.cfg.nomad_fanout_submit_chunk_size
-        if chunk <= 0:
-            return total
-        return min(total, max(1, chunk))
+        """Compute bounded chunk size for fan-out submission.
+
+        Delegates to the executor's fanout_submit_chunk_size method
+        so the Campaign class remains executor-agnostic.
+        """
+        return self.executor.fanout_submit_chunk_size(total)
 
     def _fanout_submit_interval_s(self) -> float:
-        """Compute per-submit pacing interval for fan-out submission."""
-        if self.executor.name != "nomad":
-            return 0.0
-        rate = self.cfg.nomad_fanout_submit_rate_per_sec
-        if rate is None or rate <= 0:
-            return 0.0
-        return 1.0 / rate
+        """Compute per-submit pacing interval for fan-out submission.
+
+        Delegates to the executor's fanout_submit_interval_s method
+        so the Campaign class remains executor-agnostic.
+        """
+        return self.executor.fanout_submit_interval_s()
 
     # ------------------------------------------------------------------
     # Manifest writers (issue #277)

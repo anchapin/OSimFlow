@@ -1598,17 +1598,17 @@ class NomadExecutor(BaseExecutor):
         self.poll_interval_s = self._sanitize_positive_delay(poll_interval_s, fallback=5.0)
         max_interval = self._sanitize_positive_delay(max_poll_interval_s, fallback=60.0)
         self.max_poll_interval_s = max(max_interval, self.poll_interval_s)
-        self.fanout_submit_rate_per_sec = (
+        self._fanout_submit_rate_per_sec = (
             self._sanitize_positive_delay(fanout_submit_rate_per_sec, fallback=1.0)
             if fanout_submit_rate_per_sec is not None
             else None
         )
-        self.fanout_submit_chunk_size = max(int(fanout_submit_chunk_size), 0)
+        self._fanout_submit_chunk_size = max(int(fanout_submit_chunk_size), 0)
         self.estimated_run_size = (
             max(int(estimated_run_size), 0) if estimated_run_size is not None else None
         )
         self._auto_dispatch_threshold = (
-            self.fanout_submit_chunk_size if self.fanout_submit_chunk_size > 0 else 25
+            self._fanout_submit_chunk_size if self._fanout_submit_chunk_size > 0 else 25
         )
         self._submit_count = 0
         self._active_waiters = 0
@@ -1682,6 +1682,22 @@ class NomadExecutor(BaseExecutor):
         if self.estimated_run_size is not None:
             return self.estimated_run_size >= self._auto_dispatch_threshold
         return self._submit_count >= self._auto_dispatch_threshold
+
+    def fanout_submit_chunk_size(self, total: int) -> int:
+        """Return the bounded chunk size for Nomad fan-out submission."""
+        if total <= 0:
+            return 1
+        chunk = self._fanout_submit_chunk_size
+        if chunk <= 0:
+            return total
+        return min(total, max(1, chunk))
+
+    def fanout_submit_interval_s(self) -> float:
+        """Return the per-submit pacing interval for Nomad fan-out submission."""
+        rate = self._fanout_submit_rate_per_sec
+        if rate is None or rate <= 0:
+            return 0.0
+        return 1.0 / rate
 
     @staticmethod
     def _resolve_nomad_image(
@@ -1937,8 +1953,8 @@ class NomadExecutor(BaseExecutor):
                 time.sleep(sleep_for)
                 concurrency_pressure = max(active_waiters - 8, 0) * 0.05
                 rate_pressure = 0.0
-                if self.fanout_submit_rate_per_sec is not None:
-                    rate_pressure = max(self.fanout_submit_rate_per_sec - 10.0, 0.0) * 0.01
+                if self._fanout_submit_rate_per_sec is not None:
+                    rate_pressure = max(self._fanout_submit_rate_per_sec - 10.0, 0.0) * 0.01
                 backoff_factor = 1.6 + min(concurrency_pressure + rate_pressure, 0.4)
                 delay = min(delay * backoff_factor, self.max_poll_interval_s)
         finally:
