@@ -1874,9 +1874,10 @@ class Campaign:
             # status. Re-raising would crash the worker in concurrent mode
             # and cause test_cancel_during_generation_loop_stops to fail.
             return {"status": "cancelled", "trace": self.trace}
-        except Exception:
+        except Exception as exc:
             campaign_status = "failure"
             self.trace.status = "failure"
+            self.trace.error_summary = f"{type(exc).__name__}: {exc}"
             self.trace.finalize()
             self.cfg.outdir.mkdir(parents=True, exist_ok=True)
             log.exception("campaign failed")

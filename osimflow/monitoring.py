@@ -150,6 +150,8 @@ class RunTrace:
         self.status: str = "running"  # "running", "success", "cancelled", "failed", "paused"
         # Timestamp when the campaign was paused (None if not paused).
         self.paused_at: float | None = None
+        # Campaign-level error summary set when an unhandled exception causes failure.
+        self.error_summary: str | None = None
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
 
@@ -253,6 +255,9 @@ class RunTrace:
         # Paused timestamp (issue #553). Present when the campaign has been paused.
         if self.paused_at is not None:
             d["paused_at"] = self.paused_at
+        # Campaign-level error summary (issue #737). Present when the campaign failed.
+        if self.error_summary is not None:
+            d["error_summary"] = self.error_summary
         return d
 
     def update_sample(self, trace: SampleTrace) -> None:
