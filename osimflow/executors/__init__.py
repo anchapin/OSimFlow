@@ -737,6 +737,7 @@ class AWSBatchExecutor(BaseExecutor):
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
         ecr_repository: str | None = None,
+        instance_type: str | None = None,
     ):
         # Lazy import: keeps the boto3 import cost off the local /
         # slurm executor paths. ImportError here is intentional: the
@@ -761,6 +762,7 @@ class AWSBatchExecutor(BaseExecutor):
         self.fallback_to_on_demand = fallback_to_on_demand
         self.max_retries = max_retries
         self.ecr_repository = ecr_repository
+        self._instance_type = instance_type
 
     def _resolve_container_image(self, version: str | None) -> str:
         """Resolve the container image URI.
@@ -799,11 +801,19 @@ class AWSBatchExecutor(BaseExecutor):
         to get the most recent price. Returns the price in USD per
         instance-hour. Raises ``RuntimeError`` if the query fails or
         returns no results.
+
+        When ``_instance_type`` is set, the query is scoped to that
+        instance type so the ceiling check is reliable (issue #792).
+        When it is not set, the query returns the lowest price across
+        all instance types and a warning is logged.
         """
-        response = self._get_ec2_client().describe_spot_price_history(
-            MaxResults=1,
-            ProductDescriptions=["Linux/UNIX"],
-        )
+        kwargs: dict[str, Any] = {
+            "MaxResults": 1,
+            "ProductDescriptions": ["Linux/UNIX"],
+        }
+        if self._instance_type is not None:
+            kwargs["InstanceTypes"] = [self._instance_type]
+        response = self._get_ec2_client().describe_spot_price_history(**kwargs)
         histories = response.get("SpotPriceHistory", [])
         if not histories:
             raise RuntimeError("describe_spot_price_history returned no results")
@@ -1036,12 +1046,19 @@ class AWSBatchExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
         )
 
-        # --- Spot price ceiling check (issue #131) ---
+        # --- Spot price ceiling check (issue #131, #792) ---
         # Fast, non-blocking check: query the current Spot price and
         # either raise or fall back to on-demand. This gate runs before
         # any job submission so we don't waste a Batch task that would
         # immediately be more expensive than the ceiling.
         if self.max_spot_price_usd is not None:
+            if self._instance_type is None:
+                log.warning(
+                    "instance_type is not set — spot price ceiling check "
+                    "queries the minimum across all instance types and may "
+                    "not reflect the actual cost (issue #792). Set "
+                    "--aws-batch-instance-type to scope the check."
+                )
             try:
                 current_price = self._get_spot_price()
                 if current_price > self.max_spot_price_usd:
