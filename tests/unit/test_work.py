@@ -491,7 +491,7 @@ class TestRunRealOpenstudioDirect:
         assert result == sim_out
         mock_run.assert_called_once()
         kwargs = mock_run.call_args
-        assert kwargs[1]["cwd"] == modified_sim_package
+        assert kwargs[1]["cwd"] == sim_package
         assert kwargs[1]["stdout_path"] == stdout_path
         assert kwargs[1]["stderr_path"] == stderr_path
 
