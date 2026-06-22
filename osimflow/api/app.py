@@ -254,8 +254,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     a distributed sliding-window counter that works correctly across
     multiple API instances behind a load balancer (issue #663).
 
-    When Redis is unavailable or ``redis_url`` is ``None``, the limiter
-    falls back to the in-process dict (backward-compatible).
+    .. security note::
+        When Redis is unavailable or ``redis_url`` is ``None``, the limiter
+        falls back to the **in-process dict** (backward-compatible).  This
+        mode is **not safe for multi-worker deployments** (issue #768): each
+        worker process maintains its own counter, so a client can bypass the
+        rate limit by distributing requests across workers.  For production
+        deployments with multiple API workers behind a load balancer, always
+        configure ``redis_url``.
     """
 
     def __init__(
@@ -1358,10 +1364,11 @@ def create_app(
         ``campaigns_base_dir``.
     redis_url
         Redis connection URL for distributed rate limiting across multiple
-        API instances behind a load balancer (issue #663).  When ``None``
-        (default), the in-process sliding-window limiter is used, which
-        is per-process only and not suitable for horizontal scaling.
-        Example: ``redis://localhost:6379/0``.
+        API instances behind a load balancer (issue #663, #768).  When
+        ``None`` (default), the in-process sliding-window limiter is used,
+        which is per-process only and can be bypassed in multi-worker
+        deployments.  For production deployments, always set this to a
+        Redis URL.  Example: ``redis://localhost:6379/0``.
     """
     app = FastAPI(
         title="OSimFlow API",
@@ -1436,6 +1443,17 @@ def create_app(
         key_func=key_func,
         redis_url=redis_url,
     )
+
+    # Warn when using in-memory rate limiting in production-like environments (issue #768)
+    if redis_url is None:
+        log.warning(
+            "Rate limiting is using in-process storage (redis_url is not set). "
+            "This is not safe for multi-worker deployments: each API instance "
+            "maintains its own counter, allowing rate limits to be bypassed by "
+            "distributing requests across workers. For production deployments "
+            "with multiple workers behind a load balancer, set --api-redis-url "
+            "to enable distributed rate limiting."
+        )
 
     # Store a reference for tests / introspection.  The actual
     # middleware instance is created lazily by Starlette's
