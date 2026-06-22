@@ -292,7 +292,11 @@ def _generate_pareto_plots(pareto_dir: Path, outdir: Path) -> list[Path]:
 def _hypervolume_2d_simple(points: np.ndarray, ref_point: np.ndarray) -> float:
     """Simple 2D hypervolume (area) for minimisation objectives.
 
-    Sweeps points sorted by first objective, accumulating dominated area.
+    Sweeps points sorted by first objective (ascending), accumulating dominated area.
+    The reference point must be an upper bound (i.e., max(objectives) * 1.1) so that
+    the mask pts <= ref correctly selects Pareto front points (smaller is better).
+    The contribution formula (ref_y - y_i) computes the vertical strip area below
+    each point, building the correct staircase for the dominated space.
     """
     if len(points) == 0:
         return 0.0
