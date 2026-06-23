@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .executors import run_subprocess  # local helper (issue #6)
+from .apply_params import OSMAttributeError
 from .json_utils import safe_json_dumps
 from .storage import ResultStorage
 from .version_detection import VersionDetectionError, detect_openstudio_version
@@ -301,46 +302,229 @@ def _resolve_work_script(name: str) -> Path:
 # BYOS contract: apply_parameters
 # ---------------------------------------------------------------------------
 def default_apply_parameters(
-    template: Path,
-    parameters: dict[str, object],
-    sample_id: str,
-    out: Path,
-) -> Path:
-    """Default parameter-application logic.
+    sim_dir: Path,
+    variables: dict[str, Any],
+) -> None:
+    """Apply parameter values to an OpenStudio model using Python bindings.
 
-    Applies parameters by invoking the OpenStudio CLI which properly
-    executes measures through the SDK (issue #248). This replaces the
-    prior static .osw patching approach (apply_params_to_model.py)
-    which bypassed the SDK and prevented runner.registerValue,
-    measure-side pre/post-processing, and proper error reporting.
+    Loads the ``model.osm`` from *sim_dir* using the OpenStudio Python
+    bindings, applies each entry in *variables* as a model attribute
+    mutation, and saves the modified model back to disk.
 
-    When ``openstudio.cli`` is available and ``OSIMFLOW_STUB_SIM`` is
-    not set, this function calls ``openstudio.cli run -w workflow.osw``
-    which executes the full measure pipeline through the SDK. When the
-    CLI is unavailable or stub mode is enabled, falls back to copying
-    the template and writing a placeholder to maintain backward
-    compatibility with the BYOS contract (same argv, same exit code).
+    This is the production ``.osm`` mutation path that replaces the prior
+    CLI-delegation approach (issue #248) and the ``NotImplementedError``
+    skeleton stub (issue #840).
+
+    Attribute resolution follows the dotted-notation convention:
+      * Simple name — ``"lighting_power_density"`` → first matching
+        model-level attribute.
+      * Dotted name — ``"SpaceType_Office.lighting_power_density"`` →
+        resolves to the named ``SpaceType`` object and sets its attribute.
+
+    Type coercion: ``int`` values are coerced to ``float`` for numeric
+    SDK setters; ``str`` values are passed directly.
+
+    Args:
+        sim_dir: Directory containing ``model.osm`` (the modified sim
+            package for this sample). Typically ``out / sample_id`` from
+            the campaign's apply step.
+        variables: Dict mapping variable names to values, e.g.  ``{
+            "SpaceType_Office.lighting_power_density": 10.0 }``.
+
+    Raises:
+        RuntimeError: the OpenStudio Python bindings are not installed
+            on this host. Install ``openstudio`` to enable this path.
+        OSMAttributeError: a dotted variable name references an object
+            type or instance name that does not exist in the model.
     """
-    out_dir = out / sample_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    param_file = out / f"{sample_id}.params.json"
-    safe_json_dumps(parameters, param_file, sort_keys=True)
-
-    use_real_cli = _is_openstudio_available() and not _is_stub_mode()
-
-    if use_real_cli:
-        return _apply_parameters_via_cli(
-            template=template,
-            sample_id=sample_id,
-            out_dir=out_dir,
-            param_file=param_file,
+    osm_path = sim_dir / "model.osm"
+    if not osm_path.is_file():
+        raise FileNotFoundError(
+            f"default_apply_parameters: model.osm not found in {sim_dir}"
         )
-    return _apply_parameters_stub(
-        template=template,
-        sample_id=sample_id,
-        out_dir=out_dir,
-        param_file=param_file,
-    )
+
+    try:
+        import openstudio  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenStudio Python bindings are not installed on this host. "
+            "Install `openstudio` to enable production .osm mutation, "
+            "or use the CLI-delegation path via `openstudio.cli run`."
+        ) from exc
+
+    model_opt = openstudio.openstudiomodelcore.Model.load(str(osm_path))
+    if not model_opt.is_initialized():
+        raise RuntimeError(
+            f"default_apply_parameters: OpenStudio failed to load model from {osm_path}"
+        )
+    model = model_opt.get()
+
+    _apply_osm_mutations(model, openstudio, variables)
+
+    model.save(str(osm_path), overwrite=True)
+    log.info("default_apply_parameters: mutated .osm saved to %s", osm_path)
+
+
+def _apply_osm_mutations(
+    model: Any,
+    openstudio: Any,
+    variables: dict[str, Any],
+) -> None:
+    """Apply a dict of variable mutations to an OpenStudio model.
+
+    Supports both simple attribute names and dotted ``Type_name.attr``
+    names. For dotted names, resolves the target object by type and
+    instance name before setting the attribute.
+    """
+    from .apply_params import parse_dotted_name
+
+    for name, value in variables.items():
+        _apply_single_osm_mutation(model, openstudio, name, value, parse_dotted_name)
+
+
+def _apply_single_osm_mutation(
+    model: Any,
+    openstudio: Any,
+    name: str,
+    value: Any,
+    parse_dotted_name: Any,
+) -> None:
+    """Apply a single variable mutation to an OpenStudio model.
+
+    Args:
+        name: Variable name, either simple (``"lighting_power_density"``)
+            or dotted (``"SpaceType_Office.lighting_power_density"``).
+        value: The value to set.
+        parse_dotted_name: Callable to parse dotted names.
+    """
+    parsed = parse_dotted_name(name)
+
+    obj: Any = model
+    attribute: str = parsed.attribute
+
+    if parsed.object_type is not None and parsed.object_name is not None:
+        obj = _resolve_osm_object(
+            model, openstudio, parsed.object_type, parsed.object_name
+        )
+        if obj is None:
+            raise OSMAttributeError(
+                f"Cannot resolve {parsed.object_type} '{parsed.object_name}' "
+                f"for variable '{name}'. The object does not exist in the model."
+            )
+
+    coerced: Any = value
+    if isinstance(value, bool):
+        coerced = value
+    elif isinstance(value, int):
+        coerced = float(value)
+    elif isinstance(value, float):
+        coerced = value
+    elif isinstance(value, str):
+        coerced = value
+    else:
+        raise TypeError(
+            f"Cannot coerce parameter value of type {type(value).__name__} "
+            f"for OpenStudio SDK: {value!r}"
+        )
+
+    _set_osm_attribute(obj, openstudio, parsed.object_type, attribute, coerced)
+
+
+def _resolve_osm_object(
+    model: Any,
+    openstudio: Any,
+    object_type: str,
+    object_name: str,
+) -> Any | None:
+    """Resolve an OpenStudio model object by type and instance name."""
+    getter_name = "get" + object_type + "s"
+    getter = getattr(model, getter_name, None)
+    if getter is None:
+        log.warning("Unsupported .osm object type %r — skipping", object_type)
+        return None
+    objects = getter()
+    for obj in objects:
+        if obj.nameString() == object_name:
+            return obj
+    return None
+
+
+def _set_osm_attribute(
+    obj: Any,
+    openstudio: Any,
+    object_type: str | None,
+    attribute: str,
+    value: Any,
+) -> None:
+    """Set an attribute on an OpenStudio model object.
+
+    Dispatches to typed setters for known object/attribute pairs, and
+    falls back to ``setString`` for generic IDD attributes.
+    """
+    setter_map: dict[str, dict[str, Any]] = {
+        "SpaceType": {
+            "lighting_power_density": lambda o, v: o.setLightingPowerPerFloorArea(v),
+        },
+        "ThermalZone": {
+            "cooling_setpoint": lambda o, v: _set_thermal_zone_schedule(
+                o, openstudio, v, "cooling"
+            ),
+            "heating_setpoint": lambda o, v: _set_thermal_zone_schedule(
+                o, openstudio, v, "heating"
+            ),
+        },
+        "Construction": {
+            "u_value": lambda o, v: o.setThermalConductance(v),
+        },
+        "Lights": {
+            "lighting_level": lambda o, v: o.setLightingLevel(v),
+        },
+        "People": {
+            "people_per_floor_area": lambda o, v: o.setPeopleperSpaceFloorArea(v),
+        },
+    }
+
+    if object_type is not None and object_type in setter_map:
+        attr_map = setter_map[object_type]
+        setter = attr_map.get(attribute)
+        if setter is not None:
+            try:
+                setter(obj, value)
+                return
+            except Exception as exc:
+                raise OSMAttributeError(
+                    f"Failed to set {object_type}.{attribute}={value!r}: {exc}"
+                ) from exc
+
+    if isinstance(value, str):
+        obj.setString(attribute, value)
+    elif isinstance(value, (int, float)):
+        obj.setString(attribute, str(value))
+    else:
+        raise OSMAttributeError(
+            f"No setter for {object_type}.{attribute} with value type "
+            f"{type(value).__name__}. Define an explicit setter in "
+            f"osimflow/work.py."
+        )
+
+
+def _set_thermal_zone_schedule(
+    zone: Any,
+    openstudio: Any,
+    value: float,
+    kind: str,
+) -> None:
+    """Set a constant temperature schedule on a ThermalZone.
+
+    Creates a ScheduleConstant and assigns it as the cooling or heating
+    setpoint schedule on the zone.
+    """
+    schedule = openstudio.openstudiomodelcore.ScheduleConstant(zone.model())
+    schedule.setValue(value)
+    if kind == "cooling":
+        zone.setCoolingSetpointTemperatureSchedule(schedule)
+    else:
+        zone.setHeatingSetpointTemperatureSchedule(schedule)
 
 
 def _apply_parameters_via_cli(
