@@ -67,6 +67,7 @@ class _KubernetesHandle(Handle):
         try:
             pod_status = self._executor._wait_for_terminal(self._job_name)
         except BaseException as exc:
+            self.error = exc  # type: ignore[assignment]
             self._future.set_exception(exc)
             raise
 
