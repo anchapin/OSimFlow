@@ -48,7 +48,6 @@ import scipy.stats
 import scipy.stats.qmc
 
 from osimflow._eval_safe import ExpressionError, safe_eval
-from osimflow.algorithms.qdiscrete import qdiscrete
 
 log = logging.getLogger("osimflow.algorithms")
 
@@ -250,6 +249,8 @@ class BaseAlgorithm(abc.ABC):
             f"{self.__class__.__name__} does not implement compute_uq_indices"
         )
 
+
+from osimflow.algorithms.qdiscrete import qdiscrete  # noqa: E402
 
 # ======================================================================
 # Registry
@@ -848,6 +849,10 @@ from osimflow.algorithms.sequential_search import (  # noqa: E402
 )
 
 AlgorithmRegistry.register("sequential_search", SequentialSearchAlgorithm)
+
+from osimflow.algorithms.qdiscrete import QDiscreteAlgorithm  # noqa: E402
+
+AlgorithmRegistry.register("qdiscrete", QDiscreteAlgorithm)
 
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)

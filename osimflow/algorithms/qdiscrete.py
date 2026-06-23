@@ -33,16 +33,23 @@ Supports all distribution types that appear in ``variables.yml``:
 """
 
 import bisect
+import json
 import logging
 import math
 from collections.abc import Callable
-from typing import Any, TypeVar
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
+if TYPE_CHECKING:
+    from osimflow.algorithms import BaseAlgorithm
+
+from osimflow.algorithms import BaseAlgorithm  # noqa: E402
+
 log = logging.getLogger("osimflow.algorithms.qdiscrete")
 
-__all__ = ["qdiscrete", "pmf_from_distribution", "QDError"]
+__all__ = ["qdiscrete", "pmf_from_distribution", "QDError", "QDiscreteAlgorithm"]
 
 
 class QDError(ValueError):
@@ -285,6 +292,83 @@ def _build_discrete(var_def: dict[str, Any]) -> dict[Any, float]:
 @_register_pmf_builder("categorical")
 def _build_categorical(var_def: dict[str, Any]) -> dict[Any, float]:
     return _build_discrete(var_def)
+
+
+class QDiscreteAlgorithm(BaseAlgorithm):
+    """Inverse-CDF (quantile) sampling for discrete distributions.
+
+    Wraps :func:`qdiscrete` (the Python equivalent of R's
+    ``DoE.base::qdiscrete()``) to provide probability-weighted sampling
+    for discrete variables.  Unlike LHS which uses QMC stratification,
+    this algorithm draws samples by inverting the cumulative distribution
+    function (CDF) for variables with explicit PMFs.
+
+    Single-shot: ``is_iterative()`` returns ``False``,
+    ``is_converged()`` always returns ``True``.
+
+    Supported distribution types: ``uniform``, ``normal``, ``lognormal``,
+    ``triangular``, ``discrete``, ``categorical``.
+    """
+
+    def generate_samples(
+        self,
+        variables: dict[str, Any],
+        n_samples: int,
+        seed: int | None,
+        outdir: Path,
+    ) -> Path:
+        outdir.mkdir(parents=True, exist_ok=True)
+        samples_path = outdir / "samples.json"
+
+        var_list: Any = variables.get("variables", [])
+        if isinstance(var_list, list) and var_list and isinstance(var_list[0], dict):
+            var_defs = var_list
+        elif isinstance(var_list, dict):
+            var_defs = [{"name": k, **v} for k, v in var_list.items()]
+        else:
+            var_defs = []
+
+        if not var_defs:
+            samples_path.write_text(json.dumps({"samples": []}, indent=2))
+            return samples_path
+
+        independent_vars: list[dict[str, Any]] = []
+        for var_def in var_defs:
+            if var_def.get("distribution") != "conditional":
+                independent_vars.append(var_def)
+
+        samples: list[dict[str, Any]] = []
+        for i in range(n_samples):
+            values: dict[str, Any] = {}
+            for var_def in independent_vars:
+                var_name = var_def["name"]
+                try:
+                    pmf = pmf_from_distribution(var_def)
+                    drawn = qdiscrete(pmf, n=1, seed=seed)
+                    values[var_name] = drawn[0]
+                except QDError:
+                    values[var_name] = None
+            samples.append({"sample_id": f"{i + 1:04d}", "values": values})
+
+        samples_path.write_text(json.dumps({"samples": samples}, indent=2))
+        return samples_path
+
+    def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Single-shot: return the samples from the last iteration."""
+        if not history:
+            return []
+        last = history[-1].get("samples", [])
+        return list(last)
+
+    def is_converged(self, history: list[dict[str, Any]]) -> bool:
+        """Single-shot algorithms are always converged."""
+        return True
+
+    def name(self) -> str:
+        return "qdiscrete"
+
+    def is_iterative(self) -> bool:
+        return False
 
 
 def pmf_from_distribution(var_def: dict[str, Any]) -> dict[Any, float]:
