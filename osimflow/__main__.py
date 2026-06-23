@@ -1608,7 +1608,8 @@ def _add_aggregate_runs_args(agr: argparse.ArgumentParser) -> None:
         "--labels",
         nargs="*",
         metavar="LABEL",
-        help="Optional labels for each outdir (defaults to campaign_id from run.json or outdir stem)",
+        help="Optional labels for each outdir "
+        "(defaults to campaign_id from run.json or outdir stem)",
     )
     agr.add_argument(
         "--output",
@@ -2264,7 +2265,8 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
     # table format (default)
     print(
-        f"{'ID':<25} {'PROJECT':<20} {'STATUS':<10} {'ALGO':<8} {'N':<6} {'EXECUTOR':<10} {'CREATED'}"
+        f"{'ID':<25} {'PROJECT':<20} {'STATUS':<10} "
+        f"{'ALGO':<8} {'N':<6} {'EXECUTOR':<10} {'CREATED'}"
     )
     print("-" * 100)
     for c in campaigns:
@@ -2617,7 +2619,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
         n_failed = sum(1 for s in per_sample if s.get("status") == "failed")
         n_cached = sum(1 for s in per_sample if s.get("status") == "cached")
         print(
-            f"\nSamples:    {len(per_sample)} total  |  {n_ok} ok  |  {n_failed} failed  |  {n_cached} cached"
+            f"\nSamples:    {len(per_sample)} total  |  {n_ok} ok  "
+            f"|  {n_failed} failed  |  {n_cached} cached"
         )
 
     # Generation info for iterative algorithms
@@ -3479,7 +3482,8 @@ def _cmd_query_results(args: argparse.Namespace) -> int:
         print(f"Row {i + 1}: " + "  ".join(f"{str(row.get(c, ''))[:20]:<20}" for c in columns))
 
     print(
-        f"\nTotal: {result['total']} result(s), page {args.page}/{max(1, (result['total'] + args.per_page - 1) // args.per_page)}"
+        f"\nTotal: {result['total']} result(s), page "
+        f"{args.page}/{max(1, (result['total'] + args.per_page - 1) // args.per_page)}"
     )
     print(f"Campaigns queried: {result['campaigns_queried']}")
     return 0
