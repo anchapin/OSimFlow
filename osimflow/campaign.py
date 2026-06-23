@@ -799,6 +799,7 @@ class Campaign:
         ) -> str:
             """Await one handle. Returns the sample_id."""
             sid, (handle, on_success) = item
+            trace_id = self._trace_id_for(sid)
             try:
                 result = handle.result()
                 on_success(result)
@@ -874,6 +875,9 @@ class Campaign:
                 state[f"{step_name.lower}_status"] = "failed"
                 state["error_summary"] = str(e)[:500]
                 self._checkpoint_sample(sid)
+                # Record sample status to observability backend immediately
+                # so crashed samples are not missed (issue #847).
+                self._obs.record_sample_status(sid, "failed", trace_id=trace_id)
                 return sid
             # Incremental checkpoint: update run.json after each sample
             # completes so SSE clients see live progress (issue #275).
@@ -3109,6 +3113,12 @@ class Campaign:
                     _state["apply_exit_code"] = 0
                     _state["apply_status"] = "ok"
                     self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
+                    # Record sample status to observability backend immediately
+                    # so completed samples are not missed if campaign crashes
+                    # before _finalize_samples (issue #847).
+                    self._obs.record_sample_status(
+                        _sid, "ok", trace_id=self._trace_id_for(_sid)
+                    )
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
                         self._archive_sample_artifacts(
@@ -3133,6 +3143,10 @@ class Campaign:
                 state["error_summary"] = "APPLY: unknown error during concurrent execution"
                 self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
                 self.trace.step_item_done("APPLY_PARAMETERS", status="failed")
+                # Record sample status to observability backend (issue #847).
+                self._obs.record_sample_status(
+                    _sid, "failed", trace_id=self._trace_id_for(_sid)
+                )
 
         self.trace.step_finished(
             "APPLY_PARAMETERS",
@@ -3372,6 +3386,12 @@ class Campaign:
                         _handle, "billed_duration_seconds", None
                     )
                     self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="ok")
+                    # Record sample status to observability backend immediately
+                    # so completed samples are not missed if campaign crashes
+                    # before _finalize_samples (issue #847).
+                    self._obs.record_sample_status(
+                        _sid, "ok", trace_id=self._trace_id_for(_sid)
+                    )
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
                         self._archive_sample_artifacts(
@@ -3420,6 +3440,10 @@ class Campaign:
                 state["error_summary"] = "SIM: unknown error during concurrent execution"
                 self.cache.store(ctx["key"], ctx["out_dir"], exit_code=1)
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="failed")
+                # Record sample status to observability backend (issue #847).
+                self._obs.record_sample_status(
+                    _sid, "failed", trace_id=self._trace_id_for(_sid)
+                )
 
         self.trace.step_finished(
             "RUN_OPENSTUDIO_SIM",
@@ -3627,6 +3651,12 @@ class Campaign:
                     _state["extract_exit_code"] = 0
                     _state["extract_status"] = "ok"
                     self.trace.step_item_done("EXTRACT_KPIS", status="ok")
+                    # Record sample status to observability backend immediately
+                    # so completed samples are not missed if campaign crashes
+                    # before _finalize_samples (issue #847).
+                    self._obs.record_sample_status(
+                        _sid, "ok", trace_id=self._trace_id_for(_sid)
+                    )
                     # Worker direct-to-storage push (issue #625): upload
                     # kpis.json + atomic _manifest.json, then report to the
                     # Coordinator. No-op for the LocalStorage backend.
@@ -3660,6 +3690,7 @@ class Campaign:
             # manifest for any sample that did not complete cleanly. Successful
             # samples were already published in _on_success above and are
             # skipped here (extract_status == "ok" / "cached").
+            # Also record sample status to observability backend (issue #847).
             if state.get("extract_status") == "failed":
                 self._publish_sample_results(
                     sample_id=_sid,
@@ -3668,6 +3699,9 @@ class Campaign:
                     kpi_path=None,
                     exit_code=int(state.get("extract_exit_code", 1) or 1),
                     status="failed",
+                )
+                self._obs.record_sample_status(
+                    _sid, "failed", trace_id=self._trace_id_for(_sid)
                 )
 
         self.trace.step_finished(
