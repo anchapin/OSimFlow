@@ -339,7 +339,7 @@ def default_apply_parameters(
     """
     osm_path = sim_dir / "model.osm"
     if not osm_path.is_file():
-        raise FileNotFoundError(f"default_apply_parameters: model.osm not found in {sim_dir}")
+        raise FileNotFoundError(f"model.osm not found in {sim_dir!r}")
 
     if _is_stub_mode():
         log.warning(
@@ -359,9 +359,7 @@ def default_apply_parameters(
 
     model_opt = openstudio.openstudiomodelcore.Model.load(str(osm_path))
     if not model_opt.is_initialized():
-        raise RuntimeError(
-            f"default_apply_parameters: OpenStudio failed to load model from {osm_path}"
-        )
+        raise RuntimeError(f"OpenStudio failed to load model from {osm_path!r}")
     model = model_opt.get()
 
     _apply_osm_mutations(model, openstudio, variables)
@@ -548,7 +546,7 @@ def _apply_parameters_via_cli(
     workflow_path = _find_workflow_osw(out_dir)
     if workflow_path is None:
         raise RuntimeError(
-            f"No workflow.osw found in {out_dir} for sample={sample_id}. "
+            f"No workflow.osw found in {out_dir!r} for sample={sample_id!r}. "
             f"The OpenStudio CLI requires a workflow file to apply parameters."
         )
 
@@ -1052,8 +1050,8 @@ def _run_real_openstudio(
     workflow_path = _find_workflow_osw(modified_sim_package)
     if workflow_path is None:
         raise RuntimeError(
-            f"No workflow.osw found in modified_sim_package="
-            f"{modified_sim_package} for sample={sample_id}. "
+            f"No workflow.osw found in modified_sim_package={modified_sim_package!r} "
+            f"for sample={sample_id!r}. "
             f"The real OpenStudio CLI requires a workflow file."
         )
 

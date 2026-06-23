@@ -1341,7 +1341,7 @@ class Campaign:
         if script is None:
             return
         if not script.is_file():
-            raise FileNotFoundError(f"init script not found: {script}")
+            raise FileNotFoundError(f"Init script not found: {script!r}")
         env = self._hook_env()
         log.info("running init script: %s", script)
         t0 = time.time()
@@ -2233,13 +2233,13 @@ class Campaign:
         samples_file = self._samples_manifest_path()
         if not samples_file.exists():
             raise FileNotFoundError(
-                f"samples.json not found at {samples_file}. "
+                f"Samples.json not found at {samples_file!r}. "
                 "Run a full campaign (or --dry-run) first to generate samples."
             )
         all_samples_raw = safe_json_loads(samples_file, default=None, log_warnings=False)
         if all_samples_raw is None:
             raise ValueError(
-                f"samples.json at {samples_file} is corrupted or unreadable. "
+                f"Samples.json at {samples_file!r} is corrupted or unreadable. "
                 "Run a full campaign (or --dry-run) first to generate valid samples."
             )
         all_samples = cast_samples(all_samples_raw["samples"])
@@ -2808,7 +2808,7 @@ class Campaign:
             self.cache.store(key, Path(result_path), exit_code=0)
             run_samples_data = safe_json_loads(Path(result_path), default=None, log_warnings=False)
             if run_samples_data is None:
-                raise ValueError(f"Generated samples file {result_path} is corrupted")
+                raise ValueError(f"Generated samples file {result_path!r} is corrupted")
             run_samples_obj: object = run_samples_data["samples"]
             samples = cast_samples(run_samples_obj)
 

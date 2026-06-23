@@ -87,22 +87,22 @@ def _parse_resource_quota(raw: object) -> ResourceQuota | None:
     )
     if quota.max_samples is not None and quota.max_samples < 1:
         raise ValidationError(
-            "max_samples must be >= 1",
+            "Max samples must be >= 1",
             field="resource_quota.max_samples",
         )
     if quota.max_cost_usd is not None and quota.max_cost_usd < 0:
         raise ValidationError(
-            "max_cost_usd must be >= 0",
+            "Max cost usd must be >= 0",
             field="resource_quota.max_cost_usd",
         )
     if quota.max_wall_time_min is not None and quota.max_wall_time_min <= 0:
         raise ValidationError(
-            "max_wall_time_min must be > 0",
+            "Max wall time min must be > 0",
             field="resource_quota.max_wall_time_min",
         )
     if quota.max_concurrent_samples is not None and quota.max_concurrent_samples < 1:
         raise ValidationError(
-            "max_concurrent_samples must be >= 1",
+            "Max concurrent samples must be >= 1",
             field="resource_quota.max_concurrent_samples",
         )
     return quota
@@ -120,7 +120,7 @@ def _int_field(raw: dict[str, object], key: str) -> int | None:
         except (ValueError, TypeError):
             pass
     raise ValidationError(
-        f"{key} must be an integer, got {type(val).__name__}",
+        f"{key!r} must be an integer, got {type(val).__name__}",
         field=f"resource_quota.{key}",
     )
 
@@ -137,7 +137,7 @@ def _float_field(raw: dict[str, object], key: str) -> float | None:
         except ValueError:
             pass
     raise ValidationError(
-        f"{key} must be a number, got {type(val).__name__}",
+        f"{key!r} must be a number, got {type(val).__name__}",
         field=f"resource_quota.{key}",
     )
 
@@ -1377,19 +1377,19 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
     n_samples = int(str(args["n_samples"]))
     if n_samples < 1:
         raise ValidationError(
-            f"n_samples must be >= 1, got {n_samples}",
+            f"N_samples must be >= 1, got {n_samples}",
             field="n_samples",
         )
     max_generations = int(str(args.get("max_generations", 1)))
     if max_generations < 1:
         raise ValidationError(
-            f"max_generations must be >= 1, got {max_generations}",
+            f"Max generations must be >= 1, got {max_generations}",
             field="max_generations",
         )
     nomad_fanout_submit_chunk_size = int(str(args.get("nomad_fanout_submit_chunk_size", 0)))
     if nomad_fanout_submit_chunk_size < 0:
         raise ValidationError(
-            "nomad_fanout_submit_chunk_size must be >= 0",
+            "Nomad fanout submit chunk size must be >= 0",
             field="nomad_fanout_submit_chunk_size",
         )
     shard_count_raw = args.get("shard_count")
@@ -1404,37 +1404,37 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
     range_mode = shard_start is not None or shard_end is not None
     if partition_mode and range_mode:
         raise ValidationError(
-            "shard_count/shard_index cannot be combined with shard_start/shard_end",
+            "Shard count/shard index cannot be combined with shard start/shard end",
             field="shard",
         )
     if partition_mode:
         if shard_count is None or shard_index is None:
             raise ValidationError(
-                "both shard_count and shard_index are required for partition sharding",
+                "Both shard_count and shard_index are required for partition sharding",
                 field="shard",
             )
         if shard_count < 1:
-            raise ValidationError("shard_count must be >= 1", field="shard_count")
+            raise ValidationError("Shard count must be >= 1", field="shard_count")
         if shard_index < 0 or shard_index >= shard_count:
             raise ValidationError(
-                f"shard_index must be in [0, {shard_count - 1}]",
+                f"Shard index must be in [0, {shard_count - 1}]",
                 field="shard_index",
             )
     if range_mode:
         if shard_start is None or shard_end is None:
             raise ValidationError(
-                "both shard_start and shard_end are required for range sharding",
+                "Both shard_start and shard_end are required for range sharding",
                 field="shard",
             )
         if shard_start < 0:
-            raise ValidationError("shard_start must be >= 0", field="shard_start")
+            raise ValidationError("Shard start must be >= 0", field="shard_start")
         if shard_end <= shard_start:
-            raise ValidationError("shard_end must be greater than shard_start", field="shard_end")
+            raise ValidationError("Shard end must be greater than shard start", field="shard_end")
 
     openstudio_version = str(args["openstudio_version"])
     if not openstudio_version or not openstudio_version[0].isdigit():
         raise ValidationError(
-            f"openstudio_version must start with a digit, got {openstudio_version!r}",
+            f"OpenStudio version must start with a digit, got {openstudio_version!r}",
             field="openstudio_version",
         )
 
