@@ -597,9 +597,7 @@ class TestAWSBatchHandle:
 
     def test_done_empty_jobs_returns_false(self) -> None:
         handle, mock_client = self._make_handle("RUNNING")
-        mock_client.describe_jobs.return_value = {
-            "jobs": [{"jobId": "j-h", "status": "RUNNING"}]
-        }
+        mock_client.describe_jobs.return_value = {"jobs": [{"jobId": "j-h", "status": "RUNNING"}]}
         assert handle.done() is False
 
 

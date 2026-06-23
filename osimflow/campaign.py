@@ -717,7 +717,7 @@ class Campaign:
         )
         try:
             self.trace.update_sample(trace)
-        except Exception as exc:  # noqa: BLEAVE
+        except Exception as exc:  # noqa: BLEED
             self._consecutive_checkpoint_failures += 1
             log.warning(
                 "checkpoint failed for sample %s (consecutive failures: %d): %s",
