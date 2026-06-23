@@ -3375,7 +3375,7 @@ class Campaign:
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "sim" / _sid
                         self._archive_sample_artifacts(
-                            Path(result_path), archive_dst, ["eplusout.sql"]
+                            Path(result_path), archive_dst, ["*.osw", "*.osm", "eplusout.sql"]
                         )
                     if self._result_storage is not None:
                         sql_path = result_path / "eplusout.sql"
