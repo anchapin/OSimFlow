@@ -341,13 +341,20 @@ def default_apply_parameters(
     if not osm_path.is_file():
         raise FileNotFoundError(f"default_apply_parameters: model.osm not found in {sim_dir}")
 
+    if _is_stub_mode():
+        log.warning(
+            "default_apply_parameters: OSIMFLOW_STUB_SIM=1 is set; skipping .osm mutation "
+            "(stub mode — no OpenStudio bindings required)"
+        )
+        return
+
     try:
         import openstudio  # noqa: PLC0415
     except ImportError as exc:
         raise RuntimeError(
             "OpenStudio Python bindings are not installed on this host. "
             "Install `openstudio` to enable production .osm mutation, "
-            "or use the CLI-delegation path via `openstudio.cli run`."
+            "or set OSIMFLOW_STUB_SIM=1 to use stub mode for testing."
         ) from exc
 
     model_opt = openstudio.openstudiomodelcore.Model.load(str(osm_path))
