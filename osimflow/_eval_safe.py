@@ -10,7 +10,8 @@ Allowed syntax
 * Boolean: ``and``, ``or``, ``not``
 * Arithmetic: ``+``, ``-``, ``*``, ``/``
 * Names: any identifier present in the variables dict
-* Literals: integers, floats, strings (``"..."`` or ``'...'``), booleans (``True`` / ``False``), ``None``
+* Literals: integers, floats, strings (``"..."`` or ``'...'``), booleans
+  (``True`` / ``False``), ``None``
 
 Blocked (will raise :exc:`ValueError`)
 ---------------------------------------
