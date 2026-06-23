@@ -211,7 +211,7 @@ class Campaign:
         self,
         cfg: CampaignConfig,
         executor: BaseExecutor,
-        apply_fn: Callable[..., Path] | None = None,
+        apply_fn: Callable[..., Path | None] | None = None,
         extract_fn: Callable[..., Path] | None = None,
         max_workers: int = 1,
         task_queue: TaskQueue | None = None,
@@ -3069,34 +3069,31 @@ class Campaign:
                     if ctx["seed_model_override"]
                     else self.cfg.template_sim_package
                 )
+                apply_out_dir: Path = ctx["out_dir"]
+                shutil.copytree(template_pkg, apply_out_dir, dirs_exist_ok=True)
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(
                         self.apply_fn,
-                        template_pkg,
+                        apply_out_dir,
                         ctx["resolved_params"],
-                        sid,
-                        ctx["out_dir"],
                     )
                 else:
                     handle = self.executor.submit(
                         self.apply_fn,
-                        template_pkg,
+                        apply_out_dir,
                         ctx["resolved_params"],
-                        sid,
-                        ctx["out_dir"],
                         name=f"apply_{sid}",
                         cpus=1,
                         memory_mb=512,
                         time_min=5,
                         container=self._python_container_image,
-                        result_hint=Path(ctx["out_dir"]) / sid,
+                        result_hint=apply_out_dir,
                         **self._executor_submit_transport_kwargs,
                     )
 
                 # Build the on-success callback (captures per-sample context).
                 key = ctx["key"]
                 state = ctx["state"]
-                out_dir = ctx["out_dir"]
                 archive = self.cfg.archive_intermediates
 
                 def _on_success(
@@ -3104,18 +3101,18 @@ class Campaign:
                     _sid: str = sid,
                     _key: CacheKey = key,
                     _state: dict[str, object] = state,
-                    _out_dir: Path = out_dir,
+                    _apply_out_dir: Path = apply_out_dir,
                     _archive: bool = archive,
                 ) -> None:
-                    self.cache.store(_key, Path(result_path), exit_code=0)
-                    out[_sid] = Path(result_path)
+                    self.cache.store(_key, _apply_out_dir, exit_code=0)
+                    out[_sid] = _apply_out_dir
                     _state["apply_exit_code"] = 0
                     _state["apply_status"] = "ok"
                     self.trace.step_item_done("APPLY_PARAMETERS", status="ok")
                     if _archive:
                         archive_dst = self.cfg.outdir / "archive" / "apply" / _sid
                         self._archive_sample_artifacts(
-                            Path(result_path), archive_dst, ["*.osw", "*.osm"]
+                            _apply_out_dir, archive_dst, ["*.osw", "*.osm"]
                         )
 
                 submissions[sid] = (handle, _on_success)
