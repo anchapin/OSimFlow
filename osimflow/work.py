@@ -799,6 +799,13 @@ def _run_openstudio_sim_impl(
 
     use_real_cli = _is_openstudio_available() and not _is_stub_mode()
 
+    # Fail fast if CLI is not available and stub mode is not explicitly enabled
+    if not use_real_cli and not _is_stub_mode():
+        raise RuntimeError(
+            "openstudio CLI is not available on PATH and OSIMFLOW_STUB_SIM=1 is not set. "
+            "Install OpenStudio CLI or set OSIMFLOW_STUB_SIM=1 to use stub mode for testing."
+        )
+
     # --- Container health monitoring (issue #415) ---
     # Start a heartbeat writer thread for the duration of the simulation.
     # This allows the executor to detect frozen/silently-failed containers.
