@@ -27,6 +27,17 @@ The ``weather/`` subdirectory is configurable via
 :class:`osimflow.config.CampaignConfig.weather_dir`.
 """
 
+__all__ = [
+    "EPWDownloadError",
+    "EPWValidationError",
+    "detect_climate_zone_from_stat",
+    "discover_epw_files",
+    "download_epw",
+    "validate_all_epw_files",
+    "validate_epw",
+    "validate_epw_header",
+]
+
 import logging
 import re
 import urllib.request

@@ -24,6 +24,8 @@ The DB schema is small enough to inspect with `sqlite3 cache.db ".schema"`.
 
 from __future__ import annotations
 
+__all__ = ["CacheKey", "CacheStats", "SQLiteCache", "sha256_of_dict", "sha256_of_files"]
+
 import contextlib
 import dataclasses
 import hashlib

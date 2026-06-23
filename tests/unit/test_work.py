@@ -13,12 +13,12 @@ Covers:
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -82,112 +82,120 @@ def _env_without_stub() -> dict[str, str]:
 # default_apply_parameters
 # ===========================================================================
 class TestDefaultApplyParameters:
-    def test_creates_out_dir_and_param_file(self, template_pkg: Path, out_dir: Path) -> None:
-        params = {"heating_setpoint": 20.0, "cooling_setpoint": 25.0}
+    def test_raises_when_openstudio_not_installed(self, template_pkg: Path) -> None:
+        """When OpenStudio Python bindings are not installed, RuntimeError is raised."""
+        real_import = builtins.__import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "openstudio":
+                raise ImportError("No module named 'openstudio'")
+            return real_import(name, *args, **kwargs)
+
         with (
-            patch.dict(os.environ, _env_without_stub(), clear=True),
-            patch("osimflow.work._is_openstudio_available", return_value=False),
-            patch("osimflow.work.subprocess.run") as mock_run,
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
         ):
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            result = default_apply_parameters(template_pkg, params, "0001", out_dir)
+            with pytest.raises(RuntimeError, match="OpenStudio Python bindings are not installed"):
+                default_apply_parameters(template_pkg, {"heating_setpoint": 20.0})
 
-        assert result == out_dir / "0001"
-        assert result.is_dir()
-        param_file = out_dir / "0001.params.json"
-        assert param_file.is_file()
-        written = json.loads(param_file.read_text())
-        assert written == {"cooling_setpoint": 25.0, "heating_setpoint": 20.0}
+    def test_raises_when_model_not_found(self, template_pkg: Path) -> None:
+        """Raises FileNotFoundError when model.osm is not in sim_dir."""
+        (template_pkg / "model.osm").unlink()
+        real_import = builtins.__import__
+        mock_openstudio = MagicMock()
 
-    def test_cli_invoked_when_available(self, template_pkg: Path, out_dir: Path) -> None:
-        """When openstudio.cli is available, it is called instead of static patching (issue #248)."""
-        pkg = template_pkg
-        (pkg / "workflow.osw").write_text(json.dumps({"name": "test_workflow"}))
-        params = {"wwr": 0.4}
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "openstudio":
+                return mock_openstudio
+            return real_import(name, *args, **kwargs)
+
         with (
-            patch.dict(os.environ, _env_without_stub(), clear=True),
-            patch("osimflow.work._is_openstudio_available", return_value=True),
-            patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
-            patch("osimflow.work.run_subprocess") as mock_run,
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
         ):
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            default_apply_parameters(pkg, params, "0042", out_dir)
+            with pytest.raises(FileNotFoundError, match="model.osm not found"):
+                default_apply_parameters(template_pkg, {"heating_setpoint": 20.0})
 
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
-        assert cmd[0] == "openstudio.cli"
-        assert "run" in cmd
-        assert "-w" in cmd
+    def test_raises_when_model_fails_to_load(self, template_pkg: Path) -> None:
+        """Raises RuntimeError when OpenStudio fails to load the model."""
+        real_import = builtins.__import__
+        mock_openstudio = MagicMock()
+        mock_model_opt = MagicMock()
+        mock_model_opt.is_initialized.return_value = False
+        mock_openstudio.openstudiomodelcore.Model.load.return_value = mock_model_opt
 
-    def test_fallback_to_apply_params_script_when_cli_missing(
-        self, template_pkg: Path, out_dir: Path
-    ) -> None:
-        """When CLI is unavailable, falls back to apply_params_to_model.py (backward compat)."""
-        params = {"wwr": 0.4}
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "openstudio":
+                return mock_openstudio
+            return real_import(name, *args, **kwargs)
+
         with (
-            patch.dict(os.environ, _env_without_stub(), clear=True),
-            patch("osimflow.work._is_openstudio_available", return_value=False),
-            patch("osimflow.work.subprocess.run") as mock_run,
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
         ):
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            default_apply_parameters(template_pkg, params, "0042", out_dir)
+            with pytest.raises(RuntimeError, match="OpenStudio failed to load model"):
+                default_apply_parameters(template_pkg, {"heating_setpoint": 20.0})
 
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
-        assert cmd[0] == sys.executable
-        assert "--template" in cmd
-        assert "--sample_id" in cmd
-        assert "0042" in cmd
-        assert "--out" in cmd
+    def test_applies_mutations_and_saves_model(self, template_pkg: Path) -> None:
+        """Mutates model.osm in sim_dir and saves it back."""
+        osm_path = template_pkg / "model.osm"
+        osm_path.write_text('{"type": "OSM"}')
+        real_import = builtins.__import__
+        mock_openstudio = MagicMock()
+        mock_model = MagicMock()
+        mock_model_opt = MagicMock()
+        mock_model_opt.is_initialized.return_value = True
+        mock_model_opt.get.return_value = mock_model
+        mock_openstudio.openstudiomodelcore.Model.load.return_value = mock_model_opt
 
-    def test_raises_on_subprocess_failure(self, template_pkg: Path, out_dir: Path) -> None:
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "openstudio":
+                return mock_openstudio
+            return real_import(name, *args, **kwargs)
+
         with (
-            patch.dict(os.environ, _env_without_stub(), clear=True),
-            patch("osimflow.work._is_openstudio_available", return_value=False),
-            patch("osimflow.work.subprocess.run") as mock_run,
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+            patch("osimflow.work._apply_osm_mutations") as mock_mutate,
         ):
-            mock_run.side_effect = subprocess.CalledProcessError(
-                returncode=1, cmd=[], stderr="apply_params error"
-            )
-            with pytest.raises(RuntimeError, match="apply_params failed"):
-                default_apply_parameters(template_pkg, {"x": 1.0}, "0001", out_dir)
+            result = default_apply_parameters(template_pkg, {"lighting_power_density": 10.0})
 
-    def test_makes_parent_dirs(self, out_dir: Path, tmp_path: Path) -> None:
-        template = tmp_path / "tmpl"
-        template.mkdir()
-        deep_out = out_dir / "nested" / "deep"
-        with (
-            patch.dict(os.environ, _env_without_stub(), clear=True),
-            patch("osimflow.work._is_openstudio_available", return_value=False),
-            patch("osimflow.work.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            result = default_apply_parameters(template, {"a": 1}, "0001", deep_out)
-        assert result.is_dir()
+        assert result is None
+        mock_openstudio.openstudiomodelcore.Model.load.assert_called_once_with(str(osm_path))
+        mock_mutate.assert_called_once_with(
+            mock_model, mock_openstudio, {"lighting_power_density": 10.0}
+        )
+        mock_model.save.assert_called_once_with(str(osm_path), overwrite=True)
 
-    def test_cli_error_raises(self, template_pkg: Path, out_dir: Path) -> None:
-        """When CLI is available but fails, RuntimeError is raised."""
-        pkg = template_pkg
-        (pkg / "workflow.osw").write_text(json.dumps({"name": "test_workflow"}))
-        params = {"wwr": 0.4}
+    def test_raises_on_mutation_error(self, template_pkg: Path) -> None:
+        """Re-raises OSMAttributeError from mutation failures."""
+        from osimflow.apply_params import OSMAttributeError
+
+        osm_path = template_pkg / "model.osm"
+        osm_path.write_text('{"type": "OSM"}')
+        real_import = builtins.__import__
+        mock_openstudio = MagicMock()
+        mock_model = MagicMock()
+        mock_model_opt = MagicMock()
+        mock_model_opt.is_initialized.return_value = True
+        mock_model_opt.get.return_value = mock_model
+        mock_openstudio.openstudiomodelcore.Model.load.return_value = mock_model_opt
+        mutation_error = OSMAttributeError(
+            "Cannot resolve SpaceType 'Office' for variable 'lighting_power_density'"
+        )
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "openstudio":
+                return mock_openstudio
+            return real_import(name, *args, **kwargs)
+
         with (
-            patch.dict(os.environ, _env_without_stub(), clear=True),
-            patch("osimflow.work._is_openstudio_available", return_value=True),
-            patch("osimflow.work.run_subprocess") as mock_run,
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+            patch("osimflow.work._apply_osm_mutations", side_effect=mutation_error),
         ):
-            mock_run.side_effect = subprocess.SubprocessError("CLI failed")
-            with pytest.raises(RuntimeError, match="apply_parameters failed"):
-                default_apply_parameters(pkg, params, "0001", out_dir)
+            with pytest.raises(OSMAttributeError, match="Cannot resolve SpaceType"):
+                default_apply_parameters(template_pkg, {"lighting_power_density": 10.0})
 
 
 # ===========================================================================
@@ -263,8 +271,9 @@ class TestRunOpenstudioSimStub:
         self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
     ) -> None:
         stdout_path, stderr_path = log_paths
+        # When CLI is not available and stub mode is enabled, the stub subprocess runs.
         with (
-            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}, clear=True),
             patch("osimflow.work._is_openstudio_available", return_value=False),
         ):
             result = run_openstudio_sim(

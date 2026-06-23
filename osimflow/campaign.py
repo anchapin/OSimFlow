@@ -31,6 +31,8 @@ single `run.json` trace to `${outdir}/run.json` at completion. The trace
 includes per-step timing, per-sample status, and cache hit/miss counts.
 """
 
+__all__ = ["Campaign", "CampaignError", "QuotaExceededError"]
+
 import concurrent.futures
 import contextlib
 import dataclasses

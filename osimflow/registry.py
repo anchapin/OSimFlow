@@ -14,6 +14,8 @@ metadata to support ``osimflow list``, ``osimflow show``, and
 
 from __future__ import annotations
 
+__all__ = ["CampaignRecord", "CampaignRegistry"]
+
 import dataclasses
 import json
 import logging

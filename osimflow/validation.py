@@ -11,6 +11,8 @@ Provides:
 
 from __future__ import annotations
 
+__all__ = ["ValidationError"]
+
 import json
 import logging
 import os

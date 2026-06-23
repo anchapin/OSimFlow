@@ -7,6 +7,8 @@ from them before the full __init__.py is initialized.
 
 from __future__ import annotations
 
+__all__ = ["BaseExecutor", "Handle"]
+
 import abc
 import dataclasses
 from collections.abc import Callable

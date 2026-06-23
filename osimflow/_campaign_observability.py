@@ -14,6 +14,8 @@ the ObservabilityBackend implementation.
 
 from __future__ import annotations
 
+__all__ = ["ObservabilityManager"]
+
 import logging
 
 from .config import CampaignConfig

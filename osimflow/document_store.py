@@ -28,6 +28,15 @@ Example
 
 from __future__ import annotations
 
+__all__ = [
+    "DocumentNotFoundError",
+    "DocumentStore",
+    "DocumentStoreError",
+    "DuplicateDocumentError",
+    "SQLiteDocumentStore",
+    "build_document_store",
+]
+
 import contextlib
 import json
 import logging

@@ -17,6 +17,8 @@ KPI extraction when the algorithm reports ``is_multi_objective()`` as
 ``True``, persisting to ``outdir/pareto/gen_N.json``.
 """
 
+__all__ = ["ParetoFront", "ParetoSolution"]
+
 import json
 import logging
 from dataclasses import asdict, dataclass

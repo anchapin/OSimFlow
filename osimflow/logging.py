@@ -3,6 +3,8 @@
 Provides JSON-formatted logging with log rotation via RotatingFileHandler.
 """
 
+__all__ = ["get_logger", "setup_logging"]
+
 import json
 import logging
 import re

@@ -17,6 +17,8 @@ survives process restarts and is shared across campaign runs that share an
 
 from __future__ import annotations
 
+__all__ = ["DataPoint", "DataPointManager", "DataPointStatus"]
+
 import fcntl
 import json
 import os

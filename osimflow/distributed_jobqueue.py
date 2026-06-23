@@ -56,6 +56,8 @@ Example URLs::
 
 from __future__ import annotations
 
+__all__ = ["DistributedJobQueue", "build_job_queue"]
+
 import json
 import logging
 import threading
