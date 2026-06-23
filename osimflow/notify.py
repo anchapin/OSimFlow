@@ -33,6 +33,15 @@ unit tests for the email and webhook backends do not require it.
 
 from __future__ import annotations
 
+__all__ = [
+    "EmailNotifyBackend",
+    "NotifyBackend",
+    "NullNotifyBackend",
+    "SNSNotifyBackend",
+    "WebhookNotifyBackend",
+    "build_notify_backend",
+]
+
 import abc
 import json
 import logging

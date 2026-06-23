@@ -11,6 +11,15 @@ GAP-FRESH-CRIT-002: Rserve/BCL Integration — online measure discovery.
 
 from __future__ import annotations
 
+__all__ = [
+    "AmbiguousVariableError",
+    "DiscoveredMeasure",
+    "MeasureArgument",
+    "MeasureRegistry",
+    "MeasureRegistryError",
+    "UnmappedVariableError",
+]
+
 import hashlib
 import json
 import logging

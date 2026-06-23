@@ -33,6 +33,19 @@ Usage::
             # ... existing recording logic ...
 """
 
+__all__ = [
+    "ChaosEngine",
+    "ChaosResult",
+    "ChaosScenario",
+    "CPUSpikeInjector",
+    "FaultInjector",
+    "FaultType",
+    "KillSwitchInjector",
+    "MemoryPressureInjector",
+    "NetworkDelayInjector",
+    "run_chaos_scenario",
+]
+
 import logging
 import random
 import signal

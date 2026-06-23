@@ -33,6 +33,8 @@ The ``Campaign`` class dispatches through the registry via
 stays decoupled from the sampling strategy.
 """
 
+__all__ = ["AlgorithmRegistry", "BaseAlgorithm", "LHSAlgorithm"]
+
 import abc
 import bisect
 import json

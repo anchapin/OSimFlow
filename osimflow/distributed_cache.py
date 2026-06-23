@@ -44,6 +44,8 @@ Example URLs::
 
 from __future__ import annotations
 
+__all__ = ["DistributedCache", "build_cache"]
+
 import json
 import logging
 import threading

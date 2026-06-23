@@ -22,6 +22,8 @@ Optional pieces (deferred to post-MVP):
 
 from __future__ import annotations
 
+__all__ = ["RunTrace", "StepTrace"]
+
 import dataclasses
 import json
 import logging

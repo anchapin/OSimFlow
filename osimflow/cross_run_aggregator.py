@@ -24,6 +24,8 @@ the existing POST endpoint.
 
 from __future__ import annotations
 
+__all__ = ["CrossRunAggregator"]
+
 import json
 import logging
 import time

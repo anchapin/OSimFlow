@@ -47,6 +47,8 @@ Destinations are defined in a YAML file referenced by
 
 from __future__ import annotations
 
+__all__ = ["AlertManager", "build_alert_manager"]
+
 import abc
 import dataclasses
 import json

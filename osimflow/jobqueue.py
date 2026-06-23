@@ -49,6 +49,8 @@ Priority ordering:
 
 from __future__ import annotations
 
+__all__ = ["JobQueue"]
+
 import json
 import logging
 import time

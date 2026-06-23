@@ -32,6 +32,8 @@ Usage::
 
 from __future__ import annotations
 
+__all__ = ["NullBackend", "ObservabilityBackend", "PrometheusBackend", "new_trace_id"]
+
 import logging
 import uuid
 from abc import ABC, abstractmethod
