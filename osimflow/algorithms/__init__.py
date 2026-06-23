@@ -849,6 +849,10 @@ from osimflow.algorithms.sequential_search import (  # noqa: E402
 
 AlgorithmRegistry.register("sequential_search", SequentialSearchAlgorithm)
 
+from osimflow.algorithms.qdiscrete import QDiscreteAlgorithm  # noqa: E402
+
+AlgorithmRegistry.register("qdiscrete", QDiscreteAlgorithm)
+
 # ======================================================================
 # Entry-point plug-in discovery (issue #432)
 # ======================================================================
