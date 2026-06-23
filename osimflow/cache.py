@@ -8,7 +8,7 @@ Cache key shape (PRIMARY KEY):
     (step, sample_id, openstudio_version, inputs_sha256, code_sha256,
      container_digest)
 
-Invalidation rules (per PRD §6 gotcha #3 and the analysis in
+Invalidation rules (per gotcha #3 and the analysis in
 `.agents/results/result-architecture.md`):
   * Editing a file in `bin/` invalidates the steps that reference it,
     for ALL samples.

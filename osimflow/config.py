@@ -1,7 +1,7 @@
 """Campaign configuration loader.
 
 A thin wrapper around the `variables.yml` schema, plus the CLI flags
-the PRD §1.4 calls out as required (`--input_variables`,
+required (`--input_variables`,
 `--template_sim_package`, `--n_samples`, `--outdir`,
 `--openstudio_version`, `--archive_intermediates`).
 """

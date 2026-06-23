@@ -36,7 +36,7 @@ Field               Meaning
 ``kpis_key``        Remote key of the uploaded ``kpis.json`` (or ``null``).
 ``exit_code``       Worker exit code (``0`` on success).
 ``first_severe_error``  First ``  * Severe`` line from ``eplusout.err``
-                        (PRD §6 #4) or ``null``.
+                        or ``null``.
 ``finished_at``     Unix epoch seconds when the sample finished.
 ==================  ==================================================
 """
@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("osimflow.manifest")
 
-#: Regex for the first EnergyPlus ``  * Severe`` line (PRD §6 #4).
+#: Regex for the first EnergyPlus ``  * Severe`` line.
 #: Two leading spaces, an asterisk, whitespace, then the word ``Severe``.
 _SEVERE_RE = re.compile(r"^[ \t]{2}\*+[ \t]+Severe[^\n]*", re.MULTILINE)
 
@@ -82,7 +82,7 @@ def first_severe_error(err_path: Path) -> str | None:
 
     Mirrors the reference implementation documented in
     ``docs/measure-runner-guide.md`` §2.3 and the pattern used by
-    ``bin/aggregate_results.py`` (PRD §6 #4, AGENTS.md gotcha #4).
+    ``bin/aggregate_results.py`` (AGENTS.md gotcha #4).
 
     Returns ``None`` when the file is absent or unreadable, or when it
     contains no Severe lines.

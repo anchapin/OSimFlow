@@ -702,7 +702,7 @@ class AWSBatchExecutor(BaseExecutor):
     `SlurmExecutor` exports, so downstream work scripts can be
     substrate-agnostic.
 
-    Security (PRD §6 *Cloud Security Practices*): the boto3 client
+    Security: the boto3 client
     sources credentials from the IAM role attached to the Batch compute
     environment. The constructor does **not** accept
     `aws_access_key_id` / `aws_secret_access_key`; passing long-lived

@@ -1237,7 +1237,7 @@ def publish_kpi_results(
     ``_manifest.json`` is written **last** (see
     :func:`osimflow.manifest.write_manifest_atomically`) as the durability
     fence.  ``eplusout.err`` / ``eplusout.log`` are **never** uploaded
-    (size guard, PRD §6 #1/#8 — AGENTS.md gotchas #1, #8).
+    (size guard, AGENTS.md gotchas #1, #8).
 
     .. note::
 
@@ -1341,7 +1341,7 @@ def publish_kpi_results(
                 sample_id,
             )
 
-    # 3. Capture the first Severe error (PRD §6 #4) — present on failure,
+    # 3. Capture the first Severe error — present on failure,
     #    None on clean completion.
     first_severe = manifest_mod.first_severe_error(simulation_dir / "eplusout.err")
 
