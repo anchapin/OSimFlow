@@ -38,6 +38,7 @@ def _make_executor(
         ex.fallback_to_on_demand = fallback_to_on_demand
         ex.max_retries = max_retries
         ex.ecr_repository = None
+        ex._instance_type = None
     return ex
 
 
