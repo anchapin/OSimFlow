@@ -88,6 +88,8 @@ class Handle:
     error: Exception | None = None
 
     def result(self, timeout: float | None = None) -> Any:
+        if self.error is not None:
+            raise self.error
         try:
             return self._future.result(timeout=timeout)
         except TypeError:

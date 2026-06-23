@@ -49,7 +49,11 @@ class _DaskJobQueueHandle(Handle):
         return self._future.done()
 
     def result(self, timeout: float | None = None) -> Any:
-        return self._future.result(timeout=timeout)
+        try:
+            return self._future.result(timeout=timeout)
+        except BaseException as exc:
+            self.error = exc  # type: ignore[assignment]
+            raise
 
 
 class DaskJobQueueExecutor(BaseExecutor):
