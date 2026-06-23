@@ -591,7 +591,7 @@ def parse_osw_arguments(template: Path) -> dict[str, MappedParameter]:
 
 
 # ---------------------------------------------------------------------------
-# Pre-flight check (PRD §1.4)
+# Pre-flight check
 # ---------------------------------------------------------------------------
 def preflight_check(
     parameters: dict[str, Any],
@@ -1265,7 +1265,7 @@ def apply_parameters(
     target_file = _select_template_file(template)
     template_type = detect_template_type(target_file)
 
-    # Pre-flight (PRD §1.4).
+    # Pre-flight.
     preflight_check(parameters, mappings)
 
     # Default path: copy all template artifacts into the per-sample

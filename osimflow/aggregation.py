@@ -5,7 +5,7 @@ This module is the pure-Python, storage-agnostic core of the Coordinator's
 lists every ``_manifest.json`` produced by the workers
 (see :mod:`osimflow.manifest`), reads each referenced ``kpis.json``, and
 compiles two CSVs that match the **column contract of the local
-``bin/aggregate_results.py`` path** (PRD §4.2 ``PROCESS_AGGREGATE_RESULTS``):
+``bin/aggregate_results.py`` path**):
 
 * ``aggregated_results.csv`` — one row per *successful* sample, ``sample_id``
   column first followed by every KPI spread from the sample's ``kpis.json``.
@@ -19,7 +19,7 @@ compiles two CSVs that match the **column contract of the local
       error_summary, exit_code, log_path, diagnosis_suggestion
 
   ``error_summary`` carries exactly the first ``  * Severe`` line from
-  ``eplusout.err`` (PRD §6 #4, the ``grep -m 1 "  * Severe"`` pattern).  The
+  ``eplusout.err`` (the ``grep -m 1 "  * Severe"`` pattern).  The
   manifest already captured this line (``first_severe_error`` field) at worker
   time, so the aggregator does **not** download ``.err`` files.
 
@@ -250,7 +250,7 @@ def compile_aggregation(
 
     ``failed_simulations.csv`` carries :data:`FAILED_SIMULATIONS_COLUMNS`,
     with ``error_summary`` = the manifest's ``first_severe_error`` (the first
-    ``  * Severe`` line, PRD §6 #4).  ``failure_category`` /
+    ``  * Severe`` line).  ``failure_category`` /
     ``diagnosis_suggestion`` reuse the local classifier so the two paths
     classify identically.
 

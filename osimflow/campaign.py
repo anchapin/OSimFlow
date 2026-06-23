@@ -3034,7 +3034,7 @@ class Campaign:
             independently cached entries.
 
         Before submitting any work, runs a pre-flight validation pass
-        (PRD §1.4) that checks every parameter name across all samples
+        that checks every parameter name across all samples
         against the template's available measure arguments and .osm
         attributes. This ensures a typo in ``variables.yml`` fails fast
         *before* any simulations start.
@@ -3073,7 +3073,7 @@ class Campaign:
         # in the template_sim_package directory.
         self._preflight_validate_epw_files(variable_defs)
 
-        # Pre-flight validation (PRD §1.4): validate ALL parameter names
+        # Pre-flight validation: validate ALL parameter names
         # against the template before submitting any work. Collect the
         # union of parameter names across all samples so a single bad
         # variable in any sample blocks the entire step.

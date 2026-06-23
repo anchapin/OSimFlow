@@ -1361,7 +1361,7 @@ def _apply_aggregation_transition(
         "`{campaign_id}/samples/*/_manifest.json`, reads each referenced "
         "`kpis.json`, and compiles `aggregated_results.csv` (same column "
         "contract as `bin/aggregate_results.py`) plus `failed_simulations.csv` "
-        "(first `  * Severe` line per failed manifest — PRD §6 #4).  When the "
+        "(first `  * Severe` line per failed manifest).  When the "
         "campaign algorithm is multi-objective (nsga2/pso) a Pareto-front JSON "
         "is also written.  Artifacts land under `{campaign_id}/_aggregated/` "
         "and the campaign status flips `aggregating -> complete`.\n\n"
