@@ -28,8 +28,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from .executors import run_subprocess  # local helper (issue #6)
 from .apply_params import OSMAttributeError
+from .executors import run_subprocess  # local helper (issue #6)
 from .json_utils import safe_json_dumps
 from .storage import ResultStorage
 from .version_detection import VersionDetectionError, detect_openstudio_version
@@ -339,9 +339,7 @@ def default_apply_parameters(
     """
     osm_path = sim_dir / "model.osm"
     if not osm_path.is_file():
-        raise FileNotFoundError(
-            f"default_apply_parameters: model.osm not found in {sim_dir}"
-        )
+        raise FileNotFoundError(f"default_apply_parameters: model.osm not found in {sim_dir}")
 
     try:
         import openstudio  # noqa: PLC0415
@@ -376,7 +374,7 @@ def _apply_osm_mutations(
     names. For dotted names, resolves the target object by type and
     instance name before setting the attribute.
     """
-    from .apply_params import parse_dotted_name
+    from .apply_params import parse_dotted_name  # noqa: PLC0415
 
     for name, value in variables.items():
         _apply_single_osm_mutation(model, openstudio, name, value, parse_dotted_name)
@@ -403,9 +401,7 @@ def _apply_single_osm_mutation(
     attribute: str = parsed.attribute
 
     if parsed.object_type is not None and parsed.object_name is not None:
-        obj = _resolve_osm_object(
-            model, openstudio, parsed.object_type, parsed.object_name
-        )
+        obj = _resolve_osm_object(model, openstudio, parsed.object_type, parsed.object_name)
         if obj is None:
             raise OSMAttributeError(
                 f"Cannot resolve {parsed.object_type} '{parsed.object_name}' "
@@ -417,9 +413,7 @@ def _apply_single_osm_mutation(
         coerced = value
     elif isinstance(value, int):
         coerced = float(value)
-    elif isinstance(value, float):
-        coerced = value
-    elif isinstance(value, str):
+    elif isinstance(value, (float, str)):
         coerced = value
     else:
         raise TypeError(
