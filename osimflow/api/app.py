@@ -1162,7 +1162,7 @@ def _count_severe_errors(err_path: Path) -> int:
     try:
         with err_path.open() as f:
             for line in f:
-                if "  * Severe" in line or "** Severe" in line:
+                if re.search(r"  \*+\sSevere", line):
                     count += 1
     except (OSError, UnicodeDecodeError):
         log.warning("Could not read error file for counting: %s", err_path)
@@ -1176,7 +1176,7 @@ def _find_root_cause_line(err_path: Path) -> str:
         with err_path.open() as f:
             for line in f:
                 stripped = line.strip()
-                if not first_severe and ("  * Severe" in line or "** Severe" in line):
+                if not first_severe and re.search(r"  \*+\sSevere", line):
                     first_severe = stripped
                 for _cat, patterns in _ERROR_FAILURE_PATTERNS:
                     for pat in patterns:
@@ -1197,7 +1197,7 @@ def _diagnose_sample_error(err_path: Path) -> dict[str, Any]:
     try:
         with err_path.open() as f:
             for line in f:
-                if "  * Severe" in line or "** Severe" in line:
+                if re.search(r"  \*+\sSevere", line):
                     error_summary = line.strip()
                     break
     except (OSError, UnicodeDecodeError):

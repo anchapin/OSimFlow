@@ -347,7 +347,7 @@ def _scan_err_file(err_path: Path) -> tuple[int, str]:
     try:
         with err_path.open() as f:
             for line in f:
-                is_severe = "  * Severe" in line or "** Severe" in line
+                is_severe = bool(re.search(r"  \*+\sSevere", line))
                 if is_severe:
                     count += 1
                     if not first_severe:
@@ -493,7 +493,7 @@ def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
         try:
             with err_path.open() as f:
                 for line in f:
-                    if "  * Severe" in line or "** Severe" in line:
+                    if re.search(r"  \*+\sSevere", line):
                         err_summary = line.strip()
                         break
         except (OSError, UnicodeDecodeError):
