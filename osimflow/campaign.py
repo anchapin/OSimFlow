@@ -176,6 +176,71 @@ class VariableSpec(TypedDict, total=False):
 SampleDict = dict[str, Path]  # sample_id -> path (per-sample work dir)
 
 
+@dataclasses.dataclass(frozen=True)
+class StepOutputs:
+    """Describes the files produced by a DAG step."""
+
+    produced: tuple[str, ...] = ()
+    """Glob patterns relative to work_dir (e.g. 'apply/*/modified.osw')."""
+
+    kpi_pattern: str | None = None
+    """For fan-out steps: glob pattern for per-sample KPI JSON files."""
+
+
+@dataclasses.dataclass(frozen=True)
+class StepInputs:
+    """Describes the files required by a DAG step before it can run."""
+
+    required: tuple[str, ...] = ()
+    """Exact file paths required (checked via is_file())."""
+
+    required_patterns: tuple[str, ...] = ()
+    """Glob patterns relative to work_dir; ALL files matching must exist."""
+
+    count: int | None = None
+    """Expected number of files from a fan-out step (None = no check)."""
+
+
+# Cross-step data dependency map (issue #850).
+# Maps each step name to the outputs it PRODUCES and the inputs it CONSUMES.
+# Before running a step, _verify_step_inputs() confirms all required inputs
+# are present so e.g. AGGREGATE_RESULTS cannot run until all EXTRACT_KPIS
+# outputs are confirmed on disk.
+_STEP_DEPENDENCIES: dict[str, tuple[StepInputs, StepOutputs]] = {
+    "GENERATE_LHS_SAMPLES": (
+        StepInputs(),
+        StepOutputs(produced=("samples.json",)),
+    ),
+    "PREFLIGHT_RUN_MODEL": (
+        StepInputs(required=("template_sim_package",)),
+        StepOutputs(produced=("preflight_OK",)),
+    ),
+    "APPLY_PARAMETERS": (
+        StepInputs(required=("template_sim_package", "samples.json")),
+        StepOutputs(produced=("apply/*/",)),
+    ),
+    "RUN_OPENSTUDIO_SIM": (
+        StepInputs(required_patterns=("apply/*/",)),
+        StepOutputs(produced=("work/sim/*/",)),
+    ),
+    "EXTRACT_KPIS": (
+        StepInputs(required_patterns=("work/sim/*/",)),
+        StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
+    ),
+    "AGGREGATE_RESULTS": (
+        StepInputs(
+            required_patterns=(),
+            count=None,  # verified via kpi_files argument
+        ),
+        StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
+    ),
+    "GENERATE_BASIC_PLOTS": (
+        StepInputs(required=("aggregated_results.csv",)),
+        StepOutputs(produced=("plots/",)),
+    ),
+}
+
+
 class _CancelRegistry:
     """Global registry holding the currently-running Campaign for signal handling.
 
@@ -467,6 +532,46 @@ class Campaign:
         if quota is not None and quota.max_concurrent_samples is not None:
             return min(self.max_workers, quota.max_concurrent_samples)
         return self.max_workers
+
+    def _verify_step_inputs(self, step_name: str) -> None:
+        """Verify all required inputs for *step_name* are present before running.
+
+        This is the cross-step data dependency check for issue #850.
+        Checks that every file described in ``_STEP_DEPENDENCIES[step_name]``
+        actually exists on disk.  Raises ``FileNotFoundError`` if any
+        required input is missing, preventing a step from running against
+        an incomplete or stale set of upstream outputs.
+
+        Also validates that the expected number of fan-out files are present
+        when a ``count`` expectation is declared (e.g. all N KPI files exist
+        before AGGREGATE_RESULTS runs).
+        """
+        if step_name not in _STEP_DEPENDENCIES:
+            return
+
+        inputs, outputs = _STEP_DEPENDENCIES[step_name]
+
+        # Check exact-file requirements.
+        for rel_path in inputs.required:
+            abs_path = self.cfg.work_dir / rel_path
+            if not abs_path.is_file():
+                raise FileNotFoundError(
+                    f"Step {step_name!r} requires input {rel_path!r} "
+                    f"(resolved to {abs_path}) which was not found. "
+                    f"Ensure all upstream steps completed successfully."
+                )
+
+        # Check glob-pattern requirements — ALL patterns must match at least one file.
+        for pattern in inputs.required_patterns:
+            matches = sorted(
+                (self.cfg.work_dir / pattern.replace("*", "SAMPLE")).parent.glob(pattern)
+            )
+            if not matches:
+                raise FileNotFoundError(
+                    f"Step {step_name!r} requires at least one file matching "
+                    f"pattern {pattern!r} in {self.cfg.work_dir}, but none were found. "
+                    f"Ensure all upstream steps completed successfully."
+                )
 
     def _compute_code_hashes(self) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
@@ -3937,6 +4042,17 @@ class Campaign:
 
         if self._check_cancel_requested():
             raise KeyboardInterrupt("cancellation requested before AGGREGATE_RESULTS")
+
+        # Cross-step data dependency check (issue #850): verify all KPI files
+        # are present before aggregating. This prevents AGGREGATE_RESULTS from
+        # running against a stale or incomplete set of upstream outputs.
+        self._verify_step_inputs("AGGREGATE_RESULTS")
+        for kpi_file in kpi_files:
+            if not kpi_file.is_file():
+                raise FileNotFoundError(
+                    f"AGGREGATE_RESULTS requires KPI file {kpi_file} which was not found. "
+                    f"Ensure all EXTRACT_KPIS samples completed successfully."
+                )
 
         sim_dirs = list(simulated.values())
         inputs_hash = sha256_of_dict(
