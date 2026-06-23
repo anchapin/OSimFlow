@@ -1495,12 +1495,25 @@ def generate_plots(
         cmd.extend(["--baseline_sample_id", baseline_sample_id])
     if pareto_dir is not None:
         cmd.extend(["--pareto_dir", str(pareto_dir)])
+
+    # Ensure osimflow is importable in the subprocess (issue #876)
+    # Add the project root (parent of osimflow package) to PYTHONPATH
+    env = os.environ.copy()
+    project_root = Path(__file__).resolve().parent.parent
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        str(project_root)
+        if not existing_pythonpath
+        else f"{project_root}{os.pathsep}{existing_pythonpath}"
+    )
+
     try:
         subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
             cmd,
             check=True,
             capture_output=True,
             text=True,
+            env=env,
         )
     except subprocess.CalledProcessError as e:
         log.error("generate_plots failed: %s", e.stderr)
