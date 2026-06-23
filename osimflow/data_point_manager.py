@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -147,12 +149,34 @@ class DataPointManager:
                 log.warning("Corrupt data_points.json, starting fresh: %s", exc)
                 self._data_points = {}
 
-    def _save(self) -> None:
+    def _exclusive_lock(self, fh: Any) -> None:
+        if sys.platform == "win32":
+            import msvcrt  # noqa: PLC0415
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+
+    def _release_lock(self, fh: Any) -> None:
+        if sys.platform == "win32":
+            import msvcrt  # noqa: PLC0415
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0)
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+    def _save_atomic(self) -> None:
         self.outdir.mkdir(parents=True, exist_ok=True)
         (self.outdir / ".osimflow").mkdir(parents=True, exist_ok=True)
-        self._state_file.write_text(
-            json.dumps({sid: dp.to_dict() for sid, dp in self._data_points.items()}, indent=2)
-        )
+        tmp = self.outdir / ".osimflow" / f".tmp.{uuid.uuid4().hex}"
+        try:
+            tmp.write_text(
+                json.dumps({sid: dp.to_dict() for sid, dp in self._data_points.items()}, indent=2)
+            )
+            os.rename(tmp, self._state_file)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
 
     # -------------------------------------------------------------------------
     # CRUD
@@ -181,7 +205,7 @@ class DataPointManager:
                 updated_at=now,
             )
             self._data_points[sample_id] = dp
-        self._save()
+        self._save_atomic()
         return dp
 
     def get(self, sample_id: str) -> DataPoint | None:
@@ -214,7 +238,7 @@ class DataPointManager:
         dp = self._data_points[sample_id]
         dp.seed_model = str(path)
         dp.updated_at = time.time()
-        self._save()
+        self._save_atomic()
         return dp
 
     def with_weather_file(self, sample_id: str, path: Path) -> DataPoint:
@@ -239,7 +263,7 @@ class DataPointManager:
         dp = self._data_points[sample_id]
         dp.weather_file = str(path)
         dp.updated_at = time.time()
-        self._save()
+        self._save_atomic()
         return dp
 
     def list_all(self) -> list[DataPoint]:
@@ -271,8 +295,6 @@ class DataPointManager:
         where registration may not have occurred yet.
         """
         if sample_id not in self._data_points:
-            # Auto-register if not found — work_dir will be set properly
-            # if/when the sample is re-registered with real path info.
             self.register(sample_id)
         dp = self._data_points[sample_id]
         dp.status = status
@@ -281,7 +303,7 @@ class DataPointManager:
             dp.completed_at = time.time()
         if error_summary:
             dp.error_summary = error_summary
-        self._save()
+        self._save_atomic()
         return dp
 
     def cancel(self, sample_id: str) -> DataPoint:
@@ -293,14 +315,14 @@ class DataPointManager:
         dp = self._data_points[sample_id]
         dp.priority = priority
         dp.updated_at = time.time()
-        self._save()
+        self._save_atomic()
         return dp
 
     def unregister(self, sample_id: str) -> None:
         """Remove a data point from tracking (does not delete work_dir)."""
         if sample_id in self._data_points:
             del self._data_points[sample_id]
-            self._save()
+            self._save_atomic()
 
     # -------------------------------------------------------------------------
     # Reanalysis (#420)
@@ -369,7 +391,7 @@ class DataPointManager:
                             weather_file=original.weather_file,
                         )
                         self._data_points[new_id] = new_dp
-                        self._save()
+                        self._save_atomic()
                         return new_dp
                     finally:
                         if sys.platform == "win32":
@@ -405,36 +427,58 @@ class DataPointManager:
         if not source_ids:
             raise ValueError("merge requires at least one source_id")
 
-        for sid in source_ids:
-            if sid not in self._data_points:
-                raise KeyError(f"Unknown data point: {sid!r}")
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        (self.outdir / ".osimflow").mkdir(parents=True, exist_ok=True)
+        if not self._state_file.exists():
+            self._state_file.write_text("{}")
 
-        # Register or update target
-        if target_id in self._data_points:
-            target = self._data_points[target_id]
-            target.status = DataPointStatus.MERGED
-            target.merged_from = list(source_ids)
-            target.updated_at = time.time()
-        else:
-            target = DataPoint(
-                sample_id=target_id,
-                status=DataPointStatus.MERGED,
-                work_dir=target_work_dir,
-                merged_from=list(source_ids),
-                created_at=time.time(),
-                updated_at=time.time(),
-            )
-            self._data_points[target_id] = target
+        MAX_RETRIES = 5
+        for attempt in range(MAX_RETRIES):
+            try:
+                fh = self._state_file.open("r")
+                try:
+                    self._exclusive_lock(fh)
+                    try:
+                        self._load()
 
-        # Mark all sources as merged_into target
-        for sid in source_ids:
-            dp = self._data_points[sid]
-            dp.status = DataPointStatus.MERGED
-            dp.merged_into = target_id
-            dp.updated_at = time.time()
+                        for sid in source_ids:
+                            if sid not in self._data_points:
+                                raise KeyError(f"Unknown data point: {sid!r}")
 
-        self._save()
-        return target
+                        if target_id in self._data_points:
+                            target = self._data_points[target_id]
+                            target.status = DataPointStatus.MERGED
+                            target.merged_from = list(source_ids)
+                            target.updated_at = time.time()
+                        else:
+                            target = DataPoint(
+                                sample_id=target_id,
+                                status=DataPointStatus.MERGED,
+                                work_dir=target_work_dir,
+                                merged_from=list(source_ids),
+                                created_at=time.time(),
+                                updated_at=time.time(),
+                            )
+                            self._data_points[target_id] = target
+
+                        for sid in source_ids:
+                            dp = self._data_points[sid]
+                            dp.status = DataPointStatus.MERGED
+                            dp.merged_into = target_id
+                            dp.updated_at = time.time()
+
+                        self._save_atomic()
+                        return target
+                    finally:
+                        self._release_lock(fh)
+                finally:
+                    fh.close()
+            except OSError:
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
+        raise RuntimeError("Unexpected exit from merge retry loop")
 
     def get_merge_graph(self) -> dict[str, list[str]]:
         """Return a dict mapping each non-merged data point to its sources."""
@@ -454,13 +498,35 @@ class DataPointManager:
         Args:
             priority_updates: dict mapping sample_id -> new priority
         """
-        for sid, prio in priority_updates.items():
-            if sid in self._data_points:
-                dp = self._data_points[sid]
-                if dp.status == DataPointStatus.PENDING:
-                    dp.priority = prio
-                    dp.updated_at = time.time()
-        self._save()
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        (self.outdir / ".osimflow").mkdir(parents=True, exist_ok=True)
+        if not self._state_file.exists():
+            self._state_file.write_text("{}")
+
+        MAX_RETRIES = 5
+        for attempt in range(MAX_RETRIES):
+            try:
+                fh = self._state_file.open("r")
+                try:
+                    self._exclusive_lock(fh)
+                    try:
+                        self._load()
+                        for sid, prio in priority_updates.items():
+                            if sid in self._data_points:
+                                dp = self._data_points[sid]
+                                if dp.status == DataPointStatus.PENDING:
+                                    dp.priority = prio
+                                    dp.updated_at = time.time()
+                        self._save_atomic()
+                    finally:
+                        self._release_lock(fh)
+                finally:
+                    fh.close()
+            except OSError:
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
 
     def summary(self) -> dict[str, int]:
         """Return a count summary by status."""
