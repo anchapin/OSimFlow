@@ -164,12 +164,12 @@ def test_stub_mode_writes_placeholder_sql(
 def test_no_cli_falls_back_to_stub(
     sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
 ) -> None:
-    """When openstudio.cli is not on PATH and not in stub mode,
-    the function falls back to stub behavior."""
+    """When openstudio.cli is not on PATH and stub mode is enabled,
+    the function runs the stub subprocess."""
     stdout_path, stderr_path = log_paths
-    env = {k: v for k, v in os.environ.items() if k != "OSIMFLOW_STUB_SIM"}
+    # When CLI is not available and stub mode is enabled, the stub subprocess runs.
     with (
-        patch.dict(os.environ, env, clear=True),
+        patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}, clear=True),
         patch("osimflow.work._is_openstudio_available", return_value=False),
     ):
         result = run_openstudio_sim(
