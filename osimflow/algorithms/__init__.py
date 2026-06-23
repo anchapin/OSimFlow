@@ -624,6 +624,11 @@ def _sample_independent(
 
     return lhs_samples
 
+    for var_def in discrete_vars:
+        _apply_discrete_var(lhs_samples, var_def, n_samples, seed)
+
+    return lhs_samples
+
 
 def _resolve_conditional(
     samples: list[dict[str, Any]],
