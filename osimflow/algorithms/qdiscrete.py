@@ -38,11 +38,14 @@ import logging
 import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
-from osimflow.algorithms import BaseAlgorithm
+if TYPE_CHECKING:
+    from osimflow.algorithms import BaseAlgorithm
+
+from osimflow.algorithms import BaseAlgorithm  # noqa: E402
 
 log = logging.getLogger("osimflow.algorithms.qdiscrete")
 
