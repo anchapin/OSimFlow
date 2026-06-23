@@ -192,12 +192,11 @@ def test_byos_apply_script_consumed_by_campaign(
 import json
 from pathlib import Path
 
-def apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path) -> Path:
-    out_dir = out / sample_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "byos_ran.txt").write_text(f"sid={sample_id} params={parameters}")
-    (out_dir / "model.osm").write_text(json.dumps({"attributes": {}}))
-    return out_dir
+def apply_parameters(sim_dir: Path, variables: dict) -> Path:
+    sim_dir.mkdir(parents=True, exist_ok=True)
+    (sim_dir / "byos_ran.txt").write_text(f"params={variables}")
+    (sim_dir / "model.osm").write_text(json.dumps({"attributes": {}}))
+    return sim_dir
 """
     )
 
@@ -214,11 +213,10 @@ def apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3))
     campaign.run()
 
-    for sample_dir in outdir.glob("work/apply/*/*"):
+    for sample_dir in outdir.glob("work/apply/*"):
         sentinel = sample_dir / "byos_ran.txt"
         assert sentinel.is_file(), f"BYOS sentinel missing in {sample_dir}"
         text = sentinel.read_text()
-        assert "sid=" in text
         assert "params=" in text
 
     assert (outdir / "aggregated_results.csv").is_file()

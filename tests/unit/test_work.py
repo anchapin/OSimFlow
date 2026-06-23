@@ -91,7 +91,10 @@ class TestDefaultApplyParameters:
                 raise ImportError("No module named 'openstudio'")
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", side_effect=fake_import):
+        with (
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+        ):
             with pytest.raises(RuntimeError, match="OpenStudio Python bindings are not installed"):
                 default_apply_parameters(template_pkg, {"heating_setpoint": 20.0})
 
@@ -106,7 +109,10 @@ class TestDefaultApplyParameters:
                 return mock_openstudio
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", side_effect=fake_import):
+        with (
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+        ):
             with pytest.raises(FileNotFoundError, match="model.osm not found"):
                 default_apply_parameters(template_pkg, {"heating_setpoint": 20.0})
 
@@ -123,7 +129,10 @@ class TestDefaultApplyParameters:
                 return mock_openstudio
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", side_effect=fake_import):
+        with (
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+        ):
             with pytest.raises(RuntimeError, match="OpenStudio failed to load model"):
                 default_apply_parameters(template_pkg, {"heating_setpoint": 20.0})
 
@@ -144,9 +153,12 @@ class TestDefaultApplyParameters:
                 return mock_openstudio
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", side_effect=fake_import):
-            with patch("osimflow.work._apply_osm_mutations") as mock_mutate:
-                result = default_apply_parameters(template_pkg, {"lighting_power_density": 10.0})
+        with (
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+            patch("osimflow.work._apply_osm_mutations") as mock_mutate,
+        ):
+            result = default_apply_parameters(template_pkg, {"lighting_power_density": 10.0})
 
         assert result is None
         mock_openstudio.openstudiomodelcore.Model.load.assert_called_once_with(str(osm_path))
@@ -177,10 +189,13 @@ class TestDefaultApplyParameters:
                 return mock_openstudio
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", side_effect=fake_import):
-            with patch("osimflow.work._apply_osm_mutations", side_effect=mutation_error):
-                with pytest.raises(OSMAttributeError, match="Cannot resolve SpaceType"):
-                    default_apply_parameters(template_pkg, {"lighting_power_density": 10.0})
+        with (
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+            patch("osimflow.work._apply_osm_mutations", side_effect=mutation_error),
+        ):
+            with pytest.raises(OSMAttributeError, match="Cannot resolve SpaceType"):
+                default_apply_parameters(template_pkg, {"lighting_power_density": 10.0})
 
 
 # ===========================================================================
