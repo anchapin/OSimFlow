@@ -158,6 +158,16 @@ class BaseExecutor(abc.ABC):
         """
         return total
 
+    def get_bounded_fanout_chunk_size(self, total: int) -> int:
+        """Return the bounded chunk size; delegates to fanout_submit_chunk_size.
+
+        This method exists so NomadExecutor can expose a
+        fanout_submit_chunk_size property without losing the bounded
+        computation. Subclasses that override fanout_submit_chunk_size
+        should not need to override this.
+        """
+        return self.fanout_submit_chunk_size(total)
+
     def fanout_submit_interval_s(self) -> float:
         """Return the per-submit pacing interval for fan-out submission.
 

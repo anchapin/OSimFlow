@@ -168,7 +168,8 @@ def main():
     # Deserialize Path arguments back from strings.
     # The BYOS contract specifies:
     #   apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path) -> Path
-    #   extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path
+    #   extract_kpis(simulation_dir: Path, sample_id: str, out: Path, **kwargs) -> Path
+    #     (accepts optional keyword args such as openstudio_version: str | None)
     # So positions 0 and -1 (or 3 for apply_parameters) are Path-like.
     deserialized = []
     for i, arg in enumerate(positional_args):

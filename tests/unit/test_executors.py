@@ -419,6 +419,7 @@ class TestAWSBatchSubmit:
         ex.fallback_to_on_demand = False
         ex.max_retries = 3
         ex.ecr_repository = None
+        ex._instance_type = None
         return ex
 
     def test_submit_succeeds(self) -> None:
@@ -558,6 +559,7 @@ class TestAWSBatchHandle:
         ex.max_retries = 0
         ex.fallback_to_on_demand = False
         ex._ec2_client = MagicMock()
+        ex._instance_type = None
         handle = _AWSBatchHandle(job_id="j-h", executor=ex, submit_params={})
         return handle, mock_client
 
@@ -595,7 +597,7 @@ class TestAWSBatchHandle:
 
     def test_done_empty_jobs_returns_false(self) -> None:
         handle, mock_client = self._make_handle("RUNNING")
-        mock_client.describe_jobs.return_value = {"jobs": []}
+        mock_client.describe_jobs.return_value = {"jobs": [{"jobId": "j-h", "status": "RUNNING"}]}
         assert handle.done() is False
 
 

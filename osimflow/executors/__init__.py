@@ -1776,6 +1776,11 @@ class NomadExecutor(BaseExecutor):
             return total
         return min(total, max(1, chunk))
 
+    @property
+    def fanout_submit_rate_per_sec(self) -> float | None:
+        """Return the fan-out submit rate in submissions per second."""
+        return self._fanout_submit_rate_per_sec
+
     def fanout_submit_interval_s(self) -> float:
         """Return the per-submit pacing interval for Nomad fan-out submission."""
         rate = self._fanout_submit_rate_per_sec

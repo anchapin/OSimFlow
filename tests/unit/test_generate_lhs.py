@@ -128,13 +128,13 @@ class TestApplyDistribution:
         assert val >= 0.0
 
     def test_exponential_scale(self) -> None:
-        # exponential with rate=10 → scale=10 → mean=10.
-        # PPF(0.6321...) ≈ scale ≈ 10 for an exponential.
+        # exponential with rate=10 → mean = 1/rate = 0.1.
+        # PPF(0.6321...) = -ln(1-u)/rate = -ln(exp(-1))/10 = 1/10 = 0.1
         import math
 
         u = 1 - math.exp(-1)  # ≈ 0.6321
         val = _apply_distribution(u, "exponential", {"rate": 10.0})
-        assert val == pytest.approx(10.0, rel=0.01)
+        assert val == pytest.approx(0.1, rel=0.01)
 
     def test_unsupported_raises_valueerror(self) -> None:
         with pytest.raises(ValueError, match="unsupported distribution.*'weibull'"):

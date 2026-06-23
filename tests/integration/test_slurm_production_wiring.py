@@ -451,6 +451,7 @@ def test_build_executor_propagates_slurm_advanced_flags() -> None:
         slurm_qos = "high"
         slurm_constraint = "gpu"
         slurm_gres = "gpu:1"
+        resource_quota = None
 
     with patch("osimflow.__main__.SlurmExecutor") as mock_cls:
         mock_cls.return_value.name = "slurm"

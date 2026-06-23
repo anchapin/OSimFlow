@@ -59,7 +59,7 @@ def custom_kpi_extractor_file(workdir: Path) -> Path:
         "import json\n"
         "import random\n"
         "\n"
-        "def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:\n"
+        "def extract_kpis(simulation_dir: Path, sample_id: str, out: Path, **kwargs) -> Path:\n"
         "    out.mkdir(parents=True, exist_ok=True)\n"
         "    kpi_path = out / f'kpi_{sample_id}.json'\n"
         "    x = 0.5 + 0.3 * (hash(sample_id) % 1000) / 1000.0\n"
