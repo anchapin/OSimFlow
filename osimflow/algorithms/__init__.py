@@ -38,6 +38,7 @@ import bisect
 import json
 import logging
 import math
+from collections.abc import Callable
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
@@ -364,34 +365,53 @@ class AlgorithmRegistry:
 # ======================================================================
 
 
-def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float | dict[str, Any]:
+def _apply_distribution(
+    u: float,
+    dist: str
+    | type[scipy.stats.rv_continuous]
+    | type[scipy.stats.rv_discrete]
+    | scipy.stats.rv_continuous
+    | scipy.stats.rv_discrete,
+    params: dict[str, Any],
+) -> float | dict[str, Any]:
     """Map a unit-sample value *u* ∈ [0, 1] through the named distribution PPF.
 
     This is the same logic that lives in ``bin/generate_lhs.py``.  The
     inline copy avoids a subprocess call so the algorithm can run
     directly inside the executor's work function if desired.
 
+    *dist* can be:
+    - A string distribution name (e.g. ``"uniform"``, ``"normal"``).
+    - A ``scipy.stats`` distribution *class* (e.g. ``scipy.stats.norm``).
+    - A ``scipy.stats`` distribution *instance* (e.g. ``scipy.stats.norm(0, 1)``).
+
     When *params* contains a ``pmf`` key for ``discrete`` or ``categorical``
     distributions, inverse-CDF (qdiscrete) weighted sampling is used instead
     of equal-probability sampling, matching R's DoE.base qdiscrete behaviour.
     """
-    if dist == "uniform":
-        return float(params["min"] + u * (params["max"] - params["min"]))
+    # ── scipy.stats distribution objects ────────────────────────────────────
+    if isinstance(dist, type) and issubclass(
+        dist, (scipy.stats.rv_continuous, scipy.stats.rv_discrete)
+    ):
+        if issubclass(dist, scipy.stats.rv_discrete):
+            raise NotImplementedError(
+                "Discrete scipy.stats distribution classes require an explicit "
+                "'values' list in params for inverse-CDF sampling"
+            )
+        return float(dist.ppf(u))  # type: ignore[attr-defined]
+    if isinstance(dist, scipy.stats.rv_continuous):
+        return float(dist.ppf(u))
+    if isinstance(dist, scipy.stats.rv_discrete):
+        raise NotImplementedError(
+            "Discrete scipy.stats distribution instances require an explicit "
+            "'values' list in params for inverse-CDF sampling"
+        )
 
-    if dist == "lognormal":
-        return float(scipy.stats.lognorm.ppf(u, s=params["sigma"], scale=math.exp(params["mean"])))
+    # ── string distribution names ───────────────────────────────────────────
+    dist_str: str = str(dist)
 
-    if dist == "normal":
-        return float(scipy.stats.norm.ppf(u, loc=params["mean"], scale=params["sigma"]))
-
-    if dist == "triangular":
-        left = params["min"]
-        right = params["max"]
-        mode = params.get("mode")
-        c = (mode - left) / (right - left) if mode is not None else 0.5
-        return float(scipy.stats.triang.ppf(u, c, loc=left, scale=right - left))
-
-    if dist in ("discrete", "categorical"):
+    # Discrete/categorical handled inline (complex PMF logic).
+    if dist_str in ("discrete", "categorical"):
         pmf = params.get("pmf")
         values_list: list[Any] = params["values"]
         uniform_idx = int(round(u * (len(values_list) - 1)))
@@ -405,31 +425,60 @@ def _apply_distribution(u: float, dist: str, params: dict[str, Any]) -> float | 
             chosen_idx = min(chosen_idx, len(pmf_values) - 1)
         return values_list[chosen_idx] if pmf is None else pmf_values[chosen_idx]  # type: ignore[no-any-return]
 
-    if dist == "conditional":
+    if dist_str == "conditional":
         raise NotImplementedError("conditional distributions require dependency resolution")
 
-    # Beta / gamma / exponential share a common pattern — build shape
-    # params lazily so we never touch keys for the *wrong* distribution.
-    if dist == "beta":
-        ppf_params = {"a": params["alpha"], "b": params["beta"]}
-    elif dist == "gamma":
-        ppf_params = {"a": params["alpha"]}
-    elif dist == "exponential":
-        ppf_params = {"scale": params["rate"]}
-    else:
-        raise NotImplementedError(f"unsupported distribution: {dist!r}")
+    # Dispatch table for continuous string distributions.
+    def _ppf_uniform() -> float:
+        return float(params["min"] + u * (params["max"] - params["min"]))
 
-    # scipy dist objects keyed by name.
-    _scipy_dist = {
-        "beta": scipy.stats.beta,
-        "gamma": scipy.stats.gamma,
-        "exponential": scipy.stats.expon,
+    def _ppf_lognormal() -> float:
+        return float(scipy.stats.lognorm.ppf(u, s=params["sigma"], scale=math.exp(params["mean"])))
+
+    def _ppf_normal() -> float:
+        return float(scipy.stats.norm.ppf(u, loc=params["mean"], scale=params["sigma"]))
+
+    def _ppf_triangular() -> float:
+        left = params["min"]
+        right = params["max"]
+        mode = params.get("mode")
+        c = (mode - left) / (right - left) if mode is not None else 0.5
+        return float(scipy.stats.triang.ppf(u, c, loc=left, scale=right - left))
+
+    def _ppf_beta() -> float:
+        ppf_params = {
+            "a": params["alpha"],
+            "b": params["beta"],
+            "loc": params.get("loc", 0.0),
+            "scale": params.get("scale", 1.0),
+        }
+        return float(scipy.stats.beta.ppf(u, **ppf_params))
+
+    def _ppf_gamma() -> float:
+        ppf_params = {
+            "a": params["alpha"],
+            "loc": params.get("loc", 0.0),
+            "scale": params.get("scale", 1.0),
+        }
+        return float(scipy.stats.gamma.ppf(u, **ppf_params))
+
+    def _ppf_exponential() -> float:
+        return float(scipy.stats.expon.ppf(u, scale=params["rate"]))
+
+    _str_dispatch: dict[str, Callable[[], float]] = {
+        "uniform": _ppf_uniform,
+        "lognormal": _ppf_lognormal,
+        "normal": _ppf_normal,
+        "triangular": _ppf_triangular,
+        "beta": _ppf_beta,
+        "gamma": _ppf_gamma,
+        "exponential": _ppf_exponential,
     }
-    if dist in ("beta", "gamma"):
-        ppf_params["loc"] = params.get("loc", 0.0)
-        ppf_params["scale"] = params.get("scale", 1.0)
 
-    return float(_scipy_dist[dist].ppf(u, **ppf_params))
+    if dist_str not in _str_dispatch:
+        raise NotImplementedError(f"unsupported distribution: {dist_str!r}")
+
+    return _str_dispatch[dist_str]()
 
 
 def _normalise_var_list(raw: Any) -> list[dict[str, Any]]:
@@ -458,6 +507,48 @@ def _partition_variables(
         else:
             independent.append(var_def)
     return independent, conditional
+
+
+def _partition_var_types(
+    var_list: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split *var_list* into (discrete, continuous) by distribution type."""
+    discrete: list[dict[str, Any]] = []
+    continuous: list[dict[str, Any]] = []
+    for v in var_list:
+        dist = str(v.get("distribution", "uniform"))
+        if dist in ("discrete", "categorical"):
+            discrete.append(v)
+        else:
+            continuous.append(v)
+    return discrete, continuous
+
+
+def _apply_discrete_var(
+    lhs_samples: list[dict[str, Any]],
+    var_def: dict[str, Any],
+    n_samples: int,
+    seed: int | None,
+) -> None:
+    """Draw discrete/categorical samples and merge into *lhs_samples* in-place."""
+    var_name = var_def["name"]
+    params = {k: v for k, v in var_def.items() if k not in ("distribution", "name")}
+    pmf = params.get("pmf")
+    values_list: list[Any] = params.get("values", [])
+
+    if pmf is not None:
+        drawn = qdiscrete(pmf, n=n_samples, seed=seed)
+        for i, sample in enumerate(lhs_samples):
+            sample["values"][var_name] = drawn[i]
+    elif values_list:
+        uniform_pmf = {v: 1.0 for v in values_list}
+        drawn = qdiscrete(uniform_pmf, n=n_samples, seed=seed)
+        for i, sample in enumerate(lhs_samples):
+            sample["values"][var_name] = drawn[i]
+    else:
+        raise ValueError(
+            f"discrete variable '{var_name}' requires either a 'pmf' or a 'values' list"
+        )
 
 
 def _sample_with_engine(
@@ -510,13 +601,25 @@ def _sample_independent(
     n_samples: int,
     seed: int | None,
 ) -> list[dict[str, Any]]:
-    """Run LHS over *independent_vars* and return sample dicts."""
-    return _sample_with_engine(
-        scipy.stats.qmc.LatinHypercube,
-        independent_vars,
-        n_samples,
-        seed,
+    """Run LHS over *independent_vars* and return sample dicts.
+
+    Discrete and categorical variables are sampled via ``qdiscrete``
+    (inverse-CDF) instead of the QMC engine, because QMC stratification
+    over the unit hypercube is designed for continuous distributions and
+    does not produce meaningful stratification over a fixed discrete set.
+    """
+    discrete_vars, continuous_vars = _partition_var_types(independent_vars)
+
+    lhs_samples = (
+        _sample_with_engine(scipy.stats.qmc.LatinHypercube, continuous_vars, n_samples, seed)
+        if continuous_vars
+        else [{"sample_id": f"{i + 1:04d}", "values": {}} for i in range(n_samples)]
     )
+
+    for var_def in discrete_vars:
+        _apply_discrete_var(lhs_samples, var_def, n_samples, seed)
+
+    return lhs_samples
 
 
 def _resolve_conditional(
