@@ -493,6 +493,14 @@ def _set_osm_attribute(
                 setter(obj, value)
                 return
             except Exception as exc:
+                log.error(
+                    "Failed to set %s.%s=%r: %s",
+                    object_type,
+                    attribute,
+                    value,
+                    exc,
+                    exc_info=True,
+                )
                 raise OSMAttributeError(
                     f"Failed to set {object_type}.{attribute}={value!r}: {exc}"
                 ) from exc
