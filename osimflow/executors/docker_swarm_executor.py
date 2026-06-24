@@ -165,23 +165,30 @@ class DockerSwarmExecutor(BaseExecutor):
     because services persist after their tasks complete, allowing the
     Campaign to query status even after the initial task has finished.
 
-    When Docker is unavailable or the daemon is not in Swarm mode, the
-    executor falls back to a `LocalExecutor` with a warning log message.
-    This behaviour lets campaigns proceed in development/CI environments
-    where Docker Swarm is not available.
+    **Fail-dense by default**: when Docker is unavailable or the daemon is
+    not in Swarm mode, ``submit()`` raises a ``RuntimeError`` instead of
+    silently falling back to ``LocalExecutor``. This prevents BYOS scripts
+    from running in the orchestrator process without an explicit opt-in.
 
-    Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
-    Docker resource limits. Per-sample `OSIMFLOW_OS_VERSION` and
-    `OSIMFLOW_CONTAINER` are carried as service labels — the same env
-    vars `SlurmExecutor` and `AWSBatchExecutor` export, so downstream
+    Dev/CI fallback is available via the ``OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1``
+    environment variable. When set, the executor falls back to a
+    ``LocalExecutor(max_workers=4)`` with a warning, letting campaigns
+    proceed in development/CI environments where Docker Swarm is not
+    available. The ``Campaign`` also sets ``OSIMFLOW_DOCKER_SWARM_DRY_RUN=1``
+    during ``--dry-run`` execution so the fallback is available there too.
+
+    Resource directives (``cpus``, ``memory_mb``, ``time_min``) are mapped to
+    Docker resource limits. Per-sample ``OSIMFLOW_OS_VERSION`` and
+    ``OSIMFLOW_CONTAINER`` are carried as service labels — the same env
+    vars ``SlurmExecutor`` and ``AWSBatchExecutor`` export, so downstream
     work scripts can be substrate-agnostic.
 
     Security: credentials are sourced from the Docker daemon (mounted
-    socket or `DOCKER_HOST`). The constructor does **not** accept explicit
+    socket or ``DOCKER_HOST``). The constructor does **not** accept explicit
     credentials.
 
-    The `docker` package is lazy-imported inside `__init__` and
-    `_get_client` so the local-executor / slurm-executor paths do not
+    The ``docker`` package is lazy-imported inside ``__init__`` and
+    ``_get_client`` so the local-executor / slurm-executor paths do not
     pay the import cost.
     """
 
@@ -200,6 +207,20 @@ class DockerSwarmExecutor(BaseExecutor):
         self.network = network
         self._client: Any = None
         self._stub_executor: Any = None
+
+    def _is_dev_fallback_enabled(self) -> bool:
+        """Return True when the dev fallback path is explicitly opted in.
+
+        This is set by two mechanisms:
+        - OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1  — general dev/CI opt-in
+        - OSIMFLOW_DOCKER_SWARM_DRY_RUN=1       — dry-run mode signalled by Campaign
+        """
+        import os
+
+        return os.environ.get("OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK", "") not in (
+            "",
+            "0",
+        ) or os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN", "") not in ("", "0")
 
     def _check_docker_available(self) -> bool:
         """Return True if the Docker client can reach a Swarm cluster."""
@@ -436,43 +457,6 @@ class DockerSwarmExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        # Check for stub mode: when Docker is unavailable or not in Swarm mode,
-        # fall back to LocalExecutor so campaigns can still run in dev/CI.
-        if self._stub_executor is not None:
-            # Already verified stub mode — delegate.
-            log.warning(
-                "docker_swarm running in STUB mode (Docker Swarm unavailable) — "
-                "falling back to LocalExecutor. Set OSIMFLOW_DOCKER_SWARM=1 "
-                "to enforce Swarm mode and fail if unavailable."
-            )
-            return cast(
-                Handle,
-                self._stub_executor.submit(
-                    fn,
-                    *args,
-                    name=name,
-                    cpus=cpus,
-                    memory_mb=memory_mb,
-                    time_min=time_min,
-                    container=container,
-                    openstudio_version=openstudio_version,
-                    result_hint=result_hint,
-                    remote_command=remote_command,
-                    result_transport_mode=result_transport_mode,
-                    result_storage_backend=result_storage_backend,
-                    result_storage_bucket=result_storage_bucket,
-                    result_storage_prefix=result_storage_prefix,
-                    result_storage_endpoint=result_storage_endpoint,
-                    variables_json=variables_json,
-                    env=env,
-                    stdout_path=stdout_path,
-                    stderr_path=stderr_path,
-                    max_retries=max_retries,
-                    worker_id=worker_id,
-                    **kwargs,
-                ),
-            )
-
         log.info(
             "docker_swarm submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
             name,
@@ -485,86 +469,95 @@ class DockerSwarmExecutor(BaseExecutor):
         try:
             is_swarm = self._check_docker_available()
         except (ImportError, RuntimeError) as exc:
-            log.warning(
-                "Docker unavailable or not in Swarm mode: %s. Falling back to LocalExecutor.",
-                exc,
-            )
-            # Lazily create the stub executor.
-            from osimflow.executors import LocalExecutor
+            if self._is_dev_fallback_enabled():
+                log.warning(
+                    "Docker unavailable: %s. Falling back to LocalExecutor (dev-fallback mode).",
+                    exc,
+                )
+                from osimflow.executors import LocalExecutor
 
-            if self._stub_executor is None:
-                self._stub_executor = LocalExecutor(max_workers=4)
-            return cast(
-                Handle,
-                self._stub_executor.submit(
-                    fn,
-                    *args,
-                    name=name,
-                    cpus=cpus,
-                    memory_mb=memory_mb,
-                    time_min=time_min,
-                    container=container,
-                    openstudio_version=openstudio_version,
-                    result_hint=result_hint,
-                    remote_command=remote_command,
-                    result_transport_mode=result_transport_mode,
-                    result_storage_backend=result_storage_backend,
-                    result_storage_bucket=result_storage_bucket,
-                    result_storage_prefix=result_storage_prefix,
-                    result_storage_endpoint=result_storage_endpoint,
-                    variables_json=variables_json,
-                    env=env,
-                    stdout_path=stdout_path,
-                    stderr_path=stderr_path,
-                    max_retries=max_retries,
-                    worker_id=worker_id,
-                    **kwargs,
-                ),
-            )
+                if self._stub_executor is None:
+                    self._stub_executor = LocalExecutor(max_workers=4)
+                return cast(
+                    Handle,
+                    self._stub_executor.submit(
+                        fn,
+                        *args,
+                        name=name,
+                        cpus=cpus,
+                        memory_mb=memory_mb,
+                        time_min=time_min,
+                        container=container,
+                        openstudio_version=openstudio_version,
+                        result_hint=result_hint,
+                        remote_command=remote_command,
+                        result_transport_mode=result_transport_mode,
+                        result_storage_backend=result_storage_backend,
+                        result_storage_bucket=result_storage_bucket,
+                        result_storage_prefix=result_storage_prefix,
+                        result_storage_endpoint=result_storage_endpoint,
+                        variables_json=variables_json,
+                        env=env,
+                        stdout_path=stdout_path,
+                        stderr_path=stderr_path,
+                        max_retries=max_retries,
+                        worker_id=worker_id,
+                        **kwargs,
+                    ),
+                )
+            raise RuntimeError(
+                f"Docker daemon is not reachable: {exc}. "
+                "Use --executor local for local execution, or set "
+                "OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1 to fall back to "
+                "LocalExecutor in development/CI environments."
+            ) from exc
 
         if not is_swarm:
-            log.warning(
+            if self._is_dev_fallback_enabled():
+                log.warning(
+                    "Docker daemon is not in Swarm mode. "
+                    "Falling back to LocalExecutor (dev-fallback mode). "
+                    "Initialize Swarm with: docker swarm init"
+                )
+                from osimflow.executors import LocalExecutor
+
+                if self._stub_executor is None:
+                    self._stub_executor = LocalExecutor(max_workers=4)
+                return cast(
+                    Handle,
+                    self._stub_executor.submit(
+                        fn,
+                        *args,
+                        name=name,
+                        cpus=cpus,
+                        memory_mb=memory_mb,
+                        time_min=time_min,
+                        container=container,
+                        openstudio_version=openstudio_version,
+                        result_hint=result_hint,
+                        remote_command=remote_command,
+                        result_transport_mode=result_transport_mode,
+                        result_storage_backend=result_storage_backend,
+                        result_storage_bucket=result_storage_bucket,
+                        result_storage_prefix=result_storage_prefix,
+                        result_storage_endpoint=result_storage_endpoint,
+                        variables_json=variables_json,
+                        env=env,
+                        stdout_path=stdout_path,
+                        stderr_path=stderr_path,
+                        max_retries=max_retries,
+                        worker_id=worker_id,
+                        **kwargs,
+                    ),
+                )
+            raise RuntimeError(
                 "Docker daemon is not in Swarm mode. "
-                "Falling back to LocalExecutor. "
-                "Initialize Swarm with: docker swarm init"
-            )
-            from osimflow.executors import LocalExecutor
-
-            if self._stub_executor is None:
-                self._stub_executor = LocalExecutor(max_workers=4)
-            return cast(
-                Handle,
-                self._stub_executor.submit(
-                    fn,
-                    *args,
-                    name=name,
-                    cpus=cpus,
-                    memory_mb=memory_mb,
-                    time_min=time_min,
-                    container=container,
-                    openstudio_version=openstudio_version,
-                    result_hint=result_hint,
-                    remote_command=remote_command,
-                    result_transport_mode=result_transport_mode,
-                    result_storage_backend=result_storage_backend,
-                    result_storage_bucket=result_storage_bucket,
-                    result_storage_prefix=result_storage_prefix,
-                    result_storage_endpoint=result_storage_endpoint,
-                    variables_json=variables_json,
-                    env=env,
-                    stdout_path=stdout_path,
-                    stderr_path=stderr_path,
-                    max_retries=max_retries,
-                    worker_id=worker_id,
-                    **kwargs,
-                ),
+                "Run `docker swarm init` to initialize a Swarm, "
+                "use --executor local for local execution, "
+                "or set OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1 to fall back to "
+                "LocalExecutor in development/CI environments."
             )
 
-        # Mark that stub mode is confirmed unavailable so future submits
-        # skip the check. Use None (not False) so that shutdown()'s
-        # `hasattr(self._stub_executor, "shutdown")` check correctly
-        # returns False without needing an explicit boolean guard
-        # (hasattr(None, "shutdown") == False naturally). Fixes issue #656.
         self._stub_executor = None
 
         del fn, args  # noqa: ARG002
