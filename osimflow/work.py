@@ -621,7 +621,7 @@ def _apply_parameters_stub(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("apply_params failed for %s: %s", sample_id, e.stderr)
+        log.error("apply_params failed for %s: %s", sample_id, e.stderr or "<empty>")
         raise RuntimeError(
             f"apply_params failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}"
         ) from e
@@ -1123,7 +1123,7 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("generate_lhs failed: %s", e.stderr)
+        log.error("generate_lhs failed: %s", e.stderr or "<empty>")
         raise RuntimeError(f"generate_lhs failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return samples_json
 
@@ -1159,7 +1159,7 @@ def _extract_kpis_impl(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
+        log.error("extract_kpis failed for %s: %s", sample_id, e.stderr or "<empty>")
         raise RuntimeError(
             f"extract_kpis failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}"
         ) from e
@@ -1443,7 +1443,7 @@ def aggregate_results(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("aggregate_results failed: %s", e.stderr)
+        log.error("aggregate_results failed: %s", e.stderr or "<empty>")
         raise RuntimeError(
             f"aggregate_results failed: stdout={e.stdout!r} stderr={e.stderr!r}"
         ) from e
@@ -1498,7 +1498,7 @@ def generate_plots(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("generate_plots failed: %s", e.stderr)
+        log.error("generate_plots failed: %s", e.stderr or "<empty>")
         raise RuntimeError(f"generate_plots failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return sorted(out.glob("*.png")) + sorted(out.glob("*.pdf"))
 
