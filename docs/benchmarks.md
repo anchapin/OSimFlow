@@ -23,9 +23,9 @@ PR and push to `main`, the `bench` GitHub Actions job runs:
 2. **Warm run** — runs the same campaign against the same `${outdir}`
    (so every step is a `HIT`).
 3. Persists the metrics to `${outdir}/benchmarks.json` and uploads
-   the artifact to the `benchmarks-<python-version>` GitHub Actions
-   artifact. The job fails if the cold-cache wall-clock exceeds the
-   configured threshold.
+   the artifact to the `benchmarks-<python-version>.json` GitHub
+   Actions artifact. The job fails if the cold-cache wall-clock
+   exceeds the configured threshold.
 
 The local equivalent is:
 
@@ -108,6 +108,53 @@ The threshold is recorded in the artifact so a future reader can
 re-interpret the verdict without re-running.
 
 ## Adding a new environment to the bench
+
+### Tested environments (issue #949)
+
+The `bench.yml` matrix currently exercises:
+
+- **Python 3.12** on `ubuntu-latest`
+- **Python 3.13** on `ubuntu-latest`
+
+Each matrix entry produces its own artifact —
+`benchmarks-3.12.json` and `benchmarks-3.13.json` — so a
+version-specific regression (e.g. an asyncio or `pathlib`
+behavioural change in 3.13) is isolated from a generic regression
+that affects both.
+
+The cold-cache wall-clock threshold gate
+(`OSIMFLOW_BENCH_THRESHOLD_S`, see *Overriding the threshold*
+above) applies to **both** versions; a failure on either fails the
+`bench` job (`fail-fast: true`).
+
+### Comparing artifacts across versions
+
+To diff benchmark results across Python versions:
+
+1. Open the `bench` workflow run on GitHub Actions
+   (the `bench` job runs on every push to `main` and via
+   `workflow_dispatch`).
+2. Download both `benchmarks-3.12.json` and `benchmarks-3.13.json`
+   from the run's *Artifacts* section.
+3. Compare the timing fields — primarily `cold_wall_s` (the
+   headline regression signal) and, secondarily,
+   `warm_wall_s`, `cold_per_step_s`, and `warm_per_step_s`:
+
+   ```bash
+   # Quick cold-wall diff (requires jq)
+   diff <(jq '{cold_wall_s, warm_wall_s, peak_rss}' benchmarks-3.12.json) \
+        <(jq '{cold_wall_s, warm_wall_s, peak_rss}' benchmarks-3.13.json)
+   ```
+
+   A version-specific regression shows up as a divergence between
+   the two files while a generic regression moves both equally.
+
+### Adding a new Python version or executor
+
+To add a new Python version, append it to the
+`matrix.python-version` list in `.github/workflows/bench.yml` and
+add the matching `"Programming Language :: Python :: <version>"`
+classifier in `pyproject.toml`.
 
 The current bench only exercises the `local` executor. Adding
 `slurm` or `aws_batch` is a future wire-up (issue #10 §*Out of
