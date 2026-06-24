@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "osimflow"
-version = "0.1.0-dev"
+version = "0.1.0"
 description = "Community-driven parametric OpenStudio simulation campaigns"
 readme = "README.md"
 license = {text = "MIT"}

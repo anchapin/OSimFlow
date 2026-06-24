@@ -34,9 +34,14 @@ Development snapshots carry the `-dev` suffix (e.g., `0.1.0-dev`).
    suffix for stable releases, add `-rc.N` for pre-releases).
 3. **CI green**: All required CI checks must pass on `main` before tagging.
 4. **Tag**: Annotated tag with `git tag -a v<version> -m "Release <version>"`.
-5. **Push**: `git push origin main --tags`.
-6. **GitHub Release**: Use the tag to trigger a GitHub Release with the
-   changelog entry text.
+5. **Push the tag**: `git push origin v<version>` (pushing `main` is not
+   required — the `release.yml` workflow triggers on the `v*` tag push alone).
+6. **GitHub Release**: created **automatically** by the `release.yml` workflow
+   via `softprops/action-gh-release@v3` with `generate_release_notes: true`.
+   The maintainer does **not** create the release manually; just monitor
+   https://github.com/anchapin/OSimFlow/actions/workflows/release.yml and
+   verify the release appears at https://github.com/anchapin/OSimFlow/releases
+   with wheel + sdist + `.sigstore` bundle + CycloneDX SBOM attached.
 7. **Announce**: Post a brief note in the project's discussion forum / mailing list.
 
 ### CI-Produced Release Artifacts (issue #954)
