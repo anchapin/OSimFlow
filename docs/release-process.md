@@ -39,6 +39,24 @@ Development snapshots carry the `-dev` suffix (e.g., `0.1.0-dev`).
    changelog entry text.
 7. **Announce**: Post a brief note in the project's discussion forum / mailing list.
 
+### CI-Produced Release Artifacts (issue #954)
+
+The `release` workflow (`.github/workflows/release.yml`) runs automatically on
+every `v*` tag push and produces the following artifacts. **All of these must
+appear on the GitHub Release** (the workflow attaches them automatically — do
+not delete any when editing the release):
+
+| Artifact | Purpose | Mandatory |
+|----------|---------|:---------:|
+| `osimflow-<ver>.whl` + `.tar.gz` | Built wheel + sdist (also published to PyPI) | ✅ |
+| `*.sigstore` | Sigstore keyless signature bundle for each signed artifact | ✅ |
+| `osimflow-<ver>.cdx.json` | **CycloneDX 1.5 Software Bill of Materials** for the wheel | ✅ |
+
+The CycloneDX SBOM is generated with `cyclonedx-py environment` from the freshly
+built wheel **before** Sigstore signing, so the SBOM itself is signed. Downstream
+build-energy teams that pin `osimflow` in reproducible campaigns can use the SBOM
+to audit the transitive dependency surface (PRD §6 #5–6, supply-chain hygiene).
+
 ## Changelog Process
 
 The `CHANGELOG.md` is a **running document** — it is updated in every PR.
