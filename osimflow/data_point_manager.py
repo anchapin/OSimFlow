@@ -19,6 +19,7 @@ from __future__ import annotations
 
 __all__ = ["DataPoint", "DataPointManager", "DataPointStatus"]
 
+import fasteners
 import json
 import os
 import time
@@ -27,8 +28,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
-
-import fasteners
 
 log = __import__("logging").getLogger("osimflow.data_point_manager")
 
@@ -346,55 +345,50 @@ class DataPointManager:
         MAX_RETRIES = 5
         for attempt in range(MAX_RETRIES):
             lock = self._lock()
-            acquired = lock.acquire_lock(timeout=30)
+            acquired = lock.acquire(timeout=30)
             if not acquired:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(0.05 * (attempt + 1))
                     continue
                 raise TimeoutError(f"Could not acquire lock for reanalysis of {sample_id!r}")
             try:
-                fh = self._state_file.open("r")
-                try:
-                    self._load()
+                self._load()
 
-                    original = self._data_points.get(sample_id)
-                    if original is None:
-                        raise KeyError(f"Data point {sample_id!r} not found")
+                original = self._data_points.get(sample_id)
+                if original is None:
+                    raise KeyError(f"Data point {sample_id!r} not found")
 
-                    if original.status not in (
-                        DataPointStatus.COMPLETED,
-                        DataPointStatus.FAILED,
-                    ):
-                        raise ValueError(
-                            f"Cannot reanalysis {sample_id!r}: status is "
-                            f"{original.status.value}, must be completed "
-                            "or failed"
-                        )
-
-                    new_id = f"{sample_id}_reanalyze_{original.reanalyze_count + 1}"
-                    original.reanalyze_count += 1
-                    original.updated_at = time.time()
-
-                    new_dp = DataPoint(
-                        sample_id=new_id,
-                        status=DataPointStatus.PENDING,
-                        priority=original.priority,
-                        work_dir=original.work_dir,
-                        created_at=time.time(),
-                        updated_at=time.time(),
-                        reanalyze_count=0,
-                        original_sample_id=sample_id,
-                        seed_model=original.seed_model,
-                        weather_file=original.weather_file,
+                if original.status not in (
+                    DataPointStatus.COMPLETED,
+                    DataPointStatus.FAILED,
+                ):
+                    raise ValueError(
+                        f"Cannot reanalysis {sample_id!r}: status is "
+                        f"{original.status.value}, must be completed "
+                        "or failed"
                     )
-                    self._data_points[new_id] = new_dp
-                    self._save_atomic()
-                    return new_dp
-                finally:
-                    fh.close()
+
+                new_id = f"{sample_id}_reanalyze_{original.reanalyze_count + 1}"
+                original.reanalyze_count += 1
+                original.updated_at = time.time()
+
+                new_dp = DataPoint(
+                    sample_id=new_id,
+                    status=DataPointStatus.PENDING,
+                    priority=original.priority,
+                    work_dir=original.work_dir,
+                    created_at=time.time(),
+                    updated_at=time.time(),
+                    reanalyze_count=0,
+                    original_sample_id=sample_id,
+                    seed_model=original.seed_model,
+                    weather_file=original.weather_file,
+                )
+                self._data_points[new_id] = new_dp
+                self._save_atomic()
+                return new_dp
             finally:
-                lock.release_lock()
-        raise RuntimeError("Unexpected exit from mark_for_reanalysis retry loop")
+                lock.release()
 
     # -------------------------------------------------------------------------
     # Merging (#418)
@@ -422,50 +416,45 @@ class DataPointManager:
         MAX_RETRIES = 5
         for attempt in range(MAX_RETRIES):
             lock = self._lock()
-            acquired = lock.acquire_lock(timeout=30)
+            acquired = lock.acquire(timeout=30)
             if not acquired:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(0.05 * (attempt + 1))
                     continue
                 raise TimeoutError("Could not acquire lock for merge operation")
             try:
-                fh = self._state_file.open("r")
-                try:
-                    self._load()
+                self._load()
 
-                    for sid in source_ids:
-                        if sid not in self._data_points:
-                            raise KeyError(f"Unknown data point: {sid!r}")
+                for sid in source_ids:
+                    if sid not in self._data_points:
+                        raise KeyError(f"Unknown data point: {sid!r}")
 
-                    if target_id in self._data_points:
-                        target = self._data_points[target_id]
-                        target.status = DataPointStatus.MERGED
-                        target.merged_from = list(source_ids)
-                        target.updated_at = time.time()
-                    else:
-                        target = DataPoint(
-                            sample_id=target_id,
-                            status=DataPointStatus.MERGED,
-                            work_dir=target_work_dir,
-                            merged_from=list(source_ids),
-                            created_at=time.time(),
-                            updated_at=time.time(),
-                        )
-                        self._data_points[target_id] = target
+                if target_id in self._data_points:
+                    target = self._data_points[target_id]
+                    target.status = DataPointStatus.MERGED
+                    target.merged_from = list(source_ids)
+                    target.updated_at = time.time()
+                else:
+                    target = DataPoint(
+                        sample_id=target_id,
+                        status=DataPointStatus.MERGED,
+                        work_dir=target_work_dir,
+                        merged_from=list(source_ids),
+                        created_at=time.time(),
+                        updated_at=time.time(),
+                    )
+                    self._data_points[target_id] = target
 
-                    for sid in source_ids:
-                        dp = self._data_points[sid]
-                        dp.status = DataPointStatus.MERGED
-                        dp.merged_into = target_id
-                        dp.updated_at = time.time()
+                for sid in source_ids:
+                    dp = self._data_points[sid]
+                    dp.status = DataPointStatus.MERGED
+                    dp.merged_into = target_id
+                    dp.updated_at = time.time()
 
-                    self._save_atomic()
-                    return target
-                finally:
-                    fh.close()
+                self._save_atomic()
+                return target
             finally:
-                lock.release_lock()
-        raise RuntimeError("Unexpected exit from merge retry loop")
+                lock.release()
 
     def get_merge_graph(self) -> dict[str, list[str]]:
         """Return a dict mapping each non-merged data point to its sources."""
@@ -493,27 +482,23 @@ class DataPointManager:
         MAX_RETRIES = 5
         for attempt in range(MAX_RETRIES):
             lock = self._lock()
-            acquired = lock.acquire_lock(timeout=30)
+            acquired = lock.acquire(timeout=30)
             if not acquired:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(0.05 * (attempt + 1))
                     continue
                 raise TimeoutError("Could not acquire lock for reorder_pending operation")
             try:
-                fh = self._state_file.open("r")
-                try:
-                    self._load()
-                    for sid, prio in priority_updates.items():
-                        if sid in self._data_points:
-                            dp = self._data_points[sid]
-                            if dp.status == DataPointStatus.PENDING:
-                                dp.priority = prio
-                                dp.updated_at = time.time()
-                    self._save_atomic()
-                finally:
-                    fh.close()
+                self._load()
+                for sid, prio in priority_updates.items():
+                    if sid in self._data_points:
+                        dp = self._data_points[sid]
+                        if dp.status == DataPointStatus.PENDING:
+                            dp.priority = prio
+                            dp.updated_at = time.time()
+                self._save_atomic()
             finally:
-                lock.release_lock()
+                lock.release()
 
     def summary(self) -> dict[str, int]:
         """Return a count summary by status."""
