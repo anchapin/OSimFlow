@@ -302,7 +302,7 @@ class TestSingleSample:
     ) -> None:
         cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=False, sample=0)
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        with pytest.raises(FileNotFoundError, match="samples.json not found"):
+        with pytest.raises(FileNotFoundError, match="(?i)samples.json not found"):
             campaign.run()
 
     def test_index_out_of_range(
@@ -913,7 +913,7 @@ class TestShellHooks:
             init_script=missing,
         )
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        with pytest.raises(FileNotFoundError, match="init script not found"):
+        with pytest.raises(FileNotFoundError, match="(?i)init script not found"):
             campaign.run()
 
     def test_finalize_script_best_effort(
