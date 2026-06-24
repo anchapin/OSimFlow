@@ -927,12 +927,34 @@ disabled reporting), the values will be zero.
 **Fix:** Write a custom KPI extractor (`--custom_kpi_extractor`) that
 queries the correct tables in `eplusout.sql`.
 
+### "Simulations finish in seconds / KPIs are empty (stub mode)"
+
+**Cause:** The real `openstudio.cli` is not on `PATH` (or
+`OSIMFLOW_STUB_SIM=1` is set), so `run_openstudio_sim` falls back to the
+stub — a short sleep that writes a placeholder `eplusout.sql`. The campaign
+reports a green status with no error, but the KPIs are empty because no real
+simulation ran.
+
+**Fix:** Install the OpenStudio CLI (or run inside the `nrel/openstudio`
+container), unset `OSIMFLOW_STUB_SIM`, and verify the real engine is invoked
+with `OSIMFLOW_RUN_REAL_OPENSTUDIO=1`. See AGENTS.md §8 gotcha #11.
+
 ### "ModuleNotFoundError: No module named 'submitit'"
 
 **Cause:** You selected `--executor slurm` without installing the Slurm
 extras.
 
 **Fix:** `pip install "osimflow[slurm]"`
+
+### "Slurm job ran locally / finished instantly"
+
+**Cause:** `SlurmExecutor` defaults to `debug=True` (submitit's
+`DebugExecutor`). Running `--executor slurm` without `--slurm-real` silently
+executes jobs on the local machine instead of submitting to the cluster —
+they finish almost instantly with correct-looking output and no error.
+
+**Fix:** Pass `--slurm-real` in production so jobs are submitted to the real
+Slurm cluster. See AGENTS.md §8 gotcha #10.
 
 ### Second run is not instant (cache not working)
 
