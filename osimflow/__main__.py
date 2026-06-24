@@ -19,7 +19,6 @@ import logging
 import sys
 import threading
 import time
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -3565,17 +3564,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     else:
         executor = _build_executor(args)
     trust_level = ByosTrustLevel(args.byos_trust_level)
-    if trust_level == ByosTrustLevel.INPROCESS:
-        warnings.warn(
-            "BYOS trust level 'inprocess' is a production security concern. "
-            "User scripts run in the orchestrator process with full access to "
-            "memory, credentials, and the filesystem. Only use 'inprocess' in "
-            "trusted development environments. The default 'subprocess' mode "
-            "(issue #908) is recommended for production. "
-            "Set --byos-trust-level=subprocess to silence this warning.",
-            UserWarning,
-            stacklevel=1,
-        )
     byos_resource_limits: dict[str, int] | None = None
     if args.byos_resource_limits:
         try:

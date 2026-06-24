@@ -413,16 +413,6 @@ def load_user_function(
     )
 
     if trust_level == ByosTrustLevel.INPROCESS:
-        warnings.warn(
-            "BYOS trust level 'inprocess' loads user scripts directly into "
-            "the orchestrator process with full access to memory, filesystem, "
-            "and network. This is a security risk in production (issue #908). "
-            "Only use 'inprocess' in trusted development environments. "
-            "The 'subprocess' trust level (default) runs scripts in an isolated "
-            "child process and is recommended for all production deployments.",
-            UserWarning,
-            stacklevel=2,
-        )
         return _load_inprocess(path)
 
     function_name = _discover_function_name(path)

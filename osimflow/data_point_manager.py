@@ -19,10 +19,9 @@ from __future__ import annotations
 
 __all__ = ["DataPoint", "DataPointManager", "DataPointStatus"]
 
-import fcntl
+import fasteners
 import json
 import os
-import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -131,10 +130,12 @@ class DataPointManager:
     """
 
     STATE_FILE = ".osimflow/data_points.json"
+    LOCK_FILE = ".osimflow/data_points.lock"
 
     def __init__(self, outdir: Path) -> None:
         self.outdir = Path(outdir)
         self._state_file = self.outdir / self.STATE_FILE
+        self._lock_file = self.outdir / self.LOCK_FILE
         self._data_points: dict[str, DataPoint] = {}
         self._load()
 
@@ -151,21 +152,14 @@ class DataPointManager:
                 log.warning("Corrupt data_points.json, starting fresh: %s", exc)
                 self._data_points = {}
 
-    def _exclusive_lock(self, fh: Any) -> None:
-        if sys.platform == "win32":
-            import msvcrt  # noqa: PLC0415
+    def _lock(self) -> fasteners.InterProcessLock:
+        """Return an InterProcessLock for the data points state file.
 
-            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-
-    def _release_lock(self, fh: Any) -> None:
-        if sys.platform == "win32":
-            import msvcrt  # noqa: PLC0415
-
-            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0)
-        else:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        Uses a dedicated lock file to avoid conflicts with the state file
+        itself. The lock supports timeout to prevent indefinite blocking if
+        the lock-holder crashes.
+        """
+        return fasteners.InterProcessLock(str(self._lock_file))
 
     def _save_atomic(self) -> None:
         self.outdir.mkdir(parents=True, exist_ok=True)
@@ -350,66 +344,51 @@ class DataPointManager:
 
         MAX_RETRIES = 5
         for attempt in range(MAX_RETRIES):
-            try:
-                fh = self._state_file.open("r")
-                try:
-                    if sys.platform == "win32":
-                        import msvcrt  # noqa: PLC0415
-
-                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
-                    else:
-                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-                    try:
-                        self._load()
-
-                        original = self._data_points.get(sample_id)
-                        if original is None:
-                            raise KeyError(f"Data point {sample_id!r} not found")
-
-                        if original.status not in (
-                            DataPointStatus.COMPLETED,
-                            DataPointStatus.FAILED,
-                        ):
-                            raise ValueError(
-                                f"Cannot reanalysis {sample_id!r}: status is "
-                                f"{original.status.value}, must be completed "
-                                "or failed"
-                            )
-
-                        new_id = f"{sample_id}_reanalyze_{original.reanalyze_count + 1}"
-                        original.reanalyze_count += 1
-                        original.updated_at = time.time()
-
-                        new_dp = DataPoint(
-                            sample_id=new_id,
-                            status=DataPointStatus.PENDING,
-                            priority=original.priority,
-                            work_dir=original.work_dir,
-                            created_at=time.time(),
-                            updated_at=time.time(),
-                            reanalyze_count=0,
-                            original_sample_id=sample_id,
-                            seed_model=original.seed_model,
-                            weather_file=original.weather_file,
-                        )
-                        self._data_points[new_id] = new_dp
-                        self._save_atomic()
-                        return new_dp
-                    finally:
-                        if sys.platform == "win32":
-                            import msvcrt  # noqa: PLC0415
-
-                            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0)
-                        else:
-                            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-                finally:
-                    fh.close()
-            except OSError:
+            lock = self._lock()
+            acquired = lock.acquire(timeout=30)
+            if not acquired:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(0.05 * (attempt + 1))
                     continue
-                raise
-        raise RuntimeError("Unexpected exit from mark_for_reanalysis retry loop")
+                raise TimeoutError(f"Could not acquire lock for reanalysis of {sample_id!r}")
+            try:
+                self._load()
+
+                original = self._data_points.get(sample_id)
+                if original is None:
+                    raise KeyError(f"Data point {sample_id!r} not found")
+
+                if original.status not in (
+                    DataPointStatus.COMPLETED,
+                    DataPointStatus.FAILED,
+                ):
+                    raise ValueError(
+                        f"Cannot reanalysis {sample_id!r}: status is "
+                        f"{original.status.value}, must be completed "
+                        "or failed"
+                    )
+
+                new_id = f"{sample_id}_reanalyze_{original.reanalyze_count + 1}"
+                original.reanalyze_count += 1
+                original.updated_at = time.time()
+
+                new_dp = DataPoint(
+                    sample_id=new_id,
+                    status=DataPointStatus.PENDING,
+                    priority=original.priority,
+                    work_dir=original.work_dir,
+                    created_at=time.time(),
+                    updated_at=time.time(),
+                    reanalyze_count=0,
+                    original_sample_id=sample_id,
+                    seed_model=original.seed_model,
+                    weather_file=original.weather_file,
+                )
+                self._data_points[new_id] = new_dp
+                self._save_atomic()
+                return new_dp
+            finally:
+                lock.release()
 
     # -------------------------------------------------------------------------
     # Merging (#418)
@@ -436,51 +415,46 @@ class DataPointManager:
 
         MAX_RETRIES = 5
         for attempt in range(MAX_RETRIES):
-            try:
-                fh = self._state_file.open("r")
-                try:
-                    self._exclusive_lock(fh)
-                    try:
-                        self._load()
-
-                        for sid in source_ids:
-                            if sid not in self._data_points:
-                                raise KeyError(f"Unknown data point: {sid!r}")
-
-                        if target_id in self._data_points:
-                            target = self._data_points[target_id]
-                            target.status = DataPointStatus.MERGED
-                            target.merged_from = list(source_ids)
-                            target.updated_at = time.time()
-                        else:
-                            target = DataPoint(
-                                sample_id=target_id,
-                                status=DataPointStatus.MERGED,
-                                work_dir=target_work_dir,
-                                merged_from=list(source_ids),
-                                created_at=time.time(),
-                                updated_at=time.time(),
-                            )
-                            self._data_points[target_id] = target
-
-                        for sid in source_ids:
-                            dp = self._data_points[sid]
-                            dp.status = DataPointStatus.MERGED
-                            dp.merged_into = target_id
-                            dp.updated_at = time.time()
-
-                        self._save_atomic()
-                        return target
-                    finally:
-                        self._release_lock(fh)
-                finally:
-                    fh.close()
-            except OSError:
+            lock = self._lock()
+            acquired = lock.acquire(timeout=30)
+            if not acquired:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(0.05 * (attempt + 1))
                     continue
-                raise
-        raise RuntimeError("Unexpected exit from merge retry loop")
+                raise TimeoutError("Could not acquire lock for merge operation")
+            try:
+                self._load()
+
+                for sid in source_ids:
+                    if sid not in self._data_points:
+                        raise KeyError(f"Unknown data point: {sid!r}")
+
+                if target_id in self._data_points:
+                    target = self._data_points[target_id]
+                    target.status = DataPointStatus.MERGED
+                    target.merged_from = list(source_ids)
+                    target.updated_at = time.time()
+                else:
+                    target = DataPoint(
+                        sample_id=target_id,
+                        status=DataPointStatus.MERGED,
+                        work_dir=target_work_dir,
+                        merged_from=list(source_ids),
+                        created_at=time.time(),
+                        updated_at=time.time(),
+                    )
+                    self._data_points[target_id] = target
+
+                for sid in source_ids:
+                    dp = self._data_points[sid]
+                    dp.status = DataPointStatus.MERGED
+                    dp.merged_into = target_id
+                    dp.updated_at = time.time()
+
+                self._save_atomic()
+                return target
+            finally:
+                lock.release()
 
     def get_merge_graph(self) -> dict[str, list[str]]:
         """Return a dict mapping each non-merged data point to its sources."""
@@ -507,28 +481,24 @@ class DataPointManager:
 
         MAX_RETRIES = 5
         for attempt in range(MAX_RETRIES):
-            try:
-                fh = self._state_file.open("r")
-                try:
-                    self._exclusive_lock(fh)
-                    try:
-                        self._load()
-                        for sid, prio in priority_updates.items():
-                            if sid in self._data_points:
-                                dp = self._data_points[sid]
-                                if dp.status == DataPointStatus.PENDING:
-                                    dp.priority = prio
-                                    dp.updated_at = time.time()
-                        self._save_atomic()
-                    finally:
-                        self._release_lock(fh)
-                finally:
-                    fh.close()
-            except OSError:
+            lock = self._lock()
+            acquired = lock.acquire(timeout=30)
+            if not acquired:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(0.05 * (attempt + 1))
                     continue
-                raise
+                raise TimeoutError("Could not acquire lock for reorder_pending operation")
+            try:
+                self._load()
+                for sid, prio in priority_updates.items():
+                    if sid in self._data_points:
+                        dp = self._data_points[sid]
+                        if dp.status == DataPointStatus.PENDING:
+                            dp.priority = prio
+                            dp.updated_at = time.time()
+                self._save_atomic()
+            finally:
+                lock.release()
 
     def summary(self) -> dict[str, int]:
         """Return a count summary by status."""

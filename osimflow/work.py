@@ -28,8 +28,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from ._subprocess_utils import run_subprocess  # neutral location (issue #910)
 from .apply_params import OSMAttributeError
+from .executors import run_subprocess  # local helper (issue #6)
 from .json_utils import safe_json_dumps
 from .storage import ResultStorage
 from .version_detection import VersionDetectionError, detect_openstudio_version
@@ -348,13 +348,6 @@ def default_apply_parameters(
         )
         return
 
-    if _is_stub_mode():
-        log.warning(
-            "default_apply_parameters: OSIMFLOW_STUB_SIM=1 is set; skipping .osm mutation "
-            "(stub mode — no OpenStudio bindings required)"
-        )
-        return
-
     try:
         import openstudio  # noqa: PLC0415
     except ImportError as exc:
@@ -498,6 +491,14 @@ def _set_osm_attribute(
                 setter(obj, value)
                 return
             except Exception as exc:
+                log.error(
+                    "Failed to set %s.%s=%r: %s",
+                    object_type,
+                    attribute,
+                    value,
+                    exc,
+                    exc_info=True,
+                )
                 raise OSMAttributeError(
                     f"Failed to set {object_type}.{attribute}={value!r}: {exc}"
                 ) from exc
@@ -626,7 +627,7 @@ def _apply_parameters_stub(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("apply_params failed for %s: %s", sample_id, e.stderr)
+        log.error("apply_params failed for %s: %s", sample_id, e.stderr or "<empty>")
         raise RuntimeError(
             f"apply_params failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}"
         ) from e
@@ -809,10 +810,17 @@ def _run_openstudio_sim_impl(
     ):
         return sim_out
 
-    use_real_cli = _is_openstudio_available() and not _is_stub_mode()
+    # Determine whether to use the real OpenStudio CLI or the stub.
+    # Real CLI is used when:
+    #   1. openstudio.cli is on PATH, AND
+    #   2. stub mode is NOT explicitly enabled (OSIMFLOW_STUB_SIM != "1")
+    cli_available = _is_openstudio_available()
+    stub_mode = _is_stub_mode()
+    use_real_cli = cli_available and not stub_mode
 
-    # Fail fast if CLI is not available and stub mode is not explicitly enabled
-    if not use_real_cli and not _is_stub_mode():
+    # Fail fast: if the CLI is not available AND stub mode is not enabled,
+    # the user must either install OpenStudio or explicitly opt into stub mode.
+    if not cli_available and not stub_mode:
         raise RuntimeError(
             "openstudio CLI is not available on PATH and OSIMFLOW_STUB_SIM=1 is not set. "
             "Install OpenStudio CLI or set OSIMFLOW_STUB_SIM=1 to use stub mode for testing."
@@ -1080,6 +1088,7 @@ def _run_real_openstudio(
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             cwd=modified_sim_package,
+            check=True,
         )
     except subprocess.SubprocessError as e:
         log.error(
@@ -1128,7 +1137,7 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("generate_lhs failed: %s", e.stderr)
+        log.error("generate_lhs failed: %s", e.stderr or "<empty>")
         raise RuntimeError(f"generate_lhs failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return samples_json
 
@@ -1164,7 +1173,7 @@ def _extract_kpis_impl(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("extract_kpis failed for %s: %s", sample_id, e.stderr)
+        log.error("extract_kpis failed for %s: %s", sample_id, e.stderr or "<empty>")
         raise RuntimeError(
             f"extract_kpis failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}"
         ) from e
@@ -1448,7 +1457,7 @@ def aggregate_results(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        log.error("aggregate_results failed: %s", e.stderr)
+        log.error("aggregate_results failed: %s", e.stderr or "<empty>")
         raise RuntimeError(
             f"aggregate_results failed: stdout={e.stdout!r} stderr={e.stderr!r}"
         ) from e
@@ -1516,7 +1525,7 @@ def generate_plots(
             env=env,
         )
     except subprocess.CalledProcessError as e:
-        log.error("generate_plots failed: %s", e.stderr)
+        log.error("generate_plots failed: %s", e.stderr or "<empty>")
         raise RuntimeError(f"generate_plots failed: stdout={e.stdout!r} stderr={e.stderr!r}") from e
     return sorted(out.glob("*.png")) + sorted(out.glob("*.pdf"))
 
