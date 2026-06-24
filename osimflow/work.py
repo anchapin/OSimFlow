@@ -28,8 +28,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from ._subprocess_utils import run_subprocess  # neutral location (issue #910)
 from .apply_params import OSMAttributeError
-from .executors import run_subprocess  # local helper (issue #6)
 from .json_utils import safe_json_dumps
 from .storage import ResultStorage
 from .version_detection import VersionDetectionError, detect_openstudio_version
