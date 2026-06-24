@@ -80,7 +80,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 **Foundation decision:** the project uses a custom Python driver — see `.agents/results/decision-verdict.md` and `.agents/results/architecture/0001-workflow-framework.md` for the rationale. The custom driver is built on `submitit` (Slurm), `dask-jobqueue` (alternative HPC), and a thin Boto3-based AWS Batch adapter. Per-sample work is heavy (5 min – 4 h) and embarrassingly parallel.
 
-**Current status:** **Pre-MVP / skeleton.** The repository contains the PRD, project docs, and Python *stubs* for the six processes from PRD §4.2. The orchestration foundation (the `osimflow/` package) is now landed; the next step is filling in the `bin/*.py` logic that the work layer calls. See the *Next steps* section at the bottom of `decision-verdict.md`.
+**Current status:** The orchestration foundation (the `osimflow/` package) and the per-step work layer are implemented. The six PRD §4.2 processes are backed by concrete modules under `osimflow/_work_scripts/`, which the `bin/*.py` entry points delegate to as stable shims. The package is pre-`v0.1.0` (see issue #957); active work is hardening, polish, and broader ecosystem coverage rather than greenfield foundation work. See the *Next steps* section at the bottom of `decision-verdict.md`.
 
 **MVP target:** PRD §5.2 — multi-environment orchestration, OpenStudio version selection, robustness/refinement. Estimated 3–4 weeks of focused work.
 
@@ -183,11 +183,11 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
 | `scripts/generate_openapi.py` | Export the OpenAPI spec from the FastAPI app to `docs/openapi.json` (issue #433). Run: `python scripts/generate_openapi.py --output docs/openapi.json`. |
 | `docs/openapi.json` | Auto-generated OpenAPI 3.1 spec for the OSimFlow REST API (issue #433). Regenerate after adding/modifying API endpoints. Consumable by code generators (openapi-generator, etc.). |
-| `bin/generate_lhs.py` | LHS sampler (scipy.stats). |
-| `bin/apply_params_to_model.py` | Default parameter-application logic. |
-| `bin/extract_kpis.py` | Default KPI extractor. |
-| `bin/aggregate_results.py` | Result aggregation + error-summary extraction. |
-| `bin/generate_plots.py` | Matplotlib/seaborn plot generator. |
+| `bin/generate_lhs.py` | LHS sampler (scipy.stats) — stable shim over `osimflow/_work_scripts/`. |
+| `bin/apply_params_to_model.py` | Default parameter-application logic — stable shim over `osimflow/_work_scripts/`. |
+| `bin/extract_kpis.py` | Default KPI extractor — stable shim over `osimflow/_work_scripts/`. |
+| `bin/aggregate_results.py` | Result aggregation + error-summary extraction — stable shim over `osimflow/_work_scripts/`. |
+| `bin/generate_plots.py` | Matplotlib/seaborn plot generator — stable shim over `osimflow/_work_scripts/`. |
 | `bin/excel_to_variables.py` | PAT/Analysis Gem Excel spreadsheet to ``variables.yml`` converter. Reads a PAT-style ``.xlsx`` and produces a OSimFlow ``variables.yml`` with support for uniform, normal, lognormal, triangular, discrete, categorical, and static distributions. |
 | `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
@@ -196,8 +196,8 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
 | `docs/OSimFlow.md` | The PRD — the source of truth for scope and architecture. |
 | `docs/benchmarks.md` | How to interpret the `benchmarks.json` artifact (issue #10). |
-| `docs/CONTRIBUTING.md` | Contributor onboarding (stub for Phase 3). |
-| `docs/GOVERNANCE.md` | Community governance model (stub for Phase 3). |
+| `docs/CONTRIBUTING.md` | Contributor onboarding, governance entry point, and PR-review checklist. |
+| `docs/GOVERNANCE.md` | Project governance: decision-making, maintainer roles, and community participation. |
 | `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
 | `osimflow-deploy/` | Cloud deployment recipes sub-monorepo (issue #164). Contains platform-specific README guides (AWS, Nomad, Docker), an independent CHANGELOG (`osimflow-deploy-v` tag prefix), and a CODEOWNERS file for IaC review. Links back to the actual IaC in `infra/`. Does **not** duplicate or move `infra/` files. |
 | `infra/aws/terraform/` | Terraform module for AWS Batch infrastructure (issue #148): VPC, S3 bucket, IAM roles, Batch compute environment, job queue, and job definition using `nrel/openstudio` container image. CI runs `terraform validate` on `infra/` changes. |
@@ -228,7 +228,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 
 ## 4. Build & run commands
 
-> All commands assume CWD = repo root. The orchestration foundation runs end-to-end against stub `bin/*.py` scripts (no real OpenStudio CLI needed for the MVP smoke test); see `tests/integration/test_cache_invalidation.py` for the cache-correctness gate.
+> All commands assume CWD = repo root. The orchestration foundation runs end-to-end against the implemented `osimflow/_work_scripts/` modules (the `bin/*.py` entry points are stable shims over them); no real OpenStudio CLI is needed for the smoke test because the work layer falls back to stub simulation mode when `openstudio.cli` is absent. See `tests/integration/test_cache_invalidation.py` for the cache-correctness gate.
 
 ### DAG step names (referenced from `osimflow/campaign.py`)
 
