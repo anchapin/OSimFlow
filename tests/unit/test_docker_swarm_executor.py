@@ -98,6 +98,19 @@ class TestDockerSwarmExecutorFailDense:
     - OSIMFLOW_DOCKER_SWARM_DRY_RUN=1       (dry-run mode, set by Campaign)
     """
 
+    @pytest.fixture(autouse=True)
+    def _clear_fallback_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ensure no fallback env vars leak from other tests (e.g. dry-run campaign tests).
+
+        The Campaign class sets OSIMFLOW_DOCKER_SWARM_DRY_RUN=1 process-globally
+        during --dry-run execution (added in #944). Under pytest-xdist (-n 2),
+        if a dry-run campaign test runs in the same worker process before these
+        fail-dense tests, the env var leaks and _is_dev_fallback_enabled() returns
+        True, causing submit() to fall back instead of raising.
+        """
+        monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK", raising=False)
+        monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DRY_RUN", raising=False)
+
     def _make_executor(self) -> DockerSwarmExecutor:
         """Create a DockerSwarmExecutor without calling __init__."""
         ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)
