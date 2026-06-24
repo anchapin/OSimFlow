@@ -602,6 +602,26 @@ image with `--docker-swarm-image` and the overlay network with
 complete flag set; this executor currently has no dedicated deployment
 guide.
 
+**Fail-dense by default (issue #944):** when Docker is unavailable or
+the daemon is not in Swarm mode, `DockerSwarmExecutor.submit()` raises
+a `RuntimeError` instead of silently falling back to `LocalExecutor`.
+This prevents BYOS scripts from running in the orchestrator process — the
+security-sensitive default that AGENTS.md §10 requires.
+
+To enable development/CI fallback to `LocalExecutor`, set the
+`OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1` environment variable:
+
+```bash
+export OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1
+osimflow run \
+  --executor docker_swarm \
+  --input_variables variables.yml \
+  ...
+```
+
+`--dry-run` mode automatically sets `OSIMFLOW_DOCKER_SWARM_DRY_RUN=1`
+internally, so the fallback is available without an explicit env var.
+
 ### 5.11 Dry-Run and Single-Sample Modes
 
 **Dry-run** validates your setup by running exactly one sample locally:

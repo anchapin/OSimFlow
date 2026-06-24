@@ -285,6 +285,10 @@ class Campaign:
         data_point_manager: DataPointManager | None = None,
     ):
         self.cfg = cfg
+        # Signal DockerSwarmExecutor that we are in dry-run mode so it can
+        # fall back to LocalExecutor instead of raising (issue #944).
+        if cfg.dry_run:
+            os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = "1"
         self.executor = executor
         self.max_workers = max_workers
         self.task_queue = task_queue

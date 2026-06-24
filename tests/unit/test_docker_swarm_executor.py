@@ -19,7 +19,10 @@ This correctly handles all three states:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 
@@ -83,3 +86,123 @@ class TestDockerSwarmExecutorShutdown:
 
         # shutdown() on LocalExecutor is not idempotent, but multiple calls shouldn't raise
         assert mock_local.shutdown.call_count == 3
+
+
+class TestDockerSwarmExecutorFailDense:
+    """Regression tests for issue #944 — fail-dense by default.
+
+    When Docker is unavailable or not in Swarm mode, submit() must raise
+    RuntimeError instead of silently falling back to LocalExecutor. The fallback
+    path is only available when explicitly opted in via:
+    - OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1  (general dev/CI opt-in)
+    - OSIMFLOW_DOCKER_SWARM_DRY_RUN=1       (dry-run mode, set by Campaign)
+    """
+
+    def _make_executor(self) -> DockerSwarmExecutor:
+        """Create a DockerSwarmExecutor without calling __init__."""
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)
+        ex.poll_interval_s = 5.0
+        ex.max_poll_interval_s = 60.0
+        ex.image = "nrel/openstudio:latest"
+        ex.network = None
+        ex._client = None
+        ex._stub_executor = None
+        return ex
+
+    def test_submit_raises_when_docker_not_in_swarm_mode_no_fallback(self) -> None:
+        """Without dev-fallback flag, submit() raises when Docker is not in Swarm mode."""
+        ex = self._make_executor()
+        with patch.object(ex, "_check_docker_available", return_value=False):
+            with pytest.raises(RuntimeError, match="not in Swarm mode"):
+                ex.submit(lambda: None)
+
+    def test_submit_raises_when_docker_unavailable_no_fallback(self) -> None:
+        """Without dev-fallback flag, submit() raises when Docker is unreachable."""
+        ex = self._make_executor()
+        with patch.object(
+            ex, "_check_docker_available", side_effect=RuntimeError("daemon not reachable")
+        ):
+            with pytest.raises(RuntimeError, match="not reachable"):
+                ex.submit(lambda: None)
+
+    def test_submit_raises_when_docker_import_error_no_fallback(self) -> None:
+        """Without dev-fallback flag, submit() raises when docker package is absent."""
+        ex = self._make_executor()
+        with patch.object(
+            ex,
+            "_check_docker_available",
+            side_effect=ImportError("docker package not installed"),
+        ):
+            with pytest.raises(RuntimeError, match="not reachable"):
+                ex.submit(lambda: None)
+
+    def test_submit_falls_back_when_dev_fallback_env_set(self) -> None:
+        """With OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1, submit() falls back to LocalExecutor."""
+        ex = self._make_executor()
+        with patch.object(ex, "_check_docker_available", return_value=False):
+            with patch.dict(os.environ, {"OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK": "1"}):
+                handle = ex.submit(lambda: None)
+                # Should return a Handle from the LocalExecutor fallback
+                assert handle is not None
+                # The stub executor should now be set
+                assert ex._stub_executor is not None
+
+    def test_submit_falls_back_when_dry_run_env_set(self) -> None:
+        """With OSIMFLOW_DOCKER_SWARM_DRY_RUN=1, submit() falls back to LocalExecutor."""
+        ex = self._make_executor()
+        with patch.object(ex, "_check_docker_available", return_value=False):
+            with patch.dict(os.environ, {"OSIMFLOW_DOCKER_SWARM_DRY_RUN": "1"}):
+                handle = ex.submit(lambda: None)
+                assert handle is not None
+                assert ex._stub_executor is not None
+
+    def test_submit_falls_back_when_both_envs_set(self) -> None:
+        """Both env vars set — should still fall back (both are opt-ins)."""
+        ex = self._make_executor()
+        with patch.object(ex, "_check_docker_available", return_value=False):
+            with patch.dict(
+                os.environ,
+                {
+                    "OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK": "1",
+                    "OSIMFLOW_DOCKER_SWARM_DRY_RUN": "1",
+                },
+            ):
+                handle = ex.submit(lambda: None)
+                assert handle is not None
+
+    def test_submit_raises_when_docker_unavailable_dev_fallback_false(self) -> None:
+        """OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=0 should NOT enable fallback."""
+        ex = self._make_executor()
+        with patch.object(ex, "_check_docker_available", return_value=False):
+            with patch.dict(os.environ, {"OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK": "0"}):
+                with pytest.raises(RuntimeError, match="not in Swarm mode"):
+                    ex.submit(lambda: None)
+
+    def test_submit_raises_when_docker_unavailable_dry_run_false(self) -> None:
+        """OSIMFLOW_DOCKER_SWARM_DRY_RUN=0 should NOT enable fallback."""
+        ex = self._make_executor()
+        with patch.object(ex, "_check_docker_available", return_value=False):
+            with patch.dict(os.environ, {"OSIMFLOW_DOCKER_SWARM_DRY_RUN": "0"}):
+                with pytest.raises(RuntimeError, match="not in Swarm mode"):
+                    ex.submit(lambda: None)
+
+    def test_submit_raises_when_exception_and_no_fallback(self) -> None:
+        """RuntimeError from _check_docker_available should raise when no fallback flag."""
+        ex = self._make_executor()
+        with patch.object(
+            ex,
+            "_check_docker_available",
+            side_effect=RuntimeError("connection refused"),
+        ):
+            with pytest.raises(RuntimeError, match="not reachable"):
+                ex.submit(lambda: None)
+
+    def test_submit_succeeds_when_swarm_available(self) -> None:
+        """When Docker is in Swarm mode, submit() should NOT fall back or raise."""
+        ex = self._make_executor()
+        with patch.object(ex, "_check_docker_available", return_value=True):
+            with patch.object(ex, "_submit_service", return_value="test-service"):
+                handle = ex.submit(lambda: None)
+                # _stub_executor should remain None (real mode)
+                assert ex._stub_executor is None
+                assert handle is not None
