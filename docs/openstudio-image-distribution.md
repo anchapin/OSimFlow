@@ -129,6 +129,77 @@ The break-glass plan is intentionally a *plan*, not a pre-built
 artifact. Pre-building it would re-introduce the maintenance
 liability the adoption decision removed.
 
+## Supply-chain trust model
+
+OSimFlow trusts the `nrel/openstudio` image via **digest pinning**, not
+tag-based references. This establishes an auditable, reproducible link
+between the declared version and the exact bytes that run in production.
+
+### Digest-pinned pull
+
+The ECR sync script
+([`infra/aws/scripts/sync-openstudio-to-ecr.sh`](https://github.com/anchapin/OSimFlow/blob/main/infra/aws/scripts/sync-openstudio-to-ecr.sh))
+resolves the tag to a content-addressable digest before any pull:
+
+```bash
+DIGEST=$(docker manifest inspect "${SOURCE_IMAGE}" | jq -r '.[0].digest')
+docker pull "${SOURCE_IMAGE}@${DIGEST}"
+```
+
+- If the digest cannot be resolved (e.g., network failure, manifest
+  unavailable), the script exits immediately with a clear error — it
+  does **not** fall back to a bare tag pull.
+- The resolved digest is logged and embedded in the ECR tag, so a
+  future re-sync of the same version tag can be compared against the
+  previously-pinned digest.
+
+### Cosign signature verification
+
+If [`cosign`](https://github.com/sigstore/cosign) is installed **and**
+NREL publishes a Sigstore attestation for the image, the sync script
+runs:
+
+```bash
+cosign verify --certificate-identity "https://github.com/NREL/OpenStudio" \
+  "${SOURCE_IMAGE}@${DIGEST}"
+```
+
+- **NREL currently does not publish cosign signatures** for
+  `nrel/openstudio`. In this case, the verification step is skipped
+  with an explicit logged warning:
+
+  ```
+  WARNING: Skipping cosign verification — NREL does not publish image
+  signatures (trusted via digest pin)
+  ```
+
+- If cosign is not installed at all, a similar informational message is
+  logged. Neither case is a hard failure.
+- If NREL begins publishing signatures and the verification fails, the
+  sync script exits with an error rather than pushing an unverified
+  image to ECR.
+
+### Failure behaviour
+
+| Condition | Behaviour |
+|---|---|
+| Digest resolution fails | Hard fail — sync aborts, no image pushed |
+| cosign available + NREL signs + verify fails | Hard fail — sync aborts |
+| cosign available + NREL does not sign | Warning logged, sync continues |
+| cosign not available | Info logged, sync continues |
+
+### Trust assumptions
+
+OSimFlow's current trust posture for `nrel/openstudio` is:
+
+1. **NREL's Docker Hub namespace** is the authoritative source.
+2. The **digest pin** guarantees bit-for-bit reproducibility across
+   sync runs, even if a tag is later re-tagged by NREL.
+3. **No third-party signature** is verified today because NREL does
+   not publish one.
+4. If NREL adds Sigstore signing, the existing cosign verification
+   block activates automatically (no script changes required).
+
 ## References
 
 - [ADR-0002: Adopt `nrel/openstudio` upstream](../.agents/results/architecture/0002-adopt-nrel-upstream-image.md)

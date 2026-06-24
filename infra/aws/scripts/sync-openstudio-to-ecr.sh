@@ -102,15 +102,51 @@ ensure_ecr_repo() {
 }
 
 # ---------------------------------------------------------------------------
+# Digest resolution and integrity verification
+# ---------------------------------------------------------------------------
+
+echo "=== Resolving digest for ${SOURCE_IMAGE} ==="
+DIGEST=$(docker manifest inspect "${SOURCE_IMAGE}" | jq -r '.[0].digest')
+
+if [[ -z "$DIGEST" || "$DIGEST" == "null" ]]; then
+  echo ":: ERROR: Failed to resolve digest for ${SOURCE_IMAGE}" >&2
+  echo ":: ERROR: Cannot proceed without a verifiable image digest" >&2
+  exit 1
+fi
+echo ":: Resolved digest: ${DIGEST}"
+
+PULL_IMAGE="${SOURCE_IMAGE}@${DIGEST}"
+echo ":: Will pull by digest: ${PULL_IMAGE}"
+
+# ---------------------------------------------------------------------------
+# Cosign signature verification (NREL currently does not publish signatures)
+# ---------------------------------------------------------------------------
+if command -v cosign &>/dev/null; then
+  if cosign triangulate "nrel/openstudio" &>/dev/null; then
+    echo ":: NREL image signatures detected — verifying ${PULL_IMAGE}"
+    if ! cosign verify --certificate-identity "https://github.com/NREL/OpenStudio" "${SOURCE_IMAGE}@${DIGEST}"; then
+      echo ":: ERROR: cosign verification failed for ${PULL_IMAGE}" >&2
+      exit 1
+    fi
+    echo ":: cosign verification passed"
+  else
+    echo ":: WARNING: Skipping cosign verification — NREL does not publish image signatures (trusted via digest pin)"
+  fi
+else
+  echo ":: INFO: cosign not installed — skipping signature verification (trusted via digest pin)"
+fi
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 echo "=== sync-openstudio-to-ecr ==="
 echo ":: Source: ${SOURCE_IMAGE}"
 echo ":: ECR repo: ${ECR_REPO}"
+echo ":: Digest: ${DIGEST}"
 
-# Pull from Docker Hub (with retry)
-pull_with_retry "$SOURCE_IMAGE"
+# Pull from Docker Hub by digest (with retry)
+pull_with_retry "$PULL_IMAGE"
 
 # Determine target regions
 IFS=',' read -ra REGION_LIST <<< "${REGIONS:-$REGION}"
@@ -133,10 +169,10 @@ for r in "${REGION_LIST[@]}"; do
   # Ensure the repository exists
   ensure_ecr_repo "$r" "$ECR_REPO"
 
-  # Tag and push
+  # Tag and push — use digest-pinned source to avoid re-pull by tag
   FULL_TAG="${ECR_URI}/${ECR_REPO}:${VERSION}"
-  echo ":: Tagging ${SOURCE_IMAGE} -> ${FULL_TAG}"
-  docker tag "$SOURCE_IMAGE" "$FULL_TAG"
+  echo ":: Tagging ${PULL_IMAGE} -> ${FULL_TAG}"
+  docker tag "${PULL_IMAGE}" "$FULL_TAG"
 
   echo ":: Pushing ${FULL_TAG}"
   docker push "$FULL_TAG"
