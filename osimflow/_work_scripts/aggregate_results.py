@@ -22,6 +22,17 @@ from typing import Any
 
 import pandas as pd
 
+# pd.io.sql.DatabaseError may not exist in all pandas versions (issue #889)
+try:
+    _PD_SQL_DATABASE_ERROR: type[Exception] | None = pd.io.sql.DatabaseError
+except AttributeError:
+    _PD_SQL_DATABASE_ERROR = None
+
+# Build the tuple of SQL-related database errors to catch
+_SQL_ERRORS: tuple[type[Exception], ...] = (sqlite3.DatabaseError,)
+if _PD_SQL_DATABASE_ERROR is not None:
+    _SQL_ERRORS = (sqlite3.DatabaseError, _PD_SQL_DATABASE_ERROR)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("aggregate_results")
 
@@ -275,7 +286,7 @@ class TimeSeriesAggregator:
             query = _TS_QUERIES[self.resolution]
             df = pd.read_sql_query(query, conn)
             conn.close()
-        except (sqlite3.DatabaseError, pd.io.sql.DatabaseError) as exc:
+        except _SQL_ERRORS as exc:
             log.warning("Time-series aggregation failed for %s: %s", sql_path, exc)
             return pd.DataFrame()
 
