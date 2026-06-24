@@ -60,6 +60,10 @@ def template_pkg(workdir: Path) -> Path:
             }
         )
     )
+    # model.osm is required by default_apply_parameters (the BYOS apply_fn
+    # contract). A minimal JSON .osm with empty attributes is sufficient
+    # for preflight-only tests that only validate parameter name detection.
+    (pkg / "model.osm").write_text(json.dumps({"attributes": {}}))
     return pkg
 
 

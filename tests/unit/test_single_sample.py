@@ -34,7 +34,7 @@ def test_sample_raises_when_no_samples_json(
         sample=0,
     )
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-    with pytest.raises(FileNotFoundError, match="samples.json not found"):
+    with pytest.raises(FileNotFoundError, match="(?i)samples.json not found"):
         campaign.run()
 
 
