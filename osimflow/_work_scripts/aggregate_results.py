@@ -362,7 +362,7 @@ def _scan_err_file(err_path: Path) -> tuple[int, str]:
                         if root_cause:
                             break
     except (OSError, UnicodeDecodeError):
-        log.warning("Could not read error file: %s", err_path)
+        log.warning("Could not read error file: %s", err_path, exc_info=True)
     # Fall back to first severe line if no pattern matched
     if not root_cause:
         root_cause = first_severe
