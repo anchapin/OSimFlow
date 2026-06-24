@@ -217,10 +217,10 @@ class DockerSwarmExecutor(BaseExecutor):
         """
         import os
 
-        return (
-            os.environ.get("OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK", "") not in ("", "0")
-            or os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN", "") not in ("", "0")
-        )
+        return os.environ.get("OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK", "") not in (
+            "",
+            "0",
+        ) or os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN", "") not in ("", "0")
 
     def _check_docker_available(self) -> bool:
         """Return True if the Docker client can reach a Swarm cluster."""
@@ -471,8 +471,7 @@ class DockerSwarmExecutor(BaseExecutor):
         except (ImportError, RuntimeError) as exc:
             if self._is_dev_fallback_enabled():
                 log.warning(
-                    "Docker unavailable: %s. Falling back to LocalExecutor "
-                    "(dev-fallback mode).",
+                    "Docker unavailable: %s. Falling back to LocalExecutor (dev-fallback mode).",
                     exc,
                 )
                 from osimflow.executors import LocalExecutor
