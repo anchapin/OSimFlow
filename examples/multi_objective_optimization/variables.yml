@@ -1,0 +1,54 @@
+# variables.yml - Multi-Objective Optimization with NSGA-II
+# Optimizes for competing objectives: minimize EUI and minimize cost
+
+variables:
+  - name: wall_r_value
+    distribution: uniform
+    min: 2.0
+    max: 5.0
+    description: "Wall thermal resistance (insulation level)"
+
+  - name: window_u_value
+    distribution: uniform
+    min: 1.0
+    max: 3.0
+    description: "Window U-value (lower = better insulated)"
+
+  - name: window_wwr
+    distribution: uniform
+    min: 0.2
+    max: 0.6
+    description: "Window-to-wall ratio"
+
+  - name: heating_setpoint
+    distribution: uniform
+    min: 18.0
+    max: 22.0
+    description: "Indoor heating setpoint"
+
+  - name: cooling_setpoint
+    distribution: uniform
+    min: 24.0
+    max: 28.0
+    description: "Indoor cooling setpoint"
+
+# Objective functions for multi-objective optimization
+objectives:
+  - name: eui
+    direction: minimize
+    description: "Energy Use Intensity - operating energy efficiency"
+
+  - name: construction_cost
+    direction: minimize
+    description: "Initial construction cost estimate"
+
+# Constraints
+constraints:
+  - name: thermal_comfort
+    min: 0.8
+    description: "Thermal comfort index (0-1 scale)"
+    # Violations are penalized with 1e9 added to objective
+
+  - name: daylight_factor
+    min: 0.05
+    description: "Minimum daylight factor requirement"

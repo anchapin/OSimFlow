@@ -1,0 +1,27 @@
+# variables.yml - Simple LHS Campaign
+# Demonstrates basic parameter variation with Latin Hypercube Sampling
+
+variables:
+  - name: heating_setpoint
+    distribution: uniform
+    min: 18.0
+    max: 22.0
+    description: "Indoor heating setpoint in Celsius"
+
+  - name: cooling_setpoint
+    distribution: uniform
+    min: 24.0
+    max: 28.0
+    description: "Indoor cooling setpoint in Celsius"
+
+  - name: wall_r_value
+    distribution: uniform
+    min: 2.0
+    max: 5.0
+    description: "Wall thermal resistance in m²K/W"
+
+  - name: window_wwr
+    distribution: uniform
+    min: 0.2
+    max: 0.6
+    description: "Window-to-wall ratio (fraction)"

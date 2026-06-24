@@ -1,0 +1,1338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSimFlow Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<style>
+/* ── Reset & Base ────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface-alt: #222633;
+  --border: #2e3345;
+  --text: #e2e4eb;
+  --text-muted: #8b8fa3;
+  --primary: #6c8cff;
+  --primary-dim: #4a67d6;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --cached: #a78bfa;
+  --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+}
+html { font-size: 15px; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* ── Layout ──────────────────────────────────────────────── */
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 220px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.sidebar-brand {
+  padding: 20px 16px 12px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--primary);
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-brand small { font-size: 0.7rem; color: var(--text-muted); font-weight: 400; }
+.sidebar-nav { flex: 1; padding: 8px; }
+.sidebar-nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: background 0.15s, color 0.15s;
+}
+.sidebar-nav a:hover { background: var(--surface-alt); color: var(--text); }
+.sidebar-nav a.active { background: var(--primary-dim); color: #fff; }
+.sidebar-nav a .icon { font-size: 1.1rem; width: 20px; text-align: center; }
+
+.main { flex: 1; overflow-y: auto; }
+.page { display: none; padding: 32px; max-width: 1200px; }
+.page.active { display: block; }
+
+/* ── API Key Banner ──────────────────────────────────────── */
+.api-key-bar {
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.82rem;
+}
+.api-key-bar label { color: var(--text-muted); font-weight: 500; }
+.api-key-bar input {
+  flex: 1;
+  max-width: 400px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+.api-key-bar .status {
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+.status-ok { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+.status-err { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
+.status-pending { background: rgba(139, 143, 163, 0.15); color: var(--text-muted); }
+
+/* ── Headings ────────────────────────────────────────────── */
+h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
+h2 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 12px; }
+h3 { font-size: 1rem; font-weight: 600; margin: 16px 0 8px; color: var(--text-muted); }
+.subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px; }
+
+/* ── Cards ───────────────────────────────────────────────── */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+.card-label { font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+.card-value { font-size: 1.5rem; font-weight: 700; }
+.card-value.ok { color: var(--success); }
+.card-value.fail { color: var(--danger); }
+.card-value.cached { color: var(--cached); }
+.card-value.time { color: var(--primary); }
+
+/* ── Tables ──────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+th, td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+th {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky;
+  top: 0;
+}
+tr:hover td { background: var(--surface-alt); }
+
+/* ── Badges ──────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.badge-ok { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+.badge-fail { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
+.badge-cached { background: rgba(167, 139, 250, 0.15); color: var(--cached); }
+.badge-running { background: rgba(251, 191, 36, 0.15); color: var(--warning); }
+.badge-hit { background: rgba(74, 222, 128, 0.1); color: var(--success); }
+.badge-miss { background: rgba(248, 113, 113, 0.1); color: var(--danger); }
+
+/* ── Progress ────────────────────────────────────────────── */
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--surface-alt);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+  background: linear-gradient(90deg, var(--primary-dim), var(--primary));
+}
+
+/* ── Pie Chart ───────────────────────────────────────────── */
+#pie-chart-wrap {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+#pie-chart-wrap svg { flex-shrink: 0; }
+#pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.legend-value { font-weight: 600; margin-left: auto; }
+#pie-eta { font-size: 0.82rem; color: var(--text-muted); margin-top: 4px; }
+
+/* ── Plots ───────────────────────────────────────────────── */
+.plots-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 20px; }
+.plot-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.plot-card img { width: 100%; display: block; background: #fff; }
+.plot-card .plot-label { padding: 10px 14px; font-size: 0.82rem; color: var(--text-muted); }
+
+/* ── SSE / Live Feed ─────────────────────────────────────── */
+.live-feed {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.8;
+}
+.live-feed .evt {
+  display: flex;
+  gap: 10px;
+  padding: 2px 0;
+}
+.live-feed .evt-time { color: var(--text-muted); min-width: 80px; }
+.live-feed .evt-type { font-weight: 600; min-width: 160px; }
+.live-feed .evt-type.sample-started { color: var(--warning); }
+.live-feed .evt-type.sample-completed { color: var(--success); }
+.live-feed .evt-type.step-completed { color: var(--primary); }
+.live-feed .evt-type.campaign-completed { color: var(--cached); }
+
+/* ── Pagination ──────────────────────────────────────────── */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+.pagination button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.pagination button:disabled { opacity: 0.4; cursor: default; }
+.pagination .page-info { color: var(--text-muted); font-size: 0.85rem; }
+
+/* ── Empty State ─────────────────────────────────────────── */
+.empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+.empty .icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+/* ── Create Campaign Form ───────────────────────────────── */
+.create-form {
+  max-width: 900px;
+  margin-top: 20px;
+}
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+.form-group label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+.form-group input,
+.form-group select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+  font-family: var(--font);
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-group input:focus,
+.form-group select:focus {
+  border-color: var(--primary);
+}
+.form-group input::placeholder {
+  color: var(--text-muted);
+}
+.form-group small {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 10px 24px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+.btn-primary:hover { background: var(--primary-dim); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary {
+  background: var(--surface-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 20px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+.btn-secondary:hover { background: var(--border); }
+.create-status {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.create-status.ok { color: var(--success); }
+.create-status.err { color: var(--danger); }
+.create-result {
+  margin-top: 24px;
+  padding: 20px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  max-width: 500px;
+}
+.create-result h3 {
+  margin-bottom: 12px;
+  color: var(--success);
+}
+.create-result table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.create-result td {
+  padding: 6px 0;
+  font-size: 0.88rem;
+}
+.create-result td:first-child { width: 140px; }
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app { flex-direction: column; }
+  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar-nav { display: flex; overflow-x: auto; padding: 4px; }
+  .sidebar-nav a { white-space: nowrap; }
+  .page { padding: 16px; }
+  .plots-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-brand">OSimFlow <small>v0.1</small></div>
+    <div class="sidebar-nav">
+      <a href="#" data-page="dashboard" class="active">
+        <span class="icon">&#9632;</span> Dashboard
+      </a>
+      <a href="#" data-page="steps">
+        <span class="icon">&#9654;</span> Pipeline
+      </a>
+      <a href="#" data-page="samples">
+        <span class="icon">&#9783;</span> Samples
+      </a>
+      <a href="#" data-page="results">
+        <span class="icon">&#9776;</span> Results
+      </a>
+      <a href="#" data-page="plots">
+        <span class="icon">&#9673;</span> Plots
+      </a>
+      <a href="#" data-page="live">
+        <span class="icon">&#9679;</span> Live
+      </a>
+      <a href="#" data-page="create">
+        <span class="icon">&#10010;</span> Create
+      </a>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- API Key Bar -->
+    <div class="api-key-bar">
+      <label for="apiKey">API Key:</label>
+      <input type="password" id="apiKey" placeholder="(none — auth disabled)" autocomplete="off">
+      <span id="connStatus" class="status status-pending">connecting...</span>
+    </div>
+
+    <!-- ═══ Dashboard Page ═══ -->
+    <div id="page-dashboard" class="page active">
+      <h1>Campaign Dashboard</h1>
+      <p class="subtitle">Overview of the current campaign</p>
+      <div id="dash-cards" class="cards">
+        <div class="card"><div class="card-label">Campaign</div><div class="card-value" id="card-id">—</div></div>
+        <div class="card"><div class="card-label">Samples</div><div class="card-value" id="card-samples">—</div></div>
+        <div class="card"><div class="card-label">Succeeded</div><div class="card-value ok" id="card-ok">—</div></div>
+        <div class="card"><div class="card-label">Failed</div><div class="card-value fail" id="card-fail">—</div></div>
+        <div class="card"><div class="card-label">Elapsed</div><div class="card-value time" id="card-elapsed">—</div></div>
+        <div class="card"><div class="card-label">Status</div><div id="card-status">—</div></div>
+      </div>
+      <div id="dash-progress-wrap">
+        <h3>Progress</h3>
+        <div class="progress-bar"><div class="progress-bar-fill" id="dash-progress" style="width:0%"></div></div>
+        <div style="font-size:0.82rem;color:var(--text-muted)" id="dash-progress-label">0 / 0 samples completed</div>
+      </div>
+      <div id="dash-config" style="margin-top:20px">
+        <h3>Configuration</h3>
+        <table id="config-table"><tbody></tbody></table>
+      </div>
+    </div>
+
+    <!-- ═══ Pipeline Page ═══ -->
+    <div id="page-steps" class="page">
+      <h1>Pipeline Steps</h1>
+      <p class="subtitle">DAG step execution traces</p>
+      <div class="table-wrap">
+        <table id="steps-table">
+          <thead>
+            <tr><th>Step</th><th>Cache</th><th>Elapsed</th><th>Exit Code</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ Samples Page ═══ -->
+    <div id="page-samples" class="page">
+      <h1>Sample Browser</h1>
+      <p class="subtitle">Per-sample execution results</p>
+      <div class="table-wrap">
+        <table id="samples-table">
+          <thead>
+            <tr><th>Sample ID</th><th>Status</th><th>Elapsed</th><th>Apply</th><th>Sim</th><th>Extract</th><th>Error</th><th>Worker</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="samples-pagination">
+        <button id="prev-page" disabled>&larr; Prev</button>
+        <span class="page-info" id="page-info">Page 1</span>
+        <button id="next-page">Next &rarr;</button>
+      </div>
+    </div>
+
+    <!-- ═══ Results Page ═══ -->
+    <div id="page-results" class="page">
+      <h1>Aggregated Results</h1>
+      <p class="subtitle">Data from aggregated_results.csv</p>
+      <div class="table-wrap">
+        <table id="results-table">
+          <thead><tr></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="results-empty" class="empty" style="display:none">
+        <div class="icon">&#128196;</div>
+        <p>No results file found yet.</p>
+      </div>
+    </div>
+
+    <!-- ═══ Plots Page ═══ -->
+    <div id="page-plots" class="page">
+      <h1>Plots</h1>
+      <p class="subtitle">Generated visualization plots</p>
+      <div class="plots-grid" id="plots-grid"></div>
+      <div id="plots-empty" class="empty" style="display:none">
+        <div class="icon">&#128202;</div>
+        <p>No plots available yet.</p>
+      </div>
+    </div>
+
+    <!-- ═══ Live Page ═══ -->
+    <div id="page-live" class="page">
+      <h1>Live Monitoring</h1>
+      <p class="subtitle">Real-time campaign monitoring via SSE event stream</p>
+
+      <!-- Real-time stats cards -->
+      <div id="live-stats" class="cards" style="margin-bottom:20px">
+        <div class="card">
+          <div class="card-label">Total Samples</div>
+          <div class="card-value" id="live-total">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Completed</div>
+          <div class="card-value ok" id="live-completed">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Failed</div>
+          <div class="card-value fail" id="live-failed">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Running</div>
+          <div class="card-value" id="live-running" style="color:var(--warning)">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Progress</div>
+          <div class="card-value" id="live-pct" style="color:var(--primary)">0%</div>
+        </div>
+        <div class="card">
+          <div class="card-label">ETA</div>
+          <div class="card-value" id="live-eta" style="color:var(--text-muted)">—</div>
+        </div>
+      </div>
+
+      <!-- D3 pie chart (issue #586) -->
+      <div id="pie-chart-wrap">
+        <svg id="status-pie" width="140" height="140" viewBox="0 0 140 140"></svg>
+        <div>
+          <div id="pie-legend"></div>
+          <div id="pie-eta"></div>
+        </div>
+      </div>
+
+      <!-- Real-time progress bar -->
+      <div style="margin-bottom:20px">
+        <div class="progress-bar" style="height:12px">
+          <div class="progress-bar-fill" id="live-progress-bar" style="width:0%"></div>
+        </div>
+        <div style="font-size:0.82rem;color:var(--text-muted)" id="live-progress-label">Waiting for campaign data...</div>
+      </div>
+
+      <!-- Connection controls -->
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px">
+        <button id="btn-connect" style="background:var(--primary);color:#fff;border:none;padding:8px 20px;border-radius:var(--radius);cursor:pointer;font-size:0.88rem">Connect</button>
+        <button id="btn-disconnect" style="display:none;background:var(--danger);color:#fff;border:none;padding:8px 20px;border-radius:var(--radius);cursor:pointer;font-size:0.88rem">Disconnect</button>
+        <span id="sse-status" style="font-size:0.82rem;color:var(--text-muted)">disconnected</span>
+        <span id="sse-elapsed" style="margin-left:auto;font-size:0.82rem;color:var(--text-muted)"></span>
+      </div>
+
+      <!-- Event feed -->
+      <div class="live-feed" id="live-feed">
+        <div class="empty" style="padding:30px"><p>Click "Connect" to start receiving live events.</p></div>
+      </div>
+      <div id="live-readonly" style="margin-top:12px;color:var(--text-muted);font-size:0.82rem">
+        SSE events require read-write mode (<code>--read-write</code> or <code>--enable-writes</code>).
+      </div>
+    </div>
+
+    <!-- ═══ Create Campaign Page ═══ -->
+    <div id="page-create" class="page">
+      <h1>Create Campaign</h1>
+      <p class="subtitle">Configure and launch a new simulation campaign</p>
+
+      <form id="create-form" class="create-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="input_variables">Variables YAML *</label>
+            <input type="text" id="input_variables" name="input_variables" required placeholder="e.g. variables.yml">
+            <small>Path to the variables.yml file defining LHS distributions</small>
+          </div>
+          <div class="form-group">
+            <label for="template_sim_package">Template Package *</label>
+            <input type="text" id="template_sim_package" name="template_sim_package" required placeholder="e.g. ./example_package">
+            <small>Path to the template simulation package directory</small>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="n_samples">Number of Samples *</label>
+            <input type="number" id="n_samples" name="n_samples" min="1" value="10" required>
+            <small>Number of LHS samples to generate</small>
+          </div>
+          <div class="form-group">
+            <label for="openstudio_version">OpenStudio Version</label>
+            <input type="text" id="openstudio_version" name="openstudio_version" value="3.11.0" placeholder="3.11.0">
+            <small>OpenStudio container version tag</small>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="executor">Executor</label>
+            <select id="executor" name="executor">
+              <option value="local" selected>local</option>
+              <option value="slurm">slurm</option>
+              <option value="aws_batch">aws_batch</option>
+              <option value="azure_batch">azure_batch</option>
+              <option value="google_batch">google_batch</option>
+              <option value="dask_jobqueue">dask_jobqueue</option>
+              <option value="kubernetes">kubernetes</option>
+              <option value="nomad">nomad</option>
+              <option value="pbs">pbs</option>
+            </select>
+            <small>Execution backend for campaign jobs</small>
+          </div>
+          <div class="form-group">
+            <label for="algorithm">Algorithm</label>
+            <select id="algorithm" name="algorithm">
+              <option value="lhs" selected>lhs — Latin Hypercube</option>
+              <option value="sobol">sobol — Sobol Quasi-Random</option>
+              <option value="halton">halton — Halton Quasi-Random</option>
+              <option value="morris">morris — Morris Sensitivity</option>
+              <option value="fast99">fast99 — FAST Sensitivity</option>
+              <option value="de">de — Differential Evolution</option>
+              <option value="da">da — Dual Annealing</option>
+              <option value="pso">pso — Particle Swarm</option>
+              <option value="nsga2">nsga2 — NSGA-II Multi-Objective</option>
+            </select>
+            <small>Sampling / optimization algorithm</small>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="outdir">Output Directory</label>
+            <input type="text" id="outdir" name="outdir" placeholder="(auto-generated)">
+            <small>Output directory path (auto-generated if omitted)</small>
+          </div>
+          <div class="form-group">
+            <label for="archive_intermediates">Archive Intermediates</label>
+            <select id="archive_intermediates" name="archive_intermediates">
+              <option value="false" selected>No</option>
+              <option value="true">Yes</option>
+            </select>
+            <small>Archive per-sample .osw/.osm and eplusout.sql files</small>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="auto_start">Auto-Start</label>
+            <select id="auto_start" name="auto_start">
+              <option value="false" selected>No — create only</option>
+              <option value="true">Yes — launch immediately</option>
+            </select>
+            <small>Immediately launch campaign after creation</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" id="btn-create" class="btn-primary">Create Campaign</button>
+          <span id="create-status" class="create-status"></span>
+        </div>
+      </form>
+
+      <div id="create-result" class="create-result" style="display:none">
+        <h3>Campaign Created</h3>
+        <table id="create-result-table">
+          <tr><td style="color:var(--text-muted)">Campaign ID</td><td id="result-campaign-id">—</td></tr>
+          <tr><td style="color:var(--text-muted)">Output Directory</td><td id="result-outdir">—</td></tr>
+          <tr><td style="color:var(--text-muted)">Status</td><td id="result-status">—</td></tr>
+        </table>
+        <div style="margin-top:16px">
+          <button id="btn-goto-dashboard" class="btn-secondary">Go to Dashboard</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   OSimFlow Dashboard — Vanilla JS SPA (Phase 1)
+   ═══════════════════════════════════════════════════════════ */
+
+// ── State ──────────────────────────────────────────────────
+const state = {
+  currentPage: 'dashboard',
+  campaignData: null,
+  samplesPage: 1,
+  samplesPerPage: 50,
+  samplesTotal: 0,
+  eventSource: null,
+  // Live monitoring state (issue #394)
+  liveTotal: 0,
+  liveCompleted: 0,
+  liveFailed: 0,
+  liveRunning: 0,
+  liveStartTime: null,
+};
+
+// ── API helpers ────────────────────────────────────────────
+function apiKey() { return document.getElementById('apiKey').value.trim() || null; }
+
+function apiHeaders() {
+  const key = apiKey();
+  return key ? { 'X-API-Key': key } : {};
+}
+
+function apiUrl(path) {
+  const key = apiKey();
+  const sep = path.includes('?') ? '&' : '?';
+  return key ? `${path}${sep}api_key=${encodeURIComponent(key)}` : path;
+}
+
+async function apiFetch(path, opts = {}) {
+  const resp = await fetch(apiUrl(path), { ...opts, headers: { ...apiHeaders(), ...(opts.headers || {}) } });
+  if (resp.status === 401) {
+    document.getElementById('connStatus').textContent = 'unauthorized';
+    document.getElementById('connStatus').className = 'status status-err';
+    throw new Error('Unauthorized — check API key');
+  }
+  return resp;
+}
+
+// ── Navigation ─────────────────────────────────────────────
+document.querySelectorAll('.sidebar-nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const page = a.dataset.page;
+    navigate(page);
+  });
+});
+
+function navigate(page) {
+  state.currentPage = page;
+  document.querySelectorAll('.sidebar-nav a').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `page-${page}`));
+  loadPage(page);
+}
+
+async function loadPage(page) {
+  try {
+    switch (page) {
+      case 'dashboard': await loadDashboard(); break;
+      case 'steps':     await loadSteps(); break;
+      case 'samples':   await loadSamples(); break;
+      case 'results':   await loadResults(); break;
+      case 'plots':     await loadPlots(); break;
+      case 'live':      await loadLivePage(); break;  // Auto-connect SSE on load (issue #394)
+      case 'create':    initCreateForm(); break;
+    }
+  } catch (err) {
+    console.error(`Error loading ${page}:`, err);
+  }
+}
+
+// ── Dashboard ──────────────────────────────────────────────
+async function loadDashboard() {
+  const resp = await apiFetch('/api/v1/campaign');
+  if (!resp.ok) { setConnError(); return; }
+  const data = await resp.json();
+  state.campaignData = data;
+
+  document.getElementById('card-id').textContent = data.campaign_id || '—';
+
+  setConnOk();
+
+  // Load full run.json summary via steps + samples endpoints
+  let totalSamples = 0, succeeded = 0, failed = 0, elapsed = '—';
+
+  // Steps for elapsed time
+  const stepsResp = await apiFetch('/api/v1/steps');
+  if (stepsResp.ok) {
+    const stepsData = await stepsResp.json();
+    const totalElapsed = stepsData.steps.reduce((s, st) => s + (st.elapsed_s || 0), 0);
+    elapsed = totalElapsed > 0 ? formatDuration(totalElapsed) : '—';
+  }
+
+  // Samples for counts
+  const samplesResp = await apiFetch(`/api/v1/samples?page=1&per_page=1`);
+  if (samplesResp.ok) {
+    const samplesData = await samplesResp.json();
+    state.samplesTotal = samplesData.total;
+    totalSamples = samplesData.total;
+
+    // Get all samples for counts (use large page)
+    if (totalSamples > 0) {
+      const allResp = await apiFetch(`/api/v1/samples?page=1&per_page=${Math.min(totalSamples, 500)}`);
+      if (allResp.ok) {
+        const allData = await allResp.json();
+        succeeded = allData.samples.filter(s => s.status === 'ok').length;
+        failed = allData.samples.filter(s => s.status === 'failed').length;
+      }
+    }
+  }
+
+  document.getElementById('card-samples').textContent = totalSamples;
+  document.getElementById('card-ok').textContent = succeeded;
+  document.getElementById('card-fail').textContent = failed;
+  document.getElementById('card-elapsed').textContent = elapsed;
+
+  // Status
+  const statusEl = document.getElementById('card-status');
+  if (data.finished_at) {
+    statusEl.innerHTML = '<span class="badge badge-ok">completed</span>';
+  } else if (totalSamples > 0) {
+    statusEl.innerHTML = '<span class="badge badge-running">running</span>';
+  } else {
+    statusEl.innerHTML = '<span class="badge badge-cached">pending</span>';
+  }
+
+  // Progress
+  const pct = totalSamples > 0 ? Math.round(((succeeded + failed) / totalSamples) * 100) : 0;
+  document.getElementById('dash-progress').style.width = pct + '%';
+  document.getElementById('dash-progress-label').textContent = `${succeeded + failed} / ${totalSamples} samples completed (${pct}%)`;
+
+  // Config table
+  const config = data.config_summary || {};
+  const tbody = document.querySelector('#config-table tbody');
+  tbody.innerHTML = '';
+  for (const [k, v] of Object.entries(config)) {
+    tbody.innerHTML += `<tr><td style="color:var(--text-muted)">${esc(k)}</td><td>${esc(String(v))}</td></tr>`;
+  }
+}
+
+// ── Pipeline Steps ─────────────────────────────────────────
+async function loadSteps() {
+  const resp = await apiFetch('/api/v1/steps');
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const tbody = document.querySelector('#steps-table tbody');
+  tbody.innerHTML = '';
+  for (const s of data.steps) {
+    const cacheClass = (s.cache || '').includes('HIT') ? 'badge-hit' : 'badge-miss';
+    tbody.innerHTML += `<tr>
+      <td style="font-family:var(--mono);font-size:0.82rem">${esc(s.step)}</td>
+      <td><span class="badge ${cacheClass}">${esc(s.cache || '—')}</span></td>
+      <td>${formatDuration(s.elapsed_s || 0)}</td>
+      <td>${s.exit_code === 0 ? '<span style="color:var(--success)">0</span>' : '<span style="color:var(--danger)">' + s.exit_code + '</span>'}</td>
+    </tr>`;
+  }
+}
+
+// ── Samples ────────────────────────────────────────────────
+async function loadSamples() {
+  const resp = await apiFetch(`/api/v1/samples?page=${state.samplesPage}&per_page=${state.samplesPerPage}`);
+  if (!resp.ok) return;
+  const data = await resp.json();
+  state.samplesTotal = data.total;
+
+  const tbody = document.querySelector('#samples-table tbody');
+  tbody.innerHTML = '';
+
+  for (const s of data.samples) {
+    const badge = statusBadge(s.status);
+    tbody.innerHTML += `<tr>
+      <td style="font-family:var(--mono);font-size:0.82rem">${esc(s.sample_id)}</td>
+      <td>${badge}</td>
+      <td>${formatDuration(s.elapsed_s || 0)}</td>
+      <td>${exitDot(s.apply_exit_code)}</td>
+      <td>${exitDot(s.sim_exit_code)}</td>
+      <td>${exitDot(s.extract_exit_code)}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(s.error_summary || '')}">${esc(s.error_summary || '—')}</td>
+      <td style="color:var(--text-muted);font-size:0.8rem">${esc(s.worker_id || '—')}</td>
+    </tr>`;
+  }
+
+  // Pagination
+  const totalPages = Math.ceil(data.total / state.samplesPerPage) || 1;
+  document.getElementById('page-info').textContent = `Page ${state.samplesPage} of ${totalPages} (${data.total} samples)`;
+  document.getElementById('prev-page').disabled = state.samplesPage <= 1;
+  document.getElementById('next-page').disabled = state.samplesPage >= totalPages;
+}
+
+document.getElementById('prev-page').addEventListener('click', () => {
+  if (state.samplesPage > 1) { state.samplesPage--; loadSamples(); }
+});
+document.getElementById('next-page').addEventListener('click', () => {
+  const totalPages = Math.ceil(state.samplesTotal / state.samplesPerPage) || 1;
+  if (state.samplesPage < totalPages) { state.samplesPage++; loadSamples(); }
+});
+
+// ── Results ────────────────────────────────────────────────
+async function loadResults() {
+  const resp = await apiFetch('/api/v1/results');
+  if (resp.status === 404) {
+    document.getElementById('results-table').style.display = 'none';
+    document.getElementById('results-empty').style.display = '';
+    return;
+  }
+  if (!resp.ok) return;
+  const data = await resp.json();
+  if (!data.length) {
+    document.getElementById('results-table').style.display = 'none';
+    document.getElementById('results-empty').style.display = '';
+    return;
+  }
+
+  document.getElementById('results-table').style.display = '';
+  document.getElementById('results-empty').style.display = 'none';
+
+  const keys = Object.keys(data[0]);
+  const thead = document.querySelector('#results-table thead tr');
+  thead.innerHTML = keys.map(k => `<th>${esc(k)}</th>`).join('');
+
+  const tbody = document.querySelector('#results-table tbody');
+  tbody.innerHTML = '';
+  for (const row of data) {
+    tbody.innerHTML += '<tr>' + keys.map(k => `<td>${esc(String(row[k] ?? '—'))}</td>`).join('') + '</tr>';
+  }
+}
+
+// ── Plots ──────────────────────────────────────────────────
+async function loadPlots() {
+  const resp = await apiFetch('/api/v1/plots');
+  if (resp.status === 404 || !resp.ok) {
+    document.getElementById('plots-grid').innerHTML = '';
+    document.getElementById('plots-empty').style.display = '';
+    return;
+  }
+  const data = await resp.json();
+  if (!data.plots || !data.plots.length) {
+    document.getElementById('plots-grid').innerHTML = '';
+    document.getElementById('plots-empty').style.display = '';
+    return;
+  }
+
+  document.getElementById('plots-empty').style.display = 'none';
+  const grid = document.getElementById('plots-grid');
+  grid.innerHTML = '';
+  for (const p of data.plots) {
+    const imgSrc = apiUrl(`/api/v1/plots/${encodeURIComponent(p.name)}`);
+    grid.innerHTML += `<div class="plot-card">
+      <img src="${imgSrc}" alt="${esc(p.name)}" loading="lazy">
+      <div class="plot-label">${esc(p.name)} <span style="float:right">${formatBytes(p.size)}</span></div>
+    </div>`;
+  }
+}
+
+// ── Live Page (issue #394) ─────────────────────────────────
+async function loadLivePage() {
+  // Reset live stats state
+  state.liveTotal = 0;
+  state.liveCompleted = 0;
+  state.liveFailed = 0;
+  state.liveCached = 0;
+  state.liveRunning = 0;
+  state.liveStartTime = Date.now();
+
+  // Load initial data from campaign and samples endpoints
+  try {
+    const campaignResp = await apiFetch('/api/v1/campaign');
+    if (campaignResp.ok) {
+      const campaignData = await campaignResp.json();
+      state.campaignData = campaignData;
+    }
+  } catch (err) {
+    console.error('Error loading campaign data for live page:', err);
+  }
+
+  try {
+    const samplesResp = await apiFetch('/api/v1/samples?page=1&per_page=500');
+    if (samplesResp.ok) {
+      const samplesData = await samplesResp.json();
+      state.liveTotal = samplesData.total || 0;
+      state.liveCompleted = samplesData.samples ? samplesData.samples.filter(function(s) { return s.status === 'ok'; }).length : 0;
+      state.liveFailed = samplesData.samples ? samplesData.samples.filter(function(s) { return s.status === 'failed'; }).length : 0;
+      state.liveCached = samplesData.samples ? samplesData.samples.filter(function(s) { return s.status === 'cached'; }).length : 0;
+      state.liveRunning = state.liveTotal - state.liveCompleted;
+    }
+  } catch (err) {
+    console.error('Error loading samples for live page:', err);
+  }
+
+  updateLiveStats();
+  // Auto-connect to SSE after loading initial data
+  if (!state.eventSource) {
+    connectSSE();
+  }
+}
+
+function updateLiveStats() {
+  var total = state.liveTotal;
+  var completed = state.liveCompleted;
+  var failed = state.liveFailed;
+  var cached = state.liveCached;
+  var running = state.liveRunning;
+  var pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  document.getElementById('live-total').textContent = total || '—';
+  document.getElementById('live-completed').textContent = completed;
+  document.getElementById('live-failed').textContent = failed;
+  document.getElementById('live-running').textContent = running;
+  document.getElementById('live-pct').textContent = pct + '%';
+  document.getElementById('live-progress-bar').style.width = pct + '%';
+  document.getElementById('live-progress-label').textContent = total > 0
+    ? completed + ' / ' + total + ' samples completed (' + pct + '%)'
+    : 'Waiting for campaign data...';
+
+  // ETA (issue #586)
+  var etaEl = document.getElementById('live-eta');
+  if (state.liveStartTime && completed > 0 && running > 0) {
+    var elapsed = Math.floor((Date.now() - state.liveStartTime) / 1000);
+    var rate = completed / elapsed; // samples per second
+    var remaining = total - completed;
+    if (rate > 0) {
+      var etaSeconds = Math.round(remaining / rate);
+      etaEl.textContent = formatDuration(etaSeconds);
+      etaEl.style.color = 'var(--text)';
+    } else {
+      etaEl.textContent = '—';
+      etaEl.style.color = 'var(--text-muted)';
+    }
+  } else if (running === 0 && completed > 0) {
+    etaEl.textContent = 'done';
+    etaEl.style.color = 'var(--success)';
+  } else {
+    etaEl.textContent = '—';
+    etaEl.style.color = 'var(--text-muted)';
+  }
+
+  // Update elapsed time
+  if (state.liveStartTime) {
+    var elapsed = Math.floor((Date.now() - state.liveStartTime) / 1000);
+    document.getElementById('sse-elapsed').textContent = 'Elapsed: ' + formatDuration(elapsed);
+  }
+
+  // D3 pie chart (issue #586)
+  renderPieChart({ ok: completed, failed: failed, cached: cached, running: running });
+  updatePieLegend({ ok: completed, failed: failed, cached: cached, running: running }, total);
+
+  // Update ETA footer
+  var etaEl = document.getElementById('pie-eta');
+  if (state.liveStartTime && completed > 0 && running > 0) {
+    var elapsed = Math.floor((Date.now() - state.liveStartTime) / 1000);
+    var rate = completed / elapsed;
+    var remaining = total - completed;
+    if (rate > 0) {
+      etaEl.textContent = '~' + formatDuration(Math.round(remaining / rate)) + ' remaining at current rate';
+    } else {
+      etaEl.textContent = '';
+    }
+  } else {
+    etaEl.textContent = '';
+  }
+}
+
+function updateLiveFromEvent(eventType, data) {
+  switch (eventType) {
+    case 'sample.started':
+      state.liveTotal++;
+      state.liveRunning++;
+      break;
+    case 'sample.completed':
+      state.liveCompleted++;
+      state.liveRunning = Math.max(0, state.liveRunning - 1);
+      if (data.status === 'failed') {
+        state.liveFailed++;
+      } else if (data.status === 'cached') {
+        state.liveCached++;
+      }
+      break;
+    case 'campaign.completed':
+      // Campaign finished, no more running samples
+      state.liveRunning = 0;
+      break;
+  }
+  updateLiveStats();
+}
+
+// ── D3 Pie Chart (issue #586) ─────────────────────────────
+var pieColors = { ok: '#4ade80', failed: '#f87171', cached: '#a78bfa', running: '#fbbf24' };
+
+function renderPieChart(statuses) {
+  var svg = d3.select('#status-pie');
+  svg.selectAll('*').remove();
+  var width = 140, height = 140, radius = Math.min(width, height) / 2;
+  var g = svg.append('g').attr('transform', 'translate(' + width / 2 + ',' + height / 2 + ')');
+
+  var data = [
+    { key: 'ok', value: statuses.ok },
+    { key: 'failed', value: statuses.failed },
+    { key: 'cached', value: statuses.cached },
+    { key: 'running', value: statuses.running }
+  ].filter(function(d) { return d.value > 0; });
+
+  if (data.length === 0) {
+    g.append('circle').attr('r', radius).attr('fill', 'var(--surface-alt)');
+    g.append('text').attr('text-anchor', 'middle').attr('dy', '0.35em')
+      .attr('fill', 'var(--text-muted)').attr('font-size', '12px').text('No data');
+    return;
+  }
+
+  var pie = d3.pie().value(function(d) { return d.value; }).sort(null);
+  var arc = d3.arc().innerRadius(radius * 0.5).outerRadius(radius);
+  var arcHover = d3.arc().innerRadius(radius * 0.5).outerRadius(radius * 1.05);
+
+  var arcs = g.selectAll('path').data(pie(data)).enter().append('path')
+    .attr('d', arc)
+    .attr('fill', function(d) { return pieColors[d.data.key] || '#888'; })
+    .attr('stroke', 'var(--bg)')
+    .attr('stroke-width', 2)
+    .style('cursor', 'default')
+    .on('mouseover', function(d) { d3.select(this).attr('d', arcHover); })
+    .on('mouseout', function(d) { d3.select(this).attr('d', arc); });
+
+  // Center text: total completed
+  var totalDone = (statuses.ok || 0) + (statuses.failed || 0) + (statuses.cached || 0);
+  g.append('text').attr('text-anchor', 'middle').attr('dy', '-0.2em')
+    .attr('fill', 'var(--text)').attr('font-size', '18px').attr('font-weight', '700')
+    .text(totalDone);
+  g.append('text').attr('text-anchor', 'middle').attr('dy', '1.1em')
+    .attr('fill', 'var(--text-muted)').attr('font-size', '10px')
+    .text('done');
+}
+
+function updatePieLegend(statuses, total) {
+  var legend = document.getElementById('pie-legend');
+  var items = [
+    { key: 'ok', label: 'Succeeded', color: pieColors.ok },
+    { key: 'failed', label: 'Failed', color: pieColors.failed },
+    { key: 'cached', label: 'Cached', color: pieColors.cached },
+    { key: 'running', label: 'Running', color: pieColors.running }
+  ];
+  legend.innerHTML = items.map(function(item) {
+    return '<div class="legend-item">' +
+      '<span class="legend-dot" style="background:' + item.color + '"></span>' +
+      '<span class="legend-label">' + item.label + '</span>' +
+      '<span class="legend-value">' + (statuses[item.key] || 0) + '</span>' +
+      '</div>';
+  }).join('');
+}
+
+// ── Live SSE ───────────────────────────────────────────────
+document.getElementById('btn-connect').addEventListener('click', connectSSE);
+document.getElementById('btn-disconnect').addEventListener('click', disconnectSSE);
+
+function connectSSE() {
+  if (state.eventSource) disconnectSSE();
+
+  const feed = document.getElementById('live-feed');
+  feed.innerHTML = '';
+
+  const key = apiKey();
+  const url = key ? '/api/v1/events?api_key=' + encodeURIComponent(key) : '/api/v1/events';
+
+  try {
+    const es = new EventSource(url);
+    state.eventSource = es;
+
+    es.onopen = function() {
+      document.getElementById('sse-status').textContent = 'connected';
+      document.getElementById('sse-status').style.color = 'var(--success)';
+      document.getElementById('btn-connect').style.display = 'none';
+      document.getElementById('btn-disconnect').style.display = '';
+      addFeedEvent('system', 'Connected to event stream', '');
+    };
+
+    es.onerror = function(e) {
+      document.getElementById('sse-status').textContent = 'error / read-only';
+      document.getElementById('sse-status').style.color = 'var(--danger)';
+      addFeedEvent('system', 'Connection error — SSE may require --read-write mode', '');
+      disconnectSSE();
+    };
+
+    es.addEventListener('sample.started', function(e) {
+      var d = JSON.parse(e.data);
+      addFeedEvent('sample-started', 'sample.started — ' + d.sample_id, '');
+      updateLiveFromEvent('sample.started', d);
+      if (state.currentPage === 'dashboard') loadDashboard();
+      if (state.currentPage === 'samples') loadSamples();
+    });
+    es.addEventListener('sample.completed', function(e) {
+      var d = JSON.parse(e.data);
+      addFeedEvent('sample-completed', 'sample.completed — ' + d.sample_id + ' (' + d.status + ')', '');
+      updateLiveFromEvent('sample.completed', d);
+      // Auto-refresh dashboard if visible
+      if (state.currentPage === 'dashboard') loadDashboard();
+      if (state.currentPage === 'samples') loadSamples();
+    });
+    es.addEventListener('step.completed', function(e) {
+      var d = JSON.parse(e.data);
+      addFeedEvent('step-completed', 'step.completed — ' + d.step, '');
+      if (state.currentPage === 'steps') loadSteps();
+    });
+    es.addEventListener('campaign.completed', function(e) {
+      var d = JSON.parse(e.data);
+      addFeedEvent('campaign-completed', 'campaign.completed — ' + d.campaign_id, '');
+      updateLiveFromEvent('campaign.completed', d);
+      if (state.currentPage === 'dashboard') loadDashboard();
+    });
+
+  } catch (err) {
+    addFeedEvent('system', 'Failed to connect: ' + err.message, '');
+  }
+}
+
+function disconnectSSE() {
+  if (state.eventSource) {
+    state.eventSource.close();
+    state.eventSource = null;
+  }
+  document.getElementById('sse-status').textContent = 'disconnected';
+  document.getElementById('sse-status').style.color = 'var(--text-muted)';
+  document.getElementById('btn-connect').style.display = '';
+  document.getElementById('btn-disconnect').style.display = 'none';
+}
+
+function addFeedEvent(type, text, time) {
+  const feed = document.getElementById('live-feed');
+  const now = time || new Date().toLocaleTimeString();
+  const typeClass = type.replace('.', '-');
+  const div = document.createElement('div');
+  div.className = 'evt';
+  div.innerHTML = `<span class="evt-time">${esc(now)}</span><span class="evt-type ${esc(typeClass)}">${esc(type)}</span><span>${esc(text)}</span>`;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ── Utilities ──────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function formatDuration(seconds) {
+  if (!seconds && seconds !== 0) return '—';
+  if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = (seconds % 60).toFixed(0);
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function statusBadge(status) {
+  const map = { ok: 'badge-ok', failed: 'badge-fail', cached: 'badge-cached' };
+  const cls = map[status] || 'badge-running';
+  return `<span class="badge ${cls}">${esc(status || 'unknown')}</span>`;
+}
+
+function exitDot(code) {
+  if (code === undefined || code === null) return '<span style="color:var(--text-muted)">—</span>';
+  return code === 0
+    ? '<span style="color:var(--success)">&#10003;</span>'
+    : `<span style="color:var(--danger)" title="exit ${code}">&#10007;</span>`;
+}
+
+function setConnOk() {
+  document.getElementById('connStatus').textContent = 'connected';
+  document.getElementById('connStatus').className = 'status status-ok';
+}
+
+function setConnError() {
+  document.getElementById('connStatus').textContent = 'error';
+  document.getElementById('connStatus').className = 'status status-err';
+}
+
+// ── Create Campaign Form ─────────────────────────────────────────────
+function initCreateForm() {
+  document.getElementById('create-form').style.display = '';
+  document.getElementById('create-result').style.display = 'none';
+  document.getElementById('create-status').textContent = '';
+  document.getElementById('create-status').className = 'create-status';
+  document.getElementById('btn-create').disabled = false;
+}
+
+document.getElementById('create-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('btn-create');
+  const status = document.getElementById('create-status');
+  btn.disabled = true;
+  status.textContent = 'Creating…';
+  status.className = 'create-status';
+
+  const payload = {
+    input_variables: document.getElementById('input_variables').value,
+    template_sim_package: document.getElementById('template_sim_package').value,
+    n_samples: parseInt(document.getElementById('n_samples').value, 10),
+    openstudio_version: document.getElementById('openstudio_version').value || '3.11.0',
+    executor: document.getElementById('executor').value,
+    algorithm: document.getElementById('algorithm').value,
+    outdir: document.getElementById('outdir').value || null,
+    archive_intermediates: document.getElementById('archive_intermediates').checked,
+    auto_start: document.getElementById('auto_start').checked,
+  };
+
+  try {
+    const resp = await apiFetch('/api/v1/campaigns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.textContent = 'Error: ' + (data.detail || resp.statusText);
+      status.className = 'create-status err';
+      btn.disabled = false;
+      return;
+    }
+    document.getElementById('result-campaign-id').textContent = data.campaign_id || '—';
+    document.getElementById('result-outdir').textContent = data.outdir || '—';
+    document.getElementById('result-status').textContent = data.status || '—';
+    document.getElementById('create-form').style.display = 'none';
+    document.getElementById('create-result').style.display = '';
+    status.textContent = '';
+    document.getElementById('btn-goto-dashboard').onclick = () => navigate('dashboard');
+  } catch (err) {
+    status.textContent = 'Network error: ' + err.message;
+    status.className = 'create-status err';
+    btn.disabled = false;
+  }
+});
+
+// ── Init ───────────────────────────────────────────────────
+loadDashboard();
+</script>
+
+</body>
+</html>

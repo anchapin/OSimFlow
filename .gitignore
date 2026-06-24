@@ -1,0 +1,88 @@
+# =============================================================================
+# OSimFlow — gitignore
+# =============================================================================
+# Campaign run artifacts (per-campaign outdir, including work/ subdir)
+.work/
+/results/
+example_results/
+slurm_logs/
+
+# Spike/architecture-decision artifacts: venvs and work dirs only
+.agents/spike/.venv/
+.agents/spike/*/work/
+.agents/spike/*/.venv/
+.agents/spike/work/custom_python_out/
+.agents/spike/work/snakemake_out/
+.agents/spike/work/cache_test_*/
+# Keep .agents/spike/work/fixtures/ (the variable.yml and template
+# fixture the spike scripts depend on) — not ignored above.
+
+# Per-issue agent result write-ups (e.g. result-backend-issue-11.md).
+# These are local agent deliverables, not repo content. The top-level
+# ADRs (decision-verdict.md, monitoring-decision.md, result-architecture.md)
+# and files under .agents/results/architecture/ stay tracked — only
+# the per-issue `result-*.md` write-ups are excluded.
+/.agents/results/result-*.md
+
+# Snakemake runtime caches (anywhere in the tree)
+**/.snakemake/
+**/.snakemake_timestamp
+
+# Python (osimflow/ package, bin/ scripts, any helpers)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.envrc
+
+# OpenStudio / EnergyPlus output artifacts that may leak via user_scripts
+*.osm
+*.osw
+*.idf
+*.epw
+eplusout.*
+sqlite3.db
+# Whitelist the example_package fixtures: the bench workflow needs
+# `workflow.osw` and `model.osm` to exist on disk (they're the test-mode
+# JSON stubs the stub apply step reads). They're checked-in fixtures,
+# not user OS outputs.
+!example_package/model.osm
+!example_package/workflow.osw
+
+# Container build artifacts
+*.tar
+*.tar.gz
+docker-image-*
+
+# Terraform — local state, plugins, and lock file (use remote backend in prod)
+**/.terraform/
+**/.terraform.lock.hcl
+**/terraform.tfstate*
+**/.tfstate*
+
+# Nomad — generated ACL tokens (never commit secrets)
+infra/nomad/acl/tokens/*.json
+
+# IDE / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Coverage / build reports
+htmlcov/
+.coverage
+coverage.xml
+build/
+dist/
+
+# Local-only samples / smoke-test inputs
+samples-local/
+# test

@@ -1,0 +1,146 @@
+<?xml version="1.0"?>
+<measure>
+  <schema_version>3.1</schema_version>
+  <name>hvacervdcv</name>
+  <uid>8dda36f0-45b9-4ff5-bd78-b1bf85a737ea</uid>
+  <version_id>f44a33fe-bbfd-4727-881d-71b87d9b9df2</version_id>
+  <version_modified>2025-09-25T16:19:42Z</version_modified>
+  <xml_checksum>11456A27</xml_checksum>
+  <class_name>HVACERVDCV</class_name>
+  <display_name>HVAC ERV DCV</display_name>
+  <description>Adds ERV or DCV.</description>
+  <modeler_description>ERV: Heat/energy recovery added based on climate zone. Energy recovery added to ASHRAE 'humid' climates, heat recovery added to all others. Effectiveness is based on Ventacity system. Additional fan static pressure is added as wheel power to capture impact of bypass. DCV: Add demand control ventilation to variable volume HVAC systems. Requires that the design specification outdoor air objects have some part of the ventilation be specified as per person. Also requires that if zone hvac equipment is present, it takes load priority over the ventilation system.</modeler_description>
+  <arguments>
+    <argument>
+      <name>erv_or_dcv</name>
+      <display_name>ERV or DCV:</display_name>
+      <description>Select whether to add an exhaust air energy or heat recovery system (ERV) or demand control ventilation (DCV).</description>
+      <type>Choice</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>skip both</default_value>
+      <choices>
+        <choice>
+          <value>ERV</value>
+          <display_name>ERV</display_name>
+        </choice>
+        <choice>
+          <value>DCV</value>
+          <display_name>DCV</display_name>
+        </choice>
+        <choice>
+          <value>skip both</value>
+          <display_name>skip both</display_name>
+        </choice>
+      </choices>
+    </argument>
+  </arguments>
+  <outputs />
+  <provenances />
+  <tags>
+    <tag>HVAC.HVAC Controls</tag>
+  </tags>
+  <attributes>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Measure Type</name>
+      <value>ModelMeasure</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Apply Measure Now</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>OpenStudio Application</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Software Tool</name>
+      <value>Parametric Analysis Tool</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Use Case</name>
+      <value>Model Articulation</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Use Case</name>
+      <value>Sensitivity Analysis</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Use Case</name>
+      <value>New Construction EE</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Intended Use Case</name>
+      <value>Retrofit EE</value>
+      <datatype>string</datatype>
+    </attribute>
+  </attributes>
+  <files>
+    <file>
+      <filename>README.md</filename>
+      <filetype>md</filetype>
+      <usage_type>readme</usage_type>
+      <checksum>7BCF13EC</checksum>
+    </file>
+    <file>
+      <filename>README.md.erb</filename>
+      <filetype>erb</filetype>
+      <usage_type>readmeerb</usage_type>
+      <checksum>703C9964</checksum>
+    </file>
+    <file>
+      <version>
+        <software_program>OpenStudio</software_program>
+        <identifier>2.8.0</identifier>
+        <min_compatible>2.8.0</min_compatible>
+      </version>
+      <filename>measure.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>script</usage_type>
+      <checksum>E81CB227</checksum>
+    </file>
+    <file>
+      <filename>hvacervdcv_test.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>test</usage_type>
+      <checksum>2ED78132</checksum>
+    </file>
+  </files>
+</measure>

@@ -1,0 +1,21 @@
+{
+  "seed_file": "model.osm",
+  "weather_file": "",
+  "measure_paths": [],
+  "steps": [
+    {
+      "measure_dir_name": "SetThermostatSchedule",
+      "arguments": {
+        "heating_setpoint": 20.0,
+        "cooling_setpoint": 25.0
+      }
+    },
+    {
+      "measure_dir_name": "SetEnvelopePerformance",
+      "arguments": {
+        "wwr": 0.4,
+        "wall_r_value": 3.5
+      }
+    }
+  ]
+}

@@ -1,0 +1,144 @@
+# =============================================================================
+# .github/workflows/release-installers.yml — Cross-platform binary builds
+# =============================================================================
+# Triggers on workflow_run after release.yml succeeds.
+# Builds PyInstaller binaries on 3 OSes, runs smoke tests, and uploads
+# artifacts to the GitHub Release.
+#
+# Issue #187: Cross-platform CLI installer builds.
+# =============================================================================
+name: release-installers
+
+on:
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write   # upload artifacts to GitHub Release
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build:
+    name: build installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            ext: .tar.gz
+          - os: macos-latest
+            platform: macos
+            ext: .tar.gz
+          - os: windows-latest
+            platform: windows
+            ext: .zip
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install osimflow + pyinstaller
+        run: |
+          uv pip install --system ".[dev]"
+          uv pip install --system "pyinstaller>=6"
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller packaging/osimflow.spec
+
+      - name: Run smoke test (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x packaging/scripts/smoke_test.sh
+          if [ -d "dist/osimflow" ]; then
+            export PATH="dist/osimflow:${PATH}"
+            ./packaging/scripts/smoke_test.sh dist/osimflow/osimflow
+          elif [ -f "dist/osimflow" ]; then
+            ./packaging/scripts/smoke_test.sh dist/osimflow
+          fi
+
+      - name: Run smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "dist\osimflow.exe") {
+            dist\osimflow.exe --help
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: Package artifact (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          if [ -d "dist/osimflow" ]; then
+            tar -czf "dist/osimflow-${TAG}-linux-x86_64.tar.gz" -C dist osimflow
+          fi
+
+      - name: Package artifact (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          if [ -d "dist/osimflow" ]; then
+            tar -czf "dist/osimflow-${TAG}-macos-x86_64.tar.gz" -C dist osimflow
+          fi
+
+      - name: Package artifact (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.workflow_run.head_branch }}"
+          if (Test-Path "dist\osimflow.exe") {
+            Compress-Archive -Path "dist\osimflow.exe" -DestinationPath "dist\osimflow-$tag-windows-x86_64.zip"
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: warn
+
+  upload-release:
+    name: upload to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/*.exe

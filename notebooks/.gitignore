@@ -1,0 +1,3 @@
+# Data files — these are campaign outputs, not source code
+*.parquet
+*.csv

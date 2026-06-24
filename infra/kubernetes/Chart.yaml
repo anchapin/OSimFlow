@@ -1,0 +1,14 @@
+apiVersion: v2
+name: osimflow
+description: A Helm chart for OSimFlow campaigns on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - openstudio
+  - energy-modeling
+  - hpc
+  - kubernetes
+maintainers:
+  - name: OSimFlow Community
+    url: https://github.com/anchapin/OSimFlow

@@ -1,0 +1,339 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osimflow"
+version = "0.1.0-dev"
+description = "Community-driven parametric OpenStudio simulation campaigns"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+authors = [
+    {name = "OSimFlow maintainers"},
+]
+keywords = [
+    "openstudio",
+    "energyplus",
+    "building-energy",
+    "parametric",
+    "workflow",
+    "scientific-campaigns",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Hydrology",
+]
+dependencies = [
+    "pyyaml>=6",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2",
+    "pyarrow>=12",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "tqdm>=4.65",
+    "openpyxl>=3.1",
+    "submitit>=1.5; platform_system != 'Windows'",
+    "jsonschema>=4.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+    "pytest-xdist>=3.5",
+    "pytest-timeout>=2.3",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-PyYAML",
+    "types-requests",
+    "pre-commit>=3.7",
+    "moto[batch]>=5",
+    "streamlit>=1.30",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "httpx>=0.27",
+    "schemathesis>=3.19",
+]
+aws = [
+    "boto3>=1.28",
+]
+nomad = []  # stdlib-only HTTP; empty marker for requirements.txt documentation
+slurm = [
+    "submitit>=1.5",
+]
+mlflow = [
+    "mlflow>=2",
+]
+sensitivity = [
+    "SALib>=1.4",
+]
+optimization = [
+    "pymoo>=0.6",
+]
+ga = [
+    "deap>=1.4",
+]
+api = [
+    "fastapi>=0.110",
+    "pydantic>=2.0",
+    "uvicorn[standard]>=0.29",
+    "sse-starlette>=2.0",
+    "slowapi>=0.1.9",
+    "httpx>=0.27",
+    "prometheus_client>=0.19",
+]
+viz = [
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+tui = [
+    "rich>=13.0",
+]
+r = [
+    "pyarrow>=12",
+]
+kubernetes = [
+    "kubernetes>=29",
+]
+
+[project.scripts]
+osimflow = "osimflow.__main__:main"
+
+# ---------------------------------------------------------------------------
+# Entry-point groups for third-party plug-ins (issue #432)
+# ---------------------------------------------------------------------------
+# Third-party packages can register custom algorithms or executors by
+# declaring entry points in these groups.  Discovery is automatic — the
+# AlgorithmRegistry.discover_plugins() and ExecutorRegistry.discover_plugins()
+# methods scan these groups at import time.
+#
+# Example for a third-party ``pyproject.toml``:
+#
+#   [project.entry-points."osimflow.algorithms"]
+#   bayesian_opt = "my_pkg.algorithms:BayesianOptAlgorithm"
+#
+#   [project.entry-points."osimflow.executors"]
+#   k8s_gpu = "my_pkg.executors:K8sGpuExecutor"
+#
+# The entry-point ``name`` becomes the name used on the CLI
+# (--algorithm bayesian_opt / --executor k8s_gpu).  The value must point
+# to a BaseAlgorithm or BaseExecutor subclass respectively.
+# ---------------------------------------------------------------------------
+# The built-in algorithms and executors are registered programmatically
+# (not as entry points) so the tables below are intentionally empty.
+[project.entry-points."osimflow.algorithms"]
+[project.entry-points."osimflow.executors"]
+
+[project.urls]
+Homepage = "https://github.com/anchapin/OSimFlow"
+Issues = "https://github.com/anchapin/OSimFlow/issues"
+
+[tool.setuptools.packages.find]
+include = ["osimflow*"]
+
+[tool.setuptools.package-data]
+"osimflow" = ["py.typed"]
+"osimflow._work_scripts" = ["*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--cov=osimflow",
+    "--cov-report=term-missing",
+    "--cov-fail-under=85",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "nomad_e2e: marks tests requiring a Docker-based Nomad cluster",
+    "contract: marks contract / README staleness tests",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["osimflow"]
+omit = [
+    "osimflow/__main__.py",
+    "osimflow/algorithms/fast99.py",
+    "osimflow/algorithms/morris.py",
+    "osimflow/algorithms/nsga2.py",
+    "osimflow/algorithms/pso.py",
+    "osimflow/algorithms/ga.py",
+    "osimflow/api/*",
+    "osimflow/viz/dashboard.py",
+    "osimflow/_work_scripts/*",
+    "osimflow/taskqueue.py",
+    "osimflow/storage.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff (linter + formatter; replaces flake8+isort+pyupgrade+flake8-bugbear)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["osimflow", "bin", "user_scripts", "tests"]
+# Spike/ directory holds one-off scripts from the workflow-framework decision
+# spike. They are not shipped; lint them separately or not at all.
+extend-exclude = [
+    ".agents/spike",
+    ".agents/skills",
+    "worktrees",
+]
+
+[tool.ruff.lint]
+# E/W: pycodestyle; F: pyflakes; I: isort; UP: pyupgrade;
+# B: flake8-bugbear; SIM: simplify; PL: pylint.
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "PL"]
+# B008: function call in default argument (used by Pydantic-style contracts).
+# PLR0913: too many arguments (Campaign.__init__ legitimately has many).
+# PLR2004: magic value (energy-modeling domain has many "magic" constants).
+# PLR0915: too many statements (auto-recovery block in _submit_and_await_all).
+ignore = ["B008", "PLR0913", "PLR2004", "E501", "PLR0915"]
+fixable = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+# bin/*.py are CLI scripts (argparse, top-level side effects OK).
+"bin/*" = ["PL", "SIM"]
+# scripts/*.py are CLI utility scripts that use lazy imports to avoid
+# paying import cost when the optional dependency (bson/pymongo) is absent.
+"scripts/*" = ["PL", "SIM", "PLC0415"]
+# _work_scripts/ are CLI scripts (same as bin/).
+"osimflow/_work_scripts/*" = ["PL", "SIM"]
+# tests/ use pytest patterns that ruff would otherwise flag.
+"tests/**" = ["PL", "SIM", "B011", "F841"]
+# __init__.py: re-exports.
+"**/__init__.py" = ["F401"]
+# Executors use lazy SDK imports inside __init__ to avoid paying import
+# cost when the local/slurm path is used (AWSBatchExecutor precedent).
+"osimflow/executors/*.py" = ["PLC0415"]
+# base.py defines shared primitives; import order here is intentional to
+# avoid circular deps (azure/google_batch_executor import from base).
+"osimflow/executors/__init__.py" = ["I001"]
+# campaign.py: SIM108 if-else block is more readable with explanatory comment.
+"osimflow/campaign.py" = ["SIM108"]
+# campaigns.py uses lazy imports for heavy SDKs to avoid import-time overhead.
+# PLR0912: too many branches in _build_executor_from_request is intentional
+#          to map all executor types to their config dicts.
+"osimflow/api/campaigns.py" = ["PLC0415", "I001", "PLR0912"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["osimflow"]
+
+# ---------------------------------------------------------------------------
+# mypy --strict on the public API surface (osimflow/). bin/ and
+# user_scripts/ are user-supplied CLI scripts and get a relaxed config.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+ignore_missing_imports = true
+exclude = [
+    "bin/",
+    "osimflow/_work_scripts/",
+    "user_scripts/",
+    "tests/",
+    "tools/",
+    ".venv/",
+    ".agents/",
+]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.app"
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.events"
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.schemas"
+disallow_subclassing_any = false
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.campaigns"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.pat_compat"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.files"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.timeseries"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.measures"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.variables"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.ui"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.variable_designer"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.results_viewer"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.variable_designer"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.results_query"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.coordinator"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "osimflow.api.dashboard"
+disable_error_code = ["untyped-decorator", "misc"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "tools.*"
+disallow_untyped_defs = false

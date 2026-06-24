@@ -1,0 +1,525 @@
+<?xml version="1.0"?>
+<measure>
+  <schema_version>3.1</schema_version>
+  <name>hvac_control_179_d_baseline</name>
+  <uid>d5c3d5eb-90eb-435b-bbf7-be26d4503982</uid>
+  <version_id>f8854428-55e0-4def-a639-20e23dd619a1</version_id>
+  <version_modified>2026-06-12T20:08:48Z</version_modified>
+  <xml_checksum>A514F332</xml_checksum>
+  <class_name>HVACControl179DBaseline</class_name>
+  <display_name>HVAC control 179D Baseline</display_name>
+  <description>Creates the Performance Rating Method baseline HVAC control</description>
+  <modeler_description></modeler_description>
+  <arguments>
+    <argument>
+      <name>standard</name>
+      <display_name>Standard</display_name>
+      <type>Choice</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>179D 90.1-2019</default_value>
+      <choices>
+        <choice>
+          <value>90.1-2007 BETA</value>
+          <display_name>90.1-2007 BETA</display_name>
+        </choice>
+        <choice>
+          <value>90.1-2007</value>
+          <display_name>90.1-2007</display_name>
+        </choice>
+        <choice>
+          <value>179D 90.1-2007</value>
+          <display_name>179D 90.1-2007</display_name>
+        </choice>
+        <choice>
+          <value>179D 90.1-2019</value>
+          <display_name>179D 90.1-2019</display_name>
+        </choice>
+        <choice>
+          <value>90.1-PRM-2019</value>
+          <display_name>90.1-PRM-2019</display_name>
+        </choice>
+        <choice>
+          <value>90.1-2010 BETA</value>
+          <display_name>90.1-2010 BETA</display_name>
+        </choice>
+        <choice>
+          <value>90.1-2010</value>
+          <display_name>90.1-2010</display_name>
+        </choice>
+        <choice>
+          <value>90.1-2013</value>
+          <display_name>90.1-2013</display_name>
+        </choice>
+      </choices>
+    </argument>
+    <argument>
+      <name>building_type</name>
+      <display_name>Building Type.</display_name>
+      <type>Choice</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>SmallOffice</default_value>
+      <choices>
+        <choice>
+          <value>MidriseApartment</value>
+          <display_name>MidriseApartment</display_name>
+        </choice>
+        <choice>
+          <value>HighriseApartment</value>
+          <display_name>HighriseApartment</display_name>
+        </choice>
+        <choice>
+          <value>SecondarySchool</value>
+          <display_name>SecondarySchool</display_name>
+        </choice>
+        <choice>
+          <value>PrimarySchool</value>
+          <display_name>PrimarySchool</display_name>
+        </choice>
+        <choice>
+          <value>SmallOffice</value>
+          <display_name>SmallOffice</display_name>
+        </choice>
+        <choice>
+          <value>MediumOffice</value>
+          <display_name>MediumOffice</display_name>
+        </choice>
+        <choice>
+          <value>LargeOffice</value>
+          <display_name>LargeOffice</display_name>
+        </choice>
+        <choice>
+          <value>SmallHotel</value>
+          <display_name>SmallHotel</display_name>
+        </choice>
+        <choice>
+          <value>LargeHotel</value>
+          <display_name>LargeHotel</display_name>
+        </choice>
+        <choice>
+          <value>Warehouse</value>
+          <display_name>Warehouse</display_name>
+        </choice>
+        <choice>
+          <value>RetailStandalone</value>
+          <display_name>RetailStandalone</display_name>
+        </choice>
+        <choice>
+          <value>RetailStripmall</value>
+          <display_name>RetailStripmall</display_name>
+        </choice>
+        <choice>
+          <value>QuickServiceRestaurant</value>
+          <display_name>QuickServiceRestaurant</display_name>
+        </choice>
+        <choice>
+          <value>FullServiceRestaurant</value>
+          <display_name>FullServiceRestaurant</display_name>
+        </choice>
+        <choice>
+          <value>Hospital</value>
+          <display_name>Hospital</display_name>
+        </choice>
+        <choice>
+          <value>Outpatient</value>
+          <display_name>Outpatient</display_name>
+        </choice>
+      </choices>
+    </argument>
+    <argument>
+      <name>climate_zone</name>
+      <display_name>Climate Zone.</display_name>
+      <type>Choice</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>ASHRAE 169-2013-2A</default_value>
+      <choices>
+        <choice>
+          <value>ASHRAE 169-2013-1A</value>
+          <display_name>ASHRAE 169-2013-1A</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-2A</value>
+          <display_name>ASHRAE 169-2013-2A</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-2B</value>
+          <display_name>ASHRAE 169-2013-2B</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-3A</value>
+          <display_name>ASHRAE 169-2013-3A</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-3B</value>
+          <display_name>ASHRAE 169-2013-3B</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-3C</value>
+          <display_name>ASHRAE 169-2013-3C</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-4A</value>
+          <display_name>ASHRAE 169-2013-4A</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-4B</value>
+          <display_name>ASHRAE 169-2013-4B</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-4C</value>
+          <display_name>ASHRAE 169-2013-4C</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-5A</value>
+          <display_name>ASHRAE 169-2013-5A</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-5B</value>
+          <display_name>ASHRAE 169-2013-5B</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-6A</value>
+          <display_name>ASHRAE 169-2013-6A</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-6B</value>
+          <display_name>ASHRAE 169-2013-6B</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-7A</value>
+          <display_name>ASHRAE 169-2013-7A</display_name>
+        </choice>
+        <choice>
+          <value>ASHRAE 169-2013-8A</value>
+          <display_name>ASHRAE 169-2013-8A</display_name>
+        </choice>
+      </choices>
+    </argument>
+    <argument>
+      <name>custom</name>
+      <display_name>Customization</display_name>
+      <description>If selected, some of the standard process will be replaced by custom logic specific to particular programs.  If these do not apply to you, select None.</description>
+      <type>Choice</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>*None*</default_value>
+      <choices>
+        <choice>
+          <value>Xcel Energy CO EDA</value>
+          <display_name>Xcel Energy CO EDA</display_name>
+        </choice>
+        <choice>
+          <value>*None*</value>
+          <display_name>*None*</display_name>
+        </choice>
+        <choice>
+          <value>179d</value>
+          <display_name>179d</display_name>
+        </choice>
+      </choices>
+    </argument>
+    <argument>
+      <name>debug</name>
+      <display_name>Show debug messages?</display_name>
+      <type>Boolean</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>false</default_value>
+      <choices>
+        <choice>
+          <value>true</value>
+          <display_name>true</display_name>
+        </choice>
+        <choice>
+          <value>false</value>
+          <display_name>false</display_name>
+        </choice>
+      </choices>
+    </argument>
+    <argument>
+      <name>use_upstream_args</name>
+      <display_name>Use Upstream Argument Values</display_name>
+      <description>When true this will look for arguments or registerValues in upstream measures that match arguments from this measure, and will use the value from the upstream measure in place of what is entered for this measure.</description>
+      <type>Boolean</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>true</default_value>
+      <choices>
+        <choice>
+          <value>true</value>
+          <display_name>true</display_name>
+        </choice>
+        <choice>
+          <value>false</value>
+          <display_name>false</display_name>
+        </choice>
+      </choices>
+    </argument>
+  </arguments>
+  <outputs />
+  <provenances />
+  <tags>
+    <tag>Whole Building.Space Types</tag>
+  </tags>
+  <attributes>
+    <attribute>
+      <name>Uses SketchUp API</name>
+      <value>false</value>
+      <datatype>boolean</datatype>
+    </attribute>
+    <attribute>
+      <name>Measure Type</name>
+      <value>ModelMeasure</value>
+      <datatype>string</datatype>
+    </attribute>
+  </attributes>
+  <files>
+    <file>
+      <filename>LICENSE.md</filename>
+      <filetype>md</filetype>
+      <usage_type>license</usage_type>
+      <checksum>91185A2B</checksum>
+    </file>
+    <file>
+      <filename>README.md</filename>
+      <filetype>md</filetype>
+      <usage_type>readme</usage_type>
+      <checksum>82369381</checksum>
+    </file>
+    <file>
+      <filename>README.md.erb</filename>
+      <filetype>erb</filetype>
+      <usage_type>readmeerb</usage_type>
+      <checksum>78789F4B</checksum>
+    </file>
+    <file>
+      <version>
+        <software_program>OpenStudio</software_program>
+        <identifier>2.0.0</identifier>
+        <min_compatible>2.0.0</min_compatible>
+      </version>
+      <filename>measure.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>script</usage_type>
+      <checksum>61B6C98F</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.AirLoopHVAC.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>2C07F713</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.AirTerminalSingleDuctVAVReheat.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>BE4E1936</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.CoilHeatingDXMultiSpeed.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>CAC9F485</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.CoilHeatingDXSingleSpeed.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>51A2ABED</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.FanVariableVolume.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>FD0C5BC2</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.Model.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>3B16257D</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.Model_backport_ground_condition.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>21864180</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.PlanarSurface.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>D678106E</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.PlantLoop.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>005E1CDA</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.Pump.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>0400BDB4</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.ServiceWaterHeating.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>54F51BF4</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.Siz.HeatingCoolingFuels.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>941C3A2C</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.Space.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>DF172659</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.SpaceType.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>5E83D76C</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.SubSurface.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>A8F8DA02</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.ThermalZone.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>07203FA1</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.ZoneHVACComponent.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>1958868E</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_2007.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>E86A9573</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/179d_ashrae_90_1_prm_2019.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>F48FAD80</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/README.md</filename>
+      <filetype>md</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>5CB9DD47</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/data/179d_ashrae_90_1_2007.construction_properties.json</filename>
+      <filetype>json</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>804C49A6</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/data/179d_ashrae_90_1_2007.constructions.json</filename>
+      <filetype>json</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>44D39DE9</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/data/179d_ashrae_90_1_2007.materials.json</filename>
+      <filetype>json</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>2406A5C6</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/data/179d_ashrae_90_1_2007.schedules.json</filename>
+      <filetype>json</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>C4EA3C8B</checksum>
+    </file>
+    <file>
+      <filename>179d_standards/data/179d_ashrae_90_1_2007.spc_typ.json</filename>
+      <filetype>json</filetype>
+      <usage_type>resource</usage_type>
+      <checksum>D68E9B5D</checksum>
+    </file>
+    <file>
+      <filename>179d_gem_baseline_hvac_control_test.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>test</usage_type>
+      <checksum>8D3C2B91</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system1.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>6CF9EE07</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system10.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>BFA552D7</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system2.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>3B3E59D7</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system3.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>BCDFA751</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system4.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>BDCCA1C8</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system5.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>4F6FD5FA</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system6.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>8F812397</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system7.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>5AF396B0</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system8.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>28D5E026</checksum>
+    </file>
+    <file>
+      <filename>supposed_to_be_system9.osm</filename>
+      <filetype>osm</filetype>
+      <usage_type>test</usage_type>
+      <checksum>435DE1E5</checksum>
+    </file>
+  </files>
+</measure>

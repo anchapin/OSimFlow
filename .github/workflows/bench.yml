@@ -1,0 +1,83 @@
+# =============================================================================
+# .github/workflows/bench.yml — performance benchmark
+# =============================================================================
+# Runs the cold/warm 3-sample benchmark (issue #10) and uploads
+# `benchmarks.json` as a per-Python-version artifact.
+#
+# Triggers (issue #76):
+#   - push to main: regression detection on merged code.
+#   - workflow_dispatch: ad-hoc re-runs.
+#
+# Bench is intentionally NOT a PR gate — benchmarks are noisy on a 2-core
+# GitHub runner and slow. PRs see lint + typecheck + tests + contract
+# feedback from `ci.yml`; perf drift is caught on main and tracked in
+# `docs/benchmarks.md`.
+# =============================================================================
+name: bench
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: bench (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Cache venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-bench-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-bench-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install (editable + dev extras)
+        run: |
+          uv venv .venv --python ${{ matrix.python-version }}
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
+
+      - name: Run benchmark
+        env:
+          # CI runners vary in speed; allow the workflow to override
+          # the cold-cache wall-clock threshold without editing source.
+          OSIMFLOW_BENCH_THRESHOLD_S: "60"
+        run: |
+          .venv/bin/python -m tests.benchmarks.bench_campaign \
+            --input_variables variables.yml \
+            --template_sim_package ./example_package \
+            --outdir ./bench-out \
+            --openstudio_version 3.11.0 \
+            --n_samples 3
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks-${{ matrix.python-version }}
+          path: bench-out/benchmarks.json
+          if-no-files-found: error

@@ -1,0 +1,1032 @@
+"""Pydantic response models for the OSimFlow REST API (issue #267).
+
+Provides type-safe response schemas for campaign CRUD, per-sample
+result, and file management endpoints.  Models are read-only projections
+of the data stored in ``run.json`` and on-disk artefacts.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# ---------------------------------------------------------------------------
+# Campaign list / status
+# ---------------------------------------------------------------------------
+
+
+class CampaignSummary(BaseModel):
+    """Lightweight campaign entry returned by ``GET /api/v1/campaigns``."""
+
+    campaign_id: str
+    status: str = Field(description="running | completed | unknown")
+    started_at: float | None = None
+    finished_at: float | None = None
+    n_samples: int = 0
+    n_succeeded: int = 0
+    n_failed: int = 0
+
+
+class CampaignListResponse(BaseModel):
+    """Envelope for the campaign list endpoint."""
+
+    campaigns: list[CampaignSummary]
+    total: int
+
+
+class CampaignDetailResponse(BaseModel):
+    """Full campaign status returned by ``GET /api/v1/campaigns/{id}``."""
+
+    campaign_id: str
+    status: str
+    started_at: float | None = None
+    finished_at: float | None = None
+    elapsed_s: float | None = None
+    config: dict[str, Any] | None = Field(default=None, description="config_summary from run.json")
+    summary: dict[str, Any] | None = Field(
+        default=None, description="n_samples / n_succeeded / n_failed"
+    )
+    quality_summary: dict[str, Any] | None = None
+    baseline_comparison: dict[str, Any] | None = None
+    total_cost_usd: float | None = None
+    spot_savings_usd: float | None = None
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Per-sample results
+# ---------------------------------------------------------------------------
+
+
+class SampleSummary(BaseModel):
+    """One row in the per-sample results list."""
+
+    sample_id: str
+    status: str
+    elapsed_s: float
+    error_summary: str | None = None
+    generation: int | None = None
+    worker_id: str | None = None
+    cost_usd: float | None = None
+
+
+class SampleListResponse(BaseModel):
+    """Paginated envelope for sample list endpoint."""
+
+    samples: list[SampleSummary]
+    total: int
+    page: int
+    per_page: int
+
+
+class SampleDetailResponse(BaseModel):
+    """Full per-sample detail including KPIs and log file paths."""
+
+    sample_id: str
+    status: str
+    elapsed_s: float
+    kpis: dict[str, Any] | None = None
+    log_files: dict[str, str] = Field(default_factory=dict)
+    apply_exit_code: int = 0
+    sim_exit_code: int = 0
+    extract_exit_code: int = 0
+    eplusout_sql: str | None = None
+    error_summary: str | None = None
+    generation: int | None = None
+    worker_id: str | None = None
+    cost_usd: float | None = None
+
+
+# ---------------------------------------------------------------------------
+# Campaign creation
+# ---------------------------------------------------------------------------
+
+
+class CampaignCreateRequest(BaseModel):
+    """Request body for ``POST /api/v1/campaigns``.
+
+    Mirrors the subset of ``CampaignConfig`` fields that are sensible to
+    set via the API.  Paths are relative to the server's working directory
+    or absolute.
+
+    Executor selection is controlled by the ``executor`` field.  When
+    ``executor`` is not ``"local"``, the corresponding executor-specific
+    fields must also be provided.
+    """
+
+    input_variables: str = Field(description="Path to variables.yml")
+    template_sim_package: str = Field(description="Path to the template simulation package")
+    n_samples: int = Field(ge=1, description="Number of LHS samples")
+    openstudio_version: str = Field(default="3.11.0")
+    executor: str = Field(
+        default="local",
+        description="Executor type: local | slurm | aws_batch | azure_batch | google_batch | dask_jobqueue | nomad | pbs | kubernetes",
+    )
+    algorithm: str = Field(default="lhs")
+    outdir: str | None = Field(default=None, description="Output dir (auto-generated if omitted)")
+    archive_intermediates: bool = False
+    auto_start: bool = Field(
+        default=False, description="Launch campaign immediately after creation"
+    )
+    max_workers: int = Field(
+        default=4, description="Parallelism for local executor (ignored for remote executors)"
+    )
+    # Slurm parameters (used when executor="slurm")
+    slurm_partition: str | None = Field(
+        default=None, description="Slurm partition (e.g. short, gpu)"
+    )
+    slurm_account: str | None = Field(default=None, description="Slurm account/project")
+    slurm_qos: str | None = Field(default=None, description="Slurm QoS (requires submitit >= 1.5)")
+    slurm_constraint: str | None = Field(default=None, description="Slurm constraint (e.g. gpu)")
+    slurm_gres: str | None = Field(default=None, description="Slurm generic resources (e.g. gpu:1)")
+    slurm_real: bool = Field(
+        default=False, description="Submit to real Slurm cluster (default: debug mode)"
+    )
+    # AWS Batch parameters (used when executor="aws_batch")
+    aws_batch_queue: str | None = Field(default=None, description="AWS Batch job queue")
+    aws_batch_job_definition: str | None = Field(
+        default=None, description="AWS Batch job definition name"
+    )
+    aws_batch_max_spot_price_usd: float | None = Field(
+        default=None, description="Spot price ceiling (USD/vCPU-hour)"
+    )
+    aws_batch_fallback_to_on_demand: bool = Field(
+        default=False, description="Fall back to on-demand when Spot price exceeds ceiling"
+    )
+    aws_batch_max_retries: int = Field(default=3, description="Max Spot interruption retries")
+    ecr_repository: str | None = Field(
+        default=None, description="ECR repository URI for OpenStudio images"
+    )
+    # Azure Batch parameters (used when executor="azure_batch")
+    azure_batch_account_name: str | None = Field(
+        default=None, description="Azure Batch account name"
+    )
+    azure_batch_account_url: str | None = Field(default=None, description="Azure Batch account URL")
+    azure_batch_pool_id: str | None = Field(default=None, description="Azure Batch pool ID")
+    azure_batch_location: str | None = Field(default=None, description="Azure region/location")
+    azure_use_spot: bool = Field(default=False, description="Use Azure Spot/low-priority VMs")
+    azure_fallback_to_on_demand: bool = Field(
+        default=False, description="Fall back to on-demand when Spot retries exhausted"
+    )
+    azure_max_retries: int = Field(default=3, description="Max Azure Spot VM retries")
+    # Google Cloud Batch parameters (used when executor="google_batch")
+    google_batch_project_id: str | None = Field(default=None, description="Google Cloud project ID")
+    google_batch_region: str | None = Field(default=None, description="Google Cloud region")
+    google_batch_service_account: str | None = Field(
+        default=None, description="Google Cloud service account email"
+    )
+    google_use_spot: bool = Field(default=False, description="Use Google Spot/preemptible VMs")
+    google_fallback_to_on_demand: bool = Field(
+        default=False, description="Fall back to on-demand when preemptible retries exhausted"
+    )
+    google_max_retries: int = Field(default=3, description="Max Google preemptible VM retries")
+    # Kubernetes parameters (used when executor="kubernetes")
+    kubernetes_namespace: str | None = Field(default=None, description="Kubernetes namespace")
+    kubernetes_poll_interval_s: float | None = Field(
+        default=None, description="K8s Job poll interval (seconds)"
+    )
+    kubernetes_max_poll_interval_s: float | None = Field(
+        default=None, description="K8s Job max poll interval (seconds)"
+    )
+    # Nomad parameters (used when executor="nomad")
+    nomad_address: str | None = Field(default=None, description="Nomad cluster HTTP address")
+    nomad_datacentre: str | None = Field(
+        default=None, description="Nomad datacentre (default: dc1)"
+    )
+    nomad_tls: bool = Field(default=False, description="Enable TLS for Nomad HTTP API")
+    nomad_tls_verify: bool = Field(
+        default=True, description="Verify TLS certificates for Nomad (default: True)"
+    )
+    nomad_cert: str | None = Field(
+        default=None, description="Path to client certificate PEM for Nomad mTLS"
+    )
+    nomad_key: str | None = Field(
+        default=None, description="Path to client private key PEM for Nomad mTLS"
+    )
+    nomad_ca_cert: str | None = Field(
+        default=None, description="Path to CA certificate PEM for Nomad mTLS"
+    )
+    # PBS parameters (used when executor="pbs")
+    pbs_server: str | None = Field(default=None, description="PBS server/cluster address")
+    pbs_queue: str | None = Field(default=None, description="PBS queue name")
+    pbs_real: bool = Field(
+        default=False, description="Submit to real PBS cluster (default: debug mode)"
+    )
+    # Dask-JobQueue parameters (used when executor="dask_jobqueue")
+    dask_cluster_type: str | None = Field(
+        default=None, description="Dask cluster backend: slurm | pbs | kubernetes"
+    )
+    dask_min_workers: int | None = Field(default=None, description="Minimum Dask workers")
+    dask_max_workers: int | None = Field(default=None, description="Maximum Dask workers")
+    dask_cpus_per_worker: int | None = Field(default=None, description="CPUs per Dask worker")
+    dask_memory_per_worker: str | None = Field(
+        default=None, description="Memory per Dask worker (e.g. 4GiB)"
+    )
+    dask_walltime: str | None = Field(
+        default=None, description="Walltime for Dask cluster jobs (e.g. 02:00:00)"
+    )
+    dask_queue: str | None = Field(default=None, description="HPC queue/partition for Dask workers")
+    dask_project: str | None = Field(
+        default=None, description="HPC project/account for Dask workers"
+    )
+
+
+class CampaignCreateResponse(BaseModel):
+    """Response for campaign creation."""
+
+    campaign_id: str
+    outdir: str
+    status: str = Field(description="created | running")
+
+
+# ---------------------------------------------------------------------------
+# Campaign cancellation
+# ---------------------------------------------------------------------------
+
+
+class CampaignCancelResponse(BaseModel):
+    """Response for campaign cancellation."""
+
+    campaign_id: str
+    status: str = Field(description="stopping")
+
+
+# ---------------------------------------------------------------------------
+# Campaign pause / resume (issue #553)
+# ---------------------------------------------------------------------------
+
+
+class CampaignPauseResponse(BaseModel):
+    """Response for campaign pause."""
+
+    campaign_id: str
+    status: str = Field(description="paused")
+
+
+class CampaignResumeResponse(BaseModel):
+    """Response for campaign resume."""
+
+    campaign_id: str
+    status: str = Field(description="running")
+
+
+# ---------------------------------------------------------------------------
+# Campaign comparison (issue #386)
+# ---------------------------------------------------------------------------
+
+
+class CampaignComparisonResponse(BaseModel):
+    """Side-by-side comparison of two campaigns."""
+
+    left: CampaignDetailResponse | None = Field(
+        default=None,
+        description="Left campaign details (or null if not found)",
+    )
+    right: CampaignDetailResponse | None = Field(
+        default=None,
+        description="Right campaign details (or null if not found)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Multi-campaign comparison (issue #404)
+# ---------------------------------------------------------------------------
+
+
+class CompareCampaignIdentifier(BaseModel):
+    """Identifies a single campaign to include in a comparison.
+
+    Provide **either** ``campaign_id`` (resolved via the campaigns base
+    directory or the campaign registry) **or** ``outdir`` (an absolute
+    or relative path to a campaign output directory).
+    """
+
+    campaign_id: str | None = Field(
+        default=None,
+        description="Campaign ID to look up in the registry or campaigns base dir",
+    )
+    outdir: str | None = Field(
+        default=None,
+        description="Direct path to a campaign output directory",
+    )
+
+
+class CompareCampaignsPostRequest(BaseModel):
+    """Request body for ``POST /api/v1/campaigns/compare`` (issue #404).
+
+    Accepts two or more campaign identifiers.  Each identifier may
+    reference a campaign by registry ID, by campaign directory name
+    (under the campaigns base directory), or by explicit ``outdir``
+    path.
+    """
+
+    campaigns: list[CompareCampaignIdentifier] = Field(
+        min_length=2,
+        description="Two or more campaign identifiers to compare",
+    )
+
+
+class KpiMetricStats(BaseModel):
+    """Aggregated statistics for a single numeric KPI metric."""
+
+    mean: float | None = None
+    min: float | None = None
+    max: float | None = None
+    std: float | None = None
+    count: int = 0
+
+
+class CampaignComparisonEntry(BaseModel):
+    """One campaign's data within a multi-campaign comparison."""
+
+    identifier: str = Field(description="The campaign_id or outdir used for lookup")
+    found: bool = Field(default=False, description="Whether the campaign was located")
+    campaign_id: str | None = None
+    status: str | None = None
+    started_at: float | None = None
+    finished_at: float | None = None
+    elapsed_s: float | None = None
+    config: dict[str, Any] | None = Field(
+        default=None, description="Config summary (executor, n_samples, etc.)"
+    )
+    step_timing: list[dict[str, Any]] = Field(
+        default_factory=list, description="Per-step timing traces"
+    )
+    sample_summary: dict[str, Any] | None = Field(
+        default=None,
+        description="n_samples, n_succeeded, n_failed, success_rate",
+    )
+    kpi_stats: dict[str, KpiMetricStats] = Field(
+        default_factory=dict,
+        description="Per-KPI aggregated statistics keyed by metric name",
+    )
+    error: str | None = Field(
+        default=None, description="Error message if the campaign could not be loaded"
+    )
+
+
+class KpiComparisonRow(BaseModel):
+    """One KPI metric compared across all campaigns.
+
+    The ``values`` list is aligned with the ``campaigns`` list in the
+    parent response — ``values[i]`` is the mean of this KPI in
+    ``campaigns[i]``, or ``None`` if that campaign has no data for it.
+    """
+
+    metric: str
+    values: list[float | None]
+
+
+class MultiCampaignComparisonResponse(BaseModel):
+    """Response for ``POST /api/v1/campaigns/compare`` (issue #404)."""
+
+    campaigns: list[CampaignComparisonEntry]
+    kpi_comparison: list[KpiComparisonRow] = Field(
+        default_factory=list,
+        description="KPI mean values aligned across campaigns for easy charting",
+    )
+    total: int
+
+
+# ---------------------------------------------------------------------------
+# File management (issue #273)
+# ---------------------------------------------------------------------------
+
+
+class FileInfo(BaseModel):
+    """Metadata for a single uploaded file."""
+
+    file_id: str = Field(description="Unique file identifier (UUID)")
+    filename: str = Field(description="Original filename")
+    category: str = Field(description="File category: seed_model | measure | weather | config")
+    size_bytes: int = Field(description="File size in bytes")
+    path: str = Field(description="Relative storage path under uploads/")
+
+
+class FileUploadResponse(BaseModel):
+    """Response for a successful file upload."""
+
+    file_id: str
+    filename: str
+    category: str
+    size_bytes: int
+    path: str
+
+
+class FileListResponse(BaseModel):
+    """Envelope for the file listing endpoint."""
+
+    files: list[FileInfo]
+    total: int
+
+
+class FileDeleteResponse(BaseModel):
+    """Response for file deletion."""
+
+    file_id: str
+    status: str = Field(description="deleted")
+
+
+# ---------------------------------------------------------------------------
+# Variable management (issue #347)
+# ---------------------------------------------------------------------------
+
+
+class VariableSummary(BaseModel):
+    """Lightweight variable entry returned by ``GET /api/v1/variables``."""
+
+    name: str
+    distribution: str
+    description: str | None = None
+
+
+class VariableListResponse(BaseModel):
+    """Envelope for the variable list endpoint."""
+
+    variables: list[VariableSummary]
+    total: int
+
+
+class VariableDetailResponse(BaseModel):
+    """Full variable detail returned by ``GET /api/v1/variables/{name}``."""
+
+    name: str
+    distribution: str
+    description: str | None = None
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableUpdateRequest(BaseModel):
+    """Request body for ``PUT /api/v1/variables/{name}``.
+
+    All fields are optional — only provided fields are updated.
+    """
+
+    name: str | None = Field(default=None, description="New variable name")
+    distribution: str | None = Field(default=None, description="Distribution type")
+    description: str | None = Field(default=None)
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    sigma: float | None = None
+    mode: float | None = None
+    values: list[Any] | None = None
+    alpha: float | None = None
+    beta: float | None = None
+    rate: float | None = None
+    target: str | None = None
+    mapping: dict[str, Any] | None = None
+
+
+class VariableDeleteResponse(BaseModel):
+    """Response for variable deletion."""
+
+    name: str
+    status: str = Field(description="deleted")
+
+
+# Measure management (issue #348, #547)
+# ---------------------------------------------------------------------------
+
+
+class MeasureArgument(BaseModel):
+    """A single argument accepted by a measure."""
+
+    name: str = Field(description="Argument variable name")
+    display_name: str = Field(description="Human-readable argument name")
+    description: str | None = Field(default=None, description="What this argument controls")
+    argument_type: str = Field(
+        default="String",
+        description="OpenStudio argument type: String | Double | Integer | Boolean | Choice",
+    )
+    default_value: Any = Field(default=None, description="Default value in the workflow")
+    required: bool = Field(default=False, description="Whether this argument is required")
+    valid_choices: list[str] | None = Field(
+        default=None, description="Valid choices for Choice arguments"
+    )
+    units: str | None = Field(default=None, description="Physical units, if applicable")
+    measure_dir_name: str = Field(
+        default="", description="Measure directory name this argument belongs to"
+    )
+
+
+class MeasureInfo(BaseModel):
+    """Summary information for a single measure."""
+
+    measure_dir_name: str = Field(description="Directory name of the measure")
+    display_name: str = Field(description="Human-readable measure name")
+    description: str | None = Field(default=None, description="What the measure does")
+    measure_type: str = Field(
+        default="Model",
+        description="OpenStudio measure type: Model | EnergyPlus | Reporting",
+    )
+    arguments: list[MeasureArgument] = Field(
+        default_factory=list, description="Arguments accepted by this measure"
+    )
+
+
+class MeasureListResponse(BaseModel):
+    """Envelope for the measure list endpoint."""
+
+    measures: list[MeasureInfo] = Field(default_factory=list)
+    total: int
+    source: str = Field(
+        description="Source of measure information: workflow.osw | template_package | uploaded"
+    )
+
+
+class MeasureUploadResponse(BaseModel):
+    """Response for a successful measure upload."""
+
+    measure_id: str = Field(description="Unique identifier for the uploaded measure")
+    name: str = Field(description="Measure directory name")
+    version_uuid: str = Field(description="Version UUID derived from measure content hash")
+    argument_count: int = Field(description="Number of arguments introspected from the measure")
+    detail: str = Field(description="Human-readable result message")
+
+
+class MeasureMetadataUpdate(BaseModel):
+    """Request body for ``PATCH /api/v1/measures/{measure_id}``."""
+
+    taxonomy: str | None = Field(
+        default=None, description="ASHRAE 229 taxonomy (e.g. Economics.Construction.General)"
+    )
+    description: str | None = Field(default=None, description="Measure description")
+    tags: list[str] | None = Field(default=None, description="Arbitrary tags for filtering")
+    measure_group: str | None = Field(default=None, description="Logical grouping for the measure")
+
+
+class MeasureDetailResponse(BaseModel):
+    """Full metadata for a measure, including taxonomy and tags."""
+
+    measure_id: str = Field(description="Unique identifier (UUID for uploaded measures)")
+    name: str = Field(description="Measure directory name")
+    version_uuid: str = Field(description="Version UUID from content hash")
+    taxonomy: str | None = Field(default=None, description="ASHRAE 229 taxonomy")
+    description: str | None = Field(default=None, description="Measure description")
+    tags: list[str] = Field(default_factory=list, description="Arbitrary tags")
+    measure_group: str | None = Field(default=None, description="Logical grouping")
+    arguments: list[MeasureArgument] = Field(
+        default_factory=list, description="Introspected arguments"
+    )
+    is_uploaded: bool = Field(
+        default=False,
+        description="True if from measures_dir (uploaded), False if from workflow",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Error diagnosis (issue #385)
+# ---------------------------------------------------------------------------
+
+
+class ErrorDiagnosisResponse(BaseModel):
+    """Error diagnosis result for a failed sample."""
+
+    sample_id: str = Field(description="Sample identifier")
+    error_summary: str | None = Field(
+        default=None, description="First severe error line from eplusout.err"
+    )
+    failure_category: str | None = Field(
+        default=None,
+        description="Classified failure type: convergence | surface_geometry | hvac_sizing | schedule | material_construction | weather_file | memory_timeout | timestep_instability | generic_severe",
+    )
+    root_cause_line: str | None = Field(
+        default=None, description="Root cause line from the error file"
+    )
+    total_severe_errors: int = Field(
+        default=0, description="Total count of severe errors in the error file"
+    )
+    diagnosis_suggestion: str | None = Field(
+        default=None, description="Actionable suggestion for resolving this error"
+    )
+    severity: str | None = Field(
+        default=None, description="Error severity: critical | high | medium | low"
+    )
+    log_path: str | None = Field(default=None, description="Path to the eplusout.err file")
+
+
+# ---------------------------------------------------------------------------
+# Batch sample upload (issue #552)
+# ---------------------------------------------------------------------------
+
+
+class BatchUploadSampleItem(BaseModel):
+    """One sample in a batch upload request.
+
+    Each item describes a pre-generated datapoint to add to the campaign.
+    A new unique ``sample_id`` is assigned to each entry on the server side.
+    """
+
+    values: dict[str, Any] = Field(
+        description="Dictionary of variable name → value mappings for this sample"
+    )
+    kpi_values: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional pre-computed KPI values for this sample (e.g. for re-upload after external processing)",
+    )
+    generation: int | None = Field(
+        default=None,
+        description="Optional generation number for iterative algorithms (default: 1)",
+    )
+
+
+class BatchUploadRequest(BaseModel):
+    """Request body for ``POST /api/v1/campaigns/{campaign_id}/samples/batch_upload``.
+
+    Accepts a JSON array of sample data. Each sample must provide a ``values``
+    dict; ``kpi_values`` and ``generation`` are optional.
+
+    Example::
+
+        {
+          "samples": [
+            {"values": {"wall_r": 2.5, "window_shgc": 0.4}},
+            {"values": {"wall_r": 3.0, "window_shgc": 0.3}, "kpi_values": {"eui": 120.5}}
+          ]
+        }
+    """
+
+    samples: list[BatchUploadSampleItem] = Field(
+        min_length=1,
+        description="One or more pre-generated samples to add to the campaign",
+    )
+
+
+class BatchUploadResponse(BaseModel):
+    """Response for a successful batch upload."""
+
+    campaign_id: str = Field(description="Campaign identifier")
+    added: int = Field(description="Number of samples successfully added")
+    sample_ids: list[str] = Field(
+        description="Newly assigned sample IDs for the uploaded samples (in order)"
+    )
+    detail: str = Field(description="Human-readable summary of the operation")
+
+
+# ---------------------------------------------------------------------------
+# Per-sample requeue (issue #552)
+# ---------------------------------------------------------------------------
+
+
+class SampleRequeueResponse(BaseModel):
+    """Response for requeueing a completed or failed sample."""
+
+    campaign_id: str = Field(description="Campaign identifier")
+    original_sample_id: str = Field(description="The sample that was requeued")
+    new_sample_id: str = Field(description="Newly created sample ID pending re-run")
+    status: str = Field(description="Status of the new sample: pending")
+    detail: str = Field(description="Human-readable summary of the operation")
+
+
+# ---------------------------------------------------------------------------
+# Coordinator (fire-and-forget campaign handoff — issue #602)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorHandoffPayload(BaseModel):
+    """Payload for handing off a campaign to the Coordinator (Phase 2).
+
+    This is the JSON schema the CLI posts when the ``--detach`` flag is used.
+    """
+
+    name: str = Field(description="Human-readable campaign name")
+    n_samples: int = Field(ge=1, description="Number of samples to run")
+    executor: str = Field(description="Executor type: local | slurm | aws_batch | nomad | ...")
+    openstudio_version: str = Field(description="OpenStudio version tag (e.g., 3.11.0)")
+    input_variables: str | None = Field(default=None, description="URL or path to variables.yml")
+    template_sim_package: str | None = Field(
+        default=None, description="URL or path to template sim package"
+    )
+    algorithm: str = Field(default="lhs", description="Sampling algorithm")
+    max_generations: int = Field(default=1, ge=1, description="Max DAG generations")
+    custom_apply_script: str | None = Field(
+        default=None, description="URL to custom apply_params script"
+    )
+    custom_kpi_extractor: str | None = Field(
+        default=None, description="URL to custom KPI extractor script"
+    )
+    archive_intermediates: bool = Field(default=False, description="Archive intermediate files")
+    result_storage_backend: str | None = Field(default=None, description="Result storage backend")
+    result_storage_bucket: str | None = Field(
+        default=None, description="Result storage bucket/container"
+    )
+    extra: dict[str, Any] | None = Field(
+        default=None, description="Additional executor-specific settings"
+    )
+    samples: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Pre-computed LHS sample parameter sets. If omitted, the Coordinator "
+            "generates samples using the algorithm and n_samples. Each dict maps "
+            "variable names to sampled values."
+        ),
+    )
+    notification_email: str | None = Field(
+        default=None,
+        description="Email address to notify when the campaign completes",
+    )
+    sns_topic_arn: str | None = Field(
+        default=None,
+        description="SNS topic ARN to publish to when the campaign completes",
+    )
+    webhook_url: str | None = Field(
+        default=None,
+        description=(
+            "Webhook URL to POST the campaign-completion callback to "
+            "(issue #283; reused by the issue #628 notification dispatch)."
+        ),
+    )
+
+
+class CoordinatorHandoffResponse(BaseModel):
+    """Response from a successful campaign handoff.
+
+    The endpoint returns HTTP ``202 Accepted`` (issue #630): the campaign has
+    been received but not yet run. ``status_url`` is the absolute URL the CLI
+    should poll (and persist to the local handoff record) so that
+    ``osimflow status`` can reconnect from a fresh shell.
+    """
+
+    campaign_id: str = Field(description="Assigned campaign identifier")
+    status: str = Field(description="Initial status: pending")
+    message: str = Field(description="Human-readable summary")
+    status_url: str | None = Field(
+        default=None,
+        description=(
+            "Absolute URL to poll for live status "
+            "(``GET /api/v1/coordinator/campaigns/{campaign_id}``). Present "
+            "so the CLI can persist it to the local handoff record and "
+            "reconnect later (issue #630)."
+        ),
+    )
+
+
+class CoordinatorSubmitResponse(BaseModel):
+    """Alias for backward compatibility."""
+
+    campaign_id: str
+    status: str
+    message: str
+
+
+class CoordinatorCampaignRecord(BaseModel):
+    """A Coordinator campaign record returned by GET /campaigns/{id}."""
+
+    campaign_id: str
+    name: str
+    status: str = Field(description="pending | running | aggregating | complete | failed")
+    created_at: float | None = None
+    updated_at: float | None = None
+    n_samples: int = 0
+    executor: str = ""
+    openstudio_version: str = ""
+
+
+# Phase 3: Array job submission (issue #603)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorSampleRecord(BaseModel):
+    """A single sample's parameter set, returned by GET /campaigns/{id}/samples/{index}."""
+
+    index: int = Field(ge=0, description="Zero-based sample index")
+    parameters: dict[str, Any] = Field(description="Map of variable name to sampled value")
+    status: str = Field(default="pending", description="pending | running | complete | failed")
+
+
+class CoordinatorSamplesResponse(BaseModel):
+    """Response for GET /campaigns/{id}/samples — all sample parameter sets."""
+
+    campaign_id: str
+    samples: list[CoordinatorSampleRecord]
+
+
+class CoordinatorArraySubmitRequest(BaseModel):
+    """Request for POST /campaigns/{id}/submit-array — trigger array job submission."""
+
+    job_queue: str = Field(description="AWS Batch job queue name")
+    job_definition: str = Field(description="AWS Batch job definition name")
+    array_size: int = Field(ge=1, description="Number of array job children")
+
+
+class CoordinatorArraySubmitResponse(BaseModel):
+    """Response from array job submission."""
+
+    campaign_id: str
+    array_job_id: str = Field(description="AWS Batch array job ID")
+    status: str = Field(default="pending", description="Initial status")
+    message: str
+
+
+# Phase 4: Result aggregation and user notifications (issue #604)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorPollArrayResponse(BaseModel):
+    """Response for GET /campaigns/{id}/poll-array — array job completion status."""
+
+    campaign_id: str
+    array_job_id: str
+    status: str = Field(
+        default="pending",
+        description="Array job status: pending | running | complete | failed",
+    )
+    succeeded: int = Field(ge=0, description="Number of child jobs that succeeded")
+    failed: int = Field(ge=0, description="Number of child jobs that failed")
+    pending: int = Field(ge=0, description="Number of child jobs still pending/running")
+    total: int = Field(ge=0, description="Total number of child jobs")
+    result_bucket: str | None = Field(
+        default=None, description="S3 bucket where results are stored"
+    )
+    message: str
+
+
+class CoordinatorResultFile(BaseModel):
+    """A single result file reference returned by GET /campaigns/{id}/results."""
+
+    sample_index: int | None = Field(
+        default=None, description="Sample index, or null for aggregated results"
+    )
+    file_key: str = Field(description="S3 object key or local path")
+    file_type: str = Field(description="csv | json | sql | parquet")
+    size_bytes: int | None = Field(default=None, description="File size in bytes")
+
+
+class CoordinatorResultsResponse(BaseModel):
+    """Response for GET /campaigns/{id}/results — all result files for a campaign."""
+
+    campaign_id: str
+    status: str = Field(description="aggregating | complete | failed | unavailable")
+    result_bucket: str | None = Field(default=None, description="S3 bucket")
+    aggregated_results_key: str | None = Field(
+        default=None, description="S3 key for aggregated CSV"
+    )
+    aggregated_results_url: str | None = Field(
+        default=None,
+        description=(
+            "Short-lived presigned GET URL for the aggregated CSV, signed by "
+            "the Coordinator's IAM role so the downloading client needs no "
+            "AWS credentials of its own (issue #630). Present only when the "
+            "campaign is complete and an aggregated object exists."
+        ),
+    )
+    kpi_files: list[CoordinatorResultFile] = Field(
+        default_factory=list, description="Per-sample KPI JSON files"
+    )
+    message: str
+
+
+class CoordinatorNotifyRequest(BaseModel):
+    """Request for POST /campaigns/{id}/notify — trigger a notification.
+
+    Mirrors the API contract §3.5 ``campaign.succeeded`` payload: the
+    server builds the presigned ``download_url`` (whose lifetime is
+    ``expires_in_seconds``) and dispatches it through the selected
+    backend.
+    """
+
+    notification_type: str = Field(
+        default="sns",
+        description="Type: sns | email | webhook",
+    )
+    subject: str | None = Field(default=None, description="Notification subject (SNS/email)")
+    expires_in_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description=(
+            "Lifetime of the presigned download_url in seconds "
+            "(default 3600). Mirrors --s3-artifact-presigned-url-expiration."
+        ),
+    )
+
+
+class CoordinatorNotifyResponse(BaseModel):
+    """Response from a notification trigger."""
+
+    campaign_id: str
+    notification_type: str
+    status: str = Field(default="sent", description="sent | failed | skipped")
+    message: str
+
+
+# Phase 5: Array-completion detection (issue #626, Epic #624)
+# ---------------------------------------------------------------------------
+
+
+class CoordinatorArrayCompleteEvent(BaseModel):
+    """EventBridge ``Batch Job State Change`` envelope posted to the array-complete webhook.
+
+    EventBridge fires this event when an AWS Batch array job reaches a terminal
+    state. The Coordinator re-queries ``describe_jobs`` for the array parent
+    (the source of truth) rather than trusting the event payload alone, so most
+    fields here are informational. The two fields the handler actually inspects
+    are ``source`` (must be ``aws.batch``) and ``detail.jobId`` (must match the
+    campaign's stored ``array_job_id`` or one of its children).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    version: str | None = Field(default=None, description="EventBridge envelope version")
+    id: str | None = Field(default=None, description="EventBridge event ID")
+    detail_type: str | None = Field(
+        default=None,
+        alias="detail-type",
+        description='Expected value: "Batch Job State Change"',
+    )
+    source: str | None = Field(
+        default=None,
+        description='Expected value: "aws.batch"',
+    )
+    account: str | None = None
+    time: str | None = None
+    region: str | None = None
+    resources: list[str] | None = None
+    detail: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Batch job detail. Must include ``jobId``.",
+    )
+
+
+class CoordinatorArrayCompleteResponse(BaseModel):
+    """Response for ``POST /campaigns/{id}/array-complete`` and the polling fallback.
+
+    The ``transitioned`` flag is the idempotency signal: a webhook that arrives
+    after the poller already advanced the campaign returns ``transitioned=False``
+    with HTTP 200 (a no-op).
+    """
+
+    campaign_id: str
+    array_job_id: str
+    status: str = Field(
+        description=(
+            "aggregating (this call flipped running->aggregating) | "
+            "already_aggregating (idempotent duplicate, no-op) | "
+            "pending (children still running) | failed"
+        )
+    )
+    succeeded: int = Field(ge=0, description="Child jobs that succeeded")
+    failed: int = Field(ge=0, description="Child jobs that failed")
+    total: int = Field(ge=0, description="arrayProperties.size of the parent job")
+    transitioned: bool = Field(
+        default=False,
+        description="True iff this call performed the running->aggregating transition.",
+    )
+    message: str
+
+
+class CoordinatorAggregateResponse(BaseModel):
+    """Response for ``POST /campaigns/{id}/aggregate`` (issue #627).
+
+    The endpoint compiles the terminal ``aggregated_results.csv`` +
+    ``failed_simulations.csv`` (and an optional Pareto front) from the
+    campaign's per-sample manifests and returns HTTP ``202 Accepted`` with a
+    synthetic ``aggregator_job_id``.  The job id is deterministic
+    (``{campaign_id}-aggregator``) so an idempotent re-call after a successful
+    aggregation can be correlated client-side.
+
+    For the MVP the aggregation runs **synchronously inside the endpoint**; a
+    future hardening pass may submit it as a real AWS Batch terminal job, in
+    which case ``aggregator_job_id`` will carry the Batch job id unchanged.
+    """
+
+    campaign_id: str
+    aggregator_job_id: str = Field(
+        description="Synthetic id of the terminal aggregation job (issue #627)."
+    )
+    status: str = Field(
+        description="Terminal campaign status after aggregation: complete | failed."
+    )
+    ok_count: int = Field(ge=0, description="Samples whose KPIs landed in aggregated_results.csv.")
+    failed_count: int = Field(
+        ge=0,
+        description="Samples that landed in failed_simulations.csv (incl. degraded ok).",
+    )
+    total_count: int = Field(ge=0, description="Total manifests processed.")
+    aggregated_results_key: str | None = Field(
+        default=None,
+        description="Object key of the written aggregated_results.csv (under _aggregated/).",
+    )
+    failed_simulations_key: str | None = Field(
+        default=None,
+        description="Object key of the written failed_simulations.csv (under _aggregated/).",
+    )
+    pareto_front_key: str | None = Field(
+        default=None,
+        description=(
+            "Object key of the optional Pareto-front JSON. Present only when "
+            "the campaign algorithm is multi-objective (nsga2/pso)."
+        ),
+    )
+    message: str
