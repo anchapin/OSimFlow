@@ -231,3 +231,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "xdist_group(name): group tests that must run on the same xdist worker",
     )
+    # Configure pytest-asyncio to only use the asyncio backend.
+    # trio is optional and not installed in all environments (issue #875).
+    # Setting the mode to "auto" with only asyncio available ensures tests run.
+    config.option.asyncio_mode = "auto"

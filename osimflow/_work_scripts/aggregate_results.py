@@ -22,6 +22,17 @@ from typing import Any
 
 import pandas as pd
 
+# pd.io.sql.DatabaseError may not exist in all pandas versions (issue #889)
+try:
+    _PD_SQL_DATABASE_ERROR: type[Exception] | None = pd.io.sql.DatabaseError
+except AttributeError:
+    _PD_SQL_DATABASE_ERROR = None
+
+# Build the tuple of SQL-related database errors to catch
+_SQL_ERRORS: tuple[type[Exception], ...] = (sqlite3.DatabaseError,)
+if _PD_SQL_DATABASE_ERROR is not None:
+    _SQL_ERRORS = (sqlite3.DatabaseError, _PD_SQL_DATABASE_ERROR)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("aggregate_results")
 
@@ -275,7 +286,7 @@ class TimeSeriesAggregator:
             query = _TS_QUERIES[self.resolution]
             df = pd.read_sql_query(query, conn)
             conn.close()
-        except (sqlite3.DatabaseError, pd.io.sql.DatabaseError) as exc:
+        except _SQL_ERRORS as exc:
             log.warning("Time-series aggregation failed for %s: %s", sql_path, exc)
             return pd.DataFrame()
 
@@ -362,7 +373,7 @@ def _scan_err_file(err_path: Path) -> tuple[int, str]:
                         if root_cause:
                             break
     except (OSError, UnicodeDecodeError):
-        log.warning("Could not read error file: %s", err_path)
+        log.warning("Could not read error file: %s", err_path, exc_info=True)
     # Fall back to first severe line if no pattern matched
     if not root_cause:
         root_cause = first_severe
@@ -450,7 +461,7 @@ def parse_kpi_json(kpi_path: Path) -> dict[str, Any]:
         res.update(kpis)
         return res
     except Exception as e:
-        log.warning(f"Failed to parse KPI JSON {kpi_path}: {e}")
+        log.warning("Failed to parse KPI JSON %s: %s", kpi_path, e)
         return {"sample_id": kpi_path.stem.replace("kpi_", "")}
 
 
@@ -527,8 +538,8 @@ def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--kpis", required=True, nargs="+", type=Path)
-    parser.add_argument("--simulation_dirs", required=True, nargs="+", type=Path)
+    parser.add_argument("--kpis", required=False, nargs="*", type=Path, default=[])
+    parser.add_argument("--simulation_dirs", required=False, nargs="*", type=Path, default=[])
     parser.add_argument("--out_csv", required=True, type=Path)
     parser.add_argument("--out_parquet", type=Path, default=None)
     parser.add_argument("--out_failed", required=True, type=Path)

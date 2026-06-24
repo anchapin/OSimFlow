@@ -40,6 +40,7 @@ dependencies = [
     "openpyxl>=3.1",
     "submitit>=1.5; platform_system != 'Windows'",
     "jsonschema>=4.17",
+    "fasteners>=0.19",
 ]
 
 [project.optional-dependencies]
