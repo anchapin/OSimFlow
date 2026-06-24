@@ -71,8 +71,6 @@ jobs:
           python -m build --sdist --wheel
 
       - name: Sign with Sigstore
-        env:
-          SIGSTORE_IDENTITY_TOKEN: ${{ secrets.SIGSTORE_IDENTITY_TOKEN }}
         # Keyless signing against the public Sigstore transparency log.
         # Stores the signature as a separate .sigstore bundle next to
         # each artifact so downstream consumers can verify authenticity.
