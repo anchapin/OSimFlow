@@ -2,7 +2,8 @@
 # .github/workflows/bench.yml — performance benchmark
 # =============================================================================
 # Runs the cold/warm 3-sample benchmark (issue #10) and uploads
-# `benchmarks.json` as a per-Python-version artifact.
+# `benchmarks-{python-version}.json` as a per-Python-version artifact
+# (issue #949: multi-environment matrix).
 #
 # Triggers (issue #76):
 #   - push to main: regression detection on merged code.
@@ -35,7 +36,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.12", "3.13"]
 
     steps:
       - name: Checkout
@@ -78,6 +79,6 @@ jobs:
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@v7
         with:
-          name: benchmarks-${{ matrix.python-version }}
+          name: benchmarks-${{ matrix.python-version }}.json
           path: bench-out/benchmarks.json
           if-no-files-found: error
