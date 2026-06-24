@@ -804,10 +804,17 @@ def _run_openstudio_sim_impl(
     ):
         return sim_out
 
-    use_real_cli = _is_openstudio_available() and not _is_stub_mode()
+    # Determine whether to use the real OpenStudio CLI or the stub.
+    # Real CLI is used when:
+    #   1. openstudio.cli is on PATH, AND
+    #   2. stub mode is NOT explicitly enabled (OSIMFLOW_STUB_SIM != "1")
+    cli_available = _is_openstudio_available()
+    stub_mode = _is_stub_mode()
+    use_real_cli = cli_available and not stub_mode
 
-    # Fail fast if CLI is not available and stub mode is not explicitly enabled
-    if not use_real_cli and not _is_stub_mode():
+    # Fail fast: if the CLI is not available AND stub mode is not enabled,
+    # the user must either install OpenStudio or explicitly opt into stub mode.
+    if not cli_available and not stub_mode:
         raise RuntimeError(
             "openstudio CLI is not available on PATH and OSIMFLOW_STUB_SIM=1 is not set. "
             "Install OpenStudio CLI or set OSIMFLOW_STUB_SIM=1 to use stub mode for testing."
