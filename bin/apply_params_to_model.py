@@ -19,7 +19,7 @@ for _attr in dir(_mod):
 
 sys.modules[__name__] = _sys_mod
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     try:
         sys.exit(_mod.main())
     except Exception as exc:  # noqa: BLE001
