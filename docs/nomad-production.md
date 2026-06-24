@@ -211,6 +211,11 @@ latency, and object-storage upload latency/error rate before increasing load.
   upload queue/retry behavior (bounded queue + retry with exponential
   backoff) so storage slowdowns do not destabilize the coordinator.
 
+For cost optimization on the underlying compute (instance-type selection
+and idle-compute auto-shutdown patterns that apply to any executor,
+including Nomad client fleets), see the
+[Cost Estimation & Optimization Guide](cost-estimation.md#cost-reduction-strategies).
+
 ## Files
 
 | Path | Purpose |

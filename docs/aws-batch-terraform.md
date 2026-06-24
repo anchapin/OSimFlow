@@ -208,7 +208,7 @@ The engineering team needs:
 
 2. **OIDC authentication.** For CI/CD, use GitHub OIDC (`aws-actions/configure-aws-credentials`) instead of long-lived access keys. See the nightly E2E workflow in `.github/workflows/aws-batch-e2e.yml`.
 
-3. **Cost monitoring.** Set `desired_vcpus = 0` for dev environments so compute scales to zero when idle. Add AWS Budgets alerts for production.
+3. **Cost monitoring.** Set `desired_vcpus = 0` for dev environments so compute scales to zero when idle. Add AWS Budgets alerts for production. For the full scale-to-zero pattern (and the Slurm/Dask equivalents), see [Idle-Compute Auto-Shutdown](cost-estimation.md#9-idle-compute-auto-shutdown) in the Cost Estimation guide.
 
 4. **Log retention.** Add a CloudWatch Logs retention policy to avoid indefinite log storage costs.
 

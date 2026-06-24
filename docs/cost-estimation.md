@@ -276,7 +276,92 @@ OSimFlow automatically deletes empty `eplusout.err` files after successful simul
 - Delete `eplusout.log` files from completed samples (verbose, rarely needed).
 - Keep only `eplusout.sql` for post-hoc analysis; discard `.osm`/`.osw` intermediates after KPI extraction if you don't need `--archive_intermediates`.
 
+### 8. Instance-Type Selection
+
+EnergyPlus (OpenStudio's underlying engine) is **CPU-bound but memory-sensitive**: most models scale well on 2–4 vCPUs, but very large models can out-of-memory (OOM) on small instances. The Spot example in [Spot Instance Strategy](#spot-instance-strategy) sets `"instanceTypes": ["m5", "c5"]` — pick the family deliberately based on your workload:
+
+| Family | Examples | vCPU:Memory | Best for OpenStudio when… |
+|---|---|---|---|
+| **`c5` / `c6i`** (compute-optimized) | c5.large (2 vCPU, 4 GB) | 1:2 | Small/medium models (≤200 zones), many fast parallel samples; CPU utilization consistently >80% |
+| **`m5` / `m6i`** (general-purpose) | m5.large (2 vCPU, 8 GB) | 1:4 | **Safe default.** Balanced; fits the 4 vCPU / 8 GB sim defaults without waste |
+| **`r5` / `r6i`** (memory-optimized) | r5.large (2 vCPU, 16 GB) | 1:8 | Very large models (>500 zones: hospitals, campuses) that OOM on `m5` |
+
+**Worked example — 50-zone office model, 1000 samples:**
+
+1. **Start with m5.large** (2 vCPU, 8 GB). The model fits comfortably in memory and 2 vCPUs match EnergyPlus's typical thread ceiling for mid-size buildings. At ~30 min/sample on m5 Spot ($0.029/vCPU-hr): `1000 × 0.5 hr × 2 vCPU × $0.029 ≈ $29`.
+2. **Profile a 3-sample pilot.** Check CPU and memory in `run.json` (or CloudWatch / Slurm `seff`). If peak memory is <4 GB and CPU stays >80%, **switch to c5.large** — same vCPU count, ~10% cheaper per vCPU-hour, and the tighter memory budget is not a constraint.
+3. **If samples OOM on 8 GB**, the model is memory-bound — **move to r5.large** (16 GB) rather than over-provisioning vCPUs you won't use.
+
+**Executor-specific selection:**
+
+- **AWS Batch:** set `instanceTypes` in the compute environment (see the [Spot example](#spot-instance-strategy)). Use `--aws-batch-instance-type m5.large` so the Spot price-ceiling check (`describe_spot_price_history`) is scoped to one instance type — without it, the check uses a cross-family minimum that can be misleading (issue #792).
+- **Slurm:** use `--slurm-partition` to target a partition whose nodes match the workload. Most HPC sites expose a `compute` (m5-like), `highmem` (r5-like), and sometimes a `fast`/`c5-like` partition. Pick the partition that matches your model size, not the one with the shortest queue — an OOM kill wastes far more than queue wait time.
+- **Dask (`dask_jobqueue`):** right-size workers with `--dask-cpus-per-worker` (default 2) and `--dask-memory-per-worker` (default `4GiB`). For memory-heavy models, keep `--dask-cpus-per-worker` low (1–2) and raise `--dask-memory-per-worker` (e.g. `8GiB`) rather than adding workers you can't feed.
+
+### 9. Idle-Compute Auto-Shutdown
+
+A campaign runs for minutes to hours, but a cluster left idle between campaigns burns budget continuously. Scale to zero when idle.
+
+**AWS Batch — `minvCpus: 0` + `desiredvCpus: 0` (scale to zero):**
+
+The Batch example in [Spot Instance Strategy](#spot-instance-strategy) already sets both fields — here is what they do:
+
+- `minvCpus: 0` — the compute environment is allowed to have **zero** instances when no jobs are queued. With any non-zero value, Batch keeps that many vCPUs permanently warm, which is pure idle spend between campaigns.
+- `desiredvCpus: 0` — the initial/target steady-state size. Batch scales this up as jobs arrive and **scales it back to 0** when the queue drains, terminating the underlying EC2 instances.
+
+Both must be `0` to truly scale to zero. The Terraform equivalent (see [AWS Batch Terraform Deployment Guide](aws-batch-terraform.md)) is `desired_vcpus = 0` on the compute environment; the same applies to `min_vcpus`. Verify in the console that the compute environment reaches `0` instances after a campaign finishes — a stuck warm instance is a common silent cost leak.
+
+**Slurm — power-saving (`SuspendProgram` / `ResumeProgram`):**
+
+Configure Slurm's built-in node suspend/resume in `/etc/slurm/slurm.conf` so idle compute nodes are powered down:
+
+```
+# slurm.conf — power-save section
+SuspendProgram        = /etc/slurm/suspend.sh
+ResumeProgram         = /etc/slurm/resume.sh
+SuspendTime           = 300        # seconds idle before suspend (5 min)
+SuspendTimeout        = 60         # max seconds to suspend a node
+ResumeTimeout         = 600        # max seconds to resume a node
+TreeWidth             = 50
+```
+
+`SuspendProgram` is invoked on nodes idle longer than `SuspendTime`; `ResumeProgram` starts them when jobs are queued. On cloud Slurm (AWS ParallelCluster, etc.) these scripts call `aws ec2 stop-instances` / `start-instances`. On on-prem clusters with no per-node power cost, leave this unconfigured — there is no money to save. OSimFlow submits via `submitit`, which is power-save-aware: suspended nodes simply show as `DOWN~` until resumed.
+
+**Dask — `--dask-min-workers 0`:**
+
+The `dask_jobqueue` executor scales workers between a floor and ceiling. Set the floor to zero so the cluster releases all workers when the campaign finishes:
+
+```bash
+osimflow run --executor dask_jobqueue \
+  --dask-min-workers 0 \
+  --dask-max-workers 64 \
+  --dask-cpus-per-worker 2 \
+  --dask-memory-per-worker 4GiB \
+  --n_samples 1000 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+```
+
+`--dask-min-workers 0` (the default) lets the Dask cluster scale down to zero idle workers once the work is done, so you stop paying for compute between campaigns. A non-zero floor keeps that many workers permanently allocated — useful only for low-latency ad-hoc analysis after the campaign, not for batch simulation throughput.
+
 ## Quick Reference: CLI Flags for Cost Optimization
+
+| Flag | Default | Cost impact |
+|---|---|---|
+| `--aws-batch-max-spot-price-usd` | (unset) | Caps Spot spend per vCPU-hour; rejects jobs above the ceiling |
+| `--aws-batch-fallback-to-on-demand` | off | Prevents total campaign failure when Spot is exhausted (at a price premium) |
+| `--aws-batch-instance-type` | (unset) | Scopes the Spot ceiling check to one instance type (e.g. m5.large); avoids misleading cross-family minimums |
+| `--aws-batch-max-retries` | 3 | Bounds wasted compute on repeated Spot interruptions |
+| `--slurm-partition` | `short` | Routes jobs to the cheapest queue that fits the model (see [Partition Selection](#partition-selection)) |
+| `--slurm-account` | (unset) | Chargeback routing on institutional clusters |
+| `--dask-min-workers` | 0 | Idle-worker floor; `0` releases all workers between campaigns (scale to zero) |
+| `--dask-max-workers` | 10 | Concurrency ceiling for Dask campaigns |
+| `--dask-cpus-per-worker` | 2 | Per-worker vCPU sizing (right-size to the model) |
+| `--dask-memory-per-worker` | `4GiB` | Per-worker memory; raise for large models instead of adding workers |
+| `--max-workers` | 4 | Local-executor parallelism (advisory on cloud executors) |
+| `--enable-cost-tracking` | off | Records per-campaign cost estimates in `run.json` (issue #447) |
+| `--cost-on-demand-price` | (unset) | On-demand $/vCPU-hour for cost tracking |
+| `--cost-spot-price` | (unset) | Spot $/vCPU-hour for cost tracking |
+| `--archive_intermediates` | off | Enables S3/EBS spend on per-sample `.osw`/`.osm`/`.sql` |
 
 ```bash
 # Cheapest: local executor, small run, no archive
@@ -292,6 +377,13 @@ osimflow run --executor aws_batch \
 # Slurm: right-sized partition, real cluster
 osimflow run --executor slurm --slurm-real \
   --slurm-partition short --slurm-account myproject \
+  --n_samples 1000 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+
+# Dask: scale to zero when idle, right-sized workers
+osimflow run --executor dask_jobqueue \
+  --dask-min-workers 0 --dask-max-workers 64 \
+  --dask-cpus-per-worker 2 --dask-memory-per-worker 4GiB \
   --n_samples 1000 --outdir ./results \
   --input_variables variables.yml --template_sim_package ./pkg
 
