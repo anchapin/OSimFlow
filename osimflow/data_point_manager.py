@@ -19,7 +19,6 @@ from __future__ import annotations
 
 __all__ = ["DataPoint", "DataPointManager", "DataPointStatus"]
 
-import fasteners
 import json
 import os
 import time
@@ -28,6 +27,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
+import fasteners
 
 log = __import__("logging").getLogger("osimflow.data_point_manager")
 
