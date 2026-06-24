@@ -75,6 +75,7 @@ infra/nomad/acl/tokens/*.json
 Thumbs.db
 *.swp
 *~
+erl_crash.dump
 
 # Coverage / build reports
 htmlcov/

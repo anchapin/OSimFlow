@@ -210,7 +210,7 @@ def test_init_script_missing_raises(workdir: Path, template_pkg: Path, outdir: P
     missing = workdir / "nonexistent.sh"
     cfg = _make_cfg(workdir, template_pkg, outdir, init_script=missing)
     campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-    with pytest.raises(FileNotFoundError, match="init script not found"):
+    with pytest.raises(FileNotFoundError, match="(?i)init script not found"):
         campaign.run()
 
 

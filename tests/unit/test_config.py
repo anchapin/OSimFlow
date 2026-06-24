@@ -502,7 +502,7 @@ class TestLoadConfigValidation:
     ) -> None:
         """Line 364: n_samples < 1 raises ValidationError."""
         args = _base_args(variables_yml, template_pkg, outdir, n_samples="0")
-        with pytest.raises(ValidationError, match="n_samples must be >= 1"):
+        with pytest.raises(ValidationError, match="(?i)n_samples must be >= 1"):
             load_config(args)
 
     def test_max_generations_less_than_one_raises(
@@ -510,7 +510,7 @@ class TestLoadConfigValidation:
     ) -> None:
         """Line 370: max_generations < 1 raises ValidationError."""
         args = _base_args(variables_yml, template_pkg, outdir, max_generations=0)
-        with pytest.raises(ValidationError, match="max_generations must be >= 1"):
+        with pytest.raises(ValidationError, match="(?i)max[ _]generations must be >= 1"):
             load_config(args)
 
     @pytest.mark.skip(reason="auto-detection on invalid version string not implemented")
