@@ -21,7 +21,12 @@ from pathlib import Path
 
 import pytest
 
-from osimflow.byos import ByosTrustLevel, _parse_subprocess_response, load_user_function
+from osimflow.byos import (
+    ByosTrustLevel,
+    _parse_subprocess_response,
+    load_user_function,
+    validate_trust_level,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -389,3 +394,86 @@ class TestParseSubprocessResponse:
         response = {"result": "/tmp/out/kpi_0001.json"}
         result = _parse_subprocess_response(json.dumps(response), Path("script.py"), "extract_kpis")
         assert result == Path("/tmp/out/kpi_0001.json")
+
+
+# ===========================================================================
+# In-process security warning (issue #908)
+# ===========================================================================
+class TestInprocessSecurityWarning:
+    """Tests for the UserWarning emitted when loading scripts in-process."""
+
+    def test_inprocess_mode_emits_security_warning(self, user_scripts: Path) -> None:
+        """load_user_function(inprocess) must emit a UserWarning about the risk.
+
+        Verifies the warning text mentions 'security risk' and references
+        production deployments, so operators are alerted before running
+        untrusted code in the orchestrator process (issue #908).
+        """
+        path = _write_script(
+            user_scripts,
+            "inprocess_warn.py",
+            "def apply_parameters(template, parameters, sample_id, out):\n    pass\n",
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) >= 1, "expected a UserWarning for inprocess trust level"
+        message = str(user_warnings[0].message).lower()
+        assert "security risk" in message
+        assert "production" in message
+
+    def test_subprocess_mode_does_not_emit_security_warning(self, user_scripts: Path) -> None:
+        """subprocess mode must NOT emit the inprocess security UserWarning."""
+        path = _write_script(
+            user_scripts,
+            "subprocess_no_warn.py",
+            "def apply_parameters(template, parameters, sample_id, out):\n    pass\n",
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
+
+        security_warnings = [
+            w
+            for w in caught
+            if issubclass(w.category, UserWarning) and "security risk" in str(w.message).lower()
+        ]
+        assert security_warnings == []
+
+
+# ===========================================================================
+# validate_trust_level — production hardening guard (issue #908)
+# ===========================================================================
+class TestValidateTrustLevel:
+    """Tests for the validate_trust_level BYOS hardening helper."""
+
+    def test_rejects_inprocess_when_trusted_scripts_required(self) -> None:
+        """INPROCESS + require_trusted_scripts=True raises ValueError."""
+        with pytest.raises(ValueError, match="not allowed"):
+            validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=True)
+
+    def test_error_message_mentions_inprocess_and_subprocess(self) -> None:
+        """The error message guides the operator to the fix."""
+        with pytest.raises(ValueError) as exc_info:
+            validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=True)
+        message = str(exc_info.value).lower()
+        assert "inprocess" in message
+        assert "subprocess" in message
+        assert "require-trusted-scripts" in message
+
+    def test_allows_subprocess_when_trusted_scripts_required(self) -> None:
+        """SUBPROCESS is always allowed, even with require_trusted_scripts."""
+        # Must not raise.
+        validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=True)
+
+    def test_allows_inprocess_when_trusted_scripts_not_required(self) -> None:
+        """INPROCESS is allowed when require_trusted_scripts is False (default)."""
+        # Must not raise.
+        validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=False)
+
+    def test_defaults_allow_all(self) -> None:
+        """Default (no hardening) allows both trust levels without error."""
+        validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=False)
+        validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=False)

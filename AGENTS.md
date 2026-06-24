@@ -291,6 +291,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--init-script`, `--finalize-script` (pre/post campaign shell hooks. Issue #108)
 - `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
 - `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
+- `--require-trusted-scripts` (reject `--byos-trust-level inprocess` for production hardening; issue #908)
 - `--byos-resource-limits` (CPU/memory limits for BYOS subprocess wrapper; issue #343)
 - `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
 - `--rate-limit-key` (rate limit key type: `ip` (default), `user`, or `campaign`; issue #445)

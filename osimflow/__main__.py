@@ -44,7 +44,7 @@ from osimflow import (
     build_task_queue,
     load_config,
 )
-from osimflow.byos import ByosTrustLevel, load_user_function
+from osimflow.byos import ByosTrustLevel, load_user_function, validate_trust_level
 from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.exporters.osa import OSAExporter
 from osimflow.handoff_record import (
@@ -986,6 +986,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "'subprocess' runs user scripts in an isolated child process "
             "(recommended). 'inprocess' loads scripts directly into the "
             "orchestrator process (legacy, less secure)."
+        ),
+    )
+    run.add_argument(
+        "--require-trusted-scripts",
+        action="store_true",
+        default=False,
+        help=(
+            "Reject --byos-trust-level inprocess for production hardening "
+            "(issue #908). When set, the CLI exits with an error if a user "
+            "also passes --byos-trust-level inprocess. Use this to enforce "
+            "subprocess isolation in shared/production environments."
         ),
     )
     run.add_argument(
@@ -3550,6 +3561,19 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
 
     # Apply preset before load_config so preset values are in place.
     _apply_preset(args)
+
+    # --- BYOS trust-level hardening (issue #908) -------------------------
+    # Reject --byos-trust-level inprocess when --require-trusted-scripts is
+    # set. This is the production-hardening guard: it fails fast before any
+    # config loading or executor construction so operators get a clear error.
+    try:
+        validate_trust_level(
+            ByosTrustLevel(args.byos_trust_level),
+            bool(getattr(args, "require_trusted_scripts", False)),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     # --- Fire-and-forget handoff (Phase 2 — issue #602; hardened #630) ---
     # Idempotent POST with a deterministic Idempotency-Key, local handoff

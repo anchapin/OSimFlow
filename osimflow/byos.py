@@ -110,6 +110,39 @@ class ByosTrustLevel(enum.Enum):
     INPROCESS = "inprocess"
 
 
+def validate_trust_level(
+    trust_level: ByosTrustLevel,
+    require_trusted_scripts: bool,
+) -> None:
+    """Reject the ``INPROCESS`` trust level when trusted scripts are required.
+
+    Production-hardening guard for issue #908.  When a deployment sets
+    ``--require-trusted-scripts``, BYOS scripts must run in the isolated
+    ``SUBPROCESS`` mode.  This helper centralises the rejection so the
+    CLI, the REST API, and any other entry point share a single rule.
+
+    Args:
+        trust_level: The BYOS trust level requested by the caller.
+        require_trusted_scripts: Whether the surrounding deployment
+            mandates isolated script execution.  When ``True``, the
+            ``INPROCESS`` trust level is rejected.
+
+    Raises:
+        ValueError: ``require_trusted_scripts`` is ``True`` *and*
+            ``trust_level`` is :attr:`ByosTrustLevel.INPROCESS`.
+    """
+    if require_trusted_scripts and trust_level is ByosTrustLevel.INPROCESS:
+        raise ValueError(
+            "BYOS trust level 'inprocess' is not allowed when "
+            "--require-trusted-scripts is set. In-process execution loads "
+            "user scripts directly into the orchestrator with full access to "
+            "memory, credentials, and the filesystem. Re-run with "
+            "--byos-trust-level=subprocess (the default) or drop "
+            "--require-trusted-scripts to allow in-process execution in a "
+            "trusted development environment (issue #908)."
+        )
+
+
 def _discover_function_name(path: Path) -> str:
     """Discover the BYOS function name in a user script without executing it.
 
