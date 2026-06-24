@@ -348,13 +348,6 @@ def default_apply_parameters(
         )
         return
 
-    if _is_stub_mode():
-        log.warning(
-            "default_apply_parameters: OSIMFLOW_STUB_SIM=1 is set; skipping .osm mutation "
-            "(stub mode — no OpenStudio bindings required)"
-        )
-        return
-
     try:
         import openstudio  # noqa: PLC0415
     except ImportError as exc:
