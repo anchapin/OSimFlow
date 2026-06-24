@@ -18,7 +18,13 @@
   - [5.2 Slurm Execution (HPC)](#52-slurm-execution-hpc)
   - [5.3 AWS Batch Execution (Cloud)](#53-aws-batch-execution-cloud)
   - [5.4 Nomad Execution](#54-nomad-execution)
-  - [5.5 Dry-Run and Single-Sample Modes](#55-dry-run-and-single-sample-modes)
+  - [5.5 Azure Batch Execution](#55-azure-batch-execution)
+  - [5.6 Google Cloud Batch Execution](#56-google-cloud-batch-execution)
+  - [5.7 Kubernetes Execution](#57-kubernetes-execution)
+  - [5.8 PBS/Torque Execution](#58-pbstorque-execution)
+  - [5.9 Dask-JobQueue Execution](#59-dask-jobqueue-execution)
+  - [5.10 Docker Swarm Execution](#510-docker-swarm-execution)
+  - [5.11 Dry-Run and Single-Sample Modes](#511-dry-run-and-single-sample-modes)
 - [6. Understanding Results](#6-understanding-results)
   - [6.1 Output Directory Structure](#61-output-directory-structure)
   - [6.2 run.json Interpretation](#62-runjson-interpretation)
@@ -217,7 +223,7 @@ All flags are passed to the `osimflow run` subcommand.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--executor` | choice | `local` | Executor backend: `local`, `slurm`, `aws_batch`, or `nomad`. |
+| `--executor` | choice | `local` | Executor backend. Accepted values: `local`, `slurm`, `aws_batch`, `azure_batch`, `google_batch`, `kubernetes`, `pbs`, `dask_jobqueue`, `nomad`, `docker_swarm`. See [§5 Running Campaigns](#5-running-campaigns) for one-paragraph quick-starts per executor. |
 | `--max-workers` | int | `4` | Thread pool size for `local` executor. |
 
 #### Slurm-specific
@@ -518,7 +524,85 @@ For scale hardening guidance (dispatch behavior, staged ramp 500→2k→5k→10k
 shard-first recommendation for 10k, and polling/submission/storage backpressure
 operations), see `docs/nomad-production.md`.
 
-### 5.5 Dry-Run and Single-Sample Modes
+### 5.5 Azure Batch Execution
+
+Use the `azure_batch` executor to run campaigns on **Azure Batch** pools,
+which is the recommended path when your organisation standardises on Azure
+for compute, storage, and identity (Microsoft Entra ID / managed
+identities). Provide an existing Batch account and pool via
+`--azure-batch-account-name`, `--azure-batch-account-url`,
+`--azure-batch-pool-id`, and `--azure-batch-location`; Azure Spot /
+preemptible VMs are supported through `--azure-use-spot`,
+`--azure-fallback-to-on-demand`, and `--azure-max-retries` (issue #352).
+Authentication uses the per-job Azure SDK credential chain (env vars,
+managed identity, or `DefaultAzureCredential`) — no long-lived keys are
+read by the executor. See AGENTS.md §4 (`--azure-*`) for the complete
+flag set; this executor currently has no dedicated deployment guide.
+
+### 5.6 Google Cloud Batch Execution
+
+Use the `google_batch` executor to run campaigns on **Google Cloud Batch**,
+Google's managed batch-compute service. Configure the GCP project, region,
+and the service account Batch will impersonate via
+`--google-batch-project-id`, `--google-batch-region`, and
+`--google-batch-service-account`. Preemptible VM handling mirrors the
+Azure/AWS Spot story: `--google-use-spot`,
+`--google-fallback-to-on-demand`, and `--google-max-retries` (issue
+#352). Workload Identity / per-job service-account authentication is used
+in place of long-lived keys. See AGENTS.md §4 (`--google-*`) for the
+complete flag set; this executor currently has no dedicated deployment
+guide.
+
+### 5.7 Kubernetes Execution
+
+Use the `kubernetes` executor to run campaigns as **Kubernetes Jobs** on a
+self-hosted or managed cluster (EKS/GKE/AKS/Kind). Each per-sample task is
+submitted as a Job in the namespace selected by `--kubernetes-namespace`;
+resource directives (CPUs, memory) map to Kubernetes `requests`/`limits`.
+Polling cadence is tunable with `--kubernetes-poll-interval-s` and
+`--kubernetes-max-poll-interval-s` (issue #377). For RBAC manifests, node
+sizing, and persistent-volume patterns, see
+[kubernetes-deployment.md](kubernetes-deployment.md).
+
+### 5.8 PBS/Torque Execution
+
+Use the `pbs` executor for HPC sites that run **PBS Pro** or **Torque**
+rather than Slurm. As with Slurm, pass `--pbs-real` to submit to the real
+scheduler (otherwise `submitit` runs locally in debug mode) and supply
+`--pbs-server` and `--pbs-queue` (issue #351). Resource directives
+(`cpus`, `memory_mb`, `time_min`) are forwarded to `submitit`'s PBS
+backend exactly like the Slurm executor. See AGENTS.md §4 (`--pbs-*`)
+for the complete flag set; this executor currently has no dedicated
+deployment guide.
+
+### 5.9 Dask-JobQueue Execution
+
+Use the `dask_jobqueue` executor for **elastic HPC** clusters where the
+Dask scheduler should auto-scale workers across a backing batch system
+(Slurm, PBS, or Kubernetes). This is the right choice when sample
+throughput is bursty and you want the scheduler to grow and shrink the
+worker pool. Key flags: `--dask-cluster-type`, `--dask-min-workers`,
+`--dask-max-workers`, `--dask-cpus-per-worker`,
+`--dask-memory-per-worker`, `--dask-walltime`, `--dask-queue`, and
+`--dask-project` (issue #338). Pair it with `--task-queue dask` and
+`--dask-scheduler-address` if you already operate a long-lived Dask
+scheduler. See AGENTS.md §4 (`--dask-*`) for the complete flag set; this
+executor currently has no dedicated deployment guide.
+
+### 5.10 Docker Swarm Execution
+
+Use the `docker_swarm` executor for campaigns on a **Docker Swarm**
+cluster — a lightweight alternative when you already manage Swarm
+services and do not want a full Nomad or Kubernetes deployment. Each
+per-sample task is launched as a Swarm Service; polling uses exponential
+backoff tuned by `--docker-swarm-poll-interval-s` and
+`--docker-swarm-max-poll-interval-s` (issue #582). Configure the worker
+image with `--docker-swarm-image` and the overlay network with
+`--docker-swarm-network`. See AGENTS.md §4 (`--docker-swarm-*`) for the
+complete flag set; this executor currently has no dedicated deployment
+guide.
+
+### 5.11 Dry-Run and Single-Sample Modes
 
 **Dry-run** validates your setup by running exactly one sample locally:
 
@@ -1016,62 +1100,154 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 
 ## 9. Reference
 
-### Complete CLI Reference
+### CLI Reference
 
+> **`osimflow run --help` is authoritative.** AGENTS.md §4 ("Build & run
+> commands" → "CLI flags") documents the **complete 100+ flag surface**;
+> this section summarises the most-used flags by group. For any flag not
+> shown here — including the full `--azure-*`, `--google-*`,
+> `--kubernetes-*`, `--docker-swarm-*`, `--pbs-*`, `--dask-*`,
+> `--nomad-*`, `--shard-*`, `--s3-artifact-*`, and advanced Slurm /
+> AWS-Batch flags — run `osimflow run --help` or consult AGENTS.md §4.
+
+#### Executor selection
+
+| Flag | Description |
+|---|---|
+| `--executor {local,slurm,aws_batch,azure_batch,google_batch,kubernetes,pbs,dask_jobqueue,nomad,docker_swarm}` | Executor backend (default: `local`). See [§5](#5-running-campaigns) for per-executor quick-starts. |
+| `--max-workers INT` | `local` executor thread-pool size (default: 4). |
+| `--task-queue {none,dask}` | Distributed task-queue backend for multi-node fan-out (default: `none`). |
+
+#### Campaign basics
+
+| Flag | Default | Description |
+|---|---|---|
+| `--input_variables PATH` | **required** | Path to `variables.yml`. |
+| `--template_sim_package PATH` | **required** | Template simulation package directory. |
+| `--n_samples INT` | **required** | Number of samples to generate. |
+| `--outdir PATH` | **required** | Output directory. |
+| `--openstudio_version STRING` | `3.11.0` | OpenStudio version (drives the `nrel/openstudio:<version>` tag). |
+| `--archive_intermediates` | off | Preserve per-sample `.osw`/`.osm`/`eplusout.sql`. |
+| `--preset NAME` | none | Named preset of recommended flag values (issue #384); individual flags override the preset. |
+| `--init-script` / `--finalize-script PATH` | none | Pre/post-campaign shell hooks (issue #108). |
+| `--webhook-url URL` | none | Campaign-completion webhook callback (issue #283). |
+| `--max-sample-retries INT` | `3` | Max retries for transient per-sample failures (issue #252). |
+
+#### Algorithm & sampling
+
+| Flag | Description |
+|---|---|
+| `--algorithm NAME` | Sampling strategy selector dispatched through `AlgorithmRegistry`. Built-ins: `lhs` (default), `sobol`, `halton`, `random_sampling`, `repeat_all`, `full_factorial`, `grid`, `morris`, `fast99`, `diag`, `calibration`, `de`, `da`, `ga`, `nsga2`, `spea2`, `pso`, `rgenoud`, `gaisl`, `sequential_search`, `uq`, `custom`. Add new strategies via the plug-in framework (issue #121). |
+| `--max-generations INT` | Max DAG generations (default: 1 for single-shot LHS; raise for iterative algorithms — issue #122). |
+
+#### Common Slurm flags
+
+| Flag | Description |
+|---|---|
+| `--slurm-real` | Submit to a real Slurm cluster (default: debug/local via `submitit.DebugExecutor`). |
+| `--slurm-partition STRING` | Partition (queue). |
+| `--slurm-account STRING` | Account for job accounting. |
+| `--slurm-qos` / `--slurm-constraint` / `--slurm-gres` | Advanced directives (requires `submitit >= 1.5`). |
+| `--slurm-cost-per-node-hour USD` | Node-hour cost for `--enable-cost-tracking` (issue #447). |
+
+See [deployment/slurm.md](deployment/slurm.md) for the full Slurm guide.
+
+#### Common AWS Batch flags
+
+| Flag | Description |
+|---|---|
+| `--aws-batch-queue STRING` | Batch job queue name. |
+| `--aws-batch-job-definition STRING` | Job definition ARN or name. |
+| `--aws-batch-max-spot-price-usd USD` | Spot price ceiling in USD/vCPU-hour (issue #131). |
+| `--aws-batch-fallback-to-on-demand` | Fall back to on-demand when Spot exceeds ceiling or retries exhaust. |
+| `--aws-batch-max-retries INT` | Max Spot-interruption retries (default: 3). |
+
+See [deployment/aws-batch.md](deployment/aws-batch.md) and
+[aws-batch-terraform.md](aws-batch-terraform.md) for full setup. Other
+executors' flag groups (`--azure-*`, `--google-*`, `--kubernetes-*`,
+`--docker-swarm-*`, `--pbs-*`, `--dask-*`, `--nomad-*`) are documented in
+AGENTS.md §4; per-executor quick-starts are in [§5](#5-running-campaigns).
+
+#### Observability & integration
+
+| Flag | Description |
+|---|---|
+| `--observability {none,cloudwatch,prometheus,opentelemetry}` | Observability backend selector (default: `none`). Issues #127, #145. |
+| `--cloudwatch-log-group` / `--cloudwatch-namespace` | CloudWatch config (when `--observability cloudwatch`). |
+| `--prometheus-port INT` | Prometheus metrics HTTP port (when `--observability prometheus`). |
+| `--otel-endpoint URL` | OpenTelemetry OTLP endpoint (when `--observability opentelemetry`). |
+| `--mlflow_tracking_uri URL` | Optional MLflow tracking URI (requires `pip install osimflow[mlflow]`). |
+| `--log-aggregation-url URL` | CloudWatch Logs aggregation URL for distributed log collection (issue #340). |
+
+See [observability.md](observability.md) for backend configuration.
+
+#### Result storage & cost tracking
+
+| Flag | Description |
+|---|---|
+| `--result-storage-backend {local,s3,gs,azure}` | Result storage backend (default: `local`). Issue #339. |
+| `--result-storage-bucket NAME` | Bucket / container name for the chosen backend. |
+| `--result-storage-endpoint URL` | Custom S3-compatible endpoint URL. |
+| `--enable-cost-tracking` / `--track-costs` | Enable cloud/HPC resource cost estimation (issue #447). |
+| `--cost-on-demand-price USD` / `--cost-spot-price USD` | Price per vCPU-hour for cost estimation. |
+| `--s3-artifact-bucket NAME` | Centralised S3 artifact bucket with optional presigned URLs (issue #601). |
+
+See [cost-estimation.md](cost-estimation.md) for the cost model.
+
+#### BYOS (Bring Your Own Script)
+
+| Flag | Description |
+|---|---|
+| `--custom_apply_script PATH` | Custom parameter-application script. |
+| `--custom_kpi_extractor PATH` | Custom KPI extraction script. |
+| `--byos-trust-level {subprocess,inprocess}` | BYOS execution mode (default: `subprocess`). Issue #269. |
+| `--byos-resource-limits ...` | CPU/memory limits for the BYOS subprocess wrapper (issue #343). |
+
+See [§7.1 BYOS Custom Scripts](#71-byos-custom-scripts) for the contract.
+
+#### Detach / Coordinator
+
+| Flag | Description |
+|---|---|
+| `--detach` | Hand the campaign to a Coordinator service and exit immediately (issue #602). |
+| `--coordinator-url URL` | Base URL of the Coordinator service (required with `--detach`). |
+| `--shard-count` / `--shard-index` / `--shard-start` / `--shard-end` | Coordinator shard configuration for distributed execution. |
+
+#### Debugging modes
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Force `local` executor, 1 sample, steps 1-4 only. |
+| `--sample INT` | Re-run a single sample (0-indexed) from existing `samples.json`. |
+| `--skip-preflight` | Skip the `PREFLIGHT_RUN_MODEL` seed-model validation (issue #107). |
+| `--offline` | Skip Docker Hub pulls, PyPI checks, and online weather downloads (issue #261). |
+| `--log_level {DEBUG,INFO,WARNING,ERROR}` | Logging level (default: `WARNING`). |
+
+#### `osimflow serve` subcommand
+
+The optional REST API server (requires `pip install osimflow[api]`):
+
+```bash
+osimflow serve --outdir ./results --host 0.0.0.0 --port 8000 --read-write
 ```
-osimflow run [OPTIONS]
 
-Required:
-  --input_variables PATH         Path to variables.yml
-  --template_sim_package PATH    Path to template simulation package
-  --n_samples INT                Number of LHS samples
-  --outdir PATH                  Output directory
+`--read-write` enables campaign start/stop and SSE event streaming
+(issue #143); omit it for read-only monitoring. Other `serve` flags:
+`--api-key`, `--cors-origins`, `--rate-limit`, `--tls-cert` / `--tls-key`,
+`--ui`, `--editor`, `--dashboard`, `--api-redis-url`. See [api.md](api.md)
+for the endpoint reference and `osimflow serve --help` for the full list.
 
-Executor:
-  --executor {local,slurm,aws_batch,nomad}
-                                 Executor backend (default: local)
-  --max-workers INT              Local executor thread pool size (default: 4)
+#### Other subcommands
 
-Slurm:
-  --slurm-partition STRING       Partition name (default: short)
-  --slurm-account STRING         Account for job accounting
-  --slurm-real                   Submit to real Slurm (not debug mode)
-  --slurm-qos STRING             QoS level (submitit >= 1.5)
-  --slurm-constraint STRING      Feature constraint (submitit >= 1.5)
-  --slurm-gres STRING            Generic resources, e.g. gpu:1 (submitit >= 1.5)
-
-AWS Batch:
-  --aws-batch-queue STRING       Job queue name
-  --aws-batch-job-definition STRING
-                                 Job definition ARN or name
-
-Nomad:
-  --nomad-address URL            Cluster HTTP address
-  --nomad-datacentre STRING      Target datacentre (default: dc1)
-  --[no-]nomad-remote-results-only
-                                 Deprecated compatibility toggle.
-                                 Default keeps remote-results mode.
-                                 --no-nomad-remote-results-only temporarily
-                                 enables legacy local-callable mode
-                                 (planned removal after one minor release)
-
-Campaign:
-  --openstudio_version STRING    OpenStudio version (default: 3.11.0)
-  --archive_intermediates        Archive per-sample intermediates
-  --weather_dir STRING           Weather subdirectory name (default: weather)
-  --dry-run                      Validate setup with 1 sample
-  --sample INT                   Run only sample N (0-indexed)
-
-BYOS:
-  --custom_apply_script PATH     Custom parameter-application script
-  --custom_kpi_extractor PATH    Custom KPI extraction script
-
-Integration:
-  --mlflow_tracking_uri URL      MLflow tracking server URI
-
-Logging:
-  --log_level LEVEL              Logging level (default: WARNING)
-```
+| Subcommand | Purpose |
+|---|---|
+| `osimflow health` | System health checks (Python, SQLite, OpenStudio/Docker, disk, network). Issue #411. |
+| `osimflow import-osa` / `osimflow export` | OSA analysis.json ↔ campaign config conversion. |
+| `osimflow list` / `show` / `compare` / `status` / `download` | Multi-campaign registry and status operations. Issue #266. |
+| `osimflow backup` / `restore` | Registry backup / restore / import. Issue #440. |
+| `osimflow mark-for-reanalysis` / `merge` | Data-point lifecycle operations. Issues #418, #419, #420. |
+| `osimflow measure` / `list-measures` | Measure discovery and BCL browsing. Issues #532, #580. |
+| `osimflow query-results` / `export-results` / `aggregate-runs` | Result querying, export, and cross-campaign aggregation. Issues #585, #588. |
 
 ### Documentation Index
 
