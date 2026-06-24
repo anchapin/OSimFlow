@@ -538,8 +538,8 @@ def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--kpis", required=True, nargs="+", type=Path)
-    parser.add_argument("--simulation_dirs", required=True, nargs="+", type=Path)
+    parser.add_argument("--kpis", required=False, nargs="*", type=Path, default=[])
+    parser.add_argument("--simulation_dirs", required=False, nargs="*", type=Path, default=[])
     parser.add_argument("--out_csv", required=True, type=Path)
     parser.add_argument("--out_parquet", type=Path, default=None)
     parser.add_argument("--out_failed", required=True, type=Path)
