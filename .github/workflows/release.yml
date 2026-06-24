@@ -6,12 +6,15 @@
 #   2. The package version is read from the tag and validated against
 #      `pyproject.toml` (must match `project.version`).
 #   3. sdist + wheel are built with `python -m build`.
-#   4. The build artifacts are signed with Sigstore keyless signing via
-#      `sigstore/gh-action-sigstore-python`.
-#   5. Release candidates (tag suffix `-rc.*`) are published to TestPyPI.
-#   6. Stable releases (no `-rc` suffix) are published to PyPI.
-#   7. A GitHub Release is generated with the changelog derived from the
-#      previous tag.
+#   4. A CycloneDX 1.5 SBOM (`dist/osimflow-<ver>.cdx.json`) is generated
+#      with `cyclonedx-py environment` from the freshly installed wheel
+#      (issue #954).
+#   5. The build artifacts (incl. the SBOM) are signed with Sigstore
+#      keyless signing via `sigstore/gh-action-sigstore-python`.
+#   6. Release candidates (tag suffix `-rc.*`) are published to TestPyPI.
+#   7. Stable releases (no `-rc` suffix) are published to PyPI.
+#   8. A GitHub Release is generated with the changelog derived from the
+#      previous tag and attaches the SBOM as a release asset.
 #
 # Required repository secrets:
 #   - none for Sigstore (uses OIDC keyless signing against the public
@@ -70,15 +73,36 @@ jobs:
         run: |
           python -m build --sdist --wheel
 
+      - name: Generate CycloneDX SBOM
+        # Issue #954: emit a CycloneDX 1.5 SBOM for the freshly built wheel
+        # so downstream consumers can audit the transitive dependency
+        # surface. The SBOM is generated BEFORE Sigstore signing so it is
+        # itself signed, and lands in `dist/` so the upload-artifact and
+        # GitHub Release steps pick it up automatically.
+        run: |
+          set -euo pipefail
+          uv pip install --system cyclonedx-bom
+          # Install the wheel just produced so cyclonedx-py can resolve
+          # the package metadata and its runtime dependencies.
+          uv pip install --system dist/osimflow-*.whl
+          VERSION="$(python -c 'import importlib.metadata; print(importlib.metadata.version("osimflow"))')"
+          cyclonedx-py environment \
+            --schema-version 1.5 \
+            --output-format json \
+            --output-file "dist/osimflow-${VERSION}.cdx.json"
+          echo "Generated SBOM: dist/osimflow-${VERSION}.cdx.json"
+
       - name: Sign with Sigstore
         # Keyless signing against the public Sigstore transparency log.
         # Stores the signature as a separate .sigstore bundle next to
         # each artifact so downstream consumers can verify authenticity.
+        # Signs the sdist, wheel, and CycloneDX SBOM (issue #954).
         uses: sigstore/gh-action-sigstore-python@v3.4.0
         with:
           inputs: >-
             ./dist/*.whl
             ./dist/*.tar.gz
+            ./dist/*.cdx.json
           output-directory: ./dist
 
       - name: Upload build artifacts
@@ -153,3 +177,4 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/*.sigstore
+            dist/*.cdx.json
