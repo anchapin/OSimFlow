@@ -635,21 +635,10 @@ def _apply_parameters_stub(
 
 
 # ---------------------------------------------------------------------------
-# Simulation work: the heavy step. STUB.
+# Simulation work: the heavy step. The real `openstudio.cli run -w`
+# invocation lives in `_run_real_openstudio` below (closed #31); a
+# stub fallback for tests is selected via OSIMFLOW_STUB_SIM=1.
 # ---------------------------------------------------------------------------
-# This stub is a placeholder for the real implementation, which will
-# invoke `openstudio.cli run -w workflow.osw` inside the
-# `nrel/openstudio:<version>` container (consumed from Docker Hub;
-# see `docs/openstudio-image-distribution.md` and ADR-0002). The
-# container is selected by the executor via the `container` parameter
-# on submit; the function itself only sees the work directory.
-#
-# The stub simulates work with a short sleep and writes placeholder
-# eplusout.sql / eplusout.err so the downstream extract step has
-# something to consume in tests. When wired to a real container, the
-# body becomes `subprocess.run(["openstudio.cli", "run", ...])` with  # nosec
-# logging redirected to the per-sample log files written by the
-# Campaign.
 
 
 # ---------------------------------------------------------------------------
