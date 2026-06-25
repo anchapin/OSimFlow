@@ -433,6 +433,46 @@ OSIMFLOW_RUN_REAL_OPENSTUDIO=1 .venv/bin/pytest tests/integration/test_local_exe
 This requires `openstudio.cli` on PATH or Docker with the
 `nrel/openstudio` image.
 
+### Testing under pytest-xdist (parallel test execution)
+
+CI runs the full test suite with `pytest-xdist` (`-n 2 --dist
+loadgroup`), which distributes tests across two parallel worker
+processes. This introduces a subtle **env-var leakage** risk: if one
+test triggers production code that sets `os.environ["SOME_FLAG"] = "1"`
+and a later test in the **same worker process** reads that flag, the
+second test sees the leaked value.
+
+The standard library's `patch` dot `dict` context manager is scoped to its
+with block and cleans up correctly. The danger is **production code** that assigns
+`os.environ[...] = ...` directly — those assignments persist for the
+process lifetime and leak across tests in the same xdist worker.
+
+**Rule: any test that asserts on env-var-dependent behavior MUST clear
+the relevant vars in an autouse fixture.**
+
+```python
+class TestMyExecutor:
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Clear env vars that production code may have set in this process."""
+        monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK", raising=False)
+        monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DRY_RUN", raising=False)
+
+    def test_fails_without_fallback(self) -> None:
+        # _isolate_env already ran — env is clean regardless of prior tests
+        ...
+```
+
+**Known offenders** (production code that sets process-global env vars):
+
+| File | Env var | When | Tracking issue |
+|---|---|---|---|
+| `osimflow/campaign.py` | `OSIMFLOW_DOCKER_SWARM_DRY_RUN` | `--dry-run` | #976 |
+
+If you add new `os.environ[...] = ...` assignments in production code,
+document them in this table and ensure dependent tests use
+`monkeypatch.delenv`.
+
 ---
 
 ## 6. Code Style
@@ -1155,6 +1195,75 @@ first invocation. Subsequent runs use the cache. Clear it with:
 ```bash
 pre-commit clean
 pre-commit install
+```
+
+### "refname 'origin/main' is ambiguous"
+
+A stray local branch named `refs/heads/origin/main` (distinct from the
+remote-tracking ref `refs/remotes/origin/main`) causes this warning
+whenever you reference `origin/main` in git commands. The command may
+silently resolve to the stale local branch instead of the current
+remote ref, leading to incorrect worktree bases or stale merges.
+
+**Detection:**
+
+```bash
+git for-each-ref --format='%(refname)' | grep 'refs/heads/origin/main'
+```
+
+**Fix:**
+
+```bash
+git branch -D origin/main   # deletes the stray LOCAL branch only
+git rev-parse refs/remotes/origin/main   # verify remote-tracking ref intact
+```
+
+**Workaround** (if you can't delete it yet): always use the explicit
+remote-tracking ref:
+
+```bash
+git rev-parse refs/remotes/origin/main      # always correct
+git worktree add ../wt -b branch refs/remotes/origin/main
+```
+
+Tracked in #978.
+
+### "Worktree state file collision in ../worktrees/"
+
+The `../worktrees/` directory is shared across all projects on this
+machine. If you run orchestration scripts that write state files
+(`wave-state.json`, etc.) to this directory, use a **project-specific
+filename** (e.g., `wave-state-osimflow.json`) to avoid clobbering
+another project's state.
+
+```bash
+# Bad: collides with other projects
+echo '{}' > ../worktrees/wave-state.json
+
+# Good: project-scoped
+echo '{}' > ../worktrees/wave-state-osimflow.json
+```
+
+### "PR merged despite a failing CI check"
+
+If no branch protection rules are configured on `main`, `gh pr merge`
+(or the GitHub UI "Merge" button) will succeed even when status checks
+are failing. This can silently land broken code on `main`.
+
+**Fix**: enable branch protection requiring key checks (see #975):
+
+- Settings → Branches → Branch protection rules → `main`
+- Require status checks: `lint (ruff)`, `typecheck (mypy --strict)`,
+  `test (pytest, 85% coverage gate)`, `agents & docs contract`,
+  `security (pip-audit)`
+
+Until that is configured, always verify `non_success` is empty before
+merging:
+
+```bash
+gh pr view <N> --json statusCheckRollup \
+  -q '[.statusCheckRollup[] | select(.conclusion != "SUCCESS" and .conclusion != "SKIPPED")]'
+# Empty output = safe to merge
 ```
 
 ### Getting help
