@@ -194,6 +194,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
 | `tests/integration/test_real_example_fixture.py` | Skip-gated tests for the real OpenStudio example fixture (issue #938). Skipped unless `scripts/fetch_example_fixture.py` has materialized a real `.osm` + `.epw` (gitignored); reports `s` in CI. |
 | `tests/integration/test_observability_real_sinks.py` | Real metric-sink validation for the CloudWatch, Prometheus, and OpenTelemetry backends; module + per-backend skip-gated behind `OSIMFLOW_OBSERVABILITY_REAL=1` (issue #947). |
+| `tests/integration/test_real_openstudio_campaign.py` | Full-Campaign real-`openstudio.cli` E2E exercising all 7 DAG steps (issue #939). Skip-gated on `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` + `openstudio.cli`/`openstudio` on PATH; driven nightly by `openstudio-cli-e2e.yml` which installs the CLI + fetches the real fixture. Inert (reports `s`) in normal CI. |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
