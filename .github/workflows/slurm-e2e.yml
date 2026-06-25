@@ -1,0 +1,76 @@
+# =============================================================================
+# .github/workflows/slurm-e2e.yml — Real Slurm cluster E2E (dispatch-only)
+# =============================================================================
+# Runs a 3-sample campaign against a REAL Slurm cluster, exercising the
+# ``SlurmExecutor(debug=False)`` production path that every other Slurm
+# test skips (they all use the ``debug=True`` / submitit-local fallback).
+#
+# IMPORTANT — SELF-HOSTED RUNNER REQUIRED:
+#   This workflow is a no-op on GitHub-hosted runners. There is no Slurm
+#   cluster reachable from ``ubuntu-latest`` — ``srun``/``sbatch`` are not
+#   on PATH, so submitit's ``AutoExecutor`` would pick the *local* cluster
+#   and the test would skip (or fail its structural cluster=="slurm"
+#   assertion). To actually exercise the production path:
+#
+#     1. Register a GitHub Actions self-hosted runner on a Slurm login /
+#        head node of a real cluster.
+#     2. Tag that runner with both ``self-hosted`` and ``slurm``.
+#     3. Set the ``OSIMFLOW_SLURM_PARTITION`` (and optionally
+#        ``OSIMFLOW_SLURM_ACCOUNT``) repository variables to a partition
+#        the runner's submit user can queue to.
+#
+#   The job then runs only on manual ``workflow_dispatch`` (no cron) so it
+#   never consumes cluster queue time without an explicit operator action.
+#
+# Prerequisites (GitHub variables):
+#   vars.OSIMFLOW_SLURM_PARTITION — Slurm partition to submit to (required)
+#   vars.OSIMFLOW_SLURM_ACCOUNT   — Slurm account/allocation (optional)
+#
+# The test file uses ``pytest.mark.skipif`` so it is inert in normal CI.
+# =============================================================================
+
+name: Slurm E2E (Real Cluster)
+
+on:
+  workflow_dispatch: # Manual trigger only — no cron, no cost when idle.
+    inputs:
+      n_samples:
+        description: "Number of campaign samples to run (default 3)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  slurm-e2e:
+    # Self-hosted runner registered on a Slurm login/head node, tagged
+    # ``slurm`` so the job never lands on a GitHub-hosted runner.
+    runs-on: [self-hosted, slurm]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev + slurm extras
+        run: pip install -e ".[dev,slurm]"
+
+      - name: Verify Slurm toolchain on PATH
+        run: |
+          set -euo pipefail
+          command -v sbatch >/dev/null || { echo "sbatch not on PATH — not a Slurm login node" >&2; exit 1; }
+          command -v srun  >/dev/null || { echo "srun not on PATH — submitit will not detect Slurm" >&2; exit 1; }
+          echo "Slurm toolchain OK: $(sbatch --version)"
+
+      - name: Run real Slurm cluster E2E
+        env:
+          OSIMFLOW_SLURM_E2E: "1"
+          OSIMFLOW_SLURM_PARTITION: ${{ vars.OSIMFLOW_SLURM_PARTITION }}
+          OSIMFLOW_SLURM_ACCOUNT: ${{ vars.OSIMFLOW_SLURM_ACCOUNT }}
+        # Generous timeout: real Slurm jobs sit in the scheduler queue
+        # and the campaign fans out + blocks on every per-sample
+        # ``.result()``. 1h matches the test's own ``--timeout=3600``.
+        run: .venv/bin/pytest tests/integration/test_slurm_real_cluster.py -v --timeout=3600
