@@ -143,3 +143,123 @@ class MyDatadogBackend(ObservabilityBackend):
 ```
 
 See `osimflow/observability.py` for the full ABC definition.
+
+## Real-sink validation
+
+The observability backends are unit-tested with mocks only (see
+`tests/unit/test_observability_*.py`). To validate the real wire format —
+metric names, label/dimension shapes, and API call signatures against live
+metric sinks — a set of skip-gated integration tests live in
+`tests/integration/test_observability_real_sinks.py`.
+
+These tests are **inert by default**: the whole module is skipped unless
+`OSIMFLOW_OBSERVABILITY_REAL=1` is set, so they never run in PR CI and do not
+affect the coverage gate. Each backend is additionally gated on its own sink
+configuration, so a partial setup (e.g. only a pushgateway running) still
+works — the other two tests simply skip.
+
+### Environment variables
+
+In addition to `OSIMFLOW_OBSERVABILITY_REAL=1`, each backend needs its own
+sink config:
+
+| Backend | Variable | Purpose |
+|---------|----------|---------|
+| CloudWatch | `OSIMFLOW_CW_NAMESPACE` | CloudWatch metric namespace to publish under. |
+| CloudWatch | `OSIMFLOW_CW_LOG_GROUP` | CloudWatch log group (presence gate). |
+| CloudWatch | `OSIMFLOW_CW_REGION` | AWS region (falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`). |
+| Prometheus | `OSIMFLOW_PROMETHEUS_URL` | Pushgateway `host:port` (e.g. `localhost:9091`). |
+| Prometheus | `OSIMFLOW_PROMETHEUS_JOB` | Optional job label (default: unique per run). |
+| OpenTelemetry | `OSIMFLOW_OTEL_ENDPOINT` | OTLP gRPC endpoint (e.g. `localhost:4317`). |
+| OpenTelemetry | `OSIMFLOW_OTEL_OUTPUT_FILE` | File the collector's file exporter writes to. |
+
+### Running a single backend
+
+Each test records a `status` metric carrying a unique marker (a UUID-derived
+`sample_id` / `SampleId`), pushes it through the backend, and then reads it
+back from the sink (CloudWatch `get_metric_data`, the pushgateway `/metrics`
+endpoint, or the OTel collector's file output) and asserts the marker landed.
+
+```bash
+# Prometheus (simplest local sink — one container, no config)
+docker run --rm -d -p 9091:9091 prom/pushgateway
+OSIMFLOW_OBSERVABILITY_REAL=1 OSIMFLOW_PROMETHEUS_URL=localhost:9091 \
+    .venv/bin/pytest tests/integration/test_observability_real_sinks.py \
+    -k prometheus -v --no-cov
+```
+
+The CloudWatch metric names, Prometheus label names, and OpenTelemetry
+attribute keys asserted by these tests match the [Metric Dictionary](#metric-dictionary)
+exactly.
+
+### Recommended local sink setup
+
+#### Prometheus pushgateway
+
+One container, no configuration file. Requires `pip install prometheus_client`.
+
+```bash
+docker run --rm -d -p 9091:9091 prom/pushgateway
+export OSIMFLOW_OBSERVABILITY_REAL=1
+export OSIMFLOW_PROMETHEUS_URL=localhost:9091
+.venv/bin/pytest tests/integration/test_observability_real_sinks.py -k prometheus -v --no-cov
+```
+
+The test cleans up its pushed job group after asserting (best-effort).
+
+#### OpenTelemetry collector
+
+Run an `otel-collector` with an OTLP **gRPC** receiver and a `file` exporter,
+then point the test at the output file. Save this collector config locally:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+exporters:
+  file:
+    path: /tmp/otel-metrics.json
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [file]
+```
+
+Then run the collector and the test:
+
+```bash
+docker run --rm -d -p 4317:4317 \
+    -v $(pwd)/otel-collector-config.yaml:/etc/otelcol/config.yaml \
+    -v /tmp:/tmp \
+    otel/opentelemetry-collector
+export OSIMFLOW_OBSERVABILITY_REAL=1
+export OSIMFLOW_OTEL_ENDPOINT=localhost:4317
+export OSIMFLOW_OTEL_OUTPUT_FILE=/tmp/otel-metrics.json
+.venv/bin/pytest tests/integration/test_observability_real_sinks.py -k opentelemetry -v --no-cov
+```
+
+Requires `pip install opentelemetry-api opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-grpc`. The test calls
+`MeterProvider.force_flush()` to trigger an immediate export, then polls the
+output file for the unique attribute (the SDK's periodic reader otherwise
+exports every ~60 s).
+
+#### CloudWatch
+
+Point the test at a real AWS account. Authentication uses the standard boto3
+credential chain (instance profile, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`,
+or OIDC) — never long-lived keys committed to config.
+
+```bash
+export OSIMFLOW_OBSERVABILITY_REAL=1
+export OSIMFLOW_CW_NAMESPACE=OSimFlow/RealSinkTest
+export OSIMFLOW_CW_LOG_GROUP=/osimflow/real-sink-test
+export OSIMFLOW_CW_REGION=us-east-1
+.venv/bin/pytest tests/integration/test_observability_real_sinks.py -k cloudwatch -v --no-cov
+```
+
+CloudWatch custom metrics take a few seconds to become queryable; the test
+polls `get_metric_data` for the unique `SampleId` dimension for up to ~60 s.

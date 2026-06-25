@@ -10,6 +10,9 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 ### Added
 - `scripts/fetch_example_fixture.py`: downloads a real OpenStudio `.osm` model + `.epw` weather file into `example_package/` for real-OpenStudio E2E tests; the fetched binary files stay gitignored per the `.osm`/`.epw` policy, and the original placeholder model is preserved as `model.osm.placeholder` for stub-mode tests (fixes #938).
 
+### Tests
+- `tests/integration/test_observability_real_sinks.py`: real-sink validation for the CloudWatch, Prometheus, and OpenTelemetry backends (module + per-backend skip-gated; inert in normal CI) (fixes #947).
+
 ## [0.1.0] - 2026-06-24
 
 > First official release. All APIs are subject to change (pre-1.0 development),
