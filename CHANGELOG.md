@@ -21,6 +21,7 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 - `tests/integration/test_aws_batch_cache_resume.py`: real-AWS-Batch cache-warm/resume E2E asserting the second run is >=5x faster and fully cache-served (skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + result bucket; inert in normal CI) (fixes #960).
 - `tests/integration/test_slurm_real_cluster.py` + `.github/workflows/slurm-e2e.yml`: real-Slurm-cluster E2E (`submitit.AutoExecutor(debug=False)`) on a self-hosted runner + CI dispatch path (skip-gated on `OSIMFLOW_SLURM_E2E=1` + `sbatch` on PATH) (fixes #941).
 - `tests/integration/test_azure_batch_real.py` + `.github/workflows/azure-batch-e2e.yml`: real-substrate E2E for `AzureBatchExecutor` via Azure OIDC (`azure/login`) (skip-gated; nightly on `workflow_dispatch`) (fixes #958).
+- `tests/integration/test_kubernetes_executor_real.py` + `.github/workflows/kubernetes-e2e.yml`: real-substrate E2E for `KubernetesExecutor` against a live cluster (skip-gated on `OSIMFLOW_KUBERNETES_E2E=1` + kubeconfig) (fixes #940).
 
 ## [0.1.0] - 2026-06-24
 

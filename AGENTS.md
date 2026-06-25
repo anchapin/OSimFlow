@@ -197,6 +197,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `tests/integration/test_real_openstudio_campaign.py` | Full-Campaign real-`openstudio.cli` E2E exercising all 7 DAG steps (issue #939). Skip-gated on `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` + `openstudio.cli`/`openstudio` on PATH; driven nightly by `openstudio-cli-e2e.yml` which installs the CLI + fetches the real fixture. Inert (reports `s`) in normal CI. |
 | `tests/integration/test_aws_batch_cache_resume.py` | Real-AWS-Batch cache-warm/resume E2E (issue #960). Runs a bounded 2-sample campaign with the S3 result backend, then re-runs against the same `outdir`; asserts the warm run is fully cache-served (cache stats unchanged, 0 Batch submits) and >=5x faster. Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_RESULT_BUCKET` (inert in normal CI). |
 | `tests/integration/test_slurm_real_cluster.py` | Real-Slurm-cluster E2E (issue #941). Constructs `SlurmExecutor(debug=False)` and runs a 3-sample campaign on a real cluster; asserts submitit's `AutoExecutor.cluster == "slurm"` (structural real-vs-debug proof) plus the 4-artifact contract + `run.json`. Skip-gated behind `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH; dispatched by `slurm-e2e.yml` on a self-hosted runner tagged `[self-hosted, slurm]`. Inert (reports `s`) in normal CI. |
+| `tests/integration/test_kubernetes_executor_real.py` | Real-Kubernetes-cluster E2E (issue #940). Constructs `KubernetesExecutor` and runs a 3-sample campaign against a live/`kind` cluster; asserts the 4-artifact contract + `run.json` (`executor == "kubernetes"`). Skip-gated behind `OSIMFLOW_KUBERNETES_E2E=1` + a reachable kubeconfig (`KUBECONFIG` or `~/.kube/config`); dispatched by `kubernetes-e2e.yml`. Inert (reports `s`) in normal CI. |
 | `tests/integration/test_mlflow_real_tracking.py` | Real-MLflow file-tracking-URI smoke test (issue #948). Exercises `osimflow/mlflow_hook` against the *real* `mlflow` package (not the `sys.modules` fake the unit tests use) via a hermetic `file://` store + stub sim. Skip-gated behind `OSIMFLOW_MLFLOW_E2E=1` + the `[mlflow]` extra; the ci.yml `mlflow-real` job exercises it. |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
@@ -631,6 +632,17 @@ it runs a 3-sample campaign against a real Azure Batch pool daily at
 `OSIMFLOW_AZURE_BATCH_ACCOUNT_NAME`, `OSIMFLOW_AZURE_BATCH_ACCOUNT_URL`,
 `OSIMFLOW_AZURE_BATCH_POOL_ID`, and `OSIMFLOW_AZURE_BATCH_LOCATION`
 (repository variables).
+
+The nightly Kubernetes E2E workflow (issue #940) lives in
+[`.github/workflows/kubernetes-e2e.yml`](.github/workflows/kubernetes-e2e.yml) —
+it runs a 3-sample campaign against a real Kubernetes cluster daily at
+06:00 UTC and on manual `workflow_dispatch`. Unlike the cloud-OIDC
+workflows it authenticates with a kubeconfig stored in the `KUBECONFIG`
+repository secret (written to `~/.kube/config` on the runner), which
+suits managed clusters (EKS/GKE/AKS) and self-hosted/`kind` clusters
+alike. It requires the `KUBECONFIG` secret and the
+`OSIMFLOW_KUBERNETES_NAMESPACE` repository variable. The test file uses
+`pytest.mark.skipif` so it is inert in normal CI.
 
 ---
 
