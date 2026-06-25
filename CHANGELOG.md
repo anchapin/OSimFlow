@@ -13,6 +13,7 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 ### Tests
 - `tests/integration/test_observability_real_sinks.py`: real-sink validation for the CloudWatch, Prometheus, and OpenTelemetry backends (module + per-backend skip-gated; inert in normal CI) (fixes #947).
 - `tests/integration/test_real_openstudio_campaign.py`: full-Campaign real-`openstudio.cli` E2E exercising all 7 DAG steps; skip-gated on `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` + `openstudio.cli` on PATH; nightly `openstudio-cli-e2e.yml` now also fetches the real fixture and runs it (fixes #939).
+- `tests/integration/test_google_batch_real.py` + `.github/workflows/google-batch-e2e.yml`: real-substrate E2E for `GoogleBatchExecutor` via Google Workload Identity Federation auth (skip-gated; nightly on `workflow_dispatch`) (fixes #959).
 
 ## [0.1.0] - 2026-06-24
 
