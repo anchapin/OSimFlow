@@ -10,7 +10,11 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 ### Added
 - `scripts/fetch_example_fixture.py`: downloads a real OpenStudio `.osm` model + `.epw` weather file into `example_package/` for real-OpenStudio E2E tests; the fetched binary files stay gitignored per the `.osm`/`.epw` policy, and the original placeholder model is preserved as `model.osm.placeholder` for stub-mode tests (fixes #938).
 
+### Fixed
+- `osimflow/mlflow_hook.py`: call `mlflow.set_experiment("OSimFlow")` before `start_run` so the experiment exists on a fresh tracking store; without this, MLflow 3.x raises `MlflowException: Could not find experiment with ID 0` against a fresh `file://` store (regression caught by the new real-mlflow smoke test) (fixes #948).
+
 ### Tests
+- `tests/integration/test_mlflow_real_tracking.py`: real-MLflow file-tracking-URI smoke test (gated on `OSIMFLOW_MLFLOW_E2E=1` + the `[mlflow]` extra); the ci.yml `mlflow-real` job exercises it hermetically via a `file://` store (fixes #948).
 - `tests/integration/test_observability_real_sinks.py`: real-sink validation for the CloudWatch, Prometheus, and OpenTelemetry backends (module + per-backend skip-gated; inert in normal CI) (fixes #947).
 - `tests/integration/test_real_openstudio_campaign.py`: full-Campaign real-`openstudio.cli` E2E exercising all 7 DAG steps; skip-gated on `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` + `openstudio.cli` on PATH; nightly `openstudio-cli-e2e.yml` now also fetches the real fixture and runs it (fixes #939).
 - `tests/integration/test_google_batch_real.py` + `.github/workflows/google-batch-e2e.yml`: real-substrate E2E for `GoogleBatchExecutor` via Google Workload Identity Federation auth (skip-gated; nightly on `workflow_dispatch`) (fixes #959).

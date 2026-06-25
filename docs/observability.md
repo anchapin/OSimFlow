@@ -123,6 +123,30 @@ The `--observability` flag is **independent** of the existing `--mlflow_tracking
 
 Both can be active simultaneously without conflict.
 
+### Real file-tracking smoke test
+
+The MLflow integration (`osimflow/mlflow_hook.py`) is unit-tested with a fake
+`mlflow` module injected into `sys.modules`. To also exercise the *real*
+`mlflow` package, a hermetic smoke test runs against a local `file://` tracking
+store (no server required) plus stub simulation. This catches API regressions —
+for example, MLflow 3.x deprecated the `file://` backend (it now requires
+`MLFLOW_ALLOW_FILE_STORE=true`) and no longer auto-creates the implicit "Default"
+experiment, so the hook calls `mlflow.set_experiment("OSimFlow")` before
+`start_run` (issue #948).
+
+Run it locally:
+
+```bash
+pip install -e ".[mlflow]"
+OSIMFLOW_MLFLOW_E2E=1 .venv/bin/pytest tests/integration/test_mlflow_real_tracking.py -v --timeout=300
+```
+
+The test is gated on `OSIMFLOW_MLFLOW_E2E=1` **and** the real `mlflow` package
+being importable (checked via `importlib.util.find_spec`, not a `sys.modules`
+fake), so it reports `s` (skipped) in the normal CI `test` job and only runs in
+the dedicated `mlflow-real (file tracking)` job in
+`.github/workflows/ci.yml`, which installs the `[mlflow]` extra.
+
 ## Adding a Custom Backend
 
 Subclass `ObservabilityBackend` and pass the instance to the Campaign constructor:

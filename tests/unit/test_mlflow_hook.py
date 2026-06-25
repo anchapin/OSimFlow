@@ -74,20 +74,26 @@ class TestMaybeStartMlflowRun:
         assert hook_mod._ACTIVE_URI == "http://localhost:5000"
         assert hook_mod._ACTIVE_RUN_NAME == "camp-1"
         mlflow_mock.set_tracking_uri.assert_called_once_with("http://localhost:5000")
+        mlflow_mock.set_experiment.assert_called_once_with(hook_mod.OSIMFLOW_EXPERIMENT)
         mlflow_mock.start_run.assert_called_once_with(run_name="camp-1")
 
-    def test_sets_tracking_uri_before_start_run(self) -> None:
+    def test_sets_experiment_before_start_run(self) -> None:
+        # Regression guard (issue #948): the experiment must be created
+        # before the run starts, otherwise a fresh mlflow 3.x file:// store
+        # rejects the run with "Could not find experiment with ID 0".
         call_order: list[str] = []
         mlflow_mock = MagicMock()
         mlflow_mock.set_tracking_uri.side_effect = lambda *a, **k: call_order.append(
             "set_tracking_uri"
         )
+        mlflow_mock.set_experiment.side_effect = lambda *a, **k: call_order.append("set_experiment")
         mlflow_mock.start_run.side_effect = lambda *a, **k: call_order.append("start_run")
 
         with patch.object(hook_mod, "_import_mlflow", return_value=mlflow_mock):
             hook_mod.maybe_start_mlflow_run("http://mlflow.server", "camp-2")
 
-        assert call_order == ["set_tracking_uri", "start_run"]
+        assert call_order == ["set_tracking_uri", "set_experiment", "start_run"]
+        mlflow_mock.set_experiment.assert_called_once_with(hook_mod.OSIMFLOW_EXPERIMENT)
 
 
 class TestMaybeEndMlflowRun:
@@ -296,6 +302,7 @@ class TestFullWorkflow:
             hook_mod.maybe_end_mlflow_run()
 
         mlflow_mock.set_tracking_uri.assert_called_once()
+        mlflow_mock.set_experiment.assert_called_once_with(hook_mod.OSIMFLOW_EXPERIMENT)
         mlflow_mock.start_run.assert_called_once()
         assert mlflow_mock.log_param.call_count == 4
         assert mlflow_mock.log_metric.call_count == 3

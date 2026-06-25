@@ -17,9 +17,11 @@ The contract:
     when no run is active.
 
   * If `uri` is set, the helpers import `mlflow` lazily. The first
-    `set_tracking_uri` / `start_run` happens inside `maybe_start_mlflow_run`;
-    subsequent calls reuse the same `mlflow` import via the module
-    attribute lookup.
+    `set_tracking_uri` / `set_experiment` / `start_run` happens inside
+    `maybe_start_mlflow_run`; subsequent calls reuse the same `mlflow`
+    import via the module attribute lookup. The experiment is created
+    before the run so a fresh tracking store (mlflow 3.x file://) does
+    not reject the run with a missing-experiment error (issue #948).
 
   * The `mlflow` package is intentionally not declared as a runtime
     dependency. Users who want it `pip install osimflow[mlflow]`. The
@@ -42,6 +44,15 @@ log = logging.getLogger("osimflow.mlflow")
 # Kept private to the module so the public helpers are the only API.
 _ACTIVE_URI: str | None = None
 _ACTIVE_RUN_NAME: str | None = None
+
+# All OSimFlow campaign runs land in a single predictable experiment so they
+# are discoverable in the MLflow UI. More importantly, ``set_experiment`` is
+# called *before* ``start_run`` so the experiment is guaranteed to exist on
+# the tracking store — without this, mlflow 3.x raises
+# ``MlflowException: Could not find experiment with ID 0`` against a fresh
+# file:// store (and any other store that does not auto-create the implicit
+# "Default" experiment). See issue #948.
+OSIMFLOW_EXPERIMENT = "OSimFlow"
 
 
 def _import_mlflow() -> Any | None:
@@ -83,6 +94,13 @@ def maybe_start_mlflow_run(tracking_uri: str | None, campaign_id: str) -> str | 
     if mlflow is None:
         return None
     mlflow.set_tracking_uri(tracking_uri)
+    # Ensure the experiment exists before starting a run. A fresh tracking
+    # store (notably the mlflow 3.x file:// backend) does not auto-create the
+    # implicit "Default" experiment, so a bare ``start_run`` raises
+    # ``MlflowException: Could not find experiment with ID 0``. ``set_experiment``
+    # is idempotent: it creates the experiment on first use and looks it up
+    # thereafter (issue #948).
+    mlflow.set_experiment(OSIMFLOW_EXPERIMENT)
     mlflow.start_run(run_name=campaign_id)
     _ACTIVE_URI = tracking_uri
     _ACTIVE_RUN_NAME = campaign_id
