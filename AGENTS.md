@@ -196,6 +196,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `tests/integration/test_observability_real_sinks.py` | Real metric-sink validation for the CloudWatch, Prometheus, and OpenTelemetry backends; module + per-backend skip-gated behind `OSIMFLOW_OBSERVABILITY_REAL=1` (issue #947). |
 | `tests/integration/test_real_openstudio_campaign.py` | Full-Campaign real-`openstudio.cli` E2E exercising all 7 DAG steps (issue #939). Skip-gated on `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` + `openstudio.cli`/`openstudio` on PATH; driven nightly by `openstudio-cli-e2e.yml` which installs the CLI + fetches the real fixture. Inert (reports `s`) in normal CI. |
 | `tests/integration/test_aws_batch_cache_resume.py` | Real-AWS-Batch cache-warm/resume E2E (issue #960). Runs a bounded 2-sample campaign with the S3 result backend, then re-runs against the same `outdir`; asserts the warm run is fully cache-served (cache stats unchanged, 0 Batch submits) and >=5x faster. Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_RESULT_BUCKET` (inert in normal CI). |
+| `tests/integration/test_slurm_real_cluster.py` | Real-Slurm-cluster E2E (issue #941). Constructs `SlurmExecutor(debug=False)` and runs a 3-sample campaign on a real cluster; asserts submitit's `AutoExecutor.cluster == "slurm"` (structural real-vs-debug proof) plus the 4-artifact contract + `run.json`. Skip-gated behind `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH; dispatched by `slurm-e2e.yml` on a self-hosted runner tagged `[self-hosted, slurm]`. Inert (reports `s`) in normal CI. |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
@@ -556,6 +557,7 @@ output artifacts plus the per-campaign `run.json` are produced:
 - `tests/integration/test_google_batch_real.py` — Real Google Cloud Batch E2E test (issue #959). Skipped unless `OSIMFLOW_GOOGLE_BATCH_E2E=1`. Runs via the nightly `google-batch-e2e` workflow against real Cloud Batch infrastructure with Workload Identity Federation auth.
 - `tests/integration/test_cache_resume.py` — runs the same campaign twice against the same `outdir`; the warm run must be at least 5x faster than the cold run (the issue quotes ~280x for 5 samples on the spike).
 - `tests/integration/test_aws_batch_cache_resume.py` — the cloud counterpart of `test_cache_resume.py` (issue #960). Real-AWS-Batch cache-warm/resume E2E with the S3 result backend; asserts the warm run is fully cache-served (0 Batch submits) and >=5x faster. Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_RESULT_BUCKET`.
+- `tests/integration/test_slurm_real_cluster.py` — Real-Slurm-cluster E2E (issue #941). Constructs `SlurmExecutor(debug=False)` and asserts `AutoExecutor.cluster == "slurm"` (the production path every other Slurm test skips via `debug=True`). Skip-gated behind `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH; dispatched by `slurm-e2e.yml` on a self-hosted runner.
 - `tests/integration/test_osa_round_trip.py` — OSA round-trip integration test (issue #134). Verifies that `OSAExporter.pack_osa()` produces a valid `.osa` ZIP and that export → pack → unpack → import preserves algorithm type, variable names, distributions, measure arguments, and template package files.
 - `tests/integration/test_api_events.py` — SSE events and campaign stop endpoint tests (issue #143). Validates SSE stream, `.stop` flag file behaviour, and read-only vs read-write mode enforcement.
 
@@ -604,6 +606,18 @@ Identity Federation (`google-github-actions/auth@v2`) and requires
 `GOOGLE_WORKLOAD_IDENTITY_PROVIDER` + `GOOGLE_SERVICE_ACCOUNT` (secrets),
 plus `OSIMFLOW_GOOGLE_BATCH_PROJECT_ID`, `OSIMFLOW_GOOGLE_BATCH_REGION`, and
 `OSIMFLOW_GOOGLE_BATCH_SERVICE_ACCOUNT` (repository variables).
+
+The real-Slurm-cluster E2E workflow (issue #941) lives in
+[`.github/workflows/slurm-e2e.yml`](.github/workflows/slurm-e2e.yml). Unlike
+the cloud workflows it has **no cron** — Slurm cannot be reached from a
+GitHub-hosted runner, so the job is `workflow_dispatch`-only and targets a
+self-hosted runner tagged `[self-hosted, slurm]` registered on a Slurm
+login/head node. It requires the `OSIMFLOW_SLURM_PARTITION` repository
+variable (and optionally `OSIMFLOW_SLURM_ACCOUNT`), sets
+`OSIMFLOW_SLURM_E2E=1`, and runs `tests/integration/test_slurm_real_cluster.py`
+to exercise the `SlurmExecutor(debug=False)` production path that every
+other Slurm test skips. Inert (the test reports `s`) on GitHub-hosted
+runners.
 
 ---
 
