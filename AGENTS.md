@@ -552,6 +552,7 @@ output artifacts plus the per-campaign `run.json` are produced:
 - `tests/integration/test_slurm_executor_debug.py` — `SlurmExecutor(debug=True)` (uses `submitit.DebugExecutor`; no real cluster needed in CI).
 - `tests/integration/test_aws_batch_executor_stub.py` — `AWSBatchExecutor` with a mocked `boto3` client.
 - `tests/integration/test_aws_batch_real.py` — Real AWS Batch E2E test (issue #146). Skipped unless `OSIMFLOW_AWS_BATCH_E2E=1`. Runs via the nightly `aws-batch-e2e` workflow against real Batch infrastructure with OIDC auth.
+- `tests/integration/test_google_batch_real.py` — Real Google Cloud Batch E2E test (issue #959). Skipped unless `OSIMFLOW_GOOGLE_BATCH_E2E=1`. Runs via the nightly `google-batch-e2e` workflow against real Cloud Batch infrastructure with Workload Identity Federation auth.
 - `tests/integration/test_cache_resume.py` — runs the same campaign twice against the same `outdir`; the warm run must be at least 5x faster than the cold run (the issue quotes ~280x for 5 samples on the spike).
 - `tests/integration/test_osa_round_trip.py` — OSA round-trip integration test (issue #134). Verifies that `OSAExporter.pack_osa()` produces a valid `.osa` ZIP and that export → pack → unpack → import preserves algorithm type, variable names, distributions, measure arguments, and template package files.
 - `tests/integration/test_api_events.py` — SSE events and campaign stop endpoint tests (issue #143). Validates SSE stream, `.stop` flag file behaviour, and read-only vs read-write mode enforcement.
@@ -592,6 +593,15 @@ it runs a 3-sample campaign against real AWS Batch infrastructure daily at
 (`aws-actions/configure-aws-credentials`) and requires `AWS_ROLE_ARN`
 (secret), plus `AWS_REGION`, `AWS_BATCH_QUEUE`, and
 `AWS_BATCH_JOB_DEFINITION` (repository variables).
+
+The nightly Google Cloud Batch E2E workflow (issue #959) lives in
+[`.github/workflows/google-batch-e2e.yml`](.github/workflows/google-batch-e2e.yml) —
+it runs a 3-sample campaign against real Google Cloud Batch infrastructure
+daily at 06:00 UTC and on manual `workflow_dispatch`. It uses Workload
+Identity Federation (`google-github-actions/auth@v2`) and requires
+`GOOGLE_WORKLOAD_IDENTITY_PROVIDER` + `GOOGLE_SERVICE_ACCOUNT` (secrets),
+plus `OSIMFLOW_GOOGLE_BATCH_PROJECT_ID`, `OSIMFLOW_GOOGLE_BATCH_REGION`, and
+`OSIMFLOW_GOOGLE_BATCH_SERVICE_ACCOUNT` (repository variables).
 
 ---
 
