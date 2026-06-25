@@ -1,0 +1,57 @@
+# =============================================================================
+# .github/workflows/kubernetes-e2e.yml — Real Kubernetes E2E (nightly)
+# =============================================================================
+# Runs a 3-sample campaign against a real Kubernetes cluster every night at
+# 06:00 UTC and on manual trigger (workflow_dispatch). The cluster may be a
+# managed service (EKS/GKE/AKS), a self-hosted cluster, or a `kind`/`minikube`
+# cluster brought up on the runner.
+#
+# Prerequisites (GitHub secrets / variables):
+#   secrets.KUBECONFIG                  — a kubeconfig whose current-context
+#       points at the target cluster with RBAC permission to create/get Jobs
+#       and list Pods in the target namespace. Written to ~/.kube/config on the
+#       runner. (For a managed cluster you may instead replace this step with
+#       the cloud OIDC login — aws-actions/configure-aws-credentials for EKS,
+#       google-github-actions/auth for GKE, azure/login for AKS — and generate
+#       the kubeconfig from the cloud CLI.)
+#   vars.OSIMFLOW_KUBERNETES_NAMESPACE   — namespace to submit Jobs into
+#       (e.g. `osimflow`; defaults to `default` if unset)
+#
+# Uses the `kubernetes` extra (`pip install -e ".[dev,kubernetes]"`). The test
+# file uses pytest.mark.skipif so it is inert in normal CI.
+# =============================================================================
+name: Kubernetes E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at 6am UTC
+  workflow_dispatch: # Manual trigger
+
+permissions:
+  contents: read
+
+jobs:
+  kubernetes-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev + kubernetes extras
+        run: pip install -e ".[dev,kubernetes]"
+
+      - name: Write kubeconfig from secret
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "${{ secrets.KUBECONFIG }}" > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
+
+      - name: Run real Kubernetes E2E
+        env:
+          OSIMFLOW_KUBERNETES_E2E: 1
+          OSIMFLOW_KUBERNETES_NAMESPACE: ${{ vars.OSIMFLOW_KUBERNETES_NAMESPACE }}
+        run: .venv/bin/pytest tests/integration/test_kubernetes_executor_real.py -v --timeout=1800
