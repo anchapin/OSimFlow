@@ -246,6 +246,56 @@ jobs:
           path: coverage.xml
 
   # ---------------------------------------------------------------------------
+  # Real MLflow file-tracking smoke test (issue #948)
+  # ---------------------------------------------------------------------------
+  # Exercises ``osimflow/mlflow_hook`` against the *real* ``mlflow`` package
+  # (not the ``sys.modules`` fake the unit tests inject). The test uses a
+  # hermetic ``file://`` tracking store (no server, no network) plus stub
+  # simulation, so it is a *genuinely-passing* smoke test rather than inert
+  # scaffolding. It catches mlflow API regressions (e.g. the mlflow 3.x
+  # file-store deprecation / missing-Default-experiment errors) that the
+  # mock-based unit tests cannot see.
+  #
+  # This job is additive and non-blocking for the main test gate: it installs
+  # the optional ``[mlflow]`` extra, sets ``OSIMFLOW_MLFLOW_E2E=1``, and runs
+  # only the gated smoke test. The main ``test`` job does not install mlflow,
+  # so the coverage gate is unaffected.
+  # ---------------------------------------------------------------------------
+  mlflow-real:
+    name: mlflow-real (file tracking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-mlflow-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-mlflow-
+
+      - name: Install (editable + dev + mlflow extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,mlflow]"
+
+      - name: pytest (real MLflow file-tracking smoke test)
+        env:
+          OSIMFLOW_MLFLOW_E2E: "1"
+        run: .venv/bin/pytest tests/integration/test_mlflow_real_tracking.py -v --timeout=300 --no-cov
+
+  # ---------------------------------------------------------------------------
   # Slow tests: @pytest.mark.slow only (issue #623)
   # ---------------------------------------------------------------------------
   # tests/unit/test_manifest_files.py is marked ``@pytest.mark.slow`` because

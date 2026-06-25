@@ -57,6 +57,9 @@ class _FakeMlflowRecorder:
         self._record("set_tracking_uri", uri)
         self.tracking_uri = uri
 
+    def set_experiment(self, name: str) -> None:
+        self._record("set_experiment", name)
+
     def start_run(self, run_name: str | None = None, **kwargs: Any) -> SimpleNamespace:
         self._record("start_run", run_name=run_name, **kwargs)
         self.run_name = run_name
@@ -99,6 +102,7 @@ def fake_mlflow(monkeypatch: pytest.MonkeyPatch) -> _FakeMlflowRecorder:
     recorder = _FakeMlflowRecorder()
     fake = ModuleType("mlflow")
     fake.set_tracking_uri = recorder.set_tracking_uri  # type: ignore[attr-defined]
+    fake.set_experiment = recorder.set_experiment  # type: ignore[attr-defined]
     fake.start_run = recorder.start_run  # type: ignore[attr-defined]
     fake.end_run = recorder.end_run  # type: ignore[attr-defined]
     fake.log_param = recorder.log_param  # type: ignore[attr-defined]
@@ -194,7 +198,8 @@ def test_maybe_start_mlflow_run_calls_set_tracking_uri_and_start_run(
     assert result is not None
     names = [c[0] for c in fake_mlflow.calls]
     assert names[0] == "set_tracking_uri"
-    assert names[1] == "start_run"
+    assert names[1] == "set_experiment"
+    assert names[2] == "start_run"
     assert fake_mlflow.tracking_uri == "http://localhost:5000"
     assert fake_mlflow.run_name == "2026-06-09T12-00-00"
 
