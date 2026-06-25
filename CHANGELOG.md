@@ -7,7 +7,8 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 
 ## [Unreleased]
 
-_Nothing yet. See `## [0.1.0]` below for the first official release._
+### Added
+- `scripts/fetch_example_fixture.py`: downloads a real OpenStudio `.osm` model + `.epw` weather file into `example_package/` for real-OpenStudio E2E tests; the fetched binary files stay gitignored per the `.osm`/`.epw` policy, and the original placeholder model is preserved as `model.osm.placeholder` for stub-mode tests (fixes #938).
 
 ## [0.1.0] - 2026-06-24
 

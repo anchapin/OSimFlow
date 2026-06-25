@@ -1,0 +1,22 @@
+{
+  "attributes": {
+    "window_u_value": 3.0,
+    "infiltration_rate": 0.7,
+    "hvac_setpoint": 22.0,
+    "lighting_power_density": 10.0,
+    "thermal_conductivity": 0.5,
+    "internal_gain": 5.0,
+    "equipment_lifetime": 15.0
+  },
+  "metadata": {
+    "building_type": "Office",
+    "floor_area_m2": 46.5,
+    "num_zones": 1,
+    "num_stories": 1,
+    "description": "Minimal 1-zone shoebox office model (10m x 4.65m = 46.5 m2). Single thermal zone with ideal loads HVAC. Contains one south-facing window with 40% WWR. Construction: exterior walls (concrete + insulation R-2.5 m2K/W), roof (membrane + insulation R-2.5 m2K/W), floor on grade (concrete 150mm). Chicago TMY3 climate.",
+    "climate": "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3",
+    "openstudio_version": "3.6.1",
+    "model_format": "test-mode JSON (see osimflow/apply_params.py)",
+    "real_osm_note": "For actual simulation with openstudio.cli, use a real .osm file exported from the OpenStudio Application or SDK. This JSON representation is for the test-mode convention that allows parameter application without the OpenStudio Python bindings installed."
+  }
+}

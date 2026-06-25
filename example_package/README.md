@@ -41,18 +41,69 @@ A 1-zone rectangular office building (shoebox model):
 
 ## File format conventions
 
-### model.osm (test-mode JSON)
+### model.osm (committed test-mode JSON placeholder)
 
-The `.osm` file uses the **test-mode JSON convention** documented in
+The committed `model.osm` uses the **test-mode JSON convention** documented in
 [`osimflow/apply_params.py`](../osimflow/apply_params.py). This convention
-allows the parameter application logic to run on hosts that do NOT have the
-OpenStudio Python bindings installed. The `attributes` object maps parameter
+allows the parameter-application logic to run on hosts that do NOT have the
+OpenStudio Python bindings installed, which is what the stub-mode integration
+tests (`test_preflight_validation.py`, `test_local_executor.py`,
+`test_cache_resume.py`, …) rely on. The `attributes` object maps parameter
 names to their default values.
 
-When the OpenStudio bindings ARE available (e.g. inside the
-`nrel/openstudio:<version>` container), the apply logic can also handle real
-OSM files. For actual simulation with `openstudio.cli run`, generate a real
-`.osm` using the OpenStudio Application or SDK.
+This JSON placeholder **cannot** drive a real `openstudio.cli run`
+invocation. To get a real, simulation-capable fixture see
+[Real-sim fixture](#real-sim-fixture) below.
+
+A snapshot of this JSON placeholder is also kept as
+`model.osm.placeholder` so stub mode can always be restored after fetching a
+real model (the fetcher overwrites `model.osm` in place):
+
+```bash
+cp example_package/model.osm.placeholder example_package/model.osm
+```
+
+### Real-sim fixture
+
+A genuine OpenStudio `.osm` model and a real EnergyPlus `.epw` weather file
+are **not committed** — per `AGENTS.md` §10 and the repository `.gitignore`,
+`.osm` and `.epw` files are never tracked. Instead, fetch them at dev/test
+time from stable public sources (NREL):
+
+```bash
+python scripts/fetch_example_fixture.py            # into ./example_package/
+python scripts/fetch_example_fixture.py --force     # re-download
+python scripts/fetch_example_fixture.py --dest /tmp/pkg
+```
+
+The fetcher:
+
+- Downloads a small (~300 KB) single-zone **SmallOffice** seed model
+  (`OS:Version` 1.14.0) from `NREL/openstudio-resources` — an office building
+  with thermal zones, spaces, constructions, and ideal-loads HVAC, compatible
+  with the thermostat/envelope measures referenced by `workflow.osw`.
+- Downloads the canonical **`USA_CO_Golden-NREL.724666_TMY3.epw`** TMY3
+  weather file (~1.6 MB) from the `NREL/EnergyPlus` `v24.2.0` release.
+- Verifies each download (non-empty + `OS:Version` / `LOCATION` sanity check),
+  retries 3× with exponential backoff, and writes via an atomic rename.
+- Is idempotent: re-running prints `real fixture already present, use --force
+  to refetch` and exits 0.
+- Preserves the JSON placeholder as `model.osm.placeholder` on first run.
+
+The weather file drives the actual simulation climate (EnergyPlus uses the
+EPW `LOCATION` header, which overrides the model's `OS:Site`). The fetched
+`SmallOffice.osm` lists "Houston Bush Intercontinental" as its site name, but
+when run against the Golden `.epw` the simulation uses Golden, CO weather.
+
+> **Note on `workflow.osw` measures.** The committed `workflow.osw` references
+> `SetThermostatSchedule` and `SetEnvelopePerformance` with an empty
+> `measure_paths: []` and no bundled `measures/` directory. That is sufficient
+> for stub-mode apply (the test-mode JSON apply path), but a full real
+> `openstudio.cli run -w workflow.osw` additionally requires those measures to
+> resolve on disk. Bundling real NREL measures under `example_package/measures/`
+> is tracked by the companion real-CLI E2E issue (#939). The fetcher therefore
+> ships the real model + weather; resolving the measure set for a complete
+> end-to-end real simulation is a separate, follow-up change.
 
 ### workflow.osw
 
@@ -105,8 +156,10 @@ osimflow run \
 
 ## Weather file
 
-No weather file (`.epw`) is bundled with this package. When running with
-`openstudio.cli`, provide a weather file via the `weather_file` field in
-`workflow.osw` or use the `--epw_file` target in `variables.yml`. For local
-testing without the real OpenStudio CLI, the stub mode does not require a
-weather file.
+No weather file (`.epw`) is committed (`.epw` is gitignored). For a real
+simulation, fetch the bundled Golden-NREL TMY3 file with
+`python scripts/fetch_example_fixture.py` (see
+[Real-sim fixture](#real-sim-fixture)) and reference it via the `weather_file`
+field in `workflow.osw` or the `--epw_file` target in `variables.yml`. For
+local testing without the real OpenStudio CLI, the stub mode does not require
+a weather file.

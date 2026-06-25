@@ -182,6 +182,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/client.py` | Typed async Python client for the REST API (issue #433): `OSimFlowClient` (httpx-based), Pydantic response models (`HealthResponse`, `CampaignResponse`, `StepsResponse`, `SamplesResponse`, etc.), and typed exception hierarchy (`AuthenticationError`, `NotFoundError`, `RateLimitError`, `ServerError`). Optional `[api]` extra (httpx). |
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
 | `scripts/generate_openapi.py` | Export the OpenAPI spec from the FastAPI app to `docs/openapi.json` (issue #433). Run: `python scripts/generate_openapi.py --output docs/openapi.json`. |
+| `scripts/fetch_example_fixture.py` | Download a real OpenStudio `.osm` model + `.epw` weather file into `example_package/` for real-OpenStudio E2E tests (issue #938). Stdlib `urllib` with retry/backoff; idempotent (`--force` to refetch); preserves the JSON stub as `model.osm.placeholder`. The fetched `.osm`/`.epw` are gitignored (AGENTS.md §10). |
 | `docs/openapi.json` | Auto-generated OpenAPI 3.1 spec for the OSimFlow REST API (issue #433). Regenerate after adding/modifying API endpoints. Consumable by code generators (openapi-generator, etc.). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats) — stable shim over `osimflow/_work_scripts/`. |
 | `bin/apply_params_to_model.py` | Default parameter-application logic — stable shim over `osimflow/_work_scripts/`. |
@@ -191,6 +192,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `bin/excel_to_variables.py` | PAT/Analysis Gem Excel spreadsheet to ``variables.yml`` converter. Reads a PAT-style ``.xlsx`` and produces a OSimFlow ``variables.yml`` with support for uniform, normal, lognormal, triangular, discrete, categorical, and static distributions. |
 | `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
+| `tests/integration/test_real_example_fixture.py` | Skip-gated tests for the real OpenStudio example fixture (issue #938). Skipped unless `scripts/fetch_example_fixture.py` has materialized a real `.osm` + `.epw` (gitignored); reports `s` in CI. |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
