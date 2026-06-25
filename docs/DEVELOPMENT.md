@@ -171,6 +171,8 @@ OSimFlow/
 │   │   ├── test_local_executor.py
 │   │   ├── test_slurm_executor_debug.py
 │   │   ├── test_aws_batch_executor_stub.py
+│   │   ├── test_aws_batch_real.py
+│   │   ├── test_aws_batch_cache_resume.py
 │   │   ├── test_cache_invalidation.py
 │   │   └── test_cache_resume.py
 │   ├── contract/                # Contract tests (AGENTS.md / docs sync)
@@ -419,6 +421,7 @@ against each executor substrate:
 | `tests/integration/test_slurm_executor_debug.py` | `SlurmExecutor(debug=True)` (no real cluster) |
 | `tests/integration/test_aws_batch_executor_stub.py` | `AWSBatchExecutor` with mocked boto3 |
 | `tests/integration/test_cache_resume.py` | Re-run same campaign; warm run must be 5x faster |
+| `tests/integration/test_aws_batch_cache_resume.py` | Real-AWS-Batch cache-warm/resume (skip-gated; see §11) |
 | `tests/integration/test_cache_invalidation.py` | 8 cache-invalidation scenarios |
 
 These all use the built-in stub mode (`OSIMFLOW_STUB_SIM` not needed;
@@ -923,6 +926,55 @@ sqlite3 ./results/work/cache.sqlite "SELECT step, sample_id, exit_code FROM cach
 ```bash
 .venv/bin/pytest tests/integration/test_cache_invalidation.py -v
 .venv/bin/pytest tests/integration/test_cache_resume.py -v
+```
+
+### Cache-warm / resume on real AWS Batch
+
+The local `tests/integration/test_cache_resume.py` proves the warm-run speedup when results
+live on a local filesystem. `tests/integration/test_aws_batch_cache_resume.py`
+(issue #960) is the cloud counterpart: it runs a bounded (2-sample)
+campaign against a **real** AWS Batch compute environment with the **S3
+result storage backend** enabled, then re-runs the same campaign against
+the same `outdir` and asserts the warm run is fully cache-served.
+
+**How cross-run resume survives on Batch.** The `SQLiteCache` lives at
+`<outdir>/work/cache.sqlite` — it is *local* to the orchestrator process
+that drives the campaign, and each cache entry's `output_path` is a local
+path under `outdir`. On a cold run the `AWSBatchExecutor` submits real
+Batch jobs, results land back in the local `outdir`, and (when
+`result_storage_backend="s3"` is set) KPIs / `eplusout.sql` are *also*
+uploaded to S3. On a warm run against the same `outdir`, the local
+`cache.sqlite` is re-opened, every `cache.lookup` hits, the work layer is
+skipped entirely, and **zero** Batch jobs are submitted — so the warm run
+is bounded only by cache-lookup + `run.json` I/O and is comfortably
+`>=5x` faster than the cold run. The S3 backend is exercised during the
+cold run, so a regression in either the upload path or cross-run
+cache-hit detection surfaces here.
+
+The test asserts four complementary signals (the cache-stats check is the
+authoritative structural one and cannot false-pass on a slow Batch day):
+
+1. **Cache stats** — warm-run `total` and per-step `by_step` counts equal
+   the cold run's (no new entries → no Batch jobs submitted).
+2. **`run.json`** — all `N_SAMPLES` rows present with `status == "ok"`.
+3. **Output equivalence** — the warm run's `aggregated_results.csv`
+   matches the cold run's.
+4. **Timing** — `warm_elapsed < cold_elapsed / 5` (`>=5x` speedup).
+
+The test is skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` plus the
+`OSIMFLOW_AWS_BATCH_QUEUE`, `OSIMFLOW_AWS_BATCH_JOB_DEFINITION`,
+`OSIMFLOW_AWS_REGION`, and `OSIMFLOW_AWS_BATCH_RESULT_BUCKET` env vars (the
+last names the S3 bucket the cold run uploads to). It is inert in normal
+CI and is intended for the nightly `aws-batch-e2e` workflow or a manual
+run:
+
+```bash
+export OSIMFLOW_AWS_BATCH_E2E=1
+export OSIMFLOW_AWS_BATCH_QUEUE=my-queue
+export OSIMFLOW_AWS_BATCH_JOB_DEFINITION=my-job-def
+export OSIMFLOW_AWS_REGION=us-east-1
+export OSIMFLOW_AWS_BATCH_RESULT_BUCKET=my-result-bucket
+.venv/bin/pytest tests/integration/test_aws_batch_cache_resume.py -v --timeout=3600
 ```
 
 ---
