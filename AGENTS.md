@@ -556,6 +556,7 @@ output artifacts plus the per-campaign `run.json` are produced:
 - `tests/integration/test_aws_batch_executor_stub.py` — `AWSBatchExecutor` with a mocked `boto3` client.
 - `tests/integration/test_aws_batch_real.py` — Real AWS Batch E2E test (issue #146). Skipped unless `OSIMFLOW_AWS_BATCH_E2E=1`. Runs via the nightly `aws-batch-e2e` workflow against real Batch infrastructure with OIDC auth.
 - `tests/integration/test_google_batch_real.py` — Real Google Cloud Batch E2E test (issue #959). Skipped unless `OSIMFLOW_GOOGLE_BATCH_E2E=1`. Runs via the nightly `google-batch-e2e` workflow against real Cloud Batch infrastructure with Workload Identity Federation auth.
+- `tests/integration/test_azure_batch_real.py` — Real Azure Batch E2E test (issue #958). Skipped unless `OSIMFLOW_AZURE_BATCH_E2E=1`. Runs via the nightly `azure-batch-e2e` workflow against a real Azure Batch pool with Azure OIDC auth.
 - `tests/integration/test_cache_resume.py` — runs the same campaign twice against the same `outdir`; the warm run must be at least 5x faster than the cold run (the issue quotes ~280x for 5 samples on the spike).
 - `tests/integration/test_aws_batch_cache_resume.py` — the cloud counterpart of `test_cache_resume.py` (issue #960). Real-AWS-Batch cache-warm/resume E2E with the S3 result backend; asserts the warm run is fully cache-served (0 Batch submits) and >=5x faster. Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_RESULT_BUCKET`.
 - `tests/integration/test_slurm_real_cluster.py` — Real-Slurm-cluster E2E (issue #941). Constructs `SlurmExecutor(debug=False)` and asserts `AutoExecutor.cluster == "slurm"` (the production path every other Slurm test skips via `debug=True`). Skip-gated behind `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH; dispatched by `slurm-e2e.yml` on a self-hosted runner.
@@ -620,6 +621,16 @@ variable (and optionally `OSIMFLOW_SLURM_ACCOUNT`), sets
 to exercise the `SlurmExecutor(debug=False)` production path that every
 other Slurm test skips. Inert (the test reports `s`) on GitHub-hosted
 runners.
+
+The nightly Azure Batch E2E workflow (issue #958) lives in
+[`.github/workflows/azure-batch-e2e.yml`](.github/workflows/azure-batch-e2e.yml) —
+it runs a 3-sample campaign against a real Azure Batch pool daily at
+06:00 UTC and on manual `workflow_dispatch`. It uses Azure OIDC
+(`azure/login@v2`) and requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
+`AZURE_SUBSCRIPTION_ID` (secrets), plus
+`OSIMFLOW_AZURE_BATCH_ACCOUNT_NAME`, `OSIMFLOW_AZURE_BATCH_ACCOUNT_URL`,
+`OSIMFLOW_AZURE_BATCH_POOL_ID`, and `OSIMFLOW_AZURE_BATCH_LOCATION`
+(repository variables).
 
 ---
 
