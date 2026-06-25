@@ -1,17 +1,30 @@
 # =============================================================================
 # .github/workflows/aws-batch-e2e.yml — Real AWS Batch E2E (nightly)
 # =============================================================================
-# Runs a 3-sample campaign against a real AWS Batch compute environment
-# every night at 06:00 UTC and on manual trigger (workflow_dispatch).
+# Runs campaigns against a real AWS Batch compute environment every night at
+# 06:00 UTC and on manual trigger (workflow_dispatch).
+#
+# Two jobs:
+#   1. ``aws-batch-e2e``             — the cheaper stub-in-container smoke
+#      (issue #146). The work function is the OSimFlow stub; no real
+#      openstudio.cli runs. Bounds cost via a 3-sample campaign.
+#   2. ``aws-batch-real-openstudio-e2e`` — the real-openstudio-in-container E2E
+#      (issue #942). Requires a Batch job definition whose container image is
+#      ``nrel/openstudio:<version>`` (or an ECR mirror) so the real
+#      ``openstudio.cli`` ships in the image. ``OSIMFLOW_STUB_SIM`` is left
+#      unset so the work function invokes the real CLI. Bounded to 2 samples.
 #
 # Prerequisites (GitHub secrets / variables):
 #   secrets.AWS_ROLE_ARN  — IAM role ARN with Batch submit/describe permissions
 #   vars.AWS_REGION       — AWS region (e.g. us-east-1)
 #   vars.AWS_BATCH_QUEUE  — Batch job queue name
-#   vars.AWS_BATCH_JOB_DEFINITION — Batch job definition name
+#   vars.AWS_BATCH_JOB_DEFINITION        — job def for the stub-in-container job
+#   vars.AWS_BATCH_REAL_OS_JOB_DEFINITION — job def whose image is
+#                                           nrel/openstudio:<version> (issue #942).
+#                                           Falls back to AWS_BATCH_JOB_DEFINITION.
 #
 # Uses OIDC (aws-actions/configure-aws-credentials) — no long-lived keys.
-# The test file uses pytest.mark.skipif so it is inert in normal CI.
+# The test files use pytest.mark.skipif so they are inert in normal CI.
 # =============================================================================
 name: AWS Batch E2E (Nightly)
 
@@ -50,3 +63,48 @@ jobs:
           OSIMFLOW_AWS_BATCH_JOB_DEFINITION: ${{ vars.AWS_BATCH_JOB_DEFINITION }}
           OSIMFLOW_AWS_REGION: ${{ vars.AWS_REGION }}
         run: .venv/bin/pytest tests/integration/test_aws_batch_real.py -v --timeout=1800
+
+  # ---------------------------------------------------------------------------
+  # Real openstudio.cli inside the nrel/openstudio container on AWS Batch.
+  # Unlike the stub-in-container job above, this exercises the real production
+  # cloud path: openstudio.cli run -w workflow.osw inside nrel/openstudio:<v>.
+  # Gated on a distinct env var (OSIMFLOW_AWS_BATCH_REAL_OPENSTUDIO=1) so the
+  # nightly can opt into the heavier real-OS variant independently.
+  # ---------------------------------------------------------------------------
+  aws-batch-real-openstudio-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev + aws extras
+        run: pip install -e ".[dev,aws]"
+
+      - name: Fetch real OpenStudio fixture (.osm + .epw)
+        # The real fixture is gitignored; materialise it before the test runs.
+        # The orchestrator (on the runner) stages it into the Batch container.
+        run: python scripts/fetch_example_fixture.py
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run real-openstudio AWS Batch E2E
+        env:
+          # Both gates: the base AWS Batch E2E gate + the distinct real-OS gate.
+          OSIMFLOW_AWS_BATCH_E2E: 1
+          OSIMFLOW_AWS_BATCH_REAL_OPENSTUDIO: 1
+          OSIMFLOW_AWS_BATCH_QUEUE: ${{ vars.AWS_BATCH_QUEUE }}
+          # The job definition must reference a container image of
+          # nrel/openstudio:<version> (or an ECR mirror). Falls back to the
+          # generic job definition var if the dedicated var is unset.
+          OSIMFLOW_AWS_BATCH_JOB_DEFINITION: ${{ vars.AWS_BATCH_REAL_OS_JOB_DEFINITION || vars.AWS_BATCH_JOB_DEFINITION }}
+          OSIMFLOW_AWS_REGION: ${{ vars.AWS_REGION }}
+          # NOTE: OSIMFLOW_STUB_SIM is deliberately NOT set here, so the work
+          # function's real-CLI branch runs inside the nrel/openstudio container.
+        run: .venv/bin/pytest tests/integration/test_aws_batch_real_openstudio.py -v --timeout=3600
