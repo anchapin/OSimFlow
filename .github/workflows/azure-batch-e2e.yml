@@ -1,0 +1,63 @@
+# =============================================================================
+# .github/workflows/azure-batch-e2e.yml — Real Azure Batch E2E (nightly)
+# =============================================================================
+# Runs a 3-sample campaign against a real Azure Batch pool every night at
+# 06:00 UTC and on manual trigger (workflow_dispatch).
+#
+# Prerequisites (GitHub secrets / variables):
+#   secrets.AZURE_CLIENT_ID       — App registration / Managed Identity client id
+#       with Azure Batch submit/get permissions (federated credential for the
+#       GitHub OIDC issuer)
+#   secrets.AZURE_TENANT_ID       — Azure AD tenant id
+#   secrets.AZURE_SUBSCRIPTION_ID — Azure subscription id hosting the Batch account
+#   vars.OSIMFLOW_AZURE_BATCH_ACCOUNT_NAME — Batch account name
+#   vars.OSIMFLOW_AZURE_BATCH_ACCOUNT_URL  — Batch account endpoint
+#       (e.g. https://<acct>.eastus.batch.azure.com)
+#   vars.OSIMFLOW_AZURE_BATCH_POOL_ID      — Batch pool id pre-provisioned with the
+#       nrel/openstudio container image
+#   vars.OSIMFLOW_AZURE_BATCH_LOCATION     — Azure region (e.g. eastus)
+#
+# Uses Azure OIDC (azure/login@v2) — no long-lived client secrets. The test
+# file uses pytest.mark.skipif so it is inert in normal CI.
+# =============================================================================
+name: Azure Batch E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at 6am UTC
+  workflow_dispatch: # Manual trigger
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  azure-batch-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev extra + azure SDKs
+        run: |
+          pip install -e ".[dev]"
+          pip install azure-batch azure-identity
+
+      - name: Authenticate to Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run real Azure Batch E2E
+        env:
+          OSIMFLOW_AZURE_BATCH_E2E: 1
+          OSIMFLOW_AZURE_BATCH_ACCOUNT_NAME: ${{ vars.OSIMFLOW_AZURE_BATCH_ACCOUNT_NAME }}
+          OSIMFLOW_AZURE_BATCH_ACCOUNT_URL: ${{ vars.OSIMFLOW_AZURE_BATCH_ACCOUNT_URL }}
+          OSIMFLOW_AZURE_BATCH_POOL_ID: ${{ vars.OSIMFLOW_AZURE_BATCH_POOL_ID }}
+          OSIMFLOW_AZURE_BATCH_LOCATION: ${{ vars.OSIMFLOW_AZURE_BATCH_LOCATION }}
+        run: .venv/bin/pytest tests/integration/test_azure_batch_real.py -v --timeout=1800
