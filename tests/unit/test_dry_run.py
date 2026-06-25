@@ -6,10 +6,15 @@ Verifies that dry-run:
 - Runs steps 1-4 for exactly 1 sample
 - Produces a summary (run.json + KPI file for 1 sample)
 - Does NOT produce aggregated_results.csv or plots
+- Scopes the OSIMFLOW_DOCKER_SWARM_DRY_RUN env var to run() so it
+  cannot leak across campaigns/tests (issue #976)
 """
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from osimflow import Campaign, CampaignConfig
 from osimflow.executors import LocalExecutor
@@ -115,3 +120,85 @@ def test_dry_run_returns_elapsed_time(
     assert result["elapsed_s"] > 0
     assert result["aggregated"]["csv"] is None
     assert result["plots"] == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #976: OSIMFLOW_DOCKER_SWARM_DRY_RUN must not leak process-globally.
+#
+# The Campaign used to set this env var in __init__ and never unset it, which
+# polluted later tests (e.g. fail-dense DockerSwarm tests under pytest-xdist)
+# and long-lived processes like `osimflow serve`. It is now scoped to run().
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_does_not_leak_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+    campaign_workdir: Path,
+    template_pkg: Path,
+    outdir: Path,
+) -> None:
+    """After a dry-run campaign, the env var must be absent (issue #976)."""
+    monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DRY_RUN", raising=False)
+    cfg = CampaignConfig(
+        input_variables=campaign_workdir / "variables.yml",
+        template_sim_package=template_pkg,
+        n_samples=10,
+        outdir=outdir,
+        openstudio_version="3.11.0",
+        dry_run=True,
+    )
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+    campaign.run()
+
+    assert os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN") is None
+
+
+def test_dry_run_restores_preexisting_env_value(
+    monkeypatch: pytest.MonkeyPatch,
+    campaign_workdir: Path,
+    template_pkg: Path,
+    outdir: Path,
+) -> None:
+    """A pre-existing env value is restored, not clobbered to None (issue #976)."""
+    monkeypatch.setenv("OSIMFLOW_DOCKER_SWARM_DRY_RUN", "preexisting")
+    cfg = CampaignConfig(
+        input_variables=campaign_workdir / "variables.yml",
+        template_sim_package=template_pkg,
+        n_samples=10,
+        outdir=outdir,
+        openstudio_version="3.11.0",
+        dry_run=True,
+    )
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+    campaign.run()
+
+    assert os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN") == "preexisting"
+
+
+def test_dry_run_clears_env_var_even_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    campaign_workdir: Path,
+    template_pkg: Path,
+    outdir: Path,
+) -> None:
+    """The env var must be restored even when the dry-run path raises (issue #976)."""
+    monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DRY_RUN", raising=False)
+    cfg = CampaignConfig(
+        input_variables=campaign_workdir / "variables.yml",
+        template_sim_package=template_pkg,
+        n_samples=10,
+        outdir=outdir,
+        openstudio_version="3.11.0",
+        dry_run=True,
+    )
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+
+    def _boom(t0: float) -> dict[str, object]:
+        raise RuntimeError("forced failure inside dry-run path")
+
+    monkeypatch.setattr(campaign, "_run_dry_run", _boom)
+
+    with pytest.raises(RuntimeError, match="forced failure inside dry-run path"):
+        campaign.run()
+
+    assert os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN") is None
