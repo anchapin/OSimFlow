@@ -43,6 +43,7 @@ _Nothing yet. See `## [0.1.0]` below for the first official release._
 - Release workflow now generates a CycloneDX 1.5 SBOM between build and signing steps.
 
 ### Bug Fixes
+- `osimflow/campaign.py`: scope the `OSIMFLOW_DOCKER_SWARM_DRY_RUN` env var to the dry-run campaign via save/restore so it no longer leaks across tests or long-lived processes like `osimflow serve` (fixes #976).
 - (see git history for pre-0.1.0 fixes)
 
 ### Documentation

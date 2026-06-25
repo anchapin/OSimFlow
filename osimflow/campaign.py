@@ -50,7 +50,7 @@ import sys
 import threading
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypedDict
@@ -273,6 +273,30 @@ class _CancelRegistry:
 _cancel_registry = _CancelRegistry()
 
 
+@contextlib.contextmanager
+def _scoped_dry_run_env() -> Iterator[None]:
+    """Set ``OSIMFLOW_DOCKER_SWARM_DRY_RUN=1`` for the duration of a block.
+
+    The ``DockerSwarmExecutor`` reads this env var in
+    ``_is_dev_fallback_enabled()`` to decide whether to fall back to
+    ``LocalExecutor`` during ``--dry-run`` campaigns (issue #944).
+
+    Captures and restores the prior value so the var never leaks across
+    campaigns in a long-lived process (e.g. ``osimflow serve``) or across
+    tests sharing a worker process under ``pytest-xdist`` (issue #976).
+    Restore runs even when the wrapped block raises.
+    """
+    prev = os.environ.get("OSIMFLOW_DOCKER_SWARM_DRY_RUN")
+    os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = "1"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("OSIMFLOW_DOCKER_SWARM_DRY_RUN", None)
+        else:
+            os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = prev
+
+
 class Campaign:
     def __init__(
         self,
@@ -285,10 +309,9 @@ class Campaign:
         data_point_manager: DataPointManager | None = None,
     ):
         self.cfg = cfg
-        # Signal DockerSwarmExecutor that we are in dry-run mode so it can
-        # fall back to LocalExecutor instead of raising (issue #944).
-        if cfg.dry_run:
-            os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = "1"
+        # NOTE: the OSIMFLOW_DOCKER_SWARM_DRY_RUN env var is scoped to
+        # ``run()`` (see ``_scoped_dry_run_env``) so it cannot leak
+        # across campaigns/tests in a long-lived process (issue #976).
         self.executor = executor
         self.max_workers = max_workers
         self.task_queue = task_queue
@@ -1994,7 +2017,10 @@ class Campaign:
                 )
 
             if self.cfg.dry_run:
-                result = self._run_dry_run(t0)
+                # Scope the dry-run env var to this execution so it
+                # cannot leak across campaigns/tests (issue #976).
+                with _scoped_dry_run_env():
+                    result = self._run_dry_run(t0)
             elif self.cfg.sample is not None:
                 result = self._run_single_sample(t0)
             else:
