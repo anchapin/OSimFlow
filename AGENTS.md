@@ -193,6 +193,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
 | `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
 | `tests/integration/test_real_example_fixture.py` | Skip-gated tests for the real OpenStudio example fixture (issue #938). Skipped unless `scripts/fetch_example_fixture.py` has materialized a real `.osm` + `.epw` (gitignored); reports `s` in CI. |
+| `tests/integration/test_observability_real_sinks.py` | Real metric-sink validation for the CloudWatch, Prometheus, and OpenTelemetry backends; module + per-backend skip-gated behind `OSIMFLOW_OBSERVABILITY_REAL=1` (issue #947). |
 | `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
 | `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
 | `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
