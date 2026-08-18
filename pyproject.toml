@@ -203,6 +203,11 @@ extend-exclude = [
     ".agents/spike",
     ".agents/skills",
     "worktrees",
+    # ruff >= 0.16 formats Python code blocks embedded in Markdown docs.
+    # Docs code samples are illustrative (often intentionally elided) —
+    # keep them out of the formatter to avoid docs churn on tool bumps.
+    "*.md",
+    "*.mdx",
 ]
 
 [tool.ruff.lint]
@@ -213,7 +218,10 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "PL"]
 # PLR0913: too many arguments (Campaign.__init__ legitimately has many).
 # PLR2004: magic value (energy-modeling domain has many "magic" constants).
 # PLR0915: too many statements (auto-recovery block in _submit_and_await_all).
-ignore = ["B008", "PLR0913", "PLR2004", "E501", "PLR0915"]
+# PLR0917: too many positional arguments (same public-API surface as PLR0913;
+# executor submit()/work-layer signatures legitimately exceed 5 positional args;
+# stabilized in ruff 0.16 and now enforced by the unpinned CI linter).
+ignore = ["B008", "PLR0913", "PLR2004", "E501", "PLR0915", "PLR0917"]
 fixable = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
