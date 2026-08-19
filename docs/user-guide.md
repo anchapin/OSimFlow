@@ -681,7 +681,7 @@ my_campaign/
 │   ├── doe_*.png                   # DOE analysis plots
 │   └── interactive_report.html       # Interactive Plotly report
 └── work/
-    ├── lhs/                          # LHS parameter sets (samples.json)
+    ├── samples.<label>.json          # Generated samples (label defaults to "" → samples.json)
     ├── apply/                        # Per-sample modified packages
     ├── sim/                          # Per-sample simulation output
     │   ├── sample_000/
@@ -689,7 +689,7 @@ my_campaign/
     │   │   └── stderr.log
     │   ├── sample_001/
     │   └── ...
-    ├── kpis/                         # Per-sample KPI JSON files
+    ├── kpis/                         # Per-sample KPI JSON files (kpi_<sid>.json)
     └── cache.sqlite                  # Resume cache (do not edit manually)
 ```
 
