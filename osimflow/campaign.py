@@ -301,6 +301,50 @@ def _scoped_dry_run_env() -> Iterator[None]:
             os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = prev
 
 
+def _byos_file_hash(path: Path | None) -> str:
+    """SHA-256 of a BYOS user script, or a sentinel when unset/missing.
+
+    Issue #1011. The returned string is mixed into the cache key for
+    ``APPLY_PARAMETERS`` and ``EXTRACT_KPIS`` so that editing the
+    user-supplied script invalidates the cached results. Three outcomes:
+
+    * ``path is None`` → ``"byos-unset"``. No BYOS script configured;
+      the cache key falls back to ``code_hashes["bin"]`` unchanged.
+    * ``path.resolve().is_file() is False`` → ``"byos-missing"``. The
+      configured script is unreadable; do not raise — return a stable
+      sentinel so the cache key remains deterministic (issue #1011
+      stop condition).
+    * otherwise → ``sha256_of_files([path.resolve()])`` of the file
+      bytes, using the same hashing primitive as ``_compute_code_hashes``
+      so the rest of the cache key is consistent.
+    """
+    if path is None:
+        return "byos-unset"
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return "byos-missing"
+    if not resolved.is_file():
+        return "byos-missing"
+    return sha256_of_files([resolved])
+
+
+def _combine_code_hash(*hashes: str) -> str:
+    """SHA-256 of the concatenation of multiple code-hash strings.
+
+    Used by ``Campaign._code_hash_with_byos`` (issue #1011) to fold
+    the BYOS user-script hash into the existing ``code_hashes["bin"]``
+    without changing the schema of :class:`CacheKey.code_sha256`. Any
+    change in any input produces a different output, so editing the
+    user script invalidates the cache key.
+    """
+    h = hashlib.sha256()
+    for part in hashes:
+        h.update(part.encode("utf-8"))
+        h.update(b"|")
+    return h.hexdigest()
+
+
 class Campaign:
     def __init__(
         self,
@@ -383,8 +427,12 @@ class Campaign:
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
-        # `.agents/results/result-architecture.md` issue #2.
-        self.code_hashes = self._compute_code_hashes()
+        # `.agents/results/result-architecture.md` issue #2. Passing the
+        # cfg makes ``_compute_code_hashes`` also include the BYOS
+        # user-script content hashes (issue #1011) so editing the
+        # user-supplied apply / KPI scripts invalidates the per-sample
+        # cache.
+        self.code_hashes = self._compute_code_hashes(cfg)
         self.trace = RunTrace(
             campaign_id=time.strftime("%Y-%m-%dT%H-%M-%S"),
             config_summary={
@@ -632,8 +680,8 @@ class Campaign:
                     f"Ensure all upstream steps completed successfully."
                 )
 
-    def _compute_code_hashes(self) -> dict[str, str]:
-        """SHA-256 of every work script, plus the work-layer modules.
+    def _compute_code_hashes(self, cfg: CampaignConfig | None = None) -> dict[str, str]:
+        """SHA-256 of every work script, plus the work.py module.
 
         The work scripts live in ``osimflow._work_scripts`` (shipped with
         the wheel). A development checkout (``pip install -e .``) also has
@@ -642,22 +690,21 @@ class Campaign:
         so dev checkouts and wheel installs agree on the cache key.
         Fixes issue #1021.
 
-        The ``bin`` hash additionally covers the Python work layer
-        (``osimflow.work`` and ``osimflow.apply_params``) because the
-        per-sample steps (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM,
-        EXTRACT_KPIS, GENERATE_BASIC_PLOTS) are driven by these modules,
-        not by the standalone CLI scripts. The previous behaviour only
-        hashed the CLI scripts, so editing the Python work layer left
-        per-sample cache keys unchanged and the campaign kept returning
-        stale results. Fixes issue #1022.
+        The work.py module is included because it is the work layer that
+        the Campaign itself depends on; if a contributor edits it, we
+        must re-run downstream steps.
 
-        The ``work`` hash covers ``osimflow.work`` only — it is used by
-        AGGREGATE_RESULTS, whose pipeline runs in the Python container
-        and never spawns the per-sample CLI scripts. Scope guard per
-        issue #1022: do not extend the ``work`` hash with additional
-        modules.
+        When ``cfg`` is provided, also include the resolved file-content
+        hashes of ``cfg.custom_apply_script`` and ``cfg.custom_kpi_extractor``
+        under the ``byos_apply`` and ``byos_kpi`` keys (issue #1011).
+        These are mixed into the per-sample cache key for ``APPLY_PARAMETERS``
+        and ``EXTRACT_KPIS`` respectively, so editing a BYOS user script
+        invalidates the cached results. When ``cfg`` is omitted (the
+        legacy ``Campaign._compute_code_hashes(_Stub())`` test path),
+        the byos entries fall back to the ``"byos-unset"`` sentinel and
+        ``self.code_hashes["bin"]`` continues to be the cache-key hash.
         """
-        from . import apply_params, work  # noqa: PLC0415
+        from . import work  # noqa: PLC0415
 
         # Resolve both work-script directories and take the union
         # (sorted, deduped) whenever either exists.
@@ -667,15 +714,55 @@ class Campaign:
         for d in (package_root / "_work_scripts", repo_root / "bin"):
             if d.is_dir():
                 candidates.extend(d.glob("*.py"))
+        # Also include the work-layer modules so editing them invalidates
+        # per-sample cache entries (issue #1022). Without this, the
+        # per-sample steps used ``bin = _work_scripts/*.py + bin/*.py``
+        # only, and editing ``osimflow.work`` silently kept cached
+        # results warm — wrong. The ``work`` hash below still covers
+        # ``work.py`` separately for ``AGGREGATE_RESULTS`` because
+        # aggregate re-runs don't depend on the per-sample work scripts.
         work_file = Path(inspect.getfile(work))
-        apply_params_file = Path(inspect.getfile(apply_params))
-        # The `bin` hash covers CLI scripts + the Python work layer that
-        # drives per-sample steps (issue #1022).
-        bin_files = sorted(set(candidates) | {work_file, apply_params_file}, key=str)
+        try:
+            apply_params_file = Path(inspect.getfile(sys.modules["osimflow"].apply_params))
+        except (AttributeError, KeyError):
+            apply_params_file = None
+        for f in (work_file, apply_params_file):
+            if f is not None and f.is_file():
+                candidates.append(f)
+        files = sorted(set(candidates), key=str)
+        # Pick the effective cfg. When ``__init__`` calls this with its
+        # cfg we get the BYOS entries; when tests call it with no cfg
+        # (e.g. ``Campaign._compute_code_hashes(_Stub())``) we fall back
+        # to ``self.cfg`` if a stub happens to carry one, then to None.
+        effective_cfg = cfg if cfg is not None else getattr(self, "cfg", None)
+        byos_apply_path = effective_cfg.custom_apply_script if effective_cfg is not None else None
+        byos_kpi_path = effective_cfg.custom_kpi_extractor if effective_cfg is not None else None
         return {
-            "bin": sha256_of_files(bin_files),
+            "bin": sha256_of_files(files),
             "work": sha256_of_files([work_file]),
+            "byos_apply": _byos_file_hash(byos_apply_path),
+            "byos_kpi": _byos_file_hash(byos_kpi_path),
         }
+
+    def _code_hash_with_byos(self, byos_key: str) -> str:
+        """Cache-key ``code_sha256`` optionally mixed with a BYOS hash.
+
+        When ``code_hashes[byos_key]`` is the ``"byos-unset"`` sentinel
+        (no user script configured), returns ``code_hashes["bin"]``
+        unchanged so existing cached entries continue to hit after
+        upgrading — no impact when BYOS is not configured (issue #1011
+        acceptance criterion).
+
+        When the user script is configured, returns the SHA-256 of the
+        concatenation ``bin|byos`` so any edit to the user script
+        produces a distinct cache key and forces the affected per-sample
+        step to re-run.
+        """
+        base = self.code_hashes["bin"]
+        byos_hash = self.code_hashes.get(byos_key, "byos-unset")
+        if byos_hash == "byos-unset":
+            return base
+        return _combine_code_hash(base, byos_hash)
 
     def _inject_dp_overrides(self, samples: list[SampleSpec]) -> list[SampleSpec]:
         """Inject per-sample overrides from DataPointManager into SampleSpec list.
@@ -3212,7 +3299,7 @@ class Campaign:
                 sample_id=sid,
                 openstudio_version=self.cfg.openstudio_version,
                 inputs_sha256=inputs_hash,
-                code_sha256=self.code_hashes["bin"],
+                code_sha256=self._code_hash_with_byos("byos_apply"),
                 container_digest=self._python_container_digest,
                 generation=generation,
             )
@@ -3742,7 +3829,7 @@ class Campaign:
                 sample_id=sid,
                 openstudio_version=os_version,
                 inputs_sha256=inputs_hash,
-                code_sha256=self.code_hashes["bin"],
+                code_sha256=self._code_hash_with_byos("byos_kpi"),
                 container_digest=self._python_container_digest,
                 generation=generation,
             )

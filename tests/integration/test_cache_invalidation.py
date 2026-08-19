@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from osimflow.cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
+from osimflow.config import CampaignConfig
 
 
 @pytest.fixture
@@ -366,6 +367,217 @@ def test_bin_py_edit_invalidates_code_hash_in_dev_mode() -> None:
         target.write_text(original_content)
 
 
+# ---------------------------------------------------------------------------
+# Issue #1011 — BYOS user-script content must be hashed into the
+# APPLY_PARAMETERS / EXTRACT_KPIS cache key so editing the user-supplied
+# ``--custom_apply_script`` / ``--custom_kpi_extractor`` invalidates the
+# cached results instead of silently re-using stale data.
+# ---------------------------------------------------------------------------
+def _make_minimal_cfg(tmp_path: Path, **overrides: object) -> CampaignConfig:
+    """Build a minimal valid CampaignConfig for _compute_code_hashes.
+
+    ``_compute_code_hashes`` only reads ``custom_apply_script`` and
+    ``custom_kpi_extractor``, but CampaignConfig.__post_init__ validates
+    that ``input_variables`` and ``template_sim_package`` exist on disk
+    (load_config side-effects), so we create those as fixtures here.
+    """
+    variables_yml = tmp_path / "variables.yml"
+    variables_yml.write_text("foo: bar\n")
+    template_dir = tmp_path / "template"
+    template_dir.mkdir()
+    outdir = tmp_path / "outdir"
+    outdir.mkdir()
+    base_kwargs: dict[str, object] = {
+        "input_variables": variables_yml,
+        "template_sim_package": template_dir,
+        "n_samples": 1,
+        "outdir": outdir,
+        "openstudio_version": "3.11.0",
+    }
+    base_kwargs.update(overrides)
+    return CampaignConfig(**base_kwargs)  # type: ignore[arg-type]
+
+
+def test_byos_user_script_edit_invalidates_apply_cache_key(
+    tmp_cache: SQLiteCache, tmp_path: Path
+) -> None:
+    """Regression test for issue #1011 (acceptance criterion).
+
+    Creates a ``CampaignConfig`` with ``custom_apply_script`` pointing
+    at a known-content user script, computes the APPLY_PARAMETERS cache
+    key via the same code path the Campaign uses (``_compute_code_hashes``
+    + ``_code_hash_with_byos``), edits the user script, recomputes, and
+    asserts the cache key changed. Stores the v2 key in a real SQLite
+    cache and asserts the v1 key is a miss while the v2 key is a hit.
+    """
+    from osimflow.campaign import (
+        Campaign,
+        _combine_code_hash,
+    )
+
+    apply_script = tmp_path / "custom_apply.py"
+    apply_script.write_text("# v1\ndef apply_parameters(...): pass\n")
+
+    cfg = _make_minimal_cfg(tmp_path, custom_apply_script=apply_script)
+
+    class _Stub:
+        pass
+
+    hashes_v1 = Campaign._compute_code_hashes(_Stub(), cfg=cfg)
+    assert hashes_v1["byos_apply"] != "byos-unset", (
+        "Setting custom_apply_script must populate code_hashes['byos_apply'] "
+        "with the file content hash, not the 'byos-unset' sentinel."
+    )
+    combined_v1 = _combine_code_hash(hashes_v1["bin"], hashes_v1["byos_apply"])
+
+    # User edits the BYOS user script (issue #1011 stop condition).
+    apply_script.write_text("# v2 — apply logic updated\ndef apply_parameters(...): pass\n")
+
+    hashes_v2 = Campaign._compute_code_hashes(_Stub(), cfg=cfg)
+    assert hashes_v2["byos_apply"] != hashes_v1["byos_apply"], (
+        "Editing cfg.custom_apply_script must change code_hashes['byos_apply']."
+    )
+    # bin/work are unaffected by an apply-script edit.
+    assert hashes_v2["bin"] == hashes_v1["bin"]
+    assert hashes_v2["work"] == hashes_v1["work"]
+    combined_v2 = _combine_code_hash(hashes_v2["bin"], hashes_v2["byos_apply"])
+    assert combined_v1 != combined_v2, (
+        "Editing cfg.custom_apply_script must change the APPLY_PARAMETERS cache key (issue #1011)."
+    )
+
+    # Sanity-check the cache layer: the v2 key stores, the v1 key misses.
+    out = tmp_path / "out.txt"
+    out.write_text("apply v2 output")
+    key_v2 = CacheKey("APPLY_PARAMETERS", "S1", "3.11.0", "inputs-h", combined_v2, "img")
+    tmp_cache.store(key_v2, out, exit_code=0)
+    key_v1 = CacheKey("APPLY_PARAMETERS", "S1", "3.11.0", "inputs-h", combined_v1, "img")
+    assert tmp_cache.lookup(key_v1) is None, (
+        "After editing the BYOS user script, the pre-edit APPLY_PARAMETERS cache key must miss."
+    )
+    assert tmp_cache.lookup(key_v2) is not None
+
+
+def test_byos_kpi_extractor_edit_invalidates_extract_cache_key(
+    tmp_cache: SQLiteCache, tmp_path: Path
+) -> None:
+    """Regression test for issue #1011: editing ``custom_kpi_extractor``
+    must change the EXTRACT_KPIS cache key (same logic as APPLY).
+    """
+    from osimflow.campaign import Campaign, _combine_code_hash
+
+    kpi_script = tmp_path / "custom_kpi.py"
+    kpi_script.write_text("# v1\ndef extract_kpis(...): pass\n")
+
+    cfg = _make_minimal_cfg(tmp_path, custom_kpi_extractor=kpi_script)
+
+    class _Stub:
+        pass
+
+    hashes_v1 = Campaign._compute_code_hashes(_Stub(), cfg=cfg)
+    assert hashes_v1["byos_kpi"] != "byos-unset"
+    combined_v1 = _combine_code_hash(hashes_v1["bin"], hashes_v1["byos_kpi"])
+
+    kpi_script.write_text("# v2 — KPI schema updated\ndef extract_kpis(...): pass\n")
+    hashes_v2 = Campaign._compute_code_hashes(_Stub(), cfg=cfg)
+
+    assert hashes_v2["byos_kpi"] != hashes_v1["byos_kpi"]
+    combined_v2 = _combine_code_hash(hashes_v2["bin"], hashes_v2["byos_kpi"])
+    assert combined_v1 != combined_v2, (
+        "Editing cfg.custom_kpi_extractor must change the EXTRACT_KPIS cache key (issue #1011)."
+    )
+
+    out = tmp_path / "kpis.json"
+    out.write_text('{"eui": 42.0}')
+    key_v2 = CacheKey("EXTRACT_KPIS", "S1", "3.11.0", "inputs-h", combined_v2, "img")
+    tmp_cache.store(key_v2, out, exit_code=0)
+    key_v1 = CacheKey("EXTRACT_KPIS", "S1", "3.11.0", "inputs-h", combined_v1, "img")
+    assert tmp_cache.lookup(key_v1) is None
+    assert tmp_cache.lookup(key_v2) is not None
+
+
+def test_byos_script_unset_returns_unset_sentinel() -> None:
+    """When ``cfg.custom_apply_script`` is ``None``, the byos hash is the
+    ``"byos-unset"`` sentinel so the cache key falls back to
+    ``code_hashes["bin"]`` unchanged — no impact on existing cached
+    entries when BYOS is not configured (issue #1011 acceptance
+    criterion).
+    """
+    from osimflow.campaign import _byos_file_hash
+
+    assert _byos_file_hash(None) == "byos-unset"
+
+
+def test_byos_script_missing_returns_missing_sentinel(tmp_path: Path) -> None:
+    """When the BYOS path points at a file that does not exist or is
+    unreadable, the hash is the ``"byos-missing"`` sentinel so the
+    cache key remains stable — do not raise (issue #1011 stop
+    condition).
+    """
+    from osimflow.campaign import _byos_file_hash
+
+    missing = tmp_path / "does_not_exist.py"
+    assert not missing.exists()
+    assert _byos_file_hash(missing) == "byos-missing"
+
+
+def test_byos_script_unset_does_not_change_cache_key(tmp_path: Path) -> None:
+    """Without a BYOS script configured, ``_compute_code_hashes(cfg)`` must
+    produce the same ``bin`` hash as ``_compute_code_hashes(None)`` so
+    existing cached entries continue to hit after upgrading
+    (issue #1011 acceptance criterion: no user_script → no impact).
+    """
+    from osimflow.campaign import Campaign
+
+    cfg = _make_minimal_cfg(tmp_path)  # custom_apply_script NOT set
+    assert cfg.custom_apply_script is None
+    assert cfg.custom_kpi_extractor is None
+
+    class _Stub:
+        pass
+
+    with_cfg = Campaign._compute_code_hashes(_Stub(), cfg=cfg)
+    without_cfg = Campaign._compute_code_hashes(_Stub())
+
+    assert with_cfg["bin"] == without_cfg["bin"]
+    assert with_cfg["work"] == without_cfg["work"]
+    # BYOS entries fall back to the sentinel when not configured.
+    assert with_cfg["byos_apply"] == "byos-unset"
+    assert with_cfg["byos_kpi"] == "byos-unset"
+
+
+def test_byos_apply_and_kpi_are_independent(tmp_path: Path) -> None:
+    """Editing only the apply script must change ``byos_apply`` but leave
+    ``byos_kpi`` unchanged (and vice versa). The two cache keys are
+    scoped to their respective steps.
+    """
+    from osimflow.campaign import Campaign
+
+    apply_script = tmp_path / "custom_apply.py"
+    apply_script.write_text("# v1\n")
+    kpi_script = tmp_path / "custom_kpi.py"
+    kpi_script.write_text("# v1\n")
+
+    cfg = _make_minimal_cfg(
+        tmp_path,
+        custom_apply_script=apply_script,
+        custom_kpi_extractor=kpi_script,
+    )
+
+    class _Stub:
+        pass
+
+    hashes = Campaign._compute_code_hashes(_Stub(), cfg=cfg)
+    assert hashes["byos_apply"] != hashes["byos_kpi"], (
+        "apply and kpi scripts must produce distinct hashes even when "
+        "they happen to contain identical content"
+    )
+
+    apply_script.write_text("# v2 apply changed\n")
+    after = Campaign._compute_code_hashes(_Stub(), cfg=cfg)
+    assert after["byos_apply"] != hashes["byos_apply"]
+    assert after["byos_kpi"] == hashes["byos_kpi"], (
+        "Editing only the apply script must NOT change byos_kpi"
+    )
 def test_work_py_edit_invalidates_per_sample_bin_hash() -> None:
     """Regression test for issue #1022.
 
