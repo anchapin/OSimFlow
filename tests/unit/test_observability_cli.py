@@ -350,7 +350,7 @@ class TestCampaignBackendWiring:
         mock_executor.name = "local"
         return mock_executor
 
-    @patch("osimflow.campaign.SQLiteCache")
+    @patch("osimflow.campaign.build_cache")
     def test_campaign_uses_null_backend_by_default(
         self,
         mock_cache_cls: MagicMock,
@@ -363,7 +363,7 @@ class TestCampaignBackendWiring:
         campaign = Campaign(cfg, self._make_mock_executor())
         assert isinstance(campaign._obs.backend, NullBackend)
 
-    @patch("osimflow.campaign.SQLiteCache")
+    @patch("osimflow.campaign.build_cache")
     def test_campaign_uses_cloudwatch_backend(
         self,
         mock_cache_cls: MagicMock,
@@ -380,7 +380,7 @@ class TestCampaignBackendWiring:
         assert isinstance(campaign._obs.backend, CloudWatchBackend)
         assert campaign._obs.backend._namespace == "TestNS"
 
-    @patch("osimflow.campaign.SQLiteCache")
+    @patch("osimflow.campaign.build_cache")
     def test_campaign_uses_prometheus_backend(
         self,
         mock_cache_cls: MagicMock,
@@ -396,7 +396,7 @@ class TestCampaignBackendWiring:
         campaign = Campaign(cfg, self._make_mock_executor())
         assert isinstance(campaign._obs.backend, PrometheusBackend)
 
-    @patch("osimflow.campaign.SQLiteCache")
+    @patch("osimflow.campaign.build_cache")
     def test_campaign_uses_otel_backend(
         self,
         mock_cache_cls: MagicMock,
