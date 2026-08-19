@@ -144,36 +144,236 @@ def validate_trust_level(
 
 
 def _discover_function_name(path: Path) -> str:
-    """Discover the BYOS function name in a user script without executing it.
+    """Discover the BYOS function name in a user script in an isolated subprocess.
 
-    Uses ``importlib`` to load the module and inspect its attributes.
+    Issue #1005: previously this called ``spec.loader.exec_module(mod)``
+    *inside the orchestrator process*, so a malicious BYOS file with
+    module-level code such as ``import os; os._exit(42)`` would terminate
+    the orchestrator before any subprocess sandbox was ever created.  The
+    fix moves ``exec_module`` into a child process: malicious module-level
+    code dies in the child, and the orchestrator survives to surface a
+    clear ``RuntimeError`` to the caller.
+
     Returns the name of the first matching callable found.
 
     Raises:
         ImportError: the file cannot be loaded as a Python module.
         AttributeError: no callable with a recognised name was found.
+        RuntimeError: the discovery subprocess crashed (e.g. a malicious
+            ``os._exit`` at module level).  The orchestrator itself
+            remains running — only this call raises.
     """
-    spec = importlib.util.spec_from_file_location(f"user_{path.stem}", path)
+    function_name = _discover_in_subprocess(path)
+    if function_name == "apply":
+        warnings.warn(
+            f"User script {path} uses the deprecated function name "
+            f"'apply'. Rename it to 'apply_parameters' for forward "
+            f"compatibility. Support for 'apply' will be removed in a "
+            f"future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return function_name
+
+
+# ---------------------------------------------------------------------------
+# Discovery subprocess runner — isolates ``exec_module`` from the orchestrator
+# (issue #1005).
+# ---------------------------------------------------------------------------
+_DISCOVERY_RUNNER = """
+import json
+import sys
+import importlib.util
+import warnings
+from pathlib import Path
+
+warnings.filterwarnings("ignore")
+
+# Mirror the canonical candidate list from osimflow.byos.
+# Duplicated here so the subprocess is self-contained.
+_CANDIDATE_NAMES = ("apply_parameters", "extract_kpis", "apply")
+
+
+def _emit_error(exc, message_override=None):
+    \"\"\"Emit a JSON error payload and exit non-zero.
+
+    The ``type`` field carries the exception class name so the parent
+    can re-raise the same exception type.
+    \"\"\"
+    type_name = type(exc).__name__ if exc is not None else "RuntimeError"
+    message = message_override if message_override is not None else (str(exc) or type_name)
+    print(json.dumps({"error": message, "type": type_name}))
+    sys.exit(1)
+
+
+def main() -> None:
+    script_path = Path(sys.argv[1])
+
+    try:
+        spec = importlib.util.spec_from_file_location("_byos_discover", script_path)
+    except BaseException as exc:  # noqa: BLE001 - propagate any spec failure
+        _emit_error(exc, message_override=f"could not load spec for {script_path}: {exc}")
+        return  # unreachable, _emit_error exits
+
     if spec is None or spec.loader is None:
-        raise ImportError(f"could not load spec for {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+        _emit_error(
+            ImportError(f"could not load spec for {script_path}"),
+            message_override=f"could not load spec for {script_path}",
+        )
+        return
+
+    try:
+        mod = importlib.util.module_from_spec(spec)
+        # ``exec_module`` runs the BYOS script's module-level code.  Any
+        # malicious ``os._exit()``, infinite loop, or runtime error here
+        # dies inside THIS child process — not in the orchestrator.
+        spec.loader.exec_module(mod)
+    except SystemExit:
+        # Honour user-initiated ``sys.exit(...)`` / ``os._exit(...)`` by
+        # letting it propagate out of the subprocess silently.
+        raise
+    except BaseException as exc:  # noqa: BLE001 - capture any module-level error
+        _emit_error(exc)
+        return
+
     for candidate in _CANDIDATE_NAMES:
         candidate_obj = getattr(mod, candidate, None)
         if callable(candidate_obj):
-            if candidate == "apply":
-                warnings.warn(
-                    f"User script {path} uses the deprecated function name "
-                    f"'apply'. Rename it to 'apply_parameters' for forward "
-                    f"compatibility. Support for 'apply' will be removed in a "
-                    f"future release.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-            return candidate
-    raise AttributeError(
-        f"User script {path} must define `apply_parameters(...)` or `extract_kpis(...)`."
+            print(json.dumps({"function": candidate}))
+            return
+
+    _emit_error(
+        AttributeError(
+            f"User script {script_path} must define "
+            f"`apply_parameters(...)` or `extract_kpis(...)`."
+        )
     )
+
+
+main()
+"""
+
+
+def _discover_in_subprocess(path: Path) -> str:
+    """Run the BYOS discovery path (``exec_module`` + attribute lookup) in a child process.
+
+    The subprocess loads the user's ``.py`` file via ``importlib`` and
+    writes a JSON payload of the form:
+
+        ``{"function": "<candidate_name>"}``       — on success
+        ``{"error": "<message>"}``                 — on failure (load, missing callable, exception)
+
+    The orchestrator never executes ``exec_module`` itself.  See issue
+    #1005 for the security rationale (a malicious module-level
+    ``os._exit(42)`` previously killed the orchestrator).
+
+    Args:
+        path: Path to the user's ``.py`` script.
+
+    Returns:
+        The discovered BYOS function name (e.g. ``"apply_parameters"``).
+
+    Raises:
+        AttributeError: no callable with a recognised name was found.
+        ImportError: the file cannot be loaded as a Python module.
+        RuntimeError: the discovery subprocess exited non-zero (e.g. user
+            ``os._exit(42)``).  The orchestrator itself keeps running.
+    """
+    proc = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c", _DISCOVERY_RUNNER, str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_sanitize_env(),
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        proc.communicate()
+        raise RuntimeError(f"BYOS discovery subprocess timed out after 60s: script={path}") from exc
+
+    if proc.returncode != 0:
+        # The subprocess may have produced a parseable JSON error payload
+        # before exiting (e.g. missing callable, syntax error, import
+        # failure).  Try to extract it; only raise ``RuntimeError`` when
+        # no structured response is available, which indicates a hard
+        # crash such as a malicious ``os._exit(42)``.
+        response = _parse_discovery_response(stdout)
+        if response is not None and "error" in response:
+            _raise_discovery_error(response["error"], response.get("type", "RuntimeError"))
+            raise AssertionError  # unreachable
+        # Malicious module-level ``os._exit(42)`` (or any other hard crash)
+        # ends the child at a non-zero exit code with no JSON payload.
+        error_detail = stderr.strip() or stdout.strip() or "unknown error"
+        raise RuntimeError(
+            f"BYOS discovery subprocess failed (exit {proc.returncode}): "
+            f"the user script likely has module-level side effects or "
+            f"premature termination. script={path} detail={error_detail}"
+        )
+
+    response = _parse_discovery_response(stdout)
+    if response is None:
+        raise RuntimeError(f"BYOS discovery subprocess returned invalid JSON: {stdout[:200]}")
+
+    if "error" in response:
+        _raise_discovery_error(response["error"], response.get("type", "RuntimeError"))
+        raise AssertionError  # unreachable
+
+    function_name = response.get("function")
+    if not isinstance(function_name, str) or not function_name:
+        raise RuntimeError(f"BYOS discovery subprocess returned no function name: {stdout[:200]}")
+    return function_name
+
+
+# Mapping from subprocess-reported exception class names to the actual
+# exception class.  Used by ``_discover_in_subprocess`` to re-raise the
+# same exception type the user script would have raised in-process.
+_DISCOVERY_EXCEPTION_TYPES: dict[str, type[BaseException]] = {
+    "AttributeError": AttributeError,
+    "ImportError": ImportError,
+    "ModuleNotFoundError": ImportError,  # subclass of ImportError in 3.10+
+    "SyntaxError": SyntaxError,
+    "FileNotFoundError": FileNotFoundError,
+    "NameError": NameError,
+    "TypeError": TypeError,
+    "ValueError": ValueError,
+    "RuntimeError": RuntimeError,
+}
+
+
+def _parse_discovery_response(stdout: str) -> dict[str, object] | None:
+    """Parse the JSON response from the BYOS discovery subprocess.
+
+    Returns the decoded object, or ``None`` if ``stdout`` was empty or
+    not valid JSON.
+    """
+    payload = stdout.strip()
+    if not payload:
+        return None
+    try:
+        response = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(response, dict):
+        return None
+    return response
+
+
+def _raise_discovery_error(message: object, type_name: object) -> None:
+    """Re-raise a subprocess error with the exception type the user script raised.
+
+    Looks up ``type_name`` (the exception class name reported by the
+    subprocess) in :data:`_DISCOVERY_EXCEPTION_TYPES` and raises an
+    instance of that class with ``str(message)`` as its message.  Falls
+    back to :class:`RuntimeError` for unknown / missing type names.
+    """
+    message_str = str(message)
+    exc_class = _DISCOVERY_EXCEPTION_TYPES.get(
+        str(type_name) if isinstance(type_name, str) else "",
+        RuntimeError,
+    )
+    raise exc_class(message_str)
 
 
 # ---------------------------------------------------------------------------
