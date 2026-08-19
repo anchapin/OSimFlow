@@ -10,6 +10,18 @@ Requires:
   - OSIMFLOW_KUBERNETES_NAMESPACE env var (the namespace to submit Jobs into;
     defaults to ``default`` if unset).
 
+Since issue #996 each Job runs the ephemeral-runner pattern: the container
+command is ``python -m osimflow.remote_runner`` (or an explicit
+``remote_command`` override), the task payload travels in the
+``OSIMFLOW_TASK_PAYLOAD`` env var, and result-transport configuration in the
+``OSIMFLOW_RESULT_*`` env vars. Consequently the **full-campaign test below
+requires worker images that ship the ``osimflow`` package** (both the Python
+image used for apply/KPI/aggregate/plots steps — override with
+``OSIMFLOW_PYTHON_CONTAINER_IMAGE`` — and the ``nrel/openstudio`` image used
+for sim steps; see ``docs/kubernetes-deployment.md``). The dedicated
+remote-command tests only need the public ``python:3.12-slim`` image and run
+on any cluster.
+
 This test is intentionally skipped in normal CI.  It is designed for the
 nightly ``kubernetes-e2e`` workflow
 (``.github/workflows/kubernetes-e2e.yml``) which authenticates by writing a
@@ -25,6 +37,7 @@ the runner and runs against a real Kubernetes cluster.  To run locally::
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -58,6 +71,78 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _list_osimflow_jobs(namespace: str) -> list[Any]:
+    """Return the OSimFlow Job manifests currently in *namespace*."""
+    from kubernetes import client as k8s_client
+
+    batch = k8s_client.BatchV1Api()
+    jobs = batch.list_namespaced_job(namespace=namespace)
+    return [job for job in jobs.items if job.metadata.name.startswith("osimflow-")]
+
+
+def test_real_kubernetes_job_executes_remote_command() -> None:
+    """A Job must execute real work driven by the executor contract (#996).
+
+    Uses the public ``python:3.12-slim`` image plus a ``remote_command``
+    override to prove end-to-end that:
+
+      1. the command override is honored (``/bin/sh -c <cmd>``),
+      2. the ``OSIMFLOW_TASK_PAYLOAD`` env var reaches the container and
+         decodes to the Nomad-compatible task payload,
+      3. a zero exit code drives the Job to ``Succeeded`` and the handle
+         resolves without raising.
+    """
+    from osimflow.executors import KubernetesExecutor
+
+    namespace = os.environ.get("OSIMFLOW_KUBERNETES_NAMESPACE", "default")
+    remote_command = (
+        'python -c "import json,os,sys; '
+        "p=os.environ.get('OSIMFLOW_TASK_PAYLOAD'); "
+        "sys.exit(0 if p and json.loads(p).get('name')=='cmd-check' else 4)\""
+    )
+    executor = KubernetesExecutor(
+        namespace=namespace,
+        poll_interval_s=2.0,
+        max_poll_interval_s=15.0,
+    )
+    handle = executor.submit(
+        lambda: None,
+        name="cmd-check",
+        container="python:3.12-slim",
+        remote_command=remote_command,
+        cpus=1,
+        memory_mb=512,
+        time_min=5,
+    )
+    # A non-zero exit (payload missing/wrong) fails the test via RuntimeError.
+    assert handle.result() is None
+    executor.shutdown()
+
+
+def test_real_kubernetes_job_failure_reason_surfaces() -> None:
+    """A non-zero pod exit code must surface in the handle error (#996)."""
+    from osimflow.executors import KubernetesExecutor
+
+    namespace = os.environ.get("OSIMFLOW_KUBERNETES_NAMESPACE", "default")
+    executor = KubernetesExecutor(
+        namespace=namespace,
+        poll_interval_s=2.0,
+        max_poll_interval_s=15.0,
+    )
+    handle = executor.submit(
+        lambda: None,
+        name="fail-check",
+        container="python:3.12-slim",
+        remote_command="python -c 'import sys; sys.exit(3)'",
+        cpus=1,
+        memory_mb=512,
+        time_min=5,
+    )
+    with pytest.raises(RuntimeError, match="exit code 3"):
+        handle.result()
+    executor.shutdown()
+
+
 def test_real_kubernetes_3_samples(tmp_path: Path) -> None:
     """3-sample campaign against a real Kubernetes cluster.
 
@@ -68,10 +153,14 @@ def test_real_kubernetes_3_samples(tmp_path: Path) -> None:
       2. Each Job maps the resource directives (``cpus``/``memory_mb``) to
          ``V1ResourceRequirements`` requests+limits and ``time_min`` to
          ``active_deadline_seconds``.
-      3. The executor polls ``list_namespaced_pod`` until the pod reaches a
+      3. Each Job runs the ephemeral runner (``python -m
+         osimflow.remote_runner``) with the task payload in
+         ``OSIMFLOW_TASK_PAYLOAD`` (issue #996) — the worker images must
+         therefore ship the ``osimflow`` package.
+      4. The executor polls ``list_namespaced_pod`` until the pod reaches a
          terminal phase (``Succeeded``/``Failed``), tolerating scheduling
          latency via exponential backoff.
-      4. The Campaign collects per-sample results from shared storage.
+      5. The Campaign collects per-sample results from shared storage.
 
     The test asserts the same 4-artifact contract as the local executor
     test (``test_local_executor.py``), plus the per-campaign ``run.json``
@@ -168,3 +257,25 @@ def test_real_kubernetes_3_samples(tmp_path: Path) -> None:
     assert set(result) >= {"samples", "kpis", "aggregated", "plots", "elapsed_s", "run_json"}
     assert len(result["samples"]) == 3
     assert result["run_json"] == run_json
+
+    # --- ephemeral-runner wiring on the real cluster (issue #996) --------
+    # Every submitted Job must run the remote runner (not `sleep infinity`)
+    # and carry the serialized task payload.
+    jobs = _list_osimflow_jobs(namespace)
+    assert jobs, "no osimflow-* Jobs found in namespace after campaign run"
+    sim_jobs = [j for j in jobs if "sim-" in (j.metadata.name or "")]
+    assert len(sim_jobs) >= 3, f"expected >= 3 sim Jobs, got {[j.metadata.name for j in jobs]}"
+    for job in sim_jobs[:3]:
+        container = job.spec.template.spec.containers[0]
+        assert container.command == [
+            "python",
+            "-m",
+            "osimflow.remote_runner",
+        ], f"Job {job.metadata.name} command is not the remote runner"
+        env = {e.name: e.value for e in (container.env or [])}
+        assert "OSIMFLOW_TASK_PAYLOAD" in env, (
+            f"Job {job.metadata.name} missing OSIMFLOW_TASK_PAYLOAD env var"
+        )
+        payload = json.loads(env["OSIMFLOW_TASK_PAYLOAD"])
+        assert payload["schema_version"] == 1
+        assert payload["step"] == "sim"

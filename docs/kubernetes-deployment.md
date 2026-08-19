@@ -26,6 +26,49 @@ Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to Kubernetes r
 
 Per-sample `OSIMFLOW_OS_VERSION` and `OSIMFLOW_CONTAINER` are set as environment variables on the container, matching the convention used by `SlurmExecutor` and `AWSBatchExecutor`.
 
+### Ephemeral Runner & Object-Storage Transport (issue #996)
+
+Each Job executes campaign work with the same **ephemeral-runner pattern** the `NomadExecutor` uses (`osimflow/executors/__init__.py` + `osimflow/remote_runner.py`): the Job container runs
+
+```text
+python -m osimflow.remote_runner
+```
+
+(or an explicit `remote_command` override via `/bin/sh -c`). The runner decodes the task payload, executes the step work function entirely in container-local storage (`emptyDir`-style; no RWX/NFS volume and no orchestrator-filesystem access needed), and pushes result artifacts to object storage when a result-storage backend is configured. The executor handle then downloads those artifacts (`materialize_object_storage_result`) so Campaign callbacks receive local paths — the same contract as Nomad.
+
+Environment variables carried on every Job:
+
+| Env Var | Purpose |
+|---|---|
+| `OSIMFLOW_TASK_PAYLOAD` | JSON-serialized step call (`schema_version`, `name`, `step`, encoded `args`/`kwargs`, `result_hint`) — identical serialization to `NomadExecutor._build_task_payload()` |
+| `OSIMFLOW_RESULT_TRANSPORT_MODE` | `shared_fs` (default) or `object_storage` |
+| `OSIMFLOW_RESULT_STORAGE_BACKEND` | Result backend (`s3`, `gs`, `azure`) when object-storage transport is active |
+| `OSIMFLOW_RESULT_STORAGE_BUCKET` | Bucket/container name |
+| `OSIMFLOW_RESULT_STORAGE_PREFIX` | Key prefix (the campaign `outdir` name) |
+| `OSIMFLOW_RESULT_STORAGE_ENDPOINT` | Custom S3-compatible endpoint (e.g. MinIO) |
+| `OSIMFLOW_OS_VERSION` / `OSIMFLOW_CONTAINER` | Pinned OpenStudio version / resolved container image |
+| `OSIMFLOW_STUB_SIM` | Propagated from the orchestrator when set, so pods honour the stub-vs-real CLI choice |
+
+To run a zero-shared-FS campaign, configure a result backend (and MinIO works for on-prem clusters via `--result-storage-endpoint`):
+
+```bash
+osimflow run \
+  --executor kubernetes \
+  --kubernetes-namespace osimflow \
+  --result-storage-backend s3 \
+  --result-storage-bucket osimflow-results \
+  --result-storage-endpoint http://minio.minio.svc:9000 \
+  --input_variables variables.yml \
+  --template_sim_package ./example_package \
+  --n_samples 50 \
+  --outdir ./results \
+  --openstudio_version 3.11.0
+```
+
+**Worker image prerequisite:** the container images must ship the `osimflow` package for `python -m osimflow.remote_runner` to resolve. The Python-side steps (apply/KPI/aggregate/plots) use the image resolved from `OSIMFLOW_PYTHON_CONTAINER_IMAGE` (default `ghcr.io/anchapin/scientific_python_image:latest`); the sim steps use `nrel/openstudio:<version>`, which must be extended with `pip install osimflow` (e.g. `FROM nrel/openstudio:3.11.0` + `RUN pip install osimflow` in a thin derived image pushed to your registry).
+
+**Service account permissions:** when using object-storage transport, the worker service account (or the nodes' cloud identity — IRSA on EKS, Workload Identity on GKE, Azure AD Workload Identity on AKS) needs read/write access to the result bucket in addition to the Kubernetes RBAC permissions below. For S3-compatible endpoints, provide the credentials via the environment the pods run in (e.g. a Kubernetes Secret projected into the Job env).
+
 ## Quick Start
 
 ### 1. Configure kubectl
@@ -69,7 +112,7 @@ osimflow run \
 
 Credentials are sourced from the in-cluster service account or from `~/.kube/config`. The `KubernetesExecutor` does **not** accept explicit credentials; using the configured kubeconfig or in-cluster service account is the recommended path.
 
-For production deployments, use RBAC to restrict the service account to the minimum required permissions (`create`, `get`, `list` on Jobs and Pods in the target namespace).
+For production deployments, use RBAC to restrict the service account to the minimum required permissions (`create`, `get`, `list` on Jobs and Pods in the target namespace). When object-storage transport is enabled (issue #996), the **worker** service account additionally needs object-storage read/write permissions on the result bucket (see *Ephemeral Runner & Object-Storage Transport* above).
 
 ## Resource Allocation
 

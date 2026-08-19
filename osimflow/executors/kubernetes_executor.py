@@ -6,6 +6,19 @@ pod reaches a terminal state. The returned Handle carries the job name
 and blocks on `.result()` until the task succeeds; on failure it
 re-raises a RuntimeError with the pod's failure message.
 
+Each Job runs the ephemeral-runner pattern (issue #996), mirroring
+``NomadExecutor``: the container command defaults to
+``python -m osimflow.remote_runner`` (or an explicit ``remote_command``
+override), the serialized task payload travels in the
+``OSIMFLOW_TASK_PAYLOAD`` env var, and the result-transport contract
+travels in the ``OSIMFLOW_RESULT_TRANSPORT_MODE`` /
+``OSIMFLOW_RESULT_STORAGE_*`` env vars. The runner decodes the payload,
+executes the step work function in container-local storage, and pushes
+results to object storage — no shared (RWX/NFS) volume is required.
+When the transport mode is ``object_storage``, the handle downloads
+the job-side artifacts via ``materialize_object_storage_result`` so
+Campaign callbacks receive local paths (issue #996).
+
 Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
 Kubernetes resource requests and limits. Per-sample
 `OSIMFLOW_OS_VERSION` and `OSIMFLOW_CONTAINER` are carried as
@@ -21,14 +34,21 @@ account is the recommended path.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
-from osimflow.executors.transport import resolve_result_for_callback
+from osimflow.executors.transport import (
+    coerce_transport_mode,
+    encode_transport_value,
+    materialize_object_storage_result,
+    resolve_result_for_callback,
+)
 
 log = logging.getLogger("osimflow.executors.kubernetes")
 
@@ -41,6 +61,14 @@ class _KubernetesHandle(Handle):
     Instead, the handle carries a reference to its executor and the
     job name; `result()` blocks on `_wait_for_terminal` and `done()`
     does a single non-blocking status check.
+
+    Result transport (issue #996): when ``result_transport_mode`` is
+    ``"object_storage"``, the job-side runner uploaded its artifacts to
+    the configured bucket; ``result()`` downloads them to the hint's
+    local paths via ``materialize_object_storage_result`` (same
+    contract as ``_NomadHandle``) so Campaign callbacks receive local
+    paths. For ``"shared_fs"`` / ``"auto"`` modes the hint is decoded
+    through ``resolve_result_for_callback`` only.
     """
 
     def __init__(
@@ -50,12 +78,22 @@ class _KubernetesHandle(Handle):
         submit_params: dict[str, Any],
         *,
         result_hint: Any = None,
+        result_transport_mode: str = "auto",
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
     ) -> None:
         self.job_id = job_name
         self._job_name = job_name
         self._executor = executor
         self._submit_params = submit_params
         self._result_hint = result_hint
+        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
+        self._result_storage_backend = result_storage_backend
+        self._result_storage_bucket = result_storage_bucket
+        self._result_storage_prefix = result_storage_prefix
+        self._result_storage_endpoint = result_storage_endpoint
         self._future: Future[Any] = Future()
         self.worker_id: str | None = job_name
         self.worker_ip: str | None = None
@@ -73,7 +111,19 @@ class _KubernetesHandle(Handle):
 
         phase = pod_status.get("status", {}).get("phase", "")
         if phase == "Succeeded":
-            resolved = resolve_result_for_callback(self._result_hint, default=None)
+            resolved = resolve_result_for_callback(
+                self._result_hint,
+                default=None,
+                transport_mode=self._result_transport_mode,
+            )
+            resolved = materialize_object_storage_result(
+                resolved,
+                transport_mode=self._result_transport_mode,
+                result_storage_backend=self._result_storage_backend,
+                result_storage_bucket=self._result_storage_bucket,
+                result_storage_prefix=self._result_storage_prefix,
+                result_storage_endpoint=self._result_storage_endpoint,
+            )
             self._future.set_result(resolved)
             return resolved
 
@@ -139,6 +189,16 @@ class KubernetesExecutor(BaseExecutor):
     name and blocks on `.result()` until the task succeeds; on failure
     it re-raises a RuntimeError.
 
+    Each Job runs the ephemeral-runner pattern (issue #996), mirroring
+    ``NomadExecutor``: the container command defaults to
+    ``python -m osimflow.remote_runner`` (or an explicit
+    ``remote_command`` override run via ``/bin/sh -c``), the task
+    payload travels in ``OSIMFLOW_TASK_PAYLOAD``, and the
+    result-transport contract in ``OSIMFLOW_RESULT_TRANSPORT_MODE`` /
+    ``OSIMFLOW_RESULT_STORAGE_*`` env vars. Worker images must ship the
+    ``osimflow`` package for the default command to resolve (see
+    ``docs/kubernetes-deployment.md``).
+
     Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
     Kubernetes resource requests and limits. Per-sample
     `OSIMFLOW_OS_VERSION` and `OSIMFLOW_CONTAINER` are carried as
@@ -194,18 +254,101 @@ class KubernetesExecutor(BaseExecutor):
             safe_name = "osimflow-task"
         return f"osimflow-{safe_name}"
 
+    @staticmethod
+    def _infer_step_name(submit_name: str) -> str:
+        """Map a submit name to the remote_runner step identifier.
+
+        Same mapping as ``NomadExecutor._infer_step_name``: the Campaign
+        names fan-out tasks ``apply_<sid>`` / ``sim_<sid>`` / ``kpi_<sid>``
+        and the single-shot steps ``aggregate`` / ``plots``; the remote
+        runner resolves the work function from the step identifier.
+        """
+        lower = submit_name.lower()
+        if lower.startswith("apply_"):
+            return "apply"
+        if lower.startswith("sim_"):
+            return "sim"
+        if lower.startswith("kpi_"):
+            return "extract"
+        if lower.startswith("aggregate"):
+            return "aggregate"
+        if lower.startswith("plots"):
+            return "plots"
+        return "unknown"
+
+    @staticmethod
+    def _build_task_payload(
+        *,
+        step_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        result_hint: Any,  # noqa: ANN401
+        name: str,
+    ) -> str:
+        """Serialize the step call for the ephemeral runner.
+
+        Uses the same serialization as ``NomadExecutor._build_task_payload``
+        so ``osimflow.remote_runner`` can decode either executor's Jobs
+        identically (issue #996).
+        """
+        payload = {
+            "schema_version": 1,
+            "name": name,
+            "step": step_name,
+            "args": [KubernetesExecutor._encode_payload_value(a) for a in args],
+            "kwargs": {k: KubernetesExecutor._encode_payload_value(v) for k, v in kwargs.items()},
+            "result_hint": KubernetesExecutor._encode_payload_value(result_hint),
+        }
+        return json.dumps(payload)
+
+    @staticmethod
+    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
+        return encode_transport_value(value)
+
     def _build_environment(
         self,
         *,
         container: str | None,
         openstudio_version: str | None,
+        task_payload: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
     ) -> list[dict[str, str]]:
-        """Build environment variables for the container."""
+        """Build environment variables for the container.
+
+        Mirrors the ``NomadExecutor._build_job_spec`` env block: the
+        serialized task payload travels in ``OSIMFLOW_TASK_PAYLOAD`` and
+        the result-transport contract in the ``OSIMFLOW_RESULT_*`` vars
+        so ``osimflow.remote_runner`` can execute the step and push
+        results to object storage (issue #996). ``OSIMFLOW_STUB_SIM``
+        is propagated from the orchestrator environment when set so
+        remote pods honour the orchestrator's stub-vs-real CLI choice.
+        """
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
         resolved = container or f"nrel/openstudio:{openstudio_version or 'latest'}"
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
+        if task_payload is not None:
+            env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
+        if result_transport_mode is not None:
+            env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": result_transport_mode})
+        if result_storage_backend is not None:
+            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BACKEND", "value": result_storage_backend})
+        if result_storage_bucket is not None:
+            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BUCKET", "value": result_storage_bucket})
+        if result_storage_prefix is not None:
+            env.append({"name": "OSIMFLOW_RESULT_STORAGE_PREFIX", "value": result_storage_prefix})
+        if result_storage_endpoint is not None:
+            env.append(
+                {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": result_storage_endpoint}
+            )
+        stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
+        if stub_sim is not None:
+            env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
         return env
 
     def _wait_for_terminal(self, job_name: str) -> dict[str, Any]:
@@ -259,8 +402,16 @@ class KubernetesExecutor(BaseExecutor):
         memory_mb: int,
         time_min: int,
         environment: list[dict[str, str]],
+        command: list[str] | None = None,
     ) -> str:
-        """Submit a Kubernetes Job and return the job name."""
+        """Submit a Kubernetes Job and return the job name.
+
+        ``command`` is the container entrypoint. It defaults to the
+        ephemeral runner (``python -m osimflow.remote_runner``) so each
+        Job executes real campaign work (issue #996); an explicit
+        ``remote_command`` override arrives here as
+        ``["/bin/sh", "-c", remote_command]``.
+        """
         from kubernetes import client
 
         job_name = self._build_job_name(name)
@@ -280,7 +431,7 @@ class KubernetesExecutor(BaseExecutor):
         container = client.V1Container(
             name="osimflow",
             image=container_image,
-            command=["/bin/sh", "-c", "sleep infinity"],
+            command=command or ["python", "-m", "osimflow.remote_runner"],
             env=env_vars,
             resources=resources,
         )
@@ -338,8 +489,6 @@ class KubernetesExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
-        del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
-        del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
 
         log.info(
@@ -351,12 +500,45 @@ class KubernetesExecutor(BaseExecutor):
             container,
         )
 
+        # Ephemeral-runner contract (issue #996), mirroring NomadExecutor:
+        # serialize the step call into the task payload; the Job-side
+        # ``python -m osimflow.remote_runner`` decodes it and executes the
+        # work function in container-local storage.
+        step_name = self._infer_step_name(name)
+        task_payload = self._build_task_payload(
+            step_name=step_name,
+            args=args,
+            kwargs={},
+            result_hint=result_hint,
+            name=name,
+        )
+        del fn  # noqa: ARG002 — work runs inside the Job container
+
+        if remote_command:
+            command: list[str] = ["/bin/sh", "-c", remote_command]
+        else:
+            command = ["python", "-m", "osimflow.remote_runner"]
+
         environment = self._build_environment(
             container=container,
             openstudio_version=openstudio_version,
+            task_payload=task_payload,
+            result_transport_mode=(
+                str(result_transport_mode) if result_transport_mode is not None else None
+            ),
+            result_storage_backend=(
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            result_storage_bucket=(
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            result_storage_prefix=(
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            result_storage_endpoint=(
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
         )
-
-        del fn, args  # noqa: ARG002
 
         submit_params: dict[str, Any] = {
             "name": name,
@@ -364,6 +546,7 @@ class KubernetesExecutor(BaseExecutor):
             "memory_mb": memory_mb,
             "time_min": time_min,
             "environment": environment,
+            "command": command,
         }
         job_name = self._submit_job(**submit_params)
 
@@ -372,6 +555,21 @@ class KubernetesExecutor(BaseExecutor):
             executor=self,
             submit_params=submit_params,
             result_hint=result_hint,
+            result_transport_mode=(
+                str(result_transport_mode) if result_transport_mode is not None else "auto"
+            ),
+            result_storage_backend=(
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            result_storage_bucket=(
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            result_storage_prefix=(
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            result_storage_endpoint=(
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
         )
 
     def shutdown(self) -> None:
