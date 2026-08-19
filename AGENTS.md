@@ -502,8 +502,11 @@ you add a public file here, mention its name in this section or
 - **Cache key rule:** any code that affects per-step behavior must
   be hashed into the cache key. See
   `osimflow/campaign.py:_compute_code_hashes` for the pattern.
-  Editing `bin/*.py` invalidates the affected step automatically via
-  the `code_hashes["bin"]` SHA-256. Do not bypass this hashing.
+  Editing `osimflow/_work_scripts/*.py` OR `bin/*.py` invalidates the
+  affected step automatically via the `code_hashes["bin"]` SHA-256
+  (the implementation unions both directories, sorted+deduped, so dev
+  checkouts and wheel installs agree — issue #1021). Do not bypass
+  this hashing.
 - **Executor resource directives:** `cpus`, `memory_mb`, `time_min`
   are advisory on `LocalExecutor`, propagated to Slurm via
   `submitit`'s `update_parameters`, and translated to Boto3
@@ -578,11 +581,14 @@ Shell / CLI: `set -euo pipefail`, long options in docs
    samples get huge fast. Default to daily/monthly aggregates in
    `aggregated_results.csv`; keep hourly data only in per-sample
    `.sql` files behind `--archive_intermediates`.
-9. **Cache invalidation on `bin/*.py` edits** — the cache key
-   includes a SHA-256 of every `bin/*.py` file
-   (`code_hashes["bin"]`), so editing a script invalidates the cache
-   for the affected step. Do not introduce a step that bypasses this
-   hashing.
+9. **Cache invalidation on per-step code edits** — the cache key
+   includes a SHA-256 of every `osimflow/_work_scripts/*.py` and
+   `bin/*.py` file (union, sorted, deduped; issue #1021) via
+   `code_hashes["bin"]`, so editing either directory invalidates the
+   cache for the affected step. Editing `osimflow/work.py` (and the
+   other per-step modules it imports) is hashed separately as
+   `code_hashes["work"]` for `AGGREGATE_RESULTS`. Do not introduce a
+   step that bypasses this hashing.
 10. **SlurmExecutor `debug=True` by default** — without
     `--slurm-real`, jobs run locally via `submitit.DebugExecutor`.
     Always pass `--slurm-real` in production.

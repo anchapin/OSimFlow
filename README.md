@@ -5,7 +5,7 @@
 [![codecov](https://codecov.io/gh/anchapin/OSimFlow/graph/badge.svg?token=PLACEHOLDER)](https://codecov.io/gh/anchapin/OSimFlow)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-> **Status:** Pre-`v0.1.0`. The orchestration foundation (`osimflow/` package) and per-step work-layer scripts (`osimflow/_work_scripts/`) are implemented; the `bin/*.py` entry points are stable shims over them.
+> **Status:** `v0.1.0` released (`2026-06-24`, see [CHANGELOG.md](CHANGELOG.md)). The orchestration foundation (`osimflow/` package) and per-step work-layer scripts (`osimflow/_work_scripts/`) are implemented; the `bin/*.py` entry points are stable shims over them. Active line: `v0.1.x` hardening + polish + ecosystem coverage.
 
 OSimFlow is a community-driven open-source **Python** framework that wraps the OpenStudio CLI to run large-scale, reproducible, parametric building-energy simulation campaigns. It targets OpenStudio users (energy modelers, researchers, design optimization practitioners) who need to launch hundreds or thousands of `openstudio.cli run` invocations across cloud (AWS Batch) or on-premise HPC (Slurm) without writing bespoke orchestration glue for each campaign.
 
