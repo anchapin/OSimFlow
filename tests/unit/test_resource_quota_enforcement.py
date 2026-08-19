@@ -82,7 +82,9 @@ class TestThreadPoolReceivesBoundedValue:
     def test_quota_caps_helper(self, tmp_path: Path) -> None:
         var_file, pkg, out = _make_inputs(tmp_path)
         cfg = _cfg(
-            var_file, pkg, out,
+            var_file,
+            pkg,
+            out,
             resource_quota=ResourceQuota(max_concurrent_samples=3),
         )
         campaign = Campaign(cfg, executor=_NoOpExecutor(), max_workers=10)
@@ -97,20 +99,22 @@ class TestThreadPoolReceivesBoundedValue:
     def test_quota_above_max_workers_falls_back(self, tmp_path: Path) -> None:
         var_file, pkg, out = _make_inputs(tmp_path)
         cfg = _cfg(
-            var_file, pkg, out,
+            var_file,
+            pkg,
+            out,
             resource_quota=ResourceQuota(max_concurrent_samples=16),
         )
         campaign = Campaign(cfg, executor=_NoOpExecutor(), max_workers=8)
         assert campaign._effective_max_workers() == 8
 
-    def test_fan_out_source_uses_bounded_helper(
-        self, tmp_path: Path
-    ) -> None:
+    def test_fan_out_source_uses_bounded_helper(self, tmp_path: Path) -> None:
         """The fan-out site at ~line 1063 must read `self._effective_max_workers()`,
         not `self.max_workers`. Inspect the source to guard against regression."""
         var_file, pkg, out = _make_inputs(tmp_path)
         cfg = _cfg(
-            var_file, pkg, out,
+            var_file,
+            pkg,
+            out,
             resource_quota=ResourceQuota(max_concurrent_samples=3),
         )
         campaign = Campaign(cfg, executor=_NoOpExecutor(), max_workers=10)
