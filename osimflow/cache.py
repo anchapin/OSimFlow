@@ -24,8 +24,6 @@ The DB schema is small enough to inspect with `sqlite3 cache.db ".schema"`.
 
 from __future__ import annotations
 
-__all__ = ["CacheKey", "CacheStats", "SQLiteCache", "sha256_of_dict", "sha256_of_files"]
-
 import contextlib
 import dataclasses
 import hashlib
@@ -38,6 +36,21 @@ import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
+
+__all__ = [
+    "CacheEntry",
+    "CacheKey",
+    "CacheStats",
+    "SQLiteCache",
+    "sha256_of_dict",
+    "sha256_of_files",
+]
+
+#: Threshold above which ``SQLiteCache.lookup_many`` switches from a tuple-IN
+#: query to a temporary-table JOIN. Below this we keep the SQL string compact
+#: and the parameter list easy to inspect; above it we trade a CREATE/INSERT/
+#: SELECT/DROP round-trip for an INSERT-bound batch that scales linearly.
+_LOOKUP_MANY_IN_THRESHOLD = 100
 
 log = logging.getLogger("osimflow.cache")
 
@@ -82,6 +95,22 @@ class CacheKey:
     code_sha256: str
     container_digest: str
     generation: int = 0
+
+
+@dataclasses.dataclass(frozen=True)
+class CacheEntry:
+    """A successful cache hit: the cached output path plus run metadata.
+
+    Returned by :meth:`SQLiteCache.lookup_many`. ``lookup`` historically returns
+    just ``Path`` — :class:`CacheEntry` is the batch-friendly equivalent that
+    preserves the per-row ``exit_code`` / timing fields from the ``cache_entries``
+    schema for callers that need them (e.g. observability backends, audits).
+    """
+
+    output_path: Path
+    started_at: float
+    finished_at: float
+    exit_code: int
 
 
 def sha256_of_files(paths: Iterable[Path]) -> str:
@@ -194,6 +223,34 @@ def _container_digest_for(label: str) -> str:
     return f"{label}@{_resolve_image_digest(label)}"
 
 
+def _row_to_cache_dict(
+    rows: list[sqlite3.Row],
+) -> dict[CacheKey, tuple[str, float, float, int]]:
+    """Map :class:`sqlite3.Row` rows from a cache SELECT into a dict keyed by :class:`CacheKey`.
+
+    Shared between :meth:`SQLiteCache._lookup_many_in` and
+    :meth:`SQLiteCache._lookup_many_temp_table` so the row-shape mapping lives
+    in one place.
+    """
+    return {
+        CacheKey(
+            step=row["step"],
+            sample_id=row["sample_id"],
+            openstudio_version=row["openstudio_version"],
+            inputs_sha256=row["inputs_sha256"],
+            code_sha256=row["code_sha256"],
+            container_digest=row["container_digest"],
+            generation=row["generation"],
+        ): (
+            row["output_path"],
+            row["started_at"],
+            row["finished_at"],
+            row["exit_code"],
+        )
+        for row in rows
+    }
+
+
 class SQLiteCache:
     """The campaign's resume cache. Append-only on hits, INSERT OR REPLACE on misses.
 
@@ -268,6 +325,16 @@ class SQLiteCache:
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute("PRAGMA busy_timeout=5000")
         c.execute("PRAGMA locking_mode=NORMAL")
+        #   * cache_size=-65536    — 64 MiB negative-paged cache working set
+        #                           for multi-GB caches (issue #1016).
+        #   * mmap_size=268435456 — 256 MiB memory-mapped I/O window so
+        #                           reads beyond the page cache skip the
+        #                           read() syscall path.
+        #   * temp_store=MEMORY   — keep ORDER BY / GROUP BY spill buffers
+        #                           in RAM instead of spilling to disk.
+        c.execute("PRAGMA cache_size=-65536")
+        c.execute("PRAGMA mmap_size=268435456")
+        c.execute("PRAGMA temp_store=MEMORY")
         c.row_factory = sqlite3.Row
         return c
 
@@ -398,6 +465,176 @@ class SQLiteCache:
         self._stats.hits += 1
         log.info("cache HIT  step=%s sample=%s -> %s", key.step, key.sample_id, out)
         return out
+
+    def lookup_many(self, keys: list[CacheKey]) -> dict[CacheKey, CacheEntry | None]:
+        """Batch lookup: return a :class:`CacheEntry` per hit, ``None`` per miss.
+
+        Collapses N round-trips (one ``SELECT`` per :meth:`lookup` call) into a
+        single batched read so the per-step cache-check loop in
+        ``Campaign.step_*`` can resolve hundreds of sample keys with one
+        SQLite query.
+
+        Returns a dict keyed by every **distinct** input :class:`CacheKey` (dict
+        semantics naturally collapse duplicates). Each value is a
+        :class:`CacheEntry` on a hit, ``None`` on a miss — defined as the union
+        of "no row", "row present but ``exit_code != 0``" and "row points at a
+        path that no longer exists on disk". This matches the contract of
+        :meth:`lookup` so callers can swap one for the other without semantic
+        drift. The ``CacheStats`` hit/miss counters are updated exactly once
+        per distinct key, again mirroring per-call :meth:`lookup` semantics.
+
+        Threshold-based SQL strategy:
+
+        * ``len(keys) <= _LOOKUP_MANY_IN_THRESHOLD`` (100): a single
+          ``SELECT ... WHERE (key_cols) IN ((?,?,?,?,?,?,?), ...)`` query.
+          Compact SQL, easy to inspect in traces.
+        * ``len(keys) > _LOOKUP_MANY_IN_THRESHOLD``: ``CREATE TEMP TABLE`` +
+          ``INSERT`` (via ``executemany``) + ``LEFT JOIN ... USING (...)``
+          + ``DROP TABLE``. Issues one ``SELECT`` regardless of N; the
+          ``INSERT`` is the only cost that scales with N and it remains a
+          single ``executemany`` round-trip.
+
+        No new locks beyond the existing ``_lock``.
+        """
+        if not keys:
+            return {}
+
+        # Preserve insertion order while deduping so identical keys in the
+        # input list are not double-counted in hit/miss bookkeeping.
+        seen: set[CacheKey] = set()
+        unique_keys: list[CacheKey] = []
+        for k in keys:
+            if k not in seen:
+                seen.add(k)
+                unique_keys.append(k)
+
+        with self._lock:
+            c = self.connection
+            if len(unique_keys) <= _LOOKUP_MANY_IN_THRESHOLD:
+                raw_hits = self._lookup_many_in(c, unique_keys)
+            else:
+                raw_hits = self._lookup_many_temp_table(c, unique_keys)
+
+        result: dict[CacheKey, CacheEntry | None] = {}
+        for key in unique_keys:
+            row = raw_hits.get(key)
+            if row is None:
+                self._stats.misses += 1
+                result[key] = None
+                continue
+            output_path_str, started_at, finished_at, exit_code = row
+            if exit_code != 0:
+                self._stats.misses += 1
+                result[key] = None
+                continue
+            out = Path(output_path_str)
+            if not out.exists():
+                # Stale cache entry: the output was deleted out from under us.
+                log.warning("cache hit but output missing on disk: %s", out)
+                self._stats.misses += 1
+                result[key] = None
+                continue
+            result[key] = CacheEntry(
+                output_path=out,
+                started_at=started_at,
+                finished_at=finished_at,
+                exit_code=exit_code,
+            )
+            self._stats.hits += 1
+            log.info("cache HIT  step=%s sample=%s -> %s", key.step, key.sample_id, out)
+        # ``keys`` may contain duplicates that dedupe in the dict. Mirror the
+        # requested set: every requested key maps to the same value.
+        return {k: result[k] for k in keys}
+
+    def _lookup_many_in(
+        self,
+        c: sqlite3.Connection,
+        keys: list[CacheKey],
+    ) -> dict[CacheKey, tuple[str, float, float, int]]:
+        """Single-query tuple-IN read. Helper for :meth:`lookup_many` (small N)."""
+        key_cols = (
+            "(step, sample_id, openstudio_version, inputs_sha256, "
+            "code_sha256, container_digest, generation)"
+        )
+        tuple_ph = "(" + ",".join(["?"] * 7) + ")"
+        placeholders = ",".join([tuple_ph] * len(keys))
+        sql = (
+            "SELECT step, sample_id, openstudio_version, inputs_sha256, "
+            "code_sha256, container_digest, generation, "
+            "output_path, started_at, finished_at, exit_code "
+            f"FROM cache_entries WHERE {key_cols} IN ({placeholders})"
+        )
+        params: list[object] = []
+        for k in keys:
+            params.extend(
+                [
+                    k.step,
+                    k.sample_id,
+                    k.openstudio_version,
+                    k.inputs_sha256,
+                    k.code_sha256,
+                    k.container_digest,
+                    k.generation,
+                ]
+            )
+        rows = c.execute(sql, params).fetchall()
+        return _row_to_cache_dict(rows)
+
+    def _lookup_many_temp_table(
+        self,
+        c: sqlite3.Connection,
+        keys: list[CacheKey],
+    ) -> dict[CacheKey, tuple[str, float, float, int]]:
+        """CREATE TEMP TABLE + bulk INSERT + JOIN + DROP. Helper for :meth:`lookup_many` (large N)."""
+        sql_create = (
+            "CREATE TEMP TABLE IF NOT EXISTS _osimflow_lookup_many_keys ("
+            "  step TEXT, sample_id TEXT, openstudio_version TEXT,"
+            "  inputs_sha256 TEXT, code_sha256 TEXT, container_digest TEXT,"
+            "  generation INTEGER, PRIMARY KEY (step, sample_id, "
+            "    openstudio_version, inputs_sha256, code_sha256, "
+            "    container_digest, generation)"
+            ")"
+        )
+        sql_drop = "DROP TABLE _osimflow_lookup_many_keys"
+        sql_insert = (
+            "INSERT OR IGNORE INTO _osimflow_lookup_many_keys "
+            "(step, sample_id, openstudio_version, inputs_sha256, "
+            "code_sha256, container_digest, generation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        sql_select = (
+            "SELECT k.step, k.sample_id, k.openstudio_version, k.inputs_sha256, "
+            "k.code_sha256, k.container_digest, k.generation, "
+            "e.output_path, e.started_at, e.finished_at, e.exit_code "
+            "FROM _osimflow_lookup_many_keys k "
+            "LEFT JOIN cache_entries e USING (step, sample_id, "
+            "  openstudio_version, inputs_sha256, code_sha256, "
+            "  container_digest, generation) "
+            "WHERE e.output_path IS NOT NULL"
+        )
+        c.execute(sql_create)
+        try:
+            c.executemany(
+                sql_insert,
+                [
+                    (
+                        k.step,
+                        k.sample_id,
+                        k.openstudio_version,
+                        k.inputs_sha256,
+                        k.code_sha256,
+                        k.container_digest,
+                        k.generation,
+                    )
+                    for k in keys
+                ],
+            )
+            rows = c.execute(sql_select).fetchall()
+        finally:
+            # Always drop the temp table — even on exception — so a stale
+            # temp table never leaks into a later batch on this connection.
+            c.execute(sql_drop)
+        return _row_to_cache_dict(rows)
 
     def store(self, key: CacheKey, output_path: Path, exit_code: int) -> None:
         with self._lock:
