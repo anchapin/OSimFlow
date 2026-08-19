@@ -31,7 +31,7 @@ import pytest
 
 from osimflow import Campaign, CampaignConfig, SevereEnergyPlusError
 from osimflow.algorithms import LHSAlgorithm
-from osimflow.cache import CacheKey, sha256_of_files
+from osimflow.cache import CacheKey, _container_digest_for, sha256_of_files
 from osimflow.campaign import (
     CONTAINER_OS,
     SampleSpec,
@@ -1283,7 +1283,13 @@ class TestPreflightStep:
             openstudio_version=cfg.openstudio_version,
             inputs_sha256=inputs_hash,
             code_sha256=campaign.code_hashes["bin"],
-            container_digest=CONTAINER_OS.format(version=cfg.openstudio_version),
+            # Issue #1023: pre-populate the row in the same ``<label>@<digest>``
+            # format the Campaign uses now. Bare-label rows become misses
+            # by design (backward-compatible cache schema, invalidation
+            # upgrade).
+            container_digest=_container_digest_for(
+                CONTAINER_OS.format(version=cfg.openstudio_version)
+            ),
         )
         campaign.cache.store(key, marker, exit_code=0)
         campaign.step_preflight_run_model()

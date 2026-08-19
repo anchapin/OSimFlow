@@ -31,7 +31,9 @@ import dataclasses
 import hashlib
 import json
 import logging
+import shutil
 import sqlite3
+import subprocess
 import threading
 import time
 from collections.abc import Iterable
@@ -104,6 +106,92 @@ def sha256_of_dict(d: dict[str, object]) -> str:
     """Stable hash of a JSON-serializable dict (sort_keys=True)."""
     blob = json.dumps(d, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()
+
+
+# Timeout for ``docker inspect``. 5s is long enough for a healthy daemon
+# on a warm cache and short enough to keep campaign init snappy when
+# docker is hung or absent. Issue #1023.
+_DOCKER_INSPECT_TIMEOUT_S: float = 5.0
+
+
+def _resolve_image_digest(
+    tag: str,
+    *,
+    docker_path: str | None = None,
+) -> str:
+    """Resolve the canonical content-addressable digest for an image ``tag``.
+
+    Tries ``docker inspect --format='{{index .RepoDigests 0}}' <tag>`` and
+    returns the resulting reference — typically ``<repo>@sha256:<hex>`` —
+    when a docker daemon is reachable, the image has been pulled, and the
+    call completes within ``_DOCKER_INSPECT_TIMEOUT_S``.
+
+    Falls back to ``sha256:<sha256(tag)>`` when any of the following
+    hold: ``docker`` is not on PATH, the daemon is down, the image has
+    not been pulled (RepoDigests is empty), the call exceeds the
+    timeout, or the call returns non-zero. The fallback is
+    deterministic per tag and content-addressable across machines —
+    the cache key still varies when the label changes, but cannot
+    detect an image rebuild under the same tag (which is the documented
+    trade-off of offline operation).
+
+    Issue #1023: the cache key used to store the mutable tag string
+    (``docker.io/nrel/openstudio:3.11.0``) instead of the digest. Two
+    rebuilds of the same tag produced identical cache keys, so a
+    silently stale simulation could be served from cache. Resolving at
+    config/campaign-init time means every cache lookup agrees on the
+    digest regardless of subsequent republishing.
+    """
+    docker = docker_path or shutil.which("docker")
+    if docker and tag:
+        try:
+            cp = subprocess.run(  # noqa: S603 — argv-controlled, no shell
+                [docker, "inspect", "--format={{index .RepoDigests 0}}", tag],
+                capture_output=True,
+                text=True,
+                timeout=_DOCKER_INSPECT_TIMEOUT_S,
+                check=False,
+            )
+        except (subprocess.SubprocessError, OSError, TimeoutError):
+            cp = None
+        if cp is not None and cp.returncode == 0:
+            ref = (cp.stdout or "").strip()
+            # Sanity check: docker's RepoDigests format is ``<repo>@<digest>``
+            # (the digest may be sha256:... or, for OCI, sha512:...). Empty
+            # output means the image is not pulled locally. We require the
+            # ``@`` separator before accepting the value as a digest.
+            if "@" in ref:
+                return ref
+    # Offline / no-docker / image-not-pulled fallback. The label is hashed
+    # so the cache key still varies per tag and the result is reproducible
+    # across machines that lack docker.
+    return f"sha256:{hashlib.sha256(tag.encode('utf-8')).hexdigest()}"
+
+
+def _container_digest_for(label: str) -> str:
+    """Cache-row ``container_digest`` value for an image ``label``.
+
+    Format: ``<label>@<digest>`` where ``digest`` is either the resolved
+    RepoDigests reference from docker (e.g. ``nrel/openstudio@sha256:<hex>``)
+    or, when resolution fails, ``sha256:<sha256(label)>`` as a deterministic
+    fallback.
+
+    The combined form preserves the human-readable label (so ``run.json``,
+    the campaign registry, and ad-hoc ``sqlite3`` queries can still
+    identify the image at a glance) while embedding the content-
+    addressable digest so cache invalidation works when an image is
+    rebuilt under the same tag.
+
+    Backward-compatibility (issue #1023): an old cache row that stored
+    just the label (``docker.io/nrel/openstudio:3.11.0``) no longer
+    matches the new ``<label>@<digest>`` form and is treated as a cache
+    miss. The DB schema is unchanged — no migration is required.
+    """
+    if not label:
+        # Defensive: empty labels would otherwise produce ``@sha256:<...>``
+        # and risk colliding with a real ``@sha256:e3b0...`` fallback.
+        return "unresolved"
+    return f"{label}@{_resolve_image_digest(label)}"
 
 
 class SQLiteCache:
