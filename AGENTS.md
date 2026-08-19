@@ -1,37 +1,36 @@
 # AGENTS.md
 
-> **Audience:** AI coding assistants (Claude Code, Cursor, GitHub Copilot, Windsurf, Aider, Claude/Cursor/Cline/etc.) operating in this repository. Read this file before proposing or writing code. Human contributors are also welcome to read it — it's the canonical project-orientation document for both audiences.
+> **Audience:** AI coding assistants (Claude Code, Cursor, GitHub Copilot,
+> Windsurf, Aider, Cline, etc.) operating in this repository. Read this
+> file before proposing or writing code. Human contributors are welcome
+> too — it is the canonical project-orientation document.
+>
+> Sister files auto-discovered by other tools: `CLAUDE.md` (Claude Code),
+> `.cursorrules` (Cursor), `.clinerules` (Cline). They are short pointers
+> back to this file; do not duplicate rules into them.
 
 ---
 
 ## 0. Precedence and project-type boundaries
 
-> This section resolves the conflicts between the generic AI agent
-> role prompt and this project's `AGENTS.md` (see issue #29). Read
-> this section before applying any rule from the role prompt.
+### 0.1 Precedence
 
-### 0.1 Precedence rule
+- **Project-specific `AGENTS.md` overrides** the generic agent role prompt
+  for project-scoped decisions: test commands, file paths, project
+  architecture, project conventions, location of project documentation.
+- **The generic role prompt overrides `AGENTS.md`** for cross-project
+  decisions: process (where to write result files), tool family defaults,
+  and security defaults (e.g. "no `.env*` files committed").
 
-**Project-specific `AGENTS.md` overrides the generic role prompt for
-project-scoped decisions**: test commands, file paths, project
-architecture, project-specific conventions, and the location of
-project documentation.
+### 0.2 Project type and architecture
 
-**The generic role prompt overrides `AGENTS.md` for cross-project
-decisions**: process (where to write result files), tool family
-defaults, and security defaults (e.g. "no `.env*` files committed").
-
-When the two sources disagree, this precedence rule wins; when they
-agree, follow the more specific guidance.
-
-### 0.2 Project type
-
-OSimFlow is a **CLI + library** hybrid. The project wraps the
-OpenStudio CLI to run parametric building-energy simulation
-campaigns. It runs locally on a developer machine or on HPC/cloud
-via per-job IAM roles — it is **not** a web service.
-
-### 0.3 Architecture pattern (this project)
+**OSimFlow** is a **CLI + library** hybrid that wraps the **OpenStudio
+CLI** to run large-scale parametric building-energy simulation campaigns.
+Runs locally on a developer machine, on HPC (Slurm / PBS / Nomad /
+Kubernetes / Dask-JobQueue), or on cloud (AWS Batch, Azure Batch,
+Google Batch, Docker Swarm). **It is not a web service.** There are no
+HTTP routes, no ORM models, no authentication layer. Do not apply a
+generic Router → Service → Repository → Models pattern.
 
 The actual layered structure is:
 
@@ -39,372 +38,115 @@ The actual layered structure is:
 Orchestrator → Executor → Work function
 ```
 
-- **Orchestrator** — `osimflow/campaign.py` (the `Campaign` class)
-  drives the 6-step DAG.
-- **Executor** — `osimflow/executors/__init__.py` provides
-  `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
-`AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `PBSExecutor`, and `DockerSwarmExecutor` implementations.
+- **Orchestrator** — `osimflow/campaign.py` (`Campaign` class) drives
+  the DAG.
+- **Executor** — `osimflow/executors/` provides `BaseExecutor` and ten
+  concrete executors: `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
+  `NomadExecutor` (plus `PBSExecutor`, `DaskJobQueueExecutor`,
+  `KubernetesExecutor`, `DockerSwarmExecutor`, `AzureBatchExecutor`,
+  `GoogleBatchExecutor` in their own files). All conform to
+  `submit()` → `Handle` from `osimflow/executors/base.py`.
 - **Work function** — `osimflow/work.py` (per-step logic) and
-  `bin/*.py` (CLI scripts invoked by the work layer) implement the
-  actual step work.
+  `osimflow/_work_scripts/` (CLI scripts invoked by the work layer).
+  The `bin/*.py` files are stable shims over `_work_scripts/` — keep
+  them thin and never reimplement the logic in `bin/`.
 
-**Do not** apply a generic web-service pattern (Router → Service →
-Repository → Models) to this project. There are no HTTP routes, no
-DDD Repositories, and no Models in the ORM sense.
+### 0.3 What this project does NOT have (do not search for these)
 
-### 0.4 What this project does NOT have
-
-Be aware of these absences so you don't waste cycles searching for
-code that doesn't exist:
-
-- **No authentication layer.** There are no user accounts, no
-  passwords, and no JWT/bcrypt code. The role prompt's auth rule
-  (when present) does not apply here.
-- **No SQL injection surface in user-facing code.** OSimFlow uses
+- **No authentication layer** — no user accounts, no passwords, no
+  JWT/bcrypt code. The role prompt's auth rule does not apply here.
+- **No SQL-injection surface in user-facing code** — OSimFlow uses
   SQLite in exactly one place (`osimflow/cache.py:SQLiteCache`) with
-  parameterized queries throughout. Do not add a "scan for SQL
-  injection" task to your workflow unless you are touching that
-  one file.
+  parameterized queries throughout. Skip a "scan for SQL injection"
+  task unless you are touching that one file.
 - **No `.env*` / IAM access keys / bind-mounted secrets** —
-  credentials are sourced from the IAM role on the compute
-  environment (AWS Batch) or from per-job env vars (Slurm /
-  Singularity). See §10.
+  credentials come from the IAM role on the compute environment (AWS
+  Batch) or per-job env vars (Slurm / Singularity). See §10.
+
+### 0.4 The contract checker
+
+`tools/check_agents_contract.py` is a pre-push and CI gate
+(`make contract` / `.github/workflows/ci.yml` `contract` job). It
+verifies that every public symbol in `osimflow/__init__.py`, every
+`bin/*.py`, every executor file under `osimflow/executors/`, every DAG
+step name, and every `--flag` in `osimflow/__main__.py` is mentioned
+in this file. When you add any of those, update this document in the
+same change or `make contract` will fail.
 
 ---
 
 ## 1. Project summary
 
-**OSimFlow** is a community-driven open-source **Python** framework that wraps the **OpenStudio CLI** to run large-scale, reproducible, parametric building-energy simulation campaigns. It targets **OpenStudio users** — energy modelers, researchers, and design-optimization practitioners — who need to launch hundreds to thousands of `openstudio.cli run` invocations across cloud (**AWS Batch**) or on-premise HPC (**Slurm**) without writing bespoke orchestration glue for each campaign.
+Community-driven open-source Python framework for reproducible
+parametric OpenStudio / EnergyPlus simulation campaigns. Targets energy
+modelers, researchers, and design-optimization practitioners who need
+to launch hundreds to thousands of `openstudio.cli run` invocations
+across cloud or HPC without writing bespoke orchestration glue.
 
-The full vision, scope, and technical architecture are defined in [`docs/OSimFlow.md`](docs/OSimFlow.md) (PRD). This file is the AI-assistant counterpart: it tells you the conventions, the gotchas, and the routing logic so you don't have to re-derive them from the PRD every time.
-
-**Foundation decision:** the project uses a custom Python driver — see `.agents/results/decision-verdict.md` and `.agents/results/architecture/0001-workflow-framework.md` for the rationale. The custom driver is built on `submitit` (Slurm), `dask-jobqueue` (alternative HPC), and a thin Boto3-based AWS Batch adapter. Per-sample work is heavy (5 min – 4 h) and embarrassingly parallel.
-
-**Current status:** The orchestration foundation (the `osimflow/` package) and the per-step work layer are implemented. The six PRD §4.2 processes are backed by concrete modules under `osimflow/_work_scripts/`, which the `bin/*.py` entry points delegate to as stable shims. The package is pre-`v0.1.0` (see issue #957); active work is hardening, polish, and broader ecosystem coverage rather than greenfield foundation work. See the *Next steps* section at the bottom of `decision-verdict.md`.
-
-**MVP target:** PRD §5.2 — multi-environment orchestration, OpenStudio version selection, robustness/refinement. Estimated 3–4 weeks of focused work.
+- **Foundation decision:** custom Python driver built on `submitit`
+  (Slurm), `dask-jobqueue` (alternative HPC), and a thin Boto3-based
+  AWS Batch adapter. See `.agents/results/decision-verdict.md` and
+  `.agents/results/architecture/0001-workflow-framework.md`.
+- **Per-sample work** is heavy (5 min – 4 h) and embarrassingly
+  parallel; the Campaign fans out to the configured executor and
+  caches every step.
+- **Status:** v0.1.0 released 2026-06-24. The orchestration foundation
+  and per-step work layer are in; active work is hardening, polish,
+  and broader ecosystem coverage.
+- **PRD / vision:** [`docs/OSimFlow.md`](docs/OSimFlow.md). Cite by
+  section number (e.g. "PRD §4.2").
 
 ---
 
 ## 2. Stack at a glance
 
-| Layer | Technology | Notes |
-|---|---|---|
-| Workflow orchestration | **Custom Python driver** (`osimflow/`) | ~300 LoC `Campaign` class; subcommand CLI `osimflow run`. |
-| Executor abstraction | `BaseExecutor` with `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, `DaskJobQueueExecutor`, `KubernetesExecutor`, `NomadExecutor`, `DockerSwarmExecutor`, `PBSExecutor` | All conform to the same `submit()` → `Handle` interface. |
-| Slurm backend | **`submitit.AutoExecutor`** | Drop-in `submitit.DebugExecutor` for local dev; real Slurm via `debug=False`. |
-| AWS Batch backend | **`boto3`** | Full implementation: spot interruption detection, exponential backoff, on-demand fallback, IAM role auth. |
-| Containerization | **Docker** (local/cloud) and **Singularity** (HPC) | Two images: `nrel/openstudio:<version>` (consumed from Docker Hub — see [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md)) and `scientific_python_image` (project-owned). |
-| Simulation engine | **OpenStudio CLI** + **OpenStudio Python bindings** | Invoked as `openstudio.cli run -w workflow.osw` inside the dynamic container. |
-| Statistical sampling | **`scipy.stats`** | Latin Hypercube Sampling (LHS) of design variables. |
-| Data processing | **Python 3.12+**, **`pandas`**, **`pyarrow`** (Parquet) | KPI extraction, aggregation, error parsing. |
-| Plotting | **`matplotlib`** + **`seaborn`** | 1–3 static summary plots (PNG/PDF). |
-| Container registry | **Docker Hub** (OpenStudio) + **`ghcr.io`** (scientific Python) | `docker.io/nrel/openstudio:<version>`, `ghcr.io/anchapin/scientific_python_image:latest`. |
-| Monitoring | **BYO: per-campaign `run.json` + tqdm** + pluggable observability backends | See `.agents/results/monitoring-decision.md` and [`docs/observability.md`](docs/observability.md). Optional MLflow add-on via `--mlflow_tracking_uri` (see `osimflow/mlflow_hook.py`). Observability backends (CloudWatch, Prometheus, OpenTelemetry) via `--observability` flag (issue #145, #127). |
-| CI/CD | **GitHub Actions** | Terraform validate in CI for `infra/` changes (issue #148). |
-
----
-
-## 3. Directory map
-
-| Path | Purpose |
+| Layer | Technology |
 |---|---|
- | `osimflow/__init__.py` | Public API: `Campaign`, `CampaignError`, `SQLiteCache`, `DistributedCache`, `build_cache`, `campaign_state_namespace`, `DistributedJobQueue`, `build_job_queue`, `CampaignConfig`, `coerce_variable_type`, `CampaignRegistry`, `CampaignRecord`, `SevereEnergyPlusError`, `CacheStats`, `QuotaExceededError`, `ResourceQuota`, `DiscoveredMeasure`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError`, `CrossRunAggregator`, executors, the algorithm plug-in framework (`BaseAlgorithm`, `LHSAlgorithm`, `AlgorithmRegistry`, `DOEAnalysis`), the result storage backend (`ResultStorage`, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `S3ArtifactStorage`, `ResultStorageUploader`, `build_result_storage`), the document store backend (`DocumentStore`, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`), plus the weather helpers (`discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`), the alerting helpers (`AlertManager`, `build_alert_manager`), the notification backends (`NotifyBackend`, `EmailNotifyBackend`, `NullNotifyBackend`, `SNSNotifyBackend`, `WebhookNotifyBackend`, `build_notify_backend`), the chaos engineering helpers (`ChaosEngine`, `ChaosResult`, `ChaosScenario`, `FaultInjector`, `FaultType`, `CPUSpikeInjector`, `MemoryPressureInjector`, `NetworkDelayInjector`, `KillSwitchInjector`, `run_chaos_scenario` for issue #652), the cost tracking helpers (`CostEstimate`, `CostTracker`, `CampaignCostSummary`), the data point lifecycle helpers (`DataPoint`, `DataPointManager`, `DataPointStatus` for issues #418/#419/#420), the version detection helpers (`VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`), and logging setup (`get_logger`, `setup_logging`). |
-| `osimflow/campaign.py` | The orchestrator class. ~300 LoC. Owns the 6-step DAG. |
-| `osimflow/cache.py` | `SQLiteCache` + `CacheKey` + `CacheStats` — explicit, testable resume semantics and hit rate statistics (issue #426). |
-| `osimflow/data_point_manager.py` | `DataPoint` + `DataPointManager` + `DataPointStatus` — JSON-persisted data point lifecycle manager for reanalysis, merging, and priority ordering (issues #418, #419, #420). |
-| `osimflow/document_store.py` | `DocumentStore` ABC + `SQLiteDocumentStore` — MongoDB-equivalent document store using SQLite JSON1; provides `insert_one`, `find_one`, `find_many`, `update_one`, `delete_one`, `create_index`, and `aggregate` for campaign data persistence (issue #389). |
-| `osimflow/distributed_cache.py` | `DistributedCache` + `build_cache` + `campaign_state_namespace` — Redis-backed shared campaign state for multi-node campaigns: a shared entry store (Redis hash under an outdir-derived namespace) plus pub/sub invalidation broadcast (issue #330); since issue #993 (T8.2) `Campaign` builds its cache via `build_cache`, keeping plain `SQLiteCache` for single-node local mode while distributed mode uses pid-private local SQLite files so concurrent processes never lock one database. |
-| `osimflow/distributed_jobqueue.py` | `DistributedJobQueue` + `build_job_queue` — Redis pub/sub wrapper for cross-node job queue coordination in multi-node campaigns (issue #393). |
-| `osimflow/config.py` | `CampaignConfig` dataclass + `load_config()` + `coerce_variable_type` + `ResourceQuota` (issue #409 type auto-coercion). |
- | `osimflow/storage.py` | `ResultStorage` ABC, `LocalStorage` (no-op), `S3Storage` (boto3), `GCSStorage` (google-cloud-storage), `AzureBlobStorage` (azure-storage-blob async), `S3ArtifactStorage` (boto3, artifact storage client), `ResultStorageUploader` (sync wrapper), and `build_result_storage` factory (issue #339). |
-| `osimflow/monitoring.py` | `RunTrace` + `StepTrace` + `SampleTrace`; writes `run.json`. |
-| `osimflow/logging.py` | Structured JSON logging with `JSONFormatter` + `RotatingFileHandler` (issue #258). Exports `get_logger`, `setup_logging`, and `LogAggregator`. |
-| `osimflow/observability.py` | `ObservabilityBackend` ABC + `NullBackend` + `CloudWatchBackend` + `PrometheusBackend` + `OpenTelemetryBackend` + `new_trace_id` (per-sample trace-ID helper); plug-in metrics backends (issue #145, #127). |
-| `osimflow/_campaign_observability.py` | `ObservabilityManager` — wraps `ObservabilityBackend` lifecycle and all `_obs.record_*` calls from `Campaign`; provides `record_step_duration`, `record_sample_cost`, `record_sample_status`, `record_campaign_duration`, `flush`, and `mint_trace_id` methods. |
-| `osimflow/pareto.py` | `ParetoFront` + `ParetoSolution` — non-dominated solution tracking for multi-objective algorithms (issue #141). Persists per-generation JSON to `outdir/pareto/gen_N.json`. |
-| `osimflow/registry.py` | `CampaignRegistry` + `CampaignRecord` — SQLite-backed campaign registry for multi-campaign management (issue #266). Supports `osimflow list`, `osimflow show`, `osimflow compare`, `osimflow backup`, and `osimflow restore` subcommands. Registry backup/export/import methods: `export_registry()`, `import_registry()`, `backup()` (issue #440). |
- | `osimflow/weather.py` | `.epw` file discovery, download, and header validation (issue #63): `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, `detect_climate_zone_from_stat`, plus `EPWValidationError` / `EPWDownloadError` (issue #424). |
-| `osimflow/health.py` | CLI health check module (issue #411): `CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`, `run_health_checks`, `format_results`, `to_json`, `get_exit_code`. Powers the `osimflow health` subcommand — verifies Python version, core packages, SQLite, write permissions, disk space, external tools (OpenStudio/Docker/Podman), optional packages, and network connectivity. |
-| `osimflow/api/__init__.py` | REST API public surface: `create_app`. Optional `[api]` extra (issue #138). |
-| `osimflow/api/app.py` | FastAPI application factory with `/health`, `/ready`, `/api/v1/campaign`, `/api/v1/steps` endpoints (issue #138, G23a). |
-| `osimflow/api/events.py` | SSE live events and campaign stop endpoints (issue #143): `GET /api/v1/events` (Server-Sent Events stream watching `run.json`), `POST /api/v1/campaign/stop` (writes `.stop` flag to halt a running campaign). |
-| `osimflow/mlflow_hook.py` | Optional MLflow integration (issue #7). Lazy-imports `mlflow`; the Campaign calls these helpers when `--mlflow_tracking_uri` is set. |
- | `osimflow/alerting.py` | `AlertManager` + `build_alert_manager` — Alert routing for campaign events (Slack, PagerDuty, email). |
- | `osimflow/notify.py` | `NotifyBackend` ABC + `EmailNotifyBackend` + `NullNotifyBackend` + `SNSNotifyBackend` + `WebhookNotifyBackend` + `build_notify_backend` — Pluggable notification backend for campaign events (issue #652). |
- | `osimflow/chaos.py` | `ChaosEngine` + `ChaosResult` + `ChaosScenario` + `FaultInjector` ABC + `CPUSpikeInjector` + `MemoryPressureInjector` + `NetworkDelayInjector` + `KillSwitchInjector` + `run_chaos_scenario` — Chaos engineering for resilience testing (issue #652). |
- | `osimflow/cost_tracking.py` | `CostEstimate` + `CostTracker` + `CampaignCostSummary` — Cloud/HPC resource cost estimation and tracking (issue #447). |
-| `osimflow/version_detection.py` | `VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility` — OpenStudio version detection and container tag resolution. |
-| `osimflow/algorithms/__init__.py` | Algorithm plug-in framework (issue #121): `BaseAlgorithm` ABC, `AlgorithmRegistry` singleton, built-in `LHSAlgorithm`, plus shared helpers (`_sample_with_engine`, `_apply_distribution`). Subclass and register to add new sampling strategies. `AlgorithmRegistry.discover_plugins()` auto-discovers third-party algorithms via `entry_points` group `osimflow.algorithms` (issue #432). |
-| `osimflow/algorithms/sobol.py` | `SobolAlgorithm` — Sobol quasi-random sequence sampler using `scipy.stats.qmc.Sobol` (issue #139). |
-| `osimflow/algorithms/halton.py` | `HaltonAlgorithm` — Halton quasi-random sequence sampler using `scipy.stats.qmc.Halton` (issue #139). |
-| `osimflow/algorithms/de.py` | `DifferentialEvolutionAlgorithm` — Differential evolution optimizer using `scipy.optimize.differential_evolution` (issue #125). Iterative. |
-| `osimflow/algorithms/da.py` | `DualAnnealingAlgorithm` — Dual annealing optimizer using `scipy.optimize.dual_annealing` (issue #125). Iterative. |
-| `osimflow/algorithms/ga.py` | `GeneticAlgorithm` — canonical Genetic Algorithm using DEAP with tournament selection, SBX crossover, and polynomial mutation (issue #345). Iterative. Optional `[ga]` extra. |
-| `osimflow/algorithms/nsga2.py` | `NSGA2Algorithm` — NSGA-II multi-objective optimizer using `pymoo` (issue #140). Iterative. Optional `[optimization]` extra. |
-| `osimflow/algorithms/pso.py` | `PSOAlgorithm` — Particle Swarm Optimization using a custom velocity-update loop (issue #140). Iterative. Optional `[optimization]` extra. |
-| `osimflow/algorithms/morris.py` | `MorrisAlgorithm` — Morris method sensitivity analysis sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
-| `osimflow/algorithms/fast99.py` | `FAST99Algorithm` — Fourier Amplitude Sensitivity Test (FAST99) sampler using SALib (issue #136). Optional `[sensitivity]` extra. |
-| `osimflow/algorithms/doe_analysis.py` | `DOEAnalysis` — Design of Experiments analysis: main effects, interaction effects, factor sensitivity/Pareto ranking, and ANOVA-based variance decomposition (issue #405). |
-| `osimflow/algorithms/custom.py` | `CustomDOEAlgorithm` — custom sample pattern loader from CSV or Python callable (issue #406). |
-| `osimflow/algorithms/rgenoud.py` | `RgenoudAlgorithm` — hybrid genetic algorithm with BFGS local search (issue #545). |
-| `osimflow/algorithms/spea2.py` | `SPEA2Algorithm` — Strength Pareto Evolutionary Algorithm II using `pymoo` (issue #271). Iterative. |
-| `osimflow/algorithms/uq.py` | UQ algorithm — Monte Carlo propagation, probability of failure, and confidence interval analysis (issue #530). |
-| `osimflow/algorithms/gaisl.py` | Island-model parallel Genetic Algorithm (GAISL) with migration (issue #549). Iterative. |
-| `osimflow/algorithms/factorial.py` | `FullFactorialAlgorithm` and `GridSamplingAlgorithm` — full factorial and grid DOE (issue #272). |
-| `osimflow/algorithms/random_sampling.py` | `RandomSamplingAlgorithm` — pure Monte Carlo random sampling (issue #285). |
-| `osimflow/algorithms/sequential_search.py` | `SequentialSearchAlgorithm` — deterministic parameter sweep with optional adaptive sampling (issue #550). |
-| `osimflow/algorithms/calibration.py` | `CalibrationAlgorithm` — BM25-based energy model calibration using utility bill data (issue #528). Iterative. |
-| `osimflow/algorithms/qdiscrete.py` | `qdiscrete` — inverse-CDF (quantile) sampling for discrete distributions; Python equivalent of R's `DoE.base::qdiscrete()`. |
-| `osimflow/algorithms/repeat_all.py` | `RepeatAllAlgorithm` — repeats the same sample set N times for stochastic analysis (issue #285). |
-| `osimflow/algorithms/diag.py` | `DiagAlgorithm` — one-at-a-time (OAT) diagnostic analysis, equivalent to openstudio-server's `diag.rb` (issue #581). |
-| `osimflow/executors/__init__.py` | `BaseExecutor` + `LocalExecutor` + `SlurmExecutor` + `AWSBatchExecutor` + `AzureBatchExecutor` + `GoogleBatchExecutor` + `DaskJobQueueExecutor` + `KubernetesExecutor` + `NomadExecutor` + `PBSExecutor` + `DockerSwarmExecutor`. Also includes `ExecutorRegistry` singleton with `discover_plugins()` for third-party executor auto-discovery via `entry_points` group `osimflow.executors` (issue #432). |
-| `osimflow/executors/docker_swarm_executor.py` | `DockerSwarmExecutor` — Docker Swarm executor using the official Docker SDK (issue #582). |
-| `osimflow/executors/dask_jobqueue_executor.py` | `DaskJobQueueExecutor` — elastic HPC executor using `dask-jobqueue` with auto-scaling across Slurm/PBS/Kubernetes backends (issue #338). |
-| `osimflow/executors/base.py` | `BaseExecutor` — abstract base for all executors; defines the `submit()` → `Handle` interface and shared resource-directive handling. |
-| `osimflow/executors/azure_batch_executor.py` | `AzureBatchExecutor` — Azure Batch executor using the Azure SDK. |
-| `osimflow/executors/google_batch_executor.py` | `GoogleBatchExecutor` — Google Cloud Batch executor using the Google Cloud SDK. |
-| `osimflow/executors/kubernetes_executor.py` | `KubernetesExecutor` — Kubernetes executor using the Kubernetes Python client; maps resource directives to K8s requests/limits (issues #254, #377). Each Job runs the ephemeral runner (`python -m osimflow.remote_runner` or a `remote_command` override) with the serialized step call in the `OSIMFLOW_TASK_PAYLOAD` env var and the result-transport contract in the `OSIMFLOW_RESULT_*` env vars — the same contract as `NomadExecutor`; the handle materializes object-storage results via `materialize_object_storage_result` so Campaign callbacks get local paths (issue #996). |
-| `osimflow/executors/pbs_executor.py` | `PBSExecutor` — PBS/Torque executor using submitit (issue #351). |
-| `osimflow/executors/transport.py` | Shared transport/result helpers for remote executors; defines executor-agnostic result reference contract for remote handles. |
-| `osimflow/measures.py` | `MeasureRegistry`, `Measure`, `MeasureArgument`, `MeasureRegistryError`, `UnmappedVariableError`, `AmbiguousVariableError` — measure discovery, argument introspection, and variable validation for parametric campaigns (issue #532). |
-| `osimflow/jobqueue.py` | `JobQueue` — filesystem-based job queue for crash recovery (issue #263). Manages job lifecycle (pending → in_progress → completed/failed) with atomic JSON file moves. |
-| `osimflow/handoff_record.py` | Local handoff record for Coordinator-backed (`--detach`) campaigns (issue #630, Epic #624): `HandoffRecord`, `NoHandoffRecordError`, `IDEMPOTENCY_KEY_HEADER`, `HANDOFF_RECORD_NAME`, `read_handoff_record`, `write_handoff_record`, `handoff_record_exists`. Persists `{campaign_id, coordinator_url, submitted_at, status_url}` to `outdir/.coordinator_handoff.json` so `osimflow status` / `osimflow download` can reconnect to a remote campaign from a fresh shell. |
-| `osimflow/taskqueue.py` | Distributed task queue abstraction (issue #335): `TaskQueue` ABC, `DaskTaskQueue` (Dask-based), `NoOpTaskQueue` (passthrough), `TaskHandle`, `TaskQueueStatus`, and `build_task_queue` factory. |
-| `osimflow/remote_runner.py` | Stdlib-oriented ephemeral runner worker (`python -m osimflow.remote_runner`) executed inside Nomad/Kubernetes Job containers: decodes `OSIMFLOW_TASK_PAYLOAD`, runs the step work function in container-local storage, and pushes result artifacts to object storage when `OSIMFLOW_RESULT_TRANSPORT_MODE=object_storage` (issues #618, #996). |
-| `osimflow/_work_scripts/` | Standalone work scripts: `generate_lhs.py`, `apply_params_to_model.py`, `extract_kpis.py`, `aggregate_results.py`, `generate_plots.py`, `excel_to_variables.py`. These are the CLI wrappers invoked by the Campaign's work layer. |
-| `osimflow/importers/__init__.py` | OSA import support: `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`. |
-| `osimflow/importers/osa.py` | OSA analysis.json parser and variables.yml converter (issue #104). Reverse of `exporters/osa.py`. |
-| `osimflow/exporters/__init__.py` | Export campaign state to various formats. |
-| `osimflow/exporters/osa.py` | `OSAExporter` — export campaign config to PAT-compatible analysis.json (issue #142) and ``.osa`` ZIP archives (issue #134). ``pack_osa()`` bundles analysis.json + seed model + measures + weather into a portable ``.osa`` file. Reverse of `importers/osa.py`. |
-| `osimflow/work.py` | Per-step work functions: `default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`. The BYOS contract lives here. |
-| `osimflow/client.py` | Typed async Python client for the REST API (issue #433): `OSimFlowClient` (httpx-based), Pydantic response models (`HealthResponse`, `CampaignResponse`, `StepsResponse`, `SamplesResponse`, etc.), and typed exception hierarchy (`AuthenticationError`, `NotFoundError`, `RateLimitError`, `ServerError`). Optional `[api]` extra (httpx). |
-| `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
-| `scripts/generate_openapi.py` | Export the OpenAPI spec from the FastAPI app to `docs/openapi.json` (issue #433). Run: `python scripts/generate_openapi.py --output docs/openapi.json`. |
-| `scripts/fetch_example_fixture.py` | Download a real OpenStudio `.osm` model + `.epw` weather file into `example_package/` for real-OpenStudio E2E tests (issue #938). Stdlib `urllib` with retry/backoff; idempotent (`--force` to refetch); preserves the JSON stub as `model.osm.placeholder`. The fetched `.osm`/`.epw` are gitignored (AGENTS.md §10). |
-| `scripts/apply_branch_protection.sh` | Idempotent settings-as-code applier for the GitHub branch protection rules on `main` (issue #975). Calls `gh api --method PUT /repos/anchapin/OSimFlow/branches/main/protection` with the five required status checks (`lint (ruff)`, `typecheck (mypy --strict)`, `test (pytest, 85% coverage gate)`, `agents & docs contract`, `security (pip-audit)`) plus linear-history enforcement; `--dry-run` prints the payload without making the API call. Run by the orchestrator post-merge; not executed in this PR. See `docs/branch-protection.md`. |
-| `docs/openapi.json` | Auto-generated OpenAPI 3.1 spec for the OSimFlow REST API (issue #433). Regenerate after adding/modifying API endpoints. Consumable by code generators (openapi-generator, etc.). |
-| `bin/generate_lhs.py` | LHS sampler (scipy.stats) — stable shim over `osimflow/_work_scripts/`. |
-| `bin/apply_params_to_model.py` | Default parameter-application logic — stable shim over `osimflow/_work_scripts/`. |
-| `bin/extract_kpis.py` | Default KPI extractor — stable shim over `osimflow/_work_scripts/`. |
-| `bin/aggregate_results.py` | Result aggregation + error-summary extraction — stable shim over `osimflow/_work_scripts/`. |
-| `bin/generate_plots.py` | Matplotlib/seaborn plot generator — stable shim over `osimflow/_work_scripts/`. |
-| `bin/excel_to_variables.py` | PAT/Analysis Gem Excel spreadsheet to ``variables.yml`` converter. Reads a PAT-style ``.xlsx`` and produces a OSimFlow ``variables.yml`` with support for uniform, normal, lognormal, triangular, discrete, categorical, and static distributions. |
-| `osimflow/tui.py` | Optional `rich`-based terminal UI for live campaign tracking (issue #197). Auto-detected when `rich` is installed and stdout is a TTY. Optional `[tui]` extra. |
-| `tests/integration/test_cache_invalidation.py` | Cache invalidation test suite (8 cases). |
-| `tests/integration/test_real_example_fixture.py` | Skip-gated tests for the real OpenStudio example fixture (issue #938). Skipped unless `scripts/fetch_example_fixture.py` has materialized a real `.osm` + `.epw` (gitignored); reports `s` in CI. |
-| `tests/integration/test_observability_real_sinks.py` | Real metric-sink validation for the CloudWatch, Prometheus, and OpenTelemetry backends; module + per-backend skip-gated behind `OSIMFLOW_OBSERVABILITY_REAL=1` (issue #947). |
-| `tests/integration/test_real_openstudio_campaign.py` | Full-Campaign real-`openstudio.cli` E2E exercising all 7 DAG steps (issue #939). Skip-gated on `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` + `openstudio.cli`/`openstudio` on PATH; driven nightly by `openstudio-cli-e2e.yml` which installs the CLI + fetches the real fixture. Inert (reports `s`) in normal CI. |
-| `tests/integration/test_aws_batch_cache_resume.py` | Real-AWS-Batch cache-warm/resume E2E (issue #960). Runs a bounded 2-sample campaign with the S3 result backend, then re-runs against the same `outdir`; asserts the warm run is fully cache-served (cache stats unchanged, 0 Batch submits) and >=5x faster. Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_RESULT_BUCKET` (inert in normal CI). |
-| `tests/integration/test_aws_batch_real_openstudio.py` | Real-`openstudio.cli`-in-`nrel/openstudio`-container AWS Batch E2E (issue #942). Unlike `test_aws_batch_real.py` (stub-in-container), the Batch job definition's container image is `nrel/openstudio:<version>` (real CLI). Asserts a real `eplusout.sql` (SQLite with EnergyPlus tables). Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_REAL_OPENSTUDIO=1`; driven by the `aws-batch-real-openstudio-e2e` nightly job. Inert (reports `s`) in normal CI. |
-| `tests/integration/test_slurm_real_cluster.py` | Real-Slurm-cluster E2E (issue #941). Constructs `SlurmExecutor(debug=False)` and runs a 3-sample campaign on a real cluster; asserts submitit's `AutoExecutor.cluster == "slurm"` (structural real-vs-debug proof) plus the 4-artifact contract + `run.json`. Skip-gated behind `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH; dispatched by `slurm-e2e.yml` on a self-hosted runner tagged `[self-hosted, slurm]`. Inert (reports `s`) in normal CI. |
-| `tests/integration/test_kubernetes_executor_real.py` | Real-Kubernetes-cluster E2E (issues #940, #996). Constructs `KubernetesExecutor` and runs a 3-sample campaign against a live/`kind` cluster; asserts the 4-artifact contract + `run.json` (`executor == "kubernetes"`) and that every submitted Job runs `python -m osimflow.remote_runner` with `OSIMFLOW_TASK_PAYLOAD` set; dedicated remote-command tests prove command-override, env propagation, and exit-code surfacing on any cluster (public `python:3.12-slim` image). Skip-gated behind `OSIMFLOW_KUBERNETES_E2E=1` + a reachable kubeconfig (`KUBECONFIG` or `~/.kube/config`); dispatched by `kubernetes-e2e.yml`. Inert (reports `s`) in normal CI. |
-| `tests/integration/test_mlflow_real_tracking.py` | Real-MLflow file-tracking-URI smoke test (issue #948). Exercises `osimflow/mlflow_hook` against the *real* `mlflow` package (not the `sys.modules` fake the unit tests use) via a hermetic `file://` store + stub sim. Skip-gated behind `OSIMFLOW_MLFLOW_E2E=1` + the `[mlflow]` extra; the ci.yml `mlflow-real` job exercises it. |
-| `tests/benchmarks/bench_campaign.py` | Performance benchmark script (issue #10). Runs cold + warm 3-sample campaign, writes `benchmarks.json`. |
-| `tests/benchmarks/test_bench_regression.py` | Pytest assertions for the bench artifact shape + threshold gate. |
-| `user_scripts/` | User-provided "Bring Your Own Script" (BYOS) overrides. See `user_scripts/README.md`. |
-| `docs/OSimFlow.md` | The PRD — the source of truth for scope and architecture. |
-| `docs/benchmarks.md` | How to interpret the `benchmarks.json` artifact (issue #10). |
-| `docs/CONTRIBUTING.md` | Contributor onboarding, governance entry point, and PR-review checklist. |
-| `docs/GOVERNANCE.md` | Project governance: decision-making, maintainer roles, and community participation. |
-| `.agents/results/` | Architecture decision records (ADRs) and the framework-decision verdict. |
-| `osimflow-deploy/` | Cloud deployment recipes sub-monorepo (issue #164). Contains platform-specific README guides (AWS, Nomad, Docker), an independent CHANGELOG (`osimflow-deploy-v` tag prefix), and a CODEOWNERS file for IaC review. Links back to the actual IaC in `infra/`. Does **not** duplicate or move `infra/` files. |
-| `infra/aws/terraform/` | Terraform module for AWS Batch infrastructure (issue #148): VPC, S3 bucket, IAM roles, Batch compute environment, job queue, and job definition using `nrel/openstudio` container image. CI runs `terraform validate` on `infra/` changes. |
-| `infra/aws/terraform/iam.tf` | Least-privilege IAM roles (issue #130): ECS instance profile, task role (S3 + CWL), task-execution role (ECR pull), Batch service role. |
-| `infra/aws/terraform/job-definition.tf` | Batch job definition (issue #130): parameterised vCPU, memory, timeout, execution role. |
-| `infra/aws/terraform/examples/basic/` | Minimal on-demand example config (documentation only). |
-| `infra/aws/terraform/examples/spot/` | Spot instance example config with cost tags (documentation only). |
-| `infra/aws/scripts/sync-openstudio-to-ecr.sh` | ECR mirror script (issue #129): pulls `nrel/openstudio` from Docker Hub with exponential-backoff retry, pushes to ECR in one or more regions. Avoids Docker Hub rate limits for production Batch jobs. |
-| `infra/aws/terraform/ecr.tf` | ECR repository + lifecycle policy for mirrored OpenStudio images (issue #129). Keeps last 5 tagged `3.*` images. |
-| `docs/container-image-strategy.md` | Container image strategy: why we mirror to ECR, how to use the sync script, lifecycle policy, multi-region replication, and cost considerations (issue #129). |
-| `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
-| `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
-| `docs/observability.md` | Pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry): configuration, usage, and extension guide (issue #145, #127). |
-| `docs/branch-protection.md` | Settings-as-code for the `main` branch protection rules — what's enabled (5 required status checks, linear history, no reviews/no force-pushes/no deletions), what's intentionally NOT enabled, how to verify / extend / roll back. Applied post-merge via `scripts/apply_branch_protection.sh`. Issue #975. |
-| `infra/nomad/examples/ha/` | Native host-OS HA cluster recipe for Nomad (3-server Raft quorum on bare metal/VMs) with ACL bootstrap (issues #123, #619). Nested containerization (`hind` / Docker-in-Docker) is deprecated and removed. |
-| `infra/nomad/examples/ha/server.hcl` | Shared native server config template; per-node identity via `-node`/`-bind` flags, `bootstrap_expect=3`, `retry_join`, mTLS template. |
-| `infra/nomad/examples/ha/client.hcl` | Native client config: unprivileged Docker task driver (`allow_privileged=false`), ACL, mTLS template. |
-| `infra/nomad/examples/ha/bootstrap.sh` | ACL bootstrap script (cluster-agnostic): generates management + worker tokens, registers policies. |
-| `infra/nomad/examples/ha/README.md` | Native bring-up procedure, systemd unit, and migration path from the removed `hind` (Docker Compose) setup (issue #619). |
-| `infra/nomad/acl/policies/agent.hcl` | Read-only agent/node ACL policy for operators. |
-| `infra/nomad/acl/policies/worker.hcl` | Least-privilege job submission ACL policy for the NomadExecutor. |
-| `infra/nomad/acl/tokens/` | Generated ACL tokens (git-ignored). Never commit. |
-| `docs/nomad-production.md` | Nomad production deployment guide: HA topology, ACL model, security checklist, TLS notes (issue #123). |
-| `.gitignore` | Standard Python ignores + `.osm/.osw/.idf/.epw/eplusout.*` (never commit) + Nomad token secrets. |
-| `LICENSE` | MIT. |
-| `README.md` | One-paragraph project pitch + status. |
+| Orchestration | Custom Python driver (`osimflow/`) — `osimflow run` CLI |
+| Executor abstraction | `BaseExecutor` (10 implementations, see §0.2) |
+| Slurm backend | `submitit.AutoExecutor` (real) / `DebugExecutor` (dev) |
+| AWS Batch | `boto3`, IAM role auth, spot + on-demand |
+| Containers | Docker (local/cloud) and Singularity (HPC); consumes `nrel/openstudio:<version>` from Docker Hub (the project does not build this image — see ADR-0002) |
+| Simulation | `openstudio.cli run -w workflow.osw` inside the dynamic container |
+| Sampling | `scipy.stats` — LHS plus many plug-in algorithms |
+| Data | Python 3.12+, `pandas`, `pyarrow` (Parquet), `matplotlib`, `seaborn` |
+| Cache | `SQLiteCache` (single-node) or `DistributedCache` (Redis-backed, `--redis-url`) |
+| Monitoring | Per-campaign `run.json` + pluggable observability (`--observability cloudwatch\|prometheus\|opentelemetry`) |
+| CI | GitHub Actions, parallel jobs (lint / typecheck / test / contract / security + per-substrate E2E) |
 
 ---
 
-## 4. Build & run commands
+## 3. Build & run commands
 
-> All commands assume CWD = repo root. The orchestration foundation runs end-to-end against the implemented `osimflow/_work_scripts/` modules (the `bin/*.py` entry points are stable shims over them); no real OpenStudio CLI is needed for the smoke test because the work layer falls back to stub simulation mode when `openstudio.cli` is absent. See `tests/integration/test_cache_invalidation.py` for the cache-correctness gate.
-
-### DAG step names (referenced from `osimflow/campaign.py`)
-
-The 7-step DAG that the `Campaign` class drives:
-
-- `GENERATE_LHS_SAMPLES` — single-shot, no fan-out.
-- `PREFLIGHT_RUN_MODEL` — single-shot, validates seed model before cloud spend (issue #107).
-- `APPLY_PARAMETERS` — fan-out over N samples.
-- `RUN_OPENSTUDIO_SIM` — fan-out over N samples (heavy).
-- `EXTRACT_KPIS` — fan-out over N samples.
-- `AGGREGATE_RESULTS` — one shot after all KPIs.
-- `GENERATE_BASIC_PLOTS` — one shot after aggregation.
-
-### CLI flags (referenced from `osimflow/__main__.py`)
-
-- `--executor` (local / slurm / aws_batch / azure_batch / google_batch / dask_jobqueue / nomad / docker_swarm)
-- `--preset` (named preset of recommended flags; reduces 50+ CLI surface for common use cases. Individual flags override preset values. Issue #384)
-- `--max-workers` (local executor parallelism)
-- `--slurm-partition`, `--slurm-account`, `--slurm-real`
-- `--slurm-qos`, `--slurm-constraint`, `--slurm-gres` (advanced; submitit >= 1.5 only)
-- `--slurm-cost-per-node-hour` (Slurm cost in USD per node-hour for cost tracking; issue #447)
-- `--aws-batch-queue`, `--aws-batch-job-definition`
-- `--aws-batch-max-spot-price-usd` (Spot price ceiling in USD/vCPU-hour. Issue #131)
-- `--aws-batch-fallback-to-on-demand` (fall back to on-demand when Spot exceeds ceiling or retries exhausted. Issue #131)
-- `--aws-batch-max-retries` (max Spot interruption retries; default 3. Issue #131)
-- `--aws-batch-spot-price` (AWS Batch Spot price in USD per vCPU-hour for cost tracking; issue #447)
-- `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
-- `--aws-batch-instance-type` (AWS EC2 instance type used for the Spot price ceiling check; issue #792)
-- `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-pool-id`, `--azure-batch-location` (Azure Batch executor configuration)
-- `--azure-use-spot`, `--azure-fallback-to-on-demand`, `--azure-max-retries` (Azure spot/preemptible instance handling; issue #352)
-- `--google-batch-project-id`, `--google-batch-region`, `--google-batch-service-account` (Google Cloud Batch executor configuration)
-- `--google-use-spot`, `--google-fallback-to-on-demand`, `--google-max-retries` (Google preemptible VM handling; issue #352)
-- `--pbs-queue`, `--pbs-real`, `--pbs-server` (PBS/Torque executor configuration; issue #351)
-- `--dask-cluster-type`, `--dask-min-workers`, `--dask-max-workers`, `--dask-cpus-per-worker`, `--dask-memory-per-worker`, `--dask-walltime`, `--dask-queue`, `--dask-project` (Dask-JobQueue elastic HPC executor configuration; issue #338)
-- `--task-queue` (distributed task queue backend: `none` (default) or `dask`; issue #335)
-- `--redis-url` (Redis URL for distributed campaign state — shared cache entries coordinated via Redis with pid-private local SQLite files; default `None` keeps the single-node SQLite cache. Issue #993, T8.2)
-- `--dask-scheduler-address` (Dask scheduler address for task queue; issue #335)
-- `--shard-count`, `--shard-index`, `--shard-start`, `--shard-end` (coordinator shard configuration for distributed campaign execution)
-- `--detach` (hand off campaign to Coordinator service and exit immediately; issue #602)
-- `--coordinator-url` (base URL of the Coordinator service; required when `--detach` is set; issue #602)
-- `--ecr-repository` (ECR repository URI for OpenStudio images; overrides Docker Hub. Issue #144)
-- `--offline` (skip Docker Hub pulls, PyPI version checks, and online weather downloads; issue #261)
-- `--offline-bundle` (path to offline bundle directory created by `scripts/bundle_offline.py`; issue #261)
-- `--nomad-address`, `--nomad-datacentre`
-- `--nomad-remote-results-only` (deprecated compatibility toggle; defaults to remote-result mode. Use `--no-nomad-remote-results-only` only to temporarily enable legacy local-callable behavior)
-- `--nomad-ca-cert`, `--nomad-cert`, `--nomad-key`, `--nomad-tls`, `--nomad-tls-verify` (Nomad TLS configuration; issue #344)
-- `--nomad-poll-interval-s`, `--nomad-max-poll-interval-s`, `--nomad-allocation-resolution-timeout-s` (Nomad polling and allocation configuration)
-- `--nomad-dispatch-policy` (Nomad job dispatch policy; default: `keep_manual`)
-- `--nomad-fanout-submit-chunk-size`, `--nomad-fanout-submit-rate-per-sec` (Nomad fanout submission tuning for large-scale campaigns)
-- `--docker-swarm-image`, `--docker-swarm-network`, `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s` (Docker Swarm executor configuration)
-- `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
-- `--kubernetes-backoff-limit`, `--kubernetes-ttl-seconds-after-finished`, `--kubernetes-queue-name` (Kubernetes native Job controls — native `backoffLimit` retry, automatic cleanup via `ttlSecondsAfterFinished`, and Kueue `queue-name` label; default `0`/None/None preserve the pre-#997 manifest byte-for-byte; issue #997)
-- `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s`, `--docker-swarm-image`, `--docker-swarm-network` (Docker Swarm executor configuration; issue #582)
-- `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
-- `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)
-- `--nsga2-reference-points` (comma-separated aspiration fractions for R-NSGA-II, e.g. `0.25,0.5,0.75`; issue #529)
-- `--nsga2-reference-directions` (R-NSGA-II reference direction strategy: `das-dennis`, `energy`, `wedge`, or `incremental`; issue #529)
-- `--uq-method` (UQ propagation method: `latin_hypercube` (default). Issue #530)
-- `--uq-n-samples` (number of samples for UQ analysis. Issue #530)
-- `--uq-failure-threshold` (failure threshold in `kpi=threshold` format; may be specified multiple times. Issue #530)
-- `--openstudio_version`, `--archive_intermediates`
-- `--init-script`, `--finalize-script` (pre/post campaign shell hooks. Issue #108)
-- `--custom_apply_script`, `--custom_kpi_extractor` (BYOS)
-- `--byos-trust-level` (BYOS script execution mode: `subprocess` (default, isolated child process) or `inprocess` (legacy, loads into orchestrator). Issue #269)
-- `--require-trusted-scripts` (reject `--byos-trust-level inprocess` for production hardening; issue #908)
-- `--byos-resource-limits` (CPU/memory limits for BYOS subprocess wrapper; issue #343)
-- `--api-keys-file` (path to JSON file for multi-user API key authentication; issue #395)
-- `--rate-limit-key` (rate limit key type: `ip` (default), `user`, or `campaign`; issue #445)
-- `--api-redis-url` (Redis URL for distributed rate limiting across multiple API instances behind a load balancer; issue #663)
-- `--mlflow_tracking_uri` (optional; logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`)
-- `--observability` (observability backend selector: `none` / `cloudwatch` / `prometheus` / `opentelemetry`. Default: `none`. Issue #145, #127)
-- `--cloudwatch-log-group` (CloudWatch log group name; used when `--observability cloudwatch`)
-- `--cloudwatch-namespace` (CloudWatch metric namespace; used when `--observability cloudwatch`)
-- `--prometheus-port` (Prometheus metrics HTTP port; used when `--observability prometheus`)
-- `--otel-endpoint` (OpenTelemetry OTLP endpoint URL; used when `--observability opentelemetry`)
-- `--log-aggregation-url` (CloudWatch Logs aggregation URL for distributed log collection; issue #340)
-- `--no-tui` (disable rich terminal UI even when `rich` is installed; issue #197)
-- `--dry-run` (dry-run mode: force LocalExecutor, 1 sample, steps 1-4 only)
-- `--sample` (single-sample mode: re-run sample N from existing samples.json)
-- `--skip-preflight` (skip the PREFLIGHT_RUN_MODEL step that validates the seed model; issue #107)
-- `--max-generations` (maximum number of DAG generations; default 1 for single-shot LHS. Issue #122)
-- `--max-sample-retries` (maximum retry attempts for transient per-sample failures; default 3. Issue #252)
-- `--webhook-url` (campaign completion webhook callback URL; issue #283)
-- `--result-storage-backend` (result storage backend: `local` (default), `s3`, `gs`, `azure`; issue #339)
-- `--result-storage-bucket` (bucket/container name for result storage; issue #339)
-- `--result-storage-endpoint` (custom S3-compatible endpoint URL for result storage; issue #339)
-- `--s3-artifact-bucket` (S3 bucket name for centralized artifact storage; issue #601)
-- `--s3-artifact-prefix` (S3 key prefix for artifact organization; issue #601)
-- `--s3-artifact-region` (AWS region for S3 artifact bucket; issue #601)
-- `--s3-artifact-endpoint` (custom S3 endpoint URL for S3 artifact storage; issue #601)
-- `--s3-artifact-presigned-url-expiration` (presigned URL expiration time in seconds for S3 artifact access; issue #601)
-- `--log_level`
-- `--alert-destinations` (alert receiver endpoints for campaign events)
-- `--alert-rules` (alert routing rules for campaign events)
-- `--enable-cost-tracking` (enable cloud/HPC resource cost estimation; issue #447)
-- `--cost-on-demand-price` (on-demand price per vCPU-hour for cost estimation; issue #447)
-- `--cost-spot-price` (Spot price per vCPU-hour for cost estimation; issue #447)
-- `--track-costs` (enable campaign cost tracking; issue #447)
-- `--aws-batch-spot-price` (AWS Batch Spot price in USD per vCPU-hour for cost tracking; issue #447)
-- `--aws-batch-on-demand-price` (AWS Batch on-demand price in USD per vCPU-hour for cost tracking; issue #447)
-- `--slurm-cost-per-node-hour` (Slurm cost in USD per node-hour for cost tracking; issue #447)
-- `--resource-quota` (resource quota limits for campaign execution)
-- `--bcl-api-key` (API key for the NREL Building Component Library (BCL); issue #580)
-- `--campaign-ids` (comma-separated campaign IDs for query-results and export-results subcommands; issue #585)
-- `--editor` (enable Variable Designer web UI at /ui/designer/ for editing variable YAML files; issue #587)
-- `--include-failed` / `--no-include-failed` (include or exclude failed simulations in export-results output; issue #585)
-- `--labels` (optional labels for each --outdirs path in compare and aggregate-runs subcommands)
-- `--outdirs` (two or more campaign output directories for compare, query-results, or export-results subcommands)
-- `--page` / `--per-page` (pagination for query-results subcommand; issue #585)
-- `--validate-measures` (validate measure arguments against BCL taxonomy when discovering BCL measures; issue #580)
-
-**Backup subcommand flags** (issue #440):
-- `backup` — `--output` (custom backup file path), `--registry` (registry DB path), `--log_level`
-- `restore` — `<backup_file>` (positional), `--registry` (registry DB path), `--merge` (merge instead of replace), `--log_level`
-
-**Subcommands:** `run` (campaign execution), `import-osa` (OSA import), `export` (PAT export), `serve` (REST API server; issue #138), `list` (campaign registry listing), `show` (single campaign details), `compare` (side-by-side comparison), `status` (campaign run.json status), `download` (download campaign results), `backup` (registry backup; issue #440), `restore` (registry restore/import; issue #440), `health` (system health checks; issue #411), `mark-for-reanalysis` (mark a completed/failed sample for re-running; issue #420), `merge` (merge multiple data points into a single target; issue #418), `measure` (list measures from a template package; issue #532), `list-measures` (browse and search the NREL BCL online; issue #580), `aggregate-runs` (merge two or more campaign result sets into a combined CSV; issue #588), `query-results` (query campaign results with filters and pagination; issue #585), `export-results` (export campaign results to CSV/JSON with filtering; issue #585). The `serve` subcommand accepts `--outdir`, `--host`, `--port`, `--read-only`, `--read-write`, `--enable-writes`, `--api-key`, `--cors-origins`, `--rate-limit`, `--api-redis-url`, `--tls-cert`, `--tls-key`, `--ui`, `--editor`, and `--dashboard` flags. Requires `pip install osimflow[api]`. The `list` subcommand accepts `--format` (table/json), `--status`, `--limit`, and `--registry`. The `status` subcommand accepts `<outdir>`. The `download` subcommand accepts `<outdir>`, `--output-dir`, and `--include-intermediates`. The `backup` subcommand accepts `--output` (custom backup path) and `--registry`; it creates a timestamped SQLite backup using the online backup API. The `restore` subcommand accepts `<backup_file>`, `--registry`, and `--merge` (merge vs. replace mode). The `health` subcommand accepts `--outdir` (directory to check write permissions/disk space; default: cwd), `--json` (machine-readable JSON output), and `--offline` (skip network connectivity check). The `mark-for-reanalysis` subcommand accepts `<outdir>`, `<sample_id>` (must be COMPLETED or FAILED), and `--priority` (default 0). The `merge` subcommand accepts `<outdir>`, `--source-ids` (one or more source sample IDs), `--target-id` (target sample ID), and `--target-work-dir` (path to target work directory).
-
-### Developer workflow targets (Makefile)
-
-The `Makefile` is the canonical day-to-day interface. Every CI job has a
-`make` equivalent:
+The `Makefile` is the canonical day-to-day interface. Every CI job has
+a `make` equivalent. **Always run through the project `.venv` — the
+Makefile hard-codes `.venv/bin/{python,ruff,black,mypy,pytest,
+pre-commit}` and a bare `pytest` will resolve to a different Python
+that lacks the `[dev,aws,slurm]` extras and fail with
+`ModuleNotFoundError`.** Local pre-commit is the day-to-day mirror;
+CI is the merge gate.
 
 ```bash
-make install    # pip install -e ".[dev,aws,slurm]"
+make install    # pip install -e ".[dev,aws,slurm]"   (creates .venv)
 make lint       # ruff check
-make format     # ruff format + black
-make typecheck  # mypy --strict (osimflow/)
-make test       # pytest (full suite)
-make test-fast  # pytest unit + contract only (pre-commit mirror)
+make format     # ruff format (write)
+make typecheck  # mypy --strict on osimflow/
+make test       # pytest (full suite, no coverage gate)
+make test-cov   # pytest --cov with 85% gate           (CI default)
+make test-fast  # pytest tests/contract -x -q          (pre-commit mirror)
 make contract   # tools/check_agents_contract.py + tools/check_docs_sync.py
-make precommit  # pre-commit run --all-files (the pre-push safety net)
+make precommit  # pre-commit run --all-files          (pre-push safety net)
 make act        # local CI mirror via nektos/act
 ```
 
-See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for the day-to-day workflow.
-
-### Install
-
-```bash
-# Editable install with dev + aws + slurm extras
-pip install -e ".[dev,aws,slurm]"
-
-# Minimal install (no slurm/boto3 — local executor only)
-pip install -e .
-
-# Optional MLflow add-on (issue #7). Brings in the `mlflow` package;
-# only needed if you pass `--mlflow_tracking_uri` on the CLI.
-pip install -e ".[mlflow]"
-
-# Optional sensitivity analysis add-on (issue #136). Brings in SALib;
-# required for Morris and FAST99 sampling algorithms.
-pip install -e ".[sensitivity]"
-
-# Optional multi-objective optimization add-on (issue #140). Brings in
-# pymoo; required for NSGA-II and PSO sampling algorithms.
-pip install -e ".[optimization]"
-
-# Optional REST API add-on (issue #138). Brings in FastAPI + uvicorn;
-# required for the `osimflow serve` subcommand.
-pip install -e ".[api]"
-```
+Install extras are independent: `[mlflow]`, `[sensitivity]` (SALib),
+`[optimization]` (pymoo), `[ga]` (DEAP), `[api]` (FastAPI/uvicorn),
+`[kubernetes]`, `[aws]`, `[viz]` (streamlit/plotly), `[tui]` (rich).
 
 ### Run a campaign
 
 ```bash
-# Local smoke run: 5 samples, local executor
+# Local smoke run (stub mode, no real OpenStudio needed)
 osimflow run \
   --executor local \
   --input_variables variables.yml \
@@ -413,268 +155,368 @@ osimflow run \
   --outdir ./results \
   --openstudio_version 3.11.0
 
-# HPC run via Slurm — pined OpenStudio version, real Slurm (not debug)
-osimflow run \
-  --executor slurm \
-  --slurm-real \
-  --slurm_partition short \
-  --openstudio_version 3.11.0 \
-  --input_variables variables.yml \
-  --n_samples 500
+# Slurm (real cluster — debug=False)
+osimflow run --executor slurm --slurm-real --slurm_partition short \
+  --input_variables variables.yml --n_samples 500 \
+  --openstudio_version 3.11.0
 
-# HPC run with advanced Slurm directives (GPU jobs, QoS, etc.)
-# Requires submitit >= 1.5.
-osimflow run \
-  --executor slurm \
-  --slurm-real \
-  --slurm_partition gpu \
-  --slurm_qos high \
-  --slurm_constraint gpu \
-  --slurm_gres gpu:1 \
-  --openstudio_version 3.11.0 \
-  --input_variables variables.yml \
-  --n_samples 200
-
-# Cloud run on AWS Batch (issue #5).
-#
-# Prerequisites:
-#   * `pip install osimflow[aws]` (brings in boto3).
-#   * A registered Batch job definition whose container image matches
-#     `openstudio_cli_image:<openstudio_version>` (the dynamic tag the
-#     campaign passes via the `container` kwarg; see PRD §1.4). The
-#     executor forwards the tag in the `OSIMFLOW_CONTAINER` env var on
-#     every task so the work script can read it.
-#   * AWS credentials via the IAM role attached to the Batch compute
-#     environment (PRD §6 *Cloud Security Practices*). Long-lived
-#     `aws_access_key_id` / `aws_secret_access_key` are intentionally
-#     not accepted by the executor.
-#   * `AWS_REGION` set in the environment (or `~/.aws/config` /
-#     `AWS_DEFAULT_REGION`). The executor does NOT pin a region.
-#
-# Polling: the executor polls `batch.describe_jobs` with exponential
-# backoff (start 5s, cap 60s) until the task is SUCCEEDED. FAILED
-# tasks re-raise a `RuntimeError` whose message carries the Batch
-# `statusReason`, so the Campaign's `except Exception` branch logs it.
-osimflow run \
-  --executor aws_batch \
+# AWS Batch — IAM role on the Batch compute env, no long-lived keys.
+# Set AWS_REGION; the executor does not pin a region.
+osimflow run --executor aws_batch \
   --aws-batch-queue osimflow-batch-queue \
   --aws-batch-job-definition osimflow-openstudio-job-def \
-  --openstudio_version 3.11.0 \
-  --input_variables variables.yml \
-  --template_sim_package ./example_package \
-  --n_samples 1000 \
-  --outdir ./results \
-  --archive_intermediates
-
-# User-provided custom KPI extractor
-osimflow run \
-  --executor local \
-  --custom_kpi_extractor user_scripts/my_kpis.py \
-  --input_variables variables.yml \
-  --template_sim_package ./example_package \
-  --n_samples 10 \
-  --outdir ./results
-
-# MLflow tracking (optional add-on). Requires `pip install osimflow[mlflow]`.
-osimflow run \
-  --executor local \
-  --mlflow_tracking_uri http://localhost:5000 \
-  --input_variables variables.yml \
-  --template_sim_package ./example_package \
-  --n_samples 5 \
-  --outdir ./results
-
-# Fire-and-forget handoff to Coordinator service (Phase 2, issue #602).
-# CLI exits immediately after the Coordinator acknowledges the handoff.
-osimflow run \
-  --executor local \
-  --detach \
-  --coordinator-url https://coordinator.example.com \
-  --input_variables variables.yml \
-  --template_sim_package ./example_package \
-  --n_samples 500 \
-  --outdir ./results
-
-# REST API server (optional add-on, issue #138). Requires `pip install osimflow[api]`.
-osimflow serve \
-  --outdir ./results \
-  --host 0.0.0.0 \
-  --port 8000
-
-# Read-write mode — enables campaign start/stop and SSE event streaming (issue #143)
-osimflow serve \
-  --outdir ./results \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --read-write
+  --input_variables variables.yml --template_sim_package ./example_package \
+  --n_samples 1000 --outdir ./results --archive_intermediates
 ```
 
-The campaign writes `${outdir}/run.json` with per-step timing and per-sample status; this is the primary monitoring artifact (see `.agents/results/monitoring-decision.md`).
+Re-running with the same `--outdir` is a cache hit on every step
+(50 s cold → 0.1 s warm — see `decision-verdict.md` §1). The per-step
+artifacts land at `${outdir}/{work,sim,kpis,plots,run.json,...}`.
 
-### Resume a partial run
+### DAG step names (referenced from `osimflow/campaign.py`)
 
-Re-running with the same `--outdir` is a cache hit on every step. The first run takes 50s; the second run takes 0.1s (verified — see `decision-verdict.md` §1).
+The Campaign drives a 7-step DAG; the `step="..."` constants visible to
+the contract checker are the hard-coded ones (the seventh,
+`GENERATE_BASIC_PLOTS`, plus the dynamic `GENERATE_{algo}_SAMPLES`, are
+emitted via the cache code and `StepTrace` rather than the constant
+pattern, so they don't appear in the regex scan but are real steps):
+
+1. `GENERATE_LHS_SAMPLES` (dynamic — `GENERATE_{algorithm}_SAMPLES`)
+2. `PREFLIGHT_RUN_MODEL` — validates seed model before cloud spend
+3. `APPLY_PARAMETERS` — fan-out over N samples
+4. `RUN_OPENSTUDIO_SIM` — fan-out (heavy)
+5. `EXTRACT_KPIS` — fan-out
+6. `AGGREGATE_RESULTS` — one shot
+7. `GENERATE_BASIC_PLOTS` — one shot
+
+Cross-step file dependencies are declared in
+`_STEP_DEPENDENCIES` near the top of `osimflow/campaign.py`; do not
+bypass `_verify_step_inputs` in a new step.
+
+### CLI subcommands
+
+`osimflow` subcommands (see `osimflow/__main__.py`): `run` (campaign
+execution), `import-osa` / `export` (PAT/OSA I/O), `serve` (REST API;
+requires `[api]` extra), `list` / `show` / `compare` / `status` /
+`download` (campaign registry), `backup` / `restore` (registry
+backup/restore), `health` (system health checks), `mark-for-reanalysis`
+/ `merge` (data-point lifecycle), `measure` / `list-measures` (BCL
+browse), `aggregate-runs` / `query-results` / `export-results`
+(cross-campaign analysis).
+
+### CLI flag reference (compact, alphabetical)
+
+The `run` subcommand flags (grouped):
+
+- **Execturo + parallelism:** `--executor`, `--max-workers`,
+  `--preset`, `--task-queue`, `--dask-cluster-type`,
+  `--dask-min-workers`, `--dask-max-workers`, `--dask-cpus-per-worker`,
+  `--dask-memory-per-worker`, `--dask-walltime`, `--dask-queue`,
+  `--dask-project`, `--dask-scheduler-address`.
+- **Slurm:** `--slurm-partition`, `--slurm-account`, `--slurm-real`,
+  `--slurm-qos`, `--slurm-constraint`, `--slurm-gres`,
+  `--slurm-cost-per-node-hour`.
+- **AWS Batch:** `--aws-batch-queue`, `--aws-batch-job-definition`,
+  `--aws-batch-max-spot-price-usd`, `--aws-batch-fallback-to-on-demand`,
+  `--aws-batch-max-retries`, `--aws-batch-spot-price`,
+  `--aws-batch-on-demand-price`, `--aws-batch-instance-type`,
+  `--ecr-repository`.
+- **Azure Batch:** `--azure-batch-account-name`,
+  `--azure-batch-account-url`, `--azure-batch-pool-id`,
+  `--azure-batch-location`, `--azure-use-spot`,
+  `--azure-fallback-to-on-demand`, `--azure-max-retries`.
+- **Google Batch:** `--google-batch-project-id`,
+  `--google-batch-region`, `--google-batch-service-account`,
+  `--google-use-spot`, `--google-fallback-to-on-demand`,
+  `--google-max-retries`.
+- **PBS:** `--pbs-queue`, `--pbs-real`, `--pbs-server`.
+- **Nomad:** `--nomad-address`, `--nomad-datacentre`,
+  `--nomad-remote-results-only`, `--nomad-ca-cert`, `--nomad-cert`,
+  `--nomad-key`, `--nomad-tls`, `--nomad-tls-verify`,
+  `--nomad-poll-interval-s`, `--nomad-max-poll-interval-s`,
+  `--nomad-allocation-resolution-timeout-s`, `--nomad-dispatch-policy`,
+  `--nomad-fanout-submit-chunk-size`, `--nomad-fanout-submit-rate-per-sec`.
+- **Docker Swarm:** `--docker-swarm-image`, `--docker-swarm-network`,
+  `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s`.
+- **Kubernetes:** `--kubernetes-namespace`,
+  `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s`,
+  `--kubernetes-backoff-limit`, `--kubernetes-ttl-seconds-after-finished`,
+  `--kubernetes-queue-name`.
+- **Coordinator / distributed:** `--detach`, `--coordinator-url`,
+  `--redis-url`, `--shard-count`, `--shard-index`, `--shard-start`,
+  `--shard-end`.
+- **Inputs / outputs:** `--input_variables`, `--template_sim_package`,
+  `--n_samples`, `--outdir`, `--openstudio_version`,
+  `--archive_intermediates`, `--max-generations`, `--max-sample-retries`,
+  `--skip-preflight`, `--sample`, `--dry-run`, `--no-tui`,
+  `--init-script`, `--finalize-script`.
+- **Algorithms:** `--algorithm`, `--nsga2-reference-points`,
+  `--nsga2-reference-directions`, `--uq-method`, `--uq-n-samples`,
+  `--uq-failure-threshold`.
+- **BYOS:** `--custom_apply_script`, `--custom_kpi_extractor`,
+  `--byos-trust-level`, `--require-trusted-scripts`,
+  `--byos-resource-limits`.
+- **Observability / MLflow / cost tracking / alerts:**
+  `--observability`, `--cloudwatch-log-group`, `--cloudwatch-namespace`,
+  `--prometheus-port`, `--otel-endpoint`, `--log-aggregation-url`,
+  `--mlflow_tracking_uri`, `--enable-cost-tracking`,
+  `--cost-on-demand-price`, `--cost-spot-price`, `--track-costs`,
+  `--resource-quota`, `--webhook-url`, `--alert-destinations`,
+  `--alert-rules`, `--api-keys-file`, `--rate-limit-key`.
+- **Result / artifact storage:** `--result-storage-backend`,
+  `--result-storage-bucket`, `--result-storage-endpoint`,
+  `--s3-artifact-bucket`, `--s3-artifact-prefix`,
+  `--s3-artifact-region`, `--s3-artifact-endpoint`,
+  `--s3-artifact-presigned-url-expiration`.
+- **Offline / BCL / editor:** `--offline`, `--offline-bundle`,
+  `--bcl-api-key`, `--validate-measures`, `--editor`, `--log_level`.
+
+Other subcommand flags: `serve` — `--outdir`, `--host`, `--port`,
+`--read-only`, `--read-write`, `--enable-writes`, `--api-key`,
+`--cors-origins`, `--rate-limit`, `--api-redis-url`, `--tls-cert`,
+`--tls-key`, `--ui`, `--editor`, `--dashboard`. `list` — `--format`,
+`--status`, `--limit`, `--registry`. `status` — `<outdir>`. `download`
+— `<outdir>`, `--output-dir`, `--include-intermediates`. `backup` —
+`--output`, `--registry`. `restore` — `<backup_file>`, `--registry`,
+`--merge`. `health` — `--outdir`, `--json`, `--offline`.
+`mark-for-reanalysis` — `<outdir>`, `<sample_id>`, `--priority`. `merge`
+— `<outdir>`, `--source-ids`, `--target-id`, `--target-work-dir`.
+`measure` / `list-measures` — `--template`, `--variables`, `--filter`,
+`--project`. `aggregate-runs` / `compare` / `query-results` /
+`export-results` — `--outdirs`, `--labels`, `--campaign-ids`,
+`--include-failed`, `--no-include-failed`, `--page`, `--per-page`.
 
 ---
 
-## 5. Testing
-
-Tests live under `tests/`. **Always run them through the project
-`.venv` — the Makefile hard-codes the venv paths so a bare
-`pytest` will resolve to a Python interpreter that does not have
-`submitit`, `boto3`, or `types-PyYAML` installed and the suite will
-fail with `ModuleNotFoundError`.** The supported entry points are:
+## 4. Testing
 
 ```bash
 # Canonical: uses .venv/bin/pytest under the hood
 make test           # full suite
-make test-fast      # contract + unit, no coverage gate
-make test-cov       # full suite + 85% coverage gate
+make test-fast      # contract + unit, no coverage gate (pre-commit mirror)
 
-# Direct (when you need a single file or a custom flag) — must use
-# the venv's pytest, not whatever `pytest` is first on $PATH:
+# Direct (single file or custom flags) — must use the venv's pytest
 .venv/bin/pytest tests/integration/test_cache_invalidation.py -v
 .venv/bin/pytest --cov=osimflow
 ```
 
-If a test command in this document says "pytest" without a leading
-`.venv/bin/`, that is shorthand for the canonical `make test` form.
-Do **not** invoke the system `pytest`; if it resolves at all on
-your shell, it will silently run with the wrong interpreter.
+If this file says "pytest" without `.venv/bin/`, that is shorthand
+for `make test`. Do **not** invoke the system `pytest`; if it resolves
+at all on your shell, it will silently run with the wrong interpreter.
 
-When implementing the real `bin/*.py` logic, add:
-- **End-to-end smoke test** with 1-3 samples and a tiny template package, verifying the four output artifacts (`aggregated_results.csv`, `failed_simulations.csv`, KPI JSONs, plot files).
-- **Per-step unit tests** for each `bin/*.py` script.
-- **Pre-flight parameter check tests** — the LHS variable name must map to a real measure argument / `.osm` attribute.
-- **Performance Benchmarking** smoke test (PRD §5.2) that records wall-clock + memory for a 3-sample run.
+CI runs in parallel jobs (`.github/workflows/ci.yml`): `lint`
+(`ruff check` + `ruff format --check`), `typecheck` (`mypy --strict
+osimflow/`), `test` (pytest with 85% coverage gate), `contract` (the
+two `tools/check_*.py` scripts), `security` (`pip-audit`), plus
+`mlflow-real` (real MLflow smoke test), `slow` (`-m slow`), and per-PR
+Nomad single-node E2E. Per-substrate E2E (`aws-batch-e2e.yml`,
+`google-batch-e2e.yml`, `azure-batch-e2e.yml`, `slurm-e2e.yml`,
+`kubernetes-e2e.yml`, `openstudio-cli-e2e.yml`) are nightly or
+`workflow_dispatch`-only; the unit/integration test files are
+skip-gated so they are inert in normal CI.
 
-### Executor integration tests (issue #11)
+For every new public surface, add the appropriate test in
+`tests/unit/` or `tests/integration/`. Executor integration tests
+follow the pattern of `test_local_executor.py`,
+`test_slurm_executor_debug.py`, and `test_aws_batch_executor_stub.py`
+— 3-sample campaign against the substrate, asserting the four
+artifacts (`aggregated_results.csv`, `failed_simulations.csv`, KPI
+JSONs, plot files) plus `run.json`.
 
-The four files in `tests/integration/` named after the executor profiles are
-end-to-end smoke tests of the Campaign running against each substrate
-(PRD §5.2 *Comprehensive end-to-end integration tests*). They run a
-3-sample campaign through the `example_package/` and assert all four
-output artifacts plus the per-campaign `run.json` are produced:
+When implementing real `bin/*.py` logic, also add per-step unit tests
+in `tests/unit/`, pre-flight parameter-check tests (LHS variable must
+map to a real measure argument / `.osm` attribute), and a
+performance-benchmark smoke test (`tests/benchmarks/bench_campaign.py`,
+3-sample cold + warm) if it touches the per-sample work hot path.
 
-- `tests/integration/test_local_executor.py` — `LocalExecutor` happy path.
-- `tests/integration/test_slurm_executor_debug.py` — `SlurmExecutor(debug=True)` (uses `submitit.DebugExecutor`; no real cluster needed in CI).
-- `tests/integration/test_aws_batch_executor_stub.py` — `AWSBatchExecutor` with a mocked `boto3` client.
-- `tests/integration/test_aws_batch_real.py` — Real AWS Batch E2E test (issue #146). Skipped unless `OSIMFLOW_AWS_BATCH_E2E=1`. Runs via the nightly `aws-batch-e2e` workflow against real Batch infrastructure with OIDC auth.
-- `tests/integration/test_google_batch_real.py` — Real Google Cloud Batch E2E test (issue #959). Skipped unless `OSIMFLOW_GOOGLE_BATCH_E2E=1`. Runs via the nightly `google-batch-e2e` workflow against real Cloud Batch infrastructure with Workload Identity Federation auth.
-- `tests/integration/test_azure_batch_real.py` — Real Azure Batch E2E test (issue #958). Skipped unless `OSIMFLOW_AZURE_BATCH_E2E=1`. Runs via the nightly `azure-batch-e2e` workflow against a real Azure Batch pool with Azure OIDC auth.
-- `tests/integration/test_cache_resume.py` — runs the same campaign twice against the same `outdir`; the warm run must be at least 5x faster than the cold run (the issue quotes ~280x for 5 samples on the spike).
-- `tests/integration/test_aws_batch_cache_resume.py` — the cloud counterpart of `test_cache_resume.py` (issue #960). Real-AWS-Batch cache-warm/resume E2E with the S3 result backend; asserts the warm run is fully cache-served (0 Batch submits) and >=5x faster. Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_RESULT_BUCKET`.
-- `tests/integration/test_aws_batch_real_openstudio.py` — real-`openstudio.cli`-in-`nrel/openstudio`-container AWS Batch E2E (issue #942). Unlike `test_aws_batch_real.py` (stub-in-container), the Batch job definition's image is `nrel/openstudio:<version>`; asserts a real `eplusout.sql` (SQLite with EnergyPlus tables). Skip-gated behind `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_REAL_OPENSTUDIO=1`; driven by the `aws-batch-real-openstudio-e2e` nightly job.
-- `tests/integration/test_slurm_real_cluster.py` — Real-Slurm-cluster E2E (issue #941). Constructs `SlurmExecutor(debug=False)` and asserts `AutoExecutor.cluster == "slurm"` (the production path every other Slurm test skips via `debug=True`). Skip-gated behind `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH; dispatched by `slurm-e2e.yml` on a self-hosted runner.
-- `tests/integration/test_osa_round_trip.py` — OSA round-trip integration test (issue #134). Verifies that `OSAExporter.pack_osa()` produces a valid `.osa` ZIP and that export → pack → unpack → import preserves algorithm type, variable names, distributions, measure arguments, and template package files.
-- `tests/integration/test_api_events.py` — SSE events and campaign stop endpoint tests (issue #143). Validates SSE stream, `.stop` flag file behaviour, and read-only vs read-write mode enforcement.
-- `tests/integration/test_mlflow_real_tracking.py` — Real-MLflow file-tracking-URI smoke test (issue #948). Exercises the hook against the *real* `mlflow` package via a hermetic `file://` store (no server). Genuinely-passing (not inert) when the `[mlflow]` extra is installed + `OSIMFLOW_MLFLOW_E2E=1`; the ci.yml `mlflow-real` job runs it on every PR.
+---
 
-The full executor suite runs in well under 60s on a single core. The CI
-workflow runs them on every PR via the same `pytest` invocation as the
-unit tests.
+## 5. Directory map
 
-### CI workflow
+Files in this list are verified by the contract checker (§0.4) — when
+you add a public file here, mention its name in this section or
+`make contract` fails.
 
-Every push to a PR branch and every merge to `main` runs the workflow in
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) (issues #8, #15, #76).
-That workflow is the green/red signal contributors see on a PR; it is a thin
-mirror of `make test-cov` + `make contract` + `make typecheck`, running
-`ruff check`, `ruff format --check`, `mypy osimflow`, and `pytest
---cov=osimflow --cov-fail-under=85` on a single Python 3.12 runner. The
-`ci` workflow is split into parallel `lint`, `typecheck`, `test`, `contract`,
-and `security` jobs (issue #76) so wall-clock time is dominated by the
-slowest single job, not the sum of all checks. A green check on every
-required job is the gate to merge. Lint-only fast feedback is the
-`lint` job inside the same `ci` workflow (the older separate
-`.github/workflows/lint.yml` was folded in by issue #76); the
-AGENTS.md / docs drift gate lives in the `contract` job of the same
-workflow, with a mirror in
-[`.github/workflows/agents-contract.yml`](.github/workflows/agents-contract.yml).
-The performance-benchmark job (issue #10) lives in
-[`.github/workflows/bench.yml`](.github/workflows/bench.yml) — it runs
-the cold/warm 3-sample benchmark and uploads `benchmarks.json` as a
-per-Python-version artifact (interpreted in
-[`docs/benchmarks.md`](docs/benchmarks.md)).
-See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for the full set of jobs
-and the `make act` local mirror.
+### `osimflow/` core
+- `osimflow/__init__.py` — public API surface (`__all__`).
+- `osimflow/__main__.py` — `argparse` CLI entry point (`osimflow run ...`).
+- `osimflow/campaign.py` — `Campaign` orchestrator + `CampaignError` + `QuotaExceededError` + the 7-step DAG.
+- `osimflow/config.py` — `CampaignConfig` + per-executor config dataclasses (`LocalConfig`, `SlurmConfig`, `AWSBatchConfig`, `AzureBatchConfig`, `GoogleBatchConfig`, `NomadConfig`, `ObservabilityConfig`, `DAGConfig`, `StorageConfig`) + `ResourceQuota` + `coerce_variable_type` + `load_config`.
+- `osimflow/work.py` — per-step work functions + `BYOS` contract (`default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`, `aggregate_results`, `generate_plots`, plus `SevereEnergyPlusError`).
+- `osimflow/cache.py` — `SQLiteCache` + `CacheKey` + `CacheStats`.
+- `osimflow/distributed_cache.py` — `DistributedCache` + `build_cache` + `campaign_state_namespace` (Redis-backed for multi-node campaigns; pid-private local SQLite files in distributed mode).
+- `osimflow/distributed_jobqueue.py` — `DistributedJobQueue` + `build_job_queue` (Redis pub/sub wrapper).
+- `osimflow/storage.py` — `ResultStorage` ABC, `LocalStorage`, `S3Storage`, `GCSStorage`, `AzureBlobStorage`, `S3ArtifactStorage`, `ResultStorageUploader`, `build_result_storage`.
+- `osimflow/taskqueue.py` — `TaskQueue` ABC, `DaskTaskQueue`, `NoOpTaskQueue`, `TaskHandle`, `TaskQueueStatus`, `build_task_queue`.
+- `osimflow/document_store.py` — `DocumentStore` ABC, `DocumentStoreError`, `DocumentNotFoundError`, `DuplicateDocumentError`, `SQLiteDocumentStore`, `build_document_store`.
+- `osimflow/jobqueue.py` — filesystem-based `JobQueue` (crash recovery).
+- `osimflow/monitoring.py` — `RunTrace` + `StepTrace`; writes `run.json`.
+- `osimflow/observability.py` — `ObservabilityBackend` ABC, `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`, `new_trace_id`.
+- `osimflow/_campaign_observability.py` — `ObservabilityManager` wrapping all `ObservabilityBackend` lifecycle from `Campaign`.
+- `osimflow/_campaign_cost_tracker.py` — internal cost wiring used by `Campaign`.
+- `osimflow/logging.py` — `JSONFormatter` + `RotatingFileHandler`; `get_logger`, `setup_logging`, `LogAggregator`.
+- `osimflow/registry.py` — `CampaignRegistry` + `CampaignRecord` (SQLite-backed; powers `list`/`show`/`compare`/`backup`/`restore`).
+- `osimflow/pareto.py` — `ParetoFront` + `ParetoSolution` (multi-objective tracking).
+- `osimflow/measures.py` — `MeasureRegistry` + `MeasureArgument` + `DiscoveredMeasure` + `MeasureRegistryError` + `UnmappedVariableError` + `AmbiguousVariableError`.
+- `osimflow/measure_resolver.py`, `osimflow/measure_versioning.py` — measure internals.
+- `osimflow/weather.py` — `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, `detect_climate_zone_from_stat`, `EPWValidationError`, `EPWDownloadError`.
+- `osimflow/version_detection.py` — `VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`.
+- `osimflow/health.py` — `osimflow health` subcommand (`CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`, `run_health_checks`).
+- `osimflow/alerting.py` — `AlertManager`, `build_alert_manager`.
+- `osimflow/notify.py` — `NotifyBackend` ABC, `EmailNotifyBackend`, `NullNotifyBackend`, `SNSNotifyBackend`, `WebhookNotifyBackend`, `build_notify_backend`.
+- `osimflow/chaos.py` — `ChaosEngine`, `ChaosResult`, `ChaosScenario`, `FaultInjector` ABC, `CPUSpikeInjector`, `MemoryPressureInjector`, `NetworkDelayInjector`, `KillSwitchInjector`, `run_chaos_scenario`.
+- `osimflow/cost_tracking.py` — `CostEstimate`, `CostTracker`, `CampaignCostSummary`.
+- `osimflow/data_point_manager.py` — `DataPoint`, `DataPointManager`, `DataPointStatus` (reanalysis, merging, priority).
+- `osimflow/cross_run_aggregator.py` — `CrossRunAggregator`.
+- `osimflow/handoff_record.py` — `HandoffRecord`, `NoHandoffRecordError`, `IDEMPOTENCY_KEY_HEADER`, `HANDOFF_RECORD_NAME`, `read_handoff_record`, `write_handoff_record`, `handoff_record_exists` (for `--detach` / Coordinator).
+- `osimflow/remote_runner.py` — stdlib `python -m osimflow.remote_runner` worker for Nomad/Kubernetes Jobs (decodes `OSIMFLOW_TASK_PAYLOAD`, pushes result artifacts to object storage).
+- `osimflow/apply_params.py`, `osimflow/aggregation.py`, `osimflow/audit.py`, `osimflow/byos.py`, `osimflow/event_log.py`, `osimflow/json_utils.py`, `osimflow/manifest.py`, `osimflow/results_db.py`, `osimflow/validation.py`, `osimflow/webhook.py` — internal supporting modules.
+- `osimflow/mlflow_hook.py` — optional MLflow integration (lazy-imports `mlflow`).
+- `osimflow/tui.py` — optional `rich`-based terminal UI.
+- `osimflow/_eval_safe.py`, `osimflow/_subprocess_utils.py` — internal helpers.
+- `osimflow/py.typed` — PEP 561 marker (the package is typed).
 
-The nightly AWS Batch E2E workflow (issue #146) lives in
-[`.github/workflows/aws-batch-e2e.yml`](.github/workflows/aws-batch-e2e.yml) —
-it runs a 3-sample campaign against real AWS Batch infrastructure daily at
-06:00 UTC and on manual `workflow_dispatch`. It uses OIDC authentication
-(`aws-actions/configure-aws-credentials`) and requires `AWS_ROLE_ARN`
-(secret), plus `AWS_REGION`, `AWS_BATCH_QUEUE`, and
-`AWS_BATCH_JOB_DEFINITION` (repository variables). A second job in the same
-workflow, `aws-batch-real-openstudio-e2e` (issue #942), runs the heavier
-real-`openstudio.cli`-in-`nrel/openstudio`-container E2E: it requires a Batch
-job definition whose image is `nrel/openstudio:<version>` (or an ECR mirror,
-overridable via `AWS_BATCH_REAL_OS_JOB_DEFINITION`), fetches the real
-`.osm`/`.epw` fixture, leaves `OSIMFLOW_STUB_SIM` unset so the work function
-runs the real CLI, and is gated on `OSIMFLOW_AWS_BATCH_REAL_OPENSTUDIO=1`.
+### `osimflow/_work_scripts/` (CLI scripts invoked by the work layer)
+- `generate_lhs.py`, `apply_params_to_model.py`, `extract_kpis.py`,
+  `aggregate_results.py`, `generate_plots.py`, `excel_to_variables.py`.
 
-The nightly Google Cloud Batch E2E workflow (issue #959) lives in
-[`.github/workflows/google-batch-e2e.yml`](.github/workflows/google-batch-e2e.yml) —
-it runs a 3-sample campaign against real Google Cloud Batch infrastructure
-daily at 06:00 UTC and on manual `workflow_dispatch`. It uses Workload
-Identity Federation (`google-github-actions/auth@v2`) and requires
-`GOOGLE_WORKLOAD_IDENTITY_PROVIDER` + `GOOGLE_SERVICE_ACCOUNT` (secrets),
-plus `OSIMFLOW_GOOGLE_BATCH_PROJECT_ID`, `OSIMFLOW_GOOGLE_BATCH_REGION`, and
-`OSIMFLOW_GOOGLE_BATCH_SERVICE_ACCOUNT` (repository variables).
+### `osimflow/algorithms/` (sampling + analysis)
+- `__init__.py` — `BaseAlgorithm` ABC, `AlgorithmRegistry`, `LHSAlgorithm`,
+  shared helpers, `discover_plugins()` (entry-point `osimflow.algorithms`).
+- `sobol.py`, `halton.py` — Sobol / Halton quasi-random (scipy.stats.qmc).
+- `de.py`, `da.py` — `DifferentialEvolutionAlgorithm`, `DualAnnealingAlgorithm` (scipy).
+- `ga.py` — `GeneticAlgorithm` (DEAP; `[ga]` extra).
+- `nsga2.py`, `pso.py` — multi-objective optimizers (pymoo; `[optimization]`).
+- `spea2.py` — SPEA2 (pymoo).
+- `gaisl.py` — island-model parallel GA.
+- `rgenoud.py` — hybrid GA + BFGS local search.
+- `morris.py`, `fast99.py` — Morris / FAST99 sensitivity (SALib; `[sensitivity]`).
+- `factorial.py` — `FullFactorialAlgorithm` + `GridSamplingAlgorithm`.
+- `random_sampling.py` — pure Monte Carlo.
+- `sequential_search.py` — deterministic sweep + adaptive sampling.
+- `calibration.py` — BM25-based utility-bill calibration.
+- `custom.py` — `CustomDOEAlgorithm` (CSV or Python callable).
+- `qdiscrete.py` — inverse-CDF discrete sampling (`DoE.base::qdiscrete`).
+- `repeat_all.py` — `RepeatAllAlgorithm` (repeats sample set N times).
+- `diag.py` — `DiagAlgorithm` (OAT, mirrors openstudio-server's `diag.rb`).
+- `doe_analysis.py` — `DOEAnalysis` (main effects, interactions, ANOVA).
+- `uq.py` — Monte Carlo uncertainty propagation + failure probability.
 
-The real-Slurm-cluster E2E workflow (issue #941) lives in
-[`.github/workflows/slurm-e2e.yml`](.github/workflows/slurm-e2e.yml). Unlike
-the cloud workflows it has **no cron** — Slurm cannot be reached from a
-GitHub-hosted runner, so the job is `workflow_dispatch`-only and targets a
-self-hosted runner tagged `[self-hosted, slurm]` registered on a Slurm
-login/head node. It requires the `OSIMFLOW_SLURM_PARTITION` repository
-variable (and optionally `OSIMFLOW_SLURM_ACCOUNT`), sets
-`OSIMFLOW_SLURM_E2E=1`, and runs `tests/integration/test_slurm_real_cluster.py`
-to exercise the `SlurmExecutor(debug=False)` production path that every
-other Slurm test skips. Inert (the test reports `s`) on GitHub-hosted
-runners.
+### `osimflow/executors/` (`BaseExecutor` + concrete executors)
+- `__init__.py` — `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
+  `NomadExecutor`, `ExecutorRegistry` + `discover_plugins()` (entry-point
+  `osimflow.executors`).
+- `base.py` — `BaseExecutor` + `Handle` interface.
+- `transport.py` — executor-agnostic result reference contract.
+- `azure_batch_executor.py` — `AzureBatchExecutor`.
+- `google_batch_executor.py` — `GoogleBatchExecutor`.
+- `dask_jobqueue_executor.py` — `DaskJobQueueExecutor` (Slurm/PBS/K8s).
+- `docker_swarm_executor.py` — `DockerSwarmExecutor`.
+- `kubernetes_executor.py` — `KubernetesExecutor` (each Job runs
+  `python -m osimflow.remote_runner`; `OSIMFLOW_TASK_PAYLOAD` carries
+  the step call, `OSIMFLOW_RESULT_*` carries the transport contract).
+- `pbs_executor.py` — `PBSExecutor` (submitit).
 
-The nightly Azure Batch E2E workflow (issue #958) lives in
-[`.github/workflows/azure-batch-e2e.yml`](.github/workflows/azure-batch-e2e.yml) —
-it runs a 3-sample campaign against a real Azure Batch pool daily at
-06:00 UTC and on manual `workflow_dispatch`. It uses Azure OIDC
-(`azure/login@v2`) and requires `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
-`AZURE_SUBSCRIPTION_ID` (secrets), plus
-`OSIMFLOW_AZURE_BATCH_ACCOUNT_NAME`, `OSIMFLOW_AZURE_BATCH_ACCOUNT_URL`,
-`OSIMFLOW_AZURE_BATCH_POOL_ID`, and `OSIMFLOW_AZURE_BATCH_LOCATION`
-(repository variables).
+### `osimflow/api/` (optional, `[api]` extra)
+- `__init__.py` — `create_app`.
+- `app.py` — FastAPI app factory.
+- `events.py` — SSE live events + campaign stop endpoints.
+- `auth.py`, `campaigns.py`, `coordinator.py`, `dashboard.py`,
+  `files.py`, `measures.py`, `pat_compat.py`, `results_query.py`,
+  `results_viewer.py`, `schemas.py`, `timeseries.py`,
+  `variable_designer.py`, `variables.py` — REST endpoints +
+  Pydantic models.
+- `static/`, `templates/` — UI assets.
 
-The nightly Kubernetes E2E workflow (issue #940) lives in
-[`.github/workflows/kubernetes-e2e.yml`](.github/workflows/kubernetes-e2e.yml) —
-it runs a 3-sample campaign against a real Kubernetes cluster daily at
-06:00 UTC and on manual `workflow_dispatch`. Unlike the cloud-OIDC
-workflows it authenticates with a kubeconfig stored in the `KUBECONFIG`
-repository secret (written to `~/.kube/config` on the runner), which
-suits managed clusters (EKS/GKE/AKS) and self-hosted/`kind` clusters
-alike. It requires the `KUBECONFIG` secret and the
-`OSIMFLOW_KUBERNETES_NAMESPACE` repository variable. The test file uses
-`pytest.mark.skipif` so it is inert in normal CI.
+### `osimflow/viz/` (optional, `[viz]` extra)
+- `dashboard.py` — Streamlit dashboard.
+
+### `osimflow/importers/`, `osimflow/exporters/`
+- `importers/osa.py` — `parse_osa`, `parse_analysis_json`, `osa_to_variables_yml`.
+- `exporters/osa.py` — `OSAExporter`, `pack_osa` (PAT `.osa` archive).
+
+### Top-level
+- `bin/` — backward-compatible shim scripts over `_work_scripts/`:
+  `generate_lhs.py`, `apply_params_to_model.py`, `extract_kpis.py`,
+  `aggregate_results.py`, `generate_plots.py`, `excel_to_variables.py`.
+  Each is ~25 lines that re-export from the corresponding
+  `_work_scripts/` module. Do not add logic here.
+- `scripts/` — CLI utilities: `fetch_example_fixture.py` (downloads a
+  real `.osm` + `.epw` for real-OpenStudio E2E; gitignored),
+  `generate_openapi.py` (regenerates `docs/openapi.json`),
+  `bundle_offline.py` (for `--offline-bundle`), `migrate_from_mongodb.py`,
+  `apply_branch_protection.sh` (post-merge settings-as-code for
+  `main`), `setup_nomad_vm.sh`.
+- `tools/` — repo-internal check scripts:
+  `check_agents_contract.py` (the §0.4 contract gate),
+  `check_docs_sync.py` (docs/ path resolution gate).
+- `user_scripts/` — user-supplied "Bring Your Own Script" overrides;
+  see `user_scripts/README.md`. The Campaign loads them via
+  `importlib.util` and validates the function signature with
+  `inspect.signature`.
+- `example_package/` — tiny model + variables for local smoke tests
+  and the executor integration tests.
+- `osimflow-deploy/` — cloud deployment recipes sub-monorepo
+  (independent `osimflow-deploy-v` tag prefix, CODEOWNERS for IaC).
+  Links to the actual IaC in `infra/`; does not duplicate it.
+- `infra/aws/terraform/` — Terraform module for AWS Batch
+  (VPC, S3, IAM, compute env, job queue, job definition using
+  `nrel/openstudio`; CI runs `terraform validate` on `infra/` changes).
+  IAM roles in `iam.tf`, job definition in `job-definition.tf`, ECR
+  repository + lifecycle in `ecr.tf`.
+- `infra/aws/scripts/sync-openstudio-to-ecr.sh` — ECR mirror script
+  (exponential-backoff retry, multi-region).
+- `infra/nomad/examples/ha/` — native host-OS Nomad HA cluster recipe
+  (3-server Raft, ACL bootstrap, mTLS). `infra/nomad/acl/policies/`
+  for agent/worker policies. Tokens in `acl/tokens/` are gitignored.
+- `docs/` — `OSimFlow.md` (PRD), `DEVELOPMENT.md` (the day-to-day
+  guide — read this when you want depth), `CONTRIBUTING.md`,
+  `GOVERNANCE.md`, `api.md`, `branch-protection.md`, `benchmarks.md`,
+  `user-guide.md`, plus per-feature guides (`aws-batch-terraform.md`,
+  `nomad-production.md`, `kubernetes-deployment.md`,
+  `container-image-strategy.md`, `observability.md`,
+  `distributed-cache.md`, etc.).
+- `.agents/results/` — ADRs and the framework-decision verdict.
+- `tests/contract/` — contract tests run by pre-commit and the
+  `make test-fast` job.
+- `tests/unit/`, `tests/integration/`, `tests/benchmarks/` — pytest trees.
 
 ---
 
 ## 6. Code style
 
-### Python (osimflow/, bin/, user_scripts/, tests/)
-- **PEP 8** + **type hints** everywhere. Public functions must have full annotations.
-- Use `pathlib.Path` over `os.path`. Use `logging` (not `print`).
-- Exceptions: catch, log with `exc_info=True`, **re-raise**. Never swallow.
-- The package targets Python 3.12+. Do not add `from __future__ import annotations` (the syntax is supported natively).
-- CLI entry points use `argparse` with subcommands (`osimflow run ...`).
-- For OpenStudio Python bindings, isolate all `import openstudio` calls behind a `try/except` and provide a clear error message if the bindings aren't installed (relevant in `scientific_python_image` builds that don't include the heavy C++ stack).
-- **BYOS contract**: a user-supplied function (in `user_scripts/`) is discovered by name. The Campaign validates the function signature with `inspect.signature`. Never define the same contract twice (once as a Python function, once as a CLI surface).
-- **Cache key rule**: any code that affects per-step behavior must be hashed into the cache key. See `osimflow/campaign.py:_compute_code_hashes` for the pattern.
-- **Executor resource directives**: `cpus`, `memory_mb`, `time_min` are advisory on `LocalExecutor`, propagated to Slurm via `submitit`'s `update_parameters` for `SlurmExecutor`, and translated to Boto3 `containerOverrides` for `AWSBatchExecutor`. Add new resource kinds by extending the `submit()` signature, not by adding process-local config.
-- **Enforcement**: the rules above are enforced by `ruff` (lint + format), `mypy --strict` (types), and the AGENTS.md / docs contract checks. Run `make precommit` before pushing; CI mirrors the same checks. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+- **Python 3.12+**, PEP 8, full type hints on public functions
+  (enforced by `mypy --strict` on `osimflow/`).
+- `pathlib.Path` over `os.path`. `logging` over `print`.
+- Exceptions: catch, log with `exc_info=True`, **re-raise**. Never
+  swallow.
+- No `from __future__ import annotations` (Python 3.12+ is the target).
+- CLI entry points use `argparse` with subcommands.
+- `import openstudio` calls must be isolated behind `try/except` with
+  a clear error message (the `scientific_python_image` build does
+  not include the heavy C++ stack).
+- **BYOS contract:** the user supplies a Python file with a function
+  of the right signature; the Campaign discovers and calls it via
+  `inspect.signature`. Never define the same contract twice (once as
+  a Python function, once as a CLI surface).
+- **Cache key rule:** any code that affects per-step behavior must
+  be hashed into the cache key. See
+  `osimflow/campaign.py:_compute_code_hashes` for the pattern.
+  Editing `bin/*.py` invalidates the affected step automatically via
+  the `code_hashes["bin"]` SHA-256. Do not bypass this hashing.
+- **Executor resource directives:** `cpus`, `memory_mb`, `time_min`
+  are advisory on `LocalExecutor`, propagated to Slurm via
+  `submitit`'s `update_parameters`, and translated to Boto3
+  `containerOverrides` for `AWSBatchExecutor`. Add new resource
+  kinds by extending the `submit()` signature, not by adding
+  process-local config.
+- **Enforcement:** ruff (lint + format), mypy --strict, and the
+  `make contract` checks. Run `make precommit` before pushing; CI
+  mirrors the same checks. See `docs/DEVELOPMENT.md`.
 
-### Shell / CLI
-- All user-facing scripts use `set -euo pipefail`.
-- Long options over short ones in documentation (e.g., `--openstudio_version` not `-o`).
-- Per-sample stdout/stderr land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
+Shell / CLI: `set -euo pipefail`, long options in docs
+(`--openstudio_version` not `-o`). Per-sample stdout/stderr land at
+`${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 
 ---
 
@@ -682,117 +524,193 @@ alike. It requires the `KUBECONFIG` secret and the
 
 | Term | Meaning |
 |---|---|
-| **LHS** | Latin Hypercube Sampling — a stratified random sampling method. We use `scipy.stats.qmc.LatinHypercube`. |
-| **`.osm`** | OpenStudio Model file (the parametric building energy model). |
-| **`.osw`** | OpenStudio Workflow file — orchestrates which measures run on a model. |
-| **`.idf`** | EnergyPlus Input Data File. **Out of scope** for OSimFlow (PRD §3.2). |
-| **`.epw`** | EnergyPlus Weather file. **Out of scope** for OSimFlow. |
-| **`eplusout.sql`** | SQLite output of an EnergyPlus simulation — primary source for KPI extraction. |
-| **`eplusout.err`** | EnergyPlus error log. Used by `failed_simulations.csv` to extract one-line summaries (`grep -m 1 "  * Severe"`). |
-| **`eplusout.log`** | EnergyPlus full log. Verbose; usually not archived unless debugging. |
-| **EUI** | Energy Use Intensity (kWh/m²/yr or kBtu/ft²/yr) — the canonical headline KPI. |
-| **Measure** | An OpenStudio plug-in (Ruby or Python) that modifies a model or workflow. Arguments are exposed in `.osw`. |
-| **`template_sim_package`** | A user-supplied directory containing a base `.osm`/`.osw` and any required measure scripts. The campaign's starting point. |
-| **`variables.yml`** | User-supplied input file declaring which parameters vary and their LHS distributions. |
-| **BYOS** | "Bring Your Own Script" — user-provided Python scripts in `user_scripts/` that override default `bin/` logic. The override interface is a Python function signature. |
-| **`run.json`** | The per-campaign monitoring trace (per-step timing, per-sample status, cache hit/miss). The primary observability artifact. |
-| **`nrel/openstudio:<version>`** | The dynamic container image tag (consumed from Docker Hub), selected via `--openstudio_version`. The project does not own this image. |
+| **LHS** | Latin Hypercube Sampling — `scipy.stats.qmc.LatinHypercube` |
+| **`.osm`** | OpenStudio Model file (the parametric building energy model) |
+| **`.osw`** | OpenStudio Workflow file — orchestrates which measures run on a model |
+| **`.idf`** | EnergyPlus Input Data File — **out of scope** for OSimFlow |
+| **`.epw`** | EnergyPlus Weather file — **out of scope** for OSimFlow |
+| **`eplusout.sql`** | SQLite output of an EnergyPlus simulation — primary source for KPI extraction |
+| **`eplusout.err`** | EnergyPlus error log; `failed_simulations.csv` extracts the *first* "Severe Error" line via `grep -m 1 "  * Severe"` |
+| **`eplusout.log`** | EnergyPlus full log (verbose; do not archive unless debugging) |
+| **EUI** | Energy Use Intensity (kWh/m²/yr or kBtu/ft²/yr) — the canonical headline KPI |
+| **Measure** | OpenStudio plug-in (Ruby or Python) that modifies a model or workflow; arguments are exposed in `.osw` |
+| **`template_sim_package`** | User-supplied directory with a base `.osm`/`.osw` + any required measure scripts |
+| **`variables.yml`** | User-supplied input declaring which parameters vary and their LHS distributions |
+| **BYOS** | "Bring Your Own Script" — user-supplied Python in `user_scripts/` overriding default `bin/` logic |
+| **`run.json`** | Per-campaign monitoring trace (per-step timing, per-sample status, cache hit/miss) |
+| **`nrel/openstudio:<version>`** | Dynamic container image tag (Docker Hub), selected via `--openstudio_version` |
 
 ---
 
 ## 8. Common gotchas (from PRD §6)
 
-These are *known traps* the PRD explicitly calls out. When you write code, check yourself against this list:
-
-1. **Large `eplusout.err` files** — delete from the work directory on successful simulation (PRD §1.4 *Intelligent Intermediate File Optimization*). The Campaign does this in `step_run_openstudio_sim` after a successful handle.result().
-2. **Pre-flight parameter checks** — `step_apply_parameters` (via `bin/apply_params_to_model.py`) must verify that every LHS variable actually maps to an existing measure argument or `.osm` attribute *before* the simulation runs (PRD §1.4 *Pre-flight Parameter Applicability Validation*). Fail fast with a clear error.
-3. **OpenStudio version pinning** — version lives in the **container tag** (`CONTAINER_OS.format(version=...)`) passed to the executor, not in `variables.yml` or env vars. The `nrel/openstudio:<version>` is dynamically selected in `step_run_openstudio_sim` from `--openstudio_version`. See [`docs/openstudio-image-distribution.md`](docs/openstudio-image-distribution.md) for the cache-key shape.
-4. **Failed simulation summaries** — `failed_simulations.csv` must contain the *first* "Severe Error" line from each `eplusout.err`, not the whole file. Use `grep -m 1 "  * Severe"`. Implemented in `bin/aggregate_results.py`.
-5. **`--archive_intermediates`** — when set, publish: all campaign inputs (`template_sim_package`, `variables.yml`) **and** per-sample `.osw/.osm` + `eplusout.sql`. Don't blindly archive `eplusout.err`/`eplusout.log` — too large. This is a future addition to the `Campaign` orchestrator (copy a step's `publishDir` pattern).
-6. **AWS Batch security** — IAM roles for EC2 instances, not long-lived access keys (PRD §6 *Cloud Security Practices*). `AWSBatchExecutor` must source credentials from the IAM role on the compute environment, never from `boto3` long-lived keys.
-7. **OpenStudio Measure dependencies** — custom Ruby/Python measure deps must be packaged *inside* the `template_sim_package`, not installed at runtime.
-8. **Large time-series data** — hourly outputs for thousands of samples get huge fast. Default to daily/monthly aggregates in `aggregated_results.csv`; keep hourly data only in per-sample `.sql` files behind `--archive_intermediates`.
-9. **Cache invalidation on `bin/*.py` edits** — the cache key includes a SHA-256 of every `bin/*.py` file (`code_hashes["bin"]`), so editing a script invalidates the cache for the affected step. **Do not** introduce a step that bypasses this hashing.
-10. **SlurmExecutor `debug=True` by default** — without `--slurm-real`, jobs run locally. This is the documented `submitit` pattern. Always pass `--slurm_real` in production.
-11. **Real vs stub OpenStudio CLI** — `run_openstudio_sim` invokes `openstudio.cli run -w workflow.osw` when the CLI is on PATH (detected via `shutil.which`). When the CLI is not available, it falls back to the stub (sleep + placeholder output). Set `OSIMFLOW_STUB_SIM=1` to force stub mode even when the CLI is installed (the escape hatch for testing). Existing integration tests use the stub; set `OSIMFLOW_RUN_REAL_OPENSTUDIO=1` to run the real E2E test.
-12. **Missing workflow.osw in real CLI mode** — when `openstudio.cli` is available but no `workflow.osw` exists in the `modified_sim_package`, the work function raises `RuntimeError` before invoking the CLI. The `template_sim_package` must always contain a `workflow.osw`.
+1. **Large `eplusout.err` files** — delete from the work directory on
+   successful simulation (`step_run_openstudio_sim` does this after a
+   successful `handle.result()`). Don't archive them blindly under
+   `--archive_intermediates` — they get huge.
+2. **Pre-flight parameter checks** — `step_apply_parameters` (via
+   `bin/apply_params_to_model.py`) must verify that every LHS variable
+   actually maps to an existing measure argument or `.osm` attribute
+   *before* the simulation runs. Fail fast with a clear error.
+3. **OpenStudio version pinning** — the version lives in the
+   **container tag** (`CONTAINER_OS.format(version=...)`) passed to
+   the executor, not in `variables.yml` or env vars. The
+   `nrel/openstudio:<version>` image is dynamically selected in
+   `step_run_openstudio_sim` from `--openstudio_version`. See
+   `docs/openstudio-image-distribution.md` for the cache-key shape.
+4. **Failed simulation summaries** — `failed_simulations.csv` must
+   contain the *first* "Severe Error" line from each `eplusout.err`,
+   not the whole file. Use `grep -m 1 "  * Severe"`. Implemented in
+   `bin/aggregate_results.py`.
+5. **`--archive_intermediates`** — when set, publish all campaign
+   inputs (`template_sim_package`, `variables.yml`) **and** per-sample
+   `.osw`/`.osm` + `eplusout.sql`. Don't blindly archive `eplusout.err`
+   / `eplusout.log` — too large. (A future addition to the
+   `Campaign` orchestrator; copy a step's `publishDir` pattern.)
+6. **AWS Batch security** — IAM roles for EC2 instances, not
+   long-lived access keys. `AWSBatchExecutor` must source credentials
+   from the IAM role on the compute environment, never from `boto3`
+   long-lived keys.
+7. **OpenStudio Measure dependencies** — custom Ruby/Python measure
+   deps must be packaged *inside* the `template_sim_package`, not
+   installed at runtime.
+8. **Large time-series data** — hourly outputs for thousands of
+   samples get huge fast. Default to daily/monthly aggregates in
+   `aggregated_results.csv`; keep hourly data only in per-sample
+   `.sql` files behind `--archive_intermediates`.
+9. **Cache invalidation on `bin/*.py` edits** — the cache key
+   includes a SHA-256 of every `bin/*.py` file
+   (`code_hashes["bin"]`), so editing a script invalidates the cache
+   for the affected step. Do not introduce a step that bypasses this
+   hashing.
+10. **SlurmExecutor `debug=True` by default** — without
+    `--slurm-real`, jobs run locally via `submitit.DebugExecutor`.
+    Always pass `--slurm-real` in production.
+11. **Real vs stub OpenStudio CLI** — `run_openstudio_sim` invokes
+    `openstudio.cli run -w workflow.osw` when the CLI is on PATH
+    (detected via `shutil.which`). When the CLI is not available, it
+    falls back to the stub (sleep + placeholder output). Set
+    `OSIMFLOW_STUB_SIM=1` to force stub mode even when the CLI is
+    installed. The real E2E test
+    (`tests/integration/test_real_openstudio_campaign.py`) is
+    skip-gated on `OSIMFLOW_RUN_REAL_OPENSTUDIO=1`.
+12. **Missing `workflow.osw` in real CLI mode** — when `openstudio.cli`
+    is available but no `workflow.osw` exists in the
+    `modified_sim_package`, the work function raises `RuntimeError`
+    before invoking the CLI. The `template_sim_package` must always
+    contain a `workflow.osw`.
+13. **Distributed cache uses pid-private local SQLite files** —
+    since #993 (T8.2) `Campaign` builds its cache via `build_cache`,
+    keeping plain `SQLiteCache` for single-node local mode and a
+    Redis-backed `DistributedCache` (with pid-private local SQLite
+    under the hood) when `--redis-url` is set. Concurrent processes
+    never lock one database.
 
 ---
 
 ## 9. Task routing hints for AI agents
 
-Use these patterns to decide where to make a change.
-
 | If the user asks to… | Edit |
 |---|---|
-| Add a new KPI | `bin/extract_kpis.py` (and the schema doc in `osimflow/monitoring.py:SampleTrace`). |
-| Add a new sampling distribution | `osimflow/algorithms/` package (subclass `BaseAlgorithm` in a new module, register via `AlgorithmRegistry.register` in `__init__.py`) **and** update the `variables.yml` example in `docs/`. |
-| Add a new execution platform | New class in `osimflow/executors/__init__.py` (subclass `BaseExecutor`) **and** register via `ExecutorRegistry.register` in `__init__.py` **and** add the executor choice to `osimflow/__main__.py:_build_executor`. |
-| Add a third-party algorithm plug-in | Declare an entry point in the external package's `pyproject.toml` under `[project.entry-points."osimflow.algorithms"]`. Discovery is automatic via `AlgorithmRegistry.discover_plugins()` — no code change in `osimflow/` needed (issue #432). |
-| Add a third-party executor plug-in | Declare an entry point in the external package's `pyproject.toml` under `[project.entry-points."osimflow.executors"]`. Discovery is automatic via `ExecutorRegistry.discover_plugins()` — no code change in `osimflow/` needed (issue #432). |
-| Add a new step to the DAG | A new method on `Campaign` in `osimflow/campaign.py` **and** call it from `Campaign.run` **and** emit `StepTrace` hooks. Update the directory map in this file. |
-| Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py`. |
-| Add a user-facing CLI flag | `osimflow/__main__.py:_build_parser` (add the `add_argument` call) **and** the `CampaignConfig` dataclass in `osimflow/config.py` **and** the `load_config` parser. |
-| Change KPI output schema | `bin/extract_kpis.py` (output dict shape) **and** `bin/aggregate_results.py` (column ordering) **and** update the `variables.yml` example in `docs/`. |
-| Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different Campaign semantics (retry, cache, monitoring). |
-| Add a new cache invalidation rule | `osimflow/campaign.py:step_*` (the cache key construction) **and** a test in `tests/integration/test_cache_invalidation.py`. |
-| Add an export format | New module in `osimflow/exporters/` (e.g. `osa.py` for PAT) **and** add the `--target` choice to `osimflow/__main__.py` export subcommand. |
-| Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture. |
-| Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/` — modify the Terraform module. IAM roles are in `iam.tf`, job definition in `job-definition.tf`. Run `terraform validate` to check. CI validates on `infra/` path changes. |
-| Add a REST API endpoint | New route in `osimflow/api/app.py` **and** a test in `tests/unit/test_api_core.py`. Requires `pip install osimflow[api]`. After adding endpoints, re-run `python scripts/generate_openapi.py` to regenerate `docs/openapi.json`, and add a typed method + test in `osimflow/client.py` / `tests/unit/test_client.py` (issue #433). |
-| Add or modify a health check | `osimflow/health.py` (add/modify a `_check_*` function, register it in `run_health_checks`) **and** a test in `tests/unit/test_health_check.py`. |
+| Add a new KPI | `osimflow/_work_scripts/extract_kpis.py` (or `bin/extract_kpis.py` shim) **and** `osimflow/monitoring.py:StepTrace` schema |
+| Add a new sampling algorithm | new module in `osimflow/algorithms/`, subclass `BaseAlgorithm`, register via `AlgorithmRegistry.register` in `osimflow/algorithms/__init__.py`; or declare an entry point under `[project.entry-points."osimflow.algorithms"]` in a third-party `pyproject.toml` (auto-discovered) |
+| Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/__main__.py:_build_executor`; or declare an entry point under `[project.entry-points."osimflow.executors"]` |
+| Add a new step to the DAG | new method on `Campaign` in `osimflow/campaign.py`, call it from `Campaign.run`, emit `StepTrace` hooks, declare inputs/outputs in `_STEP_DEPENDENCIES`; update §3 of this file |
+| Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py` |
+| Add a user-facing CLI flag | `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser |
+| Change KPI output schema | `osimflow/_work_scripts/extract_kpis.py` (dict shape) **and** `osimflow/_work_scripts/aggregate_results.py` (column ordering); update §3 / §8 of this file if it affects the contract |
+| Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different `Campaign` semantics (retry, cache, monitoring) |
+| Add a new cache invalidation rule | `osimflow/campaign.py:_compute_code_hashes` **and** a test in `tests/integration/test_cache_invalidation.py` |
+| Add an export format | new module in `osimflow/exporters/`, add the `--target` choice to `osimflow/__main__.py` export subcommand |
+| Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture (the stub is already there for `OSIMFLOW_STUB_SIM=1`) |
+| Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/`; IAM roles in `iam.tf`, job definition in `job-definition.tf`; `terraform validate` is in CI on `infra/` path changes |
+| Add a REST API endpoint | new route in `osimflow/api/app.py` **and** a test in `tests/unit/test_api_core.py`; re-run `python scripts/generate_openapi.py --output docs/openapi.json` afterwards; add a typed method + test in `osimflow/client.py` / `tests/unit/test_client.py` |
+| Add or modify a health check | `osimflow/health.py` (`_check_*` function, register in `run_health_checks`) **and** a test in `tests/unit/test_health_check.py` |
 
-### 9.1 Tool selection decision tree
-
-When the same task can be done several ways — and the opencode session
+When the same task can be done several ways and the opencode session
 exposes both the standard tool family (Read/Write/Edit/Bash/Grep/Glob)
-and the context-mode (`ctx_*`) and codebase-memory-mcp
-(`codebase-memory-mcp_*`) tool families — reach for the **smallest
-tool that gets the job done**. The decision tree below is the
-project-specific tie-breaker (see §0.1 — this list wins over the
-generic role prompt's tool guidance when they disagree).
-
-| Task | Tool |
-|---|---|
-| Read a small file you intend to edit | `Read` |
-| Read / transform a large file without showing full contents | `ctx_execute_file` |
-| Find a function / class / route definition by name | `codebase-memory-mcp_search_graph` |
-| Trace callers / callees of a function (impact analysis) | `codebase-memory-mcp_trace_path` |
-| Search for a string literal in a known path | `Grep` |
-| Run a shell command whose output is short and fixed | `Bash` |
-| Run a shell command with large / unpredictable output | `ctx_execute` |
-| Read documentation from a URL (lib docs, RFCs) | `ctx_fetch_and_index` |
+and the context-mode / codebase-memory-mcp tool families, reach for
+the smallest tool that gets the job done:
+- Read a small file you intend to edit → `Read`.
+- Read / transform a large file without showing full contents →
+  `ctx_execute_file`.
+- Find a function / class / route definition by name →
+  `codebase-memory-mcp_search_graph`.
+- Trace callers / callees (impact analysis) →
+  `codebase-memory-mcp_trace_path`.
+- Search for a string literal in a known path → `Grep`.
+- Run a shell command with large / unpredictable output →
+  `ctx_execute`.
+- Read documentation from a URL → `ctx_fetch_and_index`.
 
 ---
 
 ## 10. Security & data handling
 
-- **Never commit** `.osm`, `.osw`, `.idf`, `.epw`, `eplusout.*` files. The `.gitignore` already excludes them; double-check before staging.
-- For very large inputs that *must* be tracked, use **`git-lfs`** — don't bypass the gitignore.
-- **AWS**: IAM roles for EC2 compute environment only. No long-lived AWS access keys in the repo or in any config file. The `AWSBatchExecutor` must source credentials from the IAM role on the compute environment. The Terraform module (`infra/aws/terraform/iam.tf`) provisions least-privilege roles: a task role scoped to the campaign S3 bucket and CloudWatch Logs, a task-execution role for ECR image pulls, and a Batch service role.
-- **Singularity on shared HPC**: never bind-mount secrets; pass via env vars or submitit's `ex.update_parameters(setup=...)`, not as container mounts.
-- **BYOS user scripts**: when a user supplies a script, treat it as untrusted. The Campaign loads it via `importlib.util` and validates the function signature with `inspect.signature`. The default `LocalExecutor` runs in a thread pool with no resource limits — when wiring `SlurmExecutor` to production, set a per-job timeout (`time_min`) to bound blast radius.
+- **Never commit** `.osm`, `.osw`, `.idf`, `.epw`, `eplusout.*` files.
+  `.gitignore` excludes them; double-check before staging. For very
+  large inputs that *must* be tracked, use `git-lfs` — don't bypass
+  the gitignore.
+- **AWS:** IAM roles for EC2 compute environments only. No
+  long-lived AWS access keys in the repo or in any config file.
+  `AWSBatchExecutor` must source credentials from the IAM role on
+  the compute environment. The Terraform module
+  (`infra/aws/terraform/iam.tf`) provisions least-privilege roles:
+  a task role scoped to the campaign S3 bucket and CloudWatch Logs,
+  a task-execution role for ECR image pulls, and a Batch service role.
+- **Singularity on shared HPC:** never bind-mount secrets; pass via
+  env vars or `submitit`'s `ex.update_parameters(setup=...)`, not as
+  container mounts.
+- **BYOS user scripts:** treat user-supplied scripts as untrusted.
+  The Campaign loads them via `importlib.util` and validates the
+  function signature with `inspect.signature`. Default trust level
+  is `subprocess` (isolated child process); `--byos-trust-level
+  inprocess` is the legacy in-process load and should be rejected in
+  production via `--require-trusted-scripts`. The default
+  `LocalExecutor` runs in a thread pool with no resource limits —
+  when wiring `SlurmExecutor` to production, set a per-job timeout
+  (`time_min`) to bound blast radius.
+- **Nomad ACL tokens** (`infra/nomad/acl/tokens/*.json`) are
+  git-ignored. Never commit.
 
 ---
 
 ## 11. References
 
-- [PRD (docs/OSimFlow.md)](docs/OSimFlow.md) — sections to cite by number:
-  - §1.4 — Key Differentiators
-  - §3.1 — In-Scope Features
-  - §4.2 — Key Modules/Processes
-  - §5.2 — Phase 3 Deliverables
-  - §6 — Potential Challenges & Considerations
-- [Architecture decision (`.agents/results/architecture/0001-workflow-framework.md`)](.agents/results/architecture/0001-workflow-framework.md) — why the project uses a custom Python driver.
-- [OpenStudio image distribution (`docs/openstudio-image-distribution.md`)](docs/openstudio-image-distribution.md) — where the OpenStudio CLI container comes from, and why we don't build it ourselves.
-- [ADR-0002 (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md) — the decision record for adopting `nrel/openstudio` directly.
-- [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
-- [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
-- [Observability guide (docs/observability.md)](docs/observability.md) — pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry).
-- [Branch protection (docs/branch-protection.md)](docs/branch-protection.md) — settings-as-code for the `main` branch protection rules (5 required status checks, linear history, no reviews/no force-pushes). Applied post-merge by `scripts/apply_branch_protection.sh`; see issue #975.
-- [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
-- [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
-- [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding.
-- [GOVERNANCE.md](docs/GOVERNANCE.md) — community governance model.
-- [`submitit` documentation](https://github.com/facebookincubator/submitit) — the Slurm executor backend.
-- [OpenStudio CLI reference](https://openstudio.net/docs/cli/)
+- [PRD (docs/OSimFlow.md)](docs/OSimFlow.md) — sections to cite by
+  number: §1.4 (Key Differentiators), §3.1 (In-Scope Features), §4.2
+  (Key Modules/Processes), §5.2 (Phase 3 Deliverables), §6
+  (Potential Challenges).
+- [Architecture decision
+  (`.agents/results/architecture/0001-workflow-framework.md`)](.agents/results/architecture/0001-workflow-framework.md)
+  — why the project uses a custom Python driver.
+- [ADR-0002
+  (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md)
+  — the decision to adopt `nrel/openstudio` directly.
+- [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md)
+  — the spike's outcome that ratified the foundation.
+- [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md)
+  — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
+- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — the day-to-day developer
+  guide (architecture, project structure, dev env, tests, code
+  style, adding executors/steps/flags, BYOS, cache, CI, debugging).
+  Read this when you want depth.
+- [User Guide (docs/user-guide.md)](docs/user-guide.md) — canonical
+  entry point for users (install, config, run, interpret results,
+  troubleshoot).
+- [Observability guide (docs/observability.md)](docs/observability.md)
+  — pluggable backends (CloudWatch, Prometheus, OpenTelemetry).
+- [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md)
+  — zero-to-running AWS Batch deployment (issue #130).
+- [Branch protection (docs/branch-protection.md)](docs/branch-protection.md)
+  — settings-as-code for the `main` branch rules (5 required status
+  checks, linear history, no reviews/no force-pushes). Applied
+  post-merge via `scripts/apply_branch_protection.sh`; see issue #975.
+- [Nomad production (docs/nomad-production.md)](docs/nomad-production.md)
+  — Nomad HA topology, ACL model, security checklist, TLS notes.
+- [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding,
+  governance entry point, PR-review checklist.
+- [GOVERNANCE.md](docs/GOVERNANCE.md) — community governance.
+- [`submitit` documentation](https://github.com/facebookincubator/submitit)
+  — Slurm executor backend.
+- [OpenStudio CLI reference](https://openstudio.net/docs/cli/).
