@@ -31,7 +31,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Any, ClassVar, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
@@ -48,6 +48,9 @@ from osimflow.executors.transport import (
 )
 
 log = logging.getLogger("osimflow.executors")
+
+if TYPE_CHECKING:
+    from osimflow.health import CheckResult
 
 #: Entry-point group for third-party executor plug-ins (issue #432).
 EXECUTOR_ENTRY_POINT_GROUP = "osimflow.executors"
@@ -2270,6 +2273,14 @@ class ExecutorRegistry:
     lookup path (``get(name)``) so that the CLI and Campaign can validate
     executor names without hard-coding a choices list.
 
+    Health checks (issue #1024) are stored alongside each registered
+    executor via :meth:`register_health_check`. The health module iterates
+    the registry to dispatch one check per executor instead of hard-coding
+    an executor list. The check functions themselves live in
+    ``osimflow/health.py`` (kept there to avoid pulling the health module
+    into every executor's import path); the registration call is the only
+    cross-module coupling.
+
     Typical usage::
 
         cls = ExecutorRegistry.get("local")
@@ -2282,6 +2293,7 @@ class ExecutorRegistry:
     """
 
     _registry: dict[str, type[BaseExecutor]] = {}
+    _health_checks: dict[str, "Callable[[], CheckResult]"] = {}
 
     @classmethod
     def register(cls, name: str, executor_cls: type[BaseExecutor]) -> None:
@@ -2308,6 +2320,59 @@ class ExecutorRegistry:
     def list_available(cls) -> list[str]:
         """Return the sorted list of registered executor names."""
         return sorted(cls._registry)
+
+    @classmethod
+    def register_health_check(cls, name: str, check_fn: "Callable[[], CheckResult]") -> None:
+        """Register a health check for executor *name* (issue #1024).
+
+        ``check_fn`` must be a zero-argument callable returning a
+        ``CheckResult``. It runs in :meth:`osimflow.health.run_health_checks`
+        for every registered executor.
+
+        Raises
+        ------
+        ValueError
+            If *name* is not a registered executor.
+        """
+        if name not in cls._registry:
+            available = ", ".join(sorted(cls._registry)) or "(none)"
+            raise ValueError(
+                f"cannot register health check for '{name}': executor not registered. "
+                f"Available executors: {available}"
+            )
+        cls._health_checks[name] = check_fn
+        log.debug("registered health check for executor %s", name)
+
+    @classmethod
+    def get_health_check(cls, name: str) -> "Callable[[], CheckResult] | None":
+        """Return the health check callable registered for *name*, or None."""
+        return cls._health_checks.get(name)
+
+    @classmethod
+    def iter_health_checks(cls) -> "list[tuple[str, Callable[[], CheckResult]]]":
+        """Return ``[(name, check_fn), ...]`` for every executor that has a check.
+
+        Sorted by executor name for deterministic output. Executors
+        registered without a health check are skipped — this lets us add
+        a new executor before its check is in place without breaking the
+        health subcommand (the regression test asserts coverage of all
+        built-ins).
+        """
+        pairs: list[tuple[str, Callable[[], CheckResult]]] = []
+        for name in sorted(cls._registry):
+            check = cls._health_checks.get(name)
+            if check is not None:
+                pairs.append((name, check))
+        return pairs
+
+    @classmethod
+    def clear_health_checks(cls) -> None:
+        """Test helper: drop every registered health check.
+
+        Production code never calls this. Tests use it to start from a
+        clean slate when checking the registration loop in isolation.
+        """
+        cls._health_checks.clear()
 
     @classmethod
     def discover_plugins(cls) -> int:

@@ -199,7 +199,9 @@ bypass `_verify_step_inputs` in a new step.
 execution), `import-osa` / `export` (PAT/OSA I/O), `serve` (REST API;
 requires `[api]` extra), `list` / `show` / `compare` / `status` /
 `download` (campaign registry), `backup` / `restore` (registry
-backup/restore), `health` (system health checks), `mark-for-reanalysis`
+backup/restore), `health` (system health checks; per-executor substrate
+checks dispatch via `ExecutorRegistry` — pass `--executor <name>` to
+promote that one to CRITICAL, issue #1024), `mark-for-reanalysis`
 / `merge` (data-point lifecycle), `measure` / `list-measures` (BCL
 browse), `aggregate-runs` / `query-results` / `export-results`
 (cross-campaign analysis).
@@ -361,7 +363,7 @@ you add a public file here, mention its name in this section or
 - `osimflow/measure_resolver.py`, `osimflow/measure_versioning.py` — measure internals.
 - `osimflow/weather.py` — `discover_epw_files`, `download_epw`, `validate_epw`, `validate_epw_header`, `validate_all_epw_files`, `detect_climate_zone_from_stat`, `EPWValidationError`, `EPWDownloadError`.
 - `osimflow/version_detection.py` — `VersionDetectionError`, `detect_openstudio_version`, `get_compatible_container_tag`, `verify_version_compatibility`.
-- `osimflow/health.py` — `osimflow health` subcommand (`CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`, `run_health_checks`).
+- `osimflow/health.py` — `osimflow health` subcommand (`CheckResult`, `CheckStatus`, `CheckCategory`, `HealthReport`, `run_health_checks`). Includes one `_check_<executor>()` function per executor registered in `ExecutorRegistry` (issue #1024): `local`, `slurm`, `pbs`, `aws_batch`, `azure_batch`, `google_batch`, `nomad`, `kubernetes`, `docker_swarm`, `dask_jobqueue`. Each returns `INFORMATIONAL` by default; `run_health_checks` promotes the matching check to `CRITICAL` when `--executor <name>` is passed on the CLI.
 - `osimflow/alerting.py` — `AlertManager`, `build_alert_manager`.
 - `osimflow/notify.py` — `NotifyBackend` ABC, `EmailNotifyBackend`, `NullNotifyBackend`, `SNSNotifyBackend`, `WebhookNotifyBackend`, `build_notify_backend`.
 - `osimflow/chaos.py` — `ChaosEngine`, `ChaosResult`, `ChaosScenario`, `FaultInjector` ABC, `CPUSpikeInjector`, `MemoryPressureInjector`, `NetworkDelayInjector`, `KillSwitchInjector`, `run_chaos_scenario`.
@@ -405,7 +407,10 @@ you add a public file here, mention its name in this section or
 ### `osimflow/executors/` (`BaseExecutor` + concrete executors)
 - `__init__.py` — `LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
   `NomadExecutor`, `ExecutorRegistry` + `discover_plugins()` (entry-point
-  `osimflow.executors`).
+  `osimflow.executors`). `ExecutorRegistry.register_health_check(name, fn)`
+  attaches an optional per-executor health check (issue #1024);
+  `iter_health_checks()` yields `(name, fn)` pairs for the dispatcher in
+  `osimflow.health.run_health_checks`.
 - `base.py` — `BaseExecutor` + `Handle` interface.
 - `transport.py` — executor-agnostic result reference contract.
 - `azure_batch_executor.py` — `AzureBatchExecutor`.
