@@ -658,8 +658,11 @@ def test_spot_retry_backoff_caps_at_60s_and_honors_max_retries(
     for d in sleeps:
         assert d <= 60.0, f"{executor_name}: retry sleep {d}s exceeds the 60s cap"
     # The 4th retry (attempt index 4) computes 5*2^4=80 -> must be capped to 60.
-    assert max(sleeps) == 60.0, (
-        f"{executor_name}: expected the 60s cap to be exercised, max sleep was {max(sleeps)}"
+    # Since issue #1025 added ``random.uniform(0, backoff)`` jitter, the
+    # actual sleep is uniformly distributed in [0, 60] rather than exactly
+    # 60.0; we assert the cap *bound* is honored rather than equality.
+    assert max(sleeps) <= 60.0, (
+        f"{executor_name}: expected the 60s cap to bound the sleep, max sleep was {max(sleeps)}"
     )
     # Honor max_retries: exactly max_retries Spot retries sleep before exhaustion.
     assert len(sleeps) == ex.max_retries, (

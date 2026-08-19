@@ -305,3 +305,62 @@ def test_stats(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     s = tmp_cache.stats()
     assert s["total"] == 2
     assert s["by_step"] == {"A": 1, "B": 1}
+
+
+def test_bin_py_edit_invalidates_code_hash_in_dev_mode() -> None:
+    """Regression test for issue #1021.
+
+    In a ``pip install -e .`` development checkout both
+    ``osimflow/_work_scripts/*.py`` and ``bin/*.py`` exist. The bug was
+    that ``Campaign._compute_code_hashes`` only hashed whichever directory
+    was found *first* (``_work_scripts/``), so editing a ``bin/*.py`` file
+    left the cache key unchanged and the campaign kept returning stale
+    results.
+
+    After the fix, the hash covers the UNION of both directories
+    (sorted, deduped) whenever either exists. This test exercises the
+    actual code path: it touches a real ``bin/*.py`` file in the worktree,
+    re-computes the hash via ``Campaign._compute_code_hashes``, and
+    asserts the hash changed. The file is restored before the test
+    returns so subsequent runs are unaffected.
+    """
+    from osimflow.campaign import Campaign
+
+    # Resolve the worktree's bin/ directory (the dev fallback directory).
+    repo_root = Path(__file__).resolve().parents[2]
+    bin_dir = repo_root / "bin"
+    assert bin_dir.is_dir(), "this test requires a development checkout (bin/ must exist on disk)"
+
+    target = bin_dir / "aggregate_results.py"
+    assert target.is_file(), f"{target} should exist in a dev checkout"
+
+    original_content = target.read_text()
+    try:
+        # Baseline hash via the same path Campaign uses.
+        # _compute_code_hashes does not depend on instance state, so a
+        # bare bound method call on a None self is sufficient. We use
+        # a tiny stub object to keep mypy strict-mode happy.
+        class _Stub:
+            pass
+
+        baseline = Campaign._compute_code_hashes(_Stub())
+
+        # Touch a bin/*.py file by appending a no-op comment. SHA-256 of
+        # the union must change.
+        with target.open("a", encoding="utf-8") as f:
+            f.write("# no-op touch for issue #1021 regression test\n")
+
+        after = Campaign._compute_code_hashes(_Stub())
+
+        assert "bin" in baseline and "bin" in after
+        assert baseline["bin"] != after["bin"], (
+            "Editing bin/*.py must change the 'bin' code hash. "
+            "If this fails, _compute_code_hashes is still preferring "
+            "_work_scripts/ over bin/ (issue #1021)."
+        )
+        # The work hash must be unaffected by a bin/ edit.
+        assert baseline["work"] == after["work"]
+    finally:
+        # Restore the file byte-for-byte so subsequent test runs and
+        # human edits see the same starting content.
+        target.write_text(original_content)

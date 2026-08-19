@@ -15,6 +15,7 @@ import importlib.resources
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -243,16 +244,17 @@ def run_with_retry(
             if attempt == max_retries:
                 break
             delay = min(base_delay * (2**attempt), 60.0)
+            jittered_delay = random.uniform(0, delay)
             log.warning(
                 "%s %s transient failure (attempt %d/%d), retrying in %.1fs: %s",
                 step_name,
                 sample_id,
                 attempt + 1,
                 max_retries,
-                delay,
+                jittered_delay,
                 exc,
             )
-            time.sleep(delay)
+            time.sleep(jittered_delay)
 
     if last_exc is not None:
         raise last_exc

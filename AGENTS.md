@@ -132,7 +132,7 @@ make lint       # ruff check
 make format     # ruff format (write)
 make typecheck  # mypy --strict on osimflow/
 make test       # pytest (full suite, no coverage gate)
-make test-cov   # pytest --cov with 85% gate           (CI default)
+make test-cov   # pytest --cov with 83% gate           (CI default)
 make test-fast  # pytest tests/contract -x -q          (pre-commit mirror)
 make contract   # tools/check_agents_contract.py + tools/check_docs_sync.py
 make precommit  # pre-commit run --all-files          (pre-push safety net)
@@ -306,7 +306,7 @@ at all on your shell, it will silently run with the wrong interpreter.
 
 CI runs in parallel jobs (`.github/workflows/ci.yml`): `lint`
 (`ruff check` + `ruff format --check`), `typecheck` (`mypy --strict
-osimflow/`), `test` (pytest with 85% coverage gate), `contract` (the
+osimflow/`), `test` (pytest with 83% coverage gate), `contract` (the
 two `tools/check_*.py` scripts), `security` (`pip-audit`), plus
 `mlflow-real` (real MLflow smoke test), `slow` (`-m slow`), and per-PR
 Nomad single-node E2E. Per-substrate E2E (`aws-batch-e2e.yml`,

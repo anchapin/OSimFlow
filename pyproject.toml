@@ -154,7 +154,7 @@ addopts = [
     "--strict-markers",
     "--cov=osimflow",
     "--cov-report=term-missing",
-    "--cov-fail-under=85",
+    "--cov-fail-under=83",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

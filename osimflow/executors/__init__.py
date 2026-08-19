@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import subprocess
 import threading
@@ -603,14 +604,15 @@ class _AWSBatchHandle(Handle):
 
             if is_spot and attempt < effective_max_retries:
                 backoff = min(5.0 * (2**attempt), 60.0)
+                jittered_backoff = random.uniform(0, backoff)
                 log.warning(
                     "Spot interrupted (attempt %d/%d), retrying in %.1fs: %s",
                     attempt + 1,
                     effective_max_retries,
-                    backoff,
+                    jittered_backoff,
                     reason,
                 )
-                time.sleep(backoff)
+                time.sleep(jittered_backoff)
                 # Resubmit and update the tracked job_id.
                 self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
                 self.worker_id = self.job_id
