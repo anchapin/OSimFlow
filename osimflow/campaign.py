@@ -68,7 +68,7 @@ from .apply_params import (
     _build_mappings,
     preflight_check,
 )
-from .cache import CacheKey, sha256_of_dict, sha256_of_files
+from .cache import CacheKey, _container_digest_for, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .cost_tracking import (
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
@@ -371,6 +371,15 @@ class Campaign:
                 "using override for Python container image: %s",
                 self._python_container_image,
             )
+        # Resolve the content-addressable digests ONCE per campaign so
+        # cache keys are stable across the entire run and `docker inspect`
+        # is not called per-sample. ``_container_digest_for`` falls back to
+        # a SHA-256 of the label when docker is absent, hung, or the image
+        # is not pulled locally. See issue #1023.
+        self._python_container_digest = _container_digest_for(self._python_container_image)
+        self._os_container_digest = _container_digest_for(
+            CONTAINER_OS.format(version=cfg.openstudio_version)
+        )
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
@@ -2840,7 +2849,7 @@ class Campaign:
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
             code_sha256=self.code_hashes["bin"],
-            container_digest=self._python_container_image,
+            container_digest=self._python_container_digest,
             generation=generation,
         )
         cached = self.cache.lookup(key)
@@ -2978,7 +2987,7 @@ class Campaign:
             openstudio_version=os_version,
             inputs_sha256=inputs_hash,
             code_sha256=self.code_hashes["bin"],
-            container_digest=CONTAINER_OS.format(version=os_version),
+            container_digest=self._os_container_digest,
         )
         cached = self.cache.lookup(key)
         if cached:
@@ -3190,7 +3199,7 @@ class Campaign:
                 openstudio_version=self.cfg.openstudio_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
-                container_digest=self._python_container_image,
+                container_digest=self._python_container_digest,
                 generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
@@ -3385,7 +3394,7 @@ class Campaign:
                 openstudio_version=os_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
-                container_digest=CONTAINER_OS.format(version=os_version),
+                container_digest=self._os_container_digest,
                 generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
@@ -3720,7 +3729,7 @@ class Campaign:
                 openstudio_version=os_version,
                 inputs_sha256=inputs_hash,
                 code_sha256=self.code_hashes["bin"],
-                container_digest=self._python_container_image,
+                container_digest=self._python_container_digest,
                 generation=generation,
             )
             state = self._sample_state.setdefault(sid, {})
@@ -4129,7 +4138,7 @@ class Campaign:
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
             code_sha256=self.code_hashes["work"],
-            container_digest=self._python_container_image,
+            container_digest=self._python_container_digest,
         )
         cached = self.cache.lookup(key)
         if cached:
