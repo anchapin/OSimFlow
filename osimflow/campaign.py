@@ -930,9 +930,11 @@ class Campaign:
         The method submits no new work — all submissions are already
         dispatched.  It awaits results using a
         ``concurrent.futures.ThreadPoolExecutor`` sized to
-        ``self.max_workers``, so up to ``max_workers`` results are
-        collected in parallel.  Each per-sample error is caught, logged
-        with ``exc_info=True``, and recorded — it is never swallowed.
+        ``self._effective_max_workers()``, so up to that many results
+        are collected in parallel (bounded by
+        ``resource_quota.max_concurrent_samples`` when set — issue #1009).
+        Each per-sample error is caught, logged with ``exc_info=True``,
+        and recorded — it is never swallowed.
 
         For ``max_workers=1`` the behaviour is identical to the old
         sequential loop.
@@ -1068,7 +1070,7 @@ class Campaign:
         # so the pool parallelism effectively controls how many samples
         # we wait for at the same time.
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.max_workers,
+            max_workers=self._effective_max_workers(),
             thread_name_prefix="osimflow-fanout",
         ) as pool:
             futures = {
