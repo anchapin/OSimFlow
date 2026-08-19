@@ -780,6 +780,19 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "single-process LocalCluster is started automatically."
         ),
     )
+    run.add_argument(
+        "--redis-url",
+        default=None,
+        help=(
+            "Redis URL for distributed campaign state (issue #993, T8.2). "
+            "When set, cache entries shared across nodes/processes are "
+            "coordinated through Redis and each process uses a private "
+            "local SQLite file, so concurrent campaigns against the same "
+            "outdir no longer contend on one SQLite database. "
+            "Example: redis://localhost:6379/0. Default: single-node "
+            "SQLite cache (unchanged behaviour)."
+        ),
+    )
     # Docker Swarm executor flags (issue #582)
     run.add_argument(
         "--docker-swarm-poll-interval-s",

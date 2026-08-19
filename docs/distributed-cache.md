@@ -1,10 +1,10 @@
 # Distributed Cache
 
-OSimFlow's campaign cache accelerates re-runs by storing the output of every step/sample combination keyed to its inputs. On a single machine this works out of the box. When a campaign spans multiple Slurm nodes or AWS Batch jobs, each worker maintains its own local `SQLiteCache` — changes made by one worker are invisible to the others, so cache is not shared across the cluster.
+OSimFlow's campaign cache accelerates re-runs by storing the output of every step/sample combination keyed to its inputs. On a single machine this works out of the box with a plain `SQLiteCache`. When a campaign spans multiple Slurm nodes or AWS Batch jobs — or when two campaign processes coordinate on the same `outdir` — configure a Redis URL (`--redis-url` or `OSIMFLOW_REDIS_URL`, issue #993): shared cache entries then live in a Redis shared store, invalidations are broadcast via pub/sub, and each process keeps a pid-private local SQLite file so there is never SQLite lock contention.
 
 ## 1. Overview
 
-### The gap
+### The gap (before the shared entry store)
 
 `SQLiteCache` (`osimflow/cache.py`) is a local-only, content-addressable cache. The primary key is:
 
@@ -12,60 +12,72 @@ OSimFlow's campaign cache accelerates re-runs by storing the output of every ste
 (step, sample_id, openstudio_version, inputs_sha256, code_sha256, container_digest, generation)
 ```
 
-Two Slurm nodes running different samples with the same cache key cannot share a hit — the second node recomputes what the first node already computed. This is not a bug; it is the design for single-node operation. The gap is cross-node coherence.
+Without a distributed backend, two Slurm nodes running different samples with the same cache key cannot share a hit — the second node recomputes what the first node already computed. Similarly, two campaign processes sharing one `outdir` contend on the same `cache.sqlite` file (`SQLITE_BUSY` under load — the T8.1 reproducer, fluxion#1790). Neither is a bug in `SQLiteCache`; it is the design for single-node operation. The gap is cross-node coherence without shared-file contention — closed since issue #993 (T8.2) by the Redis-backed shared entry store.
 
 ### When it matters
 
 - Multi-node Slurm campaigns (`--executor slurm --slurm-real`) where different nodes run different samples.
 - AWS Batch multi-node jobs where different tasks compute different steps.
 - Any campaign where two or more workers might evaluate the same inputs independently.
+- Concurrent campaign processes against the same `outdir` (resume, re-analysis, cache warming) that must not lock each other out of one SQLite file.
 
-## 2. Existing Distributed Cache
+## 2. Distributed campaign state
 
-`osimflow/distributed_cache.py` provides `DistributedCache`, a drop-in wrapper around `SQLiteCache` that adds Redis pub/sub broadcast on every invalidation event.
+`osimflow/distributed_cache.py` provides `DistributedCache`, a drop-in replacement for `SQLiteCache` that coordinates campaign state through Redis (issue #993, T8.2):
+
+1. **Shared entry store** — cache entries that must be shared across nodes/processes are written to a Redis *hash* under a stable, outdir-derived namespace. A `lookup` that misses the local SQLite file falls back to the shared store and backfills the local file, so every worker converges on the same view of completed work.
+2. **Invalidation broadcast** — every `invalidate_*` call deletes the affected fields from the shared hash *and* publishes a pub/sub message so peers drop their local copies.
+
+Each process keeps a **pid-private local SQLite file** (`cache.p<pid>.sqlite`), so two concurrent campaign processes coordinating on the same state never open — and never lock — the same SQLite database (the fix for the T8.1 lock reproducer, fluxion#1790).
 
 ### Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     Single campaign                          │
-│                                                              │
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐         │
-│  │  Worker A   │   │  Worker B   │   │  Worker C   │         │
-│  │             │   │             │   │             │         │
-│  │ SQLiteCache │   │ SQLiteCache │   │ SQLiteCache │         │
-│  │     ↑↓      │   │     ↑↓      │   │     ↑↓      │         │
-│  │  (local)    │   │  (local)    │   │  (local)    │         │
-│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘         │
-│         │                  │                  │                │
-│         └──────────────────┼──────────────────┘                │
-│                            │                                   │
-│                    Redis pub/sub                               │
-│               osimflow:cache:invalidate:<campaign_id>         │
-└──────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                        One campaign (outdir)                      │
+│                                                                   │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐            │
+│  │  Worker A   │    │  Worker B   │    │  Worker C   │            │
+│  │             │    │             │    │             │            │
+│  │ cache.p1.sqlite │ │ cache.p2.sqlite │ │ cache.p3.sqlite │      │
+│  │  (pid-private, │  │  (pid-private, │  │  (pid-private, │      │
+│  │   write-through)│ │   write-through)│ │   write-through)│     │
+│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘            │
+│         │  HSET/HGET/HDEL  │                │   (sync client)     │
+│         └──────────────────┼────────────────┘                     │
+│                            │                                       │
+│              Redis hash: osimflow:cache:entries:<namespace>        │
+│              Redis pub/sub: osimflow:cache:invalidate:<namespace>  │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 `build_cache()` is the factory:
 
 ```python
-from osimflow.distributed_cache import build_cache
+from osimflow.distributed_cache import build_cache, campaign_state_namespace
 
 cache = build_cache(
     db_path=Path("outdir/work/cache.sqlite"),
     redis_url="redis://localhost:6379/0",   # None → plain SQLiteCache
-    campaign_id="2025-01-01T12-00-00",
+    campaign_id=campaign_state_namespace(Path("outdir")),
 )
 ```
 
-When `redis_url` is `None`, `build_cache` returns a plain `SQLiteCache` — single-node behaviour is unchanged. When a Redis URL is provided, it returns a `DistributedCache`.
+When `redis_url` is `None`, `build_cache` returns a plain `SQLiteCache` at `db_path` — single-node behaviour is unchanged. When a Redis URL is provided, it returns a `DistributedCache` whose shared state lives in Redis.
 
-### Redis channel naming
+If Redis is unreachable, every shared-store operation logs a warning and degrades to local-only behaviour — a Redis outage never fails the campaign.
 
-```
-osimflow:cache:invalidate:<campaign_id>
-```
+### Redis key naming
 
-The `campaign_id` (from `run.json`) keeps concurrent campaigns isolated. Each campaign broadcasts on its own channel.
+Shared entry store (hash; field = pipe-encoded cache key, value = JSON entry)::
+
+    osimflow:cache:entries:<namespace>
+
+Invalidation channel (pub/sub)::
+
+    osimflow:cache:invalidate:<namespace>
+
+The namespace is derived from the resolved `outdir` (`campaign_state_namespace`, a SHA-256 prefix), so all processes/nodes targeting the same `outdir` share one namespace while concurrent campaigns on different outdirs stay isolated. A per-run timestamp id would give each process a *different* namespace and defeat sharing.
 
 ### Message format
 
@@ -160,22 +172,25 @@ The `CampaignConfig.redis_url` field is wired from both sources and passed to `b
 
 ### Campaign integration
 
-The `Campaign` class calls `build_cache()` during initialization:
+The `Campaign` class calls `build_cache()` during initialization (issue #993):
 
 ```python
 from osimflow.campaign import Campaign
 from osimflow.config import load_config
+from osimflow.distributed_cache import campaign_state_namespace
 
-config = load_config(vars(args))
-campaign = Campaign(config=config)
+config = load_config(vars(args))   # redis_url from --redis-url / env
+campaign = Campaign(cfg=config, executor=executor)
 
 # Internally:
 # cache = build_cache(
 #     db_path=config.cache_db,
 #     redis_url=config.redis_url,
-#     campaign_id=campaign.campaign_id,
+#     campaign_id=campaign_state_namespace(config.outdir),
 # )
 ```
+
+When `redis_url` is `None` (the default), `Campaign` uses a plain `SQLiteCache` at `outdir/work/cache.sqlite` — single-node behaviour is unchanged. When `redis_url` is set, the shared state lives in Redis and each process uses a pid-private local SQLite file (`outdir/work/cache.p<pid>.sqlite`).
 
 ### Distributed job queue coordination
 
@@ -253,6 +268,8 @@ For a cache hit to occur on any node, **all seven fields must match exactly**:
 
 **Practical rules for cache hits across nodes:**
 
+With the shared entry store (issue #993), a matching key found by *any* worker is visible to every other worker: `lookup` falls back to the Redis hash when the local file misses, and backfills the local file on a shared hit. The rules below are therefore about keeping the *keys* identical across workers:
+
 1. **Same input variables** — the same `variables.yml` produces the same `inputs_sha256`.
 2. **Same seed model** — the same `template_sim_package` directory tree produces the same `inputs_sha256`.
 3. **Same `bin/*.py` scripts** — no edits to `bin/apply_params_to_model.py`, `bin/extract_kpis.py`, etc. between runs. Any edit invalidates `code_sha256` for all samples.
@@ -261,7 +278,7 @@ For a cache hit to occur on any node, **all seven fields must match exactly**:
 
 ### Computing the hashes
 
-`SQLiteCache` computes the hashes internally via `sha256_of_files()` and `sha256_of_dict()`. You can inspect them:
+`SQLiteCache` computes the hashes internally via `sha256_of_files()` and `sha256_of_dict()`. You can inspect them (single-node mode uses `cache.sqlite`; distributed mode uses per-process `cache.p<pid>.sqlite` files):
 
 ```bash
 set -euo pipefail
@@ -274,6 +291,10 @@ sqlite3 outdir/work/cache.sqlite "SELECT step, COUNT(*) FROM cache_entries GROUP
 
 # View a specific entry
 sqlite3 outdir/work/cache.sqlite "SELECT * FROM cache_entries WHERE step='RUN_OPENSTUDIO_SIM' LIMIT 1"
+
+# Distributed mode: inspect the Redis shared store instead
+redis-cli HLEN osimflow:cache:entries:<namespace>
+redis-cli HSCAN osimflow:cache:entries:<namespace> 0 MATCH 'RUN_OPENSTUDIO_SIM|*' COUNT 20
 ```
 
 ## 6. Cache Invalidation
@@ -291,16 +312,17 @@ sqlite3 outdir/work/cache.sqlite "SELECT * FROM cache_entries WHERE step='RUN_OP
 
 ### How distributed invalidation works
 
-`DistributedCache.invalidate_step()` and `invalidate_sample()` call the local `SQLiteCache` and then publish a JSON message to Redis:
+`DistributedCache.invalidate_step()` and `invalidate_sample()` delete from the local SQLite file, delete the matching fields from the Redis shared store, and publish a JSON message to the invalidation channel:
 
 ```python
 def invalidate_step(self, step: str) -> int:
     n = self._local.invalidate_step(step)
+    self._shared_invalidate(f"{step}|*")          # Redis HSCAN + HDEL
     self._publish({"action": "invalidate_step", "step": step})
     return n
 ```
 
-Every other worker subscribed to `osimflow:cache:invalidate:<campaign_id>` receives the message and calls its local `SQLiteCache.invalidate_*`, keeping all local caches coherent.
+Every other worker subscribed to `osimflow:cache:invalidate:<namespace>` receives the message and calls its local `SQLiteCache.invalidate_*`, keeping all local caches coherent. A worker that joins late (or missed the broadcast) still sees the invalidation because the shared hash fields are gone.
 
 ### Subscriber management
 
@@ -330,12 +352,13 @@ This broadcasts the invalidation to all other workers.
 
 | Operation | Local `SQLiteCache` | `DistributedCache` |
 |-----------|--------------------|--------------------|
-| `lookup` | ~0.1–1 ms (local disk) | Same (local SQLite) |
-| `store` | ~1–5 ms (local disk) | Same (local SQLite) |
-| `invalidate_*` | ~1–5 ms | ~5–20 ms (Redis round-trip) |
+| `lookup` (local hit) | ~0.1–1 ms (local disk) | Same (local SQLite fast path) |
+| `lookup` (local miss) | miss | +1 Redis round-trip if the shared store holds the key |
+| `store` | ~1–5 ms (local disk) | +1 Redis round-trip (HSET) |
+| `invalidate_*` | ~1–5 ms | ~5–20 ms (Redis HDEL + pub/sub round-trip) |
 | Subscriber receive | N/A | ~1–10 ms (depends on network) |
 
-The distributed invalidation adds network latency to `invalidate_*` calls, but these are infrequent (triggered by config changes, not per-sample). The hot path (`lookup` / `store`) is unaffected.
+The distributed path adds a bounded network round-trip (5s socket timeout, then graceful degradation to local-only) to `store` and to *missed* lookups. The invalidation calls are infrequent (triggered by config changes, not per-sample).
 
 ### Redis connection pooling
 
@@ -350,7 +373,8 @@ For high-frequency publish scenarios (e.g., many workers invalidating simultaneo
 
 `SQLiteCache` does not currently enforce a TTL. Stale entries are removed only by explicit invalidation or by reaching the storage limit. For long-running campaigns:
 
-- Monitor `cache.sqlite` size: `ls -lh outdir/work/cache.sqlite`.
+- Monitor the local cache files: `ls -lh outdir/work/cache.sqlite` (single-node) or `ls -lh outdir/work/cache.p*.sqlite` (distributed mode — one per process; they are scratch files and safe to delete between runs).
+- For the Redis shared store, set a TTL policy on the `osimflow:cache:entries:*` keys (e.g. via `redis-cli --bigkeys` review and an `EXPIRE` sweep) if campaigns are long-lived.
 - Set a cron job to purge entries older than N days if needed:
 
 ```bash
@@ -365,9 +389,10 @@ find outdir/work/cache.sqlite -mtime +30 -delete
 If a worker loses Redis connectivity:
 
 1. The subscriber thread logs a warning and attempts to reconnect.
-2. Local cache operations continue normally (the local `SQLiteCache` is always available).
-3. Invalidation broadcasts from other workers are missed until reconnection.
-4. On reconnection, the subscriber re-subscribes to the channel and resumes receiving broadcasts.
+2. Shared-store operations (`store` / shared `lookup` / shared invalidation) log a warning and degrade to local-only — they never raise, so a Redis outage cannot fail the campaign.
+3. Local cache operations continue normally (the pid-private `SQLiteCache` is always available).
+4. Invalidation broadcasts from other workers are missed until reconnection.
+5. On reconnection, the subscriber re-subscribes to the channel and resumes receiving broadcasts.
 
 Workers that miss invalidation events may produce stale cache entries for that campaign. The next explicit invalidation (e.g., changing `variables.yml`) will correct the state.
 
@@ -393,23 +418,23 @@ osimflow run \
   ...
 ```
 
-With a shared `outdir`, all workers share the same `cache.sqlite` file via NFS. This is simpler than Redis but:
+With a shared `outdir`, all workers can point at the same directory. Since issue #993 the recommended combination on shared filesystems is `--redis-url` + shared `outdir`: the shared *state* (cache entries) is coordinated through Redis while each process keeps a pid-private SQLite file, so the classic `SQLITE_BUSY` contention of many writers on one NFS-backed `cache.sqlite` is gone. Running purely on NFS without Redis remains possible but:
 
 - **Performance**: NFS latency (~1–5 ms per I/O) may be higher than local SSD.
-- **Lock contention**: SQLite WAL mode helps, but concurrent writers on NFS can cause `SQLITE_BUSY` errors under heavy load.
+- **Lock contention**: without Redis, all workers share the same `cache.sqlite` file; SQLite WAL mode helps, but concurrent writers on NFS can cause `SQLITE_BUSY` errors under heavy load (the T8.1 reproducer).
 - **No broadcast invalidation**: all workers see the same SQLite file directly.
 
-Redis pub/sub is preferred for multi-node campaigns on shared-nothing HPC infrastructure.
+Redis is preferred for multi-node campaigns on shared-nothing HPC infrastructure.
 
 ### Redis vs. memcached
 
-Redis is used for **pub/sub broadcast**, not as a cache store. The actual simulation outputs are stored on local disk (or S3). Memcached cannot serve this role because it does not support pub/sub — invalidation would require polling or a custom solution.
+Redis provides both the **shared entry store** (the campaign's cross-node cache index) and the **pub/sub broadcast** for invalidations. The actual simulation outputs are stored on local disk (or S3). Memcached cannot serve this role because it does not support pub/sub or hash-field deletion — invalidation would require polling or a custom solution.
 
 ### Summary comparison
 
-| Approach | Cache sharing | Broadcast invalidation | Setup complexity | Performance |
-|----------|--------------|------------------------|-----------------|-------------|
-| Local `SQLiteCache` (default) | None | None | None | Best (local SSD) |
-| `DistributedCache` + Redis | Per-campaign | Yes (pub/sub) | Redis required | Near-local (local SQLite) |
-| Shared NFS `outdir` | Full (same file) | None | None (if NFS exists) | Poor (NFS latency) |
-| S3 result storage | Read-only share | None | AWS S3 | N/A (not a cache) |
+| Approach | Cache sharing | Broadcast invalidation | SQLite lock contention | Setup complexity | Performance |
+|----------|--------------|------------------------|------------------------|-----------------|-------------|
+| Local `SQLiteCache` (default) | None | None | N/A (single file) | None | Best (local SSD) |
+| `DistributedCache` + Redis | Per-campaign (shared hash) | Yes (pub/sub) | None (pid-private files) | Redis required | Near-local (local fast path) |
+| Shared NFS `outdir` (no Redis) | Full (same file) | None | Possible (`SQLITE_BUSY`) | None (if NFS exists) | Poor (NFS latency) |
+| S3 result storage | Read-only share | None | N/A | AWS S3 | N/A (not a cache) |

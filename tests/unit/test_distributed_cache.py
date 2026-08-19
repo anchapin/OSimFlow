@@ -39,6 +39,24 @@ except ImportError:
     _HAS_REDIS = False
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sync_redis() -> Any:
+    """Keep every test in this module off a real sync Redis connection.
+
+    Since issue #993 the ``store``/``lookup``/``invalidate_*`` paths also
+    talk to a *sync* Redis client (the shared entry store). Without this
+    fixture, tests that do not patch ``_get_redis_sync`` would attempt a
+    real connection to localhost:6379. A failing client factory keeps
+    them hermetic: the shared-store helpers catch the error, log a
+    warning, and degrade to local-only — which is exactly the behaviour
+    under test in the pre-#993 assertions.
+    """
+    failing_module = MagicMock()
+    failing_module.from_url.side_effect = ConnectionError("no real Redis in unit tests")
+    with patch("osimflow.distributed_cache._get_redis_sync", return_value=failing_module):
+        yield
+
+
 class TestBuildCache:
     def test_returns_sqlite_cache_when_redis_url_is_none(self, tmp_path: Path) -> None:
         cache = build_cache(

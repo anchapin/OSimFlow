@@ -25,6 +25,7 @@ __all__ = [
 import dataclasses
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -1593,6 +1594,16 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         task_queue=str(args.get("task_queue", "none")),
         dask_scheduler_address=(
             str(args["dask_scheduler_address"]) if args.get("dask_scheduler_address") else None
+        ),
+        # Redis URL for distributed campaign state (issue #993 / T8.2).
+        # When set, the campaign's shared cache entries are coordinated
+        # through Redis; when None (default) the single-node SQLiteCache
+        # is used unchanged. Precedence (per docs/distributed-cache.md):
+        # CLI flag > OSIMFLOW_REDIS_URL env var > None.
+        redis_url=(
+            str(args["redis_url"])
+            if args.get("redis_url")
+            else (os.environ.get("OSIMFLOW_REDIS_URL") or None)
         ),
         resource_quota=_parse_resource_quota(args.get("resource_quota")),
         enable_cost_tracking=bool(args.get("enable_cost_tracking", False)),
