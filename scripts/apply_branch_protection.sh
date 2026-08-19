@@ -31,16 +31,17 @@
 # ----------------
 #   required_status_checks.strict          = false
 #   required_status_checks.contexts        = (5 names above)
-#   required_linear_history.enabled        = true
-#   required_pull_request_reviews          = null    (NOT required)
+#   required_linear_history                = true   (plain boolean)
+#   required_pull_request_reviews          = null   (NOT required)
 #   restrictions                           = null
 #   required_conversation_resolution       = null
-#   allow_force_pushes.enabled             = false
-#   allow_deletions.enabled                = false
-#   allow_fork_syncing.enabled             = false
-#   block_creations                        = false
-#   required_signatures                    = null
-#   lock_branch                            = false
+#   allow_force_pushes                    = false  (plain boolean)
+#   allow_deletions                       = false  (plain boolean)
+#   allow_fork_syncing                    = false  (plain boolean)
+#   block_creations                       = false
+#   required_signatures                   = false  (plain boolean)
+#   lock_branch                           = false
+#   enforce_admins                        = false  (admins bypass)
 #
 # See docs/branch-protection.md for the rationale behind each setting and the
 # review/squash-merge decisions the orchestrator intentionally skipped.
@@ -120,24 +121,17 @@ cat >"$TMP" <<JSON
         "strict": false,
         "contexts": ${REQUIRED_CHECKS}
     },
-    "required_linear_history": {
-        "enabled": true
-    },
+    "required_linear_history": true,
     "required_pull_request_reviews": null,
     "restrictions": null,
     "required_conversation_resolution": null,
-    "allow_force_pushes": {
-        "enabled": false
-    },
-    "allow_deletions": {
-        "enabled": false
-    },
-    "allow_fork_syncing": {
-        "enabled": false
-    },
+    "allow_force_pushes": false,
+    "allow_deletions": false,
+    "allow_fork_syncing": false,
     "block_creations": false,
-    "required_signatures": null,
-    "lock_branch": false
+    "required_signatures": false,
+    "lock_branch": false,
+    "enforce_admins": false
 }
 JSON
 
@@ -163,12 +157,16 @@ fi
 # Idempotency check (best-effort — falls through to PUT if jq is absent or the
 # comparison fails). Compare only the fields that a human reviewer would care
 # about: the required-check context list and the linear-history flag.
+#
+# NOTE: GitHub's GET response wraps some boolean fields as `{"enabled": true}`
+# even when the PUT body sends a plain `true` — we normalize the GET response
+# before comparing.
 if command -v jq >/dev/null 2>&1; then
     CURRENT="$(gh api "/repos/${REPO}/branches/${BRANCH}/protection" 2>/dev/null || true)"
     if [[ -n "$CURRENT" ]]; then
         if echo "$CURRENT" | jq -e --argjson desired "$(cat "$TMP")" \
                 '(.required_status_checks.contexts | sort) == ($desired.required_status_checks.contexts | sort)
-                 and .required_linear_history.enabled == $desired.required_linear_history.enabled
+                 and ((.required_linear_history | if type == "object" then .enabled else . end)) == $desired.required_linear_history
                  and (.required_pull_request_reviews // null) == ($desired.required_pull_request_reviews // null)' \
                 >/dev/null 2>&1; then
             echo "Already in desired state (no API call made)."
@@ -187,7 +185,7 @@ gh api \
 # Re-fetch and emit a one-line summary so the caller can eyeball the result.
 NEW="$(gh api "/repos/${REPO}/branches/${BRANCH}/protection")"
 CONTEXTS="$(echo "$NEW" | jq -r '.required_status_checks.contexts | join(", ")')"
-LINEAR="$(echo "$NEW" | jq -r '.required_linear_history.enabled')"
+LINEAR="$(echo "$NEW" | jq -r '.required_linear_history')"
 REVIEWS="$(echo "$NEW" | jq -r 'if .required_pull_request_reviews == null then "disabled" else "enabled" end')"
 echo "Branch protection updated for ${REPO}@${BRANCH}:"
 echo "  required checks       : ${CONTEXTS}"

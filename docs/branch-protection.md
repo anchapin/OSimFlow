@@ -17,16 +17,17 @@ The settings applied to `anchapin/OSimFlow@main` by
 |---|---|---|
 | `required_status_checks.contexts` | 5 checks (see below) | Gate merges on CI; prevents the #969 failure mode from recurring. |
 | `required_status_checks.strict` | `false` | Don't require the PR branch to be up-to-date with `main` — keeps wave-style automation unblocked; can be tightened manually later. |
-| `required_linear_history.enabled` | `true` | Linear history keeps the graph readable and `git bisect` cheap; the project already squash-merges. |
+| `required_linear_history` | `true` | Linear history keeps the graph readable and `git bisect` cheap; the project already squash-merges. (Plain boolean per the GitHub API.) |
 | `required_pull_request_reviews` | `null` (not required) | **Intentional:** requiring reviews would deadlock single-user automation. See *What's NOT enabled* below. |
 | `restrictions` | `null` | No push restrictions — by default GitHub allows admins (including `gh`'s admin:repo token) to bypass. |
 | `required_conversation_resolution` | `null` | Off — bot-driven PRs generate a high volume of stale conversation threads. |
-| `allow_force_pushes.enabled` | `false` | Forbid force pushes (the project doesn't use them in the wave workflow). |
-| `allow_deletions.enabled` | `false` | Forbid branch deletion — protects historical bisect targets. |
-| `allow_fork_syncing.enabled` | `false` | Forbid fork-syncing — irrelevant for this repo (no forks consume it as an upstream). |
+| `allow_force_pushes` | `false` | Forbid force pushes (the project doesn't use them in the wave workflow). (Plain boolean per the GitHub API.) |
+| `allow_deletions` | `false` | Forbid branch deletion — protects historical bisect targets. (Plain boolean per the GitHub API.) |
+| `allow_fork_syncing` | `false` | Forbid fork-syncing — irrelevant for this repo (no forks consume it as an upstream). (Plain boolean per the GitHub API.) |
 | `block_creations` | `false` | Allow new branch creation from `main`. |
-| `required_signatures` | `null` | Off — signing is not part of the project's contribution flow yet. |
+| `required_signatures` | `false` | Off — signing is not part of the project's contribution flow yet. |
 | `lock_branch` | `false` | Branch is open. |
+| `enforce_admins` | `false` | Admins (including `gh`'s admin:repo token) bypass the rules. Required field per the GitHub API; kept `false` so admin-driven automation stays unblocked. |
 
 ### Required status checks (must match `ci.yml` verbatim)
 
@@ -98,10 +99,11 @@ gh api repos/anchapin/OSimFlow/branches/main/protection
 This returns the full protection payload. Confirm:
 
 - `required_status_checks.contexts` is the 5-element list above.
-- `required_linear_history.enabled` is `true`.
+- `required_linear_history` is `true`.
 - `required_pull_request_reviews` is `null`.
-- `allow_force_pushes.enabled` / `allow_deletions.enabled` /
-  `allow_fork_syncing.enabled` are all `false`.
+- `allow_force_pushes` / `allow_deletions` /
+  `allow_fork_syncing` are all `false`.
+- `enforce_admins` is `false`.
 
 You can also read the same payload through the GitHub UI under
 **Settings → Branches → Branch protection rules → `main`**.

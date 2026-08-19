@@ -15,9 +15,9 @@ These tests run the script with ``--dry-run`` (no real API call) and:
   — protecting against accidental regressions).
 * ``test_payload_disables_force_pushes_and_deletions`` — explicitly assert
   ``allow_force_pushes`` / ``allow_deletions`` / ``allow_fork_syncing`` are
-  all disabled.
+  all disabled (plain booleans per the GitHub API).
 * ``test_payload_enables_linear_history`` — explicitly assert
-  ``required_linear_history.enabled`` is true.
+  ``required_linear_history`` is true (plain boolean per the GitHub API).
 
 Skips gracefully when ``gh`` is not on PATH (the dry-run code-path does not
 need ``gh``, so the rest of the tests still run; only the dry-run assertions
@@ -206,25 +206,25 @@ def test_payload_does_not_require_reviews() -> None:
 @pytest.mark.skipif(gh is None, reason="gh CLI not on PATH; skip end-to-end dry-run checks")
 def test_payload_disables_force_pushes_and_deletions() -> None:
     """``allow_force_pushes`` / ``allow_deletions`` / ``allow_fork_syncing``
-    must all be explicitly disabled."""
+    must all be explicitly disabled (plain booleans per the GitHub API)."""
     payload = _extract_payload(_run_dry_run())
-    assert payload["allow_force_pushes"]["enabled"] is False, (
-        f"allow_force_pushes must be disabled, got {payload['allow_force_pushes']!r}"
+    assert payload["allow_force_pushes"] is False, (
+        f"allow_force_pushes must be false, got {payload['allow_force_pushes']!r}"
     )
-    assert payload["allow_deletions"]["enabled"] is False, (
-        f"allow_deletions must be disabled, got {payload['allow_deletions']!r}"
+    assert payload["allow_deletions"] is False, (
+        f"allow_deletions must be false, got {payload['allow_deletions']!r}"
     )
-    assert payload["allow_fork_syncing"]["enabled"] is False, (
-        f"allow_fork_syncing must be disabled, got {payload['allow_fork_syncing']!r}"
+    assert payload["allow_fork_syncing"] is False, (
+        f"allow_fork_syncing must be false, got {payload['allow_fork_syncing']!r}"
     )
 
 
 @pytest.mark.skipif(gh is None, reason="gh CLI not on PATH; skip end-to-end dry-run checks")
 def test_payload_enables_linear_history() -> None:
-    """``required_linear_history.enabled`` must be true."""
+    """``required_linear_history`` must be true (plain boolean per the GitHub API)."""
     payload = _extract_payload(_run_dry_run())
-    assert payload["required_linear_history"]["enabled"] is True, (
-        f"required_linear_history must be enabled, got {payload['required_linear_history']!r}"
+    assert payload["required_linear_history"] is True, (
+        f"required_linear_history must be true, got {payload['required_linear_history']!r}"
     )
 
 
