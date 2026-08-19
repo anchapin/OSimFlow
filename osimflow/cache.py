@@ -180,6 +180,16 @@ class SQLiteCache:
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute("PRAGMA busy_timeout=5000")
         c.execute("PRAGMA locking_mode=NORMAL")
+        #   * cache_size=-65536    — 64 MiB negative-paged cache working set
+        #                           for multi-GB caches (issue #1016).
+        #   * mmap_size=268435456 — 256 MiB memory-mapped I/O window so
+        #                           reads beyond the page cache skip the
+        #                           read() syscall path.
+        #   * temp_store=MEMORY   — keep ORDER BY / GROUP BY spill buffers
+        #                           in RAM instead of spilling to disk.
+        c.execute("PRAGMA cache_size=-65536")
+        c.execute("PRAGMA mmap_size=268435456")
+        c.execute("PRAGMA temp_store=MEMORY")
         c.row_factory = sqlite3.Row
         return c
 
