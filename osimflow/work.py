@@ -84,6 +84,71 @@ _TRANSIENT_EXIT_CODES = frozenset([-1, 2, 4, 5, 6, 11, 12, 15, 24, 25, 26, 27, 2
 
 
 # ---------------------------------------------------------------------------
+# Subprocess env sanitization (issue #1027)
+#
+# Without ``env=`` on ``subprocess.run(...)``, the child inherits the
+# orchestrator's full environment — including any AWS / GitHub / Redis
+# secrets the orchestrator itself was handed.  Every subprocess call site
+# in this module passes ``env=_sanitize_env()`` so those secrets cannot
+# leak to ``openstudio.cli`` or the Python work scripts.
+#
+# The allowlist here is intentionally narrower than
+# ``osimflow.byos._SAFE_ENV_WHITELIST`` (issue #1007 owns BYOS semantics).
+# ``openstudio.cli`` is a trusted binary that needs PATH and the Python
+# interpreter variables to start; it does not need user-shell vars like
+# ``USER`` / ``USERNAME`` and we don't want any framework flags that are
+# only meaningful to the orchestrator itself.
+# ---------------------------------------------------------------------------
+_WORK_SUBPROCESS_ENV_EXACT_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+    }
+)
+# Wildcard prefixes — any variable whose name starts with one of these
+# is forwarded to the child.  ``OSIMFLOW_*`` covers framework flags like
+# ``OSIMFLOW_STUB_SIM``; ``PYTHON*`` covers interpreter variables
+# (``PYTHONPATH``, ``PYTHONHOME``, ``PYTHONIOENCODING``,
+# ``PYTHONUNBUFFERED``).
+_WORK_SUBPROCESS_ENV_PREFIX_ALLOWLIST: tuple[str, ...] = (
+    "OSIMFLOW_",
+    "PYTHON",
+)
+
+
+def _sanitize_env() -> dict[str, str]:
+    """Return a sanitized env for subprocesses spawned from this module (issue #1027).
+
+    Builds a clean ``dict[str, str]`` from a small allowlist:
+
+    * exact-match vars (``PATH``, ``HOME``, ``LANG``, ``LC_ALL``,
+      ``TMPDIR``, ``TEMP``, ``TMP``) — needed to locate binaries, locale
+      data, and the temp directory;
+    * prefix-match vars (``OSIMFLOW_*``, ``PYTHON*``) — framework flags
+      and Python interpreter variables.
+
+    Everything else from ``os.environ`` (notably ``AWS_*``, ``GITHUB_TOKEN``,
+    ``REDIS_URL``, ``*_SECRET*``) is **dropped**.  This is the single
+    defence against accidental credential leakage from the orchestrator
+    to ``openstudio.cli run -w ...`` and the bundled ``bin/*.py`` work
+    scripts.
+    """
+    clean: dict[str, str] = {}
+    for name, value in os.environ.items():
+        if name in _WORK_SUBPROCESS_ENV_EXACT_ALLOWLIST:
+            clean[name] = value
+            continue
+        if name.startswith(_WORK_SUBPROCESS_ENV_PREFIX_ALLOWLIST):
+            clean[name] = value
+    return clean
+
+
+# ---------------------------------------------------------------------------
 # Container / simulation health monitoring (issue #415)
 # ---------------------------------------------------------------------------
 
@@ -627,6 +692,7 @@ def _apply_parameters_stub(
             check=True,
             capture_output=True,
             text=True,
+            env=_sanitize_env(),
         )
     except subprocess.CalledProcessError as e:
         log.error("apply_params failed for %s: %s", sample_id, e.stderr or "<empty>")
@@ -857,6 +923,7 @@ def _run_openstudio_sim_impl(
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
                 cwd=sim_out,
+                env=_sanitize_env(),
             )
             (sim_out / "eplusout.sql").write_text("-- placeholder sql")
             (sim_out / "eplusout.err").write_text("")
@@ -1080,6 +1147,7 @@ def _run_real_openstudio(
             stderr_path=stderr_path,
             cwd=modified_sim_package,
             check=True,
+            env=_sanitize_env(),
         )
     except subprocess.SubprocessError as e:
         log.error(
@@ -1126,6 +1194,7 @@ def generate_lhs(variables_yml: Path, n_samples: int, out: Path) -> Path:
             check=True,
             capture_output=True,
             text=True,
+            env=_sanitize_env(),
         )
     except subprocess.CalledProcessError as e:
         log.error("generate_lhs failed: %s", e.stderr or "<empty>")
@@ -1162,6 +1231,7 @@ def _extract_kpis_impl(
             check=True,
             capture_output=True,
             text=True,
+            env=_sanitize_env(),
         )
     except subprocess.CalledProcessError as e:
         log.error("extract_kpis failed for %s: %s", sample_id, e.stderr or "<empty>")
