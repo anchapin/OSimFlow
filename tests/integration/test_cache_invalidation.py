@@ -364,3 +364,108 @@ def test_bin_py_edit_invalidates_code_hash_in_dev_mode() -> None:
         # Restore the file byte-for-byte so subsequent test runs and
         # human edits see the same starting content.
         target.write_text(original_content)
+
+
+def test_work_py_edit_invalidates_per_sample_bin_hash() -> None:
+    """Regression test for issue #1022.
+
+    The per-sample cache keys (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM,
+    EXTRACT_KPIS, GENERATE_BASIC_PLOTS) are derived from
+    ``code_hashes["bin"]``. Before the fix, that hash covered only the
+    CLI scripts in ``osimflow/_work_scripts/*.py`` and ``bin/*.py``; the
+    underlying Python work layer (``osimflow.work``) that actually drives
+    the per-sample behaviour was hashed separately under
+    ``code_hashes["work"]`` (used by AGGREGATE_RESULTS only).
+
+    Result: editing ``osimflow.work.run_openstudio_sim`` left the
+    ``bin`` hash unchanged, so a re-run with the same ``--outdir`` kept
+    returning stale ``eplusout.sql`` from the previous version of the
+    simulation runner.
+
+    After the fix, the ``bin`` hash covers ``osimflow/work.py`` AND
+    ``osimflow/apply_params.py`` (the two work-layer modules that drive
+    per-sample behaviour). Editing either of them must change the ``bin``
+    hash. The ``work`` hash is unchanged (scope guard per issue #1022).
+    """
+    from osimflow import work as work_mod
+    from osimflow.campaign import Campaign
+
+    # Resolve the worktree's osimflow package so the test is
+    # independent of where pytest is invoked from.
+    package_root = Path(work_mod.__file__).resolve().parent
+    work_py = package_root / "work.py"
+    assert work_py.is_file(), f"{work_py} must exist in the package"
+
+    class _Stub:
+        pass
+
+    baseline = Campaign._compute_code_hashes(_Stub())
+    assert "bin" in baseline
+    assert "work" in baseline
+
+    original_content = work_py.read_text()
+    try:
+        # Touch osimflow/work.py by appending a no-op comment.
+        # SHA-256 of the bin hash must change because the per-sample
+        # steps (RUN_OPENSTUDIO_SIM, EXTRACT_KPIS, ...) use it.
+        with work_py.open("a", encoding="utf-8") as f:
+            f.write("# no-op touch for issue #1022 regression test\n")
+
+        after = Campaign._compute_code_hashes(_Stub())
+
+        assert baseline["bin"] != after["bin"], (
+            "Editing osimflow/work.py must change the 'bin' code hash. "
+            "If this fails, _compute_code_hashes is still scoped to "
+            "the CLI scripts only (issue #1022)."
+        )
+        # The `work` hash covers work.py too, so it must also change.
+        assert baseline["work"] != after["work"], (
+            "Editing osimflow/work.py must also change the 'work' code hash."
+        )
+    finally:
+        # Restore byte-for-byte so subsequent test runs are unaffected.
+        work_py.write_text(original_content)
+
+
+def test_apply_params_py_edit_invalidates_per_sample_bin_hash() -> None:
+    """Regression test for issue #1022.
+
+    Companion to ``test_work_py_edit_invalidates_per_sample_bin_hash``:
+    the per-sample APPLY_PARAMETERS step is driven by
+    ``osimflow.apply_params`` (the work layer that
+    ``bin/apply_params_to_model.py`` delegates to). Editing
+    ``osimflow/apply_params.py`` must invalidate the ``bin`` hash so
+    APPLY_PARAMETERS cache entries do not go stale.
+    """
+    from osimflow import apply_params as apply_params_mod
+    from osimflow.campaign import Campaign
+
+    package_root = Path(apply_params_mod.__file__).resolve().parent
+    apply_params_py = package_root / "apply_params.py"
+    assert apply_params_py.is_file(), f"{apply_params_py} must exist in the package"
+
+    class _Stub:
+        pass
+
+    baseline = Campaign._compute_code_hashes(_Stub())
+    assert "bin" in baseline
+
+    original_content = apply_params_py.read_text()
+    try:
+        with apply_params_py.open("a", encoding="utf-8") as f:
+            f.write("# no-op touch for issue #1022 regression test\n")
+
+        after = Campaign._compute_code_hashes(_Stub())
+
+        assert baseline["bin"] != after["bin"], (
+            "Editing osimflow/apply_params.py must change the 'bin' code hash. "
+            "If this fails, _compute_code_hashes is still scoped to "
+            "the CLI scripts only (issue #1022)."
+        )
+        # The `work` hash is unchanged — scope guard per issue #1022.
+        assert baseline["work"] == after["work"], (
+            "Editing osimflow/apply_params.py must NOT change the "
+            "'work' code hash (AGGREGATE_RESULTS is unaffected)."
+        )
+    finally:
+        apply_params_py.write_text(original_content)

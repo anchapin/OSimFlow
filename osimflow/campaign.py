@@ -633,7 +633,7 @@ class Campaign:
                 )
 
     def _compute_code_hashes(self) -> dict[str, str]:
-        """SHA-256 of every work script, plus the work.py module.
+        """SHA-256 of every work script, plus the work-layer modules.
 
         The work scripts live in ``osimflow._work_scripts`` (shipped with
         the wheel). A development checkout (``pip install -e .``) also has
@@ -642,11 +642,22 @@ class Campaign:
         so dev checkouts and wheel installs agree on the cache key.
         Fixes issue #1021.
 
-        The work.py module is included because it is the work layer that
-        the Campaign itself depends on; if a contributor edits it, we
-        must re-run downstream steps.
+        The ``bin`` hash additionally covers the Python work layer
+        (``osimflow.work`` and ``osimflow.apply_params``) because the
+        per-sample steps (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM,
+        EXTRACT_KPIS, GENERATE_BASIC_PLOTS) are driven by these modules,
+        not by the standalone CLI scripts. The previous behaviour only
+        hashed the CLI scripts, so editing the Python work layer left
+        per-sample cache keys unchanged and the campaign kept returning
+        stale results. Fixes issue #1022.
+
+        The ``work`` hash covers ``osimflow.work`` only — it is used by
+        AGGREGATE_RESULTS, whose pipeline runs in the Python container
+        and never spawns the per-sample CLI scripts. Scope guard per
+        issue #1022: do not extend the ``work`` hash with additional
+        modules.
         """
-        from . import work  # noqa: PLC0415
+        from . import apply_params, work  # noqa: PLC0415
 
         # Resolve both work-script directories and take the union
         # (sorted, deduped) whenever either exists.
@@ -656,10 +667,13 @@ class Campaign:
         for d in (package_root / "_work_scripts", repo_root / "bin"):
             if d.is_dir():
                 candidates.extend(d.glob("*.py"))
-        files = sorted(set(candidates), key=str)
         work_file = Path(inspect.getfile(work))
+        apply_params_file = Path(inspect.getfile(apply_params))
+        # The `bin` hash covers CLI scripts + the Python work layer that
+        # drives per-sample steps (issue #1022).
+        bin_files = sorted(set(candidates) | {work_file, apply_params_file}, key=str)
         return {
-            "bin": sha256_of_files(files),
+            "bin": sha256_of_files(bin_files),
             "work": sha256_of_files([work_file]),
         }
 
