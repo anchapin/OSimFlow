@@ -83,7 +83,7 @@ campaign = Campaign(cfg, executor)
 result = campaign.run()
 ```
 
-The 11-step DAG:
+The 7-step DAG (matches `osimflow/campaign.py:_STEP_DEPENDENCIES`, per AGENTS.md §3):
 
 ```
 variables.yml ──► GENERATE_SAMPLES ──► PREFLIGHT_RUN_MODEL ──► VALIDATE_MEASURE_VARIABLES
