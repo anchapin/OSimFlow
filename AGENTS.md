@@ -182,6 +182,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `osimflow/__main__.py` | CLI entry point (`osimflow run ...`). |
 | `scripts/generate_openapi.py` | Export the OpenAPI spec from the FastAPI app to `docs/openapi.json` (issue #433). Run: `python scripts/generate_openapi.py --output docs/openapi.json`. |
 | `scripts/fetch_example_fixture.py` | Download a real OpenStudio `.osm` model + `.epw` weather file into `example_package/` for real-OpenStudio E2E tests (issue #938). Stdlib `urllib` with retry/backoff; idempotent (`--force` to refetch); preserves the JSON stub as `model.osm.placeholder`. The fetched `.osm`/`.epw` are gitignored (AGENTS.md §10). |
+| `scripts/apply_branch_protection.sh` | Idempotent settings-as-code applier for the GitHub branch protection rules on `main` (issue #975). Calls `gh api --method PUT /repos/anchapin/OSimFlow/branches/main/protection` with the five required status checks (`lint (ruff)`, `typecheck (mypy --strict)`, `test (pytest, 85% coverage gate)`, `agents & docs contract`, `security (pip-audit)`) plus linear-history enforcement; `--dry-run` prints the payload without making the API call. Run by the orchestrator post-merge; not executed in this PR. See `docs/branch-protection.md`. |
 | `docs/openapi.json` | Auto-generated OpenAPI 3.1 spec for the OSimFlow REST API (issue #433). Regenerate after adding/modifying API endpoints. Consumable by code generators (openapi-generator, etc.). |
 | `bin/generate_lhs.py` | LHS sampler (scipy.stats) — stable shim over `osimflow/_work_scripts/`. |
 | `bin/apply_params_to_model.py` | Default parameter-application logic — stable shim over `osimflow/_work_scripts/`. |
@@ -219,6 +220,7 @@ The full vision, scope, and technical architecture are defined in [`docs/OSimFlo
 | `docs/aws-batch-terraform.md` | Zero-to-running deployment guide for AWS Batch with Terraform (issue #130). |
 | `docs/api.md` | REST API reference: endpoints, SSE event stream, read-only vs read-write modes, and authentication notes (issue #143). |
 | `docs/observability.md` | Pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry): configuration, usage, and extension guide (issue #145, #127). |
+| `docs/branch-protection.md` | Settings-as-code for the `main` branch protection rules — what's enabled (5 required status checks, linear history, no reviews/no force-pushes/no deletions), what's intentionally NOT enabled, how to verify / extend / roll back. Applied post-merge via `scripts/apply_branch_protection.sh`. Issue #975. |
 | `infra/nomad/examples/ha/` | Native host-OS HA cluster recipe for Nomad (3-server Raft quorum on bare metal/VMs) with ACL bootstrap (issues #123, #619). Nested containerization (`hind` / Docker-in-Docker) is deprecated and removed. |
 | `infra/nomad/examples/ha/server.hcl` | Shared native server config template; per-node identity via `-node`/`-bind` flags, `bootstrap_expect=3`, `retry_join`, mTLS template. |
 | `infra/nomad/examples/ha/client.hcl` | Native client config: unprivileged Docker task driver (`allow_privileged=false`), ACL, mTLS template. |
@@ -786,6 +788,7 @@ generic role prompt's tool guidance when they disagree).
 - [Decision verdict (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md) — the spike's outcome that ratified the foundation.
 - [Monitoring decision (`.agents/results/monitoring-decision.md`)](.agents/results/monitoring-decision.md) — why OSimFlow ships BYO monitoring (per-campaign `run.json`).
 - [Observability guide (docs/observability.md)](docs/observability.md) — pluggable observability backends (CloudWatch, Prometheus, OpenTelemetry).
+- [Branch protection (docs/branch-protection.md)](docs/branch-protection.md) — settings-as-code for the `main` branch protection rules (5 required status checks, linear history, no reviews/no force-pushes). Applied post-merge by `scripts/apply_branch_protection.sh`; see issue #975.
 - [AWS Batch Terraform guide (docs/aws-batch-terraform.md)](docs/aws-batch-terraform.md) — zero-to-running deployment guide for AWS Batch infrastructure (issue #130).
 - [User Guide (docs/user-guide.md)](docs/user-guide.md) — the canonical entry point for users (installation, configuration, running campaigns, interpreting results, troubleshooting).
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributor onboarding.
