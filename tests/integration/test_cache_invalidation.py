@@ -578,6 +578,8 @@ def test_byos_apply_and_kpi_are_independent(tmp_path: Path) -> None:
     assert after["byos_kpi"] == hashes["byos_kpi"], (
         "Editing only the apply script must NOT change byos_kpi"
     )
+
+
 def test_work_py_edit_invalidates_per_sample_bin_hash() -> None:
     """Regression test for issue #1022.
 
