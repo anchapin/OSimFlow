@@ -447,6 +447,39 @@ class TestSQLiteCache:
         finally:
             conn.close()
 
+    def test_pragma_cache_size_mmap_size_temp_store(self, tmp_path: Path) -> None:
+        """Regression test for issue #1016: PRAGMA cache_size, mmap_size,
+        and temp_store must be configured for multi-GB caches."""
+        db_path = tmp_path / "test_pragma_cache_size.sqlite"
+        cache = SQLiteCache(db_path)
+        # Populate with 10K synthetic entries so the cache has nontrivial state.
+        for i in range(10_000):
+            cache.store(
+                CacheKey(
+                    step="GENERATE_LHS_SAMPLES",
+                    sample_id=f"s{i:08d}",
+                    openstudio_version="3.11.0",
+                    inputs_sha256="0" * 64,
+                    code_sha256="0" * 64,
+                    container_digest="",
+                    generation=0,
+                ),
+                db_path,
+                exit_code=0,
+            )
+        # PRAGMA cache_size / temp_store are per-connection; query the
+        # cache's own live connection rather than opening a new one.
+        conn = cache._ensure_conn()
+        assert conn.execute("PRAGMA cache_size").fetchone()[0] == -65536, (
+            "Expected cache_size=-65536 (64 MiB working set)"
+        )
+        assert conn.execute("PRAGMA mmap_size").fetchone()[0] == 268435456, (
+            "Expected mmap_size=268435456 (256 MiB memory-mapped I/O)"
+        )
+        assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2, (
+            "Expected temp_store=2 (MEMORY)"
+        )
+
     def test_concurrent_store_and_lookup(self, tmp_path: Path) -> None:
         db_path = tmp_path / "test_concurrent.sqlite"
         cache = SQLiteCache(db_path)
