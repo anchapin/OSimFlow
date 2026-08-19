@@ -6,11 +6,21 @@ Covers:
   * Script path not found: ImportError when spec cannot be loaded
   * Deprecated 'apply' name triggers DeprecationWarning
   * Non-callable attribute with matching name is skipped
-  * Module with syntax errors raises ImportError
+  * Module with syntax errors raises SyntaxError
   * Module with side effects on import
   * Subprocess isolation (issue #269): default trust level, kwargs forwarding
   * _parse_subprocess_response: empty stdout, JSON errors, error responses,
     missing result path (lines 207-222)
+
+Note (issue #1005): the BYOS discovery path now runs ``exec_module``
+inside a subprocess (see ``_discover_in_subprocess``), so tests that
+relied on monkeypatching ``importlib.util.spec_from_file_location`` in
+the orchestrator process are no longer meaningful — the subprocess has
+its own importlib and the monkeypatch does not propagate.  Subprocess
+discovery is exercised end-to-end via real-path tests below
+(``test_nonexistent_path_raises_file_not_found``, ``test_syntax_error_raises``).
+The malicious-exec_module regression test lives in
+``test_byos_exec_module_isolation.py``.
 """
 
 from __future__ import annotations
@@ -185,30 +195,6 @@ class TestLoadUserFunctionPathErrors:
         missing = user_scripts / "does_not_exist.py"
         with pytest.raises((ImportError, FileNotFoundError)):
             load_user_function(missing)
-
-    def test_spec_loader_none_raises_import_error(
-        self, user_scripts: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Line 85: spec or spec.loader is None raises ImportError."""
-        import importlib.util
-
-        # Create a file that exists but has no loader — this is hard to
-        # trigger with real paths, so we mock spec_from_file_location.
-        path = user_scripts / "valid_name.py"
-        path.write_text("def apply_parameters(t, p, s, o): pass\n")
-
-        original_spec = importlib.util.spec_from_file_location
-
-        def _broken_spec(name: str, location: str | Path, **kwargs: object):
-            # Return a spec with loader=None
-            spec = original_spec(name, location, **kwargs)
-            if spec is not None:
-                spec.loader = None
-            return spec
-
-        monkeypatch.setattr(importlib.util, "spec_from_file_location", _broken_spec)
-        with pytest.raises(ImportError, match="could not load spec"):
-            load_user_function(path)
 
 
 # ===========================================================================
