@@ -11,6 +11,9 @@ Covers:
   * Subprocess isolation (issue #269): default trust level, kwargs forwarding
   * _parse_subprocess_response: empty stdout, JSON errors, error responses,
     missing result path (lines 207-222)
+  * _sanitize_env: credential-leak guard (issue #1007 / #764) — malicious
+    secrets dropped, whitelisted vars preserved, `KEY=default` defaults
+    applied when absent, empty allowlist is deny-all
 
 Note (issue #1005): the BYOS discovery path now runs ``exec_module``
 inside a subprocess (see ``_discover_in_subprocess``), so tests that
@@ -34,6 +37,7 @@ import pytest
 from osimflow.byos import (
     ByosTrustLevel,
     _parse_subprocess_response,
+    _sanitize_env,
     load_user_function,
     validate_trust_level,
 )
@@ -463,3 +467,102 @@ class TestValidateTrustLevel:
         """Default (no hardening) allows both trust levels without error."""
         validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=False)
         validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=False)
+
+
+# ===========================================================================
+# _sanitize_env — credential-leak guard (issue #1007 / #764)
+# ===========================================================================
+class TestSanitizeEnv:
+    """Direct tests for ``osimflow.byos._sanitize_env``.
+
+    ``_sanitize_env`` is the single defence against accidental credential
+    leakage from the parent orchestrator process to user-supplied BYOS
+    subprocesses.  It must:
+
+    1. Drop credential-like secrets (``AWS_*``, ``GITHUB_TOKEN``, etc.) even
+       when they are set in the parent environment.
+    2. Preserve whitelisted variables (``PATH``, ``HOME``, ``LANG``, the
+       ``OSIMFLOW_STUB_SIM`` opt-in flag) so the child can locate its
+       interpreter, locale data, and read the stub-mode switch.
+    3. Honour ``KEY=default_value`` syntax in the whitelist: when ``KEY``
+       is absent from the parent env the default value is injected into the
+       child env.
+    4. Treat an empty allowlist as deny-all: no parent-derived vars are
+       forwarded, only explicit ``KEY=default`` entries (of which there are
+       none in an empty list).
+    """
+
+    def test_malicious_secrets_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AWS_SECRET_ACCESS_KEY / AWS_ACCESS_KEY_ID / GITHUB_TOKEN must
+        never be forwarded to the BYOS subprocess even if they are set in
+        the parent process env (issue #764)."""
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "leaked_aws_secret")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "leaked_aws_id")
+        monkeypatch.setenv("GITHUB_TOKEN", "leaked_github_token")
+
+        clean = _sanitize_env()
+
+        assert "AWS_SECRET_ACCESS_KEY" not in clean
+        assert "AWS_ACCESS_KEY_ID" not in clean
+        assert "GITHUB_TOKEN" not in clean
+        assert not any(k.startswith("AWS_") for k in clean), (
+            f"unexpected AWS_* key leaked to child env: "
+            f"{[k for k in clean if k.startswith('AWS_')]}"
+        )
+
+    def test_whitelisted_vars_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PATH, HOME, LANG and OSIMFLOW_STUB_SIM must be forwarded when
+        present in the parent env.  An OSIMFLOW_* variable that is NOT in
+        the whitelist (e.g. OSIMFLOW_RANDOM) must still be filtered."""
+        monkeypatch.setenv("PATH", "/sandbox/bin:/usr/bin")
+        monkeypatch.setenv("HOME", "/sandbox/home")
+        monkeypatch.setenv("LANG", "C.UTF-8")
+        monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+        monkeypatch.setenv("OSIMFLOW_RANDOM", "should_not_leak")
+
+        clean = _sanitize_env()
+
+        assert clean["PATH"] == "/sandbox/bin:/usr/bin"
+        assert clean["HOME"] == "/sandbox/home"
+        assert clean["LANG"] == "C.UTF-8"
+        assert clean["OSIMFLOW_STUB_SIM"] == "1"
+        assert "OSIMFLOW_RANDOM" not in clean
+
+    def test_default_value_applied_when_var_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A whitelist entry of the form ``KEY=default_value`` must inject
+        the default value when ``KEY`` is absent from the parent env.
+
+        The production whitelist contains no ``=``-syntax entries, so this
+        test exercises the branch in isolation by swapping the module-level
+        whitelist for a single ``KEY=default`` entry.
+        """
+        monkeypatch.delenv("OSIMFLOW_MOCK_FOO", raising=False)
+        monkeypatch.setattr(
+            "osimflow.byos._SAFE_ENV_WHITELIST",
+            ["OSIMFLOW_MOCK_FOO=mock_default"],
+        )
+
+        clean = _sanitize_env()
+
+        assert clean == {"OSIMFLOW_MOCK_FOO": "mock_default"}
+
+    def test_empty_allowlist_is_deny_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An empty allowlist drops every parent-derived var from the child
+        env.  This proves the deny-all branch works in isolation.
+
+        Plant a mix of secrets and whitelisted-looking vars so the test
+        fails loudly if the allowlist is silently ignored.
+        """
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "leaked")
+        monkeypatch.setenv("GITHUB_TOKEN", "leaked")
+        monkeypatch.setenv("PATH", "/should/not/appear")
+        monkeypatch.setenv("HOME", "/should/not/appear")
+        monkeypatch.setattr("osimflow.byos._SAFE_ENV_WHITELIST", [])
+
+        clean = _sanitize_env()
+
+        assert clean == {}
+        assert "AWS_SECRET_ACCESS_KEY" not in clean
+        assert "GITHUB_TOKEN" not in clean
+        assert "PATH" not in clean
+        assert "HOME" not in clean
