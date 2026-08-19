@@ -391,3 +391,14 @@ class SQLiteCache:
         if total == 0:
             return 0.0
         return self._stats.hits / total
+
+    def note_external_hit(self) -> None:
+        """Reclassify the most recent lookup miss as a hit served elsewhere.
+
+        Used by ``DistributedCache`` (issue #993): when a lookup misses the
+        local SQLite layer but hits the Redis-backed shared store, the
+        wrapper calls this so ``CacheStats`` reflects the campaign's true
+        hit rate instead of double-counting the local miss.
+        """
+        self._stats.misses = max(0, self._stats.misses - 1)
+        self._stats.hits += 1

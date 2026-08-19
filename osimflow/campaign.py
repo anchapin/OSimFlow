@@ -11,7 +11,10 @@ The shape is:
     6. AGGREGATE_RESULTS    — one shot after all KPIs.
     7. GENERATE_BASIC_PLOTS — one shot after aggregation.
 
-Each step is cached via `SQLiteCache`. Each per-sample step submits to
+Each step is cached via the cache built by `build_cache`: a plain
+`SQLiteCache` in single-node local mode (the default), or a
+`DistributedCache` when `--redis-url` is configured (issue #993). Each
+per-sample step submits to
 the configured `BaseExecutor`. Fan-out is bounded by the executor's
 max_workers so we do not overwhelm the underlying scheduler.
 
@@ -65,13 +68,14 @@ from .apply_params import (
     _build_mappings,
     preflight_check,
 )
-from .cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
+from .cache import CacheKey, sha256_of_dict, sha256_of_files
 from .config import CampaignConfig
 from .cost_tracking import (
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
 )
 from .data_point_manager import DataPointManager
+from .distributed_cache import build_cache, campaign_state_namespace
 from .distributed_jobqueue import build_job_queue
 from .executors import BaseExecutor, Handle
 from .json_utils import safe_json_dumps, safe_json_loads
@@ -343,7 +347,21 @@ class Campaign:
             )
         else:
             self.extract_fn = extract_kpis
-        self.cache = SQLiteCache(cfg.cache_db)
+        # Campaign state backend (issue #993 / T8.2). When --redis-url is
+        # configured, build_cache returns a DistributedCache: shared cache
+        # entries live in a Redis hash under a namespace derived from the
+        # (shared) outdir, and each process uses a pid-private local
+        # SQLite file — so concurrent campaign processes coordinating on
+        # the same state never contend on a single SQLite database (the
+        # T8.1 lock reproducer). When redis_url is None (the default),
+        # this is a plain SQLiteCache at cfg.cache_db — single-node
+        # behaviour is unchanged.
+        self._cache_namespace = campaign_state_namespace(cfg.outdir)
+        self.cache = build_cache(
+            db_path=cfg.cache_db,
+            redis_url=cfg.redis_url,
+            campaign_id=self._cache_namespace,
+        )
         self._python_container_image = os.environ.get(
             "OSIMFLOW_PYTHON_CONTAINER_IMAGE",
             CONTAINER_PY,

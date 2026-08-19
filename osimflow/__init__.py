@@ -43,7 +43,7 @@ from .config import (
 from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
 from .cross_run_aggregator import CrossRunAggregator
 from .data_point_manager import DataPoint, DataPointManager, DataPointStatus
-from .distributed_cache import DistributedCache, build_cache
+from .distributed_cache import DistributedCache, build_cache, campaign_state_namespace
 from .distributed_jobqueue import DistributedJobQueue, build_job_queue
 from .document_store import (
     DocumentNotFoundError,
@@ -177,6 +177,7 @@ __all__ = [
     "load_config",
     "DistributedCache",
     "build_cache",
+    "campaign_state_namespace",
     "DistributedJobQueue",
     "build_job_queue",
     "BaseExecutor",
