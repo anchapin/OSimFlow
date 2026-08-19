@@ -451,12 +451,26 @@ class SQLiteDocumentStore(DocumentStore):
         return self._ensure_conn()
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection.
+
+        Uses ``PRAGMA wal_checkpoint(PASSIVE)`` — the SQLite default. A
+        PASSIVE checkpoint copies as much WAL content as it can back into
+        the main DB **without blocking** and **without removing** the
+        auxiliary ``-wal``/``-shm`` files. Those files are left in place
+        for SQLite to manage cooperatively across every process that
+        shares the document store. This is what makes ``close()`` safe
+        to call when peer ``SQLiteDocumentStore`` instances (other
+        workers in the same campaign) still have the DB open (issue
+        #1006): the previous ``wal_checkpoint(TRUNCATE)`` removed the
+        aux files out from under peers and crashed them with
+        ``FileNotFoundError: <db>.sqlite-shm``. The fix mirrors the one
+        already applied to ``SQLiteCache.close()`` (issue #620).
+        """
         if self._conn is None:
             return
         try:
             self._conn.commit()
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             self._conn.execute("PRAGMA optimize")
         except Exception:
             pass
