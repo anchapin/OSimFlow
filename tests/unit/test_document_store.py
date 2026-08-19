@@ -284,6 +284,95 @@ class TestSQLiteDocumentStore:
         store.close()
         store.close()  # Should not raise
 
+    def test_close_does_not_use_truncate_checkpoint(self, tmp_path: Path) -> None:
+        """Issue #1006 invariant: ``close()`` MUST NOT execute TRUNCATE.
+
+        A TRUNCATE checkpoint removes the ``-wal``/``-shm`` aux files out
+        from under peer ``SQLiteDocumentStore`` instances that still have
+        the same ``db_path`` open, crashing the peers' next write with
+        ``FileNotFoundError: <db>.sqlite-shm``. This test inspects the
+        source to prevent a silent regression: it fails only on an
+        executable ``execute(...)`` call that issues
+        ``wal_checkpoint(TRUNCATE)``, not on prose mentions in
+        docstrings/comments (which explain why we avoid it).
+        """
+        import re
+
+        source = (Path(__file__).resolve().parents[2] / "osimflow" / "document_store.py").read_text(
+            encoding="utf-8"
+        )
+        executable_truncate = re.findall(
+            r'\.execute\(\s*["\']PRAGMA\s*wal_checkpoint\(TRUNCATE\)["\']',
+            source,
+            flags=re.IGNORECASE,
+        )
+        assert not executable_truncate, (
+            "SQLiteDocumentStore must not execute wal_checkpoint(TRUNCATE) "
+            "— it removes the -wal/-shm aux files and crashes peer worker "
+            "processes with FileNotFoundError (issue #1006). Use PASSIVE, "
+            "matching SQLiteCache.close() (issue #620)."
+        )
+        assert "wal_checkpoint(PASSIVE)" in source
+
+    def test_close_does_not_remove_wal_aux_files(self, tmp_path: Path) -> None:
+        """Issue #1006 regression: ``close()`` must not crash a peer
+        ``SQLiteDocumentStore`` instance that is still working against
+        the same ``db_path``.
+
+        Before the fix, ``close()`` ran ``PRAGMA wal_checkpoint(TRUNCATE)``
+        which removed the auxiliary ``<db>.sqlite-wal`` and
+        ``<db>.sqlite-shm`` files out from under the peer store's still-
+        open connection. The peer's next ``insert_one``/``find_one``
+        then crashed with ``FileNotFoundError`` on the now-missing aux
+        file. After the fix, ``close()`` uses ``wal_checkpoint(PASSIVE)``
+        which never removes the aux files; the peer store's subsequent
+        reads and writes succeed cleanly.
+
+        Reproduces the scenario described in the issue:
+
+        1. Open store A against ``db_path``.
+        2. Write through A so the WAL is populated.
+        3. Open store B (the peer) against the same ``db_path`` —
+           mirrors the multi-worker campaign shape.
+        4. ``A.close()`` — must not break B's connection.
+        5. ``B.insert_one`` + ``B.find_one`` must succeed without
+           raising ``FileNotFoundError`` on the aux files.
+
+        Note: we do not assert on the ``-wal``/``-shm`` files'
+        *existence* — SQLite lazily creates those files and may reclaim
+        an empty WAL on close regardless of checkpoint policy. What
+        matters (and what the old ``TRUNCATE`` behavior broke) is that
+        a *peer connection* still using the same DB can keep writing.
+        """
+        db_path = tmp_path / "test_close_wal_aux.sqlite"
+        store_a = SQLiteDocumentStore(db_path=db_path)
+        # Pre-populate the WAL so the aux files are in active use.
+        store_a.insert_one("kpis", {"sample_id": "from_a", "eui": 100.0})
+
+        # Peer store against the same path — the multi-worker shape
+        # from issue #1006.
+        store_b = SQLiteDocumentStore(db_path=db_path)
+
+        # Tear down A. With the old TRUNCATE behavior this removed the
+        # -wal/-shm files out from under B mid-connection; with PASSIVE
+        # the aux files stay in place and B keeps working.
+        store_a.close()
+
+        # Peer's next write/read must succeed — the regression manifested
+        # as FileNotFoundError on the aux file under the old behavior.
+        # We assert the actual data round-trips rather than poking at
+        # the aux file paths (those are managed by SQLite).
+        store_b.insert_one("kpis", {"sample_id": "from_b", "eui": 200.0})
+        found_a = store_b.find_one("kpis", {"sample_id": "from_a"})
+        assert found_a is not None
+        assert found_a["eui"] == 100.0
+        found_b = store_b.find_one("kpis", {"sample_id": "from_b"})
+        assert found_b is not None
+        assert found_b["eui"] == 200.0
+        # count_documents exercises a separate query path; cover it too.
+        assert store_b.count_documents("kpis") == 2
+        store_b.close()
+
     def test_insert_one_to_new_collection(self, store: SQLiteDocumentStore) -> None:
         doc = {"name": "test", "value": 42}
         doc_id = store.insert_one("new_collection", doc)
