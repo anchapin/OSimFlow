@@ -273,12 +273,17 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             fallback_to_on_demand=args.google_fallback_to_on_demand,
             max_retries=args.google_max_retries,
         )
-    # Kubernetes executor — namespace and polling config.
+    # Kubernetes executor — namespace, polling config, and native Job
+    # controls (issue #997). Defaults preserve the pre-#997 manifest
+    # byte-for-byte; passing flags here is opt-in.
     if args.executor == "kubernetes":
         return KubernetesExecutor(
             namespace=args.kubernetes_namespace,
             poll_interval_s=args.kubernetes_poll_interval_s,
             max_poll_interval_s=args.kubernetes_max_poll_interval_s,
+            backoff_limit=args.kubernetes_backoff_limit,
+            ttl_seconds_after_finished=args.kubernetes_ttl_seconds_after_finished,
+            queue_name=args.kubernetes_queue_name,
         )
     # PBS executor — server, queue, and debug flag.
     if args.executor == "pbs":
@@ -695,6 +700,48 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         type=float,
         default=60.0,
         help="Max poll interval for Job status (seconds, default: 60.0).",
+    )
+    # Native Job controls (issue #997). Defaults preserve the pre-#997
+    # manifest byte-for-byte: backoff_limit=0, no TTL, no extra labels.
+    run.add_argument(
+        "--kubernetes-backoff-limit",
+        type=int,
+        default=0,
+        help=(
+            "Native Job ``backoffLimit`` (default: 0 — preserves the "
+            "orchestrator-side retry semantics from ``--max-sample-retries``). "
+            "Set to >0 to enable K8s-native pod retry as an alternative: "
+            "the kubelet restarts the failed pod up to this many times "
+            "without a resubmit round-trip through the orchestrator. "
+            "Pick one mechanism, not both — running K8s-native retry "
+            "and ``--max-sample-retries`` together will double-count "
+            "failures. (issue #997)"
+        ),
+    )
+    run.add_argument(
+        "--kubernetes-ttl-seconds-after-finished",
+        type=int,
+        default=None,
+        help=(
+            "Native Job ``ttlSecondsAfterFinished`` (default: unset — "
+            "Jobs are retained in the API server until manually deleted). "
+            "Set to a positive integer (seconds) to have the API server "
+            "garbage-collect completed/failed Jobs after this delay, "
+            "releasing the etcd footprint and pod resources across a "
+            "large sweep. (issue #997)"
+        ),
+    )
+    run.add_argument(
+        "--kubernetes-queue-name",
+        default=None,
+        help=(
+            "Kueue ClusterQueue name applied as the "
+            "``kueue.x-k8s.io/queue-name`` label on Job metadata (issue #997). "
+            "When set, Kueue manages the Job through suspend/resume and "
+            "honors fair-sharing, priority, and preemption across the "
+            "cluster. Inert on clusters without Kueue installed. "
+            "Example: --kubernetes-queue-name team-a-cpu."
+        ),
     )
     run.add_argument(
         "--pbs-server",

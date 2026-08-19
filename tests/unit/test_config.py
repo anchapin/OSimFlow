@@ -297,6 +297,49 @@ class TestLoadConfig:
         assert cfg.slurm_constraint == "gpu"
         assert cfg.slurm_gres == "gpu:1"
 
+    def test_kubernetes_native_job_controls_defaults(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Defaults preserve the pre-#997 behaviour: backoff_limit=0,
+        ttl_seconds_after_finished=None, queue_name=None."""
+        args = _base_args(variables_yml, template_pkg, outdir)
+        cfg = load_config(args)
+        assert cfg.kubernetes_backoff_limit == 0
+        assert cfg.kubernetes_ttl_seconds_after_finished is None
+        assert cfg.kubernetes_queue_name is None
+
+    def test_kubernetes_native_job_controls_roundtrip(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """The three new CLI flags round-trip through load_config."""
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            kubernetes_backoff_limit="4",
+            kubernetes_ttl_seconds_after_finished="3600",
+            kubernetes_queue_name="team-a-cpu",
+        )
+        cfg = load_config(args)
+        assert cfg.kubernetes_backoff_limit == 4
+        assert cfg.kubernetes_ttl_seconds_after_finished == 3600
+        assert cfg.kubernetes_queue_name == "team-a-cpu"
+
+    def test_kubernetes_backoff_limit_cast_to_int(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """CLI strings are coerced to int — defensively guards the K8s API
+        ``backoff_limit`` which rejects non-int values."""
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            kubernetes_backoff_limit="6",
+        )
+        cfg = load_config(args)
+        assert isinstance(cfg.kubernetes_backoff_limit, int)
+        assert cfg.kubernetes_backoff_limit == 6
+
     def test_aws_batch_options(self, variables_yml: Path, template_pkg: Path, outdir: Path) -> None:
         args = _base_args(
             variables_yml,

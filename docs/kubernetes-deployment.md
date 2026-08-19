@@ -107,6 +107,19 @@ osimflow run \
 | `--kubernetes-namespace` | `default` | Kubernetes namespace for jobs |
 | `--kubernetes-poll-interval-s` | `5.0` | Poll interval for job status (seconds) |
 | `--kubernetes-max-poll-interval-s` | `60.0` | Max poll interval (seconds, exponential backoff cap) |
+| `--kubernetes-backoff-limit` | `0` | Native Job `backoffLimit` (issue #997). Defaults to 0, mirroring the orchestrator-side retry from `--max-sample-retries` (issue #252). Set to >0 to enable K8s-native pod retry as an alternative: the kubelet restarts the failed pod up to this many times without a resubmit round-trip through the orchestrator. Pick one mechanism, not both — running K8s-native retry and `--max-sample-retries` together will double-count failures. |
+| `--kubernetes-ttl-seconds-after-finished` | unset | Native Job `ttlSecondsAfterFinished` in seconds (issue #997). When set, the API server garbage-collects completed/failed Jobs after this delay, releasing etcd footprint and pod resources across a large sweep. Recommended for campaigns of >100 samples. |
+| `--kubernetes-queue-name` | unset | Kueue ClusterQueue name applied as the `kueue.x-k8s.io/queue-name` label on Job metadata (issue #997). When set, Kueue manages the Job through suspend/resume and honors fair-sharing, priority, and preemption across the cluster. Inert on clusters without Kueue installed. |
+
+## Kueue Interplay (issue #997)
+
+When `--kubernetes-queue-name` is set on a cluster with [Kueue](https://kueue.sigs.k8s.io/) installed, Kueue manages the Job lifecycle at the API-server level:
+
+- **Quota exhaustion suspends Jobs.** When a ClusterQueue runs out of quota, Kueue leaves the Job's pod in `Pending` until quota is freed by another workload completing. The executor's existing `_wait_for_terminal` polling already tolerates `Pending` (it returns `{"status": {"phase": "Pending"}}` when no pod exists yet and continues polling), so the orchestrator does NOT need to know whether the pod is suspended vs. waiting for a node — it simply waits.
+- **`activeDeadlineSeconds` only counts active execution.** Kueue's suspend/resume window does not count toward the per-Job `activeDeadlineSeconds` (which is set from `time_min`). A Queue that holds a Job suspended for an hour does not advance that Job's deadline. This is a feature, not a bug — quotas can be reclaimed without paying the wall-clock penalty against the active job.
+- **The orchestrator's `--max-sample-retries` and K8s `backoffLimit` are alternatives.** Pick one: K8s-native retry is fast (no resubmit round-trip) but only retries within the same Job; orchestrator-side retry can replace the entire Job with a different parameter sample (useful in `--detach`/`Coordinator` mode where resubmit latency matters).
+
+For a shared multi-tenant cluster, set `--kubernetes-queue-name` to a Kueue ClusterQueue managed by your platform team; you do not need to create the queue — only reference it. The executor fails fast if Kueue rejects the Job (e.g., `kueue.x-k8s.io/queue-name` resolves to a nonexistent ClusterQueue), and the `_wait_for_terminal` loop surfaces the pod's failure reason through the per-sample error log.
 
 ## Security
 
