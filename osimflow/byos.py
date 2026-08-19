@@ -291,9 +291,7 @@ def _discover_in_subprocess(path: Path) -> str:
     except subprocess.TimeoutExpired as exc:
         proc.kill()
         proc.communicate()
-        raise RuntimeError(
-            f"BYOS discovery subprocess timed out after 60s: script={path}"
-        ) from exc
+        raise RuntimeError(f"BYOS discovery subprocess timed out after 60s: script={path}") from exc
 
     if proc.returncode != 0:
         # The subprocess may have produced a parseable JSON error payload
@@ -316,9 +314,7 @@ def _discover_in_subprocess(path: Path) -> str:
 
     response = _parse_discovery_response(stdout)
     if response is None:
-        raise RuntimeError(
-            f"BYOS discovery subprocess returned invalid JSON: {stdout[:200]}"
-        )
+        raise RuntimeError(f"BYOS discovery subprocess returned invalid JSON: {stdout[:200]}")
 
     if "error" in response:
         _raise_discovery_error(response["error"], response.get("type", "RuntimeError"))
@@ -326,9 +322,7 @@ def _discover_in_subprocess(path: Path) -> str:
 
     function_name = response.get("function")
     if not isinstance(function_name, str) or not function_name:
-        raise RuntimeError(
-            f"BYOS discovery subprocess returned no function name: {stdout[:200]}"
-        )
+        raise RuntimeError(f"BYOS discovery subprocess returned no function name: {stdout[:200]}")
     return function_name
 
 

@@ -111,10 +111,7 @@ class TestExecModuleIsolation:
         path = _write_script(
             user_scripts,
             "malicious_pid.py",
-            "import os\n"
-            "os._exit(7)\n"
-            "def apply_parameters(t, p, s, o):\n"
-            "    pass\n",
+            "import os\nos._exit(7)\ndef apply_parameters(t, p, s, o):\n    pass\n",
         )
         pid_before = stdlib_os.getpid()
         with patch.object(stdlib_os, "_exit", side_effect=SystemExit(7)):
@@ -140,10 +137,7 @@ class TestExecModuleIsolation:
         path = _write_script(
             user_scripts,
             "sys_exit.py",
-            "import sys\n"
-            "sys.exit(7)\n"
-            "def apply_parameters(t, p, s, o):\n"
-            "    pass\n",
+            "import sys\nsys.exit(7)\ndef apply_parameters(t, p, s, o):\n    pass\n",
         )
         with pytest.raises(RuntimeError, match="exit 7"):
             load_user_function(path)
@@ -182,8 +176,7 @@ class TestExecModuleIsolation:
         path = _write_script(
             user_scripts,
             "good_extract.py",
-            "def extract_kpis(simulation_dir, sample_id, out):\n"
-            "    return {}\n",
+            "def extract_kpis(simulation_dir, sample_id, out):\n    return {}\n",
         )
         func = load_user_function(path)
         assert func.__name__ == "extract_kpis"
@@ -344,8 +337,7 @@ class TestExecModuleIsolation:
         path = _write_script(
             user_scripts,
             "sentinel.py",
-            f"import {sentinel}\n"
-            "def apply_parameters(t, p, s, o):\n    pass\n",
+            f"import {sentinel}\ndef apply_parameters(t, p, s, o):\n    pass\n",
         )
         with pytest.raises(ImportError):
             # ``sentinel`` does not exist on PYTHONPATH, so the
@@ -370,8 +362,7 @@ class TestExecModuleIsolation:
         bad = _write_script(
             user_scripts,
             "evil.py",
-            "import os\nos._exit(99)\n"
-            "def apply_parameters(t, p, s, o):\n    pass\n",
+            "import os\nos._exit(99)\ndef apply_parameters(t, p, s, o):\n    pass\n",
         )
         good = _write_script(
             user_scripts,
