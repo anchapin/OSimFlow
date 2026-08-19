@@ -21,7 +21,14 @@ from pathlib import Path
 
 import pytest
 
-from osimflow.cache import CacheKey, CacheStats, SQLiteCache, sha256_of_dict, sha256_of_files
+from osimflow.cache import (
+    CacheEntry,
+    CacheKey,
+    CacheStats,
+    SQLiteCache,
+    sha256_of_dict,
+    sha256_of_files,
+)
 
 # --------------------------------------------------------------------------- #
 # Issue #620 regression: multi-process / multi-thread race on cache.close().
@@ -590,6 +597,267 @@ class TestSQLiteCache:
         assert stats.misses == 5
         assert stats.invalidations == 3
         assert stats.total_keys == 20
+
+
+class TestSQLiteCacheLookupMany:
+    """Regression tests for issue #1019: SQLiteCache.lookup_many batches N lookups
+    into a single SELECT instead of one query per :meth:`SQLiteCache.lookup` call.
+
+    Invariants verified:
+
+    * All N requested keys come back in one dict (one ``CacheEntry`` each on
+      hit, ``None`` on miss).
+    * Only one ``SELECT`` against ``cache_entries`` is executed regardless of
+      N — measured via :func:`sqlite3.Connection.set_trace_callback`.
+    * Miss bookkeeping (failed exit_code, output deleted from disk, unknown
+      key) is indistinguishable from a hit's ``None`` slot, matching the
+      per-call :meth:`SQLiteCache.lookup` contract.
+    * Duplicates in the input list dedupe in the output dict and only update
+      hit/miss counters once.
+    * The temp-table path (N > 100) executes CREATE / executemany / SELECT /
+      DROP, where the SELECT count stays at exactly 1.
+    """
+
+    def _key(self, idx: int, **overrides: object) -> CacheKey:
+        defaults: dict[str, object] = {
+            "step": "APPLY_PARAMETERS",
+            "sample_id": f"s{idx:04d}",
+            "openstudio_version": "N/A",
+            "inputs_sha256": f"hash_{idx}",
+            "code_sha256": "code_abc",
+            "container_digest": "py:latest",
+            "generation": 0,
+        }
+        defaults.update(overrides)
+        return CacheKey(**defaults)  # type: ignore[arg-type]
+
+    @pytest.fixture
+    def cache(self, tmp_path: Path) -> SQLiteCache:
+        """Per-test SQLite cache fixture.
+
+        Defined locally on this class — pytest's built-in ``cache`` fixture
+        (the cross-test result cache) would otherwise override it and hand
+        back a ``_pytest.cacheprovider.Cache`` instance with no ``store``.
+        """
+        return SQLiteCache(tmp_path / "test_lookup_many.sqlite")
+
+    def test_lookup_many_returns_dict_with_one_entry_per_key(
+        self, cache: SQLiteCache, tmp_path: Path
+    ) -> None:
+        keys = [self._key(i) for i in range(5)]
+        for k in keys:
+            out = tmp_path / f"out_{k.sample_id}"
+            out.mkdir()
+            cache.store(k, out, exit_code=0)
+        result = cache.lookup_many(keys)
+        assert set(result.keys()) == {k for k in keys}
+        assert all(isinstance(v, CacheEntry) for v in result.values())
+        assert all(v is not None for v in result.values())
+        for k in keys:
+            assert result[k].output_path == tmp_path / f"out_{k.sample_id}"
+            assert result[k].exit_code == 0
+            assert result[k].started_at > 0
+            assert result[k].finished_at >= result[k].started_at
+
+    def test_lookup_many_empty_input(self, cache: SQLiteCache) -> None:
+        assert cache.lookup_many([]) == {}
+
+    def test_lookup_many_miss_when_key_unknown(self, cache: SQLiteCache) -> None:
+        result = cache.lookup_many([self._key(0)])
+        assert result == {self._key(0): None}
+
+    def test_lookup_many_treats_failed_exit_code_as_miss(
+        self, cache: SQLiteCache, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        k = self._key(0)
+        cache.store(k, out, exit_code=1)
+        result = cache.lookup_many([k])
+        assert result == {k: None}
+
+    def test_lookup_many_treats_missing_output_as_miss(
+        self, cache: SQLiteCache, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "will_be_deleted"
+        out.mkdir()
+        k = self._key(0)
+        cache.store(k, out, exit_code=0)
+        import shutil
+
+        shutil.rmtree(out)
+        result = cache.lookup_many([k])
+        assert result == {k: None}
+
+    def test_lookup_many_mixed_hits_and_misses(self, cache: SQLiteCache, tmp_path: Path) -> None:
+        hit_key = self._key(0)
+        hit_out = tmp_path / "out_hit"
+        hit_out.mkdir()
+        cache.store(hit_key, hit_out, exit_code=0)
+        miss_key = self._key(1)
+
+        result = cache.lookup_many([hit_key, miss_key])
+        assert isinstance(result[hit_key], CacheEntry)
+        assert result[hit_key].output_path == hit_out
+        assert result[miss_key] is None
+
+    def test_lookup_many_dedupes_duplicate_keys(self, cache: SQLiteCache, tmp_path: Path) -> None:
+        k = self._key(0)
+        out = tmp_path / "out"
+        out.mkdir()
+        cache.store(k, out, exit_code=0)
+        before = cache.get_stats()
+        result = cache.lookup_many([k, k, k])
+        after = cache.get_stats()
+        # Same key three times in input must still hit stats exactly once
+        assert after.hits == before.hits + 1
+        assert after.misses == before.misses
+        assert list(result.keys()) == [k]
+
+    @pytest.mark.timeout(60)
+    def test_lookup_many_1000_keys_issues_single_select(self, tmp_path: Path) -> None:
+        """Issue #1019 acceptance: N=1000 keys in / N=1 SELECT issued.
+
+        Measures the SQL statement stream through ``set_trace_callback`` and
+        asserts that exactly one ``SELECT`` against ``cache_entries`` is
+        issued, regardless of N. Also confirms every requested key resolves
+        with the correct :class:`CacheEntry` (round-trip + correctness).
+        """
+        cache = SQLiteCache(tmp_path / "batch.sqlite")
+        try:
+            n = 1000
+            keys: list[CacheKey] = [self._key(i) for i in range(n)]
+            for k in keys:
+                out = tmp_path / f"o_{k.sample_id}"
+                out.mkdir()
+                cache.store(k, out, exit_code=0)
+
+            select_statements: list[str] = []
+            # We only count SELECTs against the main cache table; the
+            # temp-table bookkeeping (CREATE / DROP) does not scale with N
+            # and is not what issue #1019 is measuring.
+            cache.connection.set_trace_callback(
+                lambda sql: (
+                    select_statements.append(sql)
+                    if sql.lstrip().upper().startswith("SELECT") and "cache_entries" in sql
+                    else None
+                )
+            )
+            result = cache.lookup_many(keys)
+            cache.connection.set_trace_callback(None)
+        finally:
+            cache.close()
+
+        cache_selects = [s for s in select_statements if "cache_entries" in s]
+        assert len(cache_selects) == 1, (
+            f"expected exactly one SELECT against cache_entries for N={n} "
+            f"keys, got {len(cache_selects)}: {cache_selects[:3]}..."
+        )
+        # Correctness: every requested key resolves to its seeded entry.
+        assert len(result) == n
+        for k in keys:
+            entry = result[k]
+            assert entry is not None, f"missing result for {k}"
+            assert isinstance(entry, CacheEntry)
+            assert entry.output_path == tmp_path / f"o_{k.sample_id}"
+            assert entry.exit_code == 0
+
+    @pytest.mark.timeout(60)
+    def test_lookup_many_below_threshold_uses_tuple_in(self, tmp_path: Path) -> None:
+        """At or below ``_LOOKUP_MANY_IN_THRESHOLD`` keys: tuple-IN path,
+        no temp table is created."""
+        cache = SQLiteCache(tmp_path / "in_clause.sqlite")
+        try:
+            keys = [self._key(i) for i in range(50)]
+            for k in keys:
+                out = tmp_path / f"o_{k.sample_id}"
+                out.mkdir()
+                cache.store(k, out, exit_code=0)
+
+            statements: list[str] = []
+            cache.connection.set_trace_callback(statements.append)
+            result = cache.lookup_many(keys)
+            cache.connection.set_trace_callback(None)
+        finally:
+            cache.close()
+
+        assert len(result) == 50
+        # No temp table should appear on the small-batch path
+        assert not any("TEMP TABLE" in s.upper() for s in statements), (
+            f"small batch unexpectedly created a temp table: "
+            f"{[s for s in statements if 'TEMP' in s.upper()]}"
+        )
+        # Exactly one SELECT against cache_entries
+        cache_selects = [s for s in statements if "cache_entries" in s]
+        assert len(cache_selects) == 1
+
+    @pytest.mark.timeout(60)
+    def test_lookup_many_above_threshold_uses_temp_table(self, tmp_path: Path) -> None:
+        """Above the threshold: temp-table JOIN path, single SELECT."""
+        cache = SQLiteCache(tmp_path / "temp_table.sqlite")
+        try:
+            keys = [self._key(i) for i in range(250)]
+            for k in keys:
+                out = tmp_path / f"o_{k.sample_id}"
+                out.mkdir()
+                cache.store(k, out, exit_code=0)
+
+            statements: list[str] = []
+            cache.connection.set_trace_callback(statements.append)
+            result = cache.lookup_many(keys)
+            cache.connection.set_trace_callback(None)
+        finally:
+            cache.close()
+
+        assert len(result) == 250
+        # Temp-table path must have been taken
+        assert any("CREATE TEMP TABLE" in s.upper() for s in statements), (
+            "large batch should use the temp-table path"
+        )
+        assert any("DROP TABLE" in s.upper() for s in statements), (
+            "temp table must be dropped after the lookup"
+        )
+        # Exactly one SELECT joining cache_entries, regardless of N.
+        # The temp-table path SQL aliases the table as 'e', so we match the
+        # table name by the joining column-set reference rather than literal
+        # "FROM cache_entries".
+        cache_selects = [s for s in statements if "cache_entries" in s and "USING" in s.upper()]
+        assert len(cache_selects) == 1, (
+            f"expected one cache_entries SELECT, got {len(cache_selects)}"
+        )
+
+    def test_lookup_many_does_not_leak_temp_table(self, tmp_path: Path) -> None:
+        """After a failed lookup_many, the temp table must not be left behind."""
+        cache = SQLiteCache(tmp_path / "leak.sqlite")
+        try:
+            keys = [self._key(i) for i in range(150)]
+            for k in keys:
+                out = tmp_path / f"o_{k.sample_id}"
+                out.mkdir()
+                cache.store(k, out, exit_code=0)
+            cache.lookup_many(keys)
+            # Inspect the connection's temp schema — must be empty.
+            temps = cache.connection.execute("SELECT name FROM sqlite_temp_master").fetchall()
+            assert temps == [], f"temp table leaked: {temps}"
+        finally:
+            cache.close()
+
+    def test_lookup_many_updates_stats_once_per_unique_key(self, tmp_path: Path) -> None:
+        cache = SQLiteCache(tmp_path / "stats.sqlite")
+        try:
+            keys = [self._key(i) for i in range(10)]
+            for k in keys:
+                out = tmp_path / f"o_{k.sample_id}"
+                out.mkdir()
+                cache.store(k, out, exit_code=0)
+
+            before = cache.get_stats()
+            cache.lookup_many(keys)
+            after = cache.get_stats()
+            assert after.hits == before.hits + 10
+            assert after.misses == before.misses
+        finally:
+            cache.close()
 
 
 class TestSQLiteCacheRaceOnClose:
