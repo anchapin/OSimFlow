@@ -714,8 +714,23 @@ class Campaign:
         for d in (package_root / "_work_scripts", repo_root / "bin"):
             if d.is_dir():
                 candidates.extend(d.glob("*.py"))
-        files = sorted(set(candidates), key=str)
         work_file = Path(inspect.getfile(work))
+        # Also fold in the work-layer modules so editing them invalidates
+        # per-sample cache entries (issue #1022). Without this addition,
+        # the per-sample steps used ``bin = _work_scripts/*.py + bin/*.py``
+        # only, and editing ``osimflow.work`` or ``osimflow.apply_params``
+        # silently kept cached results warm — wrong. The ``work`` hash
+        # below still covers ``work.py`` separately for ``AGGREGATE_RESULTS``
+        # because aggregate re-runs don't depend on the per-sample work
+        # scripts (the docstring after #1036 spells out the two-hash scheme).
+        try:
+            apply_params_file = Path(inspect.getfile(sys.modules["osimflow"].apply_params))
+        except (AttributeError, KeyError):
+            apply_params_file = None
+        for f in (work_file, apply_params_file):
+            if f is not None and f.is_file():
+                candidates.append(f)
+        files = sorted(set(candidates), key=str)
         # Pick the effective cfg. When ``__init__`` calls this with its
         # cfg we get the BYOS entries; when tests call it with no cfg
         # (e.g. ``Campaign._compute_code_hashes(_Stub())``) we fall back
