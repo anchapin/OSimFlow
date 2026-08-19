@@ -305,6 +305,13 @@ def _build_kubernetes() -> tuple[Any, Any]:
     ex.namespace = "default"
     ex.poll_interval_s = 5.0
     ex.max_poll_interval_s = 60.0
+    # Native Job controls (issue #997) — defaults preserve the
+    # pre-#997 manifest byte-for-byte. Other tests in
+    # tests/unit/test_kubernetes_executor.py exercise the field setter
+    # path; this contract test only verifies resource mapping.
+    ex.backoff_limit = 0
+    ex.ttl_seconds_after_finished = None
+    ex.queue_name = None
     ex.submit(lambda: None, name="contract", cpus=CPUS, memory_mb=MEMORY_MB, time_min=TIME_MIN)
     return ex, mock_client
 

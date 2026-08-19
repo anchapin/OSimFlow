@@ -954,6 +954,15 @@ class CampaignConfig:
     nomad_key: Path | None = None
     nomad_ca_cert: Path | None = None
 
+    # --- Legacy flat Kubernetes executor fields (issue #997) ---
+    # Native Job controls: ``backoff_limit`` (default 0 preserves the
+    # orchestrator-side retry semantics from ``max_sample_retries``),
+    # ``ttl_seconds_after_finished`` (default None), and Kueue
+    # ``queue_name`` (default None).
+    kubernetes_backoff_limit: int = 0
+    kubernetes_ttl_seconds_after_finished: int | None = None
+    kubernetes_queue_name: str | None = None
+
     # --- Legacy flat storage fields (for backward compatibility) ---
     result_storage_backend: str = "local"
     result_storage_bucket: str = ""
@@ -1582,6 +1591,19 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         nomad_key=(Path(str(args["nomad_key"])).resolve() if args.get("nomad_key") else None),
         nomad_ca_cert=(
             Path(str(args["nomad_ca_cert"])).resolve() if args.get("nomad_ca_cert") else None
+        ),
+        # Kubernetes native Job controls (issue #997). Defaults preserve
+        # the pre-#997 manifest byte-for-byte: backoff_limit=0, no TTL,
+        # no extra labels. ``kubernetes_backoff_limit`` of 0 is the
+        # documented Kubernetes "no retries" value.
+        kubernetes_backoff_limit=int(str(args.get("kubernetes_backoff_limit", 0))),
+        kubernetes_ttl_seconds_after_finished=(
+            int(str(args["kubernetes_ttl_seconds_after_finished"]))
+            if args.get("kubernetes_ttl_seconds_after_finished") is not None
+            else None
+        ),
+        kubernetes_queue_name=(
+            str(args["kubernetes_queue_name"]) if args.get("kubernetes_queue_name") else None
         ),
         byos_resource_limits=(
             args["byos_resource_limits"] if args.get("byos_resource_limits") else None  # type: ignore[arg-type]

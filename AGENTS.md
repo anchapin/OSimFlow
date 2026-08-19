@@ -290,6 +290,7 @@ The 7-step DAG that the `Campaign` class drives:
 - `--nomad-fanout-submit-chunk-size`, `--nomad-fanout-submit-rate-per-sec` (Nomad fanout submission tuning for large-scale campaigns)
 - `--docker-swarm-image`, `--docker-swarm-network`, `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s` (Docker Swarm executor configuration)
 - `--kubernetes-namespace`, `--kubernetes-poll-interval-s`, `--kubernetes-max-poll-interval-s` (Kubernetes executor configuration)
+- `--kubernetes-backoff-limit`, `--kubernetes-ttl-seconds-after-finished`, `--kubernetes-queue-name` (Kubernetes native Job controls — native `backoffLimit` retry, automatic cleanup via `ttlSecondsAfterFinished`, and Kueue `queue-name` label; default `0`/None/None preserve the pre-#997 manifest byte-for-byte; issue #997)
 - `--docker-swarm-poll-interval-s`, `--docker-swarm-max-poll-interval-s`, `--docker-swarm-image`, `--docker-swarm-network` (Docker Swarm executor configuration; issue #582)
 - `--input_variables`, `--template_sim_package`, `--n_samples`, `--outdir`
 - `--algorithm` (sampling strategy selector; dispatches through `AlgorithmRegistry`. Default: `lhs`. Issue #121)

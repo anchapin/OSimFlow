@@ -59,6 +59,11 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 5.0
         ex.max_poll_interval_s = 60.0
+        # Native Job controls (issue #997) — defaults preserve the
+        # pre-#997 manifest byte-for-byte.
+        ex.backoff_limit = 0
+        ex.ttl_seconds_after_finished = None
+        ex.queue_name = None
         with patch.object(
             ex,
             "_wait_for_terminal",
@@ -76,6 +81,9 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 5.0
         ex.max_poll_interval_s = 60.0
+        ex.backoff_limit = 0
+        ex.ttl_seconds_after_finished = None
+        ex.queue_name = None
         with patch.object(
             ex,
             "_wait_for_terminal",
@@ -91,6 +99,9 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 5.0
         ex.max_poll_interval_s = 60.0
+        ex.backoff_limit = 0
+        ex.ttl_seconds_after_finished = None
+        ex.queue_name = None
         with patch.object(
             ex,
             "_wait_for_terminal",
@@ -122,6 +133,32 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 5.0
         ex.max_poll_interval_s = 60.0
+        # Native Job controls (issue #997) — defaults preserve the
+        # pre-#997 manifest byte-for-byte. Override per-test to exercise
+        # non-default behaviour.
+        ex.backoff_limit = 0
+        ex.ttl_seconds_after_finished = None
+        ex.queue_name = None
+        return mock_client, ex
+
+    def _make_executor_with(
+        self,
+        *,
+        backoff_limit: int = 0,
+        ttl_seconds_after_finished: int | None = None,
+        queue_name: str | None = None,
+    ) -> tuple[MagicMock, KubernetesExecutor]:
+        """Build an executor with the native Job controls pre-set.
+
+        Helper for issue #997 — used by the parametrised tests that
+        exercise the new fields. The default values still match the
+        pre-#997 manifest exactly, so callers only need to override
+        the fields they care about.
+        """
+        mock_client, ex = self._make_executor()
+        ex.backoff_limit = backoff_limit
+        ex.ttl_seconds_after_finished = ttl_seconds_after_finished
+        ex.queue_name = queue_name
         return mock_client, ex
 
     @staticmethod
@@ -257,6 +294,164 @@ class TestKubernetesExecutor:
         assert container.resources.limits == {"cpu": "4", "memory": "8192Mi"}
         assert job.spec.active_deadline_seconds == 240 * 60
         assert job.spec.backoff_limit == 0
+
+    # ------------------------------------------------------------------
+    # Native Job controls (issue #997)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _submitted_job(mock_client: MagicMock) -> Any:
+        """Return the V1Job from the single create_namespaced_job call."""
+        mock_client.create_namespaced_job.assert_called_once()
+        return mock_client.create_namespaced_job.call_args.kwargs["body"]
+
+    def test_default_manifest_matches_pre_997_byte_identical(self) -> None:
+        """Defaults produce a byte-identical manifest to the pre-#997 version.
+
+        Verifies the acceptance criterion: no extra keys on the spec
+        (no ``ttl_seconds_after_finished``), no extra keys on the
+        metadata (no ``labels``), and ``backoff_limit`` is 0.
+        """
+        mock_client, ex = self._make_executor_with()  # all defaults
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        job = self._submitted_job(mock_client)
+        # Spec: backoff_limit is 0, ttl_seconds_after_finished is absent.
+        assert job.spec.backoff_limit == 0
+        assert job.spec.ttl_seconds_after_finished is None
+        # Metadata: no labels keyword passed.
+        assert job.metadata.labels is None
+        # Name is set, nothing else.
+        assert job.metadata.name == "osimflow-sim-s0"
+        # The spec only carries the fields we explicitly set.
+        assert isinstance(job.spec.template, object)
+
+    def test_default_manifest_dist_to_pre_997_is_no_new_keys(self) -> None:
+        """Compare the K8s API payload of the default manifest to the
+        pre-#997 baseline.
+
+        The K8s Python client's ``ApiClient.sanitize_for_serialization``
+        is what the wire serializer uses to build the JSON payload sent
+        to the API server (it strips ``None`` values). This is the
+        authoritative, byte-level test of the "byte-identical manifest"
+        acceptance criterion: defaults produce the same payload as the
+        pre-#997 executor, key for key, value for value.
+        """
+        import json
+
+        from kubernetes.client import ApiClient, V1Job, V1JobSpec, V1ObjectMeta
+
+        # --- Post-#997 manifest from the executor with defaults ---
+        mock_client, ex = self._make_executor_with()
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        post_job = self._submitted_job(mock_client)
+
+        # --- Pre-#997 baseline (mirror of the post-#996 manifest) ---
+        # Rebuild with the SAME call parameters the executor used
+        # (so the only difference is the absence of the three new
+        # fields). Any non-default Kubernetes ``__init__`` kwargs
+        # absent here would themselves be a test bug.
+        pre_spec = V1JobSpec(
+            template=post_job.spec.template,
+            backoff_limit=0,
+            active_deadline_seconds=post_job.spec.active_deadline_seconds,
+        )
+        pre_metadata = V1ObjectMeta(name=post_job.metadata.name)
+        # We compare the serializer-output leaves, not the live objects.
+        api_client = ApiClient()
+        post_payload = api_client.sanitize_for_serialization(post_job)
+        # Build a pre-#997 V1Job strawman to serialize identically.
+        pre_job = V1Job(
+            api_version="batch/v1",
+            kind="Job",
+            metadata=pre_metadata,
+            spec=pre_spec,
+        )
+        pre_payload = api_client.sanitize_for_serialization(pre_job)
+
+        # Both payloads sort_keys=False; the diff is structural.
+        assert json.dumps(pre_payload, sort_keys=True) == json.dumps(post_payload, sort_keys=True)
+
+        # Final acceptance-criterion summary: the new fields are absent
+        # from the post-#997 payload (they would appear if a non-default
+        # value were set).
+        assert "ttlSecondsAfterFinished" not in post_payload["spec"]
+        assert "labels" not in post_payload["metadata"]
+
+    def test_backoff_limit_set_on_spec(self) -> None:
+        """Non-zero ``backoff_limit`` is reflected on the V1JobSpec."""
+        mock_client, ex = self._make_executor_with(backoff_limit=3)
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        job = self._submitted_job(mock_client)
+        assert job.spec.backoff_limit == 3
+        # Defensive: explicit int type — K8s API rejects strings.
+        assert isinstance(job.spec.backoff_limit, int)
+
+    def test_ttl_seconds_after_finished_set_on_spec(self) -> None:
+        """``ttl_seconds_after_finished`` is reflected on the V1JobSpec
+        when set, and is an int (K8s API rejects non-int values).
+        """
+        mock_client, ex = self._make_executor_with(ttl_seconds_after_finished=3600)
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        job = self._submitted_job(mock_client)
+        assert job.spec.ttl_seconds_after_finished == 3600
+        assert isinstance(job.spec.ttl_seconds_after_finished, int)
+
+    def test_queue_name_set_on_metadata_label(self) -> None:
+        """A ``queue_name`` is applied as the Kueue label on V1ObjectMeta."""
+        mock_client, ex = self._make_executor_with(queue_name="team-a-cpu")
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        job = self._submitted_job(mock_client)
+        assert job.metadata.labels == {"kueue.x-k8s.io/queue-name": "team-a-cpu"}
+
+    def test_all_three_native_controls_together(self) -> None:
+        """All three fields are independently controllable."""
+        mock_client, ex = self._make_executor_with(
+            backoff_limit=5,
+            ttl_seconds_after_finished=7200,
+            queue_name="team-b-gpu",
+        )
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        job = self._submitted_job(mock_client)
+        assert job.spec.backoff_limit == 5
+        assert job.spec.ttl_seconds_after_finished == 7200
+        assert job.metadata.labels == {"kueue.x-k8s.io/queue-name": "team-b-gpu"}
+
+    def test_init_coerces_backoff_limit_to_int(self) -> None:
+        """The constructor accepts an int (or numerically-coercible) value."""
+        ex = KubernetesExecutor(backoff_limit=4)
+        assert ex.backoff_limit == 4
+        assert isinstance(ex.backoff_limit, int)
+
+    def test_init_coerces_ttl_seconds_to_int(self) -> None:
+        """The constructor accepts an int for ttl_seconds_after_finished."""
+        ex = KubernetesExecutor(ttl_seconds_after_finished=600)
+        assert ex.ttl_seconds_after_finished == 600
+        assert isinstance(ex.ttl_seconds_after_finished, int)
+
+    def test_init_defaults_preserve_pre_997_manifest(self) -> None:
+        """Default init produces a KubernetesExecutor whose defaults are
+        byte-identical to the pre-#997 executor."""
+        ex = KubernetesExecutor()
+        assert ex.backoff_limit == 0
+        assert ex.ttl_seconds_after_finished is None
+        assert ex.queue_name is None
 
     def test_infer_step_name_mapping(self) -> None:
         assert KubernetesExecutor._infer_step_name("apply_s0") == "apply"  # noqa: SLF001

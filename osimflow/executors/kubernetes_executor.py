@@ -1,4 +1,4 @@
-"""Kubernetes executor for OSimFlow campaigns (issue #254).
+"""Kubernetes executor for OSimFlow campaigns (issue #254, #997).
 
 Wraps the Kubernetes Python client (`kubernetes`) to create a Job per
 call, then polls the job status with exponential backoff until the
@@ -25,6 +25,13 @@ Kubernetes resource requests and limits. Per-sample
 environment variables — the same env vars `SlurmExecutor` and
 `AWSBatchExecutor` export, so downstream work scripts can be
 substrate-agnostic.
+
+Native Job controls (issue #997): ``backoff_limit``,
+``ttl_seconds_after_finished``, and the optional
+``kueue.x-k8s.io/queue-name`` label are configurable. Defaults
+preserve the pre-#997 manifest byte-for-byte (backoff=0, no TTL, no
+extra labels) so existing campaigns run unchanged when the flags are
+left unset.
 
 Security: credentials are sourced from the in-cluster service account
 or from `~/.kube/config`. The constructor does **not** accept explicit
@@ -222,10 +229,26 @@ class KubernetesExecutor(BaseExecutor):
         namespace: str = "default",
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
+        backoff_limit: int = 0,
+        ttl_seconds_after_finished: int | None = None,
+        queue_name: str | None = None,
     ):
         self.namespace = namespace
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
+        # Native Job controls (issue #997). Defaults preserve the
+        # pre-#997 manifest byte-for-byte: backoff_limit=0, no TTL, no
+        # extra labels. Setting ``backoff_limit`` > 0 enables K8s-native
+        # pod retry as an alternative to ``--max-sample-retries`` (the
+        # orchestrator-side retry loop); pick one, not both.
+        self.backoff_limit = int(backoff_limit)
+        self.ttl_seconds_after_finished = (
+            int(ttl_seconds_after_finished) if ttl_seconds_after_finished is not None else None
+        )
+        # Kueue opt-in: applied as the ``kueue.x-k8s.io/queue-name`` label
+        # on the Job's metadata. Inert on clusters without Kueue
+        # installed (the label is harmless without the controller).
+        self.queue_name = queue_name
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -443,15 +466,31 @@ class KubernetesExecutor(BaseExecutor):
             ),
         )
 
+        # Native Job controls (issue #997): plumb ``backoff_limit`` /
+        # ``ttl_seconds_after_finished`` from the executor instance onto
+        # the V1JobSpec. Defaults preserve the pre-#997 manifest byte
+        # representation: backoff_limit=0, ttl_seconds_after_finished
+        # absent. The Kueue ``queue-name`` label is added on the
+        # metadata only when the executor was constructed with a
+        # ``queue_name`` — leaving the metadata untouched by default
+        # so behavior is unchanged without opt-in.
+        job_spec_kwargs: dict[str, Any] = {
+            "template": template,
+            "backoff_limit": self.backoff_limit,
+            "active_deadline_seconds": int(time_min) * 60 if time_min > 0 else None,
+        }
+        if self.ttl_seconds_after_finished is not None:
+            job_spec_kwargs["ttl_seconds_after_finished"] = self.ttl_seconds_after_finished
+
+        metadata_kwargs: dict[str, Any] = {"name": job_name}
+        if self.queue_name:
+            metadata_kwargs["labels"] = {"kueue.x-k8s.io/queue-name": self.queue_name}
+
         job = client.V1Job(
             api_version="batch/v1",
             kind="Job",
-            metadata=client.V1ObjectMeta(name=job_name),
-            spec=client.V1JobSpec(
-                template=template,
-                backoff_limit=0,
-                active_deadline_seconds=int(time_min) * 60 if time_min > 0 else None,
-            ),
+            metadata=client.V1ObjectMeta(**metadata_kwargs),
+            spec=client.V1JobSpec(**job_spec_kwargs),
         )
 
         client = self._get_client()
