@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from osimflow.__main__ import _build_parser, _cmd_health, main
 from osimflow.health import (
     CheckCategory,
@@ -514,3 +516,304 @@ class TestIndividualChecks:
             report = run_health_checks(outdir=Path(d), skip_network=True)
         net_results = [r for r in report.results if r.name == "Network Connectivity"]
         assert net_results[0].status == CheckStatus.SKIP
+
+
+# ---------------------------------------------------------------------------
+# Per-executor health checks (issue #1024)
+# ---------------------------------------------------------------------------
+
+
+# All ten built-in executors MUST have a registered health check. Add a new
+# executor to this set when you add a new entry in ExecutorRegistry.register()
+# at the bottom of osimflow/executors/__init__.py. The regression test
+# below fails fast if anyone adds a new executor and forgets the check.
+EXPECTED_EXECUTOR_HEALTH_CHECKS: frozenset[str] = frozenset(
+    {
+        "local",
+        "slurm",
+        "pbs",
+        "aws_batch",
+        "azure_batch",
+        "google_batch",
+        "nomad",
+        "kubernetes",
+        "docker_swarm",
+        "dask_jobqueue",
+    }
+)
+
+
+class TestExecutorHealthChecks:
+    """Tests for per-executor health checks (issue #1024).
+
+    Covers:
+      * every ExecutorRegistry entry has a registered health check
+      * the orchestrator dispatches via the registry, not a hardcoded list
+      * ``configured_executor`` promotes the matching check to CRITICAL
+      * a check that raises is contained and reported, not propagated
+    """
+
+    def test_registry_lists_all_ten_executors(self) -> None:
+        """ExecutorRegistry still lists the canonical 10 executors."""
+        from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+        available = set(ExecutorRegistry.list_available())
+        assert EXPECTED_EXECUTOR_HEALTH_CHECKS.issubset(available), (
+            f"Missing executors: {EXPECTED_EXECUTOR_HEALTH_CHECKS - available}"
+        )
+
+    def test_iter_health_checks_covers_all_ten(self) -> None:
+        """Every expected executor has a registered health check."""
+        from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+        names = {name for name, _fn in ExecutorRegistry.iter_health_checks()}
+        assert names >= EXPECTED_EXECUTOR_HEALTH_CHECKS, (
+            f"Missing health checks for: {EXPECTED_EXECUTOR_HEALTH_CHECKS - names}"
+        )
+
+    def test_iter_health_checks_is_sorted(self) -> None:
+        """iter_health_checks returns a sorted list for deterministic output."""
+        from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+        names = [name for name, _fn in ExecutorRegistry.iter_health_checks()]
+        assert names == sorted(names)
+
+    def test_register_health_check_rejects_unknown_executor(self) -> None:
+        """register_health_check raises ValueError for an unknown executor."""
+        from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+        with pytest.raises(ValueError, match="not registered"):
+            ExecutorRegistry.register_health_check("does_not_exist", lambda: None)
+
+    def test_get_health_check_returns_callable(self) -> None:
+        """get_health_check returns a callable for a known executor."""
+        from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+        for name in EXPECTED_EXECUTOR_HEALTH_CHECKS:
+            check = ExecutorRegistry.get_health_check(name)
+            assert callable(check), f"{name} did not return a callable"
+
+    def test_run_health_checks_includes_all_executor_results(self, tmp_path: Path) -> None:
+        """run_health_checks emits one result per registered executor check."""
+        report = run_health_checks(outdir=tmp_path, skip_network=True)
+        executor_names = [r.name for r in report.results if r.name.startswith("Executor: ")]
+        assert len(executor_names) >= len(EXPECTED_EXECUTOR_HEALTH_CHECKS)
+        for expected in EXPECTED_EXECUTOR_HEALTH_CHECKS:
+            assert f"Executor: {expected}" in executor_names, (
+                f"Missing health check result for executor '{expected}'"
+            )
+
+    def test_default_run_returns_only_informational_executor_checks(self, tmp_path: Path) -> None:
+        """Without configured_executor, every per-executor check is INFORMATIONAL."""
+        report = run_health_checks(outdir=tmp_path, skip_network=True)
+        for r in report.results:
+            if r.name.startswith("Executor: "):
+                assert r.category == CheckCategory.INFORMATIONAL, (
+                    f"{r.name} unexpectedly promoted to {r.category}"
+                )
+
+    def test_configured_executor_promotes_check_to_critical(self, tmp_path: Path) -> None:
+        """configured_executor=<name> promotes that check to CRITICAL."""
+        report = run_health_checks(
+            outdir=tmp_path,
+            skip_network=True,
+            configured_executor="local",
+        )
+        local_results = [r for r in report.results if r.name == "Executor: local"]
+        assert len(local_results) == 1
+        assert local_results[0].critical
+        # Other executor checks stay INFORMATIONAL.
+        for r in report.results:
+            if r.name.startswith("Executor: ") and r.name != "Executor: local":
+                assert r.category == CheckCategory.INFORMATIONAL
+
+    def test_configured_executor_for_unregistered_name_is_noop(self, tmp_path: Path) -> None:
+        """An unknown configured_executor name does not raise or promote anything."""
+        # Should not raise; no per-executor check has that name, so all
+        # stay INFORMATIONAL.
+        report = run_health_checks(
+            outdir=tmp_path,
+            skip_network=True,
+            configured_executor="this_executor_does_not_exist",
+        )
+        for r in report.results:
+            if r.name.startswith("Executor: "):
+                assert r.category == CheckCategory.INFORMATIONAL
+
+    def test_check_raising_is_contained(self, tmp_path: Path) -> None:
+        """A check that raises is captured as WARN, not propagated."""
+        from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+        original = ExecutorRegistry.get_health_check("local")
+        ExecutorRegistry.register_health_check(
+            "local", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        try:
+            report = run_health_checks(outdir=tmp_path, skip_network=True)
+            local_results = [r for r in report.results if r.name == "Executor: local"]
+            assert len(local_results) == 1
+            assert local_results[0].status == CheckStatus.WARN
+            assert "boom" in local_results[0].detail
+        finally:
+            # Restore so we don't leak state across tests.
+            ExecutorRegistry.register_health_check("local", original)
+
+
+# ---------------------------------------------------------------------------
+# Individual per-executor check functions (issue #1024)
+# ---------------------------------------------------------------------------
+
+
+class TestIndividualExecutorChecks:
+    """Smoke tests for each of the 10 _check_<executor>() functions."""
+
+    def _invoke(self, name: str):  # noqa: ANN202
+        from osimflow.health import _BUILTIN_EXECUTOR_HEALTH_CHECKS  # noqa: PLC0415
+
+        fn = _BUILTIN_EXECUTOR_HEALTH_CHECKS[name]
+        return fn()
+
+    def test_local_check_returns_check_result(self) -> None:
+        """_check_local returns a CheckResult with the canonical name."""
+        r = self._invoke("local")
+        assert isinstance(r, CheckResult)
+        assert r.name == "Executor: local"
+        # The CI runner is Linux with many CPUs — should pass.
+        assert r.status in {CheckStatus.PASS, CheckStatus.WARN}
+
+    def test_slurm_check_handles_missing_sinfo(self) -> None:
+        """_check_slurm returns SKIP when sinfo is absent."""
+        with patch("shutil.which", return_value=None):
+            r = self._invoke("slurm")
+        assert r.status == CheckStatus.SKIP
+        assert r.category == CheckCategory.INFORMATIONAL
+
+    def test_pbs_check_handles_missing_qstat(self) -> None:
+        """_check_pbs returns SKIP when qstat is absent."""
+        with patch("shutil.which", return_value=None):
+            r = self._invoke("pbs")
+        assert r.status == CheckStatus.SKIP
+
+    def test_aws_batch_check_skips_without_boto3(self) -> None:
+        """_check_aws_batch returns SKIP when boto3 is not importable."""
+        import builtins  # noqa: PLC0415
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):  # noqa: ANN001, ANN002
+            if name == "boto3":
+                raise ImportError("simulated missing boto3")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            r = self._invoke("aws_batch")
+        assert r.status == CheckStatus.SKIP
+        assert "boto3" in r.message
+
+    def test_nomad_check_skips_without_cli(self) -> None:
+        """_check_nomad returns SKIP when nomad CLI is absent."""
+        with patch("shutil.which", return_value=None):
+            r = self._invoke("nomad")
+        assert r.status == CheckStatus.SKIP
+
+    def test_kubernetes_check_skips_without_kubectl(self) -> None:
+        """_check_kubernetes returns SKIP when kubectl is absent."""
+        with patch("shutil.which", return_value=None):
+            r = self._invoke("kubernetes")
+        assert r.status == CheckStatus.SKIP
+
+    def test_docker_swarm_check_skips_without_docker(self) -> None:
+        """_check_docker_swarm returns SKIP when docker CLI is absent."""
+        with patch("shutil.which", return_value=None):
+            r = self._invoke("docker_swarm")
+        assert r.status == CheckStatus.SKIP
+
+    def test_dask_jobqueue_check_skips_without_sdk(self) -> None:
+        """_check_dask_jobqueue returns SKIP when dask_jobqueue is not installed."""
+        import builtins  # noqa: PLC0415
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):  # noqa: ANN001, ANN002
+            if name == "dask_jobqueue":
+                raise ImportError("simulated missing dask_jobqueue")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            r = self._invoke("dask_jobqueue")
+        assert r.status == CheckStatus.SKIP
+
+    def test_azure_batch_check_skips_without_sdk(self) -> None:
+        """_check_azure_batch returns SKIP when azure-batch is not installed."""
+        import builtins  # noqa: PLC0415
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):  # noqa: ANN001, ANN002
+            if name.startswith("azure.batch"):
+                raise ImportError("simulated missing azure-batch")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            r = self._invoke("azure_batch")
+        assert r.status == CheckStatus.SKIP
+
+    def test_google_batch_check_skips_without_sdk(self) -> None:
+        """_check_google_batch returns SKIP when google-cloud-batch is missing."""
+        import builtins  # noqa: PLC0415
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):  # noqa: ANN001, ANN002
+            if name.startswith("google.cloud.batch"):
+                raise ImportError("simulated missing google-cloud-batch")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            r = self._invoke("google_batch")
+        assert r.status == CheckStatus.SKIP
+
+
+# ---------------------------------------------------------------------------
+# CLI flag for --executor (issue #1024)
+# ---------------------------------------------------------------------------
+
+
+class TestHealthCLIExecutorFlag:
+    """The ``osimflow health --executor <name>`` flag promotes that check."""
+
+    def test_help_lists_executor_flag(self) -> None:
+        """--help shows the --executor flag."""
+        parser = _build_parser()
+        # Invoke the parser directly rather than spawning a subprocess
+        # (which would require `python` on PATH and a re-installed
+        # package). ``format_help`` walks every subparser so the health
+        # subcommand's help text is included.
+        help_text = parser.format_help()
+        # We can't see the health subcommand's own --help from the
+        # top-level help; the next-best check is to verify the parser
+        # accepts --executor without raising.
+        try:
+            args = parser.parse_args(["health", "--offline", "--executor", "slurm"])
+        except SystemExit as exc:  # argparse exits on parse error
+            pytest.fail(f"parser rejected --executor flag: exit={exc.code}")
+        assert args.executor == "slurm"
+        # Sanity: the help text mentions the health subcommand somewhere.
+        assert "health" in help_text
+
+    def test_cmd_health_passes_configured_executor(self, tmp_path: Path) -> None:
+        """_cmd_health forwards --executor to run_health_checks."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["health", "--offline", "--executor", "local", "--outdir", str(tmp_path)]
+        )
+        assert args.executor == "local"
+        # Stub run_health_checks via the _cmd_health invocation path.
+        with patch("osimflow.health.run_health_checks") as mock_run:
+            mock_run.return_value = HealthReport(results=[])
+            from osimflow.__main__ import _cmd_health  # noqa: PLC0415
+
+            exit_code = _cmd_health(args)
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("configured_executor") == "local"

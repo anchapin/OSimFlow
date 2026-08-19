@@ -1868,6 +1868,16 @@ def _add_health_args(health: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Skip the network connectivity check.",
     )
+    health.add_argument(
+        "--executor",
+        default=None,
+        help=(
+            "Name of the executor the campaign will dispatch with (e.g. 'local', "
+            "'slurm', 'aws_batch'). Promotes that executor's health check from "
+            "INFORMATIONAL to CRITICAL so a missing substrate fails the health "
+            "subcommand instead of merely warning. (issue #1024)"
+        ),
+    )
     health.add_argument("--log_level", default="ERROR")
 
 
@@ -3250,7 +3260,7 @@ def _cmd_warm_cache(args: argparse.Namespace) -> int:
 
 
 def _cmd_health(args: argparse.Namespace) -> int:
-    """Run system health checks (issue #411)."""
+    """Run system health checks (issue #411, #1024)."""
     from osimflow.health import (  # noqa: PLC0415
         format_results,
         get_exit_code,
@@ -3259,7 +3269,11 @@ def _cmd_health(args: argparse.Namespace) -> int:
     )
 
     outdir = args.outdir if args.outdir else Path.cwd()
-    report = run_health_checks(outdir=outdir, skip_network=args.offline)
+    report = run_health_checks(
+        outdir=outdir,
+        skip_network=args.offline,
+        configured_executor=args.executor,
+    )
 
     if args.json:
         print(to_json(report))
