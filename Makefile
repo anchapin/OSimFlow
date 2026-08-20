@@ -57,7 +57,7 @@ docs-sync: ## check docs/ references resolve
 	$(PY) tools/check_docs_sync.py
 
 openapi-sync: ## check docs/openapi.json matches the live FastAPI app (issue #1049)
-	$(PIP) install -e ".[dev,api]" --quiet
+	$(PY) -m pip install -e ".[dev,api]" --quiet
 	$(PY) tools/check_openapi_sync.py --summary
 
 precommit: ## pre-commit run --all-files
