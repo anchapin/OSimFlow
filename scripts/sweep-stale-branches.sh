@@ -11,6 +11,8 @@
 #   scripts/sweep-stale-branches.sh --include-orphaned --apply   # also delete abandoned (REVIEW FIRST)
 #   scripts/sweep-stale-branches.sh --report logs/sweep.txt
 #   scripts/sweep-stale-branches.sh --min-age-days 60
+#   scripts/sweep-stale-branches.sh --worktree               # also scan stale local worktrees
+#   scripts/sweep-stale-branches.sh --worktree --apply       # remove stale worktrees too
 #   scripts/sweep-stale-branches.sh --help          # show this header
 #
 # DEFAULT BEHAVIOUR
@@ -69,6 +71,7 @@ MIN_AGE_DAYS="${MIN_AGE_DAYS:-30}"
 DRY_RUN="true"          # dry-run is the safe default
 INCLUDE_ORPHANED="false"
 DO_APPLY="false"
+SCAN_WORKTREES="false"  # also scan local git worktrees
 REPORT_FILE=""
 # Keep-list globs. Matched against the bare branch name (no origin/ prefix).
 PROTECT_GLOBS=(
@@ -98,6 +101,7 @@ while [[ $# -gt 0 ]]; do
         --protect-glob)          ADDL_PROTECT+=("$2"); shift 2 ;;
         --repo)                  REPO="${2:?--repo requires a value}"; shift 2 ;;
         --default-branch)        DEFAULT_BRANCH="${2:?--default-branch requires a value}"; shift 2 ;;
+        --worktree)              SCAN_WORKTREES="true"; shift ;;
         --help|-h)               usage 0 ;;
         *) echo "Unknown argument: $1" >&2; usage 64 ;;
     esac
@@ -110,7 +114,7 @@ if ! gh auth status >/dev/null 2>&1; then
     exit 69
 fi
 
-echo "repo=${REPO} default_branch=${DEFAULT_BRANCH} min_age_days=${MIN_AGE_DAYS} dry_run=${DRY_RUN} include_orphaned=${INCLUDE_ORPHANED}"
+echo "repo=${REPO} default_branch=${DEFAULT_BRANCH} min_age_days=${MIN_AGE_DAYS} dry_run=${DRY_RUN} include_orphaned=${INCLUDE_ORPHANED} scan_worktrees=${SCAN_WORKTREES}"
 
 # --- gather inputs ----------------------------------------------------------
 # Keep the local view of the remote fresh and drop deleted refs.
@@ -254,6 +258,105 @@ else
 fi
 emit ""
 emit "=== END ==="
+
+# --- stale local worktrees (opt-in: --worktree) -----------------------------
+# Detects local git worktrees whose branch is stale (old + no open PR + not
+# protected). A worktree's branch is classified using the SAME criteria as
+# the remote-branch sweep above, so a superseded/abandoned branch (e.g.
+# fix/issue-919 — work was moved to PR #999 on a different branch) is also
+# detected. Removes stale worktrees with `git worktree remove --force` +
+# `git worktree prune`. This is the programmatic analogue of the manual
+# cleanup in issue #1002.
+if [[ "$SCAN_WORKTREES" == "true" ]]; then
+    # The main checkout (cwd) is never a "stale" worktree.
+    main_abspath="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
+    # Build lookup sets from the already-classified branch arrays.
+    declare -A stale_branch_set=()
+    for b in "${safe[@]}" "${safe_orphaned[@]}"; do
+        stale_branch_set["$b"]=1
+    done
+
+    declare -a stale_worktrees=()
+    declare -a stale_worktree_branches=()
+    declare -a stale_worktree_orphaned=()
+    # Parse `git worktree list --porcelain` — each worktree is a block
+    # separated by a blank line:
+    #   worktree <path>
+    #   HEAD <sha>
+    #   branch <ref>   (omitted for detached HEAD)
+    # We accumulate path+branch per block, then evaluate on blank line / EOF.
+    wt_path="" wt_branch=""
+    process_worktree() {
+        [[ -z "${wt_path:-}" ]] && return
+        [[ "$wt_path" == "$main_abspath" ]] && return
+        [[ -z "${wt_branch:-}" ]] && return
+        if [[ -n "${stale_branch_set[$wt_branch]:-}" ]]; then
+            age=$(branch_age_days "$wt_branch" 2>/dev/null || echo 0)
+            if [[ "$age" -ge "$MIN_AGE_DAYS" ]]; then
+                stale_worktrees+=("$wt_path")
+                stale_worktree_branches+=("$wt_branch")
+                # Track which ones are abandoned (not proven-merged).
+                if ancestry_merged "$wt_branch" || [[ -n "${merged_heads[$wt_branch]:-}" ]]; then
+                    : # proven-merged, safe to remove with just --worktree
+                else
+                    stale_worktree_orphaned+=("$wt_branch")
+                fi
+            fi
+        fi
+    }
+    while IFS= read -r line; do
+        case "$line" in
+            '')
+                process_worktree
+                wt_path=""; wt_branch=""
+                ;;
+            worktree\ *) wt_path="${line#worktree }" ;;
+            branch\ *)   wt_branch="${line#branch }"; wt_branch="${wt_branch#refs/heads/}" ;;
+            *)           ;;
+        esac
+    done < <(git worktree list --porcelain 2>/dev/null)
+    # Flush the last block (no trailing blank line guaranteed).
+    process_worktree
+
+    emit ""
+    emit "=== STALE LOCAL WORKTREES (${#stale_worktrees[@]}) ==="
+    if ((${#stale_worktrees[@]} == 0)); then
+        emit "(none)"
+    else
+        for i in "${!stale_worktrees[@]}"; do
+            emit "  ${stale_worktrees[$i]} (${stale_worktree_branches[$i]})"
+        done
+        emit "Use '--worktree --apply' to remove proven-merged worktrees."
+        emit "Use '--worktree --include-orphaned --apply' to also remove abandoned worktrees."
+    fi
+    emit "=== END WORKTREES ==="
+
+    # Act: remove stale worktrees. Proven-merged always; abandoned only with
+    # --include-orphaned (mirrors the branch deletion semantics above).
+    if [[ "$DO_APPLY" == "true" && ${#stale_worktrees[@]} -gt 0 ]]; then
+        emit "REMOVING ${#stale_worktrees[@]} worktree(s):"
+        for i in "${!stale_worktrees[@]}"; do
+            wt_path="${stale_worktrees[$i]}"
+            wt_branch="${stale_worktree_branches[$i]}"
+            # Skip abandoned worktrees unless --include-orphaned is set.
+            is_orphaned=false
+            for ob in "${stale_worktree_orphaned[@]}"; do
+                if [[ "$ob" == "$wt_branch" ]]; then is_orphaned=true; break; fi
+            done
+            if [[ "$is_orphaned" == "true" && "$INCLUDE_ORPHANED" == "false" ]]; then
+                emit "SKIP (abandoned, needs --include-orphaned): $wt_path"
+                continue
+            fi
+            if git worktree remove "$wt_path" --force >/dev/null 2>&1; then
+                emit "REMOVED WORKTREE: $wt_path"
+            else
+                emit "FAILED (busy?): $wt_path"
+            fi
+        done
+        git worktree prune >/dev/null 2>&1 || true
+    fi
+fi
 
 # --- act (delete) -----------------------------------------------------------
 if [[ "$DO_APPLY" == "false" ]]; then
