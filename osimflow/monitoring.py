@@ -29,6 +29,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -149,6 +150,13 @@ class RunTrace:
         # Cache hit rate (issue #426). Set by Campaign._finalize_samples() after
         # AGGREGATE_RESULTS so the value is available in run.json.
         self.cache_hit_rate: float | None = None
+        # Chaos fault invocations (issue #1013). One row per call to
+        # ``Campaign._maybe_inject_chaos`` that actually exercised a
+        # fault injector — i.e. the engine was enabled, the schedule
+        # matched, and at least one registered injector ran. Stored as
+        # a list of dicts so ``run.json`` shows the recovery evidence
+        # the integration test asserts on.
+        self.chaos_invocations: list[dict[str, object]] = []
         self.status: str = "running"  # "running", "success", "cancelled", "failed", "paused"
         # Timestamp when the campaign was paused (None if not paused).
         self.paused_at: float | None = None
@@ -195,6 +203,43 @@ class RunTrace:
     def generation_done(self, trace: GenerationTrace) -> None:
         """Record a completed generation (issue #270)."""
         self.generations.append(trace)
+
+    def record_chaos_invocation(
+        self,
+        step: str,
+        when: str,
+        target_id: str,
+        results: Sequence[object],
+    ) -> None:
+        """Record a chaos fault invocation (issue #1013).
+
+        ``results`` is a sequence of :class:`osimflow.chaos.ChaosResult`
+        instances; each is serialised to a plain dict so the trace
+        stays JSON-friendly. ``when`` is one of ``"before_step"``,
+        ``"after_step"``, ``"per_sample"`` and matches the value
+        the Campaign set in ``cfg.chaos.schedule``.
+        """
+        serialised: list[dict[str, object]] = []
+        for r in results:
+            fault_type = getattr(r, "fault_type", None)
+            fault_value = getattr(fault_type, "value", None)
+            serialised.append(
+                {
+                    "fault_type": fault_value,
+                    "target_id": getattr(r, "target_id", target_id),
+                    "injected": bool(getattr(r, "injected", False)),
+                    "duration_s": float(getattr(r, "duration_s", 0.0) or 0.0),
+                    "error": getattr(r, "error", None),
+                }
+            )
+        self.chaos_invocations.append(
+            {
+                "step": step,
+                "when": when,
+                "target_id": target_id,
+                "results": serialised,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Serialization
@@ -254,6 +299,10 @@ class RunTrace:
         # Cache hit rate (issue #426).
         if self.cache_hit_rate is not None:
             d["cache_hit_rate"] = self.cache_hit_rate
+        # Chaos invocations (issue #1013). Always present as a list
+        # so downstream tooling can rely on the key — the value is
+        # ``[]`` when chaos was never enabled or never fired.
+        d["chaos_invocations"] = list(self.chaos_invocations)
         # Paused timestamp (issue #553). Present when the campaign has been paused.
         if self.paused_at is not None:
             d["paused_at"] = self.paused_at

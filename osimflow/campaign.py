@@ -69,6 +69,13 @@ from .apply_params import (
     preflight_check,
 )
 from .cache import CacheKey, _container_digest_for, sha256_of_dict, sha256_of_files
+from .chaos import (
+    ChaosEngine,
+    CPUSpikeInjector,
+    KillSwitchInjector,
+    MemoryPressureInjector,
+    NetworkDelayInjector,
+)
 from .config import CampaignConfig
 from .cost_tracking import (
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
@@ -345,8 +352,55 @@ def _combine_code_hash(*hashes: str) -> str:
     return h.hexdigest()
 
 
+def _build_default_chaos_engine(cfg: Any) -> ChaosEngine:
+    """Build a :class:`ChaosEngine` from :class:`ChaosConfig` settings.
+
+    Issue #1013 wires the chaos module into :class:`Campaign`; this
+    helper turns the user-facing config knobs into the matching
+    fault injectors and registers them on a fresh ``ChaosEngine``.
+    The schedule is *not* enforced here — it lives in
+    :meth:`Campaign._maybe_inject_chaos` so the engine itself stays
+    neutral.
+
+    Unknown scenario names are skipped with a warning so that a
+    typo in the CLI flag does not abort the campaign at start.
+    """
+    engine = ChaosEngine(enabled=True)
+    scenarios = list(cfg.scenarios)
+    for name in scenarios:
+        if name == "kill_switch":
+            engine.register(KillSwitchInjector(fail_after=cfg.fail_after))
+        elif name == "network_delay":
+            engine.register(
+                NetworkDelayInjector(
+                    delay_s=cfg.delay_s,
+                    jitter_s=cfg.jitter_s,
+                    probability=cfg.probability,
+                )
+            )
+        elif name == "cpu_spike":
+            engine.register(
+                CPUSpikeInjector(
+                    duration_s=cfg.duration_s,
+                    intensity=cfg.intensity,
+                    probability=cfg.probability,
+                )
+            )
+        elif name == "memory_pressure":
+            engine.register(
+                MemoryPressureInjector(
+                    size_mb=cfg.size_mb,
+                    duration_s=cfg.duration_s,
+                    probability=cfg.probability,
+                )
+            )
+        else:
+            log.warning("chaos: ignoring unknown scenario %r", name)
+    return engine
+
+
 class Campaign:
-    def __init__(
+    def __init__(  # noqa: PLR0912
         self,
         cfg: CampaignConfig,
         executor: BaseExecutor,
@@ -355,6 +409,7 @@ class Campaign:
         max_workers: int = 1,
         task_queue: TaskQueue | None = None,
         data_point_manager: DataPointManager | None = None,
+        chaos_engine: ChaosEngine | None = None,
     ):
         self.cfg = cfg
         # NOTE: the OSIMFLOW_DOCKER_SWARM_DRY_RUN env var is scoped to
@@ -433,6 +488,14 @@ class Campaign:
         # user-supplied apply / KPI scripts invalidates the per-sample
         # cache.
         self.code_hashes = self._compute_code_hashes(cfg)
+        chaos_summary: dict[str, object] = {}
+        chaos_cfg_obj = getattr(cfg, "chaos", None)
+        if chaos_cfg_obj is not None:
+            chaos_summary = {
+                "enabled": bool(getattr(chaos_cfg_obj, "enabled", False)),
+                "scenarios": list(getattr(chaos_cfg_obj, "scenarios", [])),
+                "schedule": str(getattr(chaos_cfg_obj, "schedule", "none")),
+            }
         self.trace = RunTrace(
             campaign_id=time.strftime("%Y-%m-%dT%H-%M-%S"),
             config_summary={
@@ -454,6 +517,7 @@ class Campaign:
                 "shard_end": cfg.shard_end,
                 "nomad_fanout_submit_rate_per_sec": cfg.nomad_fanout_submit_rate_per_sec,
                 "nomad_fanout_submit_chunk_size": cfg.nomad_fanout_submit_chunk_size,
+                "chaos": chaos_summary,
             },
         )
         # Per-sample accumulator. The three per-sample steps write here;
@@ -535,6 +599,42 @@ class Campaign:
             cfg=cfg,
             executor_name=executor.name,
         )
+
+        # Chaos engine (issue #1013). When the user passes an explicit
+        # ``chaos_engine`` we use it directly; otherwise we build one
+        # from ``cfg.chaos`` if ``enabled=True`` and at least one
+        # scenario is listed. The engine stays None for every campaign
+        # that does not opt in, so ``_maybe_inject_chaos`` is a no-op
+        # unless explicitly requested — the wiring is invisible to
+        # non-chaos campaigns.
+        chaos_cfg = getattr(cfg, "chaos", None)
+        if chaos_engine is not None:
+            self._chaos_engine: ChaosEngine | None = chaos_engine
+        elif chaos_cfg is not None and chaos_cfg.enabled and chaos_cfg.scenarios:
+            self._chaos_engine = _build_default_chaos_engine(chaos_cfg)
+        else:
+            self._chaos_engine = None
+        if self._chaos_engine is not None:
+            scenarios_repr: object
+            schedule_repr: object
+            if chaos_cfg is not None and chaos_cfg.scenarios:
+                scenarios_repr = list(chaos_cfg.scenarios)
+                schedule_repr = chaos_cfg.schedule
+            else:
+                # User supplied a custom engine; describe what is
+                # actually registered so the log line is not a lie.
+                scenarios_repr = [
+                    getattr(inj, "fault_type", None)
+                    and getattr(inj.fault_type, "value", None)
+                    or type(inj).__name__
+                    for inj in self._chaos_engine._injectors
+                ]
+                schedule_repr = "custom"
+            log.info(
+                "chaos engine enabled: scenarios=%s schedule=%s",
+                scenarios_repr,
+                schedule_repr,
+            )
 
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
@@ -2614,10 +2714,20 @@ class Campaign:
         if generation == 0:
             self.step_preflight_run_model()
 
+        # Chaos wiring (issue #1013): inject before the per-sample
+        # fan-out steps. ``_maybe_inject_chaos`` is a no-op unless
+        # ``cfg.chaos.schedule`` matches ``"before_step"``, so this
+        # call has zero overhead on non-chaos campaigns.
+        self._maybe_inject_chaos("APPLY_PARAMETERS", "before_step")
         parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
+        self._maybe_inject_chaos("APPLY_PARAMETERS", "after_step")
         self.step_validate_measure_variables()
+        self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "before_step")
         simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
+        self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "after_step")
+        self._maybe_inject_chaos("EXTRACT_KPIS", "before_step")
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
+        self._maybe_inject_chaos("EXTRACT_KPIS", "after_step")
 
         # Sobol sensitivity indices (issue #346): compute after KPI extraction.
         if self.cfg.algorithm == "sobol":
@@ -2859,6 +2969,76 @@ class Campaign:
             "elapsed_s": t1 - t0,
             "run_json": self.cfg.outdir / "run.json",
         }
+
+    def _maybe_inject_chaos(
+        self,
+        step_name: str,
+        when: str,
+        target_id: str | None = None,
+    ) -> None:
+        """Opt-in chaos fault injection (issue #1013).
+
+        Called from ``_run_one_generation`` before/after each DAG step
+        and from the per-sample fan-out loops. No-op unless the
+        campaign has an active ``ChaosEngine`` and the configured
+        ``cfg.chaos.schedule`` matches *when*. The schedule string
+        is intentionally single-valued so a campaign either fires
+        on step boundaries, on per-sample boundaries, or never —
+        combining schedules is not supported in this iteration.
+
+        Failures inside the engine never propagate: every injector
+        is wrapped in its own try/except in
+        :meth:`ChaosEngine.inject`, and we wrap the call here for
+        defence in depth so a buggy user-supplied ``chaos_engine``
+        cannot break the campaign.
+
+        Parameters
+        ----------
+        step_name
+            The DAG step the fault is being attached to. Used both
+            for logging and for the ``step`` field of the recorded
+            invocation.
+        when
+            One of ``"before_step"``, ``"after_step"``, or
+            ``"per_sample"``. Other values are silently ignored.
+        target_id
+            Identifier of the injection target — typically the
+            sample ID for ``per_sample`` injections and the step
+            name for step-boundary injections. Defaults to
+            ``step_name`` so callers don't have to invent an ID.
+        """
+        engine = self._chaos_engine
+        if engine is None or not engine.enabled:
+            return
+        chaos_cfg = getattr(self.cfg, "chaos", None)
+        schedule = getattr(chaos_cfg, "schedule", "none")
+        if schedule == "none" or schedule != when:
+            return
+        tid = target_id if target_id is not None else step_name
+        try:
+            results = engine.inject(tid)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "chaos inject failed for %s/%s: %s (continuing)",
+                step_name,
+                tid,
+                exc,
+            )
+            return
+        if results:
+            self.trace.record_chaos_invocation(
+                step=step_name,
+                when=when,
+                target_id=tid,
+                results=results,
+            )
+            log.info(
+                "chaos: %s @ %s target=%s injected=%d",
+                step_name,
+                when,
+                tid,
+                sum(1 for r in results if r.injected),
+            )
 
     def _maybe_archive_inputs(self) -> None:
         """Archive campaign inputs when ``cfg.archive_intermediates`` is set."""
@@ -3612,6 +3792,11 @@ class Campaign:
                     if now < next_submit_at:
                         time.sleep(next_submit_at - now)
                     next_submit_at = max(next_submit_at, now) + submit_interval_s
+                # Chaos wiring (issue #1013): per-sample injection. No-op
+                # unless ``cfg.chaos.schedule == "per_sample"``, in which
+                # case every sample submits under the configured fault
+                # schedule (network_delay / cpu_spike / kill_switch).
+                self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "per_sample", target_id=sid)
                 handle: Handle | TQHandle
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(
@@ -3890,6 +4075,10 @@ class Campaign:
                     if now < next_submit_at:
                         time.sleep(next_submit_at - now)
                     next_submit_at = max(next_submit_at, now) + submit_interval_s
+                # Chaos wiring (issue #1013): per-sample injection for the
+                # KPI extraction fan-out. No-op unless the schedule is
+                # ``per_sample``.
+                self._maybe_inject_chaos("EXTRACT_KPIS", "per_sample", target_id=sid)
                 handle: Handle | TQHandle
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(

@@ -160,6 +160,7 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "nomad_e2e: marks tests requiring a Docker-based Nomad cluster",
     "contract: marks contract / README staleness tests",
+    "chaos: marks tests that exercise the chaos fault-injection wiring (issue #1013). Run with '-m chaos'; deselected by default in fast-CI.",
 ]
 
 [tool.coverage.run]

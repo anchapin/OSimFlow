@@ -214,6 +214,15 @@ appear in this document. Listed in run-subcommand groups (or
   `--custom_apply_script`, `--custom_kpi_extractor`,
   `--require-trusted-scripts`.
 
+- **Resilience (chaos fault injection, issue #1013):**
+  `--chaos-delay-s`, `--chaos-duration-s`, `--chaos-enabled`,
+  `--chaos-fail-after`, `--chaos-intensity`, `--chaos-jitter-s`,
+  `--chaos-probability`, `--chaos-scenarios`, `--chaos-schedule`,
+  `--chaos-size-mb`. Off by default; the Campaign wires the
+  registered scenarios into ``ChaosEngine`` at the configured
+  schedule (``before_step`` / ``after_step`` / ``per_sample``)
+  and records every invocation under ``run.json.chaos_invocations``.
+
 - **Observability / cost / alerts:** `--alert-destinations`,
   `--alert-rules`, `--api-keys-file`, `--cloudwatch-log-group`,
   `--cloudwatch-namespace`, `--cost-on-demand-price`,
