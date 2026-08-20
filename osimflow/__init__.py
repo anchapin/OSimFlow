@@ -50,6 +50,7 @@ from .document_store import (
     DocumentStore,
     DocumentStoreError,
     DuplicateDocumentError,
+    RedisDocumentStore,
     SQLiteDocumentStore,
     build_document_store,
 )
@@ -259,6 +260,7 @@ __all__ = [
     "DocumentNotFoundError",
     "DuplicateDocumentError",
     "SQLiteDocumentStore",
+    "RedisDocumentStore",
     "build_document_store",
     # Measure registry (issue #532)
     "MeasureRegistry",

@@ -72,6 +72,7 @@ the same change or `make contract` will fail.
 | Sampling | `scipy.stats.qmc` (LHS + plugin algorithms) |
 | Data | Python 3.12+, `pandas`, `pyarrow`, `matplotlib`, `seaborn` |
 | Cache | `SQLiteCache` (single-node) or `DistributedCache` (Redis, `--redis-url`) |
+| Document store | `SQLiteDocumentStore` (single-node) or `RedisDocumentStore` (Redis, `--redis-url` — issue #1014) |
 | Observability | per-campaign `run.json` + pluggable backends (`--observability cloudwatch\|prometheus\|opentelemetry`) |
 | CI | GitHub Actions: `lint`, `typecheck`, `test`, `contract`, `security` + per-substrate E2E (nightly / `workflow_dispatch`) |
 
@@ -334,7 +335,9 @@ name in this section.
 - `osimflow/document_store.py` — `DocumentStore` ABC,
   `DocumentStoreError`, `DocumentNotFoundError`,
   `DuplicateDocumentError`, `SQLiteDocumentStore`,
-  `build_document_store`.
+  `RedisDocumentStore`, `build_document_store`
+  (issue #1014; dispatch is by `redis_url` / `namespace` mirroring
+  `build_cache`).
 - `osimflow/jobqueue.py` — filesystem-based `JobQueue`
   (crash recovery).
 - `osimflow/monitoring.py` — `RunTrace` + `StepTrace`; writes
@@ -699,6 +702,19 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
     the canonical skip-gate pattern (`pytestmark` skipif on
     the env var) so PR CI is not coupled to live
     infrastructure.
+15. **Distributed document store mirrors the cache pattern
+    (issue #1014)** — `build_document_store` returns a plain
+    `SQLiteDocumentStore` for single-node mode and a Redis-backed
+    `RedisDocumentStore` when `--redis-url` is set.  Authoritative
+    state lives in Redis (one hash per collection, JSON-encoded
+    documents, per-collection auto-increment counter, atomic
+    `HSETNX` unique-index enforcement); per-process LRU absorbs
+    repeated reads.  The same T8.1 SQLite lock reproducer that
+    #993 fixed for the cache is now closed for the document store.
+    `RedisDocumentStore` fails loud on Redis outages (raises
+    `DocumentStoreError`) instead of silently falling back to
+    local-only state — the document store is the source of truth,
+    so a Redis outage must not silently diverge workers.
 
 ---
 
