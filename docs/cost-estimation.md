@@ -351,6 +351,7 @@ osimflow run --executor dask_jobqueue \
 | `--aws-batch-fallback-to-on-demand` | off | Prevents total campaign failure when Spot is exhausted (at a price premium) |
 | `--aws-batch-instance-type` | (unset) | Scopes the Spot ceiling check to one instance type (e.g. m5.large); avoids misleading cross-family minimums |
 | `--aws-batch-max-retries` | 3 | Bounds wasted compute on repeated Spot interruptions |
+| `--aws-batch-submit-rps` | 800 | Rate-limits Batch `submit_job` calls via a shared token-bucket limiter, preventing `ThrottlingException` on large campaigns (issue #1010) — keeps retry/charge waste from rate-limit failures |
 | `--slurm-partition` | `short` | Routes jobs to the cheapest queue that fits the model (see [Partition Selection](#partition-selection)) |
 | `--slurm-account` | (unset) | Chargeback routing on institutional clusters |
 | `--dask-min-workers` | 0 | Idle-worker floor; `0` releases all workers between campaigns (scale to zero) |

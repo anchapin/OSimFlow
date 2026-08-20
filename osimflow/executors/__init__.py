@@ -689,6 +689,114 @@ class _AWSBatchHandle(Handle):
         return status in ("SUCCEEDED", "FAILED")
 
 
+# ---------------------------------------------------------------------------
+# Token-bucket rate limiter + spot-price cache (issue #1010)
+# ---------------------------------------------------------------------------
+class _TokenBucketRateLimiter:
+    """Thread-safe token-bucket rate limiter for AWS Batch submit throttling.
+
+    Shared across all ``AWSBatchExecutor`` instances via
+    :meth:`get_shared` so that concurrent submissions from multiple
+    executor objects stay within the per-account submit_job rate limit
+    (issue #1010).  AWS Batch documents ``submit_job`` at 1 000 TPS per
+    account; the default of 800 RPS leaves headroom for burst contention
+    between concurrent fan-out threads.
+    """
+
+    DEFAULT_RPS: float = 800.0
+
+    _INSTANCES: ClassVar[dict[float, "_TokenBucketRateLimiter"]] = {}
+    _INSTANCES_LOCK: ClassVar[threading.Lock] = threading.Lock()
+
+    def __init__(self, rps: float = DEFAULT_RPS) -> None:
+        self._disabled: bool = rps <= 0
+        self._rate: float = float(rps) if not self._disabled else 0.0
+        self._capacity: int = max(int(rps), 1) if not self._disabled else 1
+        self._tokens: float = float(self._capacity)
+        self._last_refill: float = time.monotonic()
+        self._lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def get_shared(cls, rps: float | None = None) -> "_TokenBucketRateLimiter":
+        """Return a shared limiter for the requested RPS (singleton per RPS).
+
+        All executor instances requesting the same RPS share the same
+        bucket, ensuring the aggregate submit rate stays bounded.
+        ``rps=None`` falls back to the default (800). ``rps=0`` disables
+        rate limiting entirely (use with caution).
+        """
+        effective: float = cls.DEFAULT_RPS if rps is None else float(rps)
+        with cls._INSTANCES_LOCK:
+            if effective not in cls._INSTANCES:
+                cls._INSTANCES[effective] = cls(rps=effective)
+            return cls._INSTANCES[effective]
+
+    def acquire(self) -> None:
+        """Block until a token is available, then consume one."""
+        if self._disabled:
+            return
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                elapsed = now - self._last_refill
+                self._tokens = min(
+                    float(self._capacity),
+                    self._tokens + elapsed * self._rate,
+                )
+                self._last_refill = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                deficit = 1.0 - self._tokens
+                wait_s = deficit / self._rate
+            # Sleep without holding the lock so other threads aren't blocked.
+            time.sleep(wait_s)
+
+
+class _SpotPriceCache:
+    """Thread-safe TTL cache for EC2 Spot price lookups (issue #1010).
+
+    Keyed by ``(region, instance_type, product_description)`` so that
+    campaigns with different configurations don't share stale prices.
+    The 60-second TTL is short enough to pick up price changes while
+    still amortizing the per-sample EC2 API call cost.
+    """
+
+    def __init__(self, ttl_s: float = 60.0) -> None:
+        self._ttl_s: float = ttl_s
+        self._cache: dict[tuple[str | None, str | None, str], tuple[float, float]] = {}
+        self._lock: threading.Lock = threading.Lock()
+
+    def get(
+        self,
+        key: tuple[str | None, str | None, str],
+    ) -> float | None:
+        """Return the cached price if within TTL, else ``None``."""
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is None:
+                return None
+            price, ts = cached
+            if time.monotonic() - ts >= self._ttl_s:
+                del self._cache[key]
+                return None
+            return price
+
+    def set(
+        self,
+        key: tuple[str | None, str | None, str],
+        price: float,
+    ) -> None:
+        """Store a spot price in the cache with the current timestamp."""
+        with self._lock:
+            self._cache[key] = (price, time.monotonic())
+
+    def clear(self) -> None:
+        """Clear all cached entries (useful for tests)."""
+        with self._lock:
+            self._cache.clear()
+
+
 class AWSBatchExecutor(BaseExecutor):
     """AWS Batch executor (issue #5).
 
@@ -746,6 +854,14 @@ class AWSBatchExecutor(BaseExecutor):
         "spot",
     )
 
+    # AWS error codes that should trigger a submit retry (issue #1010).
+    _THROTTLE_ERRORS: tuple[str, ...] = (
+        "ThrottlingException",
+        "RequestLimitExceeded",
+    )
+
+    _DEFAULT_SUBMIT_RPS: float = 800.0
+
     def __init__(
         self,
         job_queue: str = "osimflow-batch-queue",
@@ -759,12 +875,14 @@ class AWSBatchExecutor(BaseExecutor):
         max_retries: int = 3,
         ecr_repository: str | None = None,
         instance_type: str | None = None,
+        submit_rps: float | None = None,
     ):
         # Lazy import: keeps the boto3 import cost off the local /
         # slurm executor paths. ImportError here is intentional: the
         # user opted into the [aws] extra, so a missing boto3 is a
         # user error, not a silent fallback.
         import boto3  # noqa: PLC0415
+        from botocore.config import Config as BotoConfig  # noqa: PLC0415
 
         self._boto3 = boto3
         # boto3.client("batch") without a configured region raises
@@ -784,6 +902,19 @@ class AWSBatchExecutor(BaseExecutor):
         self.max_retries = max_retries
         self.ecr_repository = ecr_repository
         self._instance_type = instance_type
+        self._submit_rps = submit_rps
+        # boto3 retry config with adaptive mode for ThrottlingException
+        # handling (issue #1010). Adaptive mode uses client-side rate
+        # limiting + exponential backoff with jitter.
+        self._retry_config = BotoConfig(
+            retries={"mode": "adaptive", "max_attempts": 10},
+        )
+        # Token-bucket submit rate limiter, shared across all executor
+        # instances (issue #1010). Prevents ThrottlingException at fan-out.
+        self._submit_limiter = _TokenBucketRateLimiter.get_shared(rps=submit_rps)
+        # Spot price cache with 60s TTL — avoids one EC2 API call per
+        # sample in a 10K-sample campaign (issue #1010).
+        self._spot_price_cache = _SpotPriceCache(ttl_s=60.0)
 
     def _resolve_container_image(self, version: str | None) -> str:
         """Resolve the container image URI.
@@ -806,17 +937,30 @@ class AWSBatchExecutor(BaseExecutor):
         role / ~/.aws/config in place.
         """
         if self._client is None:
-            self._client = self._boto3.client("batch", region_name=self._region_name)
+            self._client = self._boto3.client(
+                "batch",
+                region_name=self._region_name,
+                config=self._retry_config,
+            )
         return self._client
 
     def _get_ec2_client(self) -> Any:
         """Lazy boto3 EC2 client for Spot price queries."""
         if self._ec2_client is None:
-            self._ec2_client = self._boto3.client("ec2", region_name=self._region_name)
+            self._ec2_client = self._boto3.client(
+                "ec2",
+                region_name=self._region_name,
+                config=self._retry_config,
+            )
         return self._ec2_client
 
     def _get_spot_price(self) -> float:
         """Query the current Spot price for the instance type.
+
+        Cached with a 60-second TTL keyed by ``(region, instance_type, os)``
+        (issue #1010).  When ``max_spot_price_usd`` is set, the ceiling
+        check reuses the cached value across all samples in a campaign
+        instead of making one EC2 API call per sample.
 
         Uses ``describe_spot_price_history`` with a single-result query
         to get the most recent price. Returns the price in USD per
@@ -828,9 +972,19 @@ class AWSBatchExecutor(BaseExecutor):
         When it is not set, the query returns the lowest price across
         all instance types and a warning is logged.
         """
+        product = "Linux/UNIX"
+        cache_key: tuple[str | None, str | None, str] = (
+            self._region_name,
+            self._instance_type,
+            product,
+        )
+        cached = self._spot_price_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         kwargs: dict[str, Any] = {
             "MaxResults": 1,
-            "ProductDescriptions": ["Linux/UNIX"],
+            "ProductDescriptions": [product],
         }
         if self._instance_type is not None:
             kwargs["InstanceTypes"] = [self._instance_type]
@@ -838,7 +992,10 @@ class AWSBatchExecutor(BaseExecutor):
         histories = response.get("SpotPriceHistory", [])
         if not histories:
             raise RuntimeError("describe_spot_price_history returned no results")
-        return float(histories[0]["SpotPrice"])
+        price = float(histories[0]["SpotPrice"])
+
+        self._spot_price_cache.set(cache_key, price)
+        return price
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
         """Return True if the failure reason indicates a Spot interruption."""
@@ -1004,6 +1161,11 @@ class AWSBatchExecutor(BaseExecutor):
         """Submit a single Batch job and return the jobId.
 
         Uses *job_queue* if provided, otherwise ``self.job_queue``.
+
+        Throttles via the shared token-bucket rate limiter (issue #1010)
+        and retries on ``ThrottlingException`` / ``RequestLimitExceeded``
+        with exponential backoff as defense-in-depth on top of boto3's
+        adaptive retry mode.
         """
         queue = job_queue or self.job_queue
         overrides = self._build_container_overrides(
@@ -1019,10 +1181,43 @@ class AWSBatchExecutor(BaseExecutor):
             "containerOverrides": overrides,
             "timeout": {"attemptDurationSeconds": attempt_duration_seconds},
         }
-        response = self._get_client().submit_job(**submit_kwargs)
+        # Acquire a rate-limiter token before submitting (issue #1010).
+        self._submit_limiter.acquire()
+        response = self._submit_job_with_retry(submit_kwargs)
         job_id: str = str(response["jobId"])
         log.info("aws_batch submit_job -> jobId=%s queue=%s", job_id, queue)
         return job_id
+
+    def _submit_job_with_retry(self, submit_kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Call ``submit_job`` with retry on throttle exceptions (issue #1010).
+
+        boto3's adaptive retry config (``retry_mode='adaptive'``) handles
+        transport-level retries.  This wrapper provides defense-in-depth
+        for ``ThrottlingException`` that propagates to our code, applying
+        exponential backoff with up to 5 attempts.
+        """
+        import botocore.exceptions  # noqa: PLC0415
+
+        max_attempts = 5
+        delay = 0.5
+        for attempt in range(max_attempts):
+            try:
+                return self._get_client().submit_job(**submit_kwargs)  # type: ignore[no-any-return]
+            except botocore.exceptions.ClientError as exc:
+                code = _aws_error_code(exc)
+                if code in self._THROTTLE_ERRORS and attempt < max_attempts - 1:
+                    log.warning(
+                        "submit_job throttled (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1,
+                        max_attempts,
+                        delay,
+                        code,
+                    )
+                    time.sleep(delay)
+                    delay = min(delay * 2, 30.0)
+                    continue
+                raise
+        raise RuntimeError("submit_job throttle retry exhausted")  # pragma: no cover
 
     def submit(
         self,

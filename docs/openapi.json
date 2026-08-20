@@ -3416,6 +3416,18 @@
             "description": "Max Spot interruption retries",
             "default": 3
           },
+          "aws_batch_submit_rps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch Submit Rps",
+            "description": "Submit rate limit (requests per second, token-bucket; issue #1010)"
+          },
           "ecr_repository": {
             "anyOf": [
               {
