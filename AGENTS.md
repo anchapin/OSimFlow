@@ -164,10 +164,11 @@ appear in this document. Listed in run-subcommand groups (or
 "global" if used outside `run`):
 
 - **Executor + parallelism:** `--algorithm`,
-  `--aws-batch-fallback-to-on-demand`, `--aws-batch-instance-type`,
-  `--aws-batch-job-definition`, `--aws-batch-max-retries`,
-  `--aws-batch-max-spot-price-usd`, `--aws-batch-on-demand-price`,
-  `--aws-batch-queue`, `--aws-batch-spot-price`, `--azure-batch-account-name`,
+  `--aws-batch-instance-type`, `--aws-batch-job-definition`,
+  `--aws-batch-max-retries`, `--aws-batch-max-spot-price-usd`,
+  `--aws-batch-on-demand-price`, `--aws-batch-queue`, `--aws-batch-spot-price`,
+  `--aws-batch-submit-rps`, `--aws-batch-fallback-to-on-demand`,
+  `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-location`,
   `--azure-batch-account-url`, `--azure-batch-location`,
   `--azure-batch-pool-id`, `--azure-fallback-to-on-demand`,
   `--azure-max-retries`, `--azure-use-spot`, `--coordinator-url`,

@@ -232,6 +232,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             fallback_to_on_demand=args.aws_batch_fallback_to_on_demand,
             max_retries=args.aws_batch_max_retries,
             instance_type=args.aws_batch_instance_type,
+            submit_rps=args.aws_batch_submit_rps,
         )
     # Nomad executor — address and datacentre.
     if args.executor == "nomad":
@@ -427,6 +428,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "is scoped to this instance type so the ceiling check is "
             "reliable. When omitted, the check uses the minimum price "
             "across all instance types and a warning is logged (issue #792)."
+        ),
+    )
+    run.add_argument(
+        "--aws-batch-submit-rps",
+        type=float,
+        default=None,
+        help=(
+            "Submit rate limit in submissions per second, enforced via a "
+            "shared token-bucket limiter (issue #1010). Default 800 RPS, "
+            "below AWS Batch's 1000 TPS account limit. Set to a lower "
+            "value to avoid ThrottlingException on smaller accounts."
         ),
     )
     run.add_argument(

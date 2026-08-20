@@ -155,6 +155,10 @@ class CampaignCreateRequest(BaseModel):
         default=False, description="Fall back to on-demand when Spot price exceeds ceiling"
     )
     aws_batch_max_retries: int = Field(default=3, description="Max Spot interruption retries")
+    aws_batch_submit_rps: float | None = Field(
+        default=None,
+        description="Submit rate limit (requests per second, token-bucket; issue #1010)",
+    )
     ecr_repository: str | None = Field(
         default=None, description="ECR repository URI for OpenStudio images"
     )

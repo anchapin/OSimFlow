@@ -452,11 +452,16 @@ class AWSBatchConfig:
     max_retries
         Maximum number of times a spot-interrupted job is retried before
         falling back or failing.
+    submit_rps
+        Submit rate-limit in requests per second applied via a shared
+        token-bucket limiter (default 800, below AWS Batch's 1000 TPS
+        account limit — issue #1010).
     """
 
     max_spot_price_usd: float | None = None
     fallback_to_on_demand: bool = False
     max_retries: int = 3
+    submit_rps: float | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1011,6 +1016,7 @@ class CampaignConfig:
     aws_batch_max_spot_price_usd: float | None = None
     aws_batch_fallback_to_on_demand: bool = False
     aws_batch_max_retries: int = 3
+    aws_batch_submit_rps: float | None = None
 
     azure_batch_account_name: str | None = None
     azure_batch_account_url: str | None = None
@@ -1165,6 +1171,7 @@ class CampaignConfig:
                 max_spot_price_usd=self.aws_batch_max_spot_price_usd,
                 fallback_to_on_demand=self.aws_batch_fallback_to_on_demand,
                 max_retries=self.aws_batch_max_retries,
+                submit_rps=self.aws_batch_submit_rps,
             )
 
         # Azure Batch config
@@ -1314,6 +1321,7 @@ class CampaignConfig:
                 "aws_batch_max_spot_price_usd": ("aws_batch", "max_spot_price_usd"),
                 "aws_batch_fallback_to_on_demand": ("aws_batch", "fallback_to_on_demand"),
                 "aws_batch_max_retries": ("aws_batch", "max_retries"),
+                "aws_batch_submit_rps": ("aws_batch", "submit_rps"),
                 # Azure Batch executor delegation
                 "azure_batch_account_name": ("azure_batch", "account_name"),
                 "azure_batch_account_url": ("azure_batch", "account_url"),
@@ -1664,6 +1672,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         ),
         aws_batch_fallback_to_on_demand=bool(args.get("aws_batch_fallback_to_on_demand", False)),
         aws_batch_max_retries=int(str(args.get("aws_batch_max_retries", 3))),
+        aws_batch_submit_rps=(
+            float(str(args["aws_batch_submit_rps"]))
+            if args.get("aws_batch_submit_rps") is not None
+            else None
+        ),
         ecr_repository=str(args["ecr_repository"]) if args.get("ecr_repository") else None,
         azure_batch_account_name=(
             str(args["azure_batch_account_name"]) if args.get("azure_batch_account_name") else None

@@ -364,6 +364,7 @@ class ValidateConfigRequest(BaseModel):
     aws_batch_max_spot_price_usd: float | None = None
     aws_batch_fallback_to_on_demand: bool = False
     aws_batch_max_retries: int = 3
+    aws_batch_submit_rps: float | None = None
     aws_batch_on_demand_price: float | None = None
     aws_batch_spot_price: float | None = None
     ecr_repository: str | None = None
