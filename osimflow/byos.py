@@ -26,6 +26,7 @@ for the full BYOS contract.
 
 import enum
 import importlib.util
+import inspect
 import json
 import logging
 import os
@@ -39,6 +40,144 @@ from pathlib import Path
 from typing import Any, cast
 
 log = logging.getLogger("osimflow.byos")
+
+
+class ByosContractError(Exception):
+    """Raised when a BYOS user function does not match the documented contract.
+
+    Issue #1048: AGENTS.md §6 / §10 promises that BYOS user functions are
+    loaded via ``importlib.util`` AND signature-validated with
+    ``inspect.signature``. Previously only the first half of that promise
+    was kept; this exception surfaces signature mismatches at load time
+    instead of silently accepting wrong-arity functions and failing late
+    in the campaign run with a confusing ``TypeError`` from the orchestrator.
+    """
+
+
+# Expected BYOS function signatures (issue #1048). Each entry records the
+# required positional parameter count and the documented parameter names.
+# Functions with extra **kwargs are still accepted when ``accepts_kwargs``
+# is True. The discovery subprocess also uses this table to validate the
+# user function before invoking it.
+_BYOS_CONTRACT: dict[str, dict[str, int | tuple[str, ...] | bool]] = {
+    "apply_parameters": {
+        "required_positional": 4,
+        "param_names": ("template", "parameters", "sample_id", "out"),
+        "accepts_kwargs": False,
+    },
+    "extract_kpis": {
+        "required_positional": 3,
+        "param_names": ("simulation_dir", "sample_id", "out"),
+        "accepts_kwargs": True,
+    },
+    # Deprecated alias; same contract as ``apply_parameters``.
+    "apply": {
+        "required_positional": 4,
+        "param_names": ("template", "parameters", "sample_id", "out"),
+        "accepts_kwargs": False,
+    },
+}
+
+
+def _validate_byos_signature(fn: Callable[..., Any], function_name: str) -> None:
+    """Validate that *fn* matches the documented BYOS contract for *function_name*.
+
+    Raises :class:`ByosContractError` with a clear message if the function
+    has the wrong number of required positional parameters. Names are
+    checked best-effort (the orchestrator forwards positional args, so a
+    wrong name with the right arity would still misbehave at call time —
+    but we surface this as a contract violation too).
+
+    Issue #1048: a BYOS user writing
+
+    .. code-block:: python
+
+        def apply_parameters(template, params):  # wrong arity
+            ...
+
+    would silently receive the orchestrator's positional args
+    (``sim_dir, resolved_params``) which is incorrect. With this check
+    the loader fails fast at BYOS discovery time with a precise error
+    message naming the expected signature.
+    """
+    spec = _BYOS_CONTRACT.get(function_name)
+    if spec is None:
+        # Unknown function name — let it through. The orchestrator will
+        # still get a clear ``AttributeError`` from the loader when the
+        # function is invoked, since the function name must already be
+        # in ``_CANDIDATE_NAMES`` to be discovered.
+        return
+
+    expected_count = cast(int, spec["required_positional"])
+    expected_names = cast("tuple[str, ...]", spec["param_names"])
+    accepts_kwargs = cast(bool, spec["accepts_kwargs"])
+
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError) as exc:
+        raise ByosContractError(
+            f"BYOS function '{function_name}' is not introspectable: {exc}"
+        ) from exc
+
+    # Count required (no default) positional parameters.
+    required_positional = [
+        p
+        for p in sig.parameters.values()
+        if p.default is inspect.Parameter.empty
+        and p.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+
+    if len(required_positional) != expected_count:
+        actual = (
+            f"{len(required_positional)} required positional"
+            if len(required_positional) != 1
+            else "1 required positional"
+        )
+        expected = (
+            f"{expected_count} required positional"
+            if expected_count != 1
+            else "1 required positional"
+        )
+        expected_list = ", ".join(expected_names)
+        raise ByosContractError(
+            f"BYOS function '{function_name}' has {actual} parameter(s); "
+            f"expected {expected} ({expected_list}). "
+            f"Got signature: {sig}. "
+            f"See the BYOS contract docs in user_scripts/README.md and "
+            f"AGENTS.md §6."
+        )
+
+    # Best-effort param-name check. Allow the function to accept extra
+    # kwargs (extract_kpis accepts openstudio_version etc.).
+    if not accepts_kwargs and any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    ):
+        log.warning(
+            "BYOS function '%s' accepts **kwargs but the contract "
+            "documents a fixed signature; kwargs will be ignored.",
+            function_name,
+        )
+
+    # If the function has the right arity but the param names look wrong
+    # (e.g. user wrote ``def apply_parameters(a, b, c, d):``), warn — we
+    # do not raise, because positional callers still work, but the
+    # contract docs use the canonical names.
+    actual_names = tuple(p.name for p in required_positional)
+    if actual_names != expected_names:
+        log.warning(
+            "BYOS function '%s' parameter names %s differ from the "
+            "documented contract %s. The orchestrator forwards positional "
+            "args, so this is a soft warning — but renaming for clarity "
+            "is recommended.",
+            function_name,
+            actual_names,
+            expected_names,
+        )
+
 
 # Whitelist of environment variables that BYOS subprocesses may receive.
 # This prevents accidental credential leakage (AWS keys, etc.) from the
@@ -380,13 +519,68 @@ def _raise_discovery_error(message: object, type_name: object) -> None:
 # Subprocess runner — the inline script executed in the child process
 # ---------------------------------------------------------------------------
 _SUBPROCESS_RUNNER = """
+import importlib.util
+import inspect
 import json
 import sys
-import importlib.util
 import warnings
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
+
+
+# Inline copy of osimflow.byos._BYOS_CONTRACT for subprocess validation.
+# Keeping this in sync with the parent process is part of the BYOS contract;
+# if you add a new entry, update both copies (issue #1048).
+_INLINE_BYOS_CONTRACT = {
+    "apply_parameters": {
+        "required_positional": 4,
+        "param_names": ("template", "parameters", "sample_id", "out"),
+        "accepts_kwargs": False,
+    },
+    "extract_kpis": {
+        "required_positional": 3,
+        "param_names": ("simulation_dir", "sample_id", "out"),
+        "accepts_kwargs": True,
+    },
+    "apply": {
+        "required_positional": 4,
+        "param_names": ("template", "parameters", "sample_id", "out"),
+        "accepts_kwargs": False,
+    },
+}
+
+
+class _InlineByosContractError(Exception):
+    pass
+
+
+def _inline_validate(fn, function_name):
+    spec = _INLINE_BYOS_CONTRACT.get(function_name)
+    if spec is None:
+        return
+    expected_count = spec["required_positional"]
+    expected_names = spec["param_names"]
+    sig = inspect.signature(fn)
+    required = [
+        p
+        for p in sig.parameters.values()
+        if p.default is inspect.Parameter.empty
+        and p.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    if len(required) != expected_count:
+        actual = f"{len(required)} required positional"
+        expected = f"{expected_count} required positional"
+        expected_list = ", ".join(expected_names)
+        raise _InlineByosContractError(
+            f"BYOS function '{function_name}' has {actual} parameter(s); "
+            f"expected {expected} ({expected_list}). "
+            f"Got signature: {sig}."
+        )
+
 
 def main():
     args_file = sys.argv[1]
@@ -437,6 +631,15 @@ def main():
     fn = getattr(mod, function_name, None)
     if fn is None or not callable(fn):
         print(json.dumps({"error": f"function {function_name!r} not found in {script_path}"}))
+        sys.exit(1)
+
+    # Validate the signature against the documented BYOS contract
+    # (issue #1048). Raises ``_InlineByosContractError`` on arity mismatch.
+    try:
+        _inline_validate(fn, function_name)
+    except _InlineByosContractError as exc:
+        print(json.dumps({"error": str(exc), "type": "ByosContractError"}))
+        sys.exit(1)
         sys.exit(1)
 
     try:
@@ -703,8 +906,11 @@ def _load_inprocess(path: Path) -> Callable[..., Any]:
                     DeprecationWarning,
                     stacklevel=2,
                 )
-            # Cast: the BYOS contract is validated at call time via
-            # ``inspect.signature``; mypy cannot prove the module attr type.
+            # Validate the signature against the documented BYOS contract
+            # (issue #1048). Raises ``ByosContractError`` on arity mismatch.
+            _validate_byos_signature(candidate_obj, candidate)
+            # Cast: the BYOS contract is validated above; mypy cannot prove
+            # the module attr type.
             return cast(Callable[..., Any], candidate_obj)
     raise AttributeError(
         f"User script {path} must define `apply_parameters(...)` or `extract_kpis(...)`."

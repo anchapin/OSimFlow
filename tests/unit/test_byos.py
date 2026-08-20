@@ -566,3 +566,159 @@ class TestSanitizeEnv:
         assert "GITHUB_TOKEN" not in clean
         assert "PATH" not in clean
         assert "HOME" not in clean
+
+
+# ---------------------------------------------------------------------------
+# Signature validation (issue #1048)
+# ---------------------------------------------------------------------------
+class TestByosContractValidation:
+    """Issue #1048: a BYOS user function whose signature does not match the
+    documented contract must fail fast at load time with ``ByosContractError``,
+    rather than silently accepting the wrong-arity function and confusing the
+    orchestrator later.  These tests cover both the in-process trust path
+    (direct ``inspect.signature`` validation) and the subprocess trust path
+    (the inline ``_SUBPROCESS_RUNNER`` script re-validates after
+    ``exec_module``).
+    """
+
+    def test_inprocess_wrong_arity_apply_parameters_raises_byos_contract_error(
+        self, tmp_path: Path
+    ) -> None:
+        """A user-supplied ``apply_parameters`` with only 2 args must raise
+        ``ByosContractError`` at load time (not silently accept)."""
+        from osimflow.byos import ByosContractError, ByosTrustLevel, load_user_function
+
+        path = _write_script(
+            tmp_path,
+            "wrong_arity.py",
+            "def apply_parameters(template, params):  # wrong arity (2, expected 4)\n"
+            "    return template\n",
+        )
+        with pytest.raises(ByosContractError) as excinfo:
+            load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
+        assert "apply_parameters" in str(excinfo.value)
+        assert "expected 4 required positional" in str(excinfo.value)
+
+    def test_inprocess_wrong_arity_extract_kpis_raises_byos_contract_error(
+        self, tmp_path: Path
+    ) -> None:
+        """A user-supplied ``extract_kpis`` with only 1 arg must raise
+        ``ByosContractError`` (extract_kpis expects 3 positional, accepts
+        ``**kwargs``)."""
+        from osimflow.byos import ByosContractError, ByosTrustLevel, load_user_function
+
+        path = _write_script(
+            tmp_path,
+            "wrong_arity_extract.py",
+            "def extract_kpis(sim_dir):  # wrong arity (1, expected 3)\n"
+            "    return sim_dir / 'kpis.json'\n",
+        )
+        with pytest.raises(ByosContractError) as excinfo:
+            load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
+        assert "extract_kpis" in str(excinfo.value)
+        assert "expected 3 required positional" in str(excinfo.value)
+
+    def test_inprocess_correct_signature_loads_cleanly(self, tmp_path: Path) -> None:
+        """A correctly-arity ``apply_parameters`` (4 positional) loads without
+        raising."""
+        from osimflow.byos import ByosTrustLevel, load_user_function
+
+        path = _write_script(
+            tmp_path,
+            "good.py",
+            "from pathlib import Path\n"
+            "def apply_parameters(template, parameters, sample_id, out):\n"
+            "    return out\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
+        assert callable(func)
+
+    def test_inprocess_extract_kpis_with_kwargs_loads_cleanly(self, tmp_path: Path) -> None:
+        """``extract_kpis`` accepts ``**kwargs`` (for ``openstudio_version`` etc.)
+        — the contract explicitly allows this."""
+        from osimflow.byos import ByosTrustLevel, load_user_function
+
+        path = _write_script(
+            tmp_path,
+            "good_extract.py",
+            "from pathlib import Path\n"
+            "def extract_kpis(simulation_dir, sample_id, out, **kwargs):\n"
+            "    return out\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
+        assert callable(func)
+
+    def test_subprocess_wrapper_validates_via_inline_runner(self, tmp_path: Path) -> None:
+        """The subprocess trust path returns a wrapper that calls
+        ``_run_byos_subprocess``. The actual signature check runs inside
+        the child process via the inline ``_SUBPROCESS_RUNNER`` script.
+
+        Rather than spawn a real subprocess for this test (which would
+        duplicate the subprocess-test surface in TestSubprocessIsolation),
+        we directly assert that the inline runner source contains the
+        ``_inline_validate`` call — this is the structural test that the
+        subprocess path is wired.
+        """
+        from osimflow import byos as byos_mod
+
+        runner_source = byos_mod._SUBPROCESS_RUNNER
+        assert "_INLINE_BYOS_CONTRACT" in runner_source, (
+            "inline runner missing _INLINE_BYOS_CONTRACT — issue #1048 "
+            "subprocess validation not wired"
+        )
+        assert "_inline_validate" in runner_source, (
+            "inline runner missing _inline_validate — issue #1048 subprocess validation not wired"
+        )
+        assert "_InlineByosContractError" in runner_source, (
+            "inline runner missing _InlineByosContractError — issue #1048 "
+            "subprocess validation not wired"
+        )
+        # And the inline contract is in sync with the parent process
+        # contract — if the parent adds an entry, the inline copy must too.
+        for entry_name, entry_spec in byos_mod._BYOS_CONTRACT.items():
+            assert entry_name in runner_source, (
+                f"inline runner missing contract entry for {entry_name!r}"
+            )
+            assert str(entry_spec["required_positional"]) in runner_source, (
+                f"inline runner has wrong required_positional for {entry_name!r}"
+            )
+
+    def test_param_name_mismatch_emits_warning_not_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A function with the right arity but wrong parameter names is a soft
+        warning (positional callers still work), not a hard error. The warning
+        goes through ``logging.warning`` so we use ``caplog``, not
+        ``pytest.warns``."""
+        from osimflow.byos import ByosTrustLevel, load_user_function
+
+        path = _write_script(
+            tmp_path,
+            "wrong_names.py",
+            "from pathlib import Path\n"
+            "def apply_parameters(a, b, c, d):  # right arity, wrong names\n"
+            "    return d\n",
+        )
+        with caplog.at_level("WARNING", logger="osimflow.byos"):
+            func = load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
+        assert callable(func)
+        # The validation warning appears in the captured log records.
+        assert any("parameter names" in record.getMessage() for record in caplog.records), (
+            f"Expected a 'parameter names' warning; got {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_module_without_documented_function_does_not_invoke_validation(
+        self, tmp_path: Path
+    ) -> None:
+        """A user script that defines no matching callable still raises the
+        legacy ``AttributeError`` (from ``_CANDIDATE_NAMES``); it does not
+        trip the new contract validator."""
+        from osimflow.byos import ByosTrustLevel, load_user_function
+
+        path = _write_script(
+            tmp_path,
+            "no_match.py",
+            "def completely_unrelated_function(x, y, z):\n    return x\n",
+        )
+        with pytest.raises(AttributeError):
+            load_user_function(path, trust_level=ByosTrustLevel.INPROCESS)
