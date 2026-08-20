@@ -369,13 +369,15 @@ def _resolve_work_script(name: str) -> Path:
 # BYOS contract: apply_parameters
 # ---------------------------------------------------------------------------
 def default_apply_parameters(
-    sim_dir: Path,
-    variables: dict[str, Any],
-) -> None:
+    template: Path,
+    parameters: dict[str, Any],
+    sample_id: str,
+    out: Path,
+) -> Path:
     """Apply parameter values to an OpenStudio model using Python bindings.
 
-    Loads the ``model.osm`` from *sim_dir* using the OpenStudio Python
-    bindings, applies each entry in *variables* as a model attribute
+    Loads the ``model.osm`` from *out* using the OpenStudio Python
+    bindings, applies each entry in *parameters* as a model attribute
     mutation, and saves the modified model back to disk.
 
     This is the production ``.osm`` mutation path that replaces the prior
@@ -391,12 +393,28 @@ def default_apply_parameters(
     Type coercion: ``int`` values are coerced to ``float`` for numeric
     SDK setters; ``str`` values are passed directly.
 
+    The signature matches the canonical BYOS contract documented in
+    ``osimflow.byos_contract._BYOS_CONTRACT`` (issue #1061). ``template``
+    and ``sample_id`` are accepted for parity with the BYOS contract but
+    are not used by the default implementation — the default mutates
+    ``out / model.osm`` in place.
+
     Args:
-        sim_dir: Directory containing ``model.osm`` (the modified sim
-            package for this sample). Typically ``out / sample_id`` from
-            the campaign's apply step.
-        variables: Dict mapping variable names to values, e.g.  ``{
+        template: Path to the template_sim_package (the read-only seed
+            model). The default implementation does not consult it; it
+            is accepted for parity with the BYOS contract so users who
+            swap in a custom function see consistent positional args.
+        parameters: Dict mapping variable names to values, e.g.  ``{
             "SpaceType_Office.lighting_power_density": 10.0 }``.
+        sample_id: Sample identifier (e.g. ``"0001"``). Accepted for
+            parity with the BYOS contract; not used by the default.
+        out: Per-sample output directory containing ``model.osm``. The
+            default writes the mutated model back to ``out / model.osm``
+            and returns ``out``.
+
+    Returns:
+        The per-sample output directory ``out`` (matching the BYOS
+        contract's ``apply_parameters -> Path`` return type).
 
     Raises:
         RuntimeError: the OpenStudio Python bindings are not installed
@@ -404,16 +422,16 @@ def default_apply_parameters(
         OSMAttributeError: a dotted variable name references an object
             type or instance name that does not exist in the model.
     """
-    osm_path = sim_dir / "model.osm"
+    osm_path = out / "model.osm"
     if not osm_path.is_file():
-        raise FileNotFoundError(f"model.osm not found in {sim_dir!r}")
+        raise FileNotFoundError(f"model.osm not found in {out!r}")
 
     if _is_stub_mode():
         log.warning(
             "default_apply_parameters: OSIMFLOW_STUB_SIM=1 is set; skipping .osm mutation "
             "(stub mode — no OpenStudio bindings required)"
         )
-        return
+        return out
 
     try:
         import openstudio  # noqa: PLC0415
@@ -429,10 +447,11 @@ def default_apply_parameters(
         raise RuntimeError(f"OpenStudio failed to load model from {osm_path!r}")
     model = model_opt.get()
 
-    _apply_osm_mutations(model, openstudio, variables)
+    _apply_osm_mutations(model, openstudio, parameters)
 
     model.save(str(osm_path), overwrite=True)
     log.info("default_apply_parameters: mutated .osm saved to %s", osm_path)
+    return out
 
 
 def _apply_osm_mutations(
