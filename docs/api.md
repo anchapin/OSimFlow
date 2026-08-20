@@ -459,3 +459,31 @@ logic with a stubbed transport; these verify the live UX):
 7. **Recovery: 5xx** — a server error returns exit 1 with a message noting the
    `Idempotency-Key` recovery path, and re-running the same command recovers.
 
+## Regenerating `docs/openapi.json`
+
+The committed spec at `docs/openapi.json` is **generated** from the
+running FastAPI app — it is not hand-edited. After any change to a
+route, request/response schema, or new endpoint under `osimflow/api/`,
+regenerate the spec and commit the result in the same PR:
+
+```bash
+# 1. Make sure the [api] extra is installed
+pip install -e ".[api]"
+
+# 2. Regenerate
+python scripts/generate_openapi.py --output docs/openapi.json
+
+# 3. Verify locally (exit 0 = in sync)
+python tools/check_openapi_sync.py --summary
+```
+
+### CI gate
+
+`.github/workflows/agents-contract.yml` runs `tools/check_openapi_sync.py`
+on every PR. If `docs/openapi.json` is stale relative to the live app,
+the `agents & docs contract` job fails with the diff and a one-line
+hint pointing at the regenerate command above. Volatile keys
+(`info.version`, `x-timestamp`, etc.) are stripped before diffing so
+the check focuses on schema content. Pass `--strict` to also fail on
+volatile-field drift.
+

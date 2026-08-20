@@ -32,3 +32,8 @@ jobs:
 
       - name: docs/ path resolution
         run: python tools/check_docs_sync.py
+
+      - name: docs/openapi.json sync (issue #1049)
+        run: |
+          pip install -e ".[api]" --quiet
+          python tools/check_openapi_sync.py --summary
