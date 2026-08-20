@@ -39,6 +39,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from osimflow._byos_runner_generated import _SUBPROCESS_RUNNER
+from osimflow.byos_contract import _BYOS_CONTRACT
+
 log = logging.getLogger("osimflow.byos")
 
 
@@ -54,29 +57,15 @@ class ByosContractError(Exception):
     """
 
 
-# Expected BYOS function signatures (issue #1048). Each entry records the
-# required positional parameter count and the documented parameter names.
-# Functions with extra **kwargs are still accepted when ``accepts_kwargs``
-# is True. The discovery subprocess also uses this table to validate the
-# user function before invoking it.
-_BYOS_CONTRACT: dict[str, dict[str, int | tuple[str, ...] | bool]] = {
-    "apply_parameters": {
-        "required_positional": 4,
-        "param_names": ("template", "parameters", "sample_id", "out"),
-        "accepts_kwargs": False,
-    },
-    "extract_kpis": {
-        "required_positional": 3,
-        "param_names": ("simulation_dir", "sample_id", "out"),
-        "accepts_kwargs": True,
-    },
-    # Deprecated alias; same contract as ``apply_parameters``.
-    "apply": {
-        "required_positional": 4,
-        "param_names": ("template", "parameters", "sample_id", "out"),
-        "accepts_kwargs": False,
-    },
-}
+# Re-export for backwards compatibility (issue #1061: the table moved to
+# ``osimflow.byos_contract``; the original import path is preserved so
+# downstream callers continue to work).
+__all__ = [
+    "ByosContractError",
+    "ByosTrustLevel",
+    "load_user_function",
+    "validate_trust_level",
+]
 
 
 def _validate_byos_signature(fn: Callable[..., Any], function_name: str) -> None:
@@ -108,9 +97,9 @@ def _validate_byos_signature(fn: Callable[..., Any], function_name: str) -> None
         # in ``_CANDIDATE_NAMES`` to be discovered.
         return
 
-    expected_count = cast(int, spec["required_positional"])
-    expected_names = cast("tuple[str, ...]", spec["param_names"])
-    accepts_kwargs = cast(bool, spec["accepts_kwargs"])
+    expected_count = spec.required_positional
+    expected_names = spec.param_names
+    accepts_kwargs = spec.accepts_kwargs
 
     try:
         sig = inspect.signature(fn)
@@ -517,141 +506,13 @@ def _raise_discovery_error(message: object, type_name: object) -> None:
 
 # ---------------------------------------------------------------------------
 # Subprocess runner — the inline script executed in the child process
+#
+# The runner script lives in ``osimflow/_byos_runner_generated.py``,
+# which is regenerated from ``osimflow.byos_contract._BYOS_CONTRACT`` by
+# ``tools/_generate_byos_runner.py`` (issue #1061).  We import it here
+# so the constant is exported as ``osimflow.byos._SUBPROCESS_RUNNER`` —
+# the rest of the module continues to use the historical name.
 # ---------------------------------------------------------------------------
-_SUBPROCESS_RUNNER = """
-import importlib.util
-import inspect
-import json
-import sys
-import warnings
-from pathlib import Path
-
-warnings.filterwarnings("ignore")
-
-
-# Inline copy of osimflow.byos._BYOS_CONTRACT for subprocess validation.
-# Keeping this in sync with the parent process is part of the BYOS contract;
-# if you add a new entry, update both copies (issue #1048).
-_INLINE_BYOS_CONTRACT = {
-    "apply_parameters": {
-        "required_positional": 4,
-        "param_names": ("template", "parameters", "sample_id", "out"),
-        "accepts_kwargs": False,
-    },
-    "extract_kpis": {
-        "required_positional": 3,
-        "param_names": ("simulation_dir", "sample_id", "out"),
-        "accepts_kwargs": True,
-    },
-    "apply": {
-        "required_positional": 4,
-        "param_names": ("template", "parameters", "sample_id", "out"),
-        "accepts_kwargs": False,
-    },
-}
-
-
-class _InlineByosContractError(Exception):
-    pass
-
-
-def _inline_validate(fn, function_name):
-    spec = _INLINE_BYOS_CONTRACT.get(function_name)
-    if spec is None:
-        return
-    expected_count = spec["required_positional"]
-    expected_names = spec["param_names"]
-    sig = inspect.signature(fn)
-    required = [
-        p
-        for p in sig.parameters.values()
-        if p.default is inspect.Parameter.empty
-        and p.kind in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-    ]
-    if len(required) != expected_count:
-        actual = f"{len(required)} required positional"
-        expected = f"{expected_count} required positional"
-        expected_list = ", ".join(expected_names)
-        raise _InlineByosContractError(
-            f"BYOS function '{function_name}' has {actual} parameter(s); "
-            f"expected {expected} ({expected_list}). "
-            f"Got signature: {sig}."
-        )
-
-
-def main():
-    args_file = sys.argv[1]
-    with open(args_file) as f:
-        payload = json.load(f)
-
-    script_path = payload["script"]
-    function_name = payload["function"]
-    positional_args = payload.get("args", [])
-    keyword_args = payload.get("kwargs", {})
-
-    # Deserialize Path arguments back from strings.
-    # The BYOS contract specifies:
-    #   apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path) -> Path
-    #   extract_kpis(simulation_dir: Path, sample_id: str, out: Path, **kwargs) -> Path
-    #     (accepts optional keyword args such as openstudio_version: str | None)
-    # So positions 0 and -1 (or 3 for apply_parameters) are Path-like.
-    deserialized = []
-    for i, arg in enumerate(positional_args):
-        if isinstance(arg, str) and (
-            i == 0  # first arg is always a Path (template or simulation_dir)
-            or i == len(positional_args) - 1  # last arg is always 'out' Path
-            or (function_name == "apply_parameters" and i == 3)  # 'out' is at index 3
-        ):
-            deserialized.append(Path(arg))
-        elif isinstance(arg, dict):
-            deserialized.append(arg)
-        else:
-            deserialized.append(arg)
-
-    # Deserialize kwargs: Path-like values for known Path keys.
-    path_keys = {"template", "out", "simulation_dir", "modified_sim_package"}
-    deserialized_kwargs = {}
-    for k, v in keyword_args.items():
-        if k in path_keys and isinstance(v, str):
-            deserialized_kwargs[k] = Path(v)
-        else:
-            deserialized_kwargs[k] = v
-
-    # Load the user script module.
-    spec = importlib.util.spec_from_file_location("_byos_module", script_path)
-    if spec is None or spec.loader is None:
-        print(json.dumps({"error": f"could not load spec for {script_path}"}))
-        sys.exit(1)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    fn = getattr(mod, function_name, None)
-    if fn is None or not callable(fn):
-        print(json.dumps({"error": f"function {function_name!r} not found in {script_path}"}))
-        sys.exit(1)
-
-    # Validate the signature against the documented BYOS contract
-    # (issue #1048). Raises ``_InlineByosContractError`` on arity mismatch.
-    try:
-        _inline_validate(fn, function_name)
-    except _InlineByosContractError as exc:
-        print(json.dumps({"error": str(exc), "type": "ByosContractError"}))
-        sys.exit(1)
-        sys.exit(1)
-
-    try:
-        result = fn(*deserialized, **deserialized_kwargs)
-        # The BYOS contract always returns a Path.
-        print(json.dumps({"result": str(result)}))
-    except Exception as exc:
-        print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
-        sys.exit(1)
-
-main()
-"""
 
 
 def _serialize_arg(value: object) -> object:
