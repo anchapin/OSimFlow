@@ -12,13 +12,14 @@
 
 VENV := .venv
 PY := $(VENV)/bin/python
+PIP := $(VENV)/bin/pip
 RUFF := $(VENV)/bin/ruff
 BLACK := $(VENV)/bin/black
 MYPY := $(VENV)/bin/mypy
 PYTEST := $(VENV)/bin/pytest
 PRECOMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help install lint format typecheck test test-cov test-fast contract byos-generate docs-sync agents-contract precommit act clean
+.PHONY: help install lint format typecheck test test-cov test-fast contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -47,13 +48,17 @@ test-fast: ## pytest contract only (pre-commit mirror)
 byos-generate: ## regenerate the inline BYOS subprocess runner from osimflow.byos_contract
 	$(PY) tools/_generate_byos_runner.py
 
-contract: byos-generate agents-contract docs-sync ## run all contract checks (BYOS generator + AGENTS.md + docs/)
+contract: byos-generate agents-contract docs-sync openapi-sync ## run all contract checks (BYOS generator + AGENTS.md + docs/ + openapi)
 
 agents-contract: ## check AGENTS.md / code drift
 	$(PY) tools/check_agents_contract.py
 
 docs-sync: ## check docs/ references resolve
 	$(PY) tools/check_docs_sync.py
+
+openapi-sync: ## check docs/openapi.json matches the live FastAPI app (issue #1049)
+	$(PIP) install -e ".[dev,api]" --quiet
+	$(PY) tools/check_openapi_sync.py --summary
 
 precommit: ## pre-commit run --all-files
 	$(PRECOMMIT) run --all-files
