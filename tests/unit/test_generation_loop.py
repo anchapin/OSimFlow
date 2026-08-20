@@ -160,13 +160,15 @@ class EarlyConvergingAlgorithm(MockIterativeAlgorithm):
 
 
 def _stub_apply(
-    sim_dir: Path,
-    variables: dict[str, object],
+    template: Path,
+    parameters: dict[str, object],
+    sample_id: str,
+    out: Path,
 ) -> Path:
-    """Stub apply function matching the 2-arg signature from issue #840."""
-    sim_dir.mkdir(parents=True, exist_ok=True)
-    (sim_dir / "modified_package").mkdir(exist_ok=True)
-    return sim_dir
+    """Stub apply function matching the BYOS 4-arg contract (issue #1061)."""
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "modified_package").mkdir(exist_ok=True)
+    return out
 
 
 def _stub_extract(

@@ -192,11 +192,11 @@ def test_byos_apply_script_consumed_by_campaign(
 import json
 from pathlib import Path
 
-def apply_parameters(sim_dir: Path, variables: dict) -> Path:
-    sim_dir.mkdir(parents=True, exist_ok=True)
-    (sim_dir / "byos_ran.txt").write_text(f"params={variables}")
-    (sim_dir / "model.osm").write_text(json.dumps({"attributes": {}}))
-    return sim_dir
+def apply_parameters(template: Path, parameters: dict, sample_id: str, out: Path) -> Path:
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "byos_ran.txt").write_text(f"params={parameters}")
+    (out / "model.osm").write_text(json.dumps({"attributes": {}}))
+    return out
 """
     )
 

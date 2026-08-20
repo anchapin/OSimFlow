@@ -153,7 +153,17 @@ class TestProvenance:
 
         assert "bin" in hashes
         assert "work" in hashes
-        assert all(isinstance(v, str) and len(v) == 64 for v in hashes.values())
+        # ``bin`` and ``work`` are 64-char SHA-256 hashes. The ``byos_*``
+        # entries are either 64-char SHA-256 hashes (when a BYOS script
+        # is configured) or stable sentinels (``"byos-unset"`` /
+        # ``"byos-missing"``) when no user script is set (issue #1011).
+        assert isinstance(hashes["bin"], str) and len(hashes["bin"]) == 64
+        assert isinstance(hashes["work"], str) and len(hashes["work"]) == 64
+        for key in ("byos_apply", "byos_kpi"):
+            assert key in hashes
+            value = hashes[key]
+            assert isinstance(value, str)
+            assert len(value) == 64 or value in {"byos-unset", "byos-missing"}
 
     def test_environment_info(self, campaign_env):
         cfg, executor, outdir = campaign_env

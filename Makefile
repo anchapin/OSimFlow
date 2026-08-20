@@ -18,7 +18,7 @@ MYPY := $(VENV)/bin/mypy
 PYTEST := $(VENV)/bin/pytest
 PRECOMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help install lint format typecheck test test-cov test-fast contract docs-sync agents-contract precommit act clean
+.PHONY: help install lint format typecheck test test-cov test-fast contract byos-generate docs-sync agents-contract precommit act clean
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -44,7 +44,10 @@ test-cov: ## pytest --cov with 83% gate
 test-fast: ## pytest contract only (pre-commit mirror)
 	$(PYTEST) tests/contract -x -q
 
-contract: agents-contract docs-sync ## run both contract checks
+byos-generate: ## regenerate the inline BYOS subprocess runner from osimflow.byos_contract
+	$(PY) tools/_generate_byos_runner.py
+
+contract: byos-generate agents-contract docs-sync ## run all contract checks (BYOS generator + AGENTS.md + docs/)
 
 agents-contract: ## check AGENTS.md / code drift
 	$(PY) tools/check_agents_contract.py

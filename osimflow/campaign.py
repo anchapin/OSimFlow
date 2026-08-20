@@ -3353,17 +3353,32 @@ class Campaign:
                 )
                 apply_out_dir: Path = ctx["out_dir"]
                 shutil.copytree(template_pkg, apply_out_dir, dirs_exist_ok=True)
+                # The BYOS contract (osimflow.byos_contract._BYOS_CONTRACT
+                # — issue #1061) specifies ``apply_parameters(template,
+                # parameters, sample_id, out)``. The orchestrator
+                # previously forwarded only the per-sample output dir
+                # and the resolved parameter dict, which silently
+                # satisfied the legacy 2-arg default but diverged from
+                # the documented 4-arg contract — and caused the
+                # subprocess validation (PR #1058) to reject any
+                # user-supplied BYOS apply script. Forward all four
+                # positional args so the contract and the default
+                # implement the same shape.
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(
                         self.apply_fn,
-                        apply_out_dir,
+                        template_pkg,
                         ctx["resolved_params"],
+                        sid,
+                        apply_out_dir,
                     )
                 else:
                     handle = self.executor.submit(
                         self.apply_fn,
-                        apply_out_dir,
+                        template_pkg,
                         ctx["resolved_params"],
+                        sid,
+                        apply_out_dir,
                         name=f"apply_{sid}",
                         cpus=1,
                         memory_mb=512,
