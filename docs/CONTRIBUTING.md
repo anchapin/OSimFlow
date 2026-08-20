@@ -179,6 +179,48 @@ If a docs change is intentionally deferred, write `// docs: skip —
   the squashed subject.
 - The squash body should reference the issue: `Closes #N`.
 
+### When `--admin` merge is appropriate
+
+`gh pr merge --admin` (or `gh pr merge --admin --squash`) bypasses
+branch protection's required-status-checks gate. It is **not** a
+substitute for a green build — it is an escape hatch for documented
+edge cases only.
+
+Use `--admin` only when **all** of the following are true:
+
+1. **Local verification is fully green** — `make lint`, `make
+   typecheck`, and `.venv/bin/pytest` (the full fast suite, no
+   coverage gate) all pass on the candidate commit.
+2. **The failing CI check is one of the explicitly non-gating
+   jobs** — the `slow (@pytest.mark.slow)` job is *intentionally* a
+   non-gating diagnostic (see `.github/workflows/ci.yml` lines
+   299-308), and the AWS Batch / Nomad / Azure / GCP / Kubernetes /
+   Slurm / Docker-Swarm / Dask / OpenStudio-CLI / real-MLflow E2E
+   jobs are skip-gated outside their respective `*-e2e.yml`
+   workflows. A flake in any of these is not a blocking gate.
+3. **The CI queue has been stuck for ≥10 minutes** without the
+   failing check reporting back. Branch protection's required
+   checks have a built-in timeout; an admin-merge before that
+   timeout is *not* appropriate.
+4. **The PR is a known fix for the failing check** (e.g. you are
+   re-opening a PR that previously failed on the same check) **or**
+   the failing check is a heredoc flake (CI runner contention, an
+   intermittent external service, a known race that the test author
+   has accepted as a flake).
+
+Do **not** use `--admin` to:
+
+- Bypass a real `test (pytest, 83% coverage gate)` failure — that
+  check is the primary gate. If it's red, the PR is not mergeable.
+- Bypass a `lint`, `typecheck`, or `agents & docs contract` failure.
+  These are deterministic and must be green.
+- Skip past a queue that has been running for <10 minutes. The CI
+  runner may just be slow; let it finish.
+
+When you do use `--admin`, leave a comment on the PR linking the
+issue that tracks the underlying flake (e.g. `#1047` for the
+`@pytest.mark.slow` flake pattern) so the reason is auditable.
+
 ---
 
 ## 6. Adding a new OpenStudio CLI version
