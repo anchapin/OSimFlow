@@ -1688,7 +1688,7 @@
           "coordinator"
         ],
         "summary": "Trigger a completion notification for a campaign",
-        "description": "Send a notification for a completed campaign.\n\nSupports two notification channels:\n- **SNS**: publishes a JSON message to ``sns_topic_arn`` if configured\n- **Email**: sends a plain-text email to ``notification_email`` if configured\n\nThe notification payload includes the ``campaign_id``, final status, and a\nsigned S3 URL (valid 24 h) to the aggregated results CSV.",
+        "description": "Dispatch a completion notification via the configured backend (issue #628).\n\nSelects a :class:`osimflow.notify.NotifyBackend` from the request's\n``notification_type`` (``sns`` / ``email`` / ``webhook``) and the\ncampaign's stored ``sns_topic_arn`` / ``notification_email`` /\n``webhook_url``. The \u00a73.5 payload carries the presigned\n``download_url`` whose lifetime is ``expires_in_seconds`` (mirrors\n``--s3-artifact-presigned-url-expiration``).\n\nFailures in the backend are logged with ``exc_info=True`` and never\npropagate: a notification mishap cannot flip a succeeded campaign\nback to failed (issue #628 criterion #4 \u2014 best-effort).",
         "operationId": "notify_campaign_api_v1_coordinator_campaigns__campaign_id__notify_post",
         "parameters": [
           {
@@ -1810,7 +1810,7 @@
           "coordinator"
         ],
         "summary": "Compile terminal aggregated_results.csv + failed_simulations.csv from manifests",
-        "description": "Terminal aggregation step of Epic #624.  Lists every `{campaign_id}/samples/*/_manifest.json`, reads each referenced `kpis.json`, and compiles `aggregated_results.csv` (same column contract as `bin/aggregate_results.py`) plus `failed_simulations.csv` (first `  * Severe` line per failed manifest \u2014 PRD \u00a76 #4).  When the campaign algorithm is multi-objective (nsga2/pso) a Pareto-front JSON is also written.  Artifacts land under `{campaign_id}/_aggregated/` and the campaign status flips `aggregating -> complete`.\n\n**Precondition**: campaign status MUST be `aggregating` (i.e. the array job was declared complete via `/array-complete`).  A call against any other status returns HTTP 409.  For the MVP the aggregation runs synchronously inside the endpoint and returns 202 with a synthetic `aggregator_job_id`.",
+        "description": "Terminal aggregation step of Epic #624.  Lists every `{campaign_id}/samples/*/_manifest.json`, reads each referenced `kpis.json`, and compiles `aggregated_results.csv` (same column contract as `bin/aggregate_results.py`) plus `failed_simulations.csv` (first `  * Severe` line per failed manifest).  When the campaign algorithm is multi-objective (nsga2/pso) a Pareto-front JSON is also written.  Artifacts land under `{campaign_id}/_aggregated/` and the campaign status flips `aggregating -> complete`.\n\n**Precondition**: campaign status MUST be `aggregating` (i.e. the array job was declared complete via `/array-complete`).  A call against any other status returns HTTP 409.  For the MVP the aggregation runs synchronously inside the endpoint and returns 202 with a synthetic `aggregator_job_id`.",
         "operationId": "aggregate_campaign_results_api_v1_coordinator_campaigns__campaign_id__aggregate_post",
         "parameters": [
           {
@@ -4659,6 +4659,18 @@
             ],
             "title": "Sns Topic Arn",
             "description": "SNS topic ARN to publish to when the campaign completes"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url",
+            "description": "Webhook URL to POST the campaign-completion callback to (issue #283; reused by the issue #628 notification dispatch)."
           }
         },
         "type": "object",
@@ -4729,11 +4741,18 @@
             ],
             "title": "Subject",
             "description": "Notification subject (SNS/email)"
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "minimum": 60.0,
+            "title": "Expires In Seconds",
+            "description": "Lifetime of the presigned download_url in seconds (default 3600). Mirrors --s3-artifact-presigned-url-expiration.",
+            "default": 3600
           }
         },
         "type": "object",
         "title": "CoordinatorNotifyRequest",
-        "description": "Request for POST /campaigns/{id}/notify \u2014 trigger a notification."
+        "description": "Request for POST /campaigns/{id}/notify \u2014 trigger a notification.\n\nMirrors the API contract \u00a73.5 ``campaign.succeeded`` payload: the\nserver builds the presigned ``download_url`` (whose lifetime is\n``expires_in_seconds``) and dispatches it through the selected\nbackend."
       },
       "CoordinatorNotifyResponse": {
         "properties": {
