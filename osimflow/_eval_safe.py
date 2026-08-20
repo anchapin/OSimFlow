@@ -124,12 +124,10 @@ _ALLOWED_NODES = frozenset(
         ast.List,
         ast.Set,
         ast.Dict,
-        # Literals
+        # Literals (Python 3.8+ unified into ast.Constant;
+        # ast.Num/Str/Bytes/NameConstant were deprecated and are
+        # removed in 3.14, so they are no longer listed here)
         ast.Constant,
-        ast.Num,  # Python < 3.8
-        ast.Str,  # Python < 3.8
-        ast.Bytes,  # Python < 3.8
-        ast.NameConstant,  # Python < 3.8
         ast.Name,
         # Formatted value (f-string) — reject if contains conversion/spec
         ast.JoinedStr,
