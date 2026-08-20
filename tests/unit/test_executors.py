@@ -35,6 +35,7 @@ from osimflow.executors import (
     _NomadClient,
     _NomadHandle,
     _slugify_job_name,
+    _SpotPriceCache,
     run_subprocess,
 )
 
@@ -420,6 +421,10 @@ class TestAWSBatchSubmit:
         ex.max_retries = 3
         ex.ecr_repository = None
         ex._instance_type = None
+        ex._submit_rps = None
+        ex._submit_limiter = MagicMock()
+        ex._spot_price_cache = _SpotPriceCache(ttl_s=60.0)
+        ex._retry_config = MagicMock()
         return ex
 
     def test_submit_succeeds(self) -> None:
@@ -523,7 +528,7 @@ class TestAWSBatchSubmit:
         ex._boto3.client.return_value = mock_client
         client = ex._get_client()
         assert client is mock_client
-        ex._boto3.client.assert_called_once_with("batch", region_name=None)
+        ex._boto3.client.assert_called_once_with("batch", region_name=None, config=ex._retry_config)
 
     def test_lazy_ec2_client(self) -> None:
         ex = self._make_executor()
@@ -532,7 +537,7 @@ class TestAWSBatchSubmit:
         ex._boto3.client.return_value = mock_client
         client = ex._get_ec2_client()
         assert client is mock_client
-        ex._boto3.client.assert_called_once_with("ec2", region_name=None)
+        ex._boto3.client.assert_called_once_with("ec2", region_name=None, config=ex._retry_config)
 
     def test_shutdown_is_noop(self) -> None:
         ex = self._make_executor()

@@ -166,6 +166,9 @@ def _build_aws_batch() -> tuple[Any, Any]:
     ex.max_retries = 3
     ex._region_name = None
     ex._instance_type = None
+    ex._submit_rps = None
+    ex._submit_limiter = MagicMock()
+    ex._spot_price_cache = MagicMock()
     ex.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR = 0.05
     ex.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR = 0.03
     ex.submit(lambda: None, name="contract", cpus=CPUS, memory_mb=MEMORY_MB, time_min=TIME_MIN)

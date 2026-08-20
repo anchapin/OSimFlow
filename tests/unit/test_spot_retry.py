@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors import AWSBatchExecutor
+from osimflow.executors import AWSBatchExecutor, _SpotPriceCache
 
 
 def _make_executor(
@@ -39,6 +39,9 @@ def _make_executor(
         ex.max_retries = max_retries
         ex.ecr_repository = None
         ex._instance_type = None
+        ex._submit_rps = None
+        ex._submit_limiter = MagicMock()
+        ex._spot_price_cache = _SpotPriceCache(ttl_s=60.0)
     return ex
 
 
