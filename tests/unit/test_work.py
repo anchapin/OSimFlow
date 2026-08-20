@@ -3,7 +3,9 @@
 Covers:
   * default_apply_parameters: subprocess invocation, param JSON, error propagation
   * run_openstudio_sim: stub mode, real CLI path, missing workflow.osw, log capture
-  * extract_kpis: subprocess invocation and error propagation
+  * extract_kpis: in-process call into osimflow._work_scripts.extract_kpis
+    (issue #1015 — was subprocess.run per sample, now an in-process call;
+    verifies no subprocess is spawned and runs a 100-sample perf smoke).
   * aggregate_results: subprocess invocation, baseline, ts_resolution, error propagation
   * generate_plots: subprocess invocation, baseline, pareto_dir, error propagation
   * preflight_run_model: stub pass, real CLI pass, real CLI severe error, missing osw
@@ -548,56 +550,161 @@ class TestRunRealOpenstudioDirect:
 # ===========================================================================
 # extract_kpis
 # ===========================================================================
+def _make_minimal_eplus_sql(path: Path) -> Path:
+    """Create a minimal eplusout.sql with a single EUI tabular row.
+
+    Used by the in-process extract_kpis tests (issue #1015).  Matches
+    the schema used in tests/unit/test_extract_kpis.py.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE TabularDataWithStrings (
+            ReportName TEXT,
+            ReportForString TEXT,
+            TableName TEXT,
+            RowName TEXT,
+            ColumnName TEXT,
+            Units TEXT,
+            Value TEXT
+        )
+    """
+    )
+    cur.execute(
+        "INSERT INTO TabularDataWithStrings VALUES (?,?,?,?,?,?,?)",
+        (
+            "AnnualBuildingUtilityPerformanceSummary",
+            "Entire Facility",
+            "Site and Source Energy",
+            "Total Site Energy",
+            "Energy Per Total Building Area",
+            "MJ/m2",
+            "360.0",
+        ),
+    )
+    cur.execute(
+        "INSERT INTO TabularDataWithStrings VALUES (?,?,?,?,?,?,?)",
+        (
+            "AnnualBuildingUtilityPerformanceSummary",
+            "Entire Facility",
+            "Site and Source Energy",
+            "Total Site Energy",
+            "Total Energy",
+            "MJ",
+            "36000.0",
+        ),
+    )
+    cur.execute("CREATE TABLE Zones (ZoneIndex INTEGER, Floor_Area REAL)")
+    cur.execute("INSERT INTO Zones VALUES (0, 100.0)")
+    conn.commit()
+    conn.close()
+    return path
+
+
 class TestExtractKpis:
     def test_returns_kpi_json_path(self, tmp_path: Path) -> None:
         sim_dir = tmp_path / "sim"
         sim_dir.mkdir()
         out = tmp_path / "kpi_out"
-        with patch("osimflow.work.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
+        with patch("osimflow._work_scripts.extract_kpis.run_extract_kpis") as mock_run_extract:
+            mock_run_extract.return_value = out / "kpi_0001.json"
             result = extract_kpis(sim_dir, "0001", out)
         assert result == out / "kpi_0001.json"
         assert out.is_dir()
 
-    def test_subprocess_called_with_correct_args(self, tmp_path: Path) -> None:
+    def test_in_process_call_uses_run_extract_kpis(self, tmp_path: Path) -> None:
+        """Issue #1015: _extract_kpis_impl must delegate to run_extract_kpis
+        (in-process), not subprocess.run.
+        """
         sim_dir = tmp_path / "sim"
         sim_dir.mkdir()
         out = tmp_path / "kpi_out"
-        with patch("osimflow.work.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
+        with patch("osimflow._work_scripts.extract_kpis.run_extract_kpis") as mock_run_extract:
+            mock_run_extract.return_value = out / "kpi_0042.json"
             extract_kpis(sim_dir, "0042", out)
-        cmd = mock_run.call_args[0][0]
-        assert "--simulation_dir" in cmd
-        assert str(sim_dir) in cmd
-        assert "--sample_id" in cmd
-        assert "0042" in cmd
-        assert "--out" in cmd
+        mock_run_extract.assert_called_once()
+        kwargs = mock_run_extract.call_args.kwargs
+        assert kwargs["simulation_dir"] == sim_dir
+        assert kwargs["sample_id"] == "0042"
+        assert kwargs["out_path"] == out / "kpi_0042.json"
+        assert kwargs["openstudio_version"] is None
 
-    def test_raises_on_subprocess_failure(self, tmp_path: Path) -> None:
+    def test_does_not_spawn_subprocess(self, tmp_path: Path) -> None:
+        """Issue #1015 acceptance: no subprocess.run is invoked when the
+        default extract_kpis is called from the in-process Campaign path.
+        """
         sim_dir = tmp_path / "sim"
         sim_dir.mkdir()
         out = tmp_path / "kpi_out"
-        with patch("osimflow.work.subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(
-                returncode=1, cmd=[], stderr="kpi error"
-            )
-            with pytest.raises(RuntimeError, match="extract_kpis failed"):
+        with patch("osimflow.work.subprocess.run") as mock_subprocess:
+            with patch("osimflow._work_scripts.extract_kpis.run_extract_kpis") as mock_run_extract:
+                mock_run_extract.return_value = out / "kpi_0001.json"
                 extract_kpis(sim_dir, "0001", out)
+        mock_subprocess.assert_not_called()
 
     def test_creates_out_dir(self, tmp_path: Path) -> None:
         sim_dir = tmp_path / "sim"
         sim_dir.mkdir()
         out = tmp_path / "deep" / "nested"
-        with patch("osimflow.work.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
+        with patch("osimflow._work_scripts.extract_kpis.run_extract_kpis") as mock_run_extract:
+            mock_run_extract.return_value = out / "kpi_0001.json"
             extract_kpis(sim_dir, "0001", out)
         assert out.is_dir()
+
+    def test_in_process_with_real_sql(self, tmp_path: Path) -> None:
+        """End-to-end: in-process extraction of a real eplusout.sql
+        produces a valid KPI JSON without spawning a subprocess.
+        """
+        sim_dir = tmp_path / "sim"
+        sim_dir.mkdir()
+        _make_minimal_eplus_sql(sim_dir / "eplusout.sql")
+        out = tmp_path / "kpi_out"
+
+        with patch("osimflow.work.subprocess.run") as mock_subprocess:
+            result = extract_kpis(sim_dir, "0001", out)
+
+        assert result == out / "kpi_0001.json"
+        assert result.is_file()
+        mock_subprocess.assert_not_called()
+        payload = json.loads(result.read_text())
+        assert payload["sample_id"] == "0001"
+        assert "kpis" in payload
+        assert "quality" in payload
+        assert payload["kpis"]["eui_kwh_m2_yr"] == pytest.approx(100.0, abs=0.01)
+
+    def test_perf_in_process_under_one_second_per_hundred(self, tmp_path: Path) -> None:
+        """Issue #1015 acceptance smoke: 100 in-process KPI extractions
+        must complete in well under what 100 subprocess startups would
+        take (~15-30 s on a typical host).  We assert < 5 s here to
+        leave a wide margin on slow CI but still catch a regression to
+        the subprocess path.
+        """
+        import time
+
+        from osimflow._work_scripts.extract_kpis import run_extract_kpis
+
+        sim_dir = tmp_path / "sim"
+        sim_dir.mkdir()
+        _make_minimal_eplus_sql(sim_dir / "eplusout.sql")
+        out = tmp_path / "kpi_out"
+        out.mkdir()
+
+        start = time.perf_counter()
+        for i in range(100):
+            sample_id = f"{i:04d}"
+            run_extract_kpis(
+                simulation_dir=sim_dir,
+                sample_id=sample_id,
+                out_path=out / f"kpi_{sample_id}.json",
+            )
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 5.0, f"100 in-process extractions took {elapsed:.2f}s"
+        assert (out / "kpi_0000.json").is_file()
+        assert (out / "kpi_0099.json").is_file()
 
 
 # ===========================================================================

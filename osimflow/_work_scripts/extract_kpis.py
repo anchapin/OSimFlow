@@ -633,6 +633,123 @@ def validate_kpis(kpis: dict[str, Any], thresholds: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
+# Public callable entry point (issue #1015)
+#
+# ``run_extract_kpis`` is the in-process callable equivalent of the
+# ``main()`` CLI below.  ``osimflow.work._extract_kpis_impl`` calls it
+# directly instead of ``subprocess.run([sys.executable, 'extract_kpis.py',
+# ...])`` so 10K samples no longer pay 150-300 ms of Python interpreter
+# startup per sample (~30 min of pure import overhead at N=10K).
+#
+# Behaviour is identical to the CLI: same KPI JSON shape on disk, same
+# quality checks, same custom-extractor path.  The CLI ``main()`` simply
+# parses argv and delegates here so the two surfaces cannot drift.
+# ---------------------------------------------------------------------------
+
+
+def run_extract_kpis(
+    simulation_dir: Path,
+    sample_id: str,
+    out_path: Path,
+    *,
+    custom_kpi_extractor: Path | None = None,
+    quality_thresholds: dict[str, Any] | None = None,
+    openstudio_version: str | None = None,
+) -> Path:
+    """Run KPI extraction for one sample and write the JSON to *out_path*.
+
+    Args:
+        simulation_dir: Per-sample simulation output directory containing
+            ``eplusout.sql`` (and ``eplusout.err`` for the summary).
+        sample_id: Sample identifier (e.g. ``"0001"``).
+        out_path: Destination path for the KPI JSON document.  Parent
+            directories are created on demand.
+        custom_kpi_extractor: Optional path to a user-supplied Python file
+            that defines ``extract_kpis(ctx)`` (BYOS override).
+        quality_thresholds: Optional dict of threshold overrides forwarded
+            to :func:`validate_kpis`.
+        openstudio_version: Optional OpenStudio version string recorded
+            in the KPI JSON for traceability.
+
+    Returns:
+        The *out_path* the JSON was written to.
+
+    Raises:
+        FileNotFoundError: when *custom_kpi_extractor* is set but does
+            not exist.
+        RuntimeError: when the custom extractor fails to load, does not
+            define ``extract_kpis(ctx)``, or returns a non-dict.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sql_path = simulation_dir / "eplusout.sql"
+
+    kpis: dict[str, Any] = {}
+
+    if custom_kpi_extractor is not None:
+        if not custom_kpi_extractor.exists():
+            msg = f"Custom KPI extractor {custom_kpi_extractor} does not exist."
+            log.error(msg)
+            raise FileNotFoundError(msg)
+        spec = importlib.util.spec_from_file_location("custom_extractor", custom_kpi_extractor)
+        if spec is None or spec.loader is None:
+            msg = f"Failed to load custom extractor from {custom_kpi_extractor}."
+            log.error(msg)
+            raise RuntimeError(msg)
+
+        custom_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(custom_mod)
+
+        if not hasattr(custom_mod, "extract_kpis"):
+            msg = f"Custom extractor {custom_kpi_extractor} must define `extract_kpis(ctx)`."
+            log.error(msg)
+            raise RuntimeError(msg)
+
+        ctx = {
+            "simulation_dir": simulation_dir,
+            "sample_id": sample_id,
+        }
+
+        try:
+            custom_kpis = custom_mod.extract_kpis(ctx)
+        except Exception as e:
+            log.error("Custom extractor failed: %s", e, exc_info=True)
+            raise RuntimeError(f"Custom extractor failed: {e}") from e
+        if isinstance(custom_kpis, dict):
+            kpis.update(custom_kpis)
+        else:
+            msg = f"Custom extractor returned {type(custom_kpis)}, expected dict."
+            log.error(msg)
+            raise RuntimeError(msg)
+    else:
+        kpis = extract_kpis_from_sql(sql_path)
+        kpis.update(_extract_simulation_summary(simulation_dir))
+
+    quality = validate_kpis(kpis, thresholds=quality_thresholds)
+
+    for w in quality["warnings"]:
+        log.warning("Quality warning for sample %s: %s", sample_id, w)
+    for f in quality["failures"]:
+        log.error("Quality failure for sample %s: %s", sample_id, f)
+
+    output = {
+        "sample_id": sample_id,
+        "openstudio_version": openstudio_version,
+        "kpis": kpis,
+        "quality": quality,
+    }
+
+    out_path.write_text(json.dumps(output, indent=2))
+    log.info(
+        "KPI extraction complete for sample=%s quality_valid=%s warnings=%d failures=%d",
+        sample_id,
+        quality["valid"],
+        len(quality["warnings"]),
+        len(quality["failures"]),
+    )
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -658,48 +775,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    sql_path = args.simulation_dir / "eplusout.sql"
-
-    kpis: dict[str, Any] = {}
-
-    if args.custom_kpi_extractor:
-        if not args.custom_kpi_extractor.exists():
-            log.error("Custom KPI extractor %s does not exist.", args.custom_kpi_extractor)
-            return 1
-        spec = importlib.util.spec_from_file_location("custom_extractor", args.custom_kpi_extractor)
-        if spec is None or spec.loader is None:
-            log.error("Failed to load custom extractor from %s.", args.custom_kpi_extractor)
-            return 1
-
-        custom_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(custom_mod)
-
-        if not hasattr(custom_mod, "extract_kpis"):
-            log.error(
-                "Custom extractor %s must define `extract_kpis(ctx)`.", args.custom_kpi_extractor
-            )
-            return 1
-
-        ctx = {
-            "simulation_dir": args.simulation_dir,
-            "sample_id": args.sample_id,
-        }
-
-        try:
-            custom_kpis = custom_mod.extract_kpis(ctx)
-            if isinstance(custom_kpis, dict):
-                kpis.update(custom_kpis)
-            else:
-                log.error("Custom extractor returned %s, expected dict.", type(custom_kpis))
-                return 1
-        except Exception as e:
-            log.error("Custom extractor failed: %s", e, exc_info=True)
-            return 1
-    else:
-        kpis = extract_kpis_from_sql(sql_path)
-        kpis.update(_extract_simulation_summary(args.simulation_dir))
-
     quality_thresholds: dict[str, Any] | None = None
     if args.quality_thresholds_json:
         try:
@@ -707,28 +782,18 @@ def main() -> int:
         except json.JSONDecodeError:
             log.warning("Could not parse --quality_thresholds_json; using defaults.")
 
-    quality = validate_kpis(kpis, thresholds=quality_thresholds)
-
-    for w in quality["warnings"]:
-        log.warning("Quality warning for sample %s: %s", args.sample_id, w)
-    for f in quality["failures"]:
-        log.error("Quality failure for sample %s: %s", args.sample_id, f)
-
-    output = {
-        "sample_id": args.sample_id,
-        "openstudio_version": args.openstudio_version,
-        "kpis": kpis,
-        "quality": quality,
-    }
-
-    args.out.write_text(json.dumps(output, indent=2))
-    log.info(
-        "KPI extraction complete for sample=%s quality_valid=%s warnings=%d failures=%d",
-        args.sample_id,
-        quality["valid"],
-        len(quality["warnings"]),
-        len(quality["failures"]),
-    )
+    try:
+        run_extract_kpis(
+            simulation_dir=args.simulation_dir,
+            sample_id=args.sample_id,
+            out_path=args.out,
+            custom_kpi_extractor=args.custom_kpi_extractor,
+            quality_thresholds=quality_thresholds,
+            openstudio_version=args.openstudio_version,
+        )
+    except (FileNotFoundError, RuntimeError) as exc:
+        log.error("extract_kpis failed: %s", exc)
+        return 1
     return 0
 
 

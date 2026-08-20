@@ -176,13 +176,18 @@ class TestSubprocessSitesPassSanitizedEnv:
     """Every subprocess call site in ``osimflow/work.py`` must pass
     ``env=_sanitize_env()`` (issue #1027).
 
-    The five sites are:
+    The remaining sites are:
 
     1. ``_apply_parameters_stub``        — ``subprocess.run``
     2. ``run_openstudio_sim`` stub branch — ``run_subprocess``
     3. ``_run_real_openstudio``          — ``run_subprocess``
     4. ``generate_lhs``                  — ``subprocess.run``
-    5. ``_extract_kpis_impl``            — ``subprocess.run``
+
+    ``_extract_kpis_impl`` is no longer a subprocess site (issue #1015:
+    it now calls :func:`osimflow._work_scripts.extract_kpis.run_extract_kpis`
+    in-process, so the credential-leak surface it created is gone
+    entirely).  See :class:`TestExtractKpisNoSubprocess` below for the
+    regression test that pins that behaviour.
 
     These tests mock the underlying ``subprocess.run`` / ``run_subprocess``
     helper and assert the ``env=`` kwarg equals ``_sanitize_env()``.
@@ -329,22 +334,61 @@ class TestSubprocessSitesPassSanitizedEnv:
         self._assert_sanitized(mock_run)
 
     # ---------------------------------------------------------------------
-    # Site 5: _extract_kpis_impl
+    # Site 5 (removed, issue #1015): _extract_kpis_impl no longer
+    # spawns a subprocess — see TestExtractKpisNoSubprocess below.
     # ---------------------------------------------------------------------
-    def test_extract_kpis_impl_passes_sanitized_env(self, tmp_path: Path) -> None:
-        """_extract_kpis_impl must pass env=_sanitize_env() to subprocess.run."""
+
+
+# ===========================================================================
+# Issue #1015: _extract_kpis_impl must NOT spawn a subprocess.  The
+# in-process path eliminates the per-sample 150-300 ms interpreter
+# startup cost AND the per-sample subprocess env-leak surface.
+# ===========================================================================
+class TestExtractKpisNoSubprocess:
+    """Pin the in-process behaviour introduced in issue #1015.
+
+    ``_extract_kpis_impl`` used to fork a fresh Python interpreter per
+    sample.  After the fix, the same-process
+    :func:`osimflow._work_scripts.extract_kpis.run_extract_kpis` is
+    invoked.  These tests ensure the subprocess is not re-introduced
+    silently — a regression here would mean the credential-leak surface
+    from issue #1027 is also back, and ~30 min of overhead for a 10K
+    campaign.
+    """
+
+    def test_does_not_invoke_subprocess_run(self, tmp_path: Path) -> None:
         sim_dir = tmp_path / "sim"
         sim_dir.mkdir()
         out = tmp_path / "out"
         out.mkdir()
-
         with patch("osimflow.work.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
             work_mod._extract_kpis_impl(sim_dir, "0001", out)
+        mock_run.assert_not_called()
 
-        self._assert_sanitized(mock_run)
+    def test_does_not_invoke_run_subprocess(self, tmp_path: Path) -> None:
+        sim_dir = tmp_path / "sim"
+        sim_dir.mkdir()
+        out = tmp_path / "out"
+        out.mkdir()
+        with patch("osimflow._subprocess_utils.run_subprocess") as mock_run_sub:
+            work_mod._extract_kpis_impl(sim_dir, "0001", out)
+        mock_run_sub.assert_not_called()
+
+    def test_calls_in_process_run_extract_kpis(self, tmp_path: Path) -> None:
+        sim_dir = tmp_path / "sim"
+        sim_dir.mkdir()
+        out = tmp_path / "out"
+        out.mkdir()
+        with patch("osimflow._work_scripts.extract_kpis.run_extract_kpis") as mock_run_extract:
+            mock_run_extract.return_value = out / "kpi_0001.json"
+            result = work_mod._extract_kpis_impl(sim_dir, "0001", out)
+        assert result == out / "kpi_0001.json"
+        mock_run_extract.assert_called_once_with(
+            simulation_dir=sim_dir,
+            sample_id="0001",
+            out_path=out / "kpi_0001.json",
+            openstudio_version=None,
+        )
 
 
 # ===========================================================================
