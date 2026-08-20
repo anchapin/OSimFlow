@@ -1,0 +1,100 @@
+# =============================================================================
+# .github/workflows/branch-cleanup.yml — nightly stale-branch sweep (issue #1003)
+# =============================================================================
+# Lists stale remote branches that are safe to delete and posts the summary to
+# the tracking issue. The scheduled run is ALWAYS a dry-run: it never deletes.
+#
+# To actually delete, trigger `workflow_dispatch` manually with
+#   apply=true  AND  confirm=DELETE
+# (the dual-input guard prevents accidental branch deletion from automation).
+# =============================================================================
+name: branch-cleanup
+
+on:
+  schedule:
+    # Nightly at 06:00 UTC.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Delete stale branches? (dry-run if false)'
+        required: false
+        default: false
+        type: boolean
+      confirm:
+        description: 'Type DELETE to confirm destructive deletion (required when apply=true)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write   # git push --delete (manual apply path only)
+  issues: write     # comment on the tracking issue
+  pull-requests: read
+
+concurrency:
+  # One sweep at a time — never overlap scheduled + manual runs.
+  group: branch-cleanup
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    name: stale-branch sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history for ancestry checks)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run stale-branch sweep
+        id: sweep
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APPLY=""
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" \
+                && "${{ inputs.apply }}" == "true" \
+                && "${{ inputs.confirm }}" == "DELETE" ]]; then
+            echo "Manual confirmed run: branches WILL be deleted."
+            APPLY="--apply"
+          else
+            echo "Scheduled/manual dry-run: no branches will be deleted."
+            echo "To delete, re-run with workflow_dispatch(apply=true, confirm=DELETE)."
+          fi
+          scripts/sweep-stale-branches.sh $APPLY \
+              --min-age-days 30 \
+              --repo "${{ github.repository }}" \
+              --report report.txt
+
+      - name: Upload sweep report
+        uses: actions/upload-artifact@v4
+        with:
+          name: stale-branch-report
+          path: report.txt
+          if-no-files-found: warn
+
+      - name: Post dry-run summary to issue #1003
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Stale-branch sweep (scheduled $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            echo
+            echo '```'
+            head -6 report.txt
+            echo '```'
+            echo
+            echo '_Scheduled run — **dry-run**, no branches were deleted._'
+            echo 'To delete, trigger `'"'"'workflow_dispatch'"'"'` with `apply=true` and `confirm=DELETE`.'
+          } > comment-body.md
+          gh issue comment 1003 \
+            --repo "${{ github.repository }}" \
+            --body-file comment-body.md
