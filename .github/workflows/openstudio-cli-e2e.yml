@@ -1,9 +1,18 @@
 # =============================================================================
-# .github/workflows/openstudio-cli-e2e.yml — Real OpenStudio CLI E2E (nightly)
+# .github/workflows/openstudio-cli-e2e.yml — Real OpenStudio CLI E2E
 # =============================================================================
 # Runs a minimal real OpenStudio simulation campaign against the
-# nrel/openstudio:<version> container every night at 06:00 UTC and on
-# manual trigger (workflow_dispatch).
+# nrel/openstudio:<version> container.  Three trigger modes
+# (issue #1020 acceptance criterion):
+#
+#   1. ``schedule`` — nightly at 06:00 UTC (smoke coverage).
+#   2. ``workflow_dispatch`` — manual run by a developer / release
+#      manager.
+#   3. ``pull_request`` against ``release/*`` branches — PR-blocking
+#      gate before each release tag (issue #1020).  Every PR that
+#      targets a release branch MUST pass this workflow before merge;
+#      the branch-protection layer (see ``docs/branch-protection.md``)
+#      wires this up via the ``release-required-checks`` list.
 #
 # This workflow exercises the production code path that was previously
 # stub-only: openstudio.cli run -w workflow.osw inside the container,
@@ -29,7 +38,7 @@
 #
 # Uses the nrel/openstudio container from Docker Hub. No credentials needed.
 # =============================================================================
-name: openstudio-cli-e2e (Nightly)
+name: openstudio-cli-e2e (Nightly + release-blocking)
 
 on:
   schedule:
@@ -44,6 +53,17 @@ on:
         description: 'Number of samples to run'
         required: false
         default: '1'
+  # PR-blocking for release branches (issue #1020).  PRs against any
+  # other branch are NOT blocked by this workflow — only release
+  # promotion is gated on the real OpenStudio CLI passing.
+  pull_request:
+    branches:
+      - "release/**"
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+      - ".agents/**"
 
 permissions:
   contents: read
