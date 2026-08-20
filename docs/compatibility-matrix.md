@@ -8,19 +8,24 @@ image directly from Docker Hub. No project-owned build is required.
 
 ## Compatibility Matrix
 
+This matrix reflects the **currently-released** OSimFlow line and the
+OpenStudio versions it has been tested against. Future OSimFlow lines
+(0.2.x, 0.3.x) are listed in the [PRD](OSimFlow.md) once they
+exist — speculative rows have been removed from this table.
+
 | OSimFlow | OpenStudio | Status | Notes |
 |----------|------------|--------|-------|
-| 0.1.x    | 3.7.0      | Supported | Ubuntu 20.04 base |
+| 0.1.x    | 3.7.0      | Supported | Ubuntu 20.04 base; floor version |
+| 0.1.x    | 3.7.0-2204 | Supported | Ubuntu 22.04 base |
 | 0.1.x    | 3.8.0      | Supported | |
-| 0.1.x    | 3.9.0      | Beta | Community-tested |
-| 0.2.x    | 3.7.0      | Supported | |
-| 0.2.x    | 3.8.0      | Supported | |
-| 0.2.x    | 3.9.0      | Supported | |
-| 0.3.x    | 3.7.0      | Supported | LTS-compatible |
-| 0.3.x    | 3.8.0      | Supported | |
-| 0.3.x    | 3.9.0      | Supported | |
-| 0.3.x    | 3.10.0     | Supported | |
-| 0.3.x    | 3.11.0     | Supported | latest stable |
+| 0.1.x    | 3.9.0      | Supported | |
+| 0.1.x    | 3.10.0     | Supported | |
+| 0.1.x    | 3.11.0     | Supported | latest stable |
+
+NREL also publishes older tags on Docker Hub (down to `3.1.0`); OSimFlow
+does not test or advertise them. Pinning to a non-listed version will
+fall through to the default container path but is unsupported per the
+[Version Support Policy](#version-support-policy) below.
 
 ## Status Definitions
 

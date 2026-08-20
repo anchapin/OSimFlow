@@ -983,11 +983,14 @@ for the initial run (verified in benchmarks).
 The `--openstudio_version` flag determines which `nrel/openstudio` container
 image is used. The version maps directly to the Docker Hub tag:
 
-| `--openstudio_version` | Container image |
-|---|---|
-| `3.9.0` | `docker.io/nrel/openstudio:3.9.0` |
-| `3.10.0` | `docker.io/nrel/openstudio:3.10.0` |
-| `3.11.0` | `docker.io/nrel/openstudio:3.11.0` |
+| `--openstudio_version` | Container image | Notes |
+|---|---|---|
+| `3.7.0` | `docker.io/nrel/openstudio:3.7.0` | Floor version (Ubuntu 20.04 base) |
+| `3.7.0-2204` | `docker.io/nrel/openstudio:3.7.0-2204` | Ubuntu 22.04 base |
+| `3.8.0` | `docker.io/nrel/openstudio:3.8.0` | |
+| `3.9.0` | `docker.io/nrel/openstudio:3.9.0` | |
+| `3.10.0` | `docker.io/nrel/openstudio:3.10.0` | |
+| `3.11.0` | `docker.io/nrel/openstudio:3.11.0` | latest stable (default) |
 
 **When to pin:** Always pin in production campaigns for reproducibility.
 Changing the version invalidates the cache for the simulation step.
@@ -995,8 +998,9 @@ Changing the version invalidates the cache for the simulation step.
 **When to float:** During development, you may omit the flag (defaults to
 `3.11.0`) or update it to test compatibility with a new OpenStudio release.
 
-For supported versions and availability checking, see
-[openstudio-image-distribution.md](openstudio-image-distribution.md).
+For the full supported-version policy and how to add a new tag, see
+[openstudio-image-distribution.md](openstudio-image-distribution.md) and
+[compatibility-matrix.md](compatibility-matrix.md).
 
 ### 7.7 Importing from OpenStudio Analysis Spreadsheet (.osa)
 
