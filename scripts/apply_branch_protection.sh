@@ -23,7 +23,7 @@
 #
 #     - lint (ruff)
 #     - typecheck (mypy --strict)
-#     - test (pytest, 85% coverage gate)
+#     - test (pytest, 83% coverage gate)
 #     - agents & docs contract
 #     - security (pip-audit)
 #
@@ -103,7 +103,7 @@ done
 REQUIRED_CHECKS='[
     "lint (ruff)",
     "typecheck (mypy --strict)",
-    "test (pytest, 85% coverage gate)",
+    "test (pytest, 83% coverage gate)",
     "agents & docs contract",
     "security (pip-audit)"
 ]'

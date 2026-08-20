@@ -99,7 +99,10 @@ class TestSpotInterruptionRetry:
         assert handle.job_id == "job-2"
         mock_sleep.assert_called_once()
         backoff = mock_sleep.call_args[0][0]
-        assert backoff == pytest.approx(5.0)
+        # Jitter (PR #1029): backoff is `random.uniform(0, min(5.0 * 2**attempt, 60.0))`,
+        # so for attempt=0 it falls in [0, 5.0]. Verify the range rather than the exact
+        # value to keep the test deterministic across runs.
+        assert 0 <= backoff <= 5.0, f"expected jittered backoff in [0, 5.0], got {backoff}"
 
     def test_multiple_spot_interruptions_then_success(self) -> None:
         ex = _make_executor(max_retries=3)

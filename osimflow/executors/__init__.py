@@ -2444,3 +2444,24 @@ ExecutorRegistry.register("docker_swarm", DockerSwarmExecutor)
 
 # Discover third-party executor plug-ins (no-op when none installed).
 ExecutorRegistry.discover_plugins()
+
+
+# ---------------------------------------------------------------------------
+# Health-check registration (issue #1024, fix #1053)
+# ---------------------------------------------------------------------------
+# The per-executor health checks live in ``osimflow.health`` to keep the
+# health module out of every executor's import path. The health module
+# also tries to register its checks at import time, but that path is
+# order-dependent: if ``osimflow.health`` is imported before
+# ``osimflow.executors`` (e.g. when pytest-xdist workers import the
+# health module first), the registration silently no-ops because the
+# registry is still empty. Calling it here — after every built-in
+# executor is registered — guarantees the binding is in place regardless
+# of import order. The call is idempotent (``_register_executor_health_checks``
+# re-binds the same callables, so repeated invocations are safe).
+try:
+    from osimflow.health import _register_executor_health_checks  # noqa: PLC0415
+
+    _register_executor_health_checks()
+except Exception:  # noqa: BLE001 — never break executor import over a health wiring glitch
+    pass
