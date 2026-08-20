@@ -10,6 +10,7 @@ __all__ = [
     "AWSBatchConfig",
     "AzureBatchConfig",
     "CampaignConfig",
+    "ChaosConfig",
     "DAGConfig",
     "GoogleBatchConfig",
     "LocalConfig",
@@ -768,6 +769,86 @@ class ObservabilityConfig:
 
 
 # ======================================================================
+# Chaos testing config (issue #1013)
+# ======================================================================
+
+
+@dataclasses.dataclass
+class ChaosConfig:
+    """Opt-in chaos testing settings (issue #1013).
+
+    The ``chaos`` machinery in :mod:`osimflow.chaos` provides a
+    ``ChaosEngine`` plus four built-in ``FaultInjector`` types
+    (kill switch, network delay, CPU spike, memory pressure). The
+    settings here drive the wiring from :class:`Campaign` into the
+    engine so the fault scenarios actually fire during a campaign
+    run.
+
+    Everything is **off by default**. The ``kill_switch`` scenario
+    logs a warning but does not actually terminate the orchestrator
+    process (it does not map sample IDs to worker PIDs in this
+    wiring), so even the most aggressive setting is non-destructive
+    unless the operator deliberately pairs it with a real
+    executor-side SIGTERM handling hook.
+
+    Attributes
+    ----------
+    enabled
+        Whether chaos injection is active during the campaign
+        (default: False).
+    scenarios
+        Comma-separated list of scenario names to enable. Built-in
+        scenarios:
+
+        - ``kill_switch``  — ``KillSwitchInjector(fail_after=fail_after)``
+        - ``network_delay`` — ``NetworkDelayInjector(delay_s=delay_s,
+          jitter_s=jitter_s, probability=probability)``
+        - ``cpu_spike``     — ``CPUSpikeInjector(duration_s=duration_s,
+          intensity=intensity, probability=probability)``
+        - ``memory_pressure`` — ``MemoryPressureInjector(size_mb=size_mb,
+          duration_s=duration_s, probability=probability)``
+
+        Empty list is a no-op even when ``enabled`` is True.
+    schedule
+        When to inject faults (default: ``"none"``). One of:
+
+        - ``"before_step"`` — inject once before each DAG step starts
+        - ``"after_step"``  — inject once after each DAG step finishes
+        - ``"per_sample"``  — inject once per sample during the fan-out
+          (run-sim + extract-kpi)
+        - ``"none"``        — disabled (matches ``enabled=False``)
+
+    probability
+        Probability forwarded to the probability-aware injectors
+        (network delay, CPU spike, memory pressure). 1.0 = always
+        inject (default).
+    delay_s
+        ``delay_s`` for ``NetworkDelayInjector`` (seconds).
+    jitter_s
+        ``jitter_s`` for ``NetworkDelayInjector`` (seconds).
+    duration_s
+        Duration for CPU spike / memory pressure injectors (seconds).
+    intensity
+        CPU intensity fraction (0.0-1.0) for ``CPUSpikeInjector``.
+    size_mb
+        Size in MB for ``MemoryPressureInjector``.
+    fail_after
+        Number of inject calls before ``KillSwitchInjector`` fires.
+    """
+
+    enabled: bool = False
+    scenarios: list[str] = dataclasses.field(default_factory=list)
+    schedule: str = "none"
+    probability: float = 1.0
+    delay_s: float = 0.1
+    jitter_s: float = 0.05
+    duration_s: float = 0.5
+    intensity: float = 0.5
+    size_mb: int = 64
+    fail_after: int = 2
+
+
+# ======================================================================
 # CampaignConfig with backward-compatible attribute delegation
 # ======================================================================
 
@@ -844,6 +925,8 @@ class CampaignConfig:
         Google Cloud Batch executor configuration (grouped).
     nomad
         Nomad executor configuration (grouped).
+    chaos
+        Opt-in chaos testing settings (issue #1013).
     """
 
     # --- Core required fields ---
@@ -856,6 +939,7 @@ class CampaignConfig:
     # --- Composed focused configs (issue #767, init=False for backward compat) ---
     dag: DAGConfig = dataclasses.field(init=False)
     storage: StorageConfig = dataclasses.field(init=False)
+    chaos: ChaosConfig = dataclasses.field(init=False)
     _observability: ObservabilityConfig = dataclasses.field(init=False)
 
     # --- Objective and constraints (issue #282) ---
@@ -989,6 +1073,18 @@ class CampaignConfig:
     cost_on_demand_price: float = 0.05
     cost_spot_price: float = 0.03
 
+    # --- Legacy flat chaos fields (issue #1013) ---
+    chaos_enabled: bool = False
+    chaos_scenarios: list[str] = dataclasses.field(default_factory=list)
+    chaos_schedule: str = "none"
+    chaos_probability: float = 1.0
+    chaos_delay_s: float = 0.1
+    chaos_jitter_s: float = 0.05
+    chaos_duration_s: float = 0.5
+    chaos_intensity: float = 0.5
+    chaos_size_mb: int = 64
+    chaos_fail_after: int = 2
+
     def __post_init__(self) -> None:
         """Initialize composed configs and executor configs from flat fields."""
         # Initialize dag config from flat fields (always, since init=False)
@@ -1109,6 +1205,30 @@ class CampaignConfig:
                 ca_cert=self.nomad_ca_cert,
             )
 
+        # Chaos config (issue #1013). Built unconditionally so that
+        # ``self.chaos`` is always present on the CampaignConfig instance;
+        # the field is composed from the legacy flat ``chaos_*`` fields
+        # so ``Campaign(chaos_engine=...)`` can pick them up via
+        # ``cfg.chaos.*`` without any user code changes. When
+        # ``chaos_enabled`` is set without explicit scenarios, fall back
+        # to ``["kill_switch"]`` so the engine is enabled-but-empty
+        # never happens — kill_switch is the cheapest safe default.
+        scenarios_for_chaos = list(self.chaos_scenarios)
+        if self.chaos_enabled and not scenarios_for_chaos:
+            scenarios_for_chaos = ["kill_switch"]
+        self.chaos = ChaosConfig(
+            enabled=self.chaos_enabled,
+            scenarios=scenarios_for_chaos,
+            schedule=self.chaos_schedule,
+            probability=self.chaos_probability,
+            delay_s=self.chaos_delay_s,
+            jitter_s=self.chaos_jitter_s,
+            duration_s=self.chaos_duration_s,
+            intensity=self.chaos_intensity,
+            size_mb=self.chaos_size_mb,
+            fail_after=self.chaos_fail_after,
+        )
+
     def _get_legacy_field(self, name: str, default: Any) -> Any:
         """Get a legacy flat field value for composed config initialization."""
         return getattr(self, name, default)
@@ -1223,6 +1343,17 @@ class CampaignConfig:
                 "nomad_cert": ("nomad", "cert"),
                 "nomad_key": ("nomad", "key"),
                 "nomad_ca_cert": ("nomad", "ca_cert"),
+                # Chaos config delegation (issue #1013)
+                "chaos_enabled": ("chaos", "enabled"),
+                "chaos_scenarios": ("chaos", "scenarios"),
+                "chaos_schedule": ("chaos", "schedule"),
+                "chaos_probability": ("chaos", "probability"),
+                "chaos_delay_s": ("chaos", "delay_s"),
+                "chaos_jitter_s": ("chaos", "jitter_s"),
+                "chaos_duration_s": ("chaos", "duration_s"),
+                "chaos_intensity": ("chaos", "intensity"),
+                "chaos_size_mb": ("chaos", "size_mb"),
+                "chaos_fail_after": ("chaos", "fail_after"),
             }
         if name in self._DELEGATED_ATTRS:
             config_attr, field_name = self._DELEGATED_ATTRS[name]
@@ -1337,6 +1468,26 @@ def _validate_script_path(raw: object) -> None:
         must_be_file=True,
         readable=True,
     )
+
+
+def _parse_chaos_scenarios(raw: object) -> list[str]:
+    """Parse ``--chaos-scenarios`` into a clean list of strings.
+
+    Issue #1013. Accepts three shapes from ``argparse``:
+
+    * a comma-separated string ``"kill_switch,network_delay"``
+    * an already-parsed list/tuple (for programmatic config builders)
+    * ``None`` / empty (returns ``[]`` — caller decides the default)
+
+    Whitespace is stripped and empty entries are dropped so a trailing
+    comma does not produce a phantom scenario name.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [str(s).strip() for s in raw if str(s).strip()]
+    text = str(raw)
+    return [part.strip() for part in text.split(",") if part.strip()]
 
 
 def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
@@ -1668,4 +1819,22 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         s3_artifact_presigned_url_expiration=int(str(args["s3_artifact_presigned_url_expiration"]))
         if args.get("s3_artifact_presigned_url_expiration") is not None
         else 3600,
+        # Chaos testing settings (issue #1013). All off by default; the
+        # ``chaos`` composed config is built from these flat fields in
+        # ``__post_init__``. ``chaos_scenarios`` is parsed from a
+        # comma-separated string so the CLI can stay close to the
+        # existing ``--algo-args foo,bar,baz`` convention. When
+        # ``--chaos-enabled`` is set but no scenarios are listed,
+        # default to ``["kill_switch"]`` so a typo cannot leave the
+        # engine enabled-but-empty.
+        chaos_enabled=bool(args.get("chaos_enabled", False)),
+        chaos_scenarios=_parse_chaos_scenarios(args.get("chaos_scenarios")),
+        chaos_schedule=str(args.get("chaos_schedule", "none")),
+        chaos_probability=float(str(args.get("chaos_probability", 1.0))),
+        chaos_delay_s=float(str(args.get("chaos_delay_s", 0.1))),
+        chaos_jitter_s=float(str(args.get("chaos_jitter_s", 0.05))),
+        chaos_duration_s=float(str(args.get("chaos_duration_s", 0.5))),
+        chaos_intensity=float(str(args.get("chaos_intensity", 0.5))),
+        chaos_size_mb=int(str(args.get("chaos_size_mb", 64))),
+        chaos_fail_after=int(str(args.get("chaos_fail_after", 2))),
     )

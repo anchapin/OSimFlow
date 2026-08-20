@@ -1256,6 +1256,95 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--chaos-enabled",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable chaos fault injection during the campaign (issue #1013). "
+            "Off by default. When set, ``--chaos-scenarios`` lists the "
+            "injectors (kill_switch, network_delay, cpu_spike, memory_pressure) "
+            "and ``--chaos-schedule`` controls when they fire (before_step, "
+            "after_step, per_sample, or none). All chaos faults are "
+            "non-destructive in this wiring — the orchestrator is never "
+            "killed and a fault never aborts the campaign."
+        ),
+    )
+    run.add_argument(
+        "--chaos-scenarios",
+        default=None,
+        help=(
+            "Comma-separated list of chaos scenarios to enable (issue #1013). "
+            "Used together with ``--chaos-enabled``. Built-in scenarios: "
+            "``kill_switch``, ``network_delay``, ``cpu_spike``, "
+            "``memory_pressure``. Default: ``kill_switch`` when "
+            "``--chaos-enabled`` is set without this flag."
+        ),
+    )
+    run.add_argument(
+        "--chaos-schedule",
+        choices=["none", "before_step", "after_step", "per_sample"],
+        default="none",
+        help=(
+            "When to inject chaos faults during the campaign (issue #1013). "
+            "``before_step``/``after_step`` fire once per DAG step; "
+            "``per_sample`` fires once per sample submission inside the "
+            "RUN_OPENSTUDIO_SIM and EXTRACT_KPIS fan-outs. "
+            "``none`` (default) disables injection even when "
+            "``--chaos-enabled`` is set."
+        ),
+    )
+    run.add_argument(
+        "--chaos-probability",
+        type=float,
+        default=1.0,
+        help=(
+            "Per-injector base probability forwarded to "
+            "``network_delay``, ``cpu_spike``, and ``memory_pressure`` "
+            "(issue #1013). 1.0 = always inject. Default: 1.0."
+        ),
+    )
+    run.add_argument(
+        "--chaos-delay-s",
+        type=float,
+        default=0.1,
+        help=("Delay in seconds applied by ``network_delay`` (issue #1013). Default: 0.1s."),
+    )
+    run.add_argument(
+        "--chaos-jitter-s",
+        type=float,
+        default=0.05,
+        help=(
+            "Random jitter in seconds applied by ``network_delay`` (issue #1013). Default: 0.05s."
+        ),
+    )
+    run.add_argument(
+        "--chaos-duration-s",
+        type=float,
+        default=0.5,
+        help=(
+            "Duration in seconds for ``cpu_spike`` and ``memory_pressure`` "
+            "scenarios (issue #1013). Default: 0.5s."
+        ),
+    )
+    run.add_argument(
+        "--chaos-intensity",
+        type=float,
+        default=0.5,
+        help=("CPU intensity fraction (0.0-1.0) for ``cpu_spike`` (issue #1013). Default: 0.5."),
+    )
+    run.add_argument(
+        "--chaos-size-mb",
+        type=int,
+        default=64,
+        help=("Size in MB for the ``memory_pressure`` injector (issue #1013). Default: 64 MB."),
+    )
+    run.add_argument(
+        "--chaos-fail-after",
+        type=int,
+        default=2,
+        help=("Number of inject calls before ``kill_switch`` activates (issue #1013). Default: 2."),
+    )
+    run.add_argument(
         "--uq-method",
         default="latin_hypercube",
         help=(
