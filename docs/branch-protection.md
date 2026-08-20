@@ -38,7 +38,7 @@ display-name.
 
 1. **`lint (ruff)`** — `lint` job
 2. **`typecheck (mypy --strict)`** — `typecheck` job
-3. **`test (pytest, 85% coverage gate)`** — `test` job
+3. **`test (pytest, 83% coverage gate)`** — `test` job
 4. **`agents & docs contract`** — `contract` job
 5. **`security (pip-audit)`** — `security` job
 
@@ -128,6 +128,14 @@ To add or remove a required check:
    the new name here).
 2. Run `scripts/apply_branch_protection.sh` (or `--dry-run` first to inspect).
 3. Commit the change in the same PR that touched `ci.yml`.
+4. **After the PR merges, re-run `scripts/apply_branch_protection.sh` against
+   the live repo.** The script is settings-as-code (issue #975); the script
+   edit alone does not update the live GitHub branch protection — that only
+   happens when the script is re-executed. Without this step the live
+   `required_status_checks.contexts` silently drifts from the script's
+   `REQUIRED_CHECKS` array, and any renamed check starts blocking PRs as a
+   "never passing" gate (issue #1056 — the same failure mode that PR #969
+   exhibited before #975 added the protection rules in the first place).
 
 To enable review gating (e.g. when the maintainer count grows past one):
 
