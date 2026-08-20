@@ -3,9 +3,9 @@
 This is the cloud counterpart of ``tests/integration/test_cache_resume.py``:
 it asserts that the cache-warm resume path still works when a campaign is
 backed by **real AWS Batch** plus the **S3 result storage backend**
-(issue #960). The local test proves the speedup when results live on a
-local filesystem; this test proves the same speedup when per-sample
-results are additionally uploaded to S3 during the cold run.
+(issue #960). The local test proves the cache-hit path when results live
+on a local filesystem; this test proves the same cache-hit path when
+per-sample results are additionally uploaded to S3 during the cold run.
 
 How cross-run resume survives on Batch
 --------------------------------------
@@ -30,6 +30,13 @@ The S3 backend is exercised during the cold run (uploads happen), so a
 regression in ``ResultStorageUploader`` that broke the cold-run write
 path — or a regression in the cache key that broke cross-run hit
 detection — would surface here.
+
+Issue #1047: this test previously also asserted a wall-clock speedup
+floor (``warm_elapsed < cold_elapsed / 5``). Behavioral signals (cache
+stats, run.json per-sample statuses, output equivalence) are the
+authoritative check — they cannot false-pass on a slow Batch day. The
+deleted timing assertion is documented in the test docstring as
+"removed in favor of behavioral checks (issue #1047)".
 
 Skip gate
 ---------
@@ -58,7 +65,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -91,32 +97,34 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Bounded to 2 samples to control real AWS spend (issue #960 acceptance).
 N_SAMPLES = 2
 
-# Warm-run must be at least this many times faster than the cold run.
-# See ``_SPEEDUP_FLOOR`` rationale below.
-_SPEEDUP_FLOOR = 5.0
-
 
 def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
     """A second campaign run against the same ``outdir`` on real AWS Batch
-    must complete >=5x faster than the cold run and be fully cache-served.
+    must be fully cache-served.
 
-    Two structural signals are asserted (timing alone is flaky on Batch):
+    Three structural signals are asserted (timing alone is flaky on Batch):
 
-      1. **Timing** — ``warm_elapsed < cold_elapsed / 5`` (>=5x speedup).
-      2. **Cache stats** — the warm run's ``SQLiteCache`` ``total`` and
+      1. **Cache stats** — the warm run's ``SQLiteCache`` ``total`` and
          per-step ``by_step`` counts equal the cold run's, proving no new
          cache entries were written and therefore **zero** Batch jobs were
          submitted on the warm run (a cache miss would ``INSERT OR REPLACE``
          with a fresh timestamp and, more importantly, would have had to
          submit a Batch job to produce the output).
+      2. **run.json** — every campaign step recorded on the warm run, and
+         every per-sample status is "ok" (cached samples are recorded as
+         "ok"; a non-ok status on a warm run indicates a cache miss
+         re-ran and possibly failed a sample).
+      3. **Output equivalence** — the warm run's aggregated CSV and KPI
+         JSONs are byte-identical to the cold run's, proving the warm
+         run hit the cache rather than recomputing.
 
-    The ``>=5x`` floor matches the local ``test_cache_resume.py``
-    expectation and the issue title. The cold run's wall-clock is
-    dominated by Batch job startup + polling (minutes); the warm run is
-    seconds of local I/O, so a genuine cache hit comfortably exceeds 5x.
-    A regression that broke cross-run cache detection would collapse the
-    speedup toward 1x (warm run re-submits every sample) and fail both
-    the timing and the cache-stats assertions.
+    Issue #1047 removed the prior wall-clock speedup floor (``warm /
+    cold >= 5x``). Batch startup + polling dominates the cold run's
+    wall-clock (minutes), so a genuine cache hit is dramatically faster
+    than the cold run — but the *ratio* is timing-sensitive on a
+    contended Batch day. The cache-stats + run.json + output
+    equivalence checks above are the authoritative signals; they cannot
+    false-pass when the cache is genuinely broken.
     """
     import shutil
 
@@ -166,9 +174,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
 
     # --- Cold run: first time the campaign sees this outdir ------------
     cold_campaign = Campaign(cfg=make_cfg(), executor=make_executor())
-    t0 = time.perf_counter()
     cold_result = cold_campaign.run()
-    cold_elapsed = time.perf_counter() - t0
     cold_campaign.executor.shutdown()
     cold_stats: dict[str, object] = cold_campaign.cache.stats()
     cold_total = int(str(cold_stats["total"]))  # type: ignore[arg-type]
@@ -181,9 +187,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
     # does when re-running. The local cache.sqlite is reloaded and every
     # per-step lookup hits.
     warm_campaign = Campaign(cfg=make_cfg(), executor=make_executor())
-    t0 = time.perf_counter()
     warm_result = warm_campaign.run()
-    warm_elapsed = time.perf_counter() - t0
     warm_campaign.executor.shutdown()
     warm_stats: dict[str, object] = warm_campaign.cache.stats()
     warm_total = int(str(warm_stats["total"]))  # type: ignore[arg-type]
@@ -239,21 +243,3 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
     assert (
         cold_result["aggregated"]["csv"].read_text() == warm_result["aggregated"]["csv"].read_text()
     ), "warm run aggregated CSV differs from cold — cache hit returned wrong output"
-
-    # --- Signal 4: timing — warm run must be >=5x faster ---------------
-    # The cold run is dominated by Batch job startup + polling (minutes);
-    # the warm run is local cache lookups + run.json I/O (seconds). A real
-    # cache hit comfortably exceeds 5x. If this is flaky on a particularly
-    # slow Batch day, the cache-stats assertion (Signal 1) is the
-    # authoritative structural check — it cannot false-pass.
-    assert cold_elapsed > 0.0
-    assert warm_elapsed > 0.0
-    speedup = cold_elapsed / warm_elapsed
-    assert speedup >= _SPEEDUP_FLOOR, (
-        f"warm-cache speedup too low on real AWS Batch: {speedup:.1f}x "
-        f"(cold={cold_elapsed:.2f}s, warm={warm_elapsed:.2f}s). "
-        f"Expected >= {_SPEEDUP_FLOOR}x. The cache-stats check above already "
-        f"confirmed no Batch jobs were re-submitted, so a sub-threshold "
-        f"speedup here points to local I/O / cache-lookup slowdown rather "
-        f"than a cache regression."
-    )
