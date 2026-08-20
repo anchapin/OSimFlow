@@ -35,5 +35,5 @@ jobs:
 
       - name: docs/openapi.json sync (issue #1049)
         run: |
-          pip install -e ".[api]" --quiet
+          pip install -e ".[dev,api]" --quiet
           python tools/check_openapi_sync.py --summary
