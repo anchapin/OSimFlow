@@ -208,7 +208,7 @@ OSimFlow/
 ### Setup
 
 ```bash
-make install                    # pip install -e ".[dev,aws,slurm]"
+make install                    # pip install -e ".[dev,aws,slurm,api]"
 .venv/bin/pre-commit install    # Install git hooks
 ```
 

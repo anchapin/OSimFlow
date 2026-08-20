@@ -518,3 +518,71 @@ def test_agents_md_section_9_has_tool_selection_tree() -> None:
         f"of the canonical tool anchors {canonical_anchors} (issue #29). "
         f"Only found: {matches}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1060: make install must include the [api] extra
+#
+# After PR #1057 (openapi drift gate), `tools/check_openapi_sync.py` and
+# `scripts/generate_openapi.py` both require `fastapi` from the `[api]`
+# extra. A contributor who runs only `make install` (the canonical
+# day-to-day setup per AGENTS.md §2) used to hit
+# `ModuleNotFoundError: No module named 'osimflow.api'`. These tests pin
+# the contract: `make install` MUST install the `[api]` extra, and a
+# future change that drops it will fail the suite instead of the
+# contributor's local `make contract` run.
+# ---------------------------------------------------------------------------
+
+
+def test_make_install_includes_api_extra() -> None:
+    """Issue #1060: `make install` must install the `[api]` extra.
+
+    Pinned as a contract test so any future Makefile change that drops
+    the `api` extra is caught here — not in the next contributor's
+    `make contract` run, where it would manifest as a confusing
+    `ModuleNotFoundError: No module named 'osimflow.api'` after PR
+    #1057 added the openapi drift gate.
+    """
+    makefile = (REPO_ROOT / "Makefile").read_text()
+    # Find the `install:` target body and assert it installs `[api]`.
+    # We anchor on the leading tab (not `install:`) because the help-
+    # comment line (`install: ## pip install -e ".[..]"`) would
+    # otherwise match first and confuse greedy regex matching.
+    #
+    # Note: \n / \t are actual newline + tab characters here (NOT raw
+    # strings), so the regex matches a real line break and tab between
+    # the target header and its tab-indented recipe line.
+    match = re.search(
+        r"^install:.*\n\t.*pip install.*\[([^\]]+)\]",
+        makefile,
+        re.MULTILINE,
+    )
+    assert match is not None, (
+        "Could not parse `install:` target recipe from Makefile; "
+        "expected `\\t$(PY) -m pip install -e \".[extras]\"` form "
+        "(issue #1060)."
+    )
+    extras = match.group(1)
+    assert "api" in {e.strip() for e in extras.split(",")}, (
+        f"`make install` must include the `[api]` extra so that "
+        f"`tools/check_openapi_sync.py` and `scripts/generate_openapi.py` "
+        f"can import `osimflow.api`. Current extras: [{extras}]. "
+        f"See issue #1060."
+    )
+
+
+def test_osimflow_api_module_importable() -> None:
+    """Issue #1060: after `make install`, `import osimflow.api` must succeed.
+
+    This is the runtime half of the contract: the Makefile targets the
+    `[api]` extra *and* the extra must actually install the `fastapi`
+    package and surface the `osimflow.api` module. A regression in
+    pyproject.toml (e.g. accidental removal of the extra) trips this
+    test before any contributor hits it.
+    """
+    res = _run([sys.executable, "-c", "import osimflow.api"])
+    assert res.returncode == 0, (
+        f"`import osimflow.api` failed — the `[api]` extra is not "
+        f"installed in the current environment (issue #1060):\n"
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
