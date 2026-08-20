@@ -90,7 +90,11 @@ class TestRunWithRetry:
             run_with_retry(flaky, max_retries=3, base_delay=0.5)
 
         assert state["calls"] == 4
-        assert sleep_calls == [0.5, 1.0, 2.0]
+        # Jitter (PR #1029): each sleep is `random.uniform(0, expected)`,
+        # so assert per-element ranges rather than exact equality.
+        assert len(sleep_calls) == 3
+        for actual, exp in zip(sleep_calls, [0.5, 1.0, 2.0], strict=True):
+            assert 0 <= actual <= exp, f"expected jittered sleep in [0, {exp}], got {actual}"
 
     def test_exhausted_retries_propagates_non_transient_subprocess_exit_code(
         self, monkeypatch: pytest.MonkeyPatch
@@ -145,7 +149,12 @@ class TestRunWithRetry:
         with pytest.raises(_TransientError):
             run_with_retry(flaky, max_retries=3, base_delay=1.0)
 
-        assert sleep_calls == [1.0, 2.0, 4.0]
+        expected = [1.0, 2.0, 4.0]
+        assert len(sleep_calls) == len(expected)
+        # Jitter (PR #1029): each sleep is `random.uniform(0, expected)`,
+        # so assert per-element ranges rather than exact equality.
+        for actual, exp in zip(sleep_calls, expected, strict=True):
+            assert 0 <= actual <= exp, f"expected jittered sleep in [0, {exp}], got {actual}"
         assert state["calls"] == 4
 
     def test_exponential_backoff_respects_base_delay(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,7 +166,12 @@ class TestRunWithRetry:
         with pytest.raises(_TransientError):
             run_with_retry(flaky, max_retries=3, base_delay=0.25)
 
-        assert sleep_calls == [0.25, 0.5, 1.0]
+        expected = [0.25, 0.5, 1.0]
+        assert len(sleep_calls) == len(expected)
+        # Jitter (PR #1029): each sleep is `random.uniform(0, expected)`,
+        # so assert per-element ranges rather than exact equality.
+        for actual, exp in zip(sleep_calls, expected, strict=True):
+            assert 0 <= actual <= exp, f"expected jittered sleep in [0, {exp}], got {actual}"
         assert state["calls"] == 4
 
     def test_exponential_backoff_capped_at_60_seconds(
@@ -171,7 +185,12 @@ class TestRunWithRetry:
         with pytest.raises(_TransientError):
             run_with_retry(flaky, max_retries=5, base_delay=10.0)
 
-        assert sleep_calls == [10.0, 20.0, 40.0, 60.0, 60.0]
+        expected = [10.0, 20.0, 40.0, 60.0, 60.0]
+        assert len(sleep_calls) == len(expected)
+        # Jitter (PR #1029): each sleep is `random.uniform(0, expected)`,
+        # so assert per-element ranges rather than exact equality.
+        for actual, exp in zip(sleep_calls, expected, strict=True):
+            assert 0 <= actual <= exp, f"expected jittered sleep in [0, {exp}], got {actual}"
         assert state["calls"] == 6
 
     # ------------------------------------------------------------------
@@ -188,7 +207,12 @@ class TestRunWithRetry:
 
         assert result == sentinel
         assert state["calls"] == 3
-        assert sleep_calls == [0.1, 0.2]
+        # Jitter (PR #1029): each sleep is `random.uniform(0, expected)`,
+        # so assert per-element ranges rather than exact equality.
+        expected = [0.1, 0.2]
+        assert len(sleep_calls) == len(expected)
+        for actual, exp in zip(sleep_calls, expected, strict=True):
+            assert 0 <= actual <= exp, f"expected jittered sleep in [0, {exp}], got {actual}"
 
     def test_success_on_first_attempt_does_not_sleep(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No failures → no sleeps at all."""
@@ -221,4 +245,9 @@ class TestRunWithRetry:
 
         assert result == Path("/tmp/ok")
         assert state["calls"] == 3
-        assert sleep_calls == [0.5, 1.0]
+        # Jitter (PR #1029): each sleep is `random.uniform(0, expected)`,
+        # so assert per-element ranges rather than exact equality.
+        expected = [0.5, 1.0]
+        assert len(sleep_calls) == len(expected)
+        for actual, exp in zip(sleep_calls, expected, strict=True):
+            assert 0 <= actual <= exp, f"expected jittered sleep in [0, {exp}], got {actual}"

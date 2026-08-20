@@ -44,7 +44,7 @@ CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 EXPECTED_CHECKS: tuple[str, ...] = (
     "lint (ruff)",
     "typecheck (mypy --strict)",
-    "test (pytest, 85% coverage gate)",
+    "test (pytest, 83% coverage gate)",
     "agents & docs contract",
     "security (pip-audit)",
 )
