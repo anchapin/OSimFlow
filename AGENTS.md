@@ -86,11 +86,11 @@ PRD: `docs/OSimFlow.md` (cite by §). Foundation decision:
 The `Makefile` is the canonical day-to-day interface. **Always run
 through `.venv`** — the Makefile hard-codes `.venv/bin/{python,ruff,
 mypy,pytest,pre-commit}` and a bare `pytest` resolves to a different
-Python that lacks the `[dev,aws,slurm]` extras and fails with
+Python that lacks the `[dev,aws,slurm,api]` extras and fails with
 `ModuleNotFoundError`.
 
 ```bash
-make install    # pip install -e ".[dev,aws,slurm]"   (creates .venv)
+make install    # pip install -e ".[dev,aws,slurm,api]"   (creates .venv)
 make lint       # ruff check
 make format     # ruff format (write)
 make typecheck  # mypy --strict on osimflow/

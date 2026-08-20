@@ -23,8 +23,8 @@ PRECOMMIT := $(VENV)/bin/pre-commit
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: ## pip install -e ".[dev,aws,slurm]"
-	$(PY) -m pip install -e ".[dev,aws,slurm]"
+install: ## pip install -e ".[dev,aws,slurm,api]"
+	$(PY) -m pip install -e ".[dev,aws,slurm,api]"
 
 lint: ## ruff check (linter)
 	$(RUFF) check .
