@@ -257,8 +257,11 @@ CI (`make test-cov`) requires 83% coverage — gated by
 smoke), `slow` (-m slow), per-PR Nomad E2E. Per-substrate E2E
 (`aws-batch-e2e.yml`, `slurm-e2e.yml`, `kubernetes-e2e.yml`,
 `google-batch-e2e.yml`, `azure-batch-e2e.yml`,
-`openstudio-cli-e2e.yml`) are nightly or `workflow_dispatch`-only;
-their integration tests are skip-gated in normal CI.
+`nomad-e2e.yml`, `openstudio-cli-e2e.yml`) are nightly or
+`workflow_dispatch`-only; their integration tests are skip-gated in
+normal CI. The full real-E2E coverage matrix (gate, trigger, CI
+workflow, contract) lives at `docs/substrate-coverage.md`
+(issue #1020).
 
 For every new public surface, add a test in `tests/unit/` or
 `tests/integration/`. Executor integration tests follow
@@ -519,9 +522,10 @@ Slurm/PBS/K8s), `docker_swarm_executor.py`
 - `docs/` — `OSimFlow.md` (PRD), `DEVELOPMENT.md` (the
   day-to-day guide — read for depth), `CONTRIBUTING.md`,
   `GOVERNANCE.md`, `api.md`, `branch-protection.md`,
-  `benchmarks.md`, `user-guide.md`, plus per-feature
-  guides (`aws-batch-terraform.md`, `nomad-production.md`,
-  `kubernetes-deployment.md`,
+  `benchmarks.md`, `user-guide.md`,
+  `substrate-coverage.md` (real-E2E matrix — issue #1020),
+  plus per-feature guides (`aws-batch-terraform.md`,
+  `nomad-production.md`, `kubernetes-deployment.md`,
   `container-image-strategy.md`, `observability.md`,
   `distributed-cache.md`, `openstudio-image-distribution.md`,
   `measure-runner-guide.md`, `packaging-measures.md`, etc.).
@@ -530,7 +534,20 @@ Slurm/PBS/K8s), `docker_swarm_executor.py`
 - `tests/contract/` — contract tests run by pre-commit and
   `make test-fast`.
 - `tests/unit/`, `tests/integration/`, `tests/benchmarks/`
-  — pytest trees.
+  — pytest trees. The real-substrate companion tests in
+  `tests/integration/test_real_<substrate>_campaign.py`
+  (`test_aws_batch_real.py`, `test_azure_batch_real.py`,
+  `test_google_batch_real.py`, `test_kubernetes_executor_real.py`,
+  `test_slurm_real_cluster.py`,
+  `test_real_openstudio_campaign.py`,
+  `test_real_nomad_ha_campaign.py`,
+  `test_real_pbs_campaign.py`,
+  `test_real_dask_campaign.py`,
+  `test_real_docker_swarm_campaign.py`)
+  follow the 3-sample mini-campaign pattern and are skip-gated by
+  env var (see `docs/substrate-coverage.md` for the full matrix
+  and `docs/DEVELOPMENT.md` §4 for the per-test skip-gate knobs).
+  Issue #1020.
 
 ---
 
@@ -658,6 +675,21 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
     mode; Redis-backed `DistributedCache` (with pid-private
     local SQLite under the hood) when `--redis-url` is set.
     Concurrent processes never lock one database.
+14. **Real-substrate E2E coverage matrix (issue #1020)** —
+    every executor in `osimflow/executors/` has a
+    `tests/integration/test_real_<substrate>_campaign.py`
+    companion: Slurm #941, AWS Batch #942, Azure #958, Google
+    #959, Kubernetes, Nomad (HA), PBS, Dask-JobQueue,
+    Docker Swarm, and OpenStudio CLI #939. The full matrix —
+    gate env var, trigger, CI workflow, contract — lives at
+    `docs/substrate-coverage.md`. The OpenStudio CLI real-E2E
+    (`.github/workflows/openstudio-cli-e2e.yml`) is
+    PR-blocking for `release/**` branches (issue #1020
+    acceptance criterion) in addition to its nightly /
+    `workflow_dispatch` runs. Real-substrate tests follow
+    the canonical skip-gate pattern (`pytestmark` skipif on
+    the env var) so PR CI is not coupled to live
+    infrastructure.
 
 ---
 
