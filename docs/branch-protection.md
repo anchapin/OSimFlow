@@ -184,6 +184,53 @@ required." To re-enable, re-run `scripts/apply_branch_protection.sh`.
 
 ---
 
+## Stale branch sweep
+
+> Resolves issue **#1003** ("[infra] Sweep stale remote branches"). Tracks ~270+
+> stale `fix/*` and `feature/*` branches left on `origin` after PR merge, most
+> of them squash-merged (so they are *not* git-ancestors of `main`).
+
+[`scripts/sweep-stale-branches.sh`](../scripts/sweep-stale-branches.sh)
+lists branches that are safe to delete and `--apply` deletes them. It is
+**dry-run by default**; the scheduled cleanup workflow never deletes.
+
+### Deletion criteria (all must hold)
+
+1. **Proven merged** — the branch tip is an ancestor of `main` (`git merge-base
+   --is-ancestor`), **or** the branch was the head of a GitHub PR with
+   `merged_at != null` (catches squash merges whose commits never enter
+   `main`'s ancestry). The second signal is required because this repo
+   squash-merges, so the ancestry check alone misses most stale branches.
+2. **No open PR** references the branch (one `gh api …/pulls?state=open` pass).
+3. **Last commit older than `--min-age-days`** (default `30`).
+4. **Not on the keep-list**: `main`, `master`, `develop`, `release/*`,
+   `hotfix/*`, `wave*`, `releases/*`, or anything added via `--protect-glob`.
+
+### Two tiers
+
+- **Proven-merged** branches (criterion 1 holds) are safe to delete
+  automatically with `sweep-stale-branches.sh --apply`.
+- **Abandoned / unproven** branches (old, no open PR, but *not* proven
+  merged) are printed under a separate `ABANDONED — requires manual review`
+  heading. They are **never** auto-deleted; pass `--include-orphaned --apply`
+  to opt into deleting them after human review.
+
+### Idempotency
+
+Deleting a branch makes it disappear from the next `git fetch --prune`, so
+re-running `--apply` is a no-op. The script skips branches that no longer exist
+rather than erroring.
+
+### Automation
+
+[`.github/workflows/branch-cleanup.yml`](../.github/workflows/branch-cleanup.yml)
+runs the sweep **dry-run** nightly at 06:00 UTC, uploads the report as an
+artifact, and posts a summary comment to tracking issue #1003. To actually
+delete, an operator triggers `workflow_dispatch` with `apply=true` **and**
+`confirm=DELETE` (the dual-input guard blocks accidental deletion).
+
+---
+
 ## Related
 
 - Issue **#975** — Enable branch protection rules requiring CI checks before merge
