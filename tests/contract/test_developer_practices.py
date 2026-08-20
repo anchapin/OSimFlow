@@ -559,7 +559,7 @@ def test_make_install_includes_api_extra() -> None:
     )
     assert match is not None, (
         "Could not parse `install:` target recipe from Makefile; "
-        "expected `\\t$(PY) -m pip install -e \".[extras]\"` form "
+        'expected `\\t$(PY) -m pip install -e ".[extras]"` form '
         "(issue #1060)."
     )
     extras = match.group(1)
