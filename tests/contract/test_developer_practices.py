@@ -614,9 +614,7 @@ def test_make_contract_aggregate_includes_openapi_sync() -> None:
     """
     makefile = (REPO_ROOT / "Makefile").read_text()
     match = re.search(r"^contract:\s*([^\n#]*?)\s*(?:##.*)?$", makefile, re.MULTILINE)
-    assert match is not None, (
-        "Makefile is missing a `contract:` aggregate target (issue #1059)."
-    )
+    assert match is not None, "Makefile is missing a `contract:` aggregate target (issue #1059)."
     deps = match.group(1).split()
     for required in ("agents-contract", "docs-sync", "openapi-sync"):
         assert required in deps, (
@@ -640,6 +638,5 @@ def test_make_contract_aggregate_includes_openapi_sync() -> None:
     )
     for script in ("check_agents_contract.py", "check_docs_sync.py", "check_openapi_sync.py"):
         assert script in dry.stdout, (
-            f"`make -n contract` did not invoke {script} "
-            f"(issue #1059). Got:\n{dry.stdout}"
+            f"`make -n contract` did not invoke {script} (issue #1059). Got:\n{dry.stdout}"
         )
