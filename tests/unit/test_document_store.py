@@ -1,4 +1,4 @@
-"""Unit tests for osimflow/document_store.py (issue #389).
+"""Unit tests for osimflow/document_store.py (issue #389, #1014).
 
 Covers:
 - DocumentStoreError hierarchy
@@ -9,10 +9,18 @@ Covers:
 - list_collections and count_documents
 - delete_one
 - Context manager and close
+- RedisDocumentStore (issue #1014): same ABC contract as the SQLite
+  backend, exercised against ``fakeredis`` so the tests stay
+  hermetic.  Includes the multi-process race regression test that
+  mirrors the T8.1 reproducer the issue describes.
+- ``build_document_store`` factory: legacy ``backend=`` dispatch
+  plus the new ``redis_url`` / ``namespace`` dispatch that mirrors
+  ``build_cache``.
 """
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -21,9 +29,27 @@ from osimflow.document_store import (
     DocumentNotFoundError,
     DocumentStoreError,
     DuplicateDocumentError,
+    RedisDocumentStore,
     SQLiteDocumentStore,
     _build_where_clause,
+    _document_matches,
+    apply_update_operators,
     build_document_store,
+)
+
+# fakeredis is in the dev optional-dependency set (issue #1014).  Tests
+# skip cleanly when the optional dev dep is absent so a fresh CI
+# install that has not yet run ``make install`` only loses the
+# Redis-specific assertions, not the entire suite.
+try:
+    import fakeredis  # noqa: F401
+
+    _HAS_FAKEREDIS = True
+except ImportError:
+    _HAS_FAKEREDIS = False
+
+requires_fakeredis = pytest.mark.skipif(
+    not _HAS_FAKEREDIS, reason="fakeredis optional dev dep not installed"
 )
 
 
@@ -408,3 +434,459 @@ class TestDocumentStoreErrorHierarchy:
 
     def test_duplicate_document_error(self) -> None:
         assert issubclass(DuplicateDocumentError, DocumentStoreError)
+
+
+# ---------------------------------------------------------------------------
+# Issue #1014: RedisDocumentStore + factory + race scenarios
+# ---------------------------------------------------------------------------
+
+
+class TestApplyUpdateOperators:
+    """Tests for the module-level update-operator helper.
+
+    Both ``SQLiteDocumentStore`` and ``RedisDocumentStore`` share this
+    implementation (issue #1014).  The class-method wrapper on
+    ``SQLiteDocumentStore`` delegates here.
+    """
+
+    def test_set(self) -> None:
+        doc: dict[str, object] = {"a": 1}
+        apply_update_operators(doc, {"$set": {"a": 2, "b": 3}})
+        assert doc == {"a": 2, "b": 3}
+
+    def test_unset(self) -> None:
+        doc: dict[str, object] = {"a": 1, "b": 2}
+        apply_update_operators(doc, {"$unset": {"a": True}})
+        assert doc == {"b": 2}
+
+    def test_inc(self) -> None:
+        doc: dict[str, object] = {"count": 10}
+        apply_update_operators(doc, {"$inc": {"count": 5}})
+        assert doc == {"count": 15}
+
+    def test_push(self) -> None:
+        doc: dict[str, object] = {"tags": ["a"]}
+        apply_update_operators(doc, {"$push": {"tags": "b"}})
+        assert doc == {"tags": ["a", "b"]}
+
+    def test_pull(self) -> None:
+        doc: dict[str, object] = {"tags": ["a", "b", "c"]}
+        apply_update_operators(doc, {"$pull": {"tags": "b"}})
+        assert doc == {"tags": ["a", "c"]}
+
+    def test_unknown_operator_is_logged_and_skipped(self) -> None:
+        doc: dict[str, object] = {"a": 1}
+        apply_update_operators(doc, {"$unknown": {"a": 2}})
+        assert doc == {"a": 1}
+
+
+class TestDocumentMatches:
+    """Tests for the client-side filter helper used by RedisDocumentStore."""
+
+    def test_empty_filter_matches_anything(self) -> None:
+        assert _document_matches({"a": 1}, None) is True
+        assert _document_matches({"a": 1}, {}) is True
+
+    def test_eq(self) -> None:
+        assert _document_matches({"x": 1}, {"x": 1}) is True
+        assert _document_matches({"x": 2}, {"x": 1}) is False
+
+    def test_comparison_ops(self) -> None:
+        assert _document_matches({"n": 5}, {"n": {"$gt": 1}}) is True
+        assert _document_matches({"n": 5}, {"n": {"$gt": 10}}) is False
+        assert _document_matches({"n": 5}, {"n": {"$gte": 5}}) is True
+        assert _document_matches({"n": 5}, {"n": {"$lt": 10}}) is True
+        assert _document_matches({"n": 5}, {"n": {"$lte": 5}}) is True
+        assert _document_matches({"n": 5}, {"n": {"$ne": 6}}) is True
+
+    def test_in_nin(self) -> None:
+        assert _document_matches({"x": "a"}, {"x": {"$in": ["a", "b"]}}) is True
+        assert _document_matches({"x": "c"}, {"x": {"$in": ["a", "b"]}}) is False
+        assert _document_matches({"x": "c"}, {"x": {"$nin": ["a", "b"]}}) is True
+        assert _document_matches({"x": "a"}, {"x": {"$nin": ["a", "b"]}}) is False
+
+    def test_exists(self) -> None:
+        assert _document_matches({"x": 1}, {"x": {"$exists": True}}) is True
+        assert _document_matches({}, {"x": {"$exists": False}}) is True
+        assert _document_matches({"x": 1}, {"x": {"$exists": False}}) is False
+        assert _document_matches({}, {"x": {"$exists": True}}) is False
+
+    def test_regex(self) -> None:
+        assert _document_matches({"name": "abc123"}, {"name": {"$regex": "abc"}}) is True
+        assert _document_matches({"name": "xyz"}, {"name": {"$regex": "abc"}}) is False
+
+
+@requires_fakeredis
+class TestRedisDocumentStore:
+    """Tests for ``RedisDocumentStore`` (issue #1014)."""
+
+    @pytest.fixture
+    def fake_redis(self) -> fakeredis.FakeRedis:  # type: ignore[name-defined]
+        return fakeredis.FakeRedis(decode_responses=True)
+
+    @pytest.fixture
+    def store(self, fake_redis: fakeredis.FakeRedis) -> RedisDocumentStore:  # type: ignore[name-defined]
+        store = RedisDocumentStore(
+            redis_url="redis://localhost:6379/0",
+            namespace="test-ns",
+            db_path=Path("/tmp/documents.sqlite"),
+        )
+        # Inject fakeredis so the test never opens a real socket.
+        store._redis_client = fake_redis
+        return store
+
+    def test_name(self, store: RedisDocumentStore) -> None:
+        assert store.name == "redis"
+
+    def test_insert_one_generates_id(self, store: RedisDocumentStore) -> None:
+        doc_id = store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.4})
+        assert doc_id == "doc_1"
+        # Counter is shared across the process — second insert uses 2.
+        doc_id2 = store.insert_one("kpis", {"sample_id": "s0002", "eui": 200.0})
+        assert doc_id2 == "doc_2"
+
+    def test_insert_one_with_existing_id(self, store: RedisDocumentStore) -> None:
+        doc_id = store.insert_one("kpis", {"_id": "custom_id", "sample_id": "s0001"})
+        assert doc_id == "custom_id"
+
+    def test_find_one_by_id(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5})
+        doc = store.find_one("kpis", {"sample_id": "s0001"})
+        assert doc is not None
+        assert doc["sample_id"] == "s0001"
+        assert doc["eui"] == 150.5
+
+    def test_find_one_returns_none_when_not_found(self, store: RedisDocumentStore) -> None:
+        assert store.find_one("kpis", {"sample_id": "nope"}) is None
+
+    def test_find_one_with_no_filter(self, store: RedisDocumentStore) -> None:
+        store.insert_one("test", {"name": "foo"})
+        doc = store.find_one("test")
+        assert doc is not None
+        assert doc["name"] == "foo"
+
+    def test_find_many_returns_matching(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.0})
+        store.insert_one("kpis", {"sample_id": "s0002", "eui": 200.0})
+        store.insert_one("kpis", {"sample_id": "s0003", "eui": 100.0})
+        docs = store.find_many("kpis", {"eui": {"$gt": 150}})
+        ids = sorted(d["sample_id"] for d in docs)
+        assert ids == ["s0002"]
+
+    def test_find_many_with_limit(self, store: RedisDocumentStore) -> None:
+        for i in range(10):
+            store.insert_one("test", {"index": i})
+        docs = store.find_many("test", limit=3)
+        assert len(docs) == 3
+
+    def test_find_many_with_skip(self, store: RedisDocumentStore) -> None:
+        for i in range(10):
+            store.insert_one("test", {"index": i})
+        docs = store.find_many("test", sort=[("index", 1)], skip=5)
+        assert len(docs) == 5
+        assert docs[0]["index"] == 5
+
+    def test_find_many_with_sort(self, store: RedisDocumentStore) -> None:
+        for i in [3, 1, 2]:
+            store.insert_one("test", {"index": i})
+        asc = store.find_many("test", sort=[("index", 1)])
+        desc = store.find_many("test", sort=[("index", -1)])
+        assert [d["index"] for d in asc] == [1, 2, 3]
+        assert [d["index"] for d in desc] == [3, 2, 1]
+
+    def test_update_one_with_set(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5})
+        assert store.update_one("kpis", {"sample_id": "s0001"}, {"$set": {"eui": 160.0}}) is True
+        doc = store.find_one("kpis", {"sample_id": "s0001"})
+        assert doc is not None
+        assert doc["eui"] == 160.0
+
+    def test_update_one_with_unset(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5, "note": "test"})
+        assert store.update_one("kpis", {"sample_id": "s0001"}, {"$unset": {"note": True}}) is True
+        doc = store.find_one("kpis", {"sample_id": "s0001"})
+        assert doc is not None
+        assert "note" not in doc
+
+    def test_update_one_with_inc(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "count": 10})
+        assert store.update_one("kpis", {"sample_id": "s0001"}, {"$inc": {"count": 5}}) is True
+        doc = store.find_one("kpis", {"sample_id": "s0001"})
+        assert doc is not None
+        assert doc["count"] == 15
+
+    def test_update_one_with_push(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "tags": []})
+        assert store.update_one("kpis", {"sample_id": "s0001"}, {"$push": {"tags": "new"}}) is True
+        doc = store.find_one("kpis", {"sample_id": "s0001"})
+        assert doc is not None
+        assert "new" in doc["tags"]
+
+    def test_update_one_with_pull(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "tags": ["a", "b", "c"]})
+        assert store.update_one("kpis", {"sample_id": "s0001"}, {"$pull": {"tags": "b"}}) is True
+        doc = store.find_one("kpis", {"sample_id": "s0001"})
+        assert doc is not None
+        assert doc["tags"] == ["a", "c"]
+
+    def test_update_one_returns_false_when_not_found(self, store: RedisDocumentStore) -> None:
+        assert store.update_one("kpis", {"sample_id": "nope"}, {"$set": {"eui": 1.0}}) is False
+
+    def test_delete_one(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5})
+        assert store.delete_one("kpis", {"sample_id": "s0001"}) is True
+        assert store.find_one("kpis", {"sample_id": "s0001"}) is None
+
+    def test_delete_one_returns_false_when_not_found(self, store: RedisDocumentStore) -> None:
+        assert store.delete_one("kpis", {"sample_id": "nope"}) is False
+
+    def test_create_index_unique(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5})
+        store.create_index("kpis", "sample_id", unique=True)
+        with pytest.raises(DuplicateDocumentError):
+            store.insert_one("kpis", {"sample_id": "s0001", "eui": 999.0})
+
+    def test_list_collections(self, store: RedisDocumentStore) -> None:
+        store.insert_one("a", {"v": 1})
+        store.insert_one("b", {"v": 2})
+        assert sorted(store.list_collections()) == ["a", "b"]
+
+    def test_count_documents(self, store: RedisDocumentStore) -> None:
+        for i in range(5):
+            store.insert_one("kpis", {"sample_id": f"s{i:04d}"})
+        assert store.count_documents("kpis") == 5
+
+    def test_count_documents_with_filter(self, store: RedisDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.0})
+        store.insert_one("kpis", {"sample_id": "s0002", "eui": 200.0})
+        store.insert_one("kpis", {"sample_id": "s0003", "eui": 100.0})
+        assert store.count_documents("kpis", {"eui": {"$gt": 120}}) == 2
+
+    def test_close_is_idempotent(self, store: RedisDocumentStore) -> None:
+        store.close()
+        store.close()  # must not raise
+
+    def test_context_manager(self, store: RedisDocumentStore) -> None:
+        with store:
+            store.insert_one("test", {"v": 1})
+
+    def test_lru_hits_avoid_redis(self, store: RedisDocumentStore) -> None:
+        """The LRU absorbs repeated reads so a common read path does not
+        hit Redis on every call (issue #1014)."""
+        store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5})
+        # First read primes the LRU.
+        store.find_one("kpis", {"sample_id": "s0001"})
+        cached = store._lru_get("kpis", "doc_1")
+        assert cached is not None
+        assert cached["eui"] == 150.5
+
+    def test_lru_eviction_when_full(self, fake_redis: fakeredis.FakeRedis) -> None:  # type: ignore[name-defined]
+        store = RedisDocumentStore(
+            redis_url="redis://localhost:6379/0",
+            namespace="evict",
+            lru_max_entries=2,
+        )
+        store._redis_client = fake_redis
+        store.insert_one("c", {"_id": "a", "v": 1})
+        store.insert_one("c", {"_id": "b", "v": 2})
+        store.insert_one("c", {"_id": "c", "v": 3})
+        # Touch some entries to warm the LRU.
+        store.find_one("c", {"_id": "a"})
+        store.find_one("c", {"_id": "b"})
+        store.find_one("c", {"_id": "c"})
+        # LRU is bounded.
+        assert len(store._lru) <= 2
+
+
+@requires_fakeredis
+class TestRedisDocumentStoreRaceScenario:
+    """Regression test for the T8.1-style multi-process race.
+
+    Mirrors the issue #1014 acceptance criterion: N concurrent
+    processes writing distinct IDs to the same ``DocumentStore`` must
+    produce a single consistent DB view.  Threads stand in for
+    processes here; the in-process RedisDocumentStore + shared
+    fakeredis client simulates the cross-process shared state.
+    """
+
+    def test_concurrent_workers_distinct_ids(self) -> None:
+        # type: ignore[name-defined]
+        import fakeredis
+
+        shared = fakeredis.FakeRedis(decode_responses=True)
+        namespace = "campaign-outdir-deadbeef"
+        n_workers = 8
+        ops_per_worker = 25
+        errors: list[Exception] = []
+        lock = threading.Lock()
+
+        def worker(worker_id: int) -> None:
+            try:
+                s = RedisDocumentStore(
+                    redis_url="redis://fake",
+                    namespace=namespace,
+                )
+                s._redis_client = shared
+                for i in range(ops_per_worker):
+                    doc_id = f"w{worker_id}_doc_{i}"
+                    s.insert_one(
+                        "kpis",
+                        {"_id": doc_id, "worker": worker_id, "index": i},
+                    )
+                # Verify every doc we wrote is independently readable.
+                for i in range(ops_per_worker):
+                    doc_id = f"w{worker_id}_doc_{i}"
+                    doc = s.find_one("kpis", {"_id": doc_id})
+                    if doc is None:
+                        with lock:
+                            errors.append(
+                                AssertionError(f"worker {worker_id} missing doc {doc_id}")
+                            )
+                s.close()
+            except Exception as e:  # noqa: BLE001
+                with lock:
+                    errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # All workers must have completed without errors.
+        assert not errors, f"concurrent errors: {errors}"
+
+        # Independent reader sees the union of distinct ids.
+        reader = RedisDocumentStore(
+            redis_url="redis://fake",
+            namespace=namespace,
+        )
+        reader._redis_client = shared
+        try:
+            docs = reader.find_many("kpis")
+            ids = [d["_id"] for d in docs]
+            assert len(ids) == n_workers * ops_per_worker, (
+                f"expected {n_workers * ops_per_worker} docs, got {len(ids)}"
+            )
+            assert len(set(ids)) == len(ids), "duplicate doc_ids (collision)"
+            # The auto-incremented _id space must also be unique.
+            nonce_ids = [d["_id"] for d in docs if d["_id"].startswith("doc_")]
+            assert len(set(nonce_ids)) == len(nonce_ids), (
+                "auto-increment counter collided across workers"
+            )
+        finally:
+            reader.close()
+
+    def test_concurrent_workers_unique_index(self) -> None:
+        # type: ignore[name-defined]
+        """Concurrent inserts that violate a unique index raise
+        DuplicateDocumentError on the offending worker only — the
+        other workers still see a consistent state."""
+        import fakeredis
+
+        shared = fakeredis.FakeRedis(decode_responses=True)
+        namespace = "race-unique"
+        n_workers = 4
+        # All workers try to insert the same sample_id; one wins,
+        # three raise DuplicateDocumentError.
+        errors: list[Exception] = []
+        success: list[int] = []
+        lock = threading.Lock()
+
+        def worker(worker_id: int) -> None:
+            try:
+                s = RedisDocumentStore(
+                    redis_url="redis://fake",
+                    namespace=namespace,
+                )
+                s._redis_client = shared
+                s.create_index("kpis", "sample_id", unique=True)
+                s.insert_one(
+                    "kpis",
+                    {"sample_id": "s0001", "worker": worker_id},
+                )
+                with lock:
+                    success.append(worker_id)
+                s.close()
+            except DuplicateDocumentError:
+                pass  # expected for all but one worker
+            except Exception as e:  # noqa: BLE001
+                with lock:
+                    errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, errors
+        assert len(success) == 1, f"expected exactly 1 winner, got {len(success)}"
+
+
+@requires_fakeredis
+class TestBuildDocumentStoreRedisDispatch:
+    """Factory tests for the ``redis_url`` dispatch path (issue #1014)."""
+
+    def test_redis_url_dispatches_to_redis(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # type: ignore[name-defined]
+        import fakeredis
+
+        # Patch the lazy redis-sync import so build_document_store
+        # never tries to open a real socket.
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        fake_module = type("FakeModule", (), {"from_url": staticmethod(lambda *a, **k: fake)})
+        monkeypatch.setattr("osimflow.document_store._get_redis_sync", lambda: fake_module)
+        store = build_document_store(
+            db_path=tmp_path / "documents.sqlite",
+            redis_url="redis://localhost:6379/0",
+            namespace="test-ns",
+        )
+        assert isinstance(store, RedisDocumentStore)
+        assert store.name == "redis"
+        store.close()
+
+    def test_redis_url_without_namespace_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="requires a namespace"):
+            build_document_store(
+                db_path=tmp_path / "documents.sqlite",
+                redis_url="redis://localhost:6379/0",
+            )
+
+    def test_redis_url_none_returns_sqlite(self, tmp_path: Path) -> None:
+        store = build_document_store(
+            db_path=tmp_path / "documents.sqlite",
+            redis_url=None,
+        )
+        assert isinstance(store, SQLiteDocumentStore)
+        store.close()
+
+    def test_no_args_returns_sqlite(self, tmp_path: Path) -> None:
+        store = build_document_store(db_path=tmp_path / "documents.sqlite")
+        assert isinstance(store, SQLiteDocumentStore)
+        store.close()
+
+    def test_legacy_backend_redis(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # type: ignore[name-defined]
+        import fakeredis
+
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        fake_module = type("FakeModule", (), {"from_url": staticmethod(lambda *a, **k: fake)})
+        monkeypatch.setattr("osimflow.document_store._get_redis_sync", lambda: fake_module)
+        store = build_document_store(
+            backend="redis",
+            db_path=tmp_path / "documents.sqlite",
+            redis_url="redis://localhost:6379/0",
+            namespace="legacy",
+        )
+        assert isinstance(store, RedisDocumentStore)
+        store.close()
+
+    def test_legacy_backend_redis_without_redis_url_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="requires redis_url"):
+            build_document_store(
+                backend="redis",
+                db_path=tmp_path / "documents.sqlite",
+            )
