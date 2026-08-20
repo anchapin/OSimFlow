@@ -790,3 +790,100 @@ class TestCliMain:
         assert result.returncode == 0
         data = json.loads(out_path.read_text())
         assert data["kpis"].get("error") == "eplusout.sql_missing"
+
+
+# ---------------------------------------------------------------------------
+# Tests: run_extract_kpis (issue #1015)
+#
+# ``run_extract_kpis`` is the in-process callable API that replaces the
+# per-sample ``subprocess.run`` invocation.  These tests exercise it
+# directly to guarantee the in-process path produces the same JSON shape
+# the CLI did.
+# ---------------------------------------------------------------------------
+
+
+class TestRunExtractKpis:
+    def test_writes_kpi_json_in_process(self, full_sql: Path, tmp_path: Path) -> None:
+        sim_dir = full_sql.parent
+        out_path = tmp_path / "kpi_in_process.json"
+        result = ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="in_proc",
+            out_path=out_path,
+            openstudio_version="3.11.0",
+        )
+        assert result == out_path
+        data = json.loads(out_path.read_text())
+        assert data["sample_id"] == "in_proc"
+        assert data["openstudio_version"] == "3.11.0"
+        assert "eui_kwh_m2_yr" in data["kpis"]
+        assert data["quality"]["valid"] is True
+
+    def test_missing_sql_returns_error_payload(self, tmp_path: Path) -> None:
+        sim_dir = tmp_path / "empty_sim"
+        sim_dir.mkdir()
+        out_path = tmp_path / "kpi.json"
+        ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="missing",
+            out_path=out_path,
+        )
+        data = json.loads(out_path.read_text())
+        assert data["kpis"].get("error") == "eplusout.sql_missing"
+
+    def test_custom_extractor_missing_file_raises(self, tmp_path: Path) -> None:
+        sim_dir = tmp_path / "sim"
+        sim_dir.mkdir()
+        out_path = tmp_path / "kpi.json"
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            ek.run_extract_kpis(
+                simulation_dir=sim_dir,
+                sample_id="s1",
+                out_path=out_path,
+                custom_kpi_extractor=tmp_path / "nonexistent.py",
+            )
+
+    def test_custom_extractor_loaded_and_called(self, full_sql: Path, tmp_path: Path) -> None:
+        sim_dir = full_sql.parent
+        out_path = tmp_path / "kpi_custom.json"
+        custom = tmp_path / "extractor.py"
+        custom.write_text(
+            "def extract_kpis(ctx):\n    return {'custom_marker': ctx['sample_id']}\n"
+        )
+        ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="custom_test",
+            out_path=out_path,
+            custom_kpi_extractor=custom,
+        )
+        data = json.loads(out_path.read_text())
+        # The custom extractor replaces the default extraction path — its
+        # returned dict is written verbatim under ``kpis`` (matching the
+        # long-standing CLI behaviour).
+        assert data["kpis"].get("custom_marker") == "custom_test"
+        assert data["kpis"].get("eui_kwh_m2_yr") is None
+
+    def test_quality_thresholds_override(self, full_sql: Path, tmp_path: Path) -> None:
+        sim_dir = full_sql.parent
+        out_path = tmp_path / "kpi_strict.json"
+        # Force a failing quality result by demanding an EUI floor the fixture
+        # cannot meet.
+        ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="strict",
+            out_path=out_path,
+            quality_thresholds={"eui_min_kwh_m2_yr": 1_000_000.0},
+        )
+        data = json.loads(out_path.read_text())
+        assert data["quality"]["valid"] is False
+        assert any("below minimum" in f for f in data["quality"]["failures"])
+
+    def test_creates_out_dir_recursively(self, full_sql: Path, tmp_path: Path) -> None:
+        sim_dir = full_sql.parent
+        out_path = tmp_path / "deep" / "nested" / "kpi.json"
+        ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="deep",
+            out_path=out_path,
+        )
+        assert out_path.is_file()

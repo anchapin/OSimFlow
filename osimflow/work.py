@@ -1229,35 +1229,26 @@ def _extract_kpis_impl(
     openstudio_version: str | None = None,
     max_retries: int = 3,
 ) -> Path:
-    """Internal implementation — wrapped with retry by ``extract_kpis``."""
+    """Internal implementation — wrapped with retry by ``extract_kpis``.
+
+    Issue #1015: this used to fork a fresh Python interpreter per sample
+    (``subprocess.run([sys.executable, 'extract_kpis.py', ...])``) which
+    cost ~150-300 ms of import overhead per call — ~30 min of pure
+    startup latency for a 10K-sample campaign.  We now call
+    :func:`osimflow._work_scripts.extract_kpis.run_extract_kpis` directly
+    in-process; the CLI shim still exists for the standalone
+    ``bin/extract_kpis.py`` user-facing entry point.
+    """
     out.mkdir(parents=True, exist_ok=True)
     kpi_path = out / f"kpi_{sample_id}.json"
-    cmd = [
-        sys.executable,
-        str(_resolve_work_script("extract_kpis.py")),
-        "--simulation_dir",
-        str(simulation_dir),
-        "--sample_id",
-        sample_id,
-        "--out",
-        str(kpi_path),
-    ]
-    if openstudio_version is not None:
-        cmd.extend(["--openstudio_version", openstudio_version])
-    try:
-        subprocess.run(  # nosec  # sourcery skip: suspicious-subprocess-call
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=_sanitize_env(),
-        )
-    except subprocess.CalledProcessError as e:
-        log.error("extract_kpis failed for %s: %s", sample_id, e.stderr or "<empty>")
-        raise RuntimeError(
-            f"extract_kpis failed for {sample_id}: stdout={e.stdout!r} stderr={e.stderr!r}"
-        ) from e
-    return kpi_path
+    from ._work_scripts.extract_kpis import run_extract_kpis  # noqa: PLC0415
+
+    return run_extract_kpis(
+        simulation_dir=simulation_dir,
+        sample_id=sample_id,
+        out_path=kpi_path,
+        openstudio_version=openstudio_version,
+    )
 
 
 def extract_kpis(
