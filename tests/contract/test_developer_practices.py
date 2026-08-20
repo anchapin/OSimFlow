@@ -586,3 +586,60 @@ def test_osimflow_api_module_importable() -> None:
         f"installed in the current environment (issue #1060):\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1059: make contract must run the openapi-sync check
+#
+# Before PR #1057 the openapi drift gate ran only in CI
+# (`.github/workflows/agents-contract.yml`). The Makefile aggregate target
+# `contract:` did not include it, so a contributor running `make contract`
+# locally got a green light while CI failed on the same commit. This
+# contract test pins the Makefile wiring so the regression is caught at
+# PR time, not at the next contributor's `make contract` run.
+# ---------------------------------------------------------------------------
+
+
+def test_make_contract_aggregate_includes_openapi_sync() -> None:
+    """Issue #1059: `make contract` aggregate target must include the
+    openapi-sync sub-target so local `make contract` matches CI's
+    `agents-contract.yml` job.
+
+    The check is structural (parse the Makefile and assert the aggregate
+    lists `openapi-sync`) plus a functional dry-run that asserts
+    `make -n contract` invokes `tools/check_openapi_sync.py`. Both
+    are local-only safety nets — the CI contract job already runs
+    `make contract` end-to-end, so we skip the dry-run when `make`
+    is unavailable (e.g. a contributor on a stripped-down container).
+    """
+    makefile = (REPO_ROOT / "Makefile").read_text()
+    match = re.search(r"^contract:\s*([^\n#]*?)\s*(?:##.*)?$", makefile, re.MULTILINE)
+    assert match is not None, (
+        "Makefile is missing a `contract:` aggregate target (issue #1059)."
+    )
+    deps = match.group(1).split()
+    for required in ("agents-contract", "docs-sync", "openapi-sync"):
+        assert required in deps, (
+            f"`make contract` aggregate must depend on `{required}` "
+            f"(issue #1059). Current deps: {deps}"
+        )
+
+    # Functional dry-run: invoke `make -n contract` and assert all three
+    # checker scripts show up in the output. Skip if `make` is not on PATH
+    # (e.g. minimal container) — the structural check above is the
+    # canonical regression detector; the dry-run is a bonus.
+    import shutil
+
+    if shutil.which("make") is None:
+        pytest.skip("`make` not on PATH; skipping `make -n contract` dry-run")
+
+    dry = _run(["make", "-n", "contract"])
+    assert dry.returncode == 0, (
+        f"`make -n contract` failed (exit {dry.returncode}):\n"
+        f"stdout:\n{dry.stdout}\nstderr:\n{dry.stderr}"
+    )
+    for script in ("check_agents_contract.py", "check_docs_sync.py", "check_openapi_sync.py"):
+        assert script in dry.stdout, (
+            f"`make -n contract` did not invoke {script} "
+            f"(issue #1059). Got:\n{dry.stdout}"
+        )

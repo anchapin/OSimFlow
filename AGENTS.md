@@ -97,7 +97,7 @@ make typecheck  # mypy --strict on osimflow/
 make test       # pytest (full suite, no coverage gate)
 make test-cov   # pytest --cov with 83% gate           (CI default)
 make test-fast  # pytest tests/contract -x -q          (pre-commit mirror)
-make contract   # regenerate BYOS runner + agents-contract + docs-sync
+make contract   # regenerate BYOS runner + agents-contract + docs-sync + openapi-sync
 make byos-generate  # regenerate osimflow/_byos_runner_generated.py only
 make precommit  # pre-commit run --all-files          (pre-push safety net)
 make act        # local CI mirror via nektos/act
