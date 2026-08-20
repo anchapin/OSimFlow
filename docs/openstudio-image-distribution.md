@@ -46,8 +46,11 @@ NREL's work and create a maintenance liability that nobody needs.
 
 These are the versions OSimFlow advertises as supported. The list is
 hand-maintained, mirrored in
-[`.github/workflows/openstudio-image-availability.yml`](../.github/workflows/openstudio-image-availability.yml),
-and validated weekly by the availability check.
+[`.github/workflows/openstudio-image-availability.yml`](../.github/workflows/openstudio-image-availability.yml)
+(`SUPPORTED_OPENSTUDIO_VERSIONS`), and validated weekly by the
+availability check. NREL publishes older tags on Docker Hub (down to
+`3.1.0`); the floor of `3.7.0` reflects the lowest version OSimFlow
+has integration tests against, not the limit of NREL's image set.
 
 | Version | Tag on Docker Hub | Notes |
 |---|---|---|
