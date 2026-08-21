@@ -62,9 +62,12 @@ openapi-sync: ## check docs/openapi.json matches the live FastAPI app (issue #10
 precommit: ## pre-commit run --all-files
 	$(PRECOMMIT) run --all-files
 
-act: ## local CI mirror (lint + contract)
+act: ## local CI mirror (lint + typecheck + test + contract + security)
 	act -j lint
-	act -j agents-contract
+	act -j typecheck
+	act -j test
+	act -j contract
+	act -j security
 
 clean: ## remove caches
 	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage coverage.xml
