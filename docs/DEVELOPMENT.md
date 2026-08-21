@@ -157,7 +157,7 @@ OSimFlow/
 │   ├── importers/               # .osa import support
 │   │   └── osa.py
 │   └── executors/
-│       └── __init__.py          # BaseExecutor + 4 implementations
+│       └── __init__.py          # BaseExecutor + 9 implementations
 ├── bin/                         # CLI scripts called by work.py
 │   ├── generate_lhs.py          # LHS sampler (scipy.stats)
 │   ├── apply_params_to_model.py # Default parameter application
