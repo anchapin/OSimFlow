@@ -326,6 +326,10 @@ name in this section.
 - `osimflow/distributed_cache.py` — `DistributedCache` +
   `build_cache` + `campaign_state_namespace` (Redis-backed;
   pid-private local SQLite files in distributed mode).
+- `osimflow/circuit_breaker.py` — `CircuitBreaker` +
+  `CircuitOpenError` (closed/open/half-open; guards the Redis
+  data plane in `DistributedCache` and `RedisDocumentStore`
+  against persistent outages, issue #1111).
 - `osimflow/distributed_jobqueue.py` — `DistributedJobQueue` +
   `build_job_queue` (Redis pub/sub wrapper).
 - `osimflow/storage.py` — `ResultStorage` ABC + `LocalStorage`,

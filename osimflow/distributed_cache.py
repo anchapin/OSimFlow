@@ -74,6 +74,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .cache import CacheKey, CacheStats, SQLiteCache
+from .circuit_breaker import CircuitBreaker
 
 if TYPE_CHECKING:
     import redis as redis_sync
@@ -229,6 +230,10 @@ class DistributedCache:
         self._campaign_id = campaign_id
         self._channel = f"osimflow:cache:invalidate:{campaign_id}"
         self._shared_key = f"osimflow:cache:entries:{campaign_id}"
+        # Circuit breaker (issue #1111): after repeated consecutive Redis
+        # failures, skip the shared data plane entirely for a cooldown
+        # period instead of burning a 5 s socket timeout on every op.
+        self._breaker = CircuitBreaker(name=f"cache:{campaign_id}")
 
         # Lazily-created async + sync Redis clients and subscriber thread.
         self._redis_client: redis_async.Redis | None = None
@@ -262,6 +267,11 @@ class DistributedCache:
     # ------------------------------------------------------------------
     def _shared_store(self, key: CacheKey, output_path: Path, exit_code: int) -> None:
         """Write one entry to the Redis shared store (never raises)."""
+        if not self._breaker.allow():
+            # Circuit open (issue #1111): skip silently — the campaign is
+            # already operating local-only until the cooldown elapses.
+            log.debug("DistributedCache: circuit open, skipping shared store")
+            return
         entry = json.dumps(
             {
                 "output_path": str(output_path),
@@ -272,25 +282,20 @@ class DistributedCache:
         try:
             self._get_sync_client().hset(self._shared_key, _field_for_key(key), entry)
         except Exception as exc:
+            self._breaker.record_failure()
             log.warning(
                 "DistributedCache: failed to share entry campaign=%s key=%s: %s"
-                " — continuing local-only",
+                " — continuing local-only (circuit failures: %d)",
                 self._campaign_id,
                 _field_for_key(key),
                 exc,
+                self._breaker.consecutive_failures,
             )
+        else:
+            self._breaker.record_success()
 
-    def _shared_lookup(self, key: CacheKey) -> Path | None:
-        """Look up one entry in the Redis shared store (never raises)."""
-        try:
-            raw = self._get_sync_client().hget(self._shared_key, _field_for_key(key))
-        except Exception as exc:
-            log.warning(
-                "DistributedCache: shared lookup failed campaign=%s: %s — continuing local-only",
-                self._campaign_id,
-                exc,
-            )
-            return None
+    def _decode_shared_entry(self, raw: str | None, key: CacheKey) -> Path | None:
+        """Decode a shared-store entry into an output path, or None."""
         if raw is None:
             return None
         try:
@@ -311,21 +316,48 @@ class DistributedCache:
             return None
         return out
 
+    def _shared_lookup(self, key: CacheKey) -> Path | None:
+        """Look up one entry in the Redis shared store (never raises)."""
+        if not self._breaker.allow():
+            log.debug("DistributedCache: circuit open, skipping shared lookup")
+            return None
+        try:
+            raw = self._get_sync_client().hget(self._shared_key, _field_for_key(key))
+        except Exception as exc:
+            self._breaker.record_failure()
+            log.warning(
+                "DistributedCache: shared lookup failed campaign=%s: %s — continuing local-only"
+                " (circuit failures: %d)",
+                self._campaign_id,
+                exc,
+                self._breaker.consecutive_failures,
+            )
+            return None
+        self._breaker.record_success()
+        return self._decode_shared_entry(raw, key)
+
     def _shared_invalidate(self, pattern: str) -> None:
         """Delete every shared-store hash field matching ``pattern`` (never raises)."""
+        if not self._breaker.allow():
+            log.debug("DistributedCache: circuit open, skipping shared invalidate")
+            return
         try:
             client = self._get_sync_client()
             fields = [field for field, _ in client.hscan_iter(self._shared_key, match=pattern)]
             if fields:
                 client.hdel(self._shared_key, *fields)
         except Exception as exc:
+            self._breaker.record_failure()
             log.warning(
                 "DistributedCache: shared invalidate failed campaign=%s pattern=%s: %s"
-                " — continuing local-only",
+                " — continuing local-only (circuit failures: %d)",
                 self._campaign_id,
                 pattern,
                 exc,
+                self._breaker.consecutive_failures,
             )
+        else:
+            self._breaker.record_success()
 
     # ------------------------------------------------------------------
     # Redis client (lazy, thread-safe)
@@ -463,15 +495,23 @@ class DistributedCache:
         import asyncio  # noqa: PLC0415
 
         async def _pub() -> None:
+            if not self._breaker.allow():
+                log.debug("DistributedCache: circuit open, skipping invalidation publish")
+                return
             try:
                 client = self._get_redis()
                 await client.publish(self._channel, json.dumps(payload))
             except Exception as exc:
+                self._breaker.record_failure()
                 log.warning(
-                    "DistributedCache: failed to publish invalidation for campaign=%s: %s",
+                    "DistributedCache: failed to publish invalidation for campaign=%s: %s"
+                    " (circuit failures: %d)",
                     self._campaign_id,
                     exc,
+                    self._breaker.consecutive_failures,
                 )
+            else:
+                self._breaker.record_success()
 
         try:
             asyncio.get_running_loop()
