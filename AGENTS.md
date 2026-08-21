@@ -509,8 +509,10 @@ submitit-based `SlurmExecutor`), `docker_swarm_executor.py`
   `--offline-bundle`), `migrate_from_mongodb.py`,
    `apply_branch_protection.sh` (post-merge
   settings-as-code for `main`), `setup_nomad_vm.sh`,
-  `sweep-stale-branches.sh` (dry-run stale-branch sweep;
-  deletes with `--apply`; see issue #1003).
+   `sweep-stale-branches.sh` (dry-run stale-branch sweep;
+   `--apply` deletes proven-merged; `--include-orphaned` opts into
+   abandoned branches; `--worktree` scans stale local worktrees;
+   see issue #1003).
 - `tools/` — repo-internal check scripts:
   `check_agents_contract.py` (§0.3), `check_docs_sync.py`
   (docs path resolution), `_generate_byos_runner.py`
@@ -743,7 +745,7 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 | Change AWS Batch infrastructure (VPC, IAM, compute env) | `infra/aws/terraform/`; IAM roles in `iam.tf`, job definition in `job-definition.tf`; `terraform validate` is in CI on `infra/` path changes |
 | Add a REST API endpoint | new route in `osimflow/api/app.py` **and** a test in `tests/unit/test_api_core.py`; re-run `python scripts/generate_openapi.py --output docs/openapi.json` afterwards; add a typed method + test in `osimflow/client.py` / `tests/unit/test_client.py` |
 | Add or modify a health check | `osimflow/health.py` (`_check_*` function, register in `run_health_checks`) **and** a test in `tests/unit/test_health_check.py` |
-| Sweep stale remote branches | `scripts/sweep-stale-branches.sh` (dry-run default; `--apply` deletes proven-merged) + `.github/workflows/branch-cleanup.yml` (nightly dry-run, posts to issue #1003; manual `apply=true`+`confirm=DELETE`); see `docs/branch-protection.md` §"Stale branch sweep" (issue #1003) |
+| Sweep stale remote branches | `scripts/sweep-stale-branches.sh` (dry-run default; `--apply` deletes proven-merged; `--include-orphaned` also opts into abandoned branches; `--worktree` scans stale local worktrees) + `.github/workflows/branch-cleanup.yml` (nightly dry-run, posts to issue #1003; manual `apply=true`+`confirm=DELETE`); see `docs/branch-protection.md` §"Stale branch sweep" (issue #1003) |
 
 Tool family priority (when both standard tools and
 context-mode / codebase-memory-mcp are exposed):

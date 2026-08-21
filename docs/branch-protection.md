@@ -212,8 +212,22 @@ lists branches that are safe to delete and `--apply` deletes them. It is
   automatically with `sweep-stale-branches.sh --apply`.
 - **Abandoned / unproven** branches (old, no open PR, but *not* proven
   merged) are printed under a separate `ABANDONED — requires manual review`
-  heading. They are **never** auto-deleted; pass `--include-orphaned --apply`
-  to opt into deleting them after human review.
+   heading. They are **never** auto-deleted; pass `--include-orphaned --apply`
+   to opt into deleting them after human review.
+
+### Local worktree cleanup (`--worktree`)
+
+The `--worktree` flag extends the sweep to stale local git worktrees (e.g.
+those created by `git worktree add` for in-progress fixes). When enabled, the
+script reuses the same proven-merged / abandoned classification to identify
+worktrees that are safe to remove:
+
+- **Proven-merged** worktrees are listed under the same dry-run summary;
+  pass `--worktree --apply` to remove them.
+- Use `--worktree --include-orphaned --apply` to also remove abandoned
+  worktrees after human review (same semantics as branch deletion).
+- Proven-merged worktrees are safe to remove without `--include-orphaned`
+  because the underlying branch has already been merged and deleted upstream.
 
 ### Idempotency
 
