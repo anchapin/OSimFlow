@@ -92,7 +92,7 @@ Python that lacks the `[dev,aws,slurm,api]` extras and fails with
 
 ```bash
 make help       # list all targets
-make install    # pip install -e ".[dev,aws,slurm,api]"   (creates .venv)
+make install    # pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"   (creates .venv)
 make lint       # ruff check
 make format     # ruff format (write)
 make typecheck  # mypy --strict on osimflow/
