@@ -25,7 +25,7 @@ pip install "osimflow[api]"       # REST API server
 ```bash
 git clone https://github.com/anchapin/OSimFlow.git
 cd OSimFlow
-pip install -e ".[dev,aws,slurm]"
+pip install -e ".[dev,aws,slurm,api]"
 ```
 
 ---

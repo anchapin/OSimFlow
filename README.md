@@ -28,7 +28,7 @@ The framework foundation (a custom Python driver built on `submitit` for Slurm, 
 ### 1. Install
 
 ```bash
-pip install -e ".[dev,aws,slurm]"
+pip install -e ".[dev,aws,slurm,api]"
 ```
 
 ### 2. Run a sample campaign

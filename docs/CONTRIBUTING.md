@@ -36,7 +36,7 @@ Quick setup (5 min):
 # Fork the repo on GitHub, then:
 git clone https://github.com/<your-username>/OSimFlow.git
 cd OSimFlow
-python -m pip install -e ".[dev,aws,slurm]"
+python -m pip install -e ".[dev,aws,slurm,api]"
 pre-commit install
 ```
 
@@ -57,7 +57,7 @@ Detailed commands and the day-to-day workflow live in
 
 ```bash
 make help       # list all targets
-make install    # pip install -e ".[dev,aws,slurm]"
+make install    # pip install -e ".[dev,aws,slurm,api]"
 make lint       # ruff check
 make format     # ruff format
 make typecheck  # mypy --strict osimflow/
