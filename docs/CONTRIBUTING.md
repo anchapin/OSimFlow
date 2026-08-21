@@ -62,7 +62,7 @@ make lint       # ruff check
 make format     # ruff format
 make typecheck  # mypy --strict osimflow/
 make test       # full pytest suite
-make test-cov   # pytest with 85% coverage gate
+make test-cov   # pytest with 83% coverage gate
 make test-fast  # contract + unit only (pre-commit mirror)
 make contract   # tools/check_agents_contract.py + tools/check_docs_sync.py
 make precommit  # the pre-push safety net
@@ -142,7 +142,7 @@ re-run the step.
 - [ ] All checks green locally: `make precommit` (or `act` for the CI
       mirror if you have it installed).
 - [ ] Full test suite green: `make test`.
-- [ ] Coverage gate (85%) still passes: `make test-cov`.
+- [ ] Coverage gate (83%) still passes: `make test-cov`.
 - [ ] If you added a new public symbol to `osimflow/__init__.py`, a new
       `bin/*.py` script, a new file in `osimflow/executors/`, a new
       campaign step, or a new CLI flag, **AGENTS.md is updated in the
