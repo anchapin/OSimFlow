@@ -99,3 +99,55 @@ def test_nomad_range_sharding_flags_parse() -> None:
     )
     assert args.shard_start == 100
     assert args.shard_end == 200
+
+
+def test_nomad_tls_defaults_off() -> None:
+    """--nomad-tls keeps its backwards-compatible default of False."""
+    parser = _build_parser()
+    args = parser.parse_args(_base_run_args())
+    assert args.nomad_tls is False
+
+
+def test_nomad_cleartext_token_warns_for_non_local_address() -> None:
+    """Constructing a NomadExecutor with TLS off + non-local address warns loudly (#1112)."""
+    import pytest
+
+    with pytest.warns(UserWarning, match="SEC-009"):
+        NomadExecutor(address="https://nomad.example.com:4646", tls=False)
+
+
+def test_nomad_no_warning_for_local_address() -> None:
+    """Loopback addresses are exempt from the cleartext-token warning."""
+    import warnings as warnings_mod
+
+    with warnings_mod.catch_warnings():
+        warnings_mod.simplefilter("error", UserWarning)
+        ex = NomadExecutor(address="http://127.0.0.1:4646", tls=False)
+    assert ex.tls is False
+
+
+def test_nomad_no_warning_when_tls_enabled() -> None:
+    """TLS-enabled non-local addresses do not warn."""
+    import warnings as warnings_mod
+
+    with warnings_mod.catch_warnings():
+        warnings_mod.simplefilter("error", UserWarning)
+        ex = NomadExecutor(
+            address="https://nomad.example.com:4646",
+            tls=True,
+            cert="/tmp/cert.pem",
+            key="/tmp/key.pem",
+        )
+    assert ex.tls is True
+
+
+def test_is_local_address_variants() -> None:
+    """_is_local_address recognizes loopback hostnames and IPv6 variants."""
+    is_local = NomadExecutor._is_local_address
+    assert is_local("http://127.0.0.1:4646") is True
+    assert is_local("http://localhost:4646") is True
+    assert is_local("http://LOCALHOST:4646") is True
+    assert is_local("http://[::1]:4646") is True
+    assert is_local("127.0.0.1:4646") is True
+    assert is_local("https://nomad.example.com:4646") is False
+    assert is_local("http://10.0.0.5:4646") is False

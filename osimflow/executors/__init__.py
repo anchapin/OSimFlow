@@ -1940,6 +1940,26 @@ class NomadExecutor(BaseExecutor):
         self.cert = cert
         self.key = key
         self.ca_cert = ca_cert
+        # SEC-009 (issue #1112): a bearer token sent over plain HTTP to a
+        # non-local address can be intercepted by anyone on the network
+        # path. TLS stays opt-in for backwards compatibility with dev
+        # clusters, but non-local use without it is almost certainly a
+        # misconfiguration — warn loudly on both the warnings channel and
+        # the logger.
+        if not tls and not self._is_local_address(self.address):
+            warnings.warn(
+                f"Nomad TLS is DISABLED for non-local address {self.address}: "
+                "the NOMAD_TOKEN ACL token is transmitted in cleartext and can "
+                "be intercepted (SEC-009). Enable TLS with --nomad-tls and "
+                "configure --nomad-cert/--nomad-key/--nomad-ca-cert.",
+                UserWarning,
+                stacklevel=2,
+            )
+            log.warning(
+                "SEC-009: Nomad TLS disabled for non-local address %s — "
+                "NOMAD_TOKEN transmitted in cleartext",
+                self.address,
+            )
         self._dispatch_job_registered = False
         # Compatibility mode:
         # - remote_results_only=True (default): do not run local callables; Handle.result()
@@ -1955,6 +1975,27 @@ class NomadExecutor(BaseExecutor):
             key=key,
             ca_cert=ca_cert,
         )
+
+    @staticmethod
+    def _is_local_address(address: str) -> bool:
+        """True when *address* points at the local machine (issue #1112).
+
+        Loopback addresses are exempt from the cleartext-token warning
+        because loopback traffic never leaves the host.
+        """
+        import urllib.parse  # noqa: PLC0415
+
+        candidate = address if "//" in address else f"//{address}"
+        try:
+            hostname = (urllib.parse.urlsplit(candidate).hostname or "").lower()
+        except ValueError:
+            return False
+        if not hostname:
+            return False
+        if hostname in {"localhost", "::1"} or hostname.startswith("127."):
+            return True
+        # Bracketed IPv6 loopback variants ([::1], [0:0:0:0:0:0:0:1]).
+        return hostname in {"0:0:0:0:0:0:0:1"}
 
     @staticmethod
     def _sanitize_positive_delay(value: float | None, *, fallback: float) -> float:
