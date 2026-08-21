@@ -304,6 +304,32 @@ class TestSubprocessIsolation:
         with pytest.raises(RuntimeError, match="exit"):
             func(str(user_scripts), {}, "0001", str(user_scripts / "out"))
 
+    def test_subprocess_timeout_configurable(self, user_scripts: Path) -> None:
+        """Subprocess mode honors timeout_s and reports the configured value (#1109)."""
+        path = _write_script(
+            user_scripts,
+            "sub_slow.py",
+            "import time\n"
+            "def apply_parameters(template, parameters, sample_id, out):\n"
+            "    time.sleep(30)\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS, timeout_s=0.5)
+        with pytest.raises(RuntimeError, match=r"timed out after 0\.5s"):
+            func(str(user_scripts), {}, "0001", str(user_scripts / "out"))
+
+    def test_subprocess_default_timeout_is_600(self, user_scripts: Path) -> None:
+        """Default timeout_s is 600s (backwards compatible with the old hardcode)."""
+        path = _write_script(
+            user_scripts,
+            "sub_fast.py",
+            "from pathlib import Path\n"
+            "def apply_parameters(template, parameters, sample_id, out):\n"
+            "    return Path(str(out)) / sample_id\n",
+        )
+        func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
+        wrapper_attrs = getattr(func, "_byos_timeout_s", None)
+        assert wrapper_attrs == 600.0
+
     def test_warning_logged_on_load(
         self, user_scripts: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

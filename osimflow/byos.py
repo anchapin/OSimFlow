@@ -567,6 +567,7 @@ def _run_byos_subprocess(
     args: tuple[object, ...],
     kwargs: dict[str, object] | None = None,
     resource_limits: dict[str, int] | None = None,
+    timeout_s: float = 600.0,
 ) -> Path:
     """Run a BYOS function in an isolated subprocess.
 
@@ -642,12 +643,12 @@ def _run_byos_subprocess(
             env=_sanitize_env(),
         )
         try:
-            stdout, stderr = proc.communicate(timeout=600)
+            stdout, stderr = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired as exc:
             proc.kill()
             proc.communicate()
             raise RuntimeError(
-                f"BYOS subprocess timed out after 600s: script={script_path} "
+                f"BYOS subprocess timed out after {timeout_s:g}s: script={script_path} "
                 f"function={function_name}"
             ) from exc
     finally:
@@ -669,6 +670,7 @@ def load_user_function(
     *,
     trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS,
     resource_limits: dict[str, int] | None = None,
+    timeout_s: float = 600.0,
 ) -> Callable[..., Any]:
     """Import a user ``.py`` file and return a callable that respects the trust level.
 
@@ -727,7 +729,12 @@ def load_user_function(
 
     def _subprocess_wrapper(*args: object, **kwargs: object) -> Path:
         return _run_byos_subprocess(
-            script_path, function_name, args, kwargs, resource_limits=resource_limits
+            script_path,
+            function_name,
+            args,
+            kwargs,
+            resource_limits=resource_limits,
+            timeout_s=timeout_s,
         )
 
     _subprocess_wrapper.__name__ = function_name
@@ -735,6 +742,7 @@ def load_user_function(
     _subprocess_wrapper._byos_script_path = script_path  # type: ignore[attr-defined]
     _subprocess_wrapper._byos_trust_level = trust_level  # type: ignore[attr-defined]
     _subprocess_wrapper._byos_resource_limits = resource_limits  # type: ignore[attr-defined]
+    _subprocess_wrapper._byos_timeout_s = timeout_s  # type: ignore[attr-defined]
 
     return _subprocess_wrapper
 

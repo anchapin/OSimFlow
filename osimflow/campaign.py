@@ -430,7 +430,9 @@ class Campaign:
 
             log.info("loading BYOS apply_fn from %s", cfg.custom_apply_script)
             self.apply_fn = load_user_function(
-                cfg.custom_apply_script, trust_level=cfg.byos_trust_level
+                cfg.custom_apply_script,
+                trust_level=cfg.byos_trust_level,
+                timeout_s=cfg.byos_timeout_s,
             )
         else:
             self.apply_fn = default_apply_parameters
@@ -442,7 +444,9 @@ class Campaign:
 
             log.info("loading BYOS extract_fn from %s", cfg.custom_kpi_extractor)
             self.extract_fn = load_user_function(
-                cfg.custom_kpi_extractor, trust_level=cfg.byos_trust_level
+                cfg.custom_kpi_extractor,
+                trust_level=cfg.byos_trust_level,
+                timeout_s=cfg.byos_timeout_s,
             )
         else:
             self.extract_fn = extract_kpis
@@ -3750,6 +3754,7 @@ class Campaign:
                         stdout_path=ctx["stdout_log"],
                         stderr_path=ctx["stderr_log"],
                         max_retries=self.cfg.max_sample_retries,
+                        timeout_s=self.cfg.byos_timeout_s,
                         worker_id="local",
                     )
                 else:
@@ -3809,6 +3814,7 @@ class Campaign:
                         stdout_path=ctx["stdout_log"],
                         stderr_path=ctx["stderr_log"],
                         max_retries=self.cfg.max_sample_retries,
+                        timeout_s=self.cfg.byos_timeout_s,
                         worker_id="local",
                     )
                 else:
@@ -3827,6 +3833,7 @@ class Campaign:
                         stdout_path=ctx["stdout_log"],
                         stderr_path=ctx["stderr_log"],
                         max_retries=self.cfg.max_sample_retries,
+                        timeout_s=self.cfg.byos_timeout_s,
                         worker_id="local",
                         result_hint=Path(ctx["out_dir"]) / sid,
                         **self._executor_submit_transport_kwargs,
