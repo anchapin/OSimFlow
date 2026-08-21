@@ -2289,6 +2289,41 @@ class _PresetDefaultCache:
         return cls._cache
 
 
+def _is_local_host(host: str) -> bool:
+    """True when *host* binds only to the local machine (issue #1113).
+
+    Loopback binds are exempt from the cleartext-traffic warning because
+    that traffic never leaves the host. ``*`` / ``empty`` (all
+    interfaces) are treated as non-local.
+    """
+    normalized = (host or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"localhost", "::1", "[::1]", "0:0:0:0:0:0:0:1"}:
+        return True
+    return normalized.startswith("127.")
+
+
+def _warn_if_cleartext_nonlocal(tls_cert: Path | None, host: str, port: int) -> None:
+    """Warn loudly when a network-accessible serve bind lacks TLS (SEC-004).
+
+    Plain HTTP on a non-local interface transmits everything — including
+    API keys — in cleartext. TLS stays opt-in for backwards compatibility
+    with local tooling, but non-local binds without it are almost
+    certainly a misconfiguration (issue #1113).
+    """
+    if tls_cert is not None or _is_local_host(host):
+        return
+    warnings.warn(
+        f"TLS is DISABLED for non-local bind {host}:{port}: "
+        "traffic (including API keys) is transmitted in cleartext and can "
+        "be intercepted (SEC-004). Enable TLS with --tls-cert/--tls-key.",
+        UserWarning,
+        stacklevel=2,
+    )
+    log.warning("SEC-004: TLS disabled for non-local bind %s:%d — traffic is cleartext", host, port)
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Start the REST API server."""
     try:
@@ -2359,6 +2394,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     if tls_key is not None and tls_cert is None:
         print("Error: --tls-cert is required when --tls-key is provided.", file=sys.stderr)
         return 1
+
+    # SEC-004: warn loudly on cleartext non-local binds (issue #1113).
+    _warn_if_cleartext_nonlocal(tls_cert, args.host, args.port)
 
     # Launch Streamlit dashboard in a background thread if --dashboard is set.
     dashboard_thread: threading.Thread | None = None
