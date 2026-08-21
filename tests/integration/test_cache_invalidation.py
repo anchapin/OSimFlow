@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from osimflow.cache import CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
+from osimflow.cache import CacheError, CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from osimflow.config import CampaignConfig
 
 
@@ -703,3 +703,21 @@ def test_apply_params_py_edit_invalidates_per_sample_bin_hash() -> None:
         )
     finally:
         apply_params_py.write_text(original_content)
+
+
+def test_store_raises_cache_error_on_db_error(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
+    """SQLiteCache.store() must raise CacheError on sqlite3.Error."""
+    import sqlite3
+    from unittest.mock import MagicMock
+
+    out = tmp_path / "out.txt"
+    out.write_text("x")
+    key = CacheKey("STEP", "S1", "3.11.0", "h", "h", "img")
+
+    # Replace the lazy connection with a mock that raises on execute
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = sqlite3.OperationalError("database is locked")
+    tmp_cache._conn = mock_conn
+
+    with pytest.raises(CacheError, match="Failed to store cache entry"):
+        tmp_cache.store(key, out, exit_code=0)
