@@ -234,7 +234,6 @@ jobs:
             --dist loadgroup \
             --timeout=120 \
             --ignore=tests/contract \
-            --ignore=tests/integration/test_awsbatch_boto3_wiring.py \
             -m "not nomad_e2e and not slow" \
             -q
 
