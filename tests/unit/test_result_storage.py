@@ -201,6 +201,62 @@ class TestResultStorageUploader:
         uploader.close()
         assert store.calls == 2
 
+    def test_upload_retry_applies_jitter(self, tmp_path: Path) -> None:
+        """Verify jitter is applied to retry backoff (issue #1089).
+
+        ``random.uniform(0, sleep_s)`` should replace the raw backoff so
+        concurrent uploaders do not retry in lockstep.
+        """
+        from osimflow.storage import ResultStorage, ResultStorageUploader
+
+        class FlakyStorage(ResultStorage):
+            name = "flaky"
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                self.calls += 1
+                if self.calls < 3:
+                    raise OSError("transient")
+
+            def download_file(self, remote_path: str, local_path: Path) -> None:
+                return None
+
+            def list_results(self, prefix: str = "") -> list[str]:
+                return []
+
+            def delete_file(self, remote_path: str) -> None:
+                pass
+
+        from unittest.mock import patch
+
+        local_file = tmp_path / "retry.txt"
+        local_file.write_text("x")
+        store = FlakyStorage()
+        uploader = ResultStorageUploader(
+            store,
+            worker_count=1,
+            max_retries=2,
+            retry_backoff_s=1.0,
+        )
+
+        sleep_durations: list[float] = []
+        with patch("osimflow.storage.time.sleep", side_effect=sleep_durations.append):
+            with patch(
+                "osimflow.storage.random.uniform",
+                side_effect=lambda lo, hi: lo + (hi - lo) * 0.5,
+            ):
+                uploader.upload_file(local_file, "remote/retry.txt")
+                uploader.close()
+
+        assert store.calls == 3
+        assert len(sleep_durations) == 2
+        # First retry: sleep_s=1.0, jitter=0.5
+        assert sleep_durations[0] == pytest.approx(0.5)
+        # Second retry: sleep_s=2.0, jitter=1.0
+        assert sleep_durations[1] == pytest.approx(1.0)
+
     def test_close_surfaces_upload_failure(self, tmp_path: Path) -> None:
         from osimflow.storage import ResultStorage, ResultStorageUploader
 
