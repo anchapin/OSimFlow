@@ -74,11 +74,12 @@ CREATE TABLE IF NOT EXISTS cache_entries (
     code_sha256       TEXT NOT NULL,
     container_digest  TEXT NOT NULL,
     generation        INTEGER NOT NULL DEFAULT 0,
+    n_samples         INTEGER NOT NULL DEFAULT 0,
     output_path       TEXT NOT NULL,
     started_at        REAL NOT NULL,
     finished_at      REAL NOT NULL,
     exit_code         INTEGER NOT NULL,
-    PRIMARY KEY (step, sample_id, openstudio_version, inputs_sha256, code_sha256, container_digest, generation)
+    PRIMARY KEY (step, sample_id, openstudio_version, inputs_sha256, code_sha256, container_digest, generation, n_samples)
 );
 CREATE INDEX IF NOT EXISTS ix_cache_step ON cache_entries(step);
 """
@@ -95,6 +96,7 @@ class CacheKey:
     code_sha256: str
     container_digest: str
     generation: int = 0
+    n_samples: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -241,6 +243,7 @@ def _row_to_cache_dict(
             code_sha256=row["code_sha256"],
             container_digest=row["container_digest"],
             generation=row["generation"],
+            n_samples=row["n_samples"],
         ): (
             row["output_path"],
             row["started_at"],
@@ -305,6 +308,13 @@ class SQLiteCache:
         # during campaign cancellation (issue #620).
         conn = self._ensure_conn()
         conn.executescript(SCHEMA)
+        # Migration: add n_samples column to pre-existing databases.
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(cache_entries)").fetchall()}
+        if "n_samples" not in cols:
+            conn.execute(
+                "ALTER TABLE cache_entries ADD COLUMN n_samples INTEGER NOT NULL DEFAULT 0"
+            )
+            conn.commit()
         conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -439,7 +449,7 @@ class SQLiteCache:
                 """SELECT output_path, exit_code FROM cache_entries
                WHERE step=? AND sample_id=? AND openstudio_version=?
                  AND inputs_sha256=? AND code_sha256=? AND container_digest=?
-                 AND generation=?""",
+                 AND generation=? AND n_samples=?""",
                 (
                     key.step,
                     key.sample_id,
@@ -448,6 +458,7 @@ class SQLiteCache:
                     key.code_sha256,
                     key.container_digest,
                     key.generation,
+                    key.n_samples,
                 ),
             ).fetchone()
         if row is None:
@@ -554,13 +565,13 @@ class SQLiteCache:
         """Single-query tuple-IN read. Helper for :meth:`lookup_many` (small N)."""
         key_cols = (
             "(step, sample_id, openstudio_version, inputs_sha256, "
-            "code_sha256, container_digest, generation)"
+            "code_sha256, container_digest, generation, n_samples)"
         )
-        tuple_ph = "(" + ",".join(["?"] * 7) + ")"
+        tuple_ph = "(" + ",".join(["?"] * 8) + ")"
         placeholders = ",".join([tuple_ph] * len(keys))
         sql = (
             "SELECT step, sample_id, openstudio_version, inputs_sha256, "
-            "code_sha256, container_digest, generation, "
+            "code_sha256, container_digest, generation, n_samples, "
             "output_path, started_at, finished_at, exit_code "
             f"FROM cache_entries WHERE {key_cols} IN ({placeholders})"
         )
@@ -575,6 +586,7 @@ class SQLiteCache:
                     k.code_sha256,
                     k.container_digest,
                     k.generation,
+                    k.n_samples,
                 ]
             )
         rows = c.execute(sql, params).fetchall()
@@ -590,26 +602,26 @@ class SQLiteCache:
             "CREATE TEMP TABLE IF NOT EXISTS _osimflow_lookup_many_keys ("
             "  step TEXT, sample_id TEXT, openstudio_version TEXT,"
             "  inputs_sha256 TEXT, code_sha256 TEXT, container_digest TEXT,"
-            "  generation INTEGER, PRIMARY KEY (step, sample_id, "
+            "  generation INTEGER, n_samples INTEGER, PRIMARY KEY (step, sample_id, "
             "    openstudio_version, inputs_sha256, code_sha256, "
-            "    container_digest, generation)"
+            "    container_digest, generation, n_samples)"
             ")"
         )
         sql_drop = "DROP TABLE _osimflow_lookup_many_keys"
         sql_insert = (
             "INSERT OR IGNORE INTO _osimflow_lookup_many_keys "
             "(step, sample_id, openstudio_version, inputs_sha256, "
-            "code_sha256, container_digest, generation) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "code_sha256, container_digest, generation, n_samples) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         sql_select = (
             "SELECT k.step, k.sample_id, k.openstudio_version, k.inputs_sha256, "
-            "k.code_sha256, k.container_digest, k.generation, "
+            "k.code_sha256, k.container_digest, k.generation, k.n_samples, "
             "e.output_path, e.started_at, e.finished_at, e.exit_code "
             "FROM _osimflow_lookup_many_keys k "
             "LEFT JOIN cache_entries e USING (step, sample_id, "
             "  openstudio_version, inputs_sha256, code_sha256, "
-            "  container_digest, generation) "
+            "  container_digest, generation, n_samples) "
             "WHERE e.output_path IS NOT NULL"
         )
         c.execute(sql_create)
@@ -625,6 +637,7 @@ class SQLiteCache:
                         k.code_sha256,
                         k.container_digest,
                         k.generation,
+                        k.n_samples,
                     )
                     for k in keys
                 ],
@@ -642,9 +655,9 @@ class SQLiteCache:
             c.execute(
                 """INSERT OR REPLACE INTO cache_entries
                    (step, sample_id, openstudio_version, inputs_sha256,
-                    code_sha256, container_digest, generation, output_path,
-                    started_at, finished_at, exit_code)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    code_sha256, container_digest, generation, n_samples,
+                    output_path, started_at, finished_at, exit_code)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     key.step,
                     key.sample_id,
@@ -653,6 +666,7 @@ class SQLiteCache:
                     key.code_sha256,
                     key.container_digest,
                     key.generation,
+                    key.n_samples,
                     str(output_path),
                     time.time(),
                     time.time(),

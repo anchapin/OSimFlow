@@ -205,6 +205,26 @@ def test_variables_yml_change_invalidates_lhs_only(tmp_cache: SQLiteCache, tmp_p
     assert tmp_cache.lookup(new_key) is None
 
 
+def test_n_samples_change_invalidates_lhs_cache(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
+    """Changing n_samples must invalidate the GENERATE_LHS_SAMPLES cache key.
+
+    Regression test for issue #1083: the cache key for sample generation
+    must include n_samples so that re-running with a different sample count
+    does not reuse stale cached samples.
+    """
+    out = tmp_path / "out.txt"
+    out.write_text("x")
+    key_5 = CacheKey("GENERATE_LHS_SAMPLES", "ALL", "N/A", "vars-h", "h", "img", n_samples=5)
+    tmp_cache.store(key_5, out, exit_code=0)
+
+    # Same variables but different n_samples → cache miss
+    key_10 = CacheKey("GENERATE_LHS_SAMPLES", "ALL", "N/A", "vars-h", "h", "img", n_samples=10)
+    assert tmp_cache.lookup(key_10) is None
+
+    # Same n_samples → cache hit
+    assert tmp_cache.lookup(key_5) == out
+
+
 def test_aggregate_results_uses_work_hash_not_bin_hash(
     tmp_cache: SQLiteCache, tmp_path: Path
 ) -> None:
