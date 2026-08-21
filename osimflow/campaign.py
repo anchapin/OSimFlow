@@ -583,7 +583,7 @@ class Campaign:
         # Ephemeral-runner executors (Nomad, Kubernetes — issue #996) push
         # results job-side to object storage when a backend is configured;
         # their handles materialize the artifacts back to local paths.
-        if self.executor.name in ("nomad", "kubernetes") and self._result_storage is not None:
+        if self.executor.requires_remote_runner_payload and self._result_storage is not None:
             self._executor_submit_transport_kwargs = {
                 "result_transport_mode": "object_storage",
                 "result_storage_backend": cfg.result_storage_backend,
