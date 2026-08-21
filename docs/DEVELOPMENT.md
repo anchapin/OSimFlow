@@ -389,7 +389,7 @@ invoke `.venv/bin/pytest` directly.
 | `make test` | Full pytest suite |
 | `make test-fast` | Contract + unit only (~10s, pre-commit mirror) |
 | `make test-cov` | Full suite + 83% coverage gate |
-| `make lint` | ruff check (read-only) |
+| `make lint` | ruff check (read-only; the pre-commit ruff hook auto-fixes instead — see §Tooling) |
 | `make format` | ruff format (writes) |
 | `make typecheck` | mypy --strict on osimflow/ |
 | `make contract` | AGENTS.md + docs drift checks |
@@ -503,6 +503,24 @@ The rules are enforced by CI. Run `make precommit` before pushing.
 | ruff (format) | `pyproject.toml [tool.ruff]` | 100-char line length |
 | mypy | `pyproject.toml [tool.mypy]` | strict mode on `osimflow/` |
 | pre-commit | `.pre-commit-config.yaml` | All of the above + gitleaks |
+
+#### Read-only lint vs. auto-fixing pre-commit hook
+
+`make lint` and the CI `lint` job run `ruff check` **read-only** — they
+report violations but never modify files. The pre-commit `ruff` hook,
+however, runs with `--fix`: when it finds auto-fixable violations it
+**rewrites the files in place and fails with exit code 1** so the commit
+is aborted.
+
+If a commit fails because the ruff hook modified files:
+
+1. Inspect the changes (`git diff`) to confirm the autofixes are sane.
+2. Re-stage them: `git add -u`
+3. Commit again — the second run passes because the violations are gone.
+
+This asymmetry is intentional: local hooks fix cheaply before code ever
+reaches CI, while CI stays a pure gate that cannot mask violations by
+mutating the working tree.
 
 ### Per-file relaxations
 
