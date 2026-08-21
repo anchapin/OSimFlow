@@ -838,15 +838,16 @@ osimflow run \
 The script must define a function matching the BYOS contract:
 
 ```python
-def extract_kpis(sim_dir: Path, sample_id: str) -> dict:
+def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     """Extract KPIs from simulation output.
 
     Args:
-        sim_dir: Path to the per-sample simulation output directory.
+        simulation_dir: Path to the per-sample simulation output directory.
         sample_id: Sample identifier string.
+        out: Path to write the KPI JSON file.
 
     Returns:
-        Dictionary of KPI name -> numeric value.
+        Path to the written KPI JSON file.
     """
     ...
 ```
@@ -855,18 +856,18 @@ def extract_kpis(sim_dir: Path, sample_id: str) -> dict:
 
 ```python
 def apply_parameters(
-    template_pkg: Path,
-    sample_params: dict,
-    out_dir: Path,
+    template: Path,
+    parameters: dict,
     sample_id: str,
+    out: Path,
 ) -> Path:
     """Apply parameters to the template model.
 
     Args:
-        template_pkg: Path to the template simulation package.
-        sample_params: Dictionary of parameter name -> value.
-        out_dir: Directory to write the modified package.
+        template: Path to the template simulation package.
+        parameters: Dictionary of parameter name -> value.
         sample_id: Sample identifier string.
+        out: Directory to write the modified package.
 
     Returns:
         Path to the modified simulation package directory.
