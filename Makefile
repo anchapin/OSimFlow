@@ -36,14 +36,14 @@ format: ## ruff format (write)
 typecheck: ## mypy --strict (osimflow/)
 	$(MYPY) osimflow
 
-test: ## pytest (full suite, no coverage gate)
+test: ## pytest (full suite, no coverage gate — use test-cov for the gate)
 	$(PYTEST)
 
-test-cov: ## pytest --cov with 83% gate
+test-cov: ## pytest --cov with 83% gate (explicit flags, not inherited from addopts)
 	$(PYTEST) --cov=osimflow --cov-report=term-missing --cov-fail-under=83
 
 test-fast: ## pytest contract only (pre-commit mirror)
-	$(PYTEST) tests/contract -x -q
+	$(PYTEST) -o addopts="" tests/contract -x -q
 
 byos-generate: ## regenerate the inline BYOS subprocess runner from osimflow.byos_contract
 	$(PY) tools/_generate_byos_runner.py
