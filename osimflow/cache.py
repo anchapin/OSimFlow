@@ -39,6 +39,7 @@ from pathlib import Path
 
 __all__ = [
     "CacheEntry",
+    "CacheError",
     "CacheKey",
     "CacheStats",
     "SQLiteCache",
@@ -63,6 +64,15 @@ class CacheStats:
     misses: int = 0
     invalidations: int = 0
     total_keys: int = 0
+
+
+class CacheError(Exception):
+    """Raised when a cache operation (store/lookup) fails.
+
+    Wraps low-level errors (e.g. ``sqlite3.OperationalError``) so that
+    :class:`~osimflow.campaign.Campaign` can catch them and abort
+    gracefully while preserving the ``run.json`` trace.
+    """
 
 
 SCHEMA = """
@@ -652,27 +662,40 @@ class SQLiteCache:
     def store(self, key: CacheKey, output_path: Path, exit_code: int) -> None:
         with self._lock:
             c = self.connection
-            c.execute(
-                """INSERT OR REPLACE INTO cache_entries
+            try:
+                c.execute(
+                    """INSERT OR REPLACE INTO cache_entries
                    (step, sample_id, openstudio_version, inputs_sha256,
                     code_sha256, container_digest, generation, n_samples,
                     output_path, started_at, finished_at, exit_code)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
+                    (
+                        key.step,
+                        key.sample_id,
+                        key.openstudio_version,
+                        key.inputs_sha256,
+                        key.code_sha256,
+                        key.container_digest,
+                        key.generation,
+                        key.n_samples,
+                        str(output_path),
+                        time.time(),
+                        time.time(),
+                        exit_code,
+                    ),
+                )
+            except sqlite3.Error:
+                log.error(
+                    "cache STORE failed for step=%s sample=%s — cache key: %s",
                     key.step,
                     key.sample_id,
-                    key.openstudio_version,
-                    key.inputs_sha256,
-                    key.code_sha256,
-                    key.container_digest,
-                    key.generation,
-                    key.n_samples,
-                    str(output_path),
-                    time.time(),
-                    time.time(),
-                    exit_code,
-                ),
-            )
+                    key,
+                    exc_info=True,
+                )
+                raise CacheError(
+                    f"Failed to store cache entry for step={key.step} "
+                    f"sample_id={key.sample_id} — the campaign will abort"
+                ) from None
         log.info(
             "cache STORE step=%s sample=%s exit=%d -> %s",
             key.step,
