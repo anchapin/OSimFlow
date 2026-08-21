@@ -895,10 +895,10 @@ class CoordinatorResultsResponse(BaseModel):
 class CoordinatorNotifyRequest(BaseModel):
     """Request for POST /campaigns/{id}/notify — trigger a notification.
 
-    Mirrors the API contract §3.5 ``campaign.succeeded`` payload: the
-    server builds the presigned ``download_url`` (whose lifetime is
-    ``expires_in_seconds``) and dispatches it through the selected
-    backend.
+    Mirrors the ``campaign.succeeded`` notification payload (defined in
+    ``CampaignSucceededPayload``); the server builds the presigned ``download_url``
+    (whose lifetime is ``expires_in_seconds``) and dispatches it through the
+    selected backend.
     """
 
     notification_type: str = Field(

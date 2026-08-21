@@ -642,7 +642,7 @@ campaign with 1 failure, run locally with OpenStudio 3.11.0:
 |---|---|---|
 | `summary.n_failed > 0` | Some samples failed. | Run the `jq` query from §3.2 to find which ones and why. |
 | All steps `HIT`/`HIT×N` | Cache resume — nothing re-ran. | This is correct. Only `GENERATE_BASIC_PLOTS` re-runs. |
-| All steps `MISS`/`MISS×N` on second run | Cache was invalidated. | Check the list in §3.5. Likely a code or input change. |
+| All steps `MISS`/`MISS×N` on second run | Cache was invalidated. | Check the cache invalidation table in DEVELOPMENT.md §11.2. Likely a code or input change. |
 | `RUN_OPENSTUDIO_SIM` takes < 1s per sample | Stub mode. | Check `config.openstudio_version` and ensure the CLI is installed, or set `OSIMFLOW_STUB_SIM=0`. |
 | `finished_at: null` | Campaign crashed before finalization. | Check the terminal output for the exception. `run.json` was not written. |
 | `exit_code: 1` on `GENERATE_LHS_SAMPLES` | Invalid `variables.yml`. | Check the YAML syntax and distribution parameters. |

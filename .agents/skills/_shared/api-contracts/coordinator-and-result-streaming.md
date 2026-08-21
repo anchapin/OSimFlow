@@ -168,7 +168,7 @@ POST /api/v1/coordinator/campaigns/{id}/aggregate
 The aggregator:
 1. Lists `{bucket}/{campaign_id}/samples/*/_manifest.json`.
 2. Reads each `kpis.json`, compiles `aggregated_results.csv`.
-3. Extracts the first `  * Severe` line per failed sample into `failed_simulations.csv` (PRD §6 #4 — `grep -m 1`).
+3. Extracts the first `  * Severe` line per failed sample into `failed_simulations.csv` (AGENTS.md §8 gotcha #4 — `grep -m 1`).
 4. Writes both to `{bucket}/{campaign_id}/_aggregated/`.
 5. Optionally computes Pareto front (issue #141) when `--algorithm` is multi-objective.
 6. Flips campaign status `aggregating → succeeded`.
@@ -210,6 +210,6 @@ These cut across #617 and #618 and are shared Epic-level acceptance criteria:
 
 ## 5. Out of scope (explicit)
 
-- Real-time streaming of hourly time-series to the client (PRD §6 #8 — daily/monthly aggregates only in the CSV; hourly stays in per-sample `.sql`).
+- Real-time streaming of hourly time-series to the client (AGENTS.md §8 gotcha #8 — daily/monthly aggregates only in the CSV; hourly stays in per-sample `.sql`).
 - A web UI for campaign authoring (#617 task 2 mentions "web interface or API endpoint" — this contract specifies the **API endpoint** path; a web UI is a separate follow-on).
 - Changing the existing `ResultStorage` ABC or `build_result_storage` factory — workers reuse `S3Storage.upload()`.

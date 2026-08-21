@@ -299,7 +299,7 @@ def test_webhook_backend_requires_url() -> None:
 
 
 def test_webhook_backend_send_happy_path() -> None:
-    """A successful webhook POST dispatches the merged #283 + §3.5 payload."""
+    """A successful webhook POST dispatches the merged #283 campaign.succeeded payload."""
     backend = WebhookNotifyBackend(url="https://hooks.example.com/osimflow")
 
     delivered: list[dict[str, Any]] = []

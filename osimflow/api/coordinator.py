@@ -927,7 +927,7 @@ async def notify_campaign(
     Selects a :class:`osimflow.notify.NotifyBackend` from the request's
     ``notification_type`` (``sns`` / ``email`` / ``webhook``) and the
     campaign's stored ``sns_topic_arn`` / ``notification_email`` /
-    ``webhook_url``. The §3.5 payload carries the presigned
+    ``webhook_url``. The campaign.succeeded payload carries the presigned
     ``download_url`` whose lifetime is ``expires_in_seconds`` (mirrors
     ``--s3-artifact-presigned-url-expiration``).
 
@@ -978,7 +978,7 @@ async def notify_campaign(
 # The pure dispatch logic is split out of the HTTP handler so the
 # aggregation endpoint can re-use it to auto-fire notifications on
 # completion (criterion #3) without going through the network. Both
-# paths share the same payload shape (§3.5) and the same best-effort
+# paths share the same payload shape (campaign.succeeded) and the same best-effort
 # contract (criterion #4).
 
 
@@ -988,7 +988,7 @@ def _build_notify_payload(
     download_url: str | None,
     expires_in_seconds: int,
 ) -> dict[str, Any]:
-    """Build the §3.5 ``campaign.succeeded`` payload for a campaign record."""
+    """Build the ``campaign.succeeded`` webhook payload for a campaign record."""
     return {
         "campaign_id": rec.get("campaign_id", ""),
         "name": rec.get("name"),
@@ -1064,7 +1064,7 @@ def _notify_campaign_completion(rec: dict[str, Any]) -> None:
     Called from the aggregation endpoint after the campaign status flips
     to ``complete`` (issue #628 criterion #3). Iterates the channels
     configured on the campaign record (SNS topic ARN → notification
-    email → webhook URL) and dispatches the §3.5 ``campaign.succeeded``
+    email → webhook URL) and dispatches the ``campaign.succeeded``
     payload to each. Best-effort: a failure in any channel is logged
     with ``exc_info=True`` and does not affect the others or the
     campaign status (criterion #4).

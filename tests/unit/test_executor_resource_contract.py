@@ -1,6 +1,6 @@
 """Parametrized per-executor resource-directive contract test (issue #943).
 
-PRD §6 #3 calls the resource-allocation mapping a key consideration. Each
+AGENTS.md §8 gotcha #3 calls the resource-allocation mapping a key consideration. Each
 executor translates the canonical OSimFlow directives ``cpus`` /
 ``memory_mb`` / ``time_min`` into a scheduler-native spec:
 

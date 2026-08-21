@@ -7,7 +7,7 @@ Covers all seven acceptance criteria:
 2. ``aggregated_results.csv`` column contract matches the local
    ``bin/aggregate_results.py`` path (``sample_id`` lead, then KPI columns).
 3. ``failed_simulations.csv`` carries exactly the first ``  * Severe`` line
-   per failed manifest (PRD §6 #4) — no full ``.err`` dumps.
+   per failed manifest (AGENTS.md §8 gotcha #4) — no full ``.err`` dumps.
 4. A Pareto-front JSON is produced when ``--algorithm`` is ``nsga2``/``pso``.
 5. Robustness: an ok manifest whose ``kpis.json`` is missing is logged +
    counted as failed, never a crash.

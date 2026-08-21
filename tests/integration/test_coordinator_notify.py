@@ -12,7 +12,7 @@ Also covers:
   the right backend and returns ``status=sent``.
 * A failed ``send()`` is logged but never reverts the campaign status
   (criterion #4 — best-effort).
-* The §3.5 payload carries ``download_url`` + ``expires_in_seconds``.
+* The campaign.succeeded payload carries ``download_url`` + ``expires_in_seconds``.
 * A campaign with no configured channel completes silently (auto-notify
   is skipped, not an error).
 """
@@ -211,7 +211,7 @@ def test_aggregation_fires_exactly_one_send_for_single_configured_channel(
     assert len(fake.calls) == 1
     event, payload = fake.calls[0]
     assert event == "campaign.succeeded"
-    # §3.5 payload contract.
+    # campaign.succeeded payload contract.
     assert payload["campaign_id"] == CAMPAIGN_ID
     assert "download_url" in payload
     assert payload["expires_in_seconds"] == 3600
