@@ -4446,6 +4446,7 @@ class Campaign:
             {
                 "kpis": [str(p) for p in kpi_files],
                 "sims": [str(p) for p in sim_dirs],
+                "baseline_sample_id": baseline_sample_id or "None",
             }
         )
         key = CacheKey(
