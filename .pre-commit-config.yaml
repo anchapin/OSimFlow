@@ -51,7 +51,7 @@ repos:
 
       - id: pytest-fast
         name: pytest (contract + fast integration)
-        entry: .venv/bin/pytest tests/contract -x -q
+        entry: .venv/bin/pytest -o addopts="" tests/contract -x -q
         language: system
         types: [python]
         pass_filenames: false
