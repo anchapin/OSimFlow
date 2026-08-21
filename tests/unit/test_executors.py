@@ -605,6 +605,19 @@ class TestAWSBatchHandle:
         mock_client.describe_jobs.return_value = {"jobs": [{"jobId": "j-h", "status": "RUNNING"}]}
         assert handle.done() is False
 
+    def test_done_ghost_job_returns_false_not_raise(self) -> None:
+        """done() must return False (not raise RuntimeError) on ghost jobs (issue #1094).
+
+        After _GHOST_RETRIES consecutive empty describe_jobs responses, the
+        handle should capture the error and return False, per the base
+        Handle.done() contract (base.py:100).
+        """
+        handle, mock_client = self._make_handle("RUNNING")
+        mock_client.describe_jobs.return_value = {"jobs": []}
+        assert handle.done() is False
+        assert isinstance(handle.error, RuntimeError)
+        assert "Ghost job" in str(handle.error)
+
 
 # ---------------------------------------------------------------------------
 # _slugify_job_name
