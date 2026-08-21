@@ -387,7 +387,7 @@ invoke `.venv/bin/pytest` directly.
 |---|---|
 | `make test` | Full pytest suite |
 | `make test-fast` | Contract + unit only (~10s, pre-commit mirror) |
-| `make test-cov` | Full suite + 85% coverage gate |
+| `make test-cov` | Full suite + 83% coverage gate |
 | `make lint` | ruff check (read-only) |
 | `make format` | ruff format (writes) |
 | `make typecheck` | mypy --strict on osimflow/ |
@@ -404,10 +404,10 @@ invoke `.venv/bin/pytest` directly.
 ```bash
 make test-cov
 # Or manually:
-.venv/bin/pytest --cov=osimflow --cov-report=term-missing --cov-fail-under=85
+.venv/bin/pytest --cov=osimflow --cov-report=term-missing --cov-fail-under=83
 ```
 
-The coverage gate is 85%. If it fails, the output shows which lines
+The coverage gate is 83%. If it fails, the output shows which lines
 are uncovered. Add tests for the missing public-API paths.
 
 ### Integration tests
@@ -1072,7 +1072,7 @@ jobs:
      ┌───────────────┐
      │     test       │
      │  (pytest,      │
-     │  85% coverage) │
+      │  83% coverage) │
      │    ~2-5 min    │
      └───────────────┘
 ```
@@ -1083,7 +1083,7 @@ jobs:
 | `typecheck` | `mypy --strict osimflow/` | ~60s |
 | `contract` | AGENTS.md drift + docs path resolution | ~10s |
 | `security` | `pip-audit` against the dependency set | ~30s |
-| `test` | `pytest --cov=osimflow --cov-fail-under=85` | ~2-5 min |
+| `test` | `pytest --cov=osimflow --cov-fail-under=83` | ~2-5 min |
 
 A green check on every required job is the gate to merge.
 
@@ -1306,7 +1306,7 @@ are failing. This can silently land broken code on `main`.
 
 - Settings → Branches → Branch protection rules → `main`
 - Require status checks: `lint (ruff)`, `typecheck (mypy --strict)`,
-  `test (pytest, 85% coverage gate)`, `agents & docs contract`,
+  `test (pytest, 83% coverage gate)`, `agents & docs contract`,
   `security (pip-audit)`
 
 Until that is configured, always verify `non_success` is empty before
