@@ -36,7 +36,7 @@ typecheck: ## mypy --strict (osimflow/)
 	$(MYPY) osimflow
 
 test: ## pytest (full suite, no coverage gate — use test-cov for the gate)
-	$(PYTEST)
+	$(PYTEST) -o addopts=""
 
 test-cov: ## pytest --cov with 83% gate (explicit flags, not inherited from addopts)
 	$(PYTEST) --cov=osimflow --cov-report=term-missing --cov-fail-under=83
