@@ -60,7 +60,7 @@ After the command completes, check that these outputs exist under `./results`:
 ls results/aggregated_results.csv results/run.json results/plots/
 ```
 
-If all three are present, your installation is working correctly. See [AGENTS.md §4](AGENTS.md) for the full set of build/run commands and the [User Guide](docs/user-guide.md) for detailed configuration.
+If all three are present, your installation is working correctly. See [AGENTS.md §2](AGENTS.md) for the full set of build/run commands and the [User Guide](docs/user-guide.md) for detailed configuration.
 
 ## License
 
