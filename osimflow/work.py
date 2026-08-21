@@ -1228,6 +1228,7 @@ def _extract_kpis_impl(
     *,
     openstudio_version: str | None = None,
     max_retries: int = 3,
+    kpis: list[str] | None = None,
 ) -> Path:
     """Internal implementation — wrapped with retry by ``extract_kpis``.
 
@@ -1248,6 +1249,7 @@ def _extract_kpis_impl(
         sample_id=sample_id,
         out_path=kpi_path,
         openstudio_version=openstudio_version,
+        kpis=kpis,
     )
 
 
@@ -1258,6 +1260,7 @@ def extract_kpis(
     *,
     openstudio_version: str | None = None,
     max_retries: int = 3,
+    kpis: list[str] | None = None,
 ) -> Path:
     """Run the default KPI extractor with exponential-backoff retry.
 
@@ -1270,6 +1273,8 @@ def extract_kpis(
         out: directory where the KPI JSON file is written.
         openstudio_version: optional OpenStudio version string to record in KPI JSON.
         max_retries: maximum retry attempts for transient failures (default 3).
+        kpis: optional list of KPI names to extract (issue #1082). When
+            ``None`` (default), all available KPIs are extracted.
 
     Returns:
         Path to the kpi JSON file.
@@ -1280,6 +1285,7 @@ def extract_kpis(
         sample_id,
         out,
         openstudio_version=openstudio_version,
+        kpis=kpis,
         max_retries=max_retries,
         sample_id=sample_id,
         step_name="extract_kpis",

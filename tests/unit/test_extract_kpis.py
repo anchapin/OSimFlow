@@ -887,3 +887,42 @@ class TestRunExtractKpis:
             out_path=out_path,
         )
         assert out_path.is_file()
+
+    def test_kpis_filter_restricts_output(self, full_sql: Path, tmp_path: Path) -> None:
+        """Issue #1082: --kpis should restrict the extracted KPI set."""
+        sim_dir = full_sql.parent
+
+        # Baseline: all KPIs present
+        out_all = tmp_path / "kpi_all.json"
+        ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="all",
+            out_path=out_all,
+        )
+        all_data = json.loads(out_all.read_text())
+        all_kpi_names = set(all_data["kpis"].keys())
+        assert "eui_kwh_m2_yr" in all_kpi_names
+        assert "unmet_hours_heating" in all_kpi_names
+
+        # Filtered: only the requested KPI present
+        out_filtered = tmp_path / "kpi_filtered.json"
+        ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="filtered",
+            out_path=out_filtered,
+            kpis=["eui_kwh_m2_yr"],
+        )
+        filtered_data = json.loads(out_filtered.read_text())
+        assert set(filtered_data["kpis"].keys()) == {"eui_kwh_m2_yr"}
+        assert filtered_data["kpis"]["eui_kwh_m2_yr"] == all_data["kpis"]["eui_kwh_m2_yr"]
+
+        # Multiple KPIs
+        out_multi = tmp_path / "kpi_multi.json"
+        ek.run_extract_kpis(
+            simulation_dir=sim_dir,
+            sample_id="multi",
+            out_path=out_multi,
+            kpis=["eui_kwh_m2_yr", "unmet_hours_heating"],
+        )
+        multi_data = json.loads(out_multi.read_text())
+        assert set(multi_data["kpis"].keys()) == {"eui_kwh_m2_yr", "unmet_hours_heating"}

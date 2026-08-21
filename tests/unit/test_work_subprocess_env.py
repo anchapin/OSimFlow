@@ -388,6 +388,7 @@ class TestExtractKpisNoSubprocess:
             sample_id="0001",
             out_path=out / "kpi_0001.json",
             openstudio_version=None,
+            kpis=None,
         )
 
 

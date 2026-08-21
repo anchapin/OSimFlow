@@ -4023,7 +4023,14 @@ class Campaign:
         os_version = self.cfg.openstudio_version
         for sid, sim_dir in simulated.items():
             inputs_hash = sha256_of_dict(
-                {"sim_dir": str(sim_dir), "sid": sid, "os_version": os_version}
+                {
+                    "sim_dir": str(sim_dir),
+                    "sid": sid,
+                    "os_version": os_version,
+                    # Issue #1082: include the KPI filter in the cache key so
+                    # that changing --kpis invalidates stale KPI JSON.
+                    "kpis": list(self.cfg.kpis) if self.cfg.kpis else [],
+                }
             )
             key = CacheKey(
                 step="EXTRACT_KPIS",
@@ -4087,6 +4094,7 @@ class Campaign:
                         sid,
                         ctx["kpi_dir"],
                         openstudio_version=ctx["os_version"],
+                        kpis=self.cfg.kpis,
                         max_retries=self.cfg.max_sample_retries,
                     )
                 else:
@@ -4096,6 +4104,7 @@ class Campaign:
                         sid,
                         ctx["kpi_dir"],
                         openstudio_version=ctx["os_version"],
+                        kpis=self.cfg.kpis,
                         name=f"kpi_{sid}",
                         cpus=1,
                         memory_mb=1024,

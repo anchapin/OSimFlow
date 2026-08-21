@@ -932,6 +932,10 @@ class CampaignConfig:
         Nomad executor configuration (grouped).
     chaos
         Opt-in chaos testing settings (issue #1013).
+    kpis
+        Optional list of KPI names to extract (issue #1082). When set,
+        only the named KPIs are written to the per-sample KPI JSON.
+        When ``None`` (default), all available KPIs are extracted.
     """
 
     # --- Core required fields ---
@@ -992,6 +996,8 @@ class CampaignConfig:
     archive_intermediates: bool = False
     custom_apply_script: Path | None = None
     custom_kpi_extractor: Path | None = None
+    # --- KPI extraction configuration (issue #1082) ---
+    kpis: list[str] | None = None
     shard_count: int | None = None
     shard_index: int | None = None
     shard_start: int | None = None
@@ -1648,6 +1654,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,
         custom_kpi_extractor=Path(str(custom_kpi)).resolve() if custom_kpi else None,
+        kpis=cast(list[str], args["kpis"]) if args.get("kpis") else None,
         mlflow_tracking_uri=(
             str(args["mlflow_tracking_uri"]) if args.get("mlflow_tracking_uri") else None
         ),
