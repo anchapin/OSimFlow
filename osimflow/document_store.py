@@ -89,6 +89,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
+from .circuit_breaker import CircuitBreaker, CircuitOpenError
+
 if TYPE_CHECKING:
     pass
 
@@ -1000,6 +1002,40 @@ def _get_redis_sync() -> Any:
     return _redis_sync_module["module"]
 
 
+class _BreakerClient:
+    """Proxy recording every Redis operation outcome into a breaker.
+
+    Wraps the sync Redis client so ``DistributedCache``-style call sites
+    do not each need bespoke breaker plumbing (issue #1111). While the
+    circuit is open, calls fail fast with :class:`DocumentStoreError`
+    instead of waiting out another 5 s socket timeout.
+    """
+
+    def __init__(self, client: Any, breaker: CircuitBreaker) -> None:
+        self._client = client
+        self._breaker = breaker
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            try:
+                self._breaker.check()
+            except CircuitOpenError as exc:
+                raise DocumentStoreError(f"Redis unavailable ({exc})") from exc
+            try:
+                result = attr(*args, **kwargs)
+            except Exception:
+                self._breaker.record_failure()
+                raise
+            self._breaker.record_success()
+            return result
+
+        return wrapped
+
+
 class RedisDocumentStore(DocumentStore):
     """Redis-backed document store for distributed campaigns (issue #1014).
 
@@ -1106,6 +1142,10 @@ class RedisDocumentStore(DocumentStore):
         self.requested_db_path = db_path
         self._lru_max_entries = int(lru_max_entries)
         self._redis_client: Any = None
+        # Circuit breaker (issue #1111): after repeated consecutive Redis
+        # failures, fail fast (DocumentStoreError) instead of burning the
+        # 5 s socket timeout on every operation until Redis recovers.
+        self._breaker = CircuitBreaker(name=f"docs:{namespace}")
         self._lru: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
         self._lru_lock = threading.Lock()
         # Per-instance index registry.  Keyed by ``(collection, field)``
@@ -1131,16 +1171,33 @@ class RedisDocumentStore(DocumentStore):
 
         Socket timeouts bound every call so a hung Redis does not stall
         the campaign (mirrors the same timeouts in
-        ``DistributedCache._get_sync_client``).
+        ``DistributedCache._get_sync_client``).  The returned client is
+        wrapped in a recording proxy that feeds every operation's outcome
+        into the circuit breaker;         while the breaker is open, operations
+        fail fast with :class:`DocumentStoreError` instead of waiting for
+        another socket timeout (issue #1111).
         """
+        # Fail fast while the circuit is open (issue #1111): do not even
+        # attempt client construction or a socket round-trip.
+        try:
+            self._breaker.check()
+        except CircuitOpenError as exc:
+            raise DocumentStoreError(f"Redis unavailable ({exc})") from exc
         if self._redis_client is None:
             redis_sync = _get_redis_sync()
-            self._redis_client = redis_sync.from_url(
-                self._redis_url,
-                decode_responses=True,
-                socket_timeout=5.0,
-                socket_connect_timeout=5.0,
-            )
+            try:
+                raw_client = redis_sync.from_url(
+                    self._redis_url,
+                    decode_responses=True,
+                    socket_timeout=5.0,
+                    socket_connect_timeout=5.0,
+                )
+            except Exception:
+                # Construction itself failed (bad URL, immediate connection
+                # error): count it toward the circuit (issue #1111).
+                self._breaker.record_failure()
+                raise
+            self._redis_client = _BreakerClient(raw_client, self._breaker)
         return self._redis_client
 
     # ------------------------------------------------------------------
