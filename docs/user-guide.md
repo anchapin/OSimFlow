@@ -287,9 +287,9 @@ Nomad runtime environment variables:
 ### 4.2 variables.yml Schema
 
 The `variables.yml` file declares which parameters vary and how they are
-distributed. OSimFlow supports **nine distributions**: `uniform`,
+distributed. OSimFlow supports **ten distributions**: `uniform`,
 `lognormal`, `normal`, `triangular`, `beta`, `gamma`, `exponential`,
-`pareto`, and `weibull`.
+`discrete`, `categorical`, and `conditional`.
 
 **Minimal example:**
 
