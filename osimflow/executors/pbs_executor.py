@@ -67,7 +67,7 @@ class _PBSHandle(Handle):
         # approach.
         try:
             job_state, exit_code = self._executor._wait_for_terminal(self.job_id)
-        except BaseException as exc:  # noqa: BLE001 — surface any poll error
+        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
             self._future.set_exception(exc)
             raise
 

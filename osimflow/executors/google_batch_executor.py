@@ -89,7 +89,7 @@ class _GoogleBatchHandle(Handle):
         for attempt in range(effective_max_retries + 1):
             try:
                 job = self._executor._wait_for_terminal(self.job_name)
-            except BaseException as exc:
+            except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                 self._future.set_exception(exc)
                 raise
 
@@ -129,7 +129,7 @@ class _GoogleBatchHandle(Handle):
                         self.worker_id = self.job_name
                         try:
                             job = self._executor._wait_for_terminal(self.job_name)
-                        except BaseException as exc:
+                        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                             self._future.set_exception(exc)
                             raise
                         status = job.status.state

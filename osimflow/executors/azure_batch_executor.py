@@ -96,7 +96,7 @@ class _AzureBatchHandle(Handle):
         for attempt in range(effective_max_retries + 1):
             try:
                 job = self._executor._wait_for_terminal(self.job_id)
-            except BaseException as exc:
+            except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                 self._future.set_exception(exc)
                 raise
 
@@ -133,7 +133,7 @@ class _AzureBatchHandle(Handle):
                     self.worker_id = self.job_id
                     try:
                         job = self._executor._wait_for_terminal(self.job_id)
-                    except BaseException as exc:
+                    except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                         self._future.set_exception(exc)
                         raise
                     exit_code = job.properties.execution_info.exit_code
