@@ -644,6 +644,8 @@ class DAGConfig:
         BYOS script trust level (issue #269).
     byos_resource_limits
         BYOS subprocess resource limits (issue #343).
+    byos_timeout_s
+        BYOS / OpenStudio subprocess timeout in seconds (issue #1109).
     ecr_repository
         ECR repository URI for OpenStudio images (issue #144).
     resource_quota
@@ -680,6 +682,7 @@ class DAGConfig:
     offline_bundle: Path | None = None
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
     byos_resource_limits: dict[str, int] | None = None
+    byos_timeout_s: float = 600.0
     ecr_repository: str | None = None
     resource_quota: ResourceQuota | None = None
     redis_url: str | None = None
@@ -1006,6 +1009,7 @@ class CampaignConfig:
     offline_bundle: Path | None = None
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
     byos_resource_limits: dict[str, int] | None = None
+    byos_timeout_s: float = 600.0
     require_trusted_scripts: bool = False
     ecr_repository: str | None = None
     resource_quota: ResourceQuota | None = None
@@ -1125,6 +1129,7 @@ class CampaignConfig:
             offline_bundle=self.offline_bundle,
             byos_trust_level=self.byos_trust_level,
             byos_resource_limits=self.byos_resource_limits,
+            byos_timeout_s=self.byos_timeout_s,
             ecr_repository=self.ecr_repository,
             resource_quota=self.resource_quota,
             redis_url=self.redis_url,
@@ -1286,6 +1291,7 @@ class CampaignConfig:
                 "offline_bundle": ("dag", "offline_bundle"),
                 "byos_trust_level": ("dag", "byos_trust_level"),
                 "byos_resource_limits": ("dag", "byos_resource_limits"),
+                "byos_timeout_s": ("dag", "byos_timeout_s"),
                 "ecr_repository": ("dag", "ecr_repository"),
                 "resource_quota": ("dag", "resource_quota"),
                 "redis_url": ("dag", "redis_url"),
@@ -1779,6 +1785,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         byos_resource_limits=(
             args["byos_resource_limits"] if args.get("byos_resource_limits") else None  # type: ignore[arg-type]
         ),
+        byos_timeout_s=float(str(args.get("byos_timeout_s", 600.0))),
         result_storage_backend=str(args.get("result_storage_backend", "local")),
         result_storage_bucket=str(args.get("result_storage_bucket", "")),
         result_storage_endpoint=(

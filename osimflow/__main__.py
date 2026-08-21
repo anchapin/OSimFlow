@@ -1090,6 +1090,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--byos-timeout-s",
+        type=float,
+        default=600.0,
+        help=(
+            "Wall-clock timeout in seconds for the BYOS subprocess and the "
+            "real OpenStudio CLI simulation subprocess (issue #1109). A wedged "
+            "subprocess is killed and the sample fails instead of hanging the "
+            "campaign forever. Raise this for large models on slow hardware."
+        ),
+    )
+    run.add_argument(
         "--observability",
         choices=["none", "cloudwatch", "prometheus", "opentelemetry"],
         default="none",
@@ -3798,6 +3809,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
             Path(args.custom_apply_script),
             trust_level=trust_level,
             resource_limits=byos_resource_limits,
+            timeout_s=args.byos_timeout_s,
         )
         if args.custom_apply_script
         else None
@@ -3807,6 +3819,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
             Path(args.custom_kpi_extractor),
             trust_level=trust_level,
             resource_limits=byos_resource_limits,
+            timeout_s=args.byos_timeout_s,
         )
         if args.custom_kpi_extractor
         else None

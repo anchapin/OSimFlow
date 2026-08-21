@@ -364,6 +364,32 @@ class TestRunOpenstudioSimRealCli:
         assert "run" in cmd
         assert "-w" in cmd
 
+    def test_real_cli_timeout_passed_to_subprocess(
+        self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
+    ) -> None:
+        """timeout_s is forwarded to run_subprocess so a wedged CLI cannot hang (#1109)."""
+        stdout_path, stderr_path = log_paths
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            run_openstudio_sim(
+                modified_sim_package=sim_package,
+                sample_id="0001",
+                openstudio_version="3.11.0",
+                out=out_dir,
+                simulate_work_s=0.0,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                timeout_s=123.5,
+            )
+        assert mock_run.call_args[1]["timeout"] == 123.5
+
     def test_skips_when_eplusout_sql_exists(
         self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
     ) -> None:

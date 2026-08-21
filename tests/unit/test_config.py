@@ -219,6 +219,16 @@ class TestLoadConfig:
         assert cfg.n_samples == 10
         assert cfg.outdir == outdir.resolve()
         assert cfg.openstudio_version == "3.11.0"
+        # Issue #1109: default BYOS/sim subprocess timeout is 600s.
+        assert cfg.byos_timeout_s == 600.0
+
+    def test_byos_timeout_s_configurable(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """--byos-timeout-s flows through load_config into CampaignConfig (#1109)."""
+        args = _base_args(variables_yml, template_pkg, outdir, byos_timeout_s="1800.0")
+        cfg = load_config(args)
+        assert cfg.byos_timeout_s == 1800.0
 
     def test_missing_variables_yml(self, template_pkg: Path, outdir: Path) -> None:
         args = _base_args(Path("/nonexistent/variables.yml"), template_pkg, outdir)

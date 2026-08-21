@@ -857,8 +857,13 @@ def _run_openstudio_sim_impl(
     max_retries: int = 3,
     worker_id: str = "local",
     health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
+    timeout_s: float = 600.0,
 ) -> Path:
-    """Internal implementation — wrapped with retry by ``run_openstudio_sim``."""
+    """Internal implementation — wrapped with retry by ``run_openstudio_sim``.
+
+    ``timeout_s`` bounds the real-CLI subprocess (issue #1109): without it
+    a wedged EnergyPlus run hangs the sample forever.
+    """
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
     log.info("simulating sample=%s version=%s -> %s", sample_id, openstudio_version, sim_out)
@@ -924,6 +929,7 @@ def _run_openstudio_sim_impl(
                 sim_out=sim_out,
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
+                timeout_s=timeout_s,
             )
         else:
             cmd = [
@@ -984,6 +990,7 @@ def run_openstudio_sim(
     max_retries: int = 3,
     worker_id: str = "local",
     health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
+    timeout_s: float = 600.0,
 ) -> Path:
     """Run the OpenStudio simulation with exponential-backoff retry.
 
@@ -1037,6 +1044,10 @@ def run_openstudio_sim(
             a heartbeat thread runs for the duration of the simulation and a
             STALE heartbeat on failure triggers a retry as a potentially
             transient error (issue #415).
+        timeout_s: wall-clock bound for the real-CLI subprocess in seconds
+            (issue #1109). A wedged EnergyPlus run is killed and the sample
+            fails instead of hanging the campaign forever. Default 600s;
+            configurable via ``--byos-timeout-s``.
 
     Returns:
         Path to the simulation output directory (eplusout.sql inside).
@@ -1081,6 +1092,7 @@ def run_openstudio_sim(
         max_retries=max_retries,
         worker_id=worker_id,
         health_check_interval=health_check_interval,
+        timeout_s=timeout_s,
     )
 
 
@@ -1121,6 +1133,7 @@ def _run_real_openstudio(
     sim_out: Path,
     stdout_path: Path,
     stderr_path: Path,
+    timeout_s: float = 600.0,
 ) -> Path:
     """Invoke ``openstudio.cli run -w <workflow.osw>`` (issue #31).
 
@@ -1167,6 +1180,7 @@ def _run_real_openstudio(
             cwd=modified_sim_package,
             check=True,
             env=_sanitize_env(),
+            timeout=timeout_s,
         )
     except subprocess.SubprocessError as e:
         log.error(

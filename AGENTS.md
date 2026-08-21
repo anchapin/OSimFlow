@@ -213,7 +213,8 @@ appear in this document. Listed in run-subcommand groups (or
   `--sample`, `--skip-preflight`, `--template_sim_package`,
   `--track-costs`, `--validate-measures`.
 
-- **BYOS:** `--byos-resource-limits`, `--byos-trust-level`,
+- **BYOS:** `--byos-resource-limits`, `--byos-timeout-s`,
+  `--byos-trust-level`,
   `--custom_apply_script`, `--custom_kpi_extractor`,
   `--require-trusted-scripts`.
 
