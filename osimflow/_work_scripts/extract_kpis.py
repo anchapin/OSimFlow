@@ -655,6 +655,7 @@ def run_extract_kpis(
     custom_kpi_extractor: Path | None = None,
     quality_thresholds: dict[str, Any] | None = None,
     openstudio_version: str | None = None,
+    kpis: list[str] | None = None,
 ) -> Path:
     """Run KPI extraction for one sample and write the JSON to *out_path*.
 
@@ -670,6 +671,9 @@ def run_extract_kpis(
             to :func:`validate_kpis`.
         openstudio_version: Optional OpenStudio version string recorded
             in the KPI JSON for traceability.
+        kpis: Optional list of KPI names to extract (issue #1082).  When
+            provided, only the named KPIs are included in the output JSON.
+            When ``None`` (default), all available KPIs are extracted.
 
     Returns:
         The *out_path* the JSON was written to.
@@ -683,7 +687,7 @@ def run_extract_kpis(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sql_path = simulation_dir / "eplusout.sql"
 
-    kpis: dict[str, Any] = {}
+    extracted_kpis: dict[str, Any] = {}
 
     if custom_kpi_extractor is not None:
         if not custom_kpi_extractor.exists():
@@ -715,16 +719,21 @@ def run_extract_kpis(
             log.error("Custom extractor failed: %s", e, exc_info=True)
             raise RuntimeError(f"Custom extractor failed: {e}") from e
         if isinstance(custom_kpis, dict):
-            kpis.update(custom_kpis)
+            extracted_kpis.update(custom_kpis)
         else:
             msg = f"Custom extractor returned {type(custom_kpis)}, expected dict."
             log.error(msg)
             raise RuntimeError(msg)
     else:
-        kpis = extract_kpis_from_sql(sql_path)
-        kpis.update(_extract_simulation_summary(simulation_dir))
+        extracted_kpis = extract_kpis_from_sql(sql_path)
+        extracted_kpis.update(_extract_simulation_summary(simulation_dir))
 
-    quality = validate_kpis(kpis, thresholds=quality_thresholds)
+    # Issue #1082: filter to user-requested KPIs when --kpis is set.
+    if kpis is not None:
+        _desired = set(kpis)
+        extracted_kpis = {k: v for k, v in extracted_kpis.items() if k in _desired}
+
+    quality = validate_kpis(extracted_kpis, thresholds=quality_thresholds)
 
     for w in quality["warnings"]:
         log.warning("Quality warning for sample %s: %s", sample_id, w)
@@ -734,7 +743,7 @@ def run_extract_kpis(
     output = {
         "sample_id": sample_id,
         "openstudio_version": openstudio_version,
-        "kpis": kpis,
+        "kpis": extracted_kpis,
         "quality": quality,
     }
 
@@ -773,6 +782,13 @@ def main() -> int:
         default=None,
         help="OpenStudio version string to record in KPI JSON.",
     )
+    parser.add_argument(
+        "--kpis",
+        nargs="*",
+        metavar="KPI",
+        default=None,
+        help="Restrict KPI extraction to these names (all KPIs if omitted).",
+    )
     args = parser.parse_args()
 
     quality_thresholds: dict[str, Any] | None = None
@@ -790,6 +806,7 @@ def main() -> int:
             custom_kpi_extractor=args.custom_kpi_extractor,
             quality_thresholds=quality_thresholds,
             openstudio_version=args.openstudio_version,
+            kpis=args.kpis,
         )
     except (FileNotFoundError, RuntimeError) as exc:
         log.error("extract_kpis failed: %s", exc)

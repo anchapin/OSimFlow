@@ -930,6 +930,13 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         default=None,
         help="Path to a .py file defining extract_kpis(...) (BYOS)",
     )
+    run.add_argument(
+        "--kpis",
+        nargs="*",
+        metavar="KPI",
+        default=None,
+        help="Restrict KPI extraction to these names (all KPIs if omitted).",
+    )
     run.add_argument("--log_level", default="INFO")
     run.add_argument(
         "--algorithm",
