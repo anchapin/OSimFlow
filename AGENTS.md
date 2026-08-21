@@ -256,7 +256,7 @@ appear in this document. Listed in run-subcommand groups (or
 
 ```bash
 make test           # full suite
-make test-fast      # contract + unit, no coverage gate (pre-commit mirror)
+make test-fast      # contract only, no coverage gate (pre-commit mirror)
 .venv/bin/pytest tests/integration/test_cache_invalidation.py -v
 .venv/bin/pytest --cov=osimflow
 ```
