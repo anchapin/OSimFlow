@@ -289,14 +289,25 @@ class AzureBatchExecutor(BaseExecutor):
         lower = reason.lower()
         return any(marker.lower() in lower for marker in self._SPOT_INTERRUPTION_MARKERS)
 
-    def _wait_for_terminal(self, job_id: str) -> Any:
-        """Poll Azure Batch with exponential backoff until terminal state."""
+    def _wait_for_terminal(self, job_id: str, timeout: float | None = None) -> Any:
+        """Poll Azure Batch with exponential backoff until terminal state.
+
+        Raises:
+            TimeoutError: if *timeout* seconds elapse before a terminal state.
+        """
         delay = self.poll_interval_s
+        start = time.monotonic()
         while True:
             job = self._get_job(job_id)
             if job.properties.execution_info.end_time is not None:
                 return job
             log.info("azure_batch poll jobId=%s (sleeping %.1fs)", job_id, delay)
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}")
+                delay = min(delay, remaining)
             delay = min(delay * 2, self.max_poll_interval_s)
             time.sleep(delay)
 

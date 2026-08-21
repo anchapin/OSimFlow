@@ -378,17 +378,29 @@ class KubernetesExecutor(BaseExecutor):
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
         return env
 
-    def _wait_for_terminal(self, job_name: str) -> dict[str, Any]:
+    def _wait_for_terminal(self, job_name: str, timeout: float | None = None) -> dict[str, Any]:
         """Poll job status with exponential backoff until terminal state.
 
         Returns the pod status dict for the job's pod.
+
+        Raises:
+            TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
         delay = self.poll_interval_s
+        start = time.monotonic()
         while True:
             try:
                 pod_status = self._get_pod_status(job_name)
             except Exception as exc:
                 log.warning("error getting pod status for %s: %s", job_name, exc)
+                if timeout is not None:
+                    elapsed = time.monotonic() - start
+                    remaining = timeout - elapsed
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
+                        ) from None
+                    delay = min(delay, remaining)
                 delay = min(delay * 2, self.max_poll_interval_s)
                 time.sleep(delay)
                 continue
@@ -403,6 +415,14 @@ class KubernetesExecutor(BaseExecutor):
                 phase,
                 delay,
             )
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
+                    )
+                delay = min(delay, remaining)
             delay = min(delay * 2, self.max_poll_interval_s)
             time.sleep(delay)
 

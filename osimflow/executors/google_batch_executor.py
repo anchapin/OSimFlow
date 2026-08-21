@@ -275,9 +275,14 @@ class GoogleBatchExecutor(BaseExecutor):
         lower = status_details.lower()
         return any(marker.lower() in lower for marker in self._SPOT_INTERRUPTION_MARKERS)
 
-    def _wait_for_terminal(self, job_name: str) -> Any:
-        """Poll Google Cloud Batch with exponential backoff until terminal state."""
+    def _wait_for_terminal(self, job_name: str, timeout: float | None = None) -> Any:
+        """Poll Google Cloud Batch with exponential backoff until terminal state.
+
+        Raises:
+            TimeoutError: if *timeout* seconds elapse before a terminal state.
+        """
         delay = self.poll_interval_s
+        start = time.monotonic()
         while True:
             job = self._get_job(job_name)
             state = job.status.state
@@ -287,6 +292,14 @@ class GoogleBatchExecutor(BaseExecutor):
             log.info(
                 "google_batch poll job=%s state=%s (sleeping %.1fs)", job_name, state_str, delay
             )
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
+                    )
+                delay = min(delay, remaining)
             delay = min(delay * 2, self.max_poll_interval_s)
             time.sleep(delay)
 

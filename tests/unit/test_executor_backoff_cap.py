@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor
@@ -202,6 +204,96 @@ class TestBackoffCapAppliedBeforeSleep:
             )
 
         assert sleep_durations == [2.0, 4.0, 8.0, 8.0]
+
+
+class TestWaitForTerminalTimeout:
+    """Verify _wait_for_terminal raises TimeoutError when timeout exceeded (issue #1093)."""
+
+    def test_azure_batch_timeout_raises(self) -> None:
+        ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
+        ex._azure_identity = MagicMock()
+        ex._azure_batch = MagicMock()
+        ex._client = MagicMock()
+        ex.account_name = "testaccount"
+        ex.account_url = "https://testaccount.eastus.batch.azure.com"
+        ex.pool_id = "test-pool"
+        ex.location = "eastus"
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.01
+        ex.use_spot = False
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 3
+
+        mock_job_running = MagicMock()
+        mock_job_running.properties.execution_info.end_time = None
+        ex._client.job.get.return_value = mock_job_running
+
+        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+            with pytest.raises(TimeoutError, match="Timed out"):
+                ex._wait_for_terminal("test-job", timeout=0.05)
+
+    def test_google_batch_timeout_raises(self) -> None:
+        ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
+        ex._batch_v1 = MagicMock()
+        ex._client = MagicMock()
+        ex.project_id = "test-project"
+        ex.region = "us-central1"
+        ex.batch_service_account = None
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.01
+        ex.use_spot = False
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 3
+        ex._submit_job = MagicMock(return_value="osimflow-test")
+
+        mock_job_running = MagicMock()
+        mock_job_running.status.state = ex._batch_v1.JobStatus.State.RUNNING
+        ex._client.get_job.return_value = mock_job_running
+
+        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+            with pytest.raises(TimeoutError, match="Timed out"):
+                ex._wait_for_terminal("test-job", timeout=0.05)
+
+    def test_pbs_timeout_raises(self) -> None:
+        ex = PBSExecutor.__new__(PBSExecutor)
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.01
+        ex._query_job_state = MagicMock(return_value="R")
+        ex._parse_exit_status = MagicMock(return_value=0)
+
+        with patch("osimflow.executors.pbs_executor.time.sleep"):
+            with pytest.raises(TimeoutError, match="Timed out"):
+                ex._wait_for_terminal("12345", timeout=0.05)
+
+    def test_kubernetes_timeout_raises(self) -> None:
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)
+        ex._client = MagicMock()
+        ex.namespace = "default"
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.01
+
+        pending_pod = MagicMock()
+        pending_pod.to_dict.return_value = {"status": {"phase": "Pending"}}
+        ex._client.list_namespaced_pod.return_value = MagicMock(items=[pending_pod])
+
+        with patch("osimflow.executors.kubernetes_executor.time.sleep"):
+            with pytest.raises(TimeoutError, match="Timed out"):
+                ex._wait_for_terminal("test-job", timeout=0.05)
+
+    def test_docker_swarm_timeout_raises(self) -> None:
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)
+        ex._client = MagicMock()
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.01
+
+        def mock_status(name: str) -> dict:
+            return {"tasks": [{"status": {"State": "running"}}]}
+
+        ex._get_service_status = mock_status
+
+        with patch("osimflow.executors.docker_swarm_executor.time.sleep"):
+            with pytest.raises(TimeoutError, match="Timed out"):
+                ex._wait_for_terminal("test-service", timeout=0.05)
 
     def test_docker_swarm_wait_for_terminal_never_exceeds_max_interval(
         self,
