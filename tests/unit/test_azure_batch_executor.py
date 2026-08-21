@@ -221,6 +221,65 @@ class TestAzureBatchHandle:
             result = handle.result()
         assert result is None
 
+    def test_spot_retry_backoff_applies_jitter(self) -> None:
+        """Spot retry sleeps a jittered duration, not the raw deterministic backoff (#1108)."""
+        ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
+        ex._client = MagicMock()
+        ex._azure_batch = MagicMock()
+        ex._azure_identity = MagicMock()
+        ex.account_name = "testaccount"
+        ex.location = "eastus"
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.use_spot = True
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 3
+        ex.pool_id = "test-pool"
+
+        submit_params = {
+            "name": "test",
+            "cpus": 1,
+            "memory_mb": 1024,
+            "time_min": 60,
+            "environment": [],
+        }
+
+        mock_job_spot = MagicMock()
+        mock_job_spot.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
+        mock_job_spot.properties.execution_info.exit_code = 137
+        mock_job_spot.properties.execution_info.failure_reason = "SpotNodeTermination"
+
+        mock_job_success = MagicMock()
+        mock_job_success.properties.execution_info.end_time = "2024-01-01T00:00:01Z"
+        mock_job_success.properties.execution_info.exit_code = 0
+
+        ex._client.job.get.side_effect = [mock_job_spot, mock_job_success]
+        ex._client.job.add.return_value = None
+        ex._client.task.add.return_value = None
+
+        handle = _AzureBatchHandle(
+            job_id="test-job",
+            executor=ex,
+            submit_params=submit_params,
+        )
+
+        sleep_durations: list[float] = []
+        with (
+            patch(
+                "osimflow.executors.azure_batch_executor.time.sleep",
+                side_effect=sleep_durations.append,
+            ),
+            patch(
+                "osimflow.executors.azure_batch_executor.random.uniform",
+                side_effect=lambda lo, hi: lo + (hi - lo) * 0.5,
+            ),
+        ):
+            handle.result()
+
+        # First attempt backoff = min(5 * 2**0, 60) = 5.0; full jitter at midpoint => 2.5.
+        assert len(sleep_durations) >= 1
+        assert sleep_durations[0] == pytest.approx(2.5)
+
     def test_spot_interruption_exhausted_retries_raises(self) -> None:
         """When Spot retries are exhausted, raises RuntimeError."""
         ex = AzureBatchExecutor.__new__(AzureBatchExecutor)

@@ -30,6 +30,7 @@ fall back to regular VMs after Spot retries are exhausted.
 from __future__ import annotations
 
 import logging
+import random
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -111,14 +112,15 @@ class _AzureBatchHandle(Handle):
 
             if is_spot and attempt < effective_max_retries:
                 backoff = min(5.0 * (2**attempt), 60.0)
+                jittered_backoff = random.uniform(0, backoff)
                 log.warning(
                     "Spot interrupted (attempt %d/%d), retrying in %.1fs: %s",
                     attempt + 1,
                     effective_max_retries,
-                    backoff,
+                    jittered_backoff,
                     failure_reason,
                 )
-                time.sleep(backoff)
+                time.sleep(jittered_backoff)
                 self.job_id = self._executor._submit_job(**self._submit_params)
                 self.worker_id = self.job_id
                 continue

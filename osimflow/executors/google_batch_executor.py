@@ -35,6 +35,7 @@ whether to fall back to regular VMs after Spot retries are exhausted.
 from __future__ import annotations
 
 import logging
+import random
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -105,14 +106,15 @@ class _GoogleBatchHandle(Handle):
 
                 if is_spot and attempt < effective_max_retries:
                     backoff = min(5.0 * (2**attempt), 60.0)
+                    jittered_backoff = random.uniform(0, backoff)
                     log.warning(
                         "Spot/preemptible interrupted (attempt %d/%d), retrying in %.1fs: %s",
                         attempt + 1,
                         effective_max_retries,
-                        backoff,
+                        jittered_backoff,
                         status_details,
                     )
-                    time.sleep(backoff)
+                    time.sleep(jittered_backoff)
                     self.job_name = self._executor._submit_job(**self._submit_params)
                     self.worker_id = self.job_name
                     continue
