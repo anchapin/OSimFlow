@@ -950,6 +950,29 @@ class TestExtractSevereError:
         result = _extract_severe_error(output)
         assert "Something bad" in result
 
+    def test_extracts_single_asterisk_severe_line(self) -> None:
+        """Regression test for issue #1091.
+
+        EnergyPlus sometimes uses a single ``*`` (not ``**``) for severe
+        errors. The regex ``r"^\\s*(?:\\d+\\s+)?\\*+\\s*Severe"`` uses
+        ``\\*+`` (one-or-more) so it should catch single-asterisk lines.
+        """
+        output = "line1\n   * Severe  ** Zone not found\nline3"
+        result = _extract_severe_error(output)
+        assert "Zone not found" in result
+
+    def test_extracts_single_asterisk_no_leading_space(self) -> None:
+        """Issue #1091: single-asterisk severe line without leading spaces."""
+        output = "line1\n* Severe  ** Zone not found\nline3"
+        result = _extract_severe_error(output)
+        assert "Zone not found" in result
+
+    def test_extracts_numbered_single_asterisk_severe(self) -> None:
+        """Issue #1091: single-asterisk with number prefix."""
+        output = "line1\n   1 * Severe  ** Zone not found\nline3"
+        result = _extract_severe_error(output)
+        assert "Zone not found" in result
+
 
 # ===========================================================================
 # _find_workflow_osw
