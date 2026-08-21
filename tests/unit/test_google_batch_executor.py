@@ -209,6 +209,62 @@ class TestGoogleBatchHandle:
             result = handle.result()
         assert result is None
 
+    def test_spot_retry_backoff_applies_jitter(self) -> None:
+        """Spot retry sleeps a jittered duration, not the raw deterministic backoff (#1108)."""
+        ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
+        ex._batch_v1 = MagicMock()
+        ex.project_id = "test-project"
+        ex.region = "us-central1"
+        ex.batch_service_account = None
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.use_spot = True
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 3
+        ex._client = MagicMock()
+        ex._submit_job = MagicMock(return_value="osimflow-test")
+
+        submit_params = {
+            "name": "test",
+            "cpus": 1,
+            "memory_mb": 1024,
+            "time_min": 60,
+            "environment": [],
+        }
+
+        mock_job_preempted = MagicMock()
+        mock_job_preempted.status.state = ex._batch_v1.JobStatus.State.FAILED
+        mock_job_preempted.status.status_details = "instance was preempted"
+
+        mock_job_success = MagicMock()
+        mock_job_success.status.state = ex._batch_v1.JobStatus.State.SUCCEEDED
+
+        ex._client.get_job.side_effect = [mock_job_preempted, mock_job_success]
+        ex._client.create_job.return_value = None
+
+        handle = _GoogleBatchHandle(
+            job_name="test-job",
+            executor=ex,
+            submit_params=submit_params,
+        )
+
+        sleep_durations: list[float] = []
+        with (
+            patch(
+                "osimflow.executors.google_batch_executor.time.sleep",
+                side_effect=sleep_durations.append,
+            ),
+            patch(
+                "osimflow.executors.google_batch_executor.random.uniform",
+                side_effect=lambda lo, hi: lo + (hi - lo) * 0.5,
+            ),
+        ):
+            handle.result()
+
+        # First attempt backoff = min(5 * 2**0, 60) = 5.0; full jitter at midpoint => 2.5.
+        assert len(sleep_durations) >= 1
+        assert sleep_durations[0] == pytest.approx(2.5)
+
     def test_spot_interruption_exhausted_retries_raises(self) -> None:
         """When preemptible retries are exhausted, raises RuntimeError."""
         ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
