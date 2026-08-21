@@ -1213,7 +1213,7 @@ class AWSBatchExecutor(BaseExecutor):
                         delay,
                         code,
                     )
-                    time.sleep(delay)
+                    time.sleep(random.uniform(0, delay))
                     delay = min(delay * 2, 30.0)
                     continue
                 raise

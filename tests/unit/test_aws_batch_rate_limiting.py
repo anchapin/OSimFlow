@@ -214,6 +214,45 @@ class TestSubmitJobWithRetry:
         # Only one call — no retry for non-throttle errors.
         assert client_mock.submit_job.call_count == 1
 
+    def test_retry_applies_jitter(self, executor: AWSBatchExecutor) -> None:
+        """Verify jitter is applied to retry backoff (issue #1089).
+
+        ``random.uniform(0, delay)`` should be used so concurrent campaigns
+        retrying at the same throttle point do not retry in lockstep.
+        """
+        import botocore.exceptions
+
+        error_response = {"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}}
+        throttle_exc = botocore.exceptions.ClientError(error_response, "SubmitJob")
+
+        call_count = 0
+
+        def _mock_submit(**kwargs: object) -> dict[str, object]:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise throttle_exc
+            return {"jobId": f"job-{call_count}", "job": {}}
+
+        client_mock = MagicMock()
+        client_mock.submit_job.side_effect = _mock_submit
+        executor._client = client_mock  # noqa: SLF001
+
+        sleep_durations: list[float] = []
+        with patch("osimflow.executors.time.sleep", side_effect=sleep_durations.append):
+            with patch(
+                "osimflow.executors.random.uniform",
+                side_effect=lambda lo, hi: lo + (hi - lo) * 0.25,
+            ):
+                result = executor._submit_job_with_retry(submit_kwargs={})
+
+        assert result["jobId"] == "job-3"
+        assert len(sleep_durations) == 2  # Two retries before success
+        # First retry: delay=0.5, jitter = 0.5 * 0.25 = 0.125
+        assert sleep_durations[0] == pytest.approx(0.125)
+        # Second retry: delay=1.0, jitter = 1.0 * 0.25 = 0.25
+        assert sleep_durations[1] == pytest.approx(0.25)
+
 
 # ---------------------------------------------------------------------------
 # _submit_job: rate limiter integration

@@ -29,6 +29,7 @@ __all__ = [
 import concurrent.futures
 import logging
 import queue
+import random
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -968,7 +969,7 @@ class ResultStorageUploader:
                                 exc,
                             )
                             if sleep_s > 0:
-                                time.sleep(sleep_s)
+                                time.sleep(random.uniform(0, sleep_s))
                 if last_error is not None:
                     msg = f"{local_path} -> {remote_path}: {last_error}"
                     with self._error_lock:
