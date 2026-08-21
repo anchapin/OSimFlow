@@ -113,6 +113,19 @@ class BaseExecutor(abc.ABC):
 
     name: str = "base"
 
+    @property
+    def requires_remote_runner_payload(self) -> bool:
+        """Whether this executor dispatches work via ``python -m osimflow.remote_runner``.
+
+        Executors that use a remote-runner payload (e.g. Nomad, Kubernetes)
+        marshal step calls into ``OSIMFLOW_TASK_PAYLOAD`` and execute them
+        inside a job container.  Other executors (Local, Slurm, AWS Batch, etc.)
+        invoke work scripts directly and never need the payload path.
+
+        Override in subclasses that differ from the default.
+        """
+        return False
+
     @abc.abstractmethod
     def submit(
         self,

@@ -1840,6 +1840,10 @@ class NomadExecutor(BaseExecutor):
 
     name = "nomad"
 
+    @property
+    def requires_remote_runner_payload(self) -> bool:
+        return True
+
     # The parameterized job ID used for dispatch mode.
     DISPATCH_JOB_ID = "osimflow-worker"
     _LEGACY_DISPATCH_POLICY_ALIASES: ClassVar[dict[str, str]] = {

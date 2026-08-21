@@ -224,6 +224,10 @@ class KubernetesExecutor(BaseExecutor):
 
     name = "kubernetes"
 
+    @property
+    def requires_remote_runner_payload(self) -> bool:
+        return True
+
     def __init__(
         self,
         namespace: str = "default",
