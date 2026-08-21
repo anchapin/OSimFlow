@@ -316,6 +316,67 @@ def test_aggregate_results_uses_work_hash_not_bin_hash(
     )
 
 
+def test_aggregate_results_baseline_sample_id_in_cache_key(
+    tmp_cache: SQLiteCache, tmp_path: Path
+) -> None:
+    """Regression test for issue #1096.
+
+    When using a baseline simulation (e.g. for relative-EUI normalisation),
+    changing the *baseline* sample must invalidate the AGGREGATE_RESULTS
+    cache entry so that the re-aggregation picks up the new reference
+    values. The ``baseline_sample_id`` must therefore be folded into the
+    ``inputs_hash`` that feeds the cache key.
+
+    This mirrors the code path in ``step_aggregate_results`` which now
+    includes ``"baseline_sample_id"`` in the dict passed to
+    ``sha256_of_dict``.
+    """
+    from osimflow.cache import sha256_of_dict
+
+    kpi_files = [str(tmp_path / "kpi_1.json"), str(tmp_path / "kpi_2.json")]
+    sim_dirs = [str(tmp_path / "sim_1"), str(tmp_path / "sim_2")]
+
+    # Replicate the inputs_hash computation from step_aggregate_results
+    inputs_hash_baseline_a = sha256_of_dict(
+        {"kpis": kpi_files, "sims": sim_dirs, "baseline_sample_id": "baseline_A"}
+    )
+    inputs_hash_baseline_b = sha256_of_dict(
+        {"kpis": kpi_files, "sims": sim_dirs, "baseline_sample_id": "baseline_B"}
+    )
+
+    # Different baseline → different inputs_hash
+    assert inputs_hash_baseline_a != inputs_hash_baseline_b
+
+    out = tmp_path / "aggregated.csv"
+    out.write_text("sample_id,eui\n1,100\n2,150\n")
+
+    key_a = CacheKey(
+        step="AGGREGATE_RESULTS",
+        sample_id="ALL",
+        openstudio_version="N/A",
+        inputs_sha256=inputs_hash_baseline_a,
+        code_sha256="code-hash",
+        container_digest="python-img",
+    )
+    key_b = CacheKey(
+        step="AGGREGATE_RESULTS",
+        sample_id="ALL",
+        openstudio_version="N/A",
+        inputs_sha256=inputs_hash_baseline_b,
+        code_sha256="code-hash",
+        container_digest="python-img",
+    )
+
+    tmp_cache.store(key_a, out, exit_code=0)
+
+    # Baseline A is cached → hit
+    assert tmp_cache.lookup(key_a) is not None
+    # Baseline B must miss (different inputs_hash)
+    assert tmp_cache.lookup(key_b) is None, (
+        "Changing baseline_sample_id must invalidate the AGGREGATE_RESULTS cache entry (issue #1096)"
+    )
+
+
 def test_stats(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     """Cache primary key has 6 columns; same key replaces, different key adds."""
     out = tmp_path / "o.txt"
