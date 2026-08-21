@@ -121,7 +121,7 @@ osimflow run \
   --openstudio_version 3.11.0
 
 # Slurm (real cluster — debug=False)
-osimflow run --executor slurm --slurm-real --slurm_partition short \
+osimflow run --executor slurm --slurm-real --slurm-partition short \
   --input_variables variables.yml --n_samples 500 \
   --openstudio_version 3.11.0
 
