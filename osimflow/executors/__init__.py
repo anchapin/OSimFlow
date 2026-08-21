@@ -682,9 +682,13 @@ class _AWSBatchHandle(Handle):
                 self._GHOST_RETRIES,
             )
         else:
-            raise RuntimeError(
+            # Ghost job: not found after _GHOST_RETRIES consecutive empty
+            # responses. Per the base Handle.done() contract (base.py:100),
+            # polling errors must be captured and returned as False, not raised.
+            self.error = RuntimeError(
                 f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries"
             )
+            return False
         status = jobs[0].get("status", "")
         return status in ("SUCCEEDED", "FAILED")
 
@@ -1703,7 +1707,7 @@ class _NomadHandle(Handle):
         self._future.set_exception(RuntimeError(msg))
         raise RuntimeError(msg)
 
-    def done(self) -> bool:
+    def done(self) -> bool:  # noqa: PLR0911
         # If the future is already finished (terminal status observed
         # by a prior ``result()`` call), report done without making
         # another HTTP call. This mirrors the base ``Handle.done()``
@@ -1740,9 +1744,13 @@ class _NomadHandle(Handle):
                 self._GHOST_RETRIES,
             )
         else:
-            raise RuntimeError(
+            # Ghost allocation: not found after _GHOST_RETRIES consecutive
+            # empty responses. Per the base Handle.done() contract (base.py:100),
+            # polling errors must be captured and returned as False, not raised.
+            self.error = RuntimeError(
                 f"Ghost job: job ID {self.job_id!r} not found after {self._GHOST_RETRIES} retries"
             )
+            return False
         status = alloc.get("ClientStatus", "")
         if status not in ("complete", "failed", "lost"):
             return False
