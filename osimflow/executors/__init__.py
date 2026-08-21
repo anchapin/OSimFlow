@@ -590,7 +590,7 @@ class _AWSBatchHandle(Handle):
 
             try:
                 job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)  # noqa: SLF001
-            except BaseException as exc:  # noqa: BLE001 — surface any poll error
+            except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                 self._future.set_exception(exc)
                 raise
 
@@ -633,7 +633,7 @@ class _AWSBatchHandle(Handle):
                     # Poll the on-demand job (no more retries).
                     try:
                         job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)  # noqa: SLF001
-                    except BaseException as exc:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                         self._future.set_exception(exc)
                         raise
                     self._apply_cost(job)
@@ -1671,7 +1671,7 @@ class _NomadHandle(Handle):
                         f"Timed out after {elapsed:.1f}s waiting for allocation {alloc_id!r}"
                     )
             alloc = self._executor._wait_for_terminal(alloc_id, timeout=remaining)  # noqa: SLF001
-        except BaseException as exc:  # noqa: BLE001 — surface any poll error
+        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
             self._future.set_exception(exc)
             raise
         status = alloc.get("ClientStatus", "unknown")

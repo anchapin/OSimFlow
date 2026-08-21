@@ -51,8 +51,8 @@ class _DaskJobQueueHandle(Handle):
     def result(self, timeout: float | None = None) -> Any:
         try:
             return self._future.result(timeout=timeout)
-        except BaseException as exc:
-            self.error = exc  # type: ignore[assignment]
+        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
+            self.error = exc
             raise
 
 

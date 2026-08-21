@@ -111,8 +111,8 @@ class _KubernetesHandle(Handle):
     def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
         try:
             pod_status = self._executor._wait_for_terminal(self._job_name)
-        except BaseException as exc:
-            self.error = exc  # type: ignore[assignment]
+        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
+            self.error = exc
             self._future.set_exception(exc)
             raise
 

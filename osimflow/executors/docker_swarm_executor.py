@@ -80,7 +80,7 @@ class _DockerSwarmHandle(Handle):
         # but not enforced.
         try:
             task_result = self._executor._wait_for_terminal(self._service_name)
-        except BaseException as exc:
+        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
             self._future.set_exception(exc)
             raise
 
