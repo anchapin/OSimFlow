@@ -307,18 +307,28 @@ class PBSExecutor(BaseExecutor):
                     pass
         return -1
 
-    def _wait_for_terminal(self, job_id: str) -> tuple[str, int]:
+    def _wait_for_terminal(self, job_id: str, timeout: float | None = None) -> tuple[str, int]:
         """Poll ``qstat`` with exponential backoff until the job is terminal.
 
         Returns ``(state, exit_code)``.
+
+        Raises:
+            TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
         delay = self.poll_interval_s
+        start = time.monotonic()
         while True:
             state = self._query_job_state(job_id)
             if state in ("F", "E", "C"):
                 exit_code = self._parse_exit_status(job_id)
                 return state, exit_code
             log.info("pbs poll jobId=%s state=%s (sleeping %.1fs)", job_id, state, delay)
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}")
+                delay = min(delay, remaining)
             # Exponential backoff, capped.
             delay = min(delay * 2, self.max_poll_interval_s)
             time.sleep(delay)

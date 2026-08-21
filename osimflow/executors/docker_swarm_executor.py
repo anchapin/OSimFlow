@@ -285,12 +285,16 @@ class DockerSwarmExecutor(BaseExecutor):
             log.warning("error getting service status for %s: %s", service_name, exc)
             return {"tasks": []}
 
-    def _wait_for_terminal(self, service_name: str) -> dict[str, Any]:
+    def _wait_for_terminal(self, service_name: str, timeout: float | None = None) -> dict[str, Any]:
         """Poll service tasks with exponential backoff until all are terminal.
 
         Returns the first non-running task dict.
+
+        Raises:
+            TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
         delay = self.poll_interval_s
+        start = time.monotonic()
         while True:
             try:
                 service_status = self._get_service_status(service_name)
@@ -301,6 +305,14 @@ class DockerSwarmExecutor(BaseExecutor):
                     exc,
                     delay,
                 )
+                if timeout is not None:
+                    elapsed = time.monotonic() - start
+                    remaining = timeout - elapsed
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"Timed out after {elapsed:.1f}s waiting for service {service_name!r}"
+                        ) from None
+                    delay = min(delay, remaining)
                 delay = min(delay * 2, self.max_poll_interval_s)
                 time.sleep(delay)
                 continue
@@ -313,6 +325,14 @@ class DockerSwarmExecutor(BaseExecutor):
                     service_name,
                     delay,
                 )
+                if timeout is not None:
+                    elapsed = time.monotonic() - start
+                    remaining = timeout - elapsed
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"Timed out after {elapsed:.1f}s waiting for service {service_name!r}"
+                        )
+                    delay = min(delay, remaining)
                 delay = min(delay * 2, self.max_poll_interval_s)
                 time.sleep(delay)
                 continue
@@ -338,6 +358,14 @@ class DockerSwarmExecutor(BaseExecutor):
                 current_state,
                 delay,
             )
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for service {service_name!r}"
+                    ) from None
+                delay = min(delay, remaining)
             delay = min(delay * 2, self.max_poll_interval_s)
             time.sleep(delay)
 
