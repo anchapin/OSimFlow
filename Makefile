@@ -14,7 +14,6 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 RUFF := $(VENV)/bin/ruff
-BLACK := $(VENV)/bin/black
 MYPY := $(VENV)/bin/mypy
 PYTEST := $(VENV)/bin/pytest
 PRECOMMIT := $(VENV)/bin/pre-commit
