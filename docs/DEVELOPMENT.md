@@ -889,7 +889,8 @@ key = CacheKey(
 | Change | What it invalidates |
 |---|---|
 | Edit a `bin/*.py` file | All steps that hash `code_hashes["bin"]` |
-| Edit `osimflow/work.py` | All steps (via `code_hashes["work"]`) |
+| Edit `osimflow/work.py` | Per-sample steps (via `code_hashes["bin"]`) + `AGGREGATE_RESULTS` (via `code_hashes["work"]`) |
+| Edit `osimflow/apply_params.py` | All steps that hash `code_hashes["bin"]` |
 | Change `variables.yml` | `GENERATE_LHS_SAMPLES` (and downstream) |
 | Change `--openstudio_version` | `RUN_OPENSTUDIO_SIM` only |
 | Change `template_sim_package` | `APPLY_PARAMETERS` + `RUN_OPENSTUDIO_SIM` |
@@ -897,17 +898,24 @@ key = CacheKey(
 
 ### Code hashing
 
-The Campaign hashes all `bin/*.py` files and `osimflow/work.py` at
-construction time:
+The Campaign computes code hashes at construction time
+(`osimflow/campaign.py:_compute_code_hashes`). The ``bin`` hash
+covers the union of ``bin/*.py`` and ``osimflow/_work_scripts/*.py``
+(dev checkout), plus ``osimflow/work.py`` and
+``osimflow/apply_params.py`` (the per-sample work layer — issue #1022).
+The ``work`` hash covers only ``osimflow/work.py`` and is used by
+``AGGREGATE_RESULTS`` exclusively. BYOS user scripts
+(``cfg.custom_apply_script`` / ``cfg.custom_kpi_extractor``) are mixed
+into the per-sample key via ``_combine_code_hash`` (issue #1011).
 
 ```python
 def _compute_code_hashes(self) -> dict[str, str]:
-    from . import work
-    bin_dir = Path(__file__).resolve().parent.parent / "bin"
-    files = sorted(bin_dir.glob("*.py"))
+    # (simplified — see osimflow/campaign.py for the full implementation)
+    bin_files = sorted(set(bin_dir.glob("*.py") + work_dir.glob("*.py")))
     work_file = Path(inspect.getfile(work))
+    apply_params_file = Path(inspect.getfile(apply_params))
     return {
-        "bin": sha256_of_files(files),
+        "bin": sha256_of_files(bin_files + [work_file, apply_params_file]),
         "work": sha256_of_files([work_file]),
     }
 ```
