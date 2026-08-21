@@ -70,16 +70,17 @@ OSimFlow uses a three-layer architecture:
 ┌─────────────────────────────────────────────────────────────────┐
 │  Orchestrator (osimflow/campaign.py)                            │
 │                                                                 │
-│  Campaign.run() drives the 6-step DAG:                          │
-│                                                                 │
+│  Campaign.run() drives the 7-step DAG:                          │
+
 │    1. GENERATE_LHS_SAMPLES  ──→  samples.json                  │
-│    2. APPLY_PARAMETERS      ──→  N modified sim packages       │
-│    3. RUN_OPENSTUDIO_SIM    ──→  N simulation outputs          │
-│    4. EXTRACT_KPIS          ──→  N KPI JSON files              │
-│    5. AGGREGATE_RESULTS     ──→  aggregated_results.csv        │
-│    6. GENERATE_BASIC_PLOTS  ──→  *.png plots                   │
+│    2. PREFLIGHT_RUN_MODEL    ──→  validated seed model         │
+│    3. APPLY_PARAMETERS      ──→  N modified sim packages       │
+│    4. RUN_OPENSTUDIO_SIM    ──→  N simulation outputs          │
+│    5. EXTRACT_KPIS          ──→  N KPI JSON files              │
+│    6. AGGREGATE_RESULTS     ──→  aggregated_results.csv        │
+│    7. GENERATE_BASIC_PLOTS  ──→  *.png plots                   │
 │                                                                 │
-│  Steps 2-4 fan out over N samples.                              │
+│  Steps 3-5 fan out over N samples.                              │
 │  Each step is cached (SQLiteCache).                             │
 ├─────────────────────────────────────────────────────────────────┤
 │  Executor (osimflow/executors/__init__.py)                      │
