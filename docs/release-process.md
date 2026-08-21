@@ -60,7 +60,7 @@ not delete any when editing the release):
 The CycloneDX SBOM is generated with `cyclonedx-py environment` from the freshly
 built wheel **before** Sigstore signing, so the SBOM itself is signed. Downstream
 build-energy teams that pin `osimflow` in reproducible campaigns can use the SBOM
-to audit the transitive dependency surface (PRD §6 #5–6, supply-chain hygiene).
+to audit the transitive dependency surface (AGENTS.md §8 gotcha #5–6, supply-chain hygiene).
 
 ## Changelog Process
 

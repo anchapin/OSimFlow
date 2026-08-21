@@ -391,7 +391,7 @@ Terminal aggregation step (issue #627, Epic #624). Triggered after
 `{campaign_id}/samples/*/_manifest.json`, reads each referenced `kpis.json`,
 and compiles `aggregated_results.csv` (same column contract as
 `bin/aggregate_results.py`) plus `failed_simulations.csv` (first
-`  * Severe` line per failed manifest — PRD §6 #4). When the campaign
+`  * Severe` line per failed manifest — AGENTS.md §8 gotcha #4). When the campaign
 algorithm is multi-objective (`nsga2`/`pso`) a Pareto-front JSON is also
 written. Artifacts land under `{campaign_id}/_aggregated/` and the campaign
 status flips `aggregating → complete`.

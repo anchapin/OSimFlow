@@ -1155,7 +1155,7 @@ class TestPublishKpiResults:
         assert manifest["status"] == "failed"
         assert manifest["exit_code"] == 1
         assert manifest["kpis_key"] is None
-        # first_severe_error = FIRST '  * Severe' line (PRD §6 #4).
+        # first_severe_error = FIRST '  * Severe' line (AGENTS.md §8 gotcha #4).
         assert manifest["first_severe_error"] == "* Severe ~  HVAC sizing failed in zone Z"
         # No kpis.json uploaded on failure (no file existed).
         assert "camp-1/samples/0002/kpis.json" not in storage.uploads
@@ -1183,7 +1183,7 @@ class TestPublishKpiResults:
         )
         keys = set(storage.uploads)
         assert "camp-1/samples/0003/eplusout.sql" in keys
-        # Size guard (PRD §6 #1/#8): never upload .err / .log.
+        # Size guard (AGENTS.md §8 gotcha #1/#8): never upload .err / .log.
         assert not any(k.endswith("eplusout.err") for k in keys)
         assert not any(k.endswith("eplusout.log") for k in keys)
 
