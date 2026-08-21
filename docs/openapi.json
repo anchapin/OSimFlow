@@ -1688,7 +1688,7 @@
           "coordinator"
         ],
         "summary": "Trigger a completion notification for a campaign",
-        "description": "Dispatch a completion notification via the configured backend (issue #628).\n\nSelects a :class:`osimflow.notify.NotifyBackend` from the request's\n``notification_type`` (``sns`` / ``email`` / ``webhook``) and the\ncampaign's stored ``sns_topic_arn`` / ``notification_email`` /\n``webhook_url``. The \u00a73.5 payload carries the presigned\n``download_url`` whose lifetime is ``expires_in_seconds`` (mirrors\n``--s3-artifact-presigned-url-expiration``).\n\nFailures in the backend are logged with ``exc_info=True`` and never\npropagate: a notification mishap cannot flip a succeeded campaign\nback to failed (issue #628 criterion #4 \u2014 best-effort).",
+        "description": "Dispatch a completion notification via the configured backend (issue #628).\n\nSelects a :class:`osimflow.notify.NotifyBackend` from the request's\n``notification_type`` (``sns`` / ``email`` / ``webhook``) and the\ncampaign's stored ``sns_topic_arn`` / ``notification_email`` /\n``webhook_url``. The campaign.succeeded payload carries the presigned\n``download_url`` whose lifetime is ``expires_in_seconds`` (mirrors\n``--s3-artifact-presigned-url-expiration``).\n\nFailures in the backend are logged with ``exc_info=True`` and never\npropagate: a notification mishap cannot flip a succeeded campaign\nback to failed (issue #628 criterion #4 \u2014 best-effort).",
         "operationId": "notify_campaign_api_v1_coordinator_campaigns__campaign_id__notify_post",
         "parameters": [
           {
@@ -4764,7 +4764,7 @@
         },
         "type": "object",
         "title": "CoordinatorNotifyRequest",
-        "description": "Request for POST /campaigns/{id}/notify \u2014 trigger a notification.\n\nMirrors the API contract \u00a73.5 ``campaign.succeeded`` payload: the\nserver builds the presigned ``download_url`` (whose lifetime is\n``expires_in_seconds``) and dispatches it through the selected\nbackend."
+        "description": "Request for POST /campaigns/{id}/notify \u2014 trigger a notification.\n\nMirrors the ``campaign.succeeded`` notification payload (defined in\n``CampaignSucceededPayload``); the server builds the presigned ``download_url``\n(whose lifetime is ``expires_in_seconds``) and dispatches it through the\nselected backend."
       },
       "CoordinatorNotifyResponse": {
         "properties": {
