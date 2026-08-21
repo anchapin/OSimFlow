@@ -3133,6 +3133,7 @@ class Campaign:
             code_sha256=self.code_hashes["bin"],
             container_digest=self._python_container_digest,
             generation=generation,
+            n_samples=self.cfg.n_samples,
         )
         cached = self.cache.lookup(key)
         if cached:
