@@ -36,7 +36,7 @@ Orchestrator → Executor → Work function
 ```
 
 - **Orchestrator** — `osimflow/campaign.py` (`Campaign` class) drives
-  the 5-step DAG.
+  the 7-step DAG.
 - **Executor** — `osimflow/executors/`; 10 concrete executors
   (`LocalExecutor`, `SlurmExecutor`, `AWSBatchExecutor`,
   `NomadExecutor`, `PBSExecutor`, `AzureBatchExecutor`,
@@ -91,6 +91,7 @@ Python that lacks the `[dev,aws,slurm,api]` extras and fails with
 `ModuleNotFoundError`.
 
 ```bash
+make help       # list all targets
 make install    # pip install -e ".[dev,aws,slurm,api]"   (creates .venv)
 make lint       # ruff check
 make format     # ruff format (write)
@@ -454,16 +455,19 @@ CLI scripts invoked by the work layer: `generate_lhs.py`,
 
 ### `osimflow/executors/` (contract-checked)
 
-`__init__.py` registers built-ins and `discover_plugins()` via
-entry point `osimflow.executors`. `ExecutorRegistry.register_health_check(name, fn)`
-attaches a per-executor health check (issue #1024);
-`iter_health_checks()` feeds the dispatcher in
-`osimflow.health.run_health_checks`. `base.py` defines
+`__init__.py` defines four executors inline — `LocalExecutor`,
+`SlurmExecutor`, `AWSBatchExecutor`, `NomadExecutor` — and hosts
+`ExecutorRegistry` (`register_health_check(name, fn)` attaches a
+per-executor health check, issue #1024; `iter_health_checks()`
+feeds `osimflow.health.run_health_checks`) plus `discover_plugins()`
+via entry point `osimflow.executors`. `base.py` defines
 `BaseExecutor` + `Handle`; `transport.py` is the
-executor-agnostic result-reference contract. Concrete files:
+executor-agnostic result-reference contract. The remaining six
+executors each have their own file:
 `azure_batch_executor.py` (`AzureBatchExecutor`),
-`dask_jobqueue_executor.py` (`DaskJobQueueExecutor`,
-Slurm/PBS/K8s), `docker_swarm_executor.py`
+`dask_jobqueue_executor.py` (`DaskJobQueueExecutor`; Dask
+JobQueue with Slurm/PBS/K8s schedulers — distinct from the
+submitit-based `SlurmExecutor`), `docker_swarm_executor.py`
 (`DockerSwarmExecutor`), `google_batch_executor.py`
 (`GoogleBatchExecutor`), `kubernetes_executor.py`
 (`KubernetesExecutor` — each Job runs
