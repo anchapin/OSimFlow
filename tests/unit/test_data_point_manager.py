@@ -204,3 +204,123 @@ class TestDataPointSerialization:
         assert restored.sample_id == dp.sample_id
         assert restored.priority == dp.priority
         assert restored.status == dp.status
+
+
+class TestDataPointManagerConcurrency:
+    """Cross-process safety of read-modify-write cycles (issue #1090)."""
+
+    def test_no_lost_update_between_manager_instances(self, tmpdir: Path) -> None:
+        """Two managers on a shared outdir must not clobber each other.
+
+        Reproduces the lost-update: p2 is constructed BEFORE p1 writes, so
+        its in-memory snapshot is stale. Without the locked refresh in
+        _locked_rmw, p2's save would erase p1's status change.
+        """
+        p1 = DataPointManager(tmpdir)
+        p1.register("a")
+        p1.register("b")
+
+        p2 = DataPointManager(tmpdir)  # stale snapshot from here on
+        p1.update_status("a", DataPointStatus.RUNNING)
+        p2.update_status("b", DataPointStatus.COMPLETED)
+
+        final = DataPointManager(tmpdir)
+        assert final.get("a").status == DataPointStatus.RUNNING
+        assert final.get("b").status == DataPointStatus.COMPLETED
+
+    def test_interleaved_updates_all_survive(self, tmpdir: Path) -> None:
+        """Many managers updating disjoint samples concurrently — all persist."""
+        import threading
+
+        writers = [DataPointManager(tmpdir) for _ in range(4)]
+        for i in range(8):
+            writers[i % 4].register(f"s{i}")
+        errors: list[Exception] = []
+
+        def run(w: DataPointManager, base: int) -> None:
+            try:
+                # Each thread owns two disjoint samples; interleaving across
+                # threads still exercises concurrent lock acquisition.
+                for _j in range(20):
+                    w.update_status(f"s{base}", DataPointStatus.RUNNING)
+                    w.update_status(f"s{base + 1}", DataPointStatus.RUNNING)
+                    w.update_status(f"s{base}", DataPointStatus.COMPLETED)
+                    w.update_status(f"s{base + 1}", DataPointStatus.COMPLETED)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=run, args=(writers[k], k * 2)) for k in range(len(writers))
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        final = DataPointManager(tmpdir)
+        for i in range(8):
+            assert final.get(f"s{i}").status == DataPointStatus.COMPLETED
+
+    def test_failed_write_leaves_previous_state_intact(self, mgr: DataPointManager) -> None:
+        """A crash mid-write (os.replace raises) keeps the last good state file."""
+        import json as json_mod
+        from unittest.mock import patch
+
+        mgr.register("keep", priority=1)
+
+        real_replace = __import__("os").replace
+
+        def boom(src: str, dst: str) -> None:
+            raise OSError("simulated crash mid-write")
+
+        with patch("os.replace", side_effect=boom):
+            with pytest.raises(OSError):
+                mgr.register("doomed", priority=9)
+
+        # State file still holds the last successful write.
+        raw = json_mod.loads((mgr.outdir / DataPointManager.STATE_FILE).read_text())
+        assert "keep" in raw
+        assert "doomed" not in raw
+        assert real_replace  # keep the import referenced
+
+    def test_save_atomic_uses_replace(self, mgr: DataPointManager) -> None:
+        """Persistence goes through os.replace (atomic overwrite), not os.rename."""
+        import inspect
+
+        src = inspect.getsource(DataPointManager._save_atomic)
+        assert "os.replace" in src
+        assert "os.rename" not in src
+
+
+class TestDataPointManagerCrossProcess:
+    """True multi-process exclusion (the NFS/GPFS scenario from issue #1090)."""
+
+    def test_no_lost_update_across_processes(self, tmpdir: Path) -> None:
+        """Child processes with stale snapshots must not clobber each other."""
+        import multiprocessing
+
+        mgr = DataPointManager(tmpdir)
+        for i in range(6):
+            mgr.register(f"p{i}")
+
+        ctx = multiprocessing.get_context("fork")
+
+        def worker(outdir: str, idx: int) -> None:
+            # Constructed AFTER the parent registered everything, but each
+            # child's snapshot goes stale as soon as a sibling writes.
+            w = DataPointManager(Path(outdir))
+            for _ in range(15):
+                w.update_status(f"p{idx}", DataPointStatus.RUNNING)
+            w.update_status(f"p{idx}", DataPointStatus.COMPLETED)
+
+        procs = [ctx.Process(target=worker, args=(str(tmpdir), i), name=f"w{i}") for i in range(6)]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join()
+            assert p.exitcode == 0
+
+        final = DataPointManager(tmpdir)
+        statuses = {f"p{i}": final.get(f"p{i}").status for i in range(6)}
+        assert all(s == DataPointStatus.COMPLETED for s in statuses.values()), statuses

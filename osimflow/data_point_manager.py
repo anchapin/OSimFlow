@@ -21,16 +21,34 @@ __all__ = ["DataPoint", "DataPointManager", "DataPointStatus"]
 
 import json
 import os
+import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import fasteners
 
 log = __import__("logging").getLogger("osimflow.data_point_manager")
+
+T = TypeVar("T")
+
+# One in-process guard per data-points lock file (issue #1090). fasteners
+# record locks exclude other *processes* but are re-entrant within one
+# process, so concurrent threads (e.g. LocalExecutor's pool) need their own
+# mutex, shared across every DataPointManager instance on the same outdir.
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+def _thread_lock_for(lock_file: Path) -> threading.Lock:
+    """Return the process-wide mutex guarding *lock_file*'s state."""
+    key = str(lock_file.resolve())
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.Lock())
 
 
 class DataPointStatus(StrEnum):
@@ -137,6 +155,12 @@ class DataPointManager:
         self.outdir = Path(outdir)
         self._state_file = self.outdir / self.STATE_FILE
         self._lock_file = self.outdir / self.LOCK_FILE
+        # fasteners (fcntl record locks) only exclude *other processes*;
+        # within one process the LocalExecutor thread pool shares lock
+        # ownership, so an in-process guard is also required (issue #1090).
+        # Keyed by resolved lock-file path so every manager instance on the
+        # same outdir shares one guard.
+        self._thread_lock = _thread_lock_for(self._lock_file)
         self._data_points: dict[str, DataPoint] = {}
         self._load()
 
@@ -170,10 +194,42 @@ class DataPointManager:
             tmp.write_text(
                 json.dumps({sid: dp.to_dict() for sid, dp in self._data_points.items()}, indent=2)
             )
-            os.rename(tmp, self._state_file)
+            # os.replace is atomic and replaces an existing destination on
+            # both POSIX and Windows; a crash mid-write leaves the previous
+            # state file intact instead of a truncated JSON document.
+            os.replace(tmp, self._state_file)
         finally:
             if tmp.exists():
                 tmp.unlink()
+
+    def _locked_rmw(self, mutate: Callable[[], T]) -> T:
+        """Run *mutate* as a locked read-modify-write cycle (issue #1090).
+
+        Acquires the exclusive inter-process lock, **re-reads the state
+        file from disk** so this process sees concurrent writers' updates,
+        applies ``mutate`` to the in-memory dict, and persists atomically
+        before releasing the lock. Without the refresh step two campaign
+        processes would silently clobber each other's per-sample updates
+        (lost update) on shared filesystems.
+        """
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        (self.outdir / ".osimflow").mkdir(parents=True, exist_ok=True)
+        with self._thread_lock, self._lock():
+            self._load()
+            result = mutate()
+            self._save_atomic()
+        return result
+
+    def _auto_register(self, sample_id: str) -> DataPoint:
+        """Register *sample_id* without taking the lock.
+
+        Only call while the exclusive lock is held (inside ``_locked_rmw``)
+        — public entry points must go through ``register`` instead.
+        """
+        now = time.time()
+        dp = DataPoint(sample_id=sample_id, created_at=now, updated_at=now)
+        self._data_points[sample_id] = dp
+        return dp
 
     # -------------------------------------------------------------------------
     # CRUD
@@ -187,23 +243,26 @@ class DataPointManager:
     ) -> DataPoint:
         """Register a new data point (or update priority/work_dir of existing)."""
         now = time.time()
-        if sample_id in self._data_points:
-            dp = self._data_points[sample_id]
-            dp.priority = priority
-            if work_dir is not None:
-                dp.work_dir = work_dir
-            dp.updated_at = now
-        else:
-            dp = DataPoint(
-                sample_id=sample_id,
-                priority=priority,
-                work_dir=work_dir,
-                created_at=now,
-                updated_at=now,
-            )
-            self._data_points[sample_id] = dp
-        self._save_atomic()
-        return dp
+
+        def _mutate() -> DataPoint:
+            if sample_id in self._data_points:
+                dp = self._data_points[sample_id]
+                dp.priority = priority
+                if work_dir is not None:
+                    dp.work_dir = work_dir
+                dp.updated_at = now
+            else:
+                dp = DataPoint(
+                    sample_id=sample_id,
+                    priority=priority,
+                    work_dir=work_dir,
+                    created_at=now,
+                    updated_at=now,
+                )
+                self._data_points[sample_id] = dp
+            return dp
+
+        return self._locked_rmw(_mutate)
 
     def get(self, sample_id: str) -> DataPoint | None:
         """Return a data point by id, or None if not registered."""
@@ -230,13 +289,16 @@ class DataPointManager:
         Returns:
             The updated ``DataPoint``.
         """
-        if sample_id not in self._data_points:
-            self.register(sample_id)
-        dp = self._data_points[sample_id]
-        dp.seed_model = str(path)
-        dp.updated_at = time.time()
-        self._save_atomic()
-        return dp
+
+        def _mutate() -> DataPoint:
+            if sample_id not in self._data_points:
+                self._auto_register(sample_id)
+            dp = self._data_points[sample_id]
+            dp.seed_model = str(path)
+            dp.updated_at = time.time()
+            return dp
+
+        return self._locked_rmw(_mutate)
 
     def with_weather_file(self, sample_id: str, path: Path) -> DataPoint:
         """Set a per-sample weather file override.
@@ -255,13 +317,16 @@ class DataPointManager:
         Returns:
             The updated ``DataPoint``.
         """
-        if sample_id not in self._data_points:
-            self.register(sample_id)
-        dp = self._data_points[sample_id]
-        dp.weather_file = str(path)
-        dp.updated_at = time.time()
-        self._save_atomic()
-        return dp
+
+        def _mutate() -> DataPoint:
+            if sample_id not in self._data_points:
+                self._auto_register(sample_id)
+            dp = self._data_points[sample_id]
+            dp.weather_file = str(path)
+            dp.updated_at = time.time()
+            return dp
+
+        return self._locked_rmw(_mutate)
 
     def list_all(self) -> list[DataPoint]:
         """Return all registered data points sorted by sample_id."""
@@ -291,17 +356,24 @@ class DataPointManager:
         updating status — particularly useful in exception-handling paths
         where registration may not have occurred yet.
         """
-        if sample_id not in self._data_points:
-            self.register(sample_id)
-        dp = self._data_points[sample_id]
-        dp.status = status
-        dp.updated_at = time.time()
-        if status in (DataPointStatus.COMPLETED, DataPointStatus.FAILED, DataPointStatus.CANCELLED):
-            dp.completed_at = time.time()
-        if error_summary:
-            dp.error_summary = error_summary
-        self._save_atomic()
-        return dp
+
+        def _mutate() -> DataPoint:
+            if sample_id not in self._data_points:
+                self._auto_register(sample_id)
+            dp = self._data_points[sample_id]
+            dp.status = status
+            dp.updated_at = time.time()
+            if status in (
+                DataPointStatus.COMPLETED,
+                DataPointStatus.FAILED,
+                DataPointStatus.CANCELLED,
+            ):
+                dp.completed_at = time.time()
+            if error_summary:
+                dp.error_summary = error_summary
+            return dp
+
+        return self._locked_rmw(_mutate)
 
     def cancel(self, sample_id: str) -> DataPoint:
         """Cancel a data point (marks as CANCELLED)."""
@@ -309,17 +381,22 @@ class DataPointManager:
 
     def set_priority(self, sample_id: str, priority: int) -> DataPoint:
         """Update the priority of a data point."""
-        dp = self._data_points[sample_id]
-        dp.priority = priority
-        dp.updated_at = time.time()
-        self._save_atomic()
-        return dp
+
+        def _mutate() -> DataPoint:
+            dp = self._data_points[sample_id]
+            dp.priority = priority
+            dp.updated_at = time.time()
+            return dp
+
+        return self._locked_rmw(_mutate)
 
     def unregister(self, sample_id: str) -> None:
         """Remove a data point from tracking (does not delete work_dir)."""
-        if sample_id in self._data_points:
-            del self._data_points[sample_id]
-            self._save_atomic()
+
+        def _mutate() -> None:
+            self._data_points.pop(sample_id, None)
+
+        self._locked_rmw(_mutate)
 
     # -------------------------------------------------------------------------
     # Reanalysis (#420)
