@@ -300,7 +300,7 @@ name in this section.
 - `osimflow/__init__.py` — public API surface (`__all__`).
 - `osimflow/__main__.py` — `argparse` CLI entry point (`osimflow run ...`).
 - `osimflow/campaign.py` — `Campaign` orchestrator + `CampaignError` +
-  `QuotaExceededError` + the 5-step DAG.
+  `QuotaExceededError` + the 7-step DAG.
 - `osimflow/config.py` — `CampaignConfig` + per-executor config
   dataclasses (`LocalConfig`, `SlurmConfig`, `AWSBatchConfig`,
   `AzureBatchConfig`, `GoogleBatchConfig`, `NomadConfig`,
