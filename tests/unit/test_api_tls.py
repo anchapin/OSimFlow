@@ -293,6 +293,8 @@ class TestNonLocalTLSWarning:
                 str(tmp_path),
                 "--host",
                 "0.0.0.0",
+                "--api-key",
+                "test-key-1095",
                 "--tls-cert",
                 str(cert),
                 "--tls-key",
