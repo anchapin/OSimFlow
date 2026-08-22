@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import pytest
@@ -443,6 +444,62 @@ class TestAPIKeyAuth:
         resp = client.get("/health/")
         # FastAPI may redirect or handle; the middleware should not block it.
         assert resp.status_code in (200, 307)
+
+
+class TestServeAuthWarning:
+    """Tests for the SEC-001 non-local no-auth warning (issue #1095).
+
+    The CLI helper lives in ``osimflow.__main__``; the behaviour it
+    encodes is that a network-accessible bind with no key store must
+    emit a loud warning.
+    """
+
+    def _import_helper(self):
+        from osimflow import __main__ as cli
+
+        return cli
+
+    def test_warns_when_auth_disabled_on_nonlocal_bind(self) -> None:
+        cli = self._import_helper()
+        with pytest.warns(UserWarning, match="Authentication is DISABLED"):
+            cli._warn_if_auth_disabled_nonlocal(None, None, "0.0.0.0", 8000)
+
+    def test_warns_on_star_bind(self) -> None:
+        cli = self._import_helper()
+        with pytest.warns(UserWarning, match="Authentication is DISABLED"):
+            cli._warn_if_auth_disabled_nonlocal(None, None, "*", 8000)
+
+    def test_no_warning_when_api_key_set(self) -> None:
+        cli = self._import_helper()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            cli._warn_if_auth_disabled_nonlocal("secret", None, "0.0.0.0", 8000)
+
+    def test_no_warning_when_keys_file_set(self, tmp_path: Path) -> None:
+        cli = self._import_helper()
+        keys_file = tmp_path / "keys.json"
+        keys_file.write_text('{"users": [{"key": "k", "user_id": "u", "role": "admin"}]}')
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            cli._warn_if_auth_disabled_nonlocal(None, keys_file, "0.0.0.0", 8000)
+
+    def test_no_warning_on_localhost_bind(self) -> None:
+        cli = self._import_helper()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            cli._warn_if_auth_disabled_nonlocal(None, None, "127.0.0.1", 8000)
+
+    def test_no_warning_on_localhost_default(self) -> None:
+        cli = self._import_helper()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            cli._warn_if_auth_disabled_nonlocal(None, None, "localhost", 8000)
+
+    def test_no_warning_when_auth_enabled_on_localhost(self) -> None:
+        cli = self._import_helper()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            cli._warn_if_auth_disabled_nonlocal("secret", None, "localhost", 8000)
 
 
 class TestCORSMiddleware:

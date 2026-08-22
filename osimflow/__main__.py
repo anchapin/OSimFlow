@@ -1566,7 +1566,9 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "API key for authentication (single-key mode). "
-            "Required when --enable-writes is set "
+            "SEC-001: REQUIRED when binding to a non-local interface — "
+            "without it every endpoint is reachable without credentials "
+            "(issue #1095). Required when --enable-writes is set "
             "(auto-generated and logged if not provided). When read-only, "
             "authentication is disabled unless this is set. "
             "Use --api-keys-file for multi-user authentication (issue #395)."
@@ -2304,6 +2306,40 @@ def _is_local_host(host: str) -> bool:
     return normalized.startswith("127.")
 
 
+def _warn_if_auth_disabled_nonlocal(
+    api_key: str | None,
+    api_keys_file: Path | None,
+    host: str,
+    port: int,
+) -> None:
+    """Warn loudly when the serve bind is network-accessible with no auth (issue #1095).
+
+    ``APIKeyMiddleware`` passes every request through when no key store is
+    configured (``api_key is None and api_keys_file is None``), so all
+    endpoints — campaign data, file downloads, time-series queries — are
+    reachable without credentials. Loopback binds are exempt because that
+    traffic never leaves the host; ``0.0.0.0`` / ``*`` / empty are not.
+    """
+    auth_enabled = api_key is not None or api_keys_file is not None
+    if auth_enabled or _is_local_host(host):
+        return
+    warnings.warn(
+        f"Authentication is DISABLED on non-local bind {host}:{port}: "
+        "every endpoint (campaign data, file downloads, time-series "
+        "queries) is reachable without credentials. Pass --api-key or "
+        "--api-keys-file to require authentication (issue #1095).",
+        UserWarning,
+        stacklevel=2,
+    )
+    log.warning(
+        "SEC-001: auth disabled for non-local bind %s:%d — all endpoints "
+        "are publicly reachable without credentials (issue #1095). "
+        "Pass --api-key or --api-keys-file.",
+        host,
+        port,
+    )
+
+
 def _warn_if_cleartext_nonlocal(tls_cert: Path | None, host: str, port: int) -> None:
     """Warn loudly when a network-accessible serve bind lacks TLS (SEC-004).
 
@@ -2397,6 +2433,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     # SEC-004: warn loudly on cleartext non-local binds (issue #1113).
     _warn_if_cleartext_nonlocal(tls_cert, args.host, args.port)
+
+    # SEC-001: warn loudly when a non-local bind has no authentication at
+    # all — every endpoint is reachable without credentials (issue #1095).
+    _warn_if_auth_disabled_nonlocal(api_key, api_keys_file, args.host, args.port)
 
     # Launch Streamlit dashboard in a background thread if --dashboard is set.
     dashboard_thread: threading.Thread | None = None
