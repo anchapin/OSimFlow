@@ -469,6 +469,7 @@ class DockerSwarmExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -493,6 +494,8 @@ class DockerSwarmExecutor(BaseExecutor):
             time_min,
             container,
         )
+
+        self._container_digest = container_digest
 
         try:
             is_swarm = self._check_docker_available()
@@ -575,6 +578,7 @@ class DockerSwarmExecutor(BaseExecutor):
                         stderr_path=stderr_path,
                         max_retries=max_retries,
                         worker_id=worker_id,
+                        container_digest=container_digest,
                         **kwargs,
                     ),
                 )

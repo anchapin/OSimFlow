@@ -399,6 +399,7 @@ class AzureBatchExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -418,6 +419,7 @@ class AzureBatchExecutor(BaseExecutor):
         del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
         del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
+        self._container_digest = container_digest
 
         log.info(
             "azure_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",

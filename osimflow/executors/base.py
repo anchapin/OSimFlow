@@ -136,6 +136,7 @@ class BaseExecutor(abc.ABC):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,

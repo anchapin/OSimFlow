@@ -258,6 +258,10 @@ class GoogleBatchExecutor(BaseExecutor):
         self.fallback_to_on_demand = fallback_to_on_demand
         self.max_retries = max_retries
         self._client: Any = None
+        # Issue #1081: digest pinning. Initialized in the constructor so
+        # ``_resolve_container_image`` is callable without going through
+        # ``submit()`` (e.g. unit tests); overridden by ``submit()``.
+        self._container_digest: str | None = None
 
     def _get_client(self) -> Any:
         """Lazy Google Cloud Batch synchronous client construction."""
@@ -315,7 +319,13 @@ class GoogleBatchExecutor(BaseExecutor):
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
-        resolved = container or f"nrel/openstudio:{openstudio_version or 'latest'}"
+        # Issue #1081: a pinned SHA256 digest overrides the mutable tag
+        # for the OSIMFLOW_CONTAINER env var the worker reads.
+        container_digest = getattr(self, "_container_digest", None)
+        if container_digest is not None:
+            resolved = container_digest
+        else:
+            resolved = container or f"nrel/openstudio:{openstudio_version or 'latest'}"
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         return env
 
@@ -402,6 +412,7 @@ class GoogleBatchExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -418,6 +429,7 @@ class GoogleBatchExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
+        self._container_digest = container_digest
         del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
         del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
