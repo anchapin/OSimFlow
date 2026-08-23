@@ -854,6 +854,10 @@ class AWSBatchExecutor(BaseExecutor):
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR: float = 0.05
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR: float = 0.03
 
+    # Issue #1081: digest pinning. Class attribute default ensures the
+    # attribute exists even when __init__ is bypassed (e.g. tests using __new__).
+    _container_digest: str | None = None
+
     # Sentinel used in statusReason to identify Spot interruptions.
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
         "Spot interruption",
