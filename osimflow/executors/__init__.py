@@ -937,7 +937,7 @@ class AWSBatchExecutor(BaseExecutor):
         the digest is returned verbatim and overrides every tag-based
         resolution path below.
         """
-        container_digest = getattr(self, "_container_digest", None)
+        container_digest = self._container_digest
         if container_digest:
             return container_digest
         tag = version or "latest"
