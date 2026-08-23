@@ -1125,13 +1125,13 @@ class AWSBatchExecutor(BaseExecutor):
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
-        # Issue #1081: a pinned SHA256 digest overrides the mutable tag
-        # for the OSIMFLOW_CONTAINER env var that remote_runner reads.
-        container_digest = getattr(self, "_container_digest", None)
-        if container_digest is not None:
-            resolved = container_digest
-        else:
-            resolved = container or f"nrel/openstudio:{openstudio_version or 'latest'}"
+        # Resolve container image using the standard resolution logic
+        # which respects container_digest, ecr_repository, and the
+        # container parameter.
+        resolved = self._resolve_container_image(openstudio_version)
+        # If a custom container was passed, it takes precedence
+        if container is not None:
+            resolved = container
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
