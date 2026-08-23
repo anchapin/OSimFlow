@@ -483,6 +483,15 @@ class Campaign:
         self._os_container_digest = _container_digest_for(
             CONTAINER_OS.format(version=cfg.openstudio_version)
         )
+        # Issue #1081: when the caller pins images by SHA256 digest via
+        # ``--container-digest``, honor that digest for BOTH images instead
+        # of the resolved mutable-tag digest. The digest is content-addressable
+        # across machines, so cache keys stay stable and no executor ever sees
+        # a bare ``:latest`` / ``:<version>`` tag as the image reference.
+        if cfg.container_digest:
+            self._python_container_digest = cfg.container_digest
+            self._os_container_digest = cfg.container_digest
+            log.info("container images pinned by digest: %s", cfg.container_digest)
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
@@ -3569,6 +3578,7 @@ class Campaign:
                         memory_mb=512,
                         time_min=5,
                         container=self._python_container_image,
+                        container_digest=self._python_container_digest,
                         result_hint=apply_out_dir,
                         **self._executor_submit_transport_kwargs,
                     )
@@ -3769,6 +3779,7 @@ class Campaign:
                         memory_mb=8 * 1024,
                         time_min=240,
                         container=CONTAINER_OS.format(version=os_version),
+                        container_digest=self._os_container_digest,
                         openstudio_version=os_version,
                         stdout_path=ctx["stdout_log"],
                         stderr_path=ctx["stderr_log"],
@@ -3829,6 +3840,7 @@ class Campaign:
                         memory_mb=8 * 1024,
                         time_min=240,
                         container=CONTAINER_OS.format(version=os_version),
+                        container_digest=self._os_container_digest,
                         openstudio_version=os_version,
                         stdout_path=ctx["stdout_log"],
                         stderr_path=ctx["stderr_log"],
@@ -4118,6 +4130,7 @@ class Campaign:
                         memory_mb=1024,
                         time_min=10,
                         container=self._python_container_image,
+                        container_digest=self._python_container_digest,
                         result_hint=Path(ctx["kpi_dir"]) / f"kpi_{sid}.json",
                         max_retries=self.cfg.max_sample_retries,
                         **self._executor_submit_transport_kwargs,
@@ -4491,6 +4504,7 @@ class Campaign:
             memory_mb=4 * 1024,
             time_min=15,
             container=self._python_container_image,
+            container_digest=self._python_container_digest,
             result_hint={
                 "csv": self.cfg.outdir / "aggregated_results.csv",
                 "parquet": self.cfg.outdir / "aggregated_results.parquet",
@@ -4542,6 +4556,7 @@ class Campaign:
             memory_mb=1024,
             time_min=10,
             container=self._python_container_image,
+            container_digest=self._python_container_digest,
             result_hint=[],
             **self._executor_submit_transport_kwargs,
         )

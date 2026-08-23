@@ -155,6 +155,10 @@ class PBSExecutor(BaseExecutor):
         self.max_poll_interval_s = max_poll_interval_s
         self.cpus_per_node = cpus_per_node
         self.mem_mb_per_node = mem_mb_per_node
+        # Issue #1081: digest pinning. Initialized in the constructor so
+        # ``_qsub_cmd`` can reference it without going through ``submit()``
+        # (e.g. unit tests); overridden by ``submit()``.
+        self._container_digest: str | None = None
 
     # -----------------------------------------------------------------------
     # PBS CLI helpers
@@ -198,6 +202,9 @@ class PBSExecutor(BaseExecutor):
         env_lines: list[str] = []
         if openstudio_version is not None:
             env_lines.append(f"OSIMFLOW_OS_VERSION={openstudio_version}")
+        container_digest = getattr(self, "_container_digest", None)
+        if container is None and container_digest is not None:
+            container = container_digest
         if container is not None:
             env_lines.append(f"OSIMFLOW_CONTAINER={container}")
 
@@ -346,6 +353,7 @@ class PBSExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -362,6 +370,7 @@ class PBSExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
+        self._container_digest = container_digest
         del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
         del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
         del variables_json, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002

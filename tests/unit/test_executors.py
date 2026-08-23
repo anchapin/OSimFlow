@@ -1319,3 +1319,69 @@ class TestRunSubprocess:
             env=env,
         )
         assert "testval" in stdout_path.read_text()
+
+
+class TestContainerDigestPinning:
+    """Issue #1081: container images pinned by SHA256 digest."""
+
+    def test_container_digest_param_accepted_by_submit(self) -> None:
+        from osimflow.executors import LocalExecutor
+
+        executor = LocalExecutor(max_workers=1)
+        handle = executor.submit(
+            lambda: 42,
+            name="t",
+            container="nrel/openstudio:3.11.0",
+            container_digest="sha256:deadbeef",
+        )
+        assert handle.result(timeout=5) == 42
+        executor.shutdown()
+
+    def test_container_digest_stored_on_executor(self) -> None:
+        from osimflow.executors import LocalExecutor
+
+        executor = LocalExecutor(max_workers=1)
+        handle = executor.submit(
+            lambda: 42,
+            name="t",
+            container="nrel/openstudio:3.11.0",
+            container_digest="sha256:abc",
+        )
+        # After submit, executor stores the digest for future _resolve_container_image calls
+        assert executor._container_digest == "sha256:abc"
+        handle.result(timeout=5)
+        executor.shutdown()
+
+    def test_resolve_container_image_returns_digest_when_set(self) -> None:
+        from unittest.mock import patch
+
+        from osimflow.executors import AWSBatchExecutor
+
+        with patch("boto3.client"):
+            executor = AWSBatchExecutor(
+                job_queue="q",
+                job_definition="jd",
+                region_name="us-east-1",
+            )
+        # Set digest directly since it's not a constructor param
+        executor._container_digest = "sha256:pin"
+        assert executor._resolve_container_image("3.11.0") == "sha256:pin"
+
+    def test_resolve_container_image_falls_back_to_tag(self) -> None:
+        from unittest.mock import patch
+
+        from osimflow.executors import AWSBatchExecutor
+
+        with patch("boto3.client"):
+            executor = AWSBatchExecutor(
+                job_queue="q",
+                job_definition="jd",
+                region_name="us-east-1",
+            )
+        assert executor._resolve_container_image("3.11.0") == "nrel/openstudio:3.11.0"
+
+    def test_container_digest_for_returns_sha256_string(self) -> None:
+        from osimflow.cache import _container_digest_for
+
+        digest = _container_digest_for("nrel/openstudio:3.11.0")
+        assert "sha256:" in digest

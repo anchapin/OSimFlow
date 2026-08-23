@@ -911,6 +911,15 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument("--outdir", required=True)
     run.add_argument("--openstudio_version", default="3.11.0")
     run.add_argument(
+        "--container-digest",
+        default=None,
+        help=(
+            "Pin container images by SHA256 digest (e.g. 'sha256:abc...' or "
+            "'repo@sha256:abc...'). When set, overrides the mutable tag for ALL "
+            "executors (issue #1081)."
+        ),
+    )
+    run.add_argument(
         "--project",
         default="",
         help=(

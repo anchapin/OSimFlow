@@ -173,7 +173,7 @@ appear in this document. Listed in run-subcommand groups (or
   `--azure-batch-account-url`, `--azure-batch-location`,
   `--azure-batch-pool-id`, `--azure-fallback-to-on-demand`,
   `--azure-max-retries`, `--azure-use-spot`, `--coordinator-url`,
-  `--dask-cluster-type`, `--dask-cpus-per-worker`,
+  `--container-digest`, `--dask-cluster-type`, `--dask-cpus-per-worker`,
   `--dask-max-workers`, `--dask-memory-per-worker`,
   `--dask-min-workers`, `--dask-project`, `--dask-queue`,
   `--dask-scheduler-address`, `--dask-walltime`, `--detach`,

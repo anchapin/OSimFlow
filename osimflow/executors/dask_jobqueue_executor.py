@@ -194,6 +194,7 @@ class DaskJobQueueExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -210,6 +211,7 @@ class DaskJobQueueExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
+        self._container_digest = container_digest
         del result_hint, remote_command, result_transport_mode  # noqa: F841
         del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
         del result_storage_endpoint, variables_json, env  # noqa: F841

@@ -948,6 +948,9 @@ class CampaignConfig:
     outdir: Path
     openstudio_version: str
 
+    # --- Container image pinning (issue #1081) ---
+    container_digest: str | None = None
+
     # --- Composed focused configs (issue #767, init=False for backward compat) ---
     dag: DAGConfig = dataclasses.field(init=False)
     storage: StorageConfig = dataclasses.field(init=False)
@@ -1656,6 +1659,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         n_samples=int(str(args["n_samples"])),
         outdir=outdir,
         openstudio_version=str(args["openstudio_version"]),
+        container_digest=(str(args["container_digest"]) if args.get("container_digest") else None),
         project=str(args.get("project", "")),
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,

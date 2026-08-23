@@ -183,6 +183,7 @@ class LocalExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -202,6 +203,7 @@ class LocalExecutor(BaseExecutor):
         import os
         import socket
 
+        self._container_digest = container_digest
         del openstudio_version, result_hint, remote_command, result_transport_mode  # noqa: F841
         del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
         del result_storage_endpoint, variables_json, stdout_path, stderr_path  # noqa: F841
@@ -388,6 +390,7 @@ class SlurmExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -851,6 +854,10 @@ class AWSBatchExecutor(BaseExecutor):
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR: float = 0.05
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR: float = 0.03
 
+    # Issue #1081: digest pinning. Class attribute default ensures the
+    # attribute exists even when __init__ is bypassed (e.g. tests using __new__).
+    _container_digest: str | None = None
+
     # Sentinel used in statusReason to identify Spot interruptions.
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
         "Spot interruption",
@@ -899,6 +906,10 @@ class AWSBatchExecutor(BaseExecutor):
         self._ec2_client: Any = None
         self.job_queue = job_queue
         self.job_definition = job_definition or "osimflow-job-def"
+        # Issue #1081: digest pinning. Initialized in the constructor so
+        # ``_resolve_container_image`` is callable without going through
+        # ``submit()`` (e.g. unit tests); overridden by ``submit()``.
+        self._container_digest: str | None = None
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
         self.max_spot_price_usd = max_spot_price_usd
@@ -925,7 +936,14 @@ class AWSBatchExecutor(BaseExecutor):
 
         When ``ecr_repository`` is set, returns ``<ecr_repo>:<version>``.
         Otherwise falls back to Docker Hub ``nrel/openstudio:<version>``.
+
+        Issue #1081: when the caller pins images by SHA256 digest,
+        the digest is returned verbatim and overrides every tag-based
+        resolution path below.
         """
+        container_digest = self._container_digest
+        if container_digest:
+            return container_digest
         tag = version or "latest"
         if self.ecr_repository:
             return f"{self.ecr_repository}:{tag}"
@@ -1232,6 +1250,7 @@ class AWSBatchExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
@@ -1248,9 +1267,11 @@ class AWSBatchExecutor(BaseExecutor):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
+        self._container_digest = container_digest
         del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
         del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
+        self._container_digest = container_digest
 
         log.info(
             "aws_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -2312,6 +2333,7 @@ class NomadExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
