@@ -561,7 +561,9 @@ class Campaign:
         try:
             self._registry = CampaignRegistry(db_path=reg_path)
         except Exception as exc:
-            log.warning("could not open campaign registry: %s (continuing without)", exc, exc_info=True)
+            log.warning(
+                "could not open campaign registry: %s (continuing without)", exc, exc_info=True
+            )
 
         # Result storage uploader for distributed campaigns (issue #339).
         # Built here so the correct backend is always used.  LocalStorage
@@ -1109,7 +1111,8 @@ class Campaign:
                 "checkpoint failed for sample %s (consecutive failures: %d): %s",
                 sid,
                 self._consecutive_checkpoint_failures,
-                exc, exc_info=True,
+                exc,
+                exc_info=True,
             )
             if self._consecutive_checkpoint_failures >= 3:
                 log.error(
@@ -1383,7 +1386,12 @@ class Campaign:
                 numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
                 all_kpis[sid] = numeric_kpis
             except Exception as exc:
-                log.warning("could not read KPI file %s for baseline comparison: %s", kpi_path, exc, exc_info=True)
+                log.warning(
+                    "could not read KPI file %s for baseline comparison: %s",
+                    kpi_path,
+                    exc,
+                    exc_info=True,
+                )
         return all_kpis
 
     @staticmethod
@@ -2910,7 +2918,10 @@ class Campaign:
                 )
             except Exception as exc:
                 log.warning(
-                    "could not build ParetoSolution for sample %s: %s", sample.get("sample_id"), exc, exc_info=True
+                    "could not build ParetoSolution for sample %s: %s",
+                    sample.get("sample_id"),
+                    exc,
+                    exc_info=True,
                 )
 
         if new_solutions:
@@ -3035,7 +3046,8 @@ class Campaign:
                 "chaos inject failed for %s/%s: %s (continuing)",
                 step_name,
                 tid,
-                exc, exc_info=True,
+                exc,
+                exc_info=True,
             )
             return
         if results:
@@ -3865,7 +3877,7 @@ class Campaign:
                     _handle: Handle | TQHandle = h,
                 ) -> None:
                     err = result_path / "eplusout.err"
-                    if err.exists() and err.stat().st_size == 0:
+                    if err.exists():
                         err.unlink()
                     self.cache.store(_key, Path(result_path), exit_code=0)
                     out[_sid] = Path(result_path)
@@ -3905,7 +3917,8 @@ class Campaign:
                                 log.warning(
                                     "result storage: upload failed for sample %s: %s",
                                     _sid,
-                                    exc, exc_info=True,
+                                    exc,
+                                    exc_info=True,
                                 )
 
                 submissions[sid] = (handle, _on_success)
@@ -4015,7 +4028,8 @@ class Campaign:
             log.warning(
                 "EXTRACT_KPIS: direct-to-storage publish failed for %s: %s",
                 sample_id,
-                exc, exc_info=True,
+                exc,
+                exc_info=True,
             )
 
     def step_extract_kpis(  # noqa: PLR0912, PLR0915
