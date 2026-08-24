@@ -25,6 +25,7 @@ __all__ = ["CircuitBreaker", "CircuitOpenError"]
 
 import threading
 import time
+from collections.abc import Callable
 
 
 class CircuitOpenError(RuntimeError):
@@ -39,6 +40,9 @@ class CircuitBreaker:
         failure_threshold: Consecutive failures before the circuit opens.
         cooldown_s: Seconds the circuit stays open before allowing one
             half-open probe.
+        on_transition: Optional callback ``(name, from_state, to_state) -> None``
+            invoked on every state change. Intended to forward events to an
+            :class:`~osimflow.observability.ObservabilityBackend`.
     """
 
     def __init__(
@@ -46,6 +50,8 @@ class CircuitBreaker:
         name: str = "redis",
         failure_threshold: int = 5,
         cooldown_s: float = 30.0,
+        *,
+        on_transition: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.name = name
         self.failure_threshold = max(int(failure_threshold), 1)
@@ -54,6 +60,7 @@ class CircuitBreaker:
         self._consecutive_failures = 0
         self._state = "closed"
         self._opened_at = 0.0
+        self._on_transition = on_transition
 
     # ------------------------------------------------------------------
     # Introspection
@@ -87,7 +94,10 @@ class CircuitBreaker:
         ``record_failure`` cycle is admitted.
         """
         with self._lock:
+            prev_state = self._state
             state = self._effective_state()
+            if state != prev_state and self._on_transition is not None:
+                self._on_transition(self.name, prev_state, state)
             # closed: normal operation. half_open: admit the single probe;
             # its outcome resolves back to closed or re-opens.
             return state in ("closed", "half_open")
@@ -104,8 +114,11 @@ class CircuitBreaker:
     def record_success(self) -> None:
         """Record a successful operation (closes the circuit)."""
         with self._lock:
+            prev_state = self._state
             self._consecutive_failures = 0
             self._state = "closed"
+            if prev_state != "closed" and self._on_transition is not None:
+                self._on_transition(self.name, prev_state, "closed")
 
     def record_failure(self) -> None:
         """Record a failed operation (opens the circuit past threshold)."""
@@ -113,7 +126,10 @@ class CircuitBreaker:
             self._consecutive_failures += 1
             was_half_open = self._state == "half_open"
             if self._consecutive_failures >= self.failure_threshold or was_half_open:
+                prev_state = self._state
                 self._state = "open"
                 self._opened_at = time.monotonic()
                 if was_half_open:
                     self._consecutive_failures = 1
+                if self._on_transition is not None:
+                    self._on_transition(self.name, prev_state, "open")

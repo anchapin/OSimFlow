@@ -198,3 +198,44 @@ class TestRedisDocumentStoreBreakerIntegration:
             for _ in range(10):
                 assert store.find_one("kpis", {"_id": "doc_1"}) is None
             assert store._breaker.state == "closed"
+
+
+class TestCircuitBreakerObservability:
+    def test_on_transition_callback_fired_on_state_change(self) -> None:
+        events: list[tuple[str, str, str]] = []
+        breaker = CircuitBreaker(
+            name="test_cb",
+            failure_threshold=2,
+            cooldown_s=0.001,
+            on_transition=lambda n, f, t: events.append((n, f, t)),
+        )
+        assert breaker.state == "closed"
+        # closed → open (2 consecutive failures)
+        breaker.record_failure()
+        breaker.record_failure()
+        assert events == [("test_cb", "closed", "open")]
+        # open → half_open (cooldown elapses on allow())
+        import time; time.sleep(0.002)
+        assert breaker.allow() is True
+        assert events == [
+            ("test_cb", "closed", "open"),
+            ("test_cb", "open", "half_open"),
+        ]
+        # half_open → open (probe fails)
+        breaker.record_failure()
+        assert events == [
+            ("test_cb", "closed", "open"),
+            ("test_cb", "open", "half_open"),
+            ("test_cb", "half_open", "open"),
+        ]
+        # open → half_open again
+        import time; time.sleep(0.002)
+        breaker.allow()
+        # half_open → closed (probe succeeds)
+        breaker.record_success()
+        assert events[-1] == ("test_cb", "half_open", "closed")
+
+    def test_no_callback_means_no_error(self) -> None:
+        breaker = CircuitBreaker(name="no_cb", failure_threshold=1, cooldown_s=0.001)
+        breaker.record_failure()
+        assert breaker.state == "open"

@@ -135,6 +135,19 @@ class ObservabilityBackend(ABC):
     def flush(self) -> None:
         """Flush any buffered metrics."""
 
+    def record_circuit_breaker_event(  # noqa: B027
+        self,
+        circuit_name: str,
+        from_state: str,
+        to_state: str,
+    ) -> None:
+        """Record a circuit breaker state transition.
+
+        Default implementation is a no-op so subclasses that do not
+        instrument circuit breakers do not need to override this.
+        """
+        pass
+
 
 class NullBackend(ObservabilityBackend):
     """No-op backend — default when no observability is configured."""
@@ -283,6 +296,19 @@ class CloudWatchBackend(ObservabilityBackend):
         log.debug("Flushed %d metrics to CloudWatch", len(self._buffer))
         self._buffer = []
 
+    def record_circuit_breaker_event(
+        self,
+        circuit_name: str,
+        from_state: str,
+        to_state: str,
+    ) -> None:
+        dims = [
+            {"Name": "CircuitName", "Value": circuit_name},
+            {"Name": "FromState", "Value": from_state},
+            {"Name": "ToState", "Value": to_state},
+        ]
+        self._add_metric("CircuitBreakerStateTransition", 1, dims)
+
 
 class PrometheusBackend(ObservabilityBackend):
     """Prometheus pushgateway backend.  Lazy-imports ``prometheus_client``.
@@ -398,6 +424,19 @@ class PrometheusBackend(ObservabilityBackend):
         push_to_gateway(self._url, job=self._job, registry=registry)
         log.debug("Pushed %d metrics to Prometheus pushgateway", len(self._buffer))
         self._buffer = []
+
+    def record_circuit_breaker_event(
+        self,
+        circuit_name: str,
+        from_state: str,
+        to_state: str,
+    ) -> None:
+        labels = {
+            "circuit_name": circuit_name,
+            "from_state": from_state,
+            "to_state": to_state,
+        }
+        self._add_metric("osimflow_circuit_breaker_transition", labels, 1)
 
 
 class OpenTelemetryBackend(ObservabilityBackend):
@@ -524,3 +563,16 @@ class OpenTelemetryBackend(ObservabilityBackend):
             gauge.set(value, attributes=labels)
         log.debug("Recorded %d OTel metrics (provider will export)", len(self._buffer))
         self._buffer = []
+
+    def record_circuit_breaker_event(
+        self,
+        circuit_name: str,
+        from_state: str,
+        to_state: str,
+    ) -> None:
+        labels = {
+            "circuit_name": circuit_name,
+            "from_state": from_state,
+            "to_state": to_state,
+        }
+        self._add_metric("osimflow.circuit_breaker.transition", labels, 1)
