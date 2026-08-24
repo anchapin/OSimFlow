@@ -561,7 +561,7 @@ class Campaign:
         try:
             self._registry = CampaignRegistry(db_path=reg_path)
         except Exception as exc:
-            log.warning("could not open campaign registry: %s (continuing without)", exc)
+            log.warning("could not open campaign registry: %s (continuing without)", exc, exc_info=True)
 
         # Result storage uploader for distributed campaigns (issue #339).
         # Built here so the correct backend is always used.  LocalStorage
@@ -1109,7 +1109,7 @@ class Campaign:
                 "checkpoint failed for sample %s (consecutive failures: %d): %s",
                 sid,
                 self._consecutive_checkpoint_failures,
-                exc,
+                exc, exc_info=True,
             )
             if self._consecutive_checkpoint_failures >= 3:
                 log.error(
@@ -1383,7 +1383,7 @@ class Campaign:
                 numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
                 all_kpis[sid] = numeric_kpis
             except Exception as exc:
-                log.warning("could not read KPI file %s for baseline comparison: %s", kpi_path, exc)
+                log.warning("could not read KPI file %s for baseline comparison: %s", kpi_path, exc, exc_info=True)
         return all_kpis
 
     @staticmethod
@@ -1687,7 +1687,7 @@ class Campaign:
         except Exception as exc:
             elapsed = time.time() - t0
             self.trace.finalize_script_duration_s = elapsed
-            log.warning("finalize script error: %s (best-effort — continuing)", exc)
+            log.warning("finalize script error: %s (best-effort — continuing)", exc, exc_info=True)
 
     def _hook_env(self) -> dict[str, str]:
         """Build the environment dict for hook scripts."""
@@ -1797,7 +1797,7 @@ class Campaign:
                                 entry[key] = var[key]
                         variable_summary.append(entry)
         except Exception as exc:
-            log.warning("could not parse variables.yml for campaign_meta: %s", exc)
+            log.warning("could not parse variables.yml for campaign_meta: %s", exc, exc_info=True)
 
         meta: dict[str, object] = {
             "campaign_id": self.trace.campaign_id,
@@ -1849,7 +1849,7 @@ class Campaign:
                 ]
                 sampling_details["n_actual_samples"] = len(samples_data.get("samples", []))
             except Exception as exc:
-                log.warning("could not read samples.json for provenance: %s", exc)
+                log.warning("could not read samples.json for provenance: %s", exc, exc_info=True)
 
         provenance: dict[str, object] = {
             "campaign_id": self.trace.campaign_id,
@@ -1980,7 +1980,7 @@ class Campaign:
                 },
             )
         except Exception as exc:
-            log.warning("failed to register campaign: %s", exc)
+            log.warning("failed to register campaign: %s", exc, exc_info=True)
 
     def _update_registry_status(self, status: str) -> None:
         """Update the campaign status in the registry on completion."""
@@ -1989,7 +1989,7 @@ class Campaign:
         try:
             self._registry.update_status(self.trace.campaign_id, status)
         except Exception as exc:
-            log.warning("failed to update campaign status in registry: %s", exc)
+            log.warning("failed to update campaign status in registry: %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------
     # Graceful shutdown (issue #255)
@@ -2137,7 +2137,7 @@ class Campaign:
             self.trace.write(self.cfg.outdir / "run.json")
             log.info("wrote cancellation trace to run.json")
         except Exception as exc:
-            log.warning("could not write cancellation trace: %s", exc)
+            log.warning("could not write cancellation trace: %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------
     # Soft pause / resume (issue #553)
@@ -2194,7 +2194,7 @@ class Campaign:
             self.trace.write(self.cfg.outdir / "run.json")
             log.info("wrote paused trace to run.json (paused_at=%.0f)", self.trace.paused_at)
         except Exception as exc:
-            log.warning("could not write paused trace: %s", exc)
+            log.warning("could not write paused trace: %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -2865,7 +2865,7 @@ class Campaign:
                 try:
                     front = ParetoFront.load(prev_path)
                 except Exception as exc:
-                    log.warning("could not load previous Pareto front: %s", exc)
+                    log.warning("could not load previous Pareto front: %s", exc, exc_info=True)
 
         # Determine objective names from the first KPI file that has data.
         objective_names: list[str] = []
@@ -2910,7 +2910,7 @@ class Campaign:
                 )
             except Exception as exc:
                 log.warning(
-                    "could not build ParetoSolution for sample %s: %s", sample.get("sample_id"), exc
+                    "could not build ParetoSolution for sample %s: %s", sample.get("sample_id"), exc, exc_info=True
                 )
 
         if new_solutions:
@@ -3035,7 +3035,7 @@ class Campaign:
                 "chaos inject failed for %s/%s: %s (continuing)",
                 step_name,
                 tid,
-                exc,
+                exc, exc_info=True,
             )
             return
         if results:
@@ -3905,7 +3905,7 @@ class Campaign:
                                 log.warning(
                                     "result storage: upload failed for sample %s: %s",
                                     _sid,
-                                    exc,
+                                    exc, exc_info=True,
                                 )
 
                 submissions[sid] = (handle, _on_success)
@@ -4015,7 +4015,7 @@ class Campaign:
             log.warning(
                 "EXTRACT_KPIS: direct-to-storage publish failed for %s: %s",
                 sample_id,
-                exc,
+                exc, exc_info=True,
             )
 
     def step_extract_kpis(  # noqa: PLR0912, PLR0915
@@ -4278,7 +4278,7 @@ class Campaign:
                 numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
                 kpi_values[sid] = numeric_kpis
             except (json.JSONDecodeError, ValueError, TypeError) as exc:
-                log.warning("could not read KPI file %s: %s", kpi_path, exc)
+                log.warning("could not read KPI file %s: %s", kpi_path, exc, exc_info=True)
 
         algo = AlgorithmRegistry.get("sobol")
         indices_dir = self.cfg.outdir / "sensitivity"
@@ -4380,7 +4380,7 @@ class Campaign:
                 numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
                 kpi_values[sid] = numeric_kpis
             except (json.JSONDecodeError, ValueError, TypeError) as exc:
-                log.warning("could not read KPI file %s: %s", kpi_path, exc)
+                log.warning("could not read KPI file %s: %s", kpi_path, exc, exc_info=True)
 
         failure_thresholds: dict[str, tuple[float, str]] | None = None
         if self.cfg.uq_failure_thresholds:
@@ -4392,7 +4392,7 @@ class Campaign:
                     kpi_name, threshold = _parse_failure_threshold(raw)
                     failure_thresholds[kpi_name] = (threshold, "greater")
                 except ValueError as exc:
-                    log.warning("invalid failure threshold %r: %s", raw, exc)
+                    log.warning("invalid failure threshold %r: %s", raw, exc, exc_info=True)
 
         algo = AlgorithmRegistry.get("uq")
         uq_dir = self.cfg.outdir / "uq"
