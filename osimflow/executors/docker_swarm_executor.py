@@ -23,13 +23,16 @@ cost.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.transport import encode_transport_value
 
 log = logging.getLogger("osimflow.executors.docker_swarm")
 
@@ -193,6 +196,63 @@ class DockerSwarmExecutor(BaseExecutor):
     """
 
     name = "docker_swarm"
+
+    @property
+    def requires_remote_runner_payload(self) -> bool:
+        return True
+
+    @staticmethod
+    def _infer_step_name(submit_name: str) -> str:
+        """Map a submit name to the remote_runner step identifier.
+
+        Same mapping as ``NomadExecutor._infer_step_name`` and
+        ``KubernetesExecutor._infer_step_name``: the Campaign names
+        fan-out tasks ``apply_<sid>`` / ``sim_<sid>`` / ``kpi_<sid>`` and
+        the single-shot steps ``aggregate`` / ``plots``; the remote runner
+        resolves the work function from the step identifier.
+        """
+        lower = submit_name.lower()
+        if lower.startswith("apply_"):
+            return "apply"
+        if lower.startswith("sim_"):
+            return "sim"
+        if lower.startswith("kpi_"):
+            return "extract"
+        if lower.startswith("aggregate"):
+            return "aggregate"
+        if lower.startswith("plots"):
+            return "plots"
+        return "unknown"
+
+    @staticmethod
+    def _build_task_payload(
+        *,
+        step_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        result_hint: Any,  # noqa: ANN401
+        name: str,
+    ) -> str:
+        """Serialize the step call for the ephemeral runner.
+
+        Uses the same serialization as ``NomadExecutor._build_task_payload``
+        and ``KubernetesExecutor._build_task_payload`` so
+        ``osimflow.remote_runner`` can decode either executor's Jobs
+        identically (issue #996).
+        """
+        payload = {
+            "schema_version": 1,
+            "name": name,
+            "step": step_name,
+            "args": [DockerSwarmExecutor._encode_payload_value(a) for a in args],
+            "kwargs": {k: DockerSwarmExecutor._encode_payload_value(v) for k, v in kwargs.items()},
+            "result_hint": DockerSwarmExecutor._encode_payload_value(result_hint),
+        }
+        return json.dumps(payload)
+
+    @staticmethod
+    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
+        return encode_transport_value(value)
 
     def __init__(
         self,
@@ -378,14 +438,25 @@ class DockerSwarmExecutor(BaseExecutor):
         time_min: int,
         openstudio_version: str | None,
         container: str | None,
+        command: list[str] | None = None,
+        task_payload: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
     ) -> str:
-        """Create a Docker Swarm service and return its name."""
+        """Create a Docker Swarm service and return its name.
+
+        When ``command`` is provided, it overrides the default container
+        command (e.g. to run ``python -m osimflow.remote_runner``).
+        """
         client = self._get_client()
 
         service_name = self._build_service_name(name)
         image = container or self.image
 
-        # Build labels for tracking and env vars.
+        # Build labels for tracking.
         labels: dict[str, str] = {
             "osimflow.task": "1",
             "osimflow.sample_name": name,
@@ -393,10 +464,26 @@ class DockerSwarmExecutor(BaseExecutor):
             "osimflow.container": image,
         }
 
+        # Build environment variables for the container.
         env: list[str] = []
         if openstudio_version is not None:
             env.append(f"OSIMFLOW_OS_VERSION={openstudio_version}")
         env.append(f"OSIMFLOW_CONTAINER={image}")
+        if task_payload is not None:
+            env.append(f"OSIMFLOW_TASK_PAYLOAD={task_payload}")
+        if result_transport_mode is not None:
+            env.append(f"OSIMFLOW_RESULT_TRANSPORT_MODE={result_transport_mode}")
+        if result_storage_backend is not None:
+            env.append(f"OSIMFLOW_RESULT_STORAGE_BACKEND={result_storage_backend}")
+        if result_storage_bucket is not None:
+            env.append(f"OSIMFLOW_RESULT_STORAGE_BUCKET={result_storage_bucket}")
+        if result_storage_prefix is not None:
+            env.append(f"OSIMFLOW_RESULT_STORAGE_PREFIX={result_storage_prefix}")
+        if result_storage_endpoint is not None:
+            env.append(f"OSIMFLOW_RESULT_STORAGE_ENDPOINT={result_storage_endpoint}")
+        stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
+        if stub_sim is not None:
+            env.append(f"OSIMFLOW_STUB_SIM={stub_sim}")
 
         # Resource limits.
         # Docker uses nanocpus (1e-9 CPUs) and memory in bytes.
@@ -426,7 +513,7 @@ class DockerSwarmExecutor(BaseExecutor):
             service = client.services.create(
                 name=service_name,
                 image=image,
-                command=["/bin/sh", "-c", "sleep infinity"],
+                command=command or ["python", "-m", "osimflow.remote_runner"],
                 env=env,
                 labels=labels,
                 container_labels=labels,
@@ -592,13 +679,23 @@ class DockerSwarmExecutor(BaseExecutor):
 
         self._stub_executor = None
 
-        del fn, args  # noqa: ARG002
-        # Unused in Docker Swarm mode: result_hint, remote_command, result_transport_mode,
-        # result_storage_*, variables_json, env, stdout/stderr_path, max_retries, worker_id.
-        del result_hint, remote_command, result_transport_mode  # noqa: F841
-        del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
-        del result_storage_endpoint, variables_json, env  # noqa: F841
-        del stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841
+        # Ephemeral-runner contract (issue #996, #1077): serialize the step
+        # call into the task payload; the Swarm-side
+        # ``python -m osimflow.remote_runner`` decodes it and executes the
+        # work function in container-local storage.
+        step_name = self._infer_step_name(name)
+        task_payload = self._build_task_payload(
+            step_name=step_name,
+            args=args,
+            kwargs={},
+            result_hint=result_hint,
+            name=name,
+        )
+
+        if remote_command:
+            command: list[str] = ["/bin/sh", "-c", remote_command]
+        else:
+            command = ["python", "-m", "osimflow.remote_runner"]
 
         submit_params: dict[str, Any] = {
             "name": name,
@@ -607,7 +704,32 @@ class DockerSwarmExecutor(BaseExecutor):
             "time_min": time_min,
             "openstudio_version": openstudio_version,
             "container": container,
+            "command": command,
+            "task_payload": task_payload,
+            "result_transport_mode": (
+                str(result_transport_mode) if result_transport_mode is not None else None
+            ),
+            "result_storage_backend": (
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            "result_storage_bucket": (
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            "result_storage_prefix": (
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            "result_storage_endpoint": (
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
         }
+
+        del fn  # noqa: ARG002 — work runs inside the Swarm container via remote_runner
+        # Unused in Docker Swarm mode: result_hint, remote_command, result_transport_mode,
+        # result_storage_*, variables_json, env, stdout/stderr_path, max_retries, worker_id.
+        del result_hint, remote_command, result_transport_mode  # noqa: F841
+        del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
+        del result_storage_endpoint, variables_json, env  # noqa: F841
+        del stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841
 
         service_name = self._submit_service(**submit_params)
 
@@ -616,20 +738,6 @@ class DockerSwarmExecutor(BaseExecutor):
             executor=self,
             submit_params=submit_params,
         )
-
-    def _build_environment(
-        self,
-        *,
-        container: str | None,
-        openstudio_version: str | None,
-    ) -> dict[str, str]:
-        """Build environment variables for the container."""
-        env: dict[str, str] = {}
-        if openstudio_version is not None:
-            env["OSIMFLOW_OS_VERSION"] = str(openstudio_version)
-        resolved = container or f"{self.image}"
-        env["OSIMFLOW_CONTAINER"] = resolved
-        return env
 
     def shutdown(self) -> None:
         # Docker client holds a socket; clean up on GC. Nothing to do.

@@ -847,6 +847,10 @@ class AWSBatchExecutor(BaseExecutor):
 
     name = "aws_batch"
 
+    @property
+    def requires_remote_runner_payload(self) -> bool:
+        return True
+
     # Default pricing estimates (USD per vCPU-hour). Conservative defaults
     # used when the Spot price cannot be queried or the instance type is
     # unknown. These are intentionally slightly above market average to
@@ -1104,22 +1108,108 @@ class AWSBatchExecutor(BaseExecutor):
             return
         raise RuntimeError(msg)
 
+    @staticmethod
+    def _infer_step_name(submit_name: str) -> str:
+        """Map a submit name to the remote_runner step identifier.
+
+        Same mapping as ``NomadExecutor._infer_step_name`` and
+        ``KubernetesExecutor._infer_step_name``: the Campaign names
+        fan-out tasks ``apply_<sid>`` / ``sim_<sid>`` / ``kpi_<sid>`` and
+        the single-shot steps ``aggregate`` / ``plots``; the remote runner
+        resolves the work function from the step identifier.
+        """
+        lower = submit_name.lower()
+        if lower.startswith("apply_"):
+            return "apply"
+        if lower.startswith("sim_"):
+            return "sim"
+        if lower.startswith("kpi_"):
+            return "extract"
+        if lower.startswith("aggregate"):
+            return "aggregate"
+        if lower.startswith("plots"):
+            return "plots"
+        return "unknown"
+
+    @staticmethod
+    def _build_task_payload(
+        *,
+        step_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        result_hint: Any,  # noqa: ANN401
+        name: str,
+    ) -> str:
+        """Serialize the step call for the ephemeral runner.
+
+        Uses the same serialization as ``NomadExecutor._build_task_payload``
+        and ``KubernetesExecutor._build_task_payload`` so
+        ``osimflow.remote_runner`` can decode either executor's Jobs
+        identically (issue #996).
+        """
+        payload = {
+            "schema_version": 1,
+            "name": name,
+            "step": step_name,
+            "args": [AWSBatchExecutor._encode_payload_value(a) for a in args],
+            "kwargs": {k: AWSBatchExecutor._encode_payload_value(v) for k, v in kwargs.items()},
+            "result_hint": AWSBatchExecutor._encode_payload_value(result_hint),
+        }
+        return json.dumps(payload)
+
+    @staticmethod
+    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
+        return encode_transport_value(value)
+
     def _build_environment(
         self,
         *,
         container: str | None,
         openstudio_version: str | None,
+        task_payload: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
     ) -> list[dict[str, str]]:
         """Build the Batch `environment` list from the per-submit kwargs.
 
-        Always present (so the task has a sane baseline); absent values
-        are omitted rather than set to empty strings.
+        The serialized task payload travels in ``OSIMFLOW_TASK_PAYLOAD`` and
+        the result-transport contract in the ``OSIMFLOW_RESULT_*`` vars so
+        ``osimflow.remote_runner`` can execute the step and push results to
+        object storage (issue #996). ``OSIMFLOW_STUB_SIM`` is propagated
+        from the orchestrator environment when set so remote pods honour
+        the orchestrator's stub-vs-real CLI choice.
         """
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
+        # Resolve container image using the standard resolution logic
+        # which respects container_digest, ecr_repository, and the
+        # container parameter.
         resolved = self._resolve_container_image(openstudio_version)
+        # If a custom container was passed, it takes precedence
+        if container is not None:
+            resolved = container
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
+        if task_payload is not None:
+            env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
+        if result_transport_mode is not None:
+            env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": result_transport_mode})
+        if result_storage_backend is not None:
+            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BACKEND", "value": result_storage_backend})
+        if result_storage_bucket is not None:
+            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BUCKET", "value": result_storage_bucket})
+        if result_storage_prefix is not None:
+            env.append({"name": "OSIMFLOW_RESULT_STORAGE_PREFIX", "value": result_storage_prefix})
+        if result_storage_endpoint is not None:
+            env.append(
+                {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": result_storage_endpoint}
+            )
+        stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
+        if stub_sim is not None:
+            env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
         return env
 
     def _build_container_overrides(
@@ -1128,6 +1218,7 @@ class AWSBatchExecutor(BaseExecutor):
         cpus: int,
         memory_mb: int,
         environment: list[dict[str, str]],
+        command: list[str] | None = None,
     ) -> dict[str, Any]:
         """Translate OSimFlow resource directives to Batch overrides.
 
@@ -1135,12 +1226,18 @@ class AWSBatchExecutor(BaseExecutor):
         and we treat the two as equivalent (the difference is < 5% and
         Batch's documented unit is MiB, so 1:1 keeps the intent clear
         to anyone reading the submit_job call).
+
+        When ``command`` is provided, it overrides the job definition's
+        container command (e.g. to run ``python -m osimflow.remote_runner``).
         """
-        return {
+        overrides: dict[str, Any] = {
             "vcpus": cpus,
             "memory": memory_mb,
             "environment": environment,
         }
+        if command is not None:
+            overrides["command"] = command
+        return overrides
 
     def _calculate_job_cost(
         self,
@@ -1238,6 +1335,7 @@ class AWSBatchExecutor(BaseExecutor):
         memory_mb: int,
         time_min: int,
         environment: list[dict[str, str]],
+        command: list[str] | None = None,
         job_queue: str | None = None,
     ) -> str:
         """Submit a single Batch job and return the jobId.
@@ -1248,12 +1346,16 @@ class AWSBatchExecutor(BaseExecutor):
         and retries on ``ThrottlingException`` / ``RequestLimitExceeded``
         with exponential backoff as defense-in-depth on top of boto3's
         adaptive retry mode.
+
+        When ``command`` is provided, it overrides the job definition's
+        container command (e.g. to run ``python -m osimflow.remote_runner``).
         """
         queue = job_queue or self.job_queue
         overrides = self._build_container_overrides(
             cpus=cpus,
             memory_mb=memory_mb,
             environment=environment,
+            command=command,
         )
         attempt_duration_seconds = int(time_min) * 60
         submit_kwargs: dict[str, Any] = {
@@ -1328,10 +1430,7 @@ class AWSBatchExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         self._container_digest = container_digest
-        del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
-        del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
-        self._container_digest = container_digest
 
         log.info(
             "aws_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
@@ -1342,9 +1441,43 @@ class AWSBatchExecutor(BaseExecutor):
             container,
         )
 
+        # Ephemeral-runner contract (issue #996, #1077): serialize the step
+        # call into the task payload; the Batch-side
+        # ``python -m osimflow.remote_runner`` decodes it and executes the
+        # work function in container-local storage.
+        step_name = self._infer_step_name(name)
+        task_payload = self._build_task_payload(
+            step_name=step_name,
+            args=args,
+            kwargs={},
+            result_hint=result_hint,
+            name=name,
+        )
+
+        if remote_command:
+            command: list[str] = ["/bin/sh", "-c", remote_command]
+        else:
+            command = ["python", "-m", "osimflow.remote_runner"]
+
         environment = self._build_environment(
             container=container,
             openstudio_version=openstudio_version,
+            task_payload=task_payload,
+            result_transport_mode=(
+                str(result_transport_mode) if result_transport_mode is not None else None
+            ),
+            result_storage_backend=(
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            result_storage_bucket=(
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            result_storage_prefix=(
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            result_storage_endpoint=(
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
         )
 
         # --- Spot price ceiling check (issue #131, #792) ---
@@ -1381,7 +1514,7 @@ class AWSBatchExecutor(BaseExecutor):
         # Submit the job to AWS Batch and return immediately (issue #262).
         # Spot retry logic lives in _AWSBatchHandle.result() so that
         # submit() is non-blocking — a prerequisite for concurrent fan-out.
-        del fn, args  # noqa: ARG002 — work runs inside the Batch container
+        del fn  # noqa: ARG002 — work runs inside the Batch container via remote_runner
 
         submit_params: dict[str, Any] = {
             "name": name,
@@ -1389,6 +1522,7 @@ class AWSBatchExecutor(BaseExecutor):
             "memory_mb": memory_mb,
             "time_min": time_min,
             "environment": environment,
+            "command": command,
         }
         job_id = self._submit_job(**submit_params)
 
