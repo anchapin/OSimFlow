@@ -3865,7 +3865,7 @@ class Campaign:
                     _handle: Handle | TQHandle = h,
                 ) -> None:
                     err = result_path / "eplusout.err"
-                    if err.exists() and err.stat().st_size == 0:
+                    if err.exists():
                         err.unlink()
                     self.cache.store(_key, Path(result_path), exit_code=0)
                     out[_sid] = Path(result_path)

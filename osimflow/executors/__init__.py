@@ -854,6 +854,10 @@ class AWSBatchExecutor(BaseExecutor):
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR: float = 0.05
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR: float = 0.03
 
+    # Issue #1081: digest pinning. Class attribute default ensures the
+    # attribute exists even when __init__ is bypassed (e.g. tests using __new__).
+    _container_digest: str | None = None
+
     # Sentinel used in statusReason to identify Spot interruptions.
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
         "Spot interruption",
@@ -883,15 +887,75 @@ class AWSBatchExecutor(BaseExecutor):
         ecr_repository: str | None = None,
         instance_type: str | None = None,
         submit_rps: float | None = None,
+        allow_long_lived_credentials: bool = False,
     ):
         # Lazy import: keeps the boto3 import cost off the local /
         # slurm executor paths. ImportError here is intentional: the
         # user opted into the [aws] extra, so a missing boto3 is a
         # user error, not a silent fallback.
         import boto3  # noqa: PLC0415
+        import botocore.session  # noqa: PLC0415
+        import botocore.credentials  # noqa: PLC0415
         from botocore.config import Config as BotoConfig  # noqa: PLC0415
 
-        self._boto3 = boto3
+        # Security: by default, restrict credential providers to IAM role
+        # only (EC2 instance metadata / ECS container credentials).
+        # This prevents accidental use of long-lived AWS_ACCESS_KEY_ID /
+        # AWS_SECRET_ACCESS_KEY from the environment or ~/.aws/credentials.
+        # Set allow_long_lived_credentials=True to opt out (not recommended
+        # for production). See issue #1160.
+        self._allow_long_lived_credentials = allow_long_lived_credentials
+
+        if not allow_long_lived_credentials:
+            # Check for long-lived credentials in environment and warn.
+            import os
+
+            env_creds = []
+            if os.environ.get("AWS_ACCESS_KEY_ID"):
+                env_creds.append("AWS_ACCESS_KEY_ID")
+            if os.environ.get("AWS_SECRET_ACCESS_KEY"):
+                env_creds.append("AWS_SECRET_ACCESS_KEY")
+            if os.environ.get("AWS_SESSION_TOKEN"):
+                env_creds.append("AWS_SESSION_TOKEN")
+            if env_creds:
+                log.warning(
+                    "AWSBatchExecutor: long-lived AWS credentials detected in "
+                    "environment (%s). These will be IGNORED because "
+                    "allow_long_lived_credentials=False (default). The executor "
+                    "will only use IAM role credentials from the EC2/ECS "
+                    "metadata service. Set allow_long_lived_credentials=True "
+                    "to opt out (not recommended for production).",
+                    ", ".join(env_creds),
+                )
+
+            # Create a custom botocore session with ONLY the IAM role
+            # credential providers. Filter the default chain to keep only:
+            # - InstanceMetadataProvider: IMDSv2 (EC2 instance profile)
+            # - ContainerProvider: ECS/Fargate/Batch task role
+            # - OriginalEC2Provider: Legacy IMDSv1 (EC2 instance profile)
+            # - BotoProvider: boto config (for region, etc.)
+            # This excludes: EnvProvider, SharedCredentialProvider, ConfigProvider,
+            # ProcessProvider, SSOProvider, LoginProvider, AssumeRoleProvider, etc.
+            session = botocore.session.get_session()
+            default_resolver = session.get_component("credential_provider")
+            iam_role_provider_names = {
+                "InstanceMetadataProvider",
+                "ContainerProvider",
+                "OriginalEC2Provider",
+                "BotoProvider",
+            }
+            iam_role_providers = [
+                p
+                for p in default_resolver.providers
+                if type(p).__name__ in iam_role_provider_names
+            ]
+            restricted_resolver = botocore.credentials.CredentialResolver(iam_role_providers)
+            session.register_component("credential_provider", restricted_resolver)
+            self._boto3_session = boto3.Session(botocore_session=session)
+        else:
+            self._boto3_session = boto3.Session()
+
+        self._boto3 = self._boto3_session
         # boto3.client("batch") without a configured region raises
         # NoRegionError immediately, so we defer client construction
         # to first use. The region still comes from the IAM role /
@@ -937,7 +1001,7 @@ class AWSBatchExecutor(BaseExecutor):
         the digest is returned verbatim and overrides every tag-based
         resolution path below.
         """
-        container_digest = getattr(self, "_container_digest", None)
+        container_digest = self._container_digest
         if container_digest:
             return container_digest
         tag = version or "latest"
