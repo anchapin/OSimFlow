@@ -23,7 +23,6 @@ cost.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
@@ -32,7 +31,6 @@ from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
-from osimflow.executors.transport import encode_transport_value
 
 log = logging.getLogger("osimflow.executors.docker_swarm")
 
@@ -200,59 +198,6 @@ class DockerSwarmExecutor(BaseExecutor):
     @property
     def requires_remote_runner_payload(self) -> bool:
         return True
-
-    @staticmethod
-    def _infer_step_name(submit_name: str) -> str:
-        """Map a submit name to the remote_runner step identifier.
-
-        Same mapping as ``NomadExecutor._infer_step_name`` and
-        ``KubernetesExecutor._infer_step_name``: the Campaign names
-        fan-out tasks ``apply_<sid>`` / ``sim_<sid>`` / ``kpi_<sid>`` and
-        the single-shot steps ``aggregate`` / ``plots``; the remote runner
-        resolves the work function from the step identifier.
-        """
-        lower = submit_name.lower()
-        if lower.startswith("apply_"):
-            return "apply"
-        if lower.startswith("sim_"):
-            return "sim"
-        if lower.startswith("kpi_"):
-            return "extract"
-        if lower.startswith("aggregate"):
-            return "aggregate"
-        if lower.startswith("plots"):
-            return "plots"
-        return "unknown"
-
-    @staticmethod
-    def _build_task_payload(
-        *,
-        step_name: str,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        result_hint: Any,  # noqa: ANN401
-        name: str,
-    ) -> str:
-        """Serialize the step call for the ephemeral runner.
-
-        Uses the same serialization as ``NomadExecutor._build_task_payload``
-        and ``KubernetesExecutor._build_task_payload`` so
-        ``osimflow.remote_runner`` can decode either executor's Jobs
-        identically (issue #996).
-        """
-        payload = {
-            "schema_version": 1,
-            "name": name,
-            "step": step_name,
-            "args": [DockerSwarmExecutor._encode_payload_value(a) for a in args],
-            "kwargs": {k: DockerSwarmExecutor._encode_payload_value(v) for k, v in kwargs.items()},
-            "result_hint": DockerSwarmExecutor._encode_payload_value(result_hint),
-        }
-        return json.dumps(payload)
-
-    @staticmethod
-    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
-        return encode_transport_value(value)
 
     def __init__(
         self,
