@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -215,7 +216,7 @@ class TestCircuitBreakerObservability:
         breaker.record_failure()
         assert events == [("test_cb", "closed", "open")]
         # open → half_open (cooldown elapses on allow())
-        import time; time.sleep(0.002)
+        time.sleep(0.002)
         assert breaker.allow() is True
         assert events == [
             ("test_cb", "closed", "open"),
@@ -229,7 +230,7 @@ class TestCircuitBreakerObservability:
             ("test_cb", "half_open", "open"),
         ]
         # open → half_open again
-        import time; time.sleep(0.002)
+        time.sleep(0.002)
         breaker.allow()
         # half_open → closed (probe succeeds)
         breaker.record_success()

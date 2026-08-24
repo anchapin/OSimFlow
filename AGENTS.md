@@ -220,9 +220,9 @@ appear in this document. Listed in run-subcommand groups (or
 
 - **Resilience (chaos fault injection, issue #1013):**
   `--chaos-delay-s`, `--chaos-duration-s`, `--chaos-enabled`,
-  `--chaos-fail-after`, `--chaos-intensity`, `--chaos-jitter-s`,
-  `--chaos-probability`, `--chaos-scenarios`, `--chaos-schedule`,
-  `--chaos-size-mb`. Off by default; the Campaign wires the
+  `--chaos-fail-after`, `--chaos-intensity` (0.0–1.0),
+  `--chaos-jitter-s` (must not exceed `--chaos-delay-s`),
+  `--chaos-probability`, `--chaos-scenarios`, `--chaos-schedule`, `--chaos-size-mb`. Off by default; the Campaign wires the
   registered scenarios into ``ChaosEngine`` at the configured
   schedule (``before_step`` / ``after_step`` / ``per_sample``)
   and records every invocation under ``run.json.chaos_invocations``.
@@ -329,7 +329,8 @@ name in this section.
 - `osimflow/circuit_breaker.py` — `CircuitBreaker` +
   `CircuitOpenError` (closed/open/half-open; guards the Redis
   data plane in `DistributedCache` and `RedisDocumentStore`
-  against persistent outages, issue #1111).
+  against persistent outages, issue #1111; `_consecutive_failures`
+  is reset to 1 on ``half_open`` → ``open`` transition).
 - `osimflow/distributed_jobqueue.py` — `DistributedJobQueue` +
   `build_job_queue` (Redis pub/sub wrapper).
 - `osimflow/storage.py` — `ResultStorage` ABC + `LocalStorage`,
@@ -350,8 +351,8 @@ name in this section.
 - `osimflow/monitoring.py` — `RunTrace` + `StepTrace`; writes
   `run.json`.
 - `osimflow/observability.py` — `ObservabilityBackend` ABC +
-  `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`,
-  `OpenTelemetryBackend` + `new_trace_id`.
+  `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`
+  + `new_trace_id` + `record_circuit_breaker_event`.
 - `osimflow/_campaign_observability.py` — `ObservabilityManager`
   wrapping backend lifecycle from `Campaign`.
 - `osimflow/_campaign_cost_tracker.py` — internal cost wiring
@@ -744,6 +745,7 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 | Add a user-facing CLI flag | `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser |
 | Change KPI output schema | `osimflow/_work_scripts/extract_kpis.py` (dict shape) **and** `osimflow/_work_scripts/aggregate_results.py` (column ordering); update §3 / §8 of this file if it affects the contract |
 | Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different `Campaign` semantics (retry, cache, monitoring) |
+| Work with safe expression evaluation | `osimflow/_eval_safe.py` (`safe_eval`, `ExpressionError`); used by chaos engine for variable expansion |
 | Add a new cache invalidation rule | `osimflow/campaign.py:_compute_code_hashes` **and** a test in `tests/integration/test_cache_invalidation.py` |
 | Add an export format | new module in `osimflow/exporters/`, add the `--target` choice to `osimflow/__main__.py` export subcommand |
 | Wire a real OpenStudio CLI invocation | `osimflow/work.py:run_openstudio_sim` — replace the stub body with `subprocess.run(["openstudio.cli", "run", ...])` and add per-sample stdout/stderr capture (the stub is already there for `OSIMFLOW_STUB_SIM=1`) |

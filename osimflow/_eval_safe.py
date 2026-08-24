@@ -152,16 +152,17 @@ class _SafeVisitor(ast.NodeVisitor):
             raise ExpressionError(f"disallowed node type {node.__class__.__name__!r} in expression")
         if type(node) not in _ALLOWED_NODES:
             raise ExpressionError(f"unknown node type {node.__class__.__name__!r} in expression")
-        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
-            if len(node.elts) > _MAX_CONTAINER_SIZE:
-                raise ExpressionError(
-                    f"container has {len(node.elts)} elements, max is {_MAX_CONTAINER_SIZE}"
-                )
-        elif isinstance(node, ast.Dict):
-            if len(node.keys) > _MAX_CONTAINER_SIZE:
-                raise ExpressionError(
-                    f"dict has {len(node.keys)} entries, max is {_MAX_CONTAINER_SIZE}"
-                )
+        if (
+            isinstance(node, (ast.Tuple, ast.List, ast.Set))
+            and len(node.elts) > _MAX_CONTAINER_SIZE
+        ):
+            raise ExpressionError(
+                f"container has {len(node.elts)} elements, max is {_MAX_CONTAINER_SIZE}"
+            )
+        elif isinstance(node, ast.Dict) and len(node.keys) > _MAX_CONTAINER_SIZE:
+            raise ExpressionError(
+                f"dict has {len(node.keys)} entries, max is {_MAX_CONTAINER_SIZE}"
+            )
         self._depth += 1
         try:
             if self._depth > _MAX_CONTAINER_DEPTH:
@@ -232,9 +233,7 @@ def _eval_constant(node: ast.Constant) -> Any:
 def _eval_node(node: ast.AST, globals_dict: dict[str, Any], depth: int = 0) -> Any:  # noqa: PLR0911, PLR0912
     """Recursively evaluate an already-validated AST node."""
     if depth > _MAX_CONTAINER_DEPTH:
-        raise ExpressionError(
-            f"container nesting depth {depth} exceeds max {_MAX_CONTAINER_DEPTH}"
-        )
+        raise ExpressionError(f"container nesting depth {depth} exceeds max {_MAX_CONTAINER_DEPTH}")
     # Literals
     if isinstance(node, ast.Constant):
         return _eval_constant(node)
