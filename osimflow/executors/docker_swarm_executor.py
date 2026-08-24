@@ -203,7 +203,7 @@ class DockerSwarmExecutor(BaseExecutor):
         self,
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
-        image: str = "nrel/openstudio:latest",
+        image: str = "nrel/openstudio:3.11.0",
         network: str | None = None,
     ):
         self.poll_interval_s = poll_interval_s
@@ -212,6 +212,15 @@ class DockerSwarmExecutor(BaseExecutor):
         self.network = network
         self._client: Any = None
         self._stub_executor: Any = None
+
+        if self.image.endswith(":latest"):
+            log.warning(
+                "docker-swarm-image is set to %r — using 'latest' is not recommended "
+                "for production due to supply-chain risk. "
+                "Pin to a specific version tag (e.g. 'nrel/openstudio:3.11.0') "
+                "or use --container-digest for immutable references.",
+                self.image,
+            )
 
     def _is_dev_fallback_enabled(self) -> bool:
         """Return True when the dev fallback path is explicitly opted in.

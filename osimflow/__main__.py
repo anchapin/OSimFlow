@@ -867,8 +867,10 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     )
     run.add_argument(
         "--docker-swarm-image",
-        default="nrel/openstudio:latest",
-        help="Docker image for Swarm services (default: nrel/openstudio:latest).",
+        default="nrel/openstudio:3.11.0",
+        help="Docker image for Swarm services (default: nrel/openstudio:3.11.0). "
+        "WARNING: Using 'latest' is not recommended for production due to "
+        "supply-chain risk — the image digest can change over time.",
     )
     run.add_argument(
         "--docker-swarm-network",
