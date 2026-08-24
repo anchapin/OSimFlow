@@ -65,16 +65,16 @@ class TestEplusoutErrCleanup:
     def campaign(self, cfg: CampaignConfig) -> Campaign:
         return Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
 
-    def test_eplusout_err_deleted_on_successful_simulation(self, campaign: Campaign, workdir: Path):
+    def test_eplusout_err_deleted_on_successful_simulation(
+        self, campaign: Campaign, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """eplusout.err should be deleted after successful simulation."""
-        # Skip preflight by using stub mode
-        import os
-
-        os.environ["OSIMFLOW_STUB_SIM"] = "1"
-        try:
-            campaign.run()
-        finally:
-            os.environ.pop("OSIMFLOW_STUB_SIM", None)
+        # Skip preflight by using stub mode. monkeypatch auto-restores the
+        # previous value (usually the conftest-forced "1") — a raw
+        # os.environ.pop here leaked into every later test and cascaded
+        # into dozens of "CLI not available" failures across the suite.
+        monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+        campaign.run()
 
         # Find the simulation output directory
         sim_dirs = list((workdir / "out" / "work" / "sim").glob("*/"))
@@ -90,7 +90,7 @@ class TestEplusoutErrCleanup:
         )
 
     def test_eplusout_err_not_archived_with_archive_intermediates(
-        self, workdir: Path, template_pkg: Path, outdir: Path
+        self, workdir: Path, template_pkg: Path, outdir: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """eplusout.err should NOT be archived even when --archive_intermediates is used."""
         cfg = CampaignConfig(
@@ -103,14 +103,12 @@ class TestEplusoutErrCleanup:
         )
         campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
 
-        # Skip preflight by using stub mode
-        import os
-
-        os.environ["OSIMFLOW_STUB_SIM"] = "1"
-        try:
-            campaign.run()
-        finally:
-            os.environ.pop("OSIMFLOW_STUB_SIM", None)
+        # Skip preflight by using stub mode. monkeypatch auto-restores the
+        # previous value (usually the conftest-forced "1") — a raw
+        # os.environ.pop here leaked into every later test and cascaded
+        # into dozens of "CLI not available" failures across the suite.
+        monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+        campaign.run()
 
         # Check archive directory
         archive_sim_dir = outdir / "archive" / "sim"
@@ -127,16 +125,16 @@ class TestEplusoutErrCleanup:
                 "eplusout.err should not be archived"
             )
 
-    def test_eplusout_err_deleted_even_with_warnings(self, campaign: Campaign, workdir: Path):
+    def test_eplusout_err_deleted_even_with_warnings(
+        self, campaign: Campaign, workdir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """eplusout.err should be deleted even if it contains warnings (non-empty)."""
-        # Skip preflight by using stub mode
-        import os
-
-        os.environ["OSIMFLOW_STUB_SIM"] = "1"
-        try:
-            campaign.run()
-        finally:
-            os.environ.pop("OSIMFLOW_STUB_SIM", None)
+        # Skip preflight by using stub mode. monkeypatch auto-restores the
+        # previous value (usually the conftest-forced "1") — a raw
+        # os.environ.pop here leaked into every later test and cascaded
+        # into dozens of "CLI not available" failures across the suite.
+        monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+        campaign.run()
 
         sim_dirs = list((workdir / "out" / "work" / "sim").glob("*/"))
         assert len(sim_dirs) == 1

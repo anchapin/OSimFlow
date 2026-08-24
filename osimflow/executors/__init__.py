@@ -952,11 +952,15 @@ class AWSBatchExecutor(BaseExecutor):
             ]
             restricted_resolver = botocore.credentials.CredentialResolver(iam_role_providers)
             session.register_component("credential_provider", restricted_resolver)
-            self._boto3_session = boto3.Session(botocore_session=session)
+            # Keep the boto3 MODULE as the client-factory seam (tests patch
+            # ``boto3.client``); carry the restricted session as a kwarg so
+            # ``self._boto3.client(...)`` stays interceptable while still
+            # routing credentials through IAM-role providers only.
+            self._botocore_session: Any = session
         else:
-            self._boto3_session = boto3.Session()
+            self._botocore_session = None
 
-        self._boto3 = self._boto3_session
+        self._boto3 = boto3
         # boto3.client("batch") without a configured region raises
         # NoRegionError immediately, so we defer client construction
         # to first use. The region still comes from the IAM role /
@@ -1010,6 +1014,17 @@ class AWSBatchExecutor(BaseExecutor):
             return f"{self.ecr_repository}:{tag}"
         return f"nrel/openstudio:{tag}"
 
+    def _client_kwargs(self) -> dict[str, Any]:
+        """Shared boto3.client kwargs, including the IAM-only session (if any)."""
+        kwargs: dict[str, Any] = {
+            "region_name": self._region_name,
+            "config": self._retry_config,
+        }
+        botocore_session = getattr(self, "_botocore_session", None)
+        if botocore_session is not None:
+            kwargs["botocore_session"] = botocore_session
+        return kwargs
+
     def _get_client(self) -> Any:
         """Lazy boto3 Batch client construction.
 
@@ -1020,21 +1035,13 @@ class AWSBatchExecutor(BaseExecutor):
         role / ~/.aws/config in place.
         """
         if self._client is None:
-            self._client = self._boto3.client(
-                "batch",
-                region_name=self._region_name,
-                config=self._retry_config,
-            )
+            self._client = self._boto3.client("batch", **self._client_kwargs())
         return self._client
 
     def _get_ec2_client(self) -> Any:
         """Lazy boto3 EC2 client for Spot price queries."""
         if self._ec2_client is None:
-            self._ec2_client = self._boto3.client(
-                "ec2",
-                region_name=self._region_name,
-                config=self._retry_config,
-            )
+            self._ec2_client = self._boto3.client("ec2", **self._client_kwargs())
         return self._ec2_client
 
     def _get_spot_price(self) -> float:
