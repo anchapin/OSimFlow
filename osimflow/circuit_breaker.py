@@ -111,9 +111,9 @@ class CircuitBreaker:
         """Record a failed operation (opens the circuit past threshold)."""
         with self._lock:
             self._consecutive_failures += 1
-            if (
-                self._consecutive_failures >= self.failure_threshold
-                or self._effective_state() == "half_open"
-            ):
+            was_half_open = self._state == "half_open"
+            if self._consecutive_failures >= self.failure_threshold or was_half_open:
                 self._state = "open"
                 self._opened_at = time.monotonic()
+                if was_half_open:
+                    self._consecutive_failures = 1
