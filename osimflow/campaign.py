@@ -62,6 +62,7 @@ import yaml
 
 from ._campaign_cost_tracker import CampaignCostTracker
 from ._campaign_observability import ObservabilityManager
+from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
     EPW_FILE_KEY,
@@ -554,6 +555,26 @@ class Campaign:
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs = ObservabilityManager(cfg)
+
+        # Alerting (issue #1180). Built from cfg so alerts fire for
+        # step failures, sample failures, worker death, and quota-exceeded
+        # events during campaign execution.
+        self._alert_manager: AlertManager | None = None
+        obs_cfg = getattr(cfg, "_observability", None)
+        if obs_cfg is not None and obs_cfg.alert_rules is not None:
+            try:
+                self._alert_manager = build_alert_manager(
+                    rules_path=obs_cfg.alert_rules,
+                    destinations_path=obs_cfg.alert_destinations,
+                )
+                log.info(
+                    "alerting enabled: rules=%s destinations=%s",
+                    obs_cfg.alert_rules,
+                    obs_cfg.alert_destinations,
+                )
+            except Exception as exc:
+                log.warning("could not initialize AlertManager: %s — continuing without", exc)
+
         # Campaign registry (issue #266). Auto-register on run start
         # and update status on completion.
         self._registry: CampaignRegistry | None = None
@@ -666,6 +687,17 @@ class Campaign:
         # silently continuing.
         self._consecutive_checkpoint_failures = 0
 
+    def _maybe_alert(self, event_type: str, context: dict[str, Any]) -> None:
+        """Send an alert if AlertManager is configured (issue #1180).
+
+        Best-effort: failures are silently logged and never propagate.
+        """
+        if self._alert_manager is not None:
+            try:
+                self._alert_manager.notify(event_type, context)
+            except Exception as exc:
+                log.warning("alert %s failed: %s", event_type, exc)
+
     def _enforce_start_quota(self) -> None:
         """Fail fast if the campaign's resource quota is already exceeded at start.
 
@@ -678,6 +710,16 @@ class Campaign:
             return
 
         if quota.max_samples is not None and self.cfg.n_samples > quota.max_samples:
+            self._maybe_alert(
+                "quota.exceeded",
+                {
+                    "campaign_id": self.trace.campaign_id,
+                    "quota_type": "max_samples",
+                    "limit": quota.max_samples,
+                    "current": self.cfg.n_samples,
+                    "message": f"n_samples={self.cfg.n_samples} exceeds max_samples={quota.max_samples}",
+                },
+            )
             raise QuotaExceededError(
                 f"n_samples={self.cfg.n_samples} exceeds resource_quota.max_samples="
                 f"{quota.max_samples}",
@@ -1269,6 +1311,17 @@ class Campaign:
                 # Record sample status to observability backend immediately
                 # so crashed samples are not missed (issue #847).
                 self._obs.record_sample_status(sid, "failed", trace_id=trace_id)
+                # Send sample failure alert (issue #1180).
+                self._maybe_alert(
+                    "sample.failed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "sample_id": sid,
+                        "step": step_name,
+                        "status": "failed",
+                        "error": str(e)[:500],
+                    },
+                )
                 return sid
             # Incremental checkpoint: update run.json after each sample
             # completes so SSE clients see live progress (issue #275).
@@ -2317,6 +2370,15 @@ class Campaign:
             self.trace.finalize()
             self.cfg.outdir.mkdir(parents=True, exist_ok=True)
             log.exception("campaign failed")
+            # Send campaign failure alert (issue #1180).
+            self._maybe_alert(
+                "campaign.failed",
+                {
+                    "campaign_id": self.trace.campaign_id,
+                    "status": "failure",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
             raise
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
@@ -3643,6 +3705,17 @@ class Campaign:
                 self.trace.step_item_done("APPLY_PARAMETERS", status="failed")
                 # Record sample status to observability backend (issue #847).
                 self._obs.record_sample_status(_sid, "failed", trace_id=self._trace_id_for(_sid))
+                # Send sample failure alert (issue #1180).
+                self._maybe_alert(
+                    "sample.failed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "sample_id": _sid,
+                        "step": "APPLY_PARAMETERS",
+                        "status": "failed",
+                        "error": "apply exited with non-zero code",
+                    },
+                )
 
         self.trace.step_finished(
             "APPLY_PARAMETERS",
@@ -3947,6 +4020,17 @@ class Campaign:
                 self.trace.step_item_done("RUN_OPENSTUDIO_SIM", status="failed")
                 # Record sample status to observability backend (issue #847).
                 self._obs.record_sample_status(_sid, "failed", trace_id=self._trace_id_for(_sid))
+                # Send sample failure alert (issue #1180).
+                self._maybe_alert(
+                    "sample.failed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "sample_id": _sid,
+                        "step": "RUN_OPENSTUDIO_SIM",
+                        "status": "failed",
+                        "error": "sim exited with non-zero code",
+                    },
+                )
 
         self.trace.step_finished(
             "RUN_OPENSTUDIO_SIM",
@@ -4217,6 +4301,17 @@ class Campaign:
                     status="failed",
                 )
                 self._obs.record_sample_status(_sid, "failed", trace_id=self._trace_id_for(_sid))
+                # Send sample failure alert (issue #1180).
+                self._maybe_alert(
+                    "sample.failed",
+                    {
+                        "campaign_id": self.trace.campaign_id,
+                        "sample_id": _sid,
+                        "step": "EXTRACT_KPIS",
+                        "status": "failed",
+                        "error": "extract exited with non-zero code",
+                    },
+                )
 
         self.trace.step_finished(
             "EXTRACT_KPIS",
