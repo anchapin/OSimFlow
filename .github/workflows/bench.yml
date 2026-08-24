@@ -68,9 +68,12 @@ jobs:
           # CI runners vary in speed; allow the workflow to override
           # the cold-cache wall-clock threshold without editing source.
           OSIMFLOW_BENCH_THRESHOLD_S: "60"
+          # CI runners have no OpenStudio CLI — the benchmark is a
+          # cold/warm-cache perf smoke, not a real-simulation test.
+          OSIMFLOW_STUB_SIM: "1"
         run: |
           .venv/bin/python -m tests.benchmarks.bench_campaign \
-            --input_variables variables.yml \
+            --input_variables example_package/variables.yml \
             --template_sim_package ./example_package \
             --outdir ./bench-out \
             --openstudio_version 3.11.0 \
