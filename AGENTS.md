@@ -752,6 +752,8 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 | Add or modify a health check | `osimflow/health.py` (`_check_*` function, register in `run_health_checks`) **and** a test in `tests/unit/test_health_check.py` |
 | Sweep stale remote branches | `scripts/sweep-stale-branches.sh` (dry-run default; `--apply` deletes proven-merged; `--include-orphaned` also opts into abandoned branches; `--worktree` scans stale local worktrees) + `.github/workflows/branch-cleanup.yml` (nightly dry-run, posts to issue #1003; manual `apply=true`+`confirm=DELETE`); see `docs/branch-protection.md` §"Stale branch sweep" (issue #1003) |
 
+### Tool selection
+
 Tool family priority (when both standard tools and
 context-mode / codebase-memory-mcp are exposed):
 - Read a small file you intend to edit → `Read`.

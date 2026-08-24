@@ -1,0 +1,35 @@
+# variables.yml - Example LHS Campaign for OSimFlow Quickstart
+# This file defines the parameters to vary and their probability distributions
+# for the Latin Hypercube Sampler. It works with the example_package's
+# model.osm and workflow.osw which use SetThermostatSchedule and
+# SetEnvelopePerformance measures.
+
+algorithm: lhs
+variables:
+  - name: heating_setpoint
+    distribution: uniform
+    min: 18.0
+    max: 22.0
+    measure_argument: SetThermostatSchedule.heating_setpoint
+    description: "Indoor heating setpoint in Celsius"
+
+  - name: cooling_setpoint
+    distribution: uniform
+    min: 24.0
+    max: 28.0
+    measure_argument: SetThermostatSchedule.cooling_setpoint
+    description: "Indoor cooling setpoint in Celsius"
+
+  - name: wall_r_value
+    distribution: uniform
+    min: 2.0
+    max: 5.0
+    measure_argument: SetEnvelopePerformance.wall_r_value
+    description: "Wall thermal resistance in m²K/W"
+
+  - name: wwr
+    distribution: uniform
+    min: 0.2
+    max: 0.6
+    measure_argument: SetEnvelopePerformance.wwr
+    description: "Window-to-wall ratio (fraction)"

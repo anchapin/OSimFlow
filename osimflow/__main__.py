@@ -1417,7 +1417,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--detach",
         action="store_true",
-        default=True,
+        default=False,
         help=(
             "Hand off the campaign to a remote Coordinator service and exit "
             "immediately (Phase 2 fire-and-forget mode). Requires --coordinator-url. "

@@ -36,7 +36,7 @@ pip install -e ".[dev,aws,slurm,api]"
 ```bash
 osimflow run \
   --executor local \
-  --input_variables variables.yml \
+  --input_variables example_package/variables.yml \
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./results \
