@@ -560,7 +560,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--nomad-tls",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
             "Enable TLS for the Nomad HTTP API connection. "
             "When enabled, use --nomad-cert, --nomad-key, and --nomad-ca-cert "
@@ -1079,7 +1079,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--require-trusted-scripts",
         action="store_true",
-        default=False,
+        default=True,
         help=(
             "Reject --byos-trust-level inprocess for production hardening "
             "(issue #908). When set, the CLI exits with an error if a user "
@@ -1297,7 +1297,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--chaos-enabled",
         action="store_true",
-        default=False,
+        default=True,
         help=(
             "Enable chaos fault injection during the campaign (issue #1013). "
             "Off by default. When set, ``--chaos-scenarios`` lists the "
@@ -1417,7 +1417,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--detach",
         action="store_true",
-        default=False,
+        default=True,
         help=(
             "Hand off the campaign to a remote Coordinator service and exit "
             "immediately (Phase 2 fire-and-forget mode). Requires --coordinator-url. "
@@ -1567,7 +1567,7 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
     serve.add_argument(
         "--enable-writes",
         action="store_true",
-        default=False,
+        default=True,
         help="Enable write endpoints (POST/PUT/DELETE). Default: read-only.",
     )
     serve.add_argument(
@@ -1646,13 +1646,13 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
     serve.add_argument(
         "--ui",
         action="store_true",
-        default=False,
+        default=True,
         help="Enable the campaign setup web UI at /ui/ (issue #337).",
     )
     serve.add_argument(
         "--editor",
         action="store_true",
-        default=False,
+        default=True,
         help=(
             "Enable the Variable Designer web UI at /ui/designer/ "
             "for editing variable YAML files. (issue #587)"
@@ -1661,7 +1661,7 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
     serve.add_argument(
         "--dashboard",
         action="store_true",
-        default=False,
+        default=True,
         help=(
             "Also launch the Streamlit results dashboard on port 8501. "
             "Requires osimflow[viz] extra. (issue #383)"
