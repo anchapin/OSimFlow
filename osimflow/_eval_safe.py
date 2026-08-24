@@ -33,6 +33,9 @@ from typing import Any
 
 __all__ = ["safe_eval", "ExpressionError"]
 
+_MAX_CONTAINER_DEPTH = 10
+_MAX_CONTAINER_SIZE = 1000
+
 # ── operators ─────────────────────────────────────────────────────────────────
 
 
@@ -139,39 +142,72 @@ _ALLOWED_NODES = frozenset(
 class _SafeVisitor(ast.NodeVisitor):
     """Walk an AST and raise :exc:`ExpressionError` on unsafe nodes."""
 
-    __slots__ = ()
+    __slots__ = ("_depth",)
+
+    def __init__(self) -> None:
+        self._depth = 0
 
     def generic_visit(self, node: ast.AST) -> None:  # noqa: PLR0912
         if type(node) in _UNSAFE_NODES:
             raise ExpressionError(f"disallowed node type {node.__class__.__name__!r} in expression")
         if type(node) not in _ALLOWED_NODES:
             raise ExpressionError(f"unknown node type {node.__class__.__name__!r} in expression")
-        # Only recurse into operands, not operator labels (BinOp.op, UnaryOp.op, Compare.ops, etc.)
-        if isinstance(node, ast.BinOp):
-            self.visit(node.left)
-            self.visit(node.right)
-        elif isinstance(node, ast.UnaryOp):
-            self.visit(node.operand)
-        elif isinstance(node, ast.Compare):
-            self.visit(node.left)
-            for comparator in node.comparators:
-                self.visit(comparator)
-        elif isinstance(node, ast.BoolOp):
-            for value in node.values:
-                self.visit(value)
-        elif isinstance(node, ast.IfExp):
-            self.visit(node.test)
-            self.visit(node.body)
-            self.visit(node.orelse)
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            if len(node.elts) > _MAX_CONTAINER_SIZE:
+                raise ExpressionError(
+                    f"container has {len(node.elts)} elements, max is {_MAX_CONTAINER_SIZE}"
+                )
         elif isinstance(node, ast.Dict):
-            for k, v in zip(node.keys, node.values, strict=True):
-                if k is not None:
-                    self.visit(k)
-                self.visit(v)
-        elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
-            for elt in node.elts:
-                self.visit(elt)
-        # Don't call super().generic_visit() — we control traversal above
+            if len(node.keys) > _MAX_CONTAINER_SIZE:
+                raise ExpressionError(
+                    f"dict has {len(node.keys)} entries, max is {_MAX_CONTAINER_SIZE}"
+                )
+        self._depth += 1
+        try:
+            if self._depth > _MAX_CONTAINER_DEPTH:
+                raise ExpressionError(
+                    f"container nesting depth {self._depth} exceeds max {_MAX_CONTAINER_DEPTH}"
+                )
+            # Only recurse into operands, not operator labels (BinOp.op, UnaryOp.op, Compare.ops, etc.)
+            if isinstance(node, ast.Expression):
+                self.visit(node.body)
+            elif isinstance(node, ast.BinOp):
+                self.visit(node.left)
+                self.visit(node.right)
+            elif isinstance(node, ast.UnaryOp):
+                self.visit(node.operand)
+            elif isinstance(node, ast.Compare):
+                self.visit(node.left)
+                for comparator in node.comparators:
+                    self.visit(comparator)
+            elif isinstance(node, ast.BoolOp):
+                for value in node.values:
+                    self.visit(value)
+            elif isinstance(node, ast.IfExp):
+                self.visit(node.test)
+                self.visit(node.body)
+                self.visit(node.orelse)
+            elif isinstance(node, ast.Dict):
+                for k, v in zip(node.keys, node.values, strict=True):
+                    if k is not None:
+                        self.visit(k)
+                    self.visit(v)
+            elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+                for elt in node.elts:
+                    self.visit(elt)
+            elif isinstance(node, ast.Name):
+                pass  # Name has `id` (str) and `ctx` (Load/Store) — no AST children to recurse
+            elif isinstance(node, ast.Constant):
+                pass  # Leaf node
+            elif isinstance(node, ast.FormattedValue):
+                self.visit(node.value)
+                if node.format_spec is not None:
+                    self.visit(node.format_spec)
+            elif isinstance(node, ast.JoinedStr):
+                for value in node.values:
+                    self.visit(value)
+        finally:
+            self._depth -= 1
 
 
 def _check_ast(node: ast.AST) -> None:
@@ -193,8 +229,12 @@ def _eval_constant(node: ast.Constant) -> Any:
     return node.value
 
 
-def _eval_node(node: ast.AST, globals_dict: dict[str, Any]) -> Any:  # noqa: PLR0911, PLR0912
+def _eval_node(node: ast.AST, globals_dict: dict[str, Any], depth: int = 0) -> Any:  # noqa: PLR0911, PLR0912
     """Recursively evaluate an already-validated AST node."""
+    if depth > _MAX_CONTAINER_DEPTH:
+        raise ExpressionError(
+            f"container nesting depth {depth} exceeds max {_MAX_CONTAINER_DEPTH}"
+        )
     # Literals
     if isinstance(node, ast.Constant):
         return _eval_constant(node)
@@ -206,26 +246,29 @@ def _eval_node(node: ast.AST, globals_dict: dict[str, Any]) -> Any:  # noqa: PLR
         op_func = _ARITH_OPS.get(type(node.op))
         if op_func is None:
             raise ExpressionError(f"unsupported binary operator {node.op!r}")
-        return op_func(_eval_node(node.left, globals_dict), _eval_node(node.right, globals_dict))
+        return op_func(
+            _eval_node(node.left, globals_dict, depth + 1),
+            _eval_node(node.right, globals_dict, depth + 1),
+        )
 
     # Unary (minus, not)
     if isinstance(node, ast.UnaryOp):
         if isinstance(node.op, ast.Not):
-            return not _eval_node(node.operand, globals_dict)
+            return not _eval_node(node.operand, globals_dict, depth + 1)
         if isinstance(node.op, ast.USub):
-            return -_eval_node(node.operand, globals_dict)
+            return -_eval_node(node.operand, globals_dict, depth + 1)
         if isinstance(node.op, ast.UAdd):
-            return +_eval_node(node.operand, globals_dict)
+            return +_eval_node(node.operand, globals_dict, depth + 1)
         raise ExpressionError(f"unsupported unary operator {node.op!r}")
 
     # Compare
     if isinstance(node, ast.Compare):
-        left = _eval_node(node.left, globals_dict)
+        left = _eval_node(node.left, globals_dict, depth + 1)
         for op, right_node in zip(node.ops, node.comparators, strict=True):
             op_func = _CMP_OPS.get(type(op))
             if op_func is None:
                 raise ExpressionError(f"unsupported comparison {op!r}")
-            right = _eval_node(right_node, globals_dict)
+            right = _eval_node(right_node, globals_dict, depth + 1)
             if not op_func(left, right):
                 return False
             left = right
@@ -238,27 +281,27 @@ def _eval_node(node: ast.AST, globals_dict: dict[str, Any]) -> Any:  # noqa: PLR
             raise ExpressionError(f"unsupported bool operator {node.op!r}")
         # Short-circuit evaluation using all()/any()
         if isinstance(node.op, ast.And):
-            return all(_eval_node(v, globals_dict) for v in node.values)
-        return any(_eval_node(v, globals_dict) for v in node.values)
+            return all(_eval_node(v, globals_dict, depth + 1) for v in node.values)
+        return any(_eval_node(v, globals_dict, depth + 1) for v in node.values)
 
     # If expression (ternary)
     if isinstance(node, ast.IfExp):
         return (
-            _eval_node(node.body, globals_dict)
-            if _eval_node(node.test, globals_dict)
-            else _eval_node(node.orelse, globals_dict)
+            _eval_node(node.body, globals_dict, depth + 1)
+            if _eval_node(node.test, globals_dict, depth + 1)
+            else _eval_node(node.orelse, globals_dict, depth + 1)
         )
 
     # Containers (tuple, list, set, dict) — allowed as literals
     if isinstance(node, ast.Tuple):
-        return tuple(_eval_node(elt, globals_dict) for elt in node.elts)
+        return tuple(_eval_node(elt, globals_dict, depth + 1) for elt in node.elts)
     if isinstance(node, ast.List):
-        return [_eval_node(elt, globals_dict) for elt in node.elts]
+        return [_eval_node(elt, globals_dict, depth + 1) for elt in node.elts]
     if isinstance(node, ast.Set):
-        return {_eval_node(elt, globals_dict) for elt in node.elts}
+        return {_eval_node(elt, globals_dict, depth + 1) for elt in node.elts}
     if isinstance(node, ast.Dict):
         return {
-            _eval_node(k, globals_dict): _eval_node(v, globals_dict)  # type: ignore[arg-type]
+            _eval_node(k, globals_dict, depth + 1): _eval_node(v, globals_dict, depth + 1)  # type: ignore[arg-type]
             for k, v in zip(node.keys, node.values, strict=True)
         }
 
