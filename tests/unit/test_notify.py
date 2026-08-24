@@ -190,7 +190,7 @@ def test_email_backend_send_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         def __exit__(self, *exc: Any) -> None:
             return None
 
-        def starttls(self) -> None:
+        def starttls(self, context: Any = None) -> None:
             pass
 
         def login(self, user: str, password: str) -> None:
@@ -264,7 +264,7 @@ def test_email_backend_credentials_from_env_only(
         def __exit__(self, *exc: Any) -> None:
             return None
 
-        def starttls(self) -> None:
+        def starttls(self, context: Any = None) -> None:
             pass
 
         def login(self, user: str, password: str) -> None:
