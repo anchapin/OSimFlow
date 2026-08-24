@@ -1653,6 +1653,13 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         log.warning("could not parse objective/constraints from %s: %s", variables_yml, exc)
         objective, constraints = None, None
 
+    _chaos_intensity = float(str(args.get("chaos_intensity", 0.5)))
+    if not (0.0 <= _chaos_intensity <= 1.0):
+        raise ValidationError(
+            f"chaos_intensity must be between 0.0 and 1.0 (got {_chaos_intensity})",
+            field="chaos_intensity",
+        )
+
     return CampaignConfig(
         input_variables=variables_yml,
         template_sim_package=template,
@@ -1865,7 +1872,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         chaos_delay_s=float(str(args.get("chaos_delay_s", 0.1))),
         chaos_jitter_s=float(str(args.get("chaos_jitter_s", 0.05))),
         chaos_duration_s=float(str(args.get("chaos_duration_s", 0.5))),
-        chaos_intensity=float(str(args.get("chaos_intensity", 0.5))),
+        chaos_intensity=_chaos_intensity,
         chaos_size_mb=int(str(args.get("chaos_size_mb", 64))),
         chaos_fail_after=int(str(args.get("chaos_fail_after", 2))),
     )
