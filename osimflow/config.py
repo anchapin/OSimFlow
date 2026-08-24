@@ -1013,7 +1013,7 @@ class CampaignConfig:
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
     byos_resource_limits: dict[str, int] | None = None
     byos_timeout_s: float = 600.0
-    require_trusted_scripts: bool = False
+    require_trusted_scripts: bool = True
     ecr_repository: str | None = None
     resource_quota: ResourceQuota | None = None
     redis_url: str | None = None
@@ -1723,7 +1723,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             if args.get("byos_trust_level")
             else ByosTrustLevel.SUBPROCESS
         ),
-        require_trusted_scripts=bool(args.get("require_trusted_scripts", False)),
+        require_trusted_scripts=bool(args.get("require_trusted_scripts", True)),
         observability=str(args.get("observability", "none")),
         cloudwatch_namespace=str(args.get("cloudwatch_namespace", "OSimFlow")),
         cloudwatch_log_group=(
