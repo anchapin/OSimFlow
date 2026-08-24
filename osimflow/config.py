@@ -1659,9 +1659,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         n_samples=int(str(args["n_samples"])),
         outdir=outdir,
         openstudio_version=str(args["openstudio_version"]),
-        container_digest=(
-            str(args["container_digest"]) if args.get("container_digest") else None
-        ),
+        container_digest=(str(args["container_digest"]) if args.get("container_digest") else None),
         project=str(args.get("project", "")),
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,

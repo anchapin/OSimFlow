@@ -40,9 +40,7 @@ class TestEplusoutErrCleanup:
     def template_pkg(self, workdir: Path) -> Path:
         pkg = workdir / "template"
         pkg.mkdir()
-        (pkg / "model.osm").write_text(
-            json.dumps({"attributes": {"test_var": 1.0}})
-        )
+        (pkg / "model.osm").write_text(json.dumps({"attributes": {"test_var": 1.0}}))
         (pkg / "workflow.osw").write_text(json.dumps({"name": "stub"}))
         return pkg
 
@@ -67,12 +65,11 @@ class TestEplusoutErrCleanup:
     def campaign(self, cfg: CampaignConfig) -> Campaign:
         return Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
 
-    def test_eplusout_err_deleted_on_successful_simulation(
-        self, campaign: Campaign, workdir: Path
-    ):
+    def test_eplusout_err_deleted_on_successful_simulation(self, campaign: Campaign, workdir: Path):
         """eplusout.err should be deleted after successful simulation."""
         # Skip preflight by using stub mode
         import os
+
         os.environ["OSIMFLOW_STUB_SIM"] = "1"
         try:
             campaign.run()
@@ -88,7 +85,9 @@ class TestEplusoutErrCleanup:
         assert (sim_dir / "eplusout.sql").exists()
 
         # eplusout.err should NOT exist (deleted on success)
-        assert not (sim_dir / "eplusout.err").exists(), "eplusout.err should be deleted after successful simulation"
+        assert not (sim_dir / "eplusout.err").exists(), (
+            "eplusout.err should be deleted after successful simulation"
+        )
 
     def test_eplusout_err_not_archived_with_archive_intermediates(
         self, workdir: Path, template_pkg: Path, outdir: Path
@@ -106,6 +105,7 @@ class TestEplusoutErrCleanup:
 
         # Skip preflight by using stub mode
         import os
+
         os.environ["OSIMFLOW_STUB_SIM"] = "1"
         try:
             campaign.run()
@@ -123,14 +123,15 @@ class TestEplusoutErrCleanup:
             assert (archived_dir / "eplusout.sql").exists()
 
             # eplusout.err should NOT be archived
-            assert not (archived_dir / "eplusout.err").exists(), "eplusout.err should not be archived"
+            assert not (archived_dir / "eplusout.err").exists(), (
+                "eplusout.err should not be archived"
+            )
 
-    def test_eplusout_err_deleted_even_with_warnings(
-        self, campaign: Campaign, workdir: Path
-    ):
+    def test_eplusout_err_deleted_even_with_warnings(self, campaign: Campaign, workdir: Path):
         """eplusout.err should be deleted even if it contains warnings (non-empty)."""
         # Skip preflight by using stub mode
         import os
+
         os.environ["OSIMFLOW_STUB_SIM"] = "1"
         try:
             campaign.run()
@@ -143,7 +144,9 @@ class TestEplusoutErrCleanup:
 
         # eplusout.err should be deleted regardless of content
         # (In stub mode it's empty, but the fix ensures deletion even if non-empty)
-        assert not (sim_dir / "eplusout.err").exists(), "eplusout.err should be deleted even if non-empty"
+        assert not (sim_dir / "eplusout.err").exists(), (
+            "eplusout.err should be deleted even if non-empty"
+        )
 
 
 if __name__ == "__main__":

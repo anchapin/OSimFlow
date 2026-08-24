@@ -949,9 +949,7 @@ class AWSBatchExecutor(BaseExecutor):
                 "BotoProvider",
             }
             iam_role_providers = [
-                p
-                for p in default_resolver.providers
-                if type(p).__name__ in iam_role_provider_names
+                p for p in default_resolver.providers if type(p).__name__ in iam_role_provider_names
             ]
             restricted_resolver = botocore.credentials.CredentialResolver(iam_role_providers)
             session.register_component("credential_provider", restricted_resolver)
