@@ -47,6 +47,7 @@ import json
 import logging
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 from typing import Any
 
@@ -174,7 +175,10 @@ class EmailNotifyBackend(NotifyBackend):
 
             with smtplib.SMTP(host, port) as server:
                 if use_tls:
-                    server.starttls()
+                    context = ssl.create_default_context()
+                    context.check_hostname = True
+                    context.verify_mode = ssl.CERT_REQUIRED
+                    server.starttls(context=context)
                 if user and password:
                     server.login(user, password)
                 server.send_message(msg)
