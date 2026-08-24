@@ -11,14 +11,29 @@ to handle transient network errors.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
 log = logging.getLogger("osimflow.webhook")
+
+_BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+class WebhookSSRFError(Exception):
+    """Raised when a webhook URL fails SSRF validation."""
 
 
 class WebhookDeliveryError(Exception):
@@ -31,13 +46,18 @@ class WebhookClient:
     Parameters
     ----------
     url
-        The target URL to POST to. Must be an http:// or https:// URL.
+        The target URL to POST to. Must be an https:// URL by default,
+        or http:// if the host is in ``allowed_insecure_hosts``.
     timeout
         Request timeout in seconds (default: 30).
     max_retries
         Maximum number of retry attempts on failure (default: 3).
     initial_delay
         Initial backoff delay in seconds (default: 1.0).
+    allowed_insecure_hosts
+        Set of hosts allowed to use http:// (insecure) instead of https://.
+        These are checked against the URL's host after any redirects.
+        By default, no insecure HTTP is allowed.
     """
 
     def __init__(
@@ -46,11 +66,61 @@ class WebhookClient:
         timeout: float = 30.0,
         max_retries: int = 3,
         initial_delay: float = 1.0,
+        allowed_insecure_hosts: set[str] | None = None,
     ) -> None:
         self.url = url
         self.timeout = timeout
         self.max_retries = max_retries
         self.initial_delay = initial_delay
+        self.allowed_insecure_hosts = allowed_insecure_hosts or set()
+        self._validate_url()
+
+    def _validate_url(self) -> None:
+        """Validate URL to prevent SSRF attacks (issue #1175).
+
+        - Requires https:// by default
+        - Allows http:// only for hosts in allowed_insecure_hosts
+        - Blocks localhost, link-local, and metadata IPs
+        """
+        parsed = urllib.parse.urlparse(self.url)
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname
+
+        if not host:
+            raise WebhookSSRFError(f"Invalid URL: no host in {self.url!r}")
+
+        if scheme == "https":
+            return
+
+        if scheme == "http":
+            if host in self.allowed_insecure_hosts:
+                return
+            raise WebhookSSRFError(
+                f"Insecure http:// URLs require explicit allowlisting. "
+                f"URL {self.url!r} has host {host!r} which is not in "
+                f"allowed_insecure_hosts. To allow this host, pass "
+                f"allowed_insecure_hosts={{{host!r}}} when constructing "
+                f"WebhookClient."
+            )
+
+        raise WebhookSSRFError(
+            f"URL scheme must be https:// (or http:// for allowed hosts). "
+            f"Got {scheme!r} in {self.url!r}"
+        )
+
+    def _check_ip_blocklist(self, host: str) -> None:
+        """Check if host resolves to a blocked IP address."""
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            return
+        for network in _BLOCKED_NETWORKS:
+            if addr in network:
+                raise WebhookSSRFError(
+                    f"Webhook URL {self.url!r} resolves to blocked "
+                    f"IP address {addr}. URLs resolving to localhost, "
+                    f"link-local, or metadata addresses are not allowed."
+                )
 
     def deliver(self, payload: dict[str, Any]) -> bool:
         """Deliver *payload* as a JSON POST to the configured URL.
@@ -71,6 +141,7 @@ class WebhookClient:
             all retries were exhausted.
         """
         body = json.dumps(payload, default=str).encode("utf-8")
+        self._check_ip_blocklist(urllib.parse.urlparse(self.url).hostname or "")
 
         for attempt in range(self.max_retries + 1):
             try:
