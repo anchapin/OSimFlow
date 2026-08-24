@@ -1660,6 +1660,19 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             field="chaos_intensity",
         )
 
+    _chaos_delay_s = float(str(args.get("chaos_delay_s", 0.1)))
+    _chaos_jitter_s = float(str(args.get("chaos_jitter_s", 0.05)))
+    if _chaos_jitter_s < 0:
+        raise ValidationError(
+            f"chaos_jitter_s must be >= 0 (got {_chaos_jitter_s})",
+            field="chaos_jitter_s",
+        )
+    if _chaos_jitter_s > _chaos_delay_s:
+        raise ValidationError(
+            f"chaos_jitter_s ({_chaos_jitter_s}) cannot exceed chaos_delay_s ({_chaos_delay_s})",
+            field="chaos_jitter_s",
+        )
+
     return CampaignConfig(
         input_variables=variables_yml,
         template_sim_package=template,
@@ -1869,8 +1882,8 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         chaos_scenarios=_parse_chaos_scenarios(args.get("chaos_scenarios")),
         chaos_schedule=str(args.get("chaos_schedule", "none")),
         chaos_probability=float(str(args.get("chaos_probability", 1.0))),
-        chaos_delay_s=float(str(args.get("chaos_delay_s", 0.1))),
-        chaos_jitter_s=float(str(args.get("chaos_jitter_s", 0.05))),
+        chaos_delay_s=_chaos_delay_s,
+        chaos_jitter_s=_chaos_jitter_s,
         chaos_duration_s=float(str(args.get("chaos_duration_s", 0.5))),
         chaos_intensity=_chaos_intensity,
         chaos_size_mb=int(str(args.get("chaos_size_mb", 64))),
