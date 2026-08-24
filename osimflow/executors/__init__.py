@@ -42,7 +42,6 @@ from osimflow.executors.kubernetes_executor import KubernetesExecutor as Kuberne
 from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
 from osimflow.executors.transport import (
     coerce_transport_mode,
-    encode_transport_value,
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
@@ -1128,36 +1127,6 @@ class AWSBatchExecutor(BaseExecutor):
         if lower.startswith("plots"):
             return "plots"
         return "unknown"
-
-    @staticmethod
-    def _build_task_payload(
-        *,
-        step_name: str,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        result_hint: Any,  # noqa: ANN401
-        name: str,
-    ) -> str:
-        """Serialize the step call for the ephemeral runner.
-
-        Uses the same serialization as ``NomadExecutor._build_task_payload``
-        and ``KubernetesExecutor._build_task_payload`` so
-        ``osimflow.remote_runner`` can decode either executor's Jobs
-        identically (issue #996).
-        """
-        payload = {
-            "schema_version": 1,
-            "name": name,
-            "step": step_name,
-            "args": [AWSBatchExecutor._encode_payload_value(a) for a in args],
-            "kwargs": {k: AWSBatchExecutor._encode_payload_value(v) for k, v in kwargs.items()},
-            "result_hint": AWSBatchExecutor._encode_payload_value(result_hint),
-        }
-        return json.dumps(payload)
-
-    @staticmethod
-    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
-        return encode_transport_value(value)
 
     def _build_environment(
         self,
@@ -2694,29 +2663,6 @@ class NomadExecutor(BaseExecutor):
         if lower.startswith("plots"):
             return "plots"
         return "unknown"
-
-    @staticmethod
-    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
-        return encode_transport_value(value)
-
-    @staticmethod
-    def _build_task_payload(
-        *,
-        step_name: str,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        result_hint: Any,  # noqa: ANN401
-        name: str,
-    ) -> str:
-        payload = {
-            "schema_version": 1,
-            "name": name,
-            "step": step_name,
-            "args": [NomadExecutor._encode_payload_value(a) for a in args],
-            "kwargs": {k: NomadExecutor._encode_payload_value(v) for k, v in kwargs.items()},
-            "result_hint": NomadExecutor._encode_payload_value(result_hint),
-        }
-        return json.dumps(payload)
 
 
 # ======================================================================

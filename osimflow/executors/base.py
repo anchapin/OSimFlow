@@ -11,9 +11,12 @@ __all__ = ["BaseExecutor", "Handle"]
 
 import abc
 import dataclasses
+import json
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
+
+from osimflow.executors.transport import encode_transport_value
 
 
 @dataclasses.dataclass
@@ -194,3 +197,57 @@ class BaseExecutor(abc.ABC):
         returns 0.0 (no pacing).
         """
         return 0.0
+
+    # --- Shared remote-runner payload helpers (issue #1168) ---
+    # Used by executors that dispatch via ``python -m osimflow.remote_runner``
+    # (Nomad, Kubernetes, AWS Batch, Azure Batch, Google Batch, Docker Swarm).
+
+    @staticmethod
+    def _infer_step_name(submit_name: str) -> str:
+        """Map a submit name to the remote_runner step identifier.
+
+        The Campaign names fan-out tasks ``apply_<sid>`` / ``sim_<sid>``
+        / ``kpi_<sid>`` and the single-shot steps ``aggregate`` / ``plots``;
+        the remote runner resolves the work function from the step identifier.
+        """
+        lower = submit_name.lower()
+        if lower.startswith("apply_"):
+            return "apply"
+        if lower.startswith("sim_"):
+            return "sim"
+        if lower.startswith("kpi_"):
+            return "extract"
+        if lower.startswith("aggregate"):
+            return "aggregate"
+        if lower.startswith("plots"):
+            return "plots"
+        return "unknown"
+
+    @staticmethod
+    def _encode_payload_value(value: Any) -> Any:  # noqa: ANN401
+        """Encode Python values for transport-safe JSON payloads."""
+        return encode_transport_value(value)
+
+    @staticmethod
+    def _build_task_payload(
+        *,
+        step_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        result_hint: Any,  # noqa: ANN401
+        name: str,
+    ) -> str:
+        """Serialize the step call for the ephemeral runner.
+
+        Uses the shared serialization so ``osimflow.remote_runner`` can
+        decode any executor's Jobs identically (issue #996).
+        """
+        payload = {
+            "schema_version": 1,
+            "name": name,
+            "step": step_name,
+            "args": [BaseExecutor._encode_payload_value(a) for a in args],
+            "kwargs": {k: BaseExecutor._encode_payload_value(v) for k, v in kwargs.items()},
+            "result_hint": BaseExecutor._encode_payload_value(result_hint),
+        }
+        return json.dumps(payload)

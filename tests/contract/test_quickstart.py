@@ -41,7 +41,7 @@ def test_readme_quickstart_produces_expected_artifacts(tmp_path: Path) -> None:
             "--executor",
             "local",
             "--input_variables",
-            str(REPO_ROOT / "variables.yml"),
+            str(REPO_ROOT / "example_package" / "variables.yml"),
             "--template_sim_package",
             str(REPO_ROOT / "example_package"),
             "--n_samples",

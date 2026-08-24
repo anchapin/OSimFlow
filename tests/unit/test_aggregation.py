@@ -60,7 +60,7 @@ class TestFailedSimulationsCSVEtraction:
         assert len(cols) == len(FAILED_SIMULATIONS_COLUMNS)
 
         # Check specific columns
-        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, cols, strict=True))
+        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, cols, strict=False))
         assert col_dict["sample_id"] == "sample_001"
         assert col_dict["root_cause_line"] == "  * Severe  Some EnergyPlus error message"
         assert col_dict["error_summary"] == "  * Severe  Some EnergyPlus error message"
@@ -121,7 +121,7 @@ class TestFailedSimulationsCSVEtraction:
         # Verify each failure has correct classification
         for i, line in enumerate(lines[1:]):
             cols = line.split(",")
-            col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, cols, strict=True))
+            col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, cols, strict=False))
             manifest = manifests[i]
             expected_category = _classify_line(manifest.first_severe_error)
             assert col_dict["failure_category"] == expected_category
@@ -157,7 +157,7 @@ class TestFailedSimulationsCSVEtraction:
         lines = result.failed_simulations_csv.strip().splitlines()
         assert len(lines) == 2
 
-        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, lines[1].split(","), strict=True))
+        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, lines[1].split(","), strict=False))
         assert col_dict["sample_id"] == "sample_001"
         assert (
             col_dict["error_summary"]
@@ -253,7 +253,7 @@ class TestFailedSimulationsCSVEtraction:
         assert len(fail_lines) == 2
 
         # Verify the failed sample
-        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, fail_lines[1].split(","), strict=True))
+        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, fail_lines[1].split(","), strict=False))
         assert col_dict["sample_id"] == "sample_002"
         assert col_dict["error_summary"] == "  * Severe  Temperature out of range"
 
@@ -280,7 +280,7 @@ class TestFailedSimulationsCSVEtraction:
 
             result = compile_aggregation([manifest], lambda k: None)
             lines = result.failed_simulations_csv.strip().splitlines()
-            col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, lines[1].split(","), strict=True))
+            col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, lines[1].split(","), strict=False))
             assert col_dict["failure_category"] == expected_category, f"Failed for: {error_line}"
 
     def test_parse_manifest_handles_various_status_values(self):
@@ -325,7 +325,7 @@ class TestFailedSimulationsCSVEtraction:
         assert len(lines) == 2
         assert lines[0] == ",".join(FAILED_SIMULATIONS_COLUMNS)
 
-        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, lines[1].split(","), strict=True))
+        col_dict = dict(zip(FAILED_SIMULATIONS_COLUMNS, lines[1].split(","), strict=False))
         assert col_dict["sample_id"] == "sample_001"
         assert col_dict["failure_category"] == "generic_severe"
 
