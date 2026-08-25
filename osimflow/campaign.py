@@ -3687,11 +3687,9 @@ class Campaign:
 
                 submissions[sid] = (handle, _on_success)
             self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
-        total_cost = sum(
-            float(str(_v)) if _v is not None else 0.0
-            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        total_cost, total_savings = CampaignCostTracker.sum_sample_costs(
+            self._sample_state
         )
-        total_savings = 0.0
         self._record_costs("APPLY_PARAMETERS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
@@ -4002,11 +4000,9 @@ class Campaign:
                 recovery_manager=recovery_manager,
                 resubmit_callback=resubmit_callback,
             )
-        total_cost = sum(
-            float(str(_v)) if _v is not None else 0.0
-            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        total_cost, total_savings = CampaignCostTracker.sum_sample_costs(
+            self._sample_state
         )
-        total_savings = 0.0
         self._record_costs("RUN_OPENSTUDIO_SIM", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
@@ -4271,11 +4267,9 @@ class Campaign:
 
                 submissions[sid] = (handle, _on_success)
             self._submit_and_await_all(submissions, "EXTRACT_KPIS")
-        total_cost = sum(
-            float(str(_v)) if _v is not None else 0.0
-            for _v in (s.get("cost_usd") for s in self._sample_state.values())
+        total_cost, total_savings = CampaignCostTracker.sum_sample_costs(
+            self._sample_state
         )
-        total_savings = 0.0
         self._record_costs("EXTRACT_KPIS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.

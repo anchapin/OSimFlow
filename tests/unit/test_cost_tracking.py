@@ -691,3 +691,99 @@ class TestCostTrackerCampaignIntegration:
         assert summary.n_samples == 2
         assert summary.executor == "local"
         assert summary.finalized_at is not None
+
+
+# ---------------------------------------------------------------------------
+# CampaignCostTracker.sum_sample_costs spot savings (issue #1178)
+# ---------------------------------------------------------------------------
+class TestSumSampleCostsSpotSavings:
+    """sum_sample_costs must return compute_spot_savings(total_cost), not 0.0.
+
+    Regression tests for issue #1178: total_spot_savings_usd in the campaign
+    cost summary (and therefore run.json) was always $0.00 because the second
+    tuple element was hardcoded to 0.0.
+    """
+
+    def test_returns_nonzero_savings_when_cost_present(self) -> None:
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+
+        sample_state = {
+            "sample_0000": {"cost_usd": 0.10},
+            "sample_0001": {"cost_usd": 0.15},
+        }
+        total_cost, savings = CampaignCostTracker.sum_sample_costs(sample_state)
+        assert total_cost == pytest.approx(0.25)
+        assert savings == pytest.approx(CampaignCostTracker.compute_spot_savings(0.25))
+        assert savings > 0.0
+
+    def test_savings_uses_default_price_ratio(self) -> None:
+        """Savings reflect the spot < on-demand default price ratio (~40%)."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+
+        sample_state = {"sample_0000": {"cost_usd": 1.0}}
+        _, savings = CampaignCostTracker.sum_sample_costs(sample_state)
+        expected_ratio = (
+            AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+            - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+        ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+        assert savings == pytest.approx(round(1.0 * expected_ratio, 6))
+
+    def test_zero_cost_yields_zero_savings(self) -> None:
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+
+        total_cost, savings = CampaignCostTracker.sum_sample_costs({})
+        assert total_cost == 0.0
+        assert savings == 0.0
+
+    def test_samples_without_cost_are_skipped(self) -> None:
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+
+        sample_state = {
+            "sample_0000": {"status": "failed"},
+            "sample_0001": {"cost_usd": None},
+            "sample_0002": {"cost_usd": "0.2"},
+        }
+        total_cost, savings = CampaignCostTracker.sum_sample_costs(sample_state)
+        assert total_cost == pytest.approx(0.2)
+        assert savings == pytest.approx(CampaignCostTracker.compute_spot_savings(0.2))
+
+    def test_savings_flow_to_campaign_cost_summary(self, tmp_path: Path) -> None:
+        """Savings from sum_sample_costs reach CampaignCostSummary via
+        record_step_costs -> finalize (the run.json cost_summary path)."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+        from osimflow.cost_tracking import CampaignCostSummary
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        tracker = CampaignCostTracker(
+            campaign_id="camp-1178", cfg=cfg, executor_name="aws_batch"
+        )
+        assert tracker.is_enabled
+
+        sample_state = {
+            "sample_0000": {"cost_usd": 0.50},
+            "sample_0001": {"cost_usd": 0.50},
+        }
+        total_cost, total_savings = CampaignCostTracker.sum_sample_costs(sample_state)
+        assert total_savings > 0.0
+
+        tracker.record_step_costs("RUN_OPENSTUDIO_SIM", total_cost, total_savings)
+        summary = tracker._tracker.finalize()
+        assert isinstance(summary, CampaignCostSummary)
+        assert summary.total_spot_savings_usd == pytest.approx(
+            CampaignCostTracker.compute_spot_savings(1.0)
+        )
+        summary_dict = tracker.finalize()
+        assert summary_dict is not None
+        assert summary_dict["total_actual_cost_usd"] == pytest.approx(1.0)
+        assert summary_dict["total_spot_savings_usd"] == pytest.approx(
+            CampaignCostTracker.compute_spot_savings(1.0)
+        )
+        assert summary_dict["total_spot_savings_usd"] > 0.0
