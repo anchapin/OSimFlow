@@ -762,9 +762,7 @@ class TestSumSampleCostsSpotSavings:
             openstudio_version="3.11.0",
             enable_cost_tracking=True,
         )
-        tracker = CampaignCostTracker(
-            campaign_id="camp-1178", cfg=cfg, executor_name="aws_batch"
-        )
+        tracker = CampaignCostTracker(campaign_id="camp-1178", cfg=cfg, executor_name="aws_batch")
         assert tracker.is_enabled
 
         sample_state = {
