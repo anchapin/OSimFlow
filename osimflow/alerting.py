@@ -54,9 +54,11 @@ import dataclasses
 import json
 import logging
 import smtplib
+import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from collections.abc import Callable
 from email.message import EmailMessage
 from pathlib import Path
@@ -96,6 +98,22 @@ class AlertRule:
     condition: Callable[[dict[str, Any]], bool]
     severity: str
     message_template: str
+
+
+#: Maximum number of failed alerts retained for retry (issue #1185).
+#: The pending-alert history is a ring buffer: once full, the oldest
+#: entry is evicted to make room for the newest failure.
+_ALERT_HISTORY_MAXLEN = 100
+
+
+@dataclasses.dataclass
+class _PendingAlert:
+    """An alert whose delivery failed and is queued for retry (issue #1185)."""
+
+    alert: Alert
+    destination: AlertDestination
+    failed_at: float
+    error: str
 
 
 class AlertDestination(abc.ABC):
@@ -283,6 +301,10 @@ class AlertManager:
         self._rules: list[AlertRule] = []
         self._destinations: list[AlertDestination] = []
         self._cache_stats: dict[str, Any] = {}
+        # Bounded ring buffer of alerts whose delivery failed (issue #1185).
+        # Retried opportunistically at the start of every notify() call.
+        self._alert_history: deque[_PendingAlert] = deque(maxlen=_ALERT_HISTORY_MAXLEN)
+        self._history_lock = threading.Lock()
 
     def add_rule(self, rule: AlertRule) -> None:
         self._rules.append(rule)
@@ -293,8 +315,11 @@ class AlertManager:
     def notify(self, event_type: str, context: dict[str, Any]) -> None:
         """Evaluate all rules matching *event_type* and dispatch alerts.
 
-        Best-effort: destination failures are logged but never raise.
+        Best-effort: destination failures are logged, queued in the
+        bounded pending-alert history for retry (issue #1185), and never
+        raise.
         """
+        self._retry_pending()
         for rule in self._rules:
             if rule.event_type != event_type:
                 continue
@@ -320,15 +345,103 @@ class AlertManager:
             )
 
             for dest in self._destinations:
+                error = ""
                 try:
-                    dest.send(alert)
+                    delivered = bool(dest.send(alert))
                 except Exception as exc:
+                    delivered = False
+                    error = str(exc)
                     log.warning(
                         "alert destination %s failed for rule %s: %s",
                         type(dest).__name__,
                         rule.name,
                         exc,
                     )
+                if delivered:
+                    continue
+                if not error:
+                    error = "destination reported delivery failure"
+                    log.warning(
+                        "alert destination %s failed for rule %s: %s",
+                        type(dest).__name__,
+                        rule.name,
+                        error,
+                    )
+                self._enqueue_pending(alert, dest, error)
+
+    def _enqueue_pending(
+        self,
+        alert: Alert,
+        dest: AlertDestination,
+        error: str,
+    ) -> None:
+        """Park a failed alert in the bounded history for later retry."""
+        with self._history_lock:
+            self._alert_history.append(
+                _PendingAlert(
+                    alert=alert,
+                    destination=dest,
+                    failed_at=time.time(),
+                    error=error,
+                )
+            )
+        log.debug(
+            "alert for rule %s queued for retry (pending=%d/%d)",
+            alert.rule_name,
+            len(self._alert_history),
+            _ALERT_HISTORY_MAXLEN,
+        )
+
+    def _retry_pending(self) -> None:
+        """Re-attempt delivery of queued alerts (issue #1185).
+
+        Called at the start of every :meth:`notify` call. Alerts whose
+        destination has recovered are removed from the history (logged at
+        info); still-failing alerts are kept with an updated error and
+        timestamp (logged at debug to avoid spam).
+        """
+        with self._history_lock:
+            if not self._alert_history:
+                return
+            pending = list(self._alert_history)
+            self._alert_history.clear()
+
+        still_failing: list[_PendingAlert] = []
+        for entry in pending:
+            error = ""
+            delivered = False
+            try:
+                delivered = bool(entry.destination.send(entry.alert))
+            except Exception as exc:
+                error = str(exc)
+            if delivered:
+                log.info(
+                    "pending alert for rule %s (%s) delivered to %s after recovery",
+                    entry.alert.rule_name,
+                    entry.alert.event_type,
+                    type(entry.destination).__name__,
+                )
+                continue
+            if not error:
+                error = "destination reported delivery failure"
+            still_failing.append(
+                _PendingAlert(
+                    alert=entry.alert,
+                    destination=entry.destination,
+                    failed_at=time.time(),
+                    error=error,
+                )
+            )
+            log.debug(
+                "pending alert for rule %s still failing for %s: %s",
+                entry.alert.rule_name,
+                type(entry.destination).__name__,
+                error,
+            )
+
+        if still_failing:
+            with self._history_lock:
+                self._alert_history.extend(still_failing)
 
     def update_cache_stats(self, stats: dict[str, Any]) -> None:
         self._cache_stats = stats

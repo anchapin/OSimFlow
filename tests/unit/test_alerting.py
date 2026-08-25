@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from unittest.mock import patch
 
 from osimflow.alerting import (
     Alert,
+    AlertDestination,
     AlertManager,
     AlertRule,
     AlertSeverity,
@@ -286,3 +289,140 @@ class TestBuildAlertManager:
         # One LogDestination from the file
         assert len(manager._destinations) == 1
         assert isinstance(manager._destinations[0], LogDestination)
+
+
+class FlakyDestination(AlertDestination):
+    """Fake destination that raises while down and delivers while up."""
+
+    def __init__(self, fail: bool = True) -> None:
+        self.fail = fail
+        self.delivered: list[Alert] = []
+
+    def send(self, alert: Alert) -> bool:
+        if self.fail:
+            raise RuntimeError("destination down")
+        self.delivered.append(alert)
+        return True
+
+
+def _manager_with(dest: AlertDestination) -> AlertManager:
+    manager = AlertManager()
+    manager.add_rule(
+        AlertRule(
+            name="test-rule",
+            event_type="campaign.completed",
+            condition=lambda _: True,
+            severity=AlertSeverity.WARNING,
+            message_template="alert {i}",
+        )
+    )
+    manager.add_destination(dest)
+    return manager
+
+
+class TestPendingAlertRetryQueue:
+    """Issue #1185 — failed alerts are queued and retried, not lost."""
+
+    def test_failed_alert_is_queued_with_timestamp(self):
+        dest = FlakyDestination(fail=True)
+        manager = _manager_with(dest)
+
+        before = time.time()
+        manager.notify("campaign.completed", {"i": 1})
+
+        assert len(manager._alert_history) == 1
+        entry = manager._alert_history[0]
+        assert entry.alert.rule_name == "test-rule"
+        assert entry.alert.message == "alert 1"
+        assert entry.destination is dest
+        assert entry.failed_at >= before
+        assert "destination down" in entry.error
+
+    def test_recovered_destination_flushes_pending_on_next_notify(self):
+        dest = FlakyDestination(fail=True)
+        manager = _manager_with(dest)
+
+        manager.notify("campaign.completed", {"i": 1})
+        assert len(manager._alert_history) == 1
+        first_alert = manager._alert_history[0].alert
+
+        dest.fail = False
+        manager.notify("campaign.completed", {"i": 2})
+
+        assert len(manager._alert_history) == 0
+        # The queued alert from the outage was delivered, plus the new one.
+        assert [a.message for a in dest.delivered] == ["alert 1", "alert 2"]
+        assert first_alert in dest.delivered
+
+    def test_ring_buffer_caps_at_100(self):
+        dest = FlakyDestination(fail=True)
+        manager = _manager_with(dest)
+
+        for i in range(101):
+            manager.notify("campaign.completed", {"i": i})
+
+        assert len(manager._alert_history) == 100
+        messages = [entry.alert.message for entry in manager._alert_history]
+        # Oldest entry (i=0) was evicted by the 101st failure.
+        assert "alert 0" not in messages
+        assert messages[0] == "alert 1"
+        assert messages[-1] == "alert 100"
+
+    def test_delivered_alerts_are_not_queued(self):
+        dest = FlakyDestination(fail=False)
+        manager = _manager_with(dest)
+
+        manager.notify("campaign.completed", {"i": 1})
+        manager.notify("campaign.completed", {"i": 2})
+
+        assert len(manager._alert_history) == 0
+        assert len(dest.delivered) == 2
+
+    def test_continued_failure_keeps_alert_queued_with_updated_error(self):
+        dest = FlakyDestination(fail=True)
+        manager = _manager_with(dest)
+
+        manager.notify("campaign.completed", {"i": 1})
+        first_failed_at = manager._alert_history[0].failed_at
+
+        time.sleep(0.01)
+        manager.notify("campaign.completed", {"i": 2})
+
+        # Both the original and the new failure remain queued.
+        assert len(manager._alert_history) == 2
+        retained = [e for e in manager._alert_history if e.alert.message == "alert 1"][0]
+        assert retained.failed_at >= first_failed_at
+        assert "destination down" in retained.error
+
+    def test_false_returning_destination_is_queued_and_retried(self):
+        class RefusingDestination(AlertDestination):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def send(self, alert: Alert) -> bool:
+                self.calls += 1
+                return False
+
+        dest = RefusingDestination()
+        manager = _manager_with(dest)
+
+        manager.notify("campaign.completed", {"i": 1})
+        assert len(manager._alert_history) == 1
+        assert manager._alert_history[0].error == "destination reported delivery failure"
+
+    def test_concurrent_notify_is_thread_safe(self):
+        dest = FlakyDestination(fail=True)
+        manager = _manager_with(dest)
+
+        def worker() -> None:
+            for i in range(10):
+                manager.notify("campaign.completed", {"i": i})
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Ring buffer bound holds under concurrent queue mutations.
+        assert len(manager._alert_history) <= 100
