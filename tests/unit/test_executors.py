@@ -38,6 +38,11 @@ from osimflow.executors import (
     _SpotPriceCache,
     run_subprocess,
 )
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SIG_ENV,
+    sign_task_payload,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -801,6 +806,80 @@ class TestNomadExecutor:
             )
         entrypoint = spec["Job"]["TaskGroups"][0]["Tasks"][0]["Config"]["entrypoint"]
         assert entrypoint == ["/bin/sh", "-c", "python -m osimflow.remote_runner"]
+        ex.shutdown()
+
+    def test_build_job_spec_signs_task_payload_when_secret_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1177: the task Env must carry the HMAC over the exact payload bytes."""
+        secret = "nomad-shared-secret"
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
+        task_payload = json.dumps({"step": "sim", "args": [], "kwargs": {}})
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646")
+            spec = ex._build_job_spec(  # noqa: SLF001
+                name="sim_0001",
+                cpus=2,
+                memory_mb=2048,
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+                task_payload=task_payload,
+            )
+        task_env = spec["Job"]["TaskGroups"][0]["Tasks"][0]["Env"]
+        assert task_env["OSIMFLOW_TASK_PAYLOAD"] == task_payload
+        assert task_env[TASK_PAYLOAD_SECRET_ENV] == secret
+        assert task_env[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(task_payload, secret)
+        ex.shutdown()
+
+    def test_build_job_spec_omits_signature_env_without_secret(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy unsigned mode must leave the task Env unchanged (issue #1177)."""
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        task_payload = json.dumps({"step": "sim", "args": [], "kwargs": {}})
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646")
+            spec = ex._build_job_spec(  # noqa: SLF001
+                name="sim_0001",
+                cpus=2,
+                memory_mb=2048,
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+                task_payload=task_payload,
+            )
+        task_env = spec["Job"]["TaskGroups"][0]["Tasks"][0]["Env"]
+        assert task_env["OSIMFLOW_TASK_PAYLOAD"] == task_payload
+        assert TASK_PAYLOAD_SIG_ENV not in task_env
+        assert TASK_PAYLOAD_SECRET_ENV not in task_env
+        ex.shutdown()
+
+    def test_dispatch_meta_carries_task_payload_signature(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1177: dispatch-mode meta must carry sig + secret for the runner."""
+        secret = "nomad-dispatch-secret"
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646", use_dispatch=True)
+        ex._client = MagicMock()  # noqa: SLF001
+        ex.submit(lambda: None, name="sim_0001")
+        meta = ex._client.dispatch_job.call_args.kwargs["meta"]  # noqa: SLF001
+        assert meta["task_payload_secret"] == secret
+        assert meta["task_payload_sig"] == sign_task_payload(meta["task_payload"], secret)
+        ex.shutdown()
+
+    def test_build_dispatch_job_spec_declares_signature_meta_keys(self) -> None:
+        """Dispatch meta keys for the signature must be pre-declared (issue #1177)."""
+        mock_urlopen = self._mock_urlopen()
+        with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
+            ex = NomadExecutor(address="http://127.0.0.1:4646", use_dispatch=True)
+            spec = ex._build_dispatch_job_spec()  # noqa: SLF001
+        meta_optional = spec["Job"]["ParameterizedJob"]["MetaOptional"]
+        assert "task_payload_sig" in meta_optional
+        assert "task_payload_secret" in meta_optional
         ex.shutdown()
 
     def test_build_dispatch_job_spec_defaults_to_remote_runner_command(self) -> None:

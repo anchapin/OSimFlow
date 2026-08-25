@@ -45,6 +45,13 @@ from osimflow.executors.transport import (
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SIG_ENV,
+    TASK_PAYLOAD_SIG_META_KEY,
+    TASK_PAYLOAD_SECRET_META_KEY,
+    build_signature_env,
+)
 
 log = logging.getLogger("osimflow.executors")
 
@@ -2292,6 +2299,11 @@ class NomadExecutor(BaseExecutor):
             env["OSIMFLOW_CONTAINER"] = container
         if task_payload is not None:
             env["OSIMFLOW_TASK_PAYLOAD"] = task_payload
+            # Issue #1177: when a shared secret is configured, sign the
+            # exact payload bytes and propagate secret + signature so the
+            # remote_runner verifies before decoding/executing. No-op in
+            # legacy unsigned mode.
+            env.update(build_signature_env(task_payload))
         if result_transport_mode is not None:
             env["OSIMFLOW_RESULT_TRANSPORT_MODE"] = result_transport_mode
         if result_storage_backend is not None:
@@ -2381,6 +2393,8 @@ class NomadExecutor(BaseExecutor):
                         "openstudio_version",
                         "container_image",
                         "task_payload",
+                        "task_payload_sig",
+                        "task_payload_secret",
                         "result_transport_mode",
                         "result_storage_backend",
                         "result_storage_bucket",
@@ -2577,6 +2591,13 @@ class NomadExecutor(BaseExecutor):
                     else json.dumps(variables_json)
                 )
             meta["task_payload"] = task_payload
+            # Issue #1177: sign the dispatch payload when a shared secret
+            # is configured; the runner reads these back as
+            # NOMAD_META_task_payload_sig / NOMAD_META_task_payload_secret.
+            signature_env = build_signature_env(task_payload)
+            if signature_env:
+                meta[TASK_PAYLOAD_SIG_META_KEY] = signature_env[TASK_PAYLOAD_SIG_ENV]
+                meta[TASK_PAYLOAD_SECRET_META_KEY] = signature_env[TASK_PAYLOAD_SECRET_ENV]
             meta["result_transport_mode"] = (
                 str(result_transport_mode) if result_transport_mode is not None else "auto"
             )
