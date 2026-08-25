@@ -35,6 +35,11 @@ except ImportError:
 # block intentionally precedes these imports (see comment above).
 from osimflow.executors import KubernetesExecutor  # noqa: E402
 from osimflow.executors.kubernetes_executor import _KubernetesHandle  # noqa: E402
+from osimflow.task_payload_hmac import (  # noqa: E402
+    TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SIG_ENV,
+    sign_task_payload,
+)
 
 # Whole-module skip when the SDK is absent. The executor's heavy tests
 # (submit / _submit_job / _wait_for_terminal) construct real Kubernetes
@@ -227,6 +232,39 @@ class TestKubernetesExecutor:
             "__osimflow_type__": "path",
             "value": "/campaign/out/work/sim/s0",
         }
+
+    def test_submit_propagates_task_payload_signature_env_when_secret_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1177: the job env must carry the HMAC over the exact payload bytes."""
+        secret = "k8s-shared-secret"
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
+        mock_client, ex = self._make_executor()
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        container = self._submitted_container(mock_client)
+        env = {e.name: e.value for e in container.env}
+        assert env[TASK_PAYLOAD_SECRET_ENV] == secret
+        assert env[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(env["OSIMFLOW_TASK_PAYLOAD"], secret)
+
+    def test_submit_omits_task_payload_signature_env_when_no_secret(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy unsigned mode must leave the env byte-identical (issue #1177)."""
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        monkeypatch.delenv(TASK_PAYLOAD_SIG_ENV, raising=False)
+        mock_client, ex = self._make_executor()
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        container = self._submitted_container(mock_client)
+        env = {e.name: e.value for e in container.env}
+        assert "OSIMFLOW_TASK_PAYLOAD" in env
+        assert TASK_PAYLOAD_SIG_ENV not in env
+        assert TASK_PAYLOAD_SECRET_ENV not in env
 
     def test_submit_propagates_result_storage_env(self) -> None:
         """The OSIMFLOW_RESULT_* transport contract must reach the container."""

@@ -404,6 +404,17 @@ name in this section.
   `python -m osimflow.remote_runner` worker for Nomad /
   Kubernetes Jobs (decodes `OSIMFLOW_TASK_PAYLOAD`, pushes
   artifacts to object storage).
+- `osimflow/task_payload_hmac.py` — HMAC-SHA256 signing/verification
+  for `OSIMFLOW_TASK_PAYLOAD` (issue #1177):
+  `sign_task_payload`, `verify_task_payload`,
+  `resolve_payload_secret`, `build_signature_env` +
+  `TASK_PAYLOAD_ENV` / `TASK_PAYLOAD_SIG_ENV` /
+  `TASK_PAYLOAD_SECRET_ENV` constants and the Nomad meta-key
+  mirrors. `KubernetesExecutor` / `NomadExecutor` sign at
+  submission; `remote_runner` verifies (via
+  `hmac.compare_digest`, fail-closed) before decoding. Secret
+  comes from the `OSIMFLOW_TASK_PAYLOAD_SECRET` env var (no CLI
+  flag — avoids new public surface).
 - `osimflow/apply_params.py`, `osimflow/aggregation.py`,
   `osimflow/audit.py`, `osimflow/byos.py`,
   `osimflow/event_log.py`, `osimflow/json_utils.py`,

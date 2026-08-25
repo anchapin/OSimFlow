@@ -20,6 +20,12 @@ from .executors.transport import (
     local_path_to_storage_key,
 )
 from .storage import build_result_storage
+from .task_payload_hmac import (
+    TASK_PAYLOAD_SIG_ENV,
+    TASK_PAYLOAD_SIG_META_KEY,
+    resolve_payload_secret,
+    verify_task_payload,
+)
 from .work import (
     aggregate_results,
     default_apply_parameters,
@@ -35,6 +41,43 @@ def _decode_payload_value(value: Any) -> Any:  # noqa: ANN401
     return decode_transport_value(value)
 
 
+def _verify_payload_signature(raw: str) -> None:
+    """Verify the HMAC-SHA256 signature over the raw payload (issue #1177).
+
+    Fail closed: when a shared secret is configured
+    (``OSIMFLOW_TASK_PAYLOAD_SECRET`` / ``NOMAD_META_task_payload_secret``)
+    a missing or tampered ``OSIMFLOW_TASK_PAYLOAD_SIG`` raises
+    ``RuntimeError`` *before* the payload is decoded or executed.
+
+    Legacy mode: when no secret is configured the payload executes
+    unsigned. INTEGRITY TRADEOFF: anyone who can read/modify this job's
+    environment (e.g. via ``nomad alloc status`` or ``kubectl exec``)
+    can then inject arbitrary step calls. Set
+    ``OSIMFLOW_TASK_PAYLOAD_SECRET`` on the orchestrator to enable
+    signature enforcement.
+    """
+    secret = resolve_payload_secret()
+    if not secret:
+        log.warning(
+            "OSIMFLOW_TASK_PAYLOAD_SECRET not configured — executing unsigned "
+            "task payload (legacy mode). Anyone able to modify this job's "
+            "environment can inject arbitrary step calls; configure "
+            "OSIMFLOW_TASK_PAYLOAD_SECRET to enable HMAC-SHA256 verification."
+        )
+        return
+    signature = _get_env_or_nomad_meta(
+        env_key=TASK_PAYLOAD_SIG_ENV,
+        meta_key=TASK_PAYLOAD_SIG_META_KEY,
+    )
+    if not verify_task_payload(raw, signature, secret):
+        raise RuntimeError(
+            "OSIMFLOW_TASK_PAYLOAD_SIG verification failed: task payload "
+            "signature is missing or tampered with — refusing to execute "
+            "(issue #1177)"
+        )
+    log.info("task payload signature verified (HMAC-SHA256)")
+
+
 def _load_payload() -> dict[str, Any]:
     raw = os.environ.get("OSIMFLOW_TASK_PAYLOAD")
     if raw is None:
@@ -42,6 +85,9 @@ def _load_payload() -> dict[str, Any]:
         raw = os.environ.get("NOMAD_META_task_payload")  # noqa: SIM112
     if raw is None or raw.strip() == "":
         raise RuntimeError("missing task payload: OSIMFLOW_TASK_PAYLOAD/NOMAD_META_task_payload")
+    # Issue #1177: verify the signature over the exact raw payload bytes
+    # BEFORE decoding (json.loads) or executing anything.
+    _verify_payload_signature(raw)
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
