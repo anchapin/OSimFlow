@@ -134,14 +134,15 @@ class CampaignCostTracker:
         -------
         tuple[float, float]
             Tuple of (total_cost, total_savings) where savings is
-            a fixed fraction (~40%) of total_cost for AWS Batch.
+            ``compute_spot_savings(total_cost)`` — a fixed fraction
+            (~40%) of total_cost for AWS Batch.
         """
         total_cost = 0.0
         for state in sample_state.values():
             cost_usd = state.get("cost_usd")
             if cost_usd is not None:
                 total_cost += float(str(cost_usd))
-        return total_cost, 0.0
+        return total_cost, CampaignCostTracker.compute_spot_savings(total_cost)
 
     @staticmethod
     def compute_spot_savings(total_cost: float) -> float:
