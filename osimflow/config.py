@@ -1493,6 +1493,16 @@ def _validate_script_path(raw: object) -> None:
     )
 
 
+_VALID_CHAOS_SCENARIOS = frozenset(
+    [
+        "kill_switch",
+        "network_delay",
+        "cpu_spike",
+        "memory_pressure",
+    ]
+)
+
+
 def _parse_chaos_scenarios(raw: object) -> list[str]:
     """Parse ``--chaos-scenarios`` into a clean list of strings.
 
@@ -1504,13 +1514,28 @@ def _parse_chaos_scenarios(raw: object) -> list[str]:
 
     Whitespace is stripped and empty entries are dropped so a trailing
     comma does not produce a phantom scenario name.
+
+    Raises
+    ------
+    ValidationError
+        If any scenario name is not in the known registry
+        (``kill_switch``, ``network_delay``, ``cpu_spike``,
+        ``memory_pressure``). Issue #1209.
     """
     if raw is None:
         return []
     if isinstance(raw, (list, tuple)):
-        return [str(s).strip() for s in raw if str(s).strip()]
-    text = str(raw)
-    return [part.strip() for part in text.split(",") if part.strip()]
+        names = [str(s).strip() for s in raw if str(s).strip()]
+    else:
+        text = str(raw)
+        names = [part.strip() for part in text.split(",") if part.strip()]
+    unknown = sorted(set(names) - _VALID_CHAOS_SCENARIOS)
+    if unknown:
+        raise ValidationError(
+            f"chaos: unknown scenario name(s): {', '.join(unknown)!r}. "
+            f"Valid names are: {', '.join(sorted(_VALID_CHAOS_SCENARIOS))}."
+        )
+    return names
 
 
 def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912

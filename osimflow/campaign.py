@@ -363,8 +363,9 @@ def _build_default_chaos_engine(cfg: Any) -> ChaosEngine:
     :meth:`Campaign._maybe_inject_chaos` so the engine itself stays
     neutral.
 
-    Unknown scenario names are skipped with a warning so that a
-    typo in the CLI flag does not abort the campaign at start.
+    All scenario names are validated at config parse time in
+    :func:`osimflow.config._parse_chaos_scenarios` (issue #1209), so
+    no further unknown-name handling is needed here.
     """
     engine = ChaosEngine(enabled=True)
     scenarios = list(cfg.scenarios)
@@ -395,8 +396,6 @@ def _build_default_chaos_engine(cfg: Any) -> ChaosEngine:
                     probability=cfg.probability,
                 )
             )
-        else:
-            log.warning("chaos: ignoring unknown scenario %r", name)
     return engine
 
 
