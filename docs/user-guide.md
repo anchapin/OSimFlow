@@ -218,6 +218,8 @@ All flags are passed to the `osimflow run` subcommand.
 | `--outdir` | path | **required** | Output directory for campaign results. |
 | `--openstudio_version` | string | `3.11.0` | OpenStudio version. Determines the container image tag. |
 | `--archive_intermediates` | flag | off | Archive per-sample `.osw`/`.osm`/`eplusout.sql` files. |
+| `--project` | string | `""` | Campaign name used for registry grouping (e.g. `--project 'Building Energy Analysis Q1 2026'`). |
+| `--kpis` | string list | all KPIs | Restrict KPI extraction to the named KPIs (e.g. `--kpis eui peak_demand`). All KPIs extracted when omitted. |
 
 #### Executor selection
 
@@ -283,6 +285,9 @@ Nomad runtime environment variables:
 | `--weather_dir` | string | `weather` | Subdirectory name for `.epw` files inside `template_sim_package`. |
 | `--mlflow_tracking_uri` | string | none | MLflow tracking server URI. Requires `pip install osimflow[mlflow]`. |
 | `--log_level` | string | `WARNING` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `--bcl-api-key` | string | none | NREL BCL API key. Required when `--validate-measures` is set. Can also be set via `BCL_API_KEY` env var. |
+| `--validate-measures` | flag | off | Validate measure arguments against the BCL taxonomy when discovering BCL measures. Logs warnings for argument name/type deviations. |
+| `--uq-failure-threshold` | string list | none | Failure threshold for probability-of-failure analysis (`--algorithm uq`). Format: `kpi_name=threshold_value` (e.g. `eui=150`). Repeatable for multiple KPIs. |
 
 ### 4.2 variables.yml Schema
 
