@@ -1081,12 +1081,13 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--require-trusted-scripts",
         action="store_true",
-        default=True,
+        default=None,
         help=(
             "Reject --byos-trust-level inprocess for production hardening "
-            "(issue #908). When set, the CLI exits with an error if a user "
-            "also passes --byos-trust-level inprocess. Use this to enforce "
-            "subprocess isolation in shared/production environments."
+            "(issues #908, #1207). When set, the CLI exits with an error if "
+            "--byos-trust-level inprocess is also passed. When not set "
+            "(default), inprocess is blocked by default and this flag must be "
+            "passed to explicitly allow it in trusted development environments."
         ),
     )
     run.add_argument(
@@ -3851,14 +3852,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     # Apply preset before load_config so preset values are in place.
     _apply_preset(args)
 
-    # --- BYOS trust-level hardening (issue #908) -------------------------
+    # --- BYOS trust-level hardening (issues #908, #1207) -----------------
     # Reject --byos-trust-level inprocess when --require-trusted-scripts is
-    # set. This is the production-hardening guard: it fails fast before any
-    # config loading or executor construction so operators get a clear error.
+    # not explicitly set.  This is the production-hardening guard: it fails
+    # fast before any config loading or executor construction so operators
+    # get a clear error.
     try:
         validate_trust_level(
             ByosTrustLevel(args.byos_trust_level),
-            bool(getattr(args, "require_trusted_scripts", False)),
+            getattr(args, "require_trusted_scripts", None),
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

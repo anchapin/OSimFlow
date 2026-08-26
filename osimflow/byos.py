@@ -240,26 +240,42 @@ class ByosTrustLevel(enum.Enum):
 
 def validate_trust_level(
     trust_level: ByosTrustLevel,
-    require_trusted_scripts: bool,
+    require_trusted_scripts: bool | None,
 ) -> None:
-    """Reject the ``INPROCESS`` trust level when trusted scripts are required.
+    """Reject the ``INPROCESS`` trust level when not explicitly opted out.
 
-    Production-hardening guard for issue #908.  When a deployment sets
-    ``--require-trusted-scripts``, BYOS scripts must run in the isolated
-    ``SUBPROCESS`` mode.  This helper centralises the rejection so the
-    CLI, the REST API, and any other entry point share a single rule.
+    Production-hardening guard for issues #908 and #1207.
+
+    ``INPROCESS`` is only allowed when the operator explicitly sets
+    ``require_trusted_scripts=False``.  In all other cases (``None``
+    or ``True``) it is rejected.
+
+    This helper centralises the rejection so the CLI, the REST API, and
+    any other entry point share a single rule.
 
     Args:
         trust_level: The BYOS trust level requested by the caller.
-        require_trusted_scripts: Whether the surrounding deployment
-            mandates isolated script execution.  When ``True``, the
-            ``INPROCESS`` trust level is rejected.
+        require_trusted_scripts: Three-state flag for script isolation:
+            ``None`` (not set — the default): ``INPROCESS`` is blocked.
+            ``True``: ``INPROCESS`` is blocked (backward-compatible with
+            the issue #908 behaviour).  ``False``: ``INPROCESS`` is
+            explicitly allowed by the operator.
 
     Raises:
-        ValueError: ``require_trusted_scripts`` is ``True`` *and*
-            ``trust_level`` is :attr:`ByosTrustLevel.INPROCESS`.
+        ValueError: ``trust_level`` is :attr:`ByosTrustLevel.INPROCESS`
+            and ``require_trusted_scripts`` is not ``False``.
     """
-    if require_trusted_scripts and trust_level is ByosTrustLevel.INPROCESS:
+    if trust_level is ByosTrustLevel.INPROCESS and require_trusted_scripts is not False:
+        if require_trusted_scripts is None:
+            raise ValueError(
+                "BYOS trust level 'inprocess' is not allowed by default. "
+                "In-process execution loads user scripts directly into the "
+                "orchestrator with full access to memory, credentials, and "
+                "the filesystem. Pass --require-trusted-scripts to explicitly "
+                "allow in-process execution in a trusted development "
+                "environment (issues #908, #1207). "
+                "Alternatively, use --byos-trust-level=subprocess (the default)."
+            )
         raise ValueError(
             "BYOS trust level 'inprocess' is not allowed when "
             "--require-trusted-scripts is set. In-process execution loads "
@@ -267,7 +283,7 @@ def validate_trust_level(
             "memory, credentials, and the filesystem. Re-run with "
             "--byos-trust-level=subprocess (the default) or drop "
             "--require-trusted-scripts to allow in-process execution in a "
-            "trusted development environment (issue #908)."
+            "trusted development environment (issues #908, #1207)."
         )
 
 

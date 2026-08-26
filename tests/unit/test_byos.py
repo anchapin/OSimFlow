@@ -460,7 +460,7 @@ class TestInprocessSecurityWarning:
 
 
 # ===========================================================================
-# validate_trust_level — production hardening guard (issue #908)
+# validate_trust_level — production hardening guard (issues #908, #1207)
 # ===========================================================================
 class TestValidateTrustLevel:
     """Tests for the validate_trust_level BYOS hardening helper."""
@@ -484,15 +484,36 @@ class TestValidateTrustLevel:
         # Must not raise.
         validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=True)
 
-    def test_allows_inprocess_when_trusted_scripts_not_required(self) -> None:
-        """INPROCESS is allowed when require_trusted_scripts is False (default)."""
+    def test_allows_inprocess_when_require_trusted_scripts_explicitly_false(self) -> None:
+        """INPROCESS is allowed when require_trusted_scripts is explicitly False."""
         # Must not raise.
         validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=False)
 
-    def test_defaults_allow_all(self) -> None:
-        """Default (no hardening) allows both trust levels without error."""
-        validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=False)
-        validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=False)
+    def test_blocks_inprocess_when_require_trusted_scripts_not_set(self) -> None:
+        """INPROCESS is blocked when --require-trusted-scripts is not explicitly set.
+
+        This is the core fix for issue #1207: without this guard, a production
+        deployment that omits --require-trusted-scripts would silently allow
+        inprocess BYOS mode, granting user scripts full access to the
+        orchestrator's memory and credentials.
+        """
+        with pytest.raises(ValueError, match="not allowed by default"):
+            validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=None)
+
+    def test_error_message_for_none_mentions_byos_trust_level_and_subprocess(self) -> None:
+        """The error message when require_trusted_scripts=None guides the operator."""
+        with pytest.raises(ValueError) as exc_info:
+            validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=None)
+        message = str(exc_info.value).lower()
+        assert "inprocess" in message
+        assert "subprocess" in message
+        assert "require-trusted-scripts" in message
+
+    def test_defaults_block_inprocess(self) -> None:
+        """Default (None) blocks INPROCESS; SUBPROCESS is always allowed."""
+        validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=None)
+        with pytest.raises(ValueError):
+            validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=None)
 
 
 # ===========================================================================
