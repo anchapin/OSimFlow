@@ -63,6 +63,16 @@ _BYOS_CONTRACT: dict[str, ByosContractEntry] = {
         param_names=("template", "parameters", "sample_id", "out"),
         accepts_kwargs=False,
     ),
+    "aggregate_results": ByosContractEntry(
+        required_positional=3,
+        param_names=("kpi_files", "sim_dirs", "out"),
+        accepts_kwargs=True,
+    ),
+    "generate_plots": ByosContractEntry(
+        required_positional=3,
+        param_names=("csv_path", "failed_path", "out"),
+        accepts_kwargs=True,
+    ),
 }
 
 
