@@ -485,12 +485,22 @@ class TestValidateTrustLevel:
         validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=True)
 
     def test_allows_inprocess_when_trusted_scripts_not_required(self) -> None:
-        """INPROCESS is allowed when require_trusted_scripts is False (default)."""
+        """INPROCESS is allowed when require_trusted_scripts is False (explicit opt-in to danger)."""
         # Must not raise.
         validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=False)
 
-    def test_defaults_allow_all(self) -> None:
-        """Default (no hardening) allows both trust levels without error."""
+    def test_defaults_block_inprocess(self) -> None:
+        """Default (no --require-trusted-scripts flag) blocks INPROCESS.
+
+        Regression test for issue #1207: the CLI defaults to blocking
+        inprocess mode unless --require-trusted-scripts is explicitly passed.
+        """
+        with pytest.raises(ValueError, match="not allowed"):
+            validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=True)
+        validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=True)
+
+    def test_explicit_opt_out_allows_inprocess(self) -> None:
+        """Explicit --require-trusted-scripts=False (dangerous) allows INPROCESS."""
         validate_trust_level(ByosTrustLevel.INPROCESS, require_trusted_scripts=False)
         validate_trust_level(ByosTrustLevel.SUBPROCESS, require_trusted_scripts=False)
 

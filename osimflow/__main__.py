@@ -1081,12 +1081,13 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--require-trusted-scripts",
         action="store_true",
-        default=True,
+        default=False,
         help=(
             "Reject --byos-trust-level inprocess for production hardening "
             "(issue #908). When set, the CLI exits with an error if a user "
             "also passes --byos-trust-level inprocess. Use this to enforce "
-            "subprocess isolation in shared/production environments."
+            "subprocess isolation in shared/production environments. "
+            "Security-by-default: omitting this flag blocks inprocess mode."
         ),
     )
     run.add_argument(
@@ -3858,7 +3859,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     try:
         validate_trust_level(
             ByosTrustLevel(args.byos_trust_level),
-            bool(getattr(args, "require_trusted_scripts", False)),
+            bool(getattr(args, "require_trusted_scripts", True)),
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
