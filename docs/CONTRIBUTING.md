@@ -37,7 +37,7 @@ Quick setup (5 min):
 git clone https://github.com/<your-username>/OSimFlow.git
 cd OSimFlow
 python -m pip install -e ".[dev,aws,slurm,api]"
-pre-commit install
+.venv/bin/pre-commit install
 ```
 
 For the minimal install (local executor only, no Slurm/Boto3):
