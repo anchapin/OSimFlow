@@ -1493,12 +1493,14 @@ def _validate_script_path(raw: object) -> None:
     )
 
 
-_VALID_CHAOS_SCENARIOS = frozenset([
-    "kill_switch",
-    "network_delay",
-    "cpu_spike",
-    "memory_pressure",
-])
+_VALID_CHAOS_SCENARIOS = frozenset(
+    [
+        "kill_switch",
+        "network_delay",
+        "cpu_spike",
+        "memory_pressure",
+    ]
+)
 
 
 def _parse_chaos_scenarios(raw: object) -> list[str]:
