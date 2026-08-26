@@ -1,14 +1,13 @@
-"""HMAC-SHA256 task-payload signature tests (issue #1177).
+"""HMAC-SHA256 task-payload signature tests (issue #1177, #1205).
 
 Covers the shared signing/verification helpers in
-``osimflow.task_payload_hmac``, the fail-closed verification gate in
-``osimflow.remote_runner``, and the legacy unsigned path.
+``osimflow.task_payload_hmac`` and the fail-closed verification gate in
+``osimflow.remote_runner``.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 
 import pytest
 
@@ -127,19 +126,13 @@ class TestRemoteRunnerVerification:
         payload = remote_runner._load_payload()  # noqa: SLF001
         assert payload["step"] == "sim"
 
-    def test_legacy_no_secret_warns_but_executes(
+    def test_no_secret_rejected_fail_closed(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD", VALID_PAYLOAD)
-        with caplog.at_level(logging.WARNING, logger="osimflow.remote_runner"):
-            payload = remote_runner._load_payload()  # noqa: SLF001
-        assert payload["step"] == "sim"
-        assert any(
-            "legacy mode" in record.message and "unsigned" in record.message
-            for record in caplog.records
-        )
+        with pytest.raises(RuntimeError, match="OSIMFLOW_TASK_PAYLOAD_SECRET is not configured"):
+            remote_runner._load_payload()  # noqa: SLF001
 
     def test_main_fails_closed_without_executing_step(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
