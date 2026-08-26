@@ -1743,7 +1743,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             if args.get("byos_trust_level")
             else ByosTrustLevel.SUBPROCESS
         ),
-        require_trusted_scripts=args.get("require_trusted_scripts"),
+        require_trusted_scripts=cast("bool | None", args.get("require_trusted_scripts")),
         observability=str(args.get("observability", "none")),
         cloudwatch_namespace=str(args.get("cloudwatch_namespace", "OSimFlow")),
         cloudwatch_log_group=(
