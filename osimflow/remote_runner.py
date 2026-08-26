@@ -49,22 +49,21 @@ def _verify_payload_signature(raw: str) -> None:
     a missing or tampered ``OSIMFLOW_TASK_PAYLOAD_SIG`` raises
     ``RuntimeError`` *before* the payload is decoded or executed.
 
-    Legacy mode: when no secret is configured the payload executes
-    unsigned. INTEGRITY TRADEOFF: anyone who can read/modify this job's
+    Rejected unsigned: when no secret is configured the payload is rejected
+    (issue #1205) because any process that can read/modify this job's
     environment (e.g. via ``nomad alloc status`` or ``kubectl exec``)
-    can then inject arbitrary step calls. Set
+    can inject arbitrary step calls. Set
     ``OSIMFLOW_TASK_PAYLOAD_SECRET`` on the orchestrator to enable
     signature enforcement.
     """
     secret = resolve_payload_secret()
     if not secret:
-        log.warning(
-            "OSIMFLOW_TASK_PAYLOAD_SECRET not configured — executing unsigned "
-            "task payload (legacy mode). Anyone able to modify this job's "
-            "environment can inject arbitrary step calls; configure "
-            "OSIMFLOW_TASK_PAYLOAD_SECRET to enable HMAC-SHA256 verification."
+        raise RuntimeError(
+            "OSIMFLOW_TASK_PAYLOAD_SECRET is not configured — "
+            "refusing to execute unsigned task payload. "
+            "Configure OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator "
+            "to enable HMAC-SHA256 verification (issue #1205)."
         )
-        return
     signature = _get_env_or_nomad_meta(
         env_key=TASK_PAYLOAD_SIG_ENV,
         meta_key=TASK_PAYLOAD_SIG_META_KEY,
