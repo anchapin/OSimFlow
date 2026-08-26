@@ -42,6 +42,7 @@ __all__ = [
     "CacheError",
     "CacheKey",
     "CacheStats",
+    "ImageDigestUnavailableError",
     "SQLiteCache",
     "sha256_of_dict",
     "sha256_of_files",
@@ -72,6 +73,16 @@ class CacheError(Exception):
     Wraps low-level errors (e.g. ``sqlite3.OperationalError``) so that
     :class:`~osimflow.campaign.Campaign` can catch them and abort
     gracefully while preserving the ``run.json`` trace.
+    """
+
+
+class ImageDigestUnavailableError(Exception):
+    """Raised when the container image digest cannot be resolved (docker unavailable).
+
+    This signals that the content-addressable digest is unknown, so cache
+    lookups should skip the cache entirely rather than use a deterministic
+    fallback that could return stale results when the image has changed
+    under the same tag (issue #1218).
     """
 
 
@@ -167,14 +178,11 @@ def _resolve_image_digest(
     when a docker daemon is reachable, the image has been pulled, and the
     call completes within ``_DOCKER_INSPECT_TIMEOUT_S``.
 
-    Falls back to ``sha256:<sha256(tag)>`` when any of the following
-    hold: ``docker`` is not on PATH, the daemon is down, the image has
-    not been pulled (RepoDigests is empty), the call exceeds the
-    timeout, or the call returns non-zero. The fallback is
-    deterministic per tag and content-addressable across machines —
-    the cache key still varies when the label changes, but cannot
-    detect an image rebuild under the same tag (which is the documented
-    trade-off of offline operation).
+    Raises :class:`ImageDigestUnavailableError` when docker is unavailable,
+    the daemon is down, the image has not been pulled (RepoDigests is empty),
+    or the call times out. The caller (:func:`_container_digest_for`) maps
+    this to a ``"unresolved"`` sentinel that forces cache misses instead of
+    silently using a deterministic-but-content-agnostic fallback.
 
     Issue #1023: the cache key used to store the mutable tag string
     (``docker.io/nrel/openstudio:3.11.0``) instead of the digest. Two
@@ -182,6 +190,12 @@ def _resolve_image_digest(
     silently stale simulation could be served from cache. Resolving at
     config/campaign-init time means every cache lookup agrees on the
     digest regardless of subsequent republishing.
+
+    Issue #1218: the fallback (formerly ``sha256:<sha256(tag)>``) was
+    deterministic — two different images published under the same tag
+    produced identical cache keys, causing the campaign to reuse cached
+    results even when the underlying container image had changed. The
+    ``ImageDigestUnavailableError`` exception makes the cache miss instead.
     """
     docker = docker_path or shutil.which("docker")
     if docker and tag:
@@ -203,10 +217,12 @@ def _resolve_image_digest(
             # ``@`` separator before accepting the value as a digest.
             if "@" in ref:
                 return ref
-    # Offline / no-docker / image-not-pulled fallback. The label is hashed
-    # so the cache key still varies per tag and the result is reproducible
-    # across machines that lack docker.
-    return f"sha256:{hashlib.sha256(tag.encode('utf-8')).hexdigest()}"
+    # Docker unavailable or image not pulled: raise instead of falling back
+    # to a deterministic digest. The caller maps this to a sentinel that
+    # forces cache misses (issue #1218).
+    raise ImageDigestUnavailableError(
+        f"docker inspect unavailable or image not pulled for tag={tag!r}"
+    )
 
 
 def _container_digest_for(label: str) -> str:
@@ -214,8 +230,8 @@ def _container_digest_for(label: str) -> str:
 
     Format: ``<label>@<digest>`` where ``digest`` is either the resolved
     RepoDigests reference from docker (e.g. ``nrel/openstudio@sha256:<hex>``)
-    or, when resolution fails, ``sha256:<sha256(label)>`` as a deterministic
-    fallback.
+    or ``unresolved`` when docker is unavailable or the image has not been
+    pulled locally.
 
     The combined form preserves the human-readable label (so ``run.json``,
     the campaign registry, and ad-hoc ``sqlite3`` queries can still
@@ -223,16 +239,24 @@ def _container_digest_for(label: str) -> str:
     addressable digest so cache invalidation works when an image is
     rebuilt under the same tag.
 
+    When docker is unavailable (issue #1218), the ``unresolved`` sentinel
+    is used instead of a deterministic fallback digest. This forces cache
+    misses so that a re-run is triggered when connectivity is restored,
+    rather than silently reusing potentially-stale cached results.
+
     Backward-compatibility (issue #1023): an old cache row that stored
     just the label (``docker.io/nrel/openstudio:3.11.0``) no longer
     matches the new ``<label>@<digest>`` form and is treated as a cache
     miss. The DB schema is unchanged — no migration is required.
     """
     if not label:
-        # Defensive: empty labels would otherwise produce ``@sha256:<...>``
-        # and risk colliding with a real ``@sha256:e3b0...`` fallback.
         return "unresolved"
-    return f"{label}@{_resolve_image_digest(label)}"
+    try:
+        digest = _resolve_image_digest(label)
+    except ImageDigestUnavailableError:
+        log.debug("docker unavailable for label=%r — using unresolved sentinel", label)
+        digest = "unresolved"
+    return f"{label}@{digest}"
 
 
 def _row_to_cache_dict(
