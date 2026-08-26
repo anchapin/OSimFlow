@@ -1070,15 +1070,15 @@ class TestSQLiteCacheRaceOnClose:
 
 
 class TestResolveImageDigest:
-    """Issue #1023: ``container_digest`` must store a digest, not a mutable tag.
+    """Issue #1023 / #1218: ``container_digest`` must store a digest, not a mutable tag.
 
-    The Campaign previously stored the image label (``nrel/openstudio:3.11.0``)
-    directly in the cache row, so two rebuilds of the same tag produced
-    identical cache keys — a stale simulation could be served from
-    cache. The fix resolves the content-addressable digest via
+    The Campaign resolves the content-addressable digest via
     ``docker inspect --format='{{index .RepoDigests 0}}' <tag>`` at
-    config / campaign-init time and falls back to ``sha256:<sha256(tag)>``
-    when docker is absent, hung, or the image is not pulled.
+    config / campaign-init time. When docker is absent, the daemon is
+    down, or the image has not been pulled (RepoDigests is empty),
+    ``ImageDigestUnavailableError`` is raised so that callers (issue #1218)
+    can map it to an ``unresolved`` sentinel that forces cache misses
+    rather than silently using a stale deterministic fallback.
     """
 
     _TAG = "docker.io/nrel/openstudio:3.11.0"
@@ -1094,68 +1094,71 @@ class TestResolveImageDigest:
         with mock.patch("osimflow.cache.subprocess.run", return_value=fake_completed) as run:
             resolved = _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
         assert resolved == self._RESOLVED_REF
-        # The docker binary is invoked exactly once with the documented argv.
         run.assert_called_once()
         argv = run.call_args.args[0]
         assert argv[0] == "/usr/bin/docker"
         assert argv[1:3] == ["inspect", "--format={{index .RepoDigests 0}}"]
         assert argv[3] == self._TAG
 
-    def test_resolve_falls_back_when_docker_path_none(self) -> None:
-        """No docker binary available -> SHA-256 of the tag, with ``sha256:`` prefix."""
-        with mock.patch("osimflow.cache.shutil.which", return_value=None):
-            resolved = _resolve_image_digest(self._TAG)
-        # Must be the documented fallback shape so callers can pattern-match.
-        assert resolved.startswith("sha256:")
-        assert len(resolved) == len("sha256:") + 64
-        # The fallback is deterministic per tag — two calls agree.
-        with mock.patch("osimflow.cache.shutil.which", return_value=None):
-            again = _resolve_image_digest(self._TAG)
-        assert resolved == again
+    def test_resolve_raises_when_docker_path_none(self) -> None:
+        """No docker binary available -> ``ImageDigestUnavailableError``."""
+        from osimflow.cache import ImageDigestUnavailableError
 
-    def test_resolve_falls_back_when_docker_returns_nonzero(self) -> None:
-        """Docker exit != 0 (image not pulled, daemon down) -> fallback hash."""
+        with mock.patch("osimflow.cache.shutil.which", return_value=None):
+            with pytest.raises(ImageDigestUnavailableError):
+                _resolve_image_digest(self._TAG)
+
+    def test_resolve_raises_when_docker_returns_nonzero(self) -> None:
+        """Docker exit != 0 (image not pulled, daemon down) -> ``ImageDigestUnavailableError``."""
+        from osimflow.cache import ImageDigestUnavailableError
+
         failed = mock.Mock(returncode=1, stdout="", stderr="Error: No such image")
         with mock.patch("osimflow.cache.subprocess.run", return_value=failed):
-            resolved = _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
-        assert resolved.startswith("sha256:")
-        assert len(resolved) == 64 + len("sha256:")
+            with pytest.raises(ImageDigestUnavailableError):
+                _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
 
-    def test_resolve_falls_back_on_empty_repo_digests(self) -> None:
+    def test_resolve_raises_on_empty_repo_digests(self) -> None:
         """docker inspect exits 0 but RepoDigests is empty (image not pulled)."""
+        from osimflow.cache import ImageDigestUnavailableError
+
         empty = mock.Mock(returncode=0, stdout="\n", stderr="")
         with mock.patch("osimflow.cache.subprocess.run", return_value=empty):
-            resolved = _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
-        assert resolved.startswith("sha256:")
-        assert len(resolved) == 64 + len("sha256:")
+            with pytest.raises(ImageDigestUnavailableError):
+                _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
 
-    def test_resolve_falls_back_on_timeout(self) -> None:
-        """subprocess.run raises TimeoutExpired -> fallback hash, no exception."""
+    def test_resolve_raises_on_timeout(self) -> None:
+        """subprocess.run raises TimeoutExpired -> ``ImageDigestUnavailableError``."""
         import subprocess as _sp
+
+        from osimflow.cache import ImageDigestUnavailableError
 
         with mock.patch(
             "osimflow.cache.subprocess.run",
             side_effect=_sp.TimeoutExpired(cmd=["docker"], timeout=5),
         ):
-            resolved = _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
-        assert resolved.startswith("sha256:")
+            with pytest.raises(ImageDigestUnavailableError):
+                _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
 
-    def test_resolve_falls_back_when_docker_missing_on_filesystem(self) -> None:
-        """OSError (e.g. ``docker`` on PATH but binary deleted) -> fallback."""
+    def test_resolve_raises_when_docker_missing_on_filesystem(self) -> None:
+        """OSError (e.g. ``docker`` on PATH but binary deleted) -> ``ImageDigestUnavailableError``."""
+        from osimflow.cache import ImageDigestUnavailableError
+
         with mock.patch(
             "osimflow.cache.subprocess.run",
             side_effect=FileNotFoundError("docker not found"),
         ):
-            resolved = _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
-        assert resolved.startswith("sha256:")
-        assert len(resolved) == 64 + len("sha256:")
+            with pytest.raises(ImageDigestUnavailableError):
+                _resolve_image_digest(self._TAG, docker_path="/usr/bin/docker")
 
-    def test_resolve_different_tags_produce_different_digests(self) -> None:
-        """Both resolved and fallback paths vary with the input tag."""
+    def test_resolve_raises_for_any_docker_unavailability(self) -> None:
+        """All docker unavailability paths raise ``ImageDigestUnavailableError``."""
+        from osimflow.cache import ImageDigestUnavailableError
+
         with mock.patch("osimflow.cache.shutil.which", return_value=None):
-            a = _resolve_image_digest("nrel/openstudio:3.11.0")
-            b = _resolve_image_digest("nrel/openstudio:3.9.0")
-        assert a != b
+            with pytest.raises(ImageDigestUnavailableError):
+                _resolve_image_digest("nrel/openstudio:3.11.0")
+            with pytest.raises(ImageDigestUnavailableError):
+                _resolve_image_digest("nrel/openstudio:3.9.0")
 
 
 class TestContainerDigestFor:
@@ -1174,57 +1177,50 @@ class TestContainerDigestFor:
         assert row.startswith(self._LABEL + "@"), row
         assert row == f"{self._LABEL}@{self._RESOLVED_REF}"
 
-    def test_fallback_path_label_then_sha256_of_tag(self) -> None:
-        """Offline / no-docker fallback: ``<label>@sha256:<hash-of-label>``."""
+    def test_unavailable_path_returns_unresolved_sentinel(self) -> None:
+        """Offline / no-docker: ``_container_digest_for`` returns ``unresolved`` sentinel.
+
+        Issue #1218: instead of a deterministic-but-content-agnostic fallback
+        digest, the ``unresolved`` sentinel forces cache misses so that a
+        re-run is triggered when docker becomes available.
+        """
         with mock.patch("osimflow.cache.shutil.which", return_value=None):
             row = _container_digest_for(self._LABEL)
-        # Must contain BOTH the label (for display) and a sha256 digest
-        # (for invalidation). Acceptance criterion #1023.
-        assert self._LABEL in row, f"label lost in fallback row: {row}"
-        assert "@sha256:" in row, f"digest missing in fallback row: {row}"
-        # The sha256 portion is the SHA-256 of the LABEL itself, length 64 hex.
-        suffix = row.split("@sha256:", 1)[1]
-        assert len(suffix) == 64
-        assert all(c in "0123456789abcdef" for c in suffix)
+        assert row == f"{self._LABEL}@unresolved", f"unexpected row: {row}"
 
-    def test_fallback_is_deterministic(self) -> None:
+    def test_unresolved_sentinel_is_deterministic(self) -> None:
         """Two calls with no docker agree (cache keys stay stable)."""
         with mock.patch("osimflow.cache.shutil.which", return_value=None):
             a = _container_digest_for(self._LABEL)
             b = _container_digest_for(self._LABEL)
         assert a == b
 
-    def test_different_labels_produce_different_rows(self) -> None:
-        """Two distinct labels produce distinct cache rows even in fallback."""
+    def test_unresolved_sentinel_for_any_label(self) -> None:
+        """When docker is unavailable, all labels map to the same unresolved sentinel."""
         with mock.patch("osimflow.cache.shutil.which", return_value=None):
             a = _container_digest_for("nrel/openstudio:3.11.0")
             b = _container_digest_for("nrel/openstudio:3.9.0")
-        assert a != b
+        assert a == b == "nrel/openstudio:3.11.0@unresolved"
 
     def test_empty_label_does_not_produce_ambiguous_row(self) -> None:
-        """Defensive: an empty label never produces ``@sha256:<...>``."""
+        """Defensive: an empty label returns ``unresolved`` sentinel."""
         assert _container_digest_for("") == "unresolved"
 
     def test_row_is_usable_as_cache_key(self) -> None:
-        """The produced row round-trips through ``CacheKey`` and the SQLite cache.
+        """The ``unresolved`` sentinel round-trips through ``CacheKey`` and SQLite cache.
 
-        Regression for issue #1023: ``container_digest`` must be a real
-        cache-row value, not a label string. The same input must produce
-        an equal ``CacheKey`` instance and survive an INSERT/SELECT round
-        trip without losing invalidation power (a different image must
-        miss).
+        Issue #1218: when docker is unavailable, the ``unresolved`` sentinel
+        is used. It must survive the cache key and SQLite round-trip intact.
         """
         with mock.patch("osimflow.cache.shutil.which", return_value=None):
-            row_a = _container_digest_for("nrel/openstudio:3.11.0")
-            row_b = _container_digest_for("nrel/openstudio:3.9.0")
-        assert row_a != row_b, "two distinct labels must produce distinct rows"
+            row = _container_digest_for(self._LABEL)
         k1 = CacheKey(
             step="RUN_OPENSTUDIO_SIM",
             sample_id="s0001",
             openstudio_version="3.11.0",
             inputs_sha256="abc",
             code_sha256="def",
-            container_digest=row_a,
+            container_digest=row,
         )
         k2 = CacheKey(
             step="RUN_OPENSTUDIO_SIM",
@@ -1232,22 +1228,12 @@ class TestContainerDigestFor:
             openstudio_version="3.11.0",
             inputs_sha256="abc",
             code_sha256="def",
-            container_digest=row_a,
+            container_digest=row,
         )
         assert k1 == k2
-        # And k1 != k3 (different image, same other fields) — invalidation works.
-        k3 = CacheKey(
-            step="RUN_OPENSTUDIO_SIM",
-            sample_id="s0001",
-            openstudio_version="3.11.0",
-            inputs_sha256="abc",
-            code_sha256="def",
-            container_digest=row_b,
-        )
-        assert k1 != k3
 
     def test_row_works_in_sqlite_cache_roundtrip(self, tmp_path: Path) -> None:
-        """The resolved row stores and retrieves correctly from the SQLite cache."""
+        """The unresolved row stores and retrieves correctly from the SQLite cache."""
         with mock.patch("osimflow.cache.shutil.which", return_value=None):
             row = _container_digest_for(self._LABEL)
         cache = SQLiteCache(tmp_path / "cache.sqlite")
@@ -1264,17 +1250,5 @@ class TestContainerDigestFor:
             )
             cache.store(key, out, exit_code=0)
             assert cache.lookup(key) == out
-            # A different label produces a different row and therefore misses.
-            with mock.patch("osimflow.cache.shutil.which", return_value=None):
-                other_row = _container_digest_for("nrel/openstudio:3.9.0")
-            key_other = CacheKey(
-                step="RUN_OPENSTUDIO_SIM",
-                sample_id="s0001",
-                openstudio_version="3.11.0",
-                inputs_sha256="abc",
-                code_sha256="def",
-                container_digest=other_row,
-            )
-            assert cache.lookup(key_other) is None
         finally:
             cache.close()
