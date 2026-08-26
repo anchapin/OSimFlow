@@ -1,0 +1,63 @@
+# =============================================================================
+# .github/workflows/dask-e2e.yml — Dask-JobQueue E2E (nightly)
+# =============================================================================
+# Runs a 3-sample campaign against a real Dask cluster every night at 06:00
+# UTC and on manual trigger (workflow_dispatch).
+#
+# Uses an in-process ``distributed.LocalCluster`` so no external Dask
+# infrastructure is required — the test exercises the production wiring
+# (``submit()`` → Dask ``Future`` → ``Handle.result()``) without needing
+# a Slurm / PBS / Kubernetes backend.  The ``[dask]`` extras group is
+# installed so the ``DaskJobQueueExecutor`` lazy-imports succeed.
+#
+# The test file uses ``pytest.mark.skipif`` so it is inert in normal CI.
+# =============================================================================
+
+name: Dask-JobQueue E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+  workflow_dispatch: # Manual trigger
+    inputs:
+      n_samples:
+        description: "Number of campaign samples to run (default 3)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  dask-e2e:
+    name: "dask-jobqueue e2e"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v6
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + dev + dask extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,dask]"
+
+      - name: Run real Dask-JobQueue E2E
+        env:
+          OSIMFLOW_DASK_E2E: "1"
+        run: .venv/bin/pytest tests/integration/test_real_dask_campaign.py -v --timeout=1800

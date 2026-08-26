@@ -1,0 +1,73 @@
+# =============================================================================
+# .github/workflows/docker-swarm-e2e.yml — Real Docker Swarm E2E (dispatch-only)
+# =============================================================================
+# Runs a 3-sample campaign against a REAL Docker Swarm cluster, exercising
+# the ``DockerSwarmExecutor`` production path.
+#
+# IMPORTANT — SELF-HOSTED RUNNER REQUIRED:
+#   This workflow is a no-op on GitHub-hosted runners. Docker-in-Docker
+#   (DinD) is not available on ``ubuntu-latest`` runners, and even with
+#   a Docker daemon present, Swarm mode requires initialisation that is
+#   not available in the stock GitHub Actions environment.  To actually
+#   exercise the production path:
+#
+#     1. Register a GitHub Actions self-hosted runner on a node that has
+#        ``docker swarm init`` run (or is joined to an existing Swarm).
+#     2. Tag that runner with both ``self-hosted`` and ``docker-swarm``.
+#     3. Optionally set the ``OSIMFLOW_DOCKER_SWARM_IMAGE`` repository
+#        variable to the image to use per sample (defaults to
+#        ``python:3.12-slim``).
+#
+#   The job then runs only on manual ``workflow_dispatch`` (no cron) so it
+#   never consumes Swarm resources without an explicit operator action.
+#
+# Prerequisites (GitHub variables):
+#   vars.OSIMFLOW_DOCKER_SWARM_IMAGE — Docker image per sample
+#                                       (default: python:3.12-slim)
+#
+# The test file uses ``pytest.mark.skipif`` so it is inert in normal CI.
+# =============================================================================
+
+name: Docker Swarm E2E (Real Cluster)
+
+on:
+  workflow_dispatch: # Manual trigger only — no cron, no cost when idle.
+    inputs:
+      n_samples:
+        description: "Number of campaign samples to run (default 3)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  docker-swarm-e2e:
+    # Self-hosted runner on a Docker Swarm node, tagged ``docker-swarm``.
+    runs-on: [self-hosted, docker-swarm]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev extras + docker SDK
+        run: pip install -e ".[dev]" docker
+
+      - name: Verify Docker Swarm is active
+        run: |
+          set -euo pipefail
+          docker info --format '{{.Swarm.ControlAvailable}}' | grep -q true || \
+            { echo "Docker Swarm not available on this runner" >&2; exit 1; }
+          echo "Docker Swarm OK"
+
+      - name: Run real Docker Swarm E2E
+        env:
+          OSIMFLOW_DOCKER_SWARM_E2E: "1"
+          OSIMFLOW_DOCKER_SWARM_IMAGE: ${{ vars.OSIMFLOW_DOCKER_SWARM_IMAGE || 'python:3.12-slim' }}
+        # Generous timeout: real Swarm services are scheduled by the Docker
+        # scheduler and the campaign blocks on every per-sample
+        # ``Handle.result()``.  1h matches the test's own ``--timeout=1800``.
+        run: .venv/bin/pytest tests/integration/test_real_docker_swarm_campaign.py -v --timeout=3600
