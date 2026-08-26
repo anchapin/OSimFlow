@@ -237,6 +237,10 @@ _STEP_DEPENDENCIES: dict[str, tuple[StepInputs, StepOutputs]] = {
         StepInputs(required_patterns=("apply/*/",)),
         StepOutputs(produced=("work/sim/*/",)),
     ),
+    "VALIDATE_MEASURE_VARIABLES": (
+        StepInputs(),
+        StepOutputs(produced=()),
+    ),
     "EXTRACT_KPIS": (
         StepInputs(required_patterns=("work/sim/*/",)),
         StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
