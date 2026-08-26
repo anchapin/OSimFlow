@@ -1440,3 +1440,59 @@ class TestRunStepWithRetries:
         )
         assert received_args == ("pos_arg", "kwarg")
         assert received_kwargs == {"extra": "value", "generation": 0}
+
+
+class TestVerifyStepInputs:
+    """Test coverage for Campaign._verify_step_inputs (issue #1232)."""
+
+    def test_unknown_step_returns_early(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
+        """Steps not in _STEP_DEPENDENCIES return early without checking files."""
+        variables_yml, template_pkg, outdir = tmp_dirs
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        campaign._verify_step_inputs("NONEXISTENT_STEP")
+
+    def test_missing_required_file_raises(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """FileNotFoundError is raised when a required input file is missing."""
+        variables_yml, template_pkg, outdir = tmp_dirs
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        with pytest.raises(FileNotFoundError, match=r"requires input 'template_sim_package'"):
+            campaign._verify_step_inputs("PREFLIGHT_RUN_MODEL")
+
+    def test_present_required_file_passes(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """No exception when all required files are present."""
+        variables_yml, template_pkg, outdir = tmp_dirs
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        campaign.cfg.work_dir.mkdir(parents=True, exist_ok=True)
+        (campaign.cfg.work_dir / "template_sim_package").touch()
+        campaign._verify_step_inputs("PREFLIGHT_RUN_MODEL")
+
+    def test_missing_glob_pattern_raises(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """FileNotFoundError is raised when a required glob pattern has no matches."""
+        variables_yml, template_pkg, outdir = tmp_dirs
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        with pytest.raises(
+            FileNotFoundError, match=r"requires at least one file matching"
+        ):
+            campaign._verify_step_inputs("RUN_OPENSTUDIO_SIM")
+
+    def test_present_glob_pattern_passes(
+        self, tmp_dirs: tuple[Path, Path, Path]
+    ) -> None:
+        """No exception when glob pattern matches at least one file."""
+        variables_yml, template_pkg, outdir = tmp_dirs
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        apply_dir = campaign.cfg.work_dir / "apply"
+        apply_dir.mkdir(parents=True)
+        (apply_dir / "sample_0").mkdir()
+        campaign._verify_step_inputs("RUN_OPENSTUDIO_SIM")
