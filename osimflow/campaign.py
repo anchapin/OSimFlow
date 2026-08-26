@@ -827,9 +827,7 @@ class Campaign:
 
         # Check glob-pattern requirements — ALL patterns must match at least one file.
         for pattern in inputs.required_patterns:
-            matches = sorted(
-                (self.cfg.work_dir / pattern.replace("*", "SAMPLE")).parent.glob(pattern)
-            )
+            matches = sorted(self.cfg.work_dir.glob(pattern))
             if not matches:
                 raise FileNotFoundError(
                     f"Step {step_name!r} requires at least one file matching "
