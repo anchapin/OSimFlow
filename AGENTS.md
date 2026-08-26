@@ -236,9 +236,12 @@ appear in this document. Listed in run-subcommand groups (or
 
 - **Subcommand flags (non-`run`):** `serve` —
   `--api-key`, `--api-redis-url`, `--cors-origins`, `--dashboard`,
-  `--enable-writes`, `--host`, `--port`, `--read-only`,
-  `--read-write`, `--tls-cert`, `--tls-key`, `--ui`;
-  `list` — `--format`, `--limit`, `--registry`, `--status`;
+  `--enable-writes`, `--host`, `--port`, `--rate-limit`,
+  `--rate-limit-key`, `--read-only`,
+  `--read-write`, `--registry`, `--tls-cert`, `--tls-key`, `--ui`;
+  `export` — `--algorithm`, `--format`, `--limit`, `--n_samples`,
+  `--openstudio_version`, `--outdir`, `--target`;
+  `list` — `--format`, `--limit`, `--project`, `--registry`, `--status`;
   `status` / `download` — `--include-intermediates`,
   `--output-dir`; `backup` / `restore` — `--merge`, `--output`,
   `--registry`; `health` — `--json`, `--offline`;
