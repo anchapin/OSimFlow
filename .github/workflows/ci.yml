@@ -346,6 +346,54 @@ jobs:
             -q
 
   # ---------------------------------------------------------------------------
+  # Chaos fault-injection wiring tests (issue #1213)
+  # ---------------------------------------------------------------------------
+  # Runs ``pytest -m chaos`` against the stub-mode campaign integration test
+  # (``tests/integration/test_chaos_campaign.py``) to confirm fault injectors
+  # fire and ``run.json`` records ``chaos_invocations``.  The chaos engine is
+  # exercised in-process; no real OpenStudio or cloud substrate is needed.
+  # This job is intentionally NOT a required merge gate — chaos scenarios are
+  # probabilistic and may not fire on every run, so a flake here should not
+  # block PRs.
+  # ---------------------------------------------------------------------------
+  chaos:
+    name: chaos (fault-injection wiring)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@v6
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + all extras)
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+
+      - name: pytest -m chaos
+        run: |
+          .venv/bin/pytest \
+            -m chaos \
+            -v \
+            --no-cov \
+            --timeout=300
+
+  # ---------------------------------------------------------------------------
   # G16a: AWS Batch mocked integration tests (issue #149)
   # ---------------------------------------------------------------------------
   # Runs moto-based tests that exercise the real boto3 wire format against
