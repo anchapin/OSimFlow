@@ -1,0 +1,52 @@
+# =============================================================================
+# .github/workflows/dask-e2e.yml — Dask-JobQueue E2E (nightly)
+# =============================================================================
+# Runs a 3-sample campaign against a Dask cluster every night at 06:00 UTC
+# and on manual trigger (workflow_dispatch).
+#
+# The test starts a hermetic in-process ``distributed.LocalCluster`` so no
+# external Dask scheduler infrastructure is required — the production
+# ``DaskJobQueueExecutor.submit()`` → ``Future`` → ``Handle.result()``
+# plumbing is fully exercised without coupling to a remote cluster.
+#
+# Prerequisites (GitHub variables):
+#   vars.OSIMFLOW_DASK_QUEUE — Optional HPC queue/partition for worker jobs
+#
+# The test file uses ``pytest.mark.skipif`` so it is inert in normal CI.
+# =============================================================================
+
+name: Dask-JobQueue E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      n_samples:
+        description: "Number of campaign samples to run (default 3)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  dask-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev + dask extras
+        run: pip install -e ".[dev,dask]"
+
+      - name: Run Dask-JobQueue E2E
+        env:
+          OSIMFLOW_DASK_E2E: "1"
+          OSIMFLOW_DASK_QUEUE: ${{ vars.OSIMFLOW_DASK_QUEUE }}
+        run: .venv/bin/pytest tests/integration/test_real_dask_campaign.py -v --timeout=1800

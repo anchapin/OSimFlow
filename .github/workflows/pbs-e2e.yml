@@ -1,0 +1,68 @@
+# =============================================================================
+# .github/workflows/pbs-e2e.yml — Real PBS / Torque E2E (nightly)
+# =============================================================================
+# Runs a 3-sample campaign against a real PBS / Torque cluster every night at
+# 06:00 UTC and on manual trigger (workflow_dispatch).
+#
+# IMPORTANT — SELF-HOSTED RUNNER REQUIRED:
+#   There is no public PBS cluster reachable from GitHub-hosted runners.
+#   ``qsub`` / ``qstat`` are not on PATH for ``ubuntu-latest``, so the
+#   test would skip (or fail its structural cluster=="pbs" assertion).
+#   To actually exercise the production path:
+#
+#     1. Register a GitHub Actions self-hosted runner on a PBS / Torque
+#        head or login node.
+#     2. Tag that runner with both ``self-hosted`` and ``pbs``.
+#     3. Set ``vars.OSIMFLOW_PBS_QUEUE`` to a queue the runner's submit
+#        user can queue to.
+#
+#   The job then runs only on manual ``workflow_dispatch`` (no cron) so it
+#   never consumes cluster queue time without an explicit operator action.
+#
+# Prerequisites (GitHub variables):
+#   vars.OSIMFLOW_PBS_QUEUE — PBS/Torque queue / destination (required)
+#
+# The test file uses ``pytest.mark.skipif`` so it is inert in normal CI.
+# =============================================================================
+
+name: PBS E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      n_samples:
+        description: "Number of campaign samples to run (default 3)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  pbs-e2e:
+    runs-on: [self-hosted, pbs]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev + slurm extras
+        run: pip install -e ".[dev,slurm]"
+
+      - name: Verify PBS toolchain on PATH
+        run: |
+          set -euo pipefail
+          command -v qsub >/dev/null || { echo "qsub not on PATH — not a PBS head node" >&2; exit 1; }
+          command -v qstat >/dev/null || { echo "qstat not on PATH — PBS executor cannot poll" >&2; exit 1; }
+          echo "PBS toolchain OK"
+
+      - name: Run real PBS / Torque E2E
+        env:
+          OSIMFLOW_PBS_E2E: "1"
+          OSIMFLOW_PBS_QUEUE: ${{ vars.OSIMFLOW_PBS_QUEUE }}
+        run: .venv/bin/pytest tests/integration/test_real_pbs_campaign.py -v --timeout=1800
