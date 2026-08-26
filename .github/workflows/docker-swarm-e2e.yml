@@ -1,0 +1,64 @@
+# =============================================================================
+# .github/workflows/docker-swarm-e2e.yml — Real Docker Swarm E2E (nightly)
+# =============================================================================
+# Runs a 3-sample campaign against a real Docker Swarm cluster every night at
+# 06:00 UTC and on manual trigger (workflow_dispatch).
+#
+# Uses Docker Compose to spin up a single-node Docker Swarm inside the runner,
+# so no external infrastructure is required.
+#
+# Prerequisites (GitHub variables):
+#   vars.OSIMFLOW_DOCKER_SWARM_IMAGE — Docker image to launch per-sample
+#       services (default: python:3.12-slim)
+#
+# The test file uses ``pytest.mark.skipif`` so it is inert in normal CI.
+# =============================================================================
+
+name: Docker Swarm E2E (Nightly)
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      n_samples:
+        description: "Number of campaign samples to run (default 3)"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  docker-swarm-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install OSimFlow with dev extras + docker SDK
+        run: |
+          pip install -e ".[dev]"
+          pip install docker
+
+      - name: Initialize Docker Swarm
+        run: |
+          set -euo pipefail
+          docker swarm init || true
+          echo "Swarm node info:"
+          docker info --format '{{.Swarm.ControlAvailable}}'
+
+      - name: Run Docker Swarm E2E
+        env:
+          OSIMFLOW_DOCKER_SWARM_E2E: "1"
+          OSIMFLOW_DOCKER_SWARM_IMAGE: ${{ vars.OSIMFLOW_DOCKER_SWARM_IMAGE || 'python:3.12-slim' }}
+        run: .venv/bin/pytest tests/integration/test_real_docker_swarm_campaign.py -v --timeout=1800
+
+      - name: Cleanup Swarm services
+        if: always()
+        run: docker service rm osimflow-0 osimflow-1 osimflow-2 2>/dev/null || true
