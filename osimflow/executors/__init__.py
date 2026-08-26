@@ -233,7 +233,11 @@ class LocalExecutor(BaseExecutor):
                     kw_value,
                 )
         if kwargs:
-            log.warning("LocalExecutor.submit: %d unexpected kwargs ignored: %s", len(kwargs), list(kwargs.keys()))
+            log.warning(
+                "LocalExecutor.submit: %d unexpected kwargs ignored: %s",
+                len(kwargs),
+                list(kwargs.keys()),
+            )
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
 
