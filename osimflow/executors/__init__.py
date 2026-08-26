@@ -210,10 +210,30 @@ class LocalExecutor(BaseExecutor):
         import socket
 
         self._container_digest = container_digest
-        del openstudio_version, result_hint, remote_command, result_transport_mode  # noqa: F841
-        del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
-        del result_storage_endpoint, variables_json, stdout_path, stderr_path  # noqa: F841
-        del max_retries, worker_id, kwargs  # noqa: F841, ARG002
+        _unused = [
+            ("openstudio_version", openstudio_version),
+            ("result_hint", result_hint),
+            ("remote_command", remote_command),
+            ("result_transport_mode", result_transport_mode),
+            ("result_storage_backend", result_storage_backend),
+            ("result_storage_bucket", result_storage_bucket),
+            ("result_storage_prefix", result_storage_prefix),
+            ("result_storage_endpoint", result_storage_endpoint),
+            ("variables_json", variables_json),
+            ("stdout_path", stdout_path),
+            ("stderr_path", stderr_path),
+            ("max_retries", max_retries),
+            ("worker_id", worker_id),
+        ]
+        for kw_name, kw_value in _unused:
+            if kw_value is not None:
+                log.warning(
+                    "LocalExecutor.submit: %s is not supported locally and will be ignored (value=%r)",
+                    kw_name,
+                    kw_value,
+                )
+        if kwargs:
+            log.warning("LocalExecutor.submit: %d unexpected kwargs ignored: %s", len(kwargs), list(kwargs.keys()))
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
 
