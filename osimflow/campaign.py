@@ -34,7 +34,7 @@ single `run.json` trace to `${outdir}/run.json` at completion. The trace
 includes per-step timing, per-sample status, and cache hit/miss counts.
 """
 
-__all__ = ["Campaign", "CampaignError", "QuotaExceededError"]
+__all__ = ["Campaign", "CampaignError", "QuotaExceededError", "SimResult"]
 
 import concurrent.futures
 import contextlib
@@ -188,6 +188,19 @@ class VariableSpec(TypedDict, total=False):
 
 
 SampleDict = dict[str, Path]  # sample_id -> path (per-sample work dir)
+
+
+@dataclasses.dataclass(frozen=True)
+class SimResult:
+    """Structured result from ``step_run_openstudio_sim``.
+
+    The ``success`` field is ``False`` when one or more samples recorded a
+    non‑zero ``sim_exit_code`` (i.e. partial or complete fan‑out failure).
+    Callers can inspect this field instead of needing to parse ``run.json``.
+    """
+
+    samples: SampleDict
+    success: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2522,7 +2535,7 @@ class Campaign:
         if self._check_cancel_requested():
             return self._abort_run_path_cancel(t0, samples, kpi_files)
 
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
+        simulated: SampleDict = self.step_run_openstudio_sim(parameterized).samples
 
         # Inter-step check: cancel requested during RUN_OPENSTUDIO_SIM,
         # before EXTRACT_KPIS.
@@ -2624,7 +2637,7 @@ class Campaign:
         if self._check_cancel_requested():
             return self._abort_run_path_cancel(t0, [target], kpi_files)
 
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized)
+        simulated: SampleDict = self.step_run_openstudio_sim(parameterized).samples
 
         # Inter-step check: cancel requested during RUN_OPENSTUDIO_SIM,
         # before EXTRACT_KPIS.
@@ -2810,7 +2823,7 @@ class Campaign:
         self._maybe_inject_chaos("APPLY_PARAMETERS", "after_step")
         self.step_validate_measure_variables()
         self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "before_step")
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation)
+        simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation).samples
         self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "after_step")
         self._maybe_inject_chaos("EXTRACT_KPIS", "before_step")
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
@@ -3730,7 +3743,7 @@ class Campaign:
         self,
         parameterized: SampleDict,
         generation: int = 0,
-    ) -> SampleDict:
+    ) -> SimResult:
         """Fan-out (heavy): for each sample, run the OpenStudio simulation.
 
         For each sample, this step computes the per-sample stdout/stderr
@@ -4028,16 +4041,19 @@ class Campaign:
                     },
                 )
 
+        any_failed = any(
+            ctx["state"].get("sim_exit_code", 0) != 0 for ctx in pending.values()
+        )
         self.trace.step_finished(
             "RUN_OPENSTUDIO_SIM",
             cache="MISS×N" if n else "SKIPPED",
             elapsed_s=time.time() - t0,
-            exit_code=0,
+            exit_code=1 if any_failed else 0,
         )
         self._obs.record_step_duration(
             "RUN_OPENSTUDIO_SIM", time.time() - t0, generation=generation
         )
-        return out
+        return SimResult(samples=out, success=not any_failed)
 
     # ------------------------------------------------------------------
     # Worker direct-to-storage push (issue #625, Epic #624)
