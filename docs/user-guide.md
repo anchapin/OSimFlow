@@ -284,7 +284,7 @@ Nomad runtime environment variables:
 | `--sample` | int | none | Run only sample N (0-indexed) through steps 2-4. Reuses existing `samples.json`. |
 | `--weather_dir` | string | `weather` | Subdirectory name for `.epw` files inside `template_sim_package`. |
 | `--mlflow_tracking_uri` | string | none | MLflow tracking server URI. Requires `pip install osimflow[mlflow]`. |
-| `--log_level` | string | `WARNING` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `--log_level` | string | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `--bcl-api-key` | string | none | NREL BCL API key. Required when `--validate-measures` is set. Can also be set via `BCL_API_KEY` env var. |
 | `--validate-measures` | flag | off | Validate measure arguments against the BCL taxonomy when discovering BCL measures. Logs warnings for argument name/type deviations. |
 | `--uq-failure-threshold` | string list | none | Failure threshold for probability-of-failure analysis (`--algorithm uq`). Format: `kpi_name=threshold_value` (e.g. `eui=150`). Repeatable for multiple KPIs. |
@@ -1251,7 +1251,7 @@ See [§7.1 BYOS Custom Scripts](#71-byos-custom-scripts) for the contract.
 | `--sample INT` | Re-run a single sample (0-indexed) from existing `samples.json`. |
 | `--skip-preflight` | Skip the `PREFLIGHT_RUN_MODEL` seed-model validation (issue #107). |
 | `--offline` | Skip Docker Hub pulls, PyPI checks, and online weather downloads (issue #261). |
-| `--log_level {DEBUG,INFO,WARNING,ERROR}` | Logging level (default: `WARNING`). |
+| `--log_level {DEBUG,INFO,WARNING,ERROR}` | Logging level (default: `INFO`). |
 
 #### `osimflow serve` subcommand
 
