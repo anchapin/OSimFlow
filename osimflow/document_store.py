@@ -1267,7 +1267,12 @@ class RedisDocumentStore(DocumentStore):
         not hit Redis.
         """
         client = self._get_client()
-        raw = client.hgetall(self._coll_key(collection))
+        try:
+            raw = client.hgetall(self._coll_key(collection))
+        except Exception as exc:
+            raise DocumentStoreError(
+                f"_load_collection failed for collection {collection!r}: {exc}"
+            ) from exc
         out: dict[str, dict[str, Any]] = {}
         for doc_id, doc_json in raw.items():
             try:
@@ -1468,7 +1473,12 @@ class RedisDocumentStore(DocumentStore):
             cached = self._lru_get(collection, target_id)
             if cached is not None:
                 return cached
-            raw = self._get_client().hget(self._coll_key(collection), target_id)
+            try:
+                raw = self._get_client().hget(self._coll_key(collection), target_id)
+            except Exception as exc:
+                raise DocumentStoreError(
+                    f"find_one failed for collection {collection!r}: {exc}"
+                ) from exc
             if raw is None:
                 return None
             try:
@@ -1657,15 +1667,39 @@ class RedisDocumentStore(DocumentStore):
         if target_id is None:
             return False
 
-        client.hdel(coll_key, target_id)
+        try:
+            client.hdel(coll_key, target_id)
+        except Exception as exc:
+            raise DocumentStoreError(
+                f"delete_one failed for collection {collection!r}: {exc}"
+            ) from exc
 
         # Drop any unique-index entries that pointed at this doc.
         for (coll, _field, key), _unique in self._iter_indexes():
             if coll != collection:
                 continue
-            for value, d in client.hgetall(key).items():
+            try:
+                index_entries = client.hgetall(key)
+            except Exception as exc:
+                log.warning(
+                    "RedisDocumentStore: failed to load index entries for collection=%s field=%s: %s",
+                    collection,
+                    key,
+                    exc,
+                )
+                continue
+            for value, d in index_entries.items():
                 if d == target_id:
-                    client.hdel(key, value)
+                    try:
+                        client.hdel(key, value)
+                    except Exception as exc:
+                        log.warning(
+                            "RedisDocumentStore: failed to delete index entry collection=%s field=%s value=%s: %s",
+                            collection,
+                            key,
+                            value,
+                            exc,
+                        )
 
         self._lru_invalidate(collection)
         log.debug(
@@ -1711,7 +1745,10 @@ class RedisDocumentStore(DocumentStore):
 
     def list_collections(self) -> list[str]:
         """List all collection names."""
-        members = self._get_client().smembers(self._collections_key())
+        try:
+            members = self._get_client().smembers(self._collections_key())
+        except Exception as exc:
+            raise DocumentStoreError(f"list_collections failed: {exc}") from exc
         return sorted(members)
 
     def count_documents(

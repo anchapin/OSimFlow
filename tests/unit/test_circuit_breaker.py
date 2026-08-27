@@ -179,13 +179,15 @@ class TestRedisDocumentStoreBreakerIntegration:
         store._breaker = CircuitBreaker(name="docs:test", failure_threshold=2, cooldown_s=60.0)
         failing = _failing_sync_module()
         with patch("osimflow.document_store._get_redis_sync", return_value=failing):
-            # First two failures propagate raw (ConnectionError) and count.
-            with pytest.raises(ConnectionError):
+            # First two failures raise DocumentStoreError (wrapping ConnectionError) and count.
+            with pytest.raises(DocumentStoreError) as exc_info:
                 store.find_one("kpis", {"_id": "doc_1"})
-            with pytest.raises(ConnectionError):
+            assert isinstance(exc_info.value.__cause__, ConnectionError)
+            with pytest.raises(DocumentStoreError) as exc_info:
                 store.find_one("kpis", {"_id": "doc_1"})
+            assert isinstance(exc_info.value.__cause__, ConnectionError)
             assert store._breaker.state == "open"
-            # Third attempt fails fast with DocumentStoreError, no socket wait.
+            # Third attempt fails fast with DocumentStoreError (circuit), no socket wait.
             with pytest.raises(DocumentStoreError, match="[Cc]ircuit|unavailable"):
                 store.find_one("kpis", {"_id": "doc_1"})
 
