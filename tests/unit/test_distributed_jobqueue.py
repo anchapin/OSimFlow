@@ -235,6 +235,7 @@ class TestDistributedJobQueueAutoRecovery:
             queue_dir=queue_dir,
             redis_url="redis://localhost:6379/0",
             campaign_id="test-backoff",
+            sample_ids={"test_backoff_0"},
         )
 
         async def mock_get_message(timeout: float = 1.0, ignore_subscribe_messages: bool = True):
