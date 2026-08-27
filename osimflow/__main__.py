@@ -1149,9 +1149,11 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         "--no-tui",
         action="store_true",
         help=(
-            "Disable the rich terminal UI even when rich is installed "
-            "and stdout is a TTY. Useful when piping output or running "
-            "in environments where the TUI causes display issues."
+            "The rich TUI activates automatically when all three conditions are met: "
+            "(a) rich >= 13.0 is installed, (b) stdout is a TTY (not piped/CI), "
+            "and (c) --no-tui is not passed. "
+            "Pass this flag to disable the TUI when piping output or in environments "
+            "where the TUI causes display issues (issue #1221)."
         ),
     )
     run.add_argument(
