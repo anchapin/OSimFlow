@@ -1462,5 +1462,11 @@ class TestContainerDigestPinning:
     def test_container_digest_for_returns_sha256_string(self) -> None:
         from osimflow.cache import _container_digest_for
 
-        digest = _container_digest_for("nrel/openstudio:3.11.0")
+        fake_completed = MagicMock(
+            returncode=0,
+            stdout="nrel/openstudio@sha256:" + "deadbeef" * 8 + "\n",
+            stderr="",
+        )
+        with patch("osimflow.cache.subprocess.run", return_value=fake_completed):
+            digest = _container_digest_for("nrel/openstudio:3.11.0")
         assert "sha256:" in digest
