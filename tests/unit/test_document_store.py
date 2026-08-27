@@ -979,7 +979,9 @@ class TestRedisDocumentStoreErrorPaths:
     ) -> None:
         from unittest.mock import patch
 
-        with patch.object(store._redis_client, "hset", side_effect=ConnectionError("Connection refused")):
+        with patch.object(
+            store._redis_client, "hset", side_effect=ConnectionError("Connection refused")
+        ):
             with pytest.raises(DocumentStoreError, match="insert_one failed"):
                 store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5})
 
@@ -989,7 +991,9 @@ class TestRedisDocumentStoreErrorPaths:
         from unittest.mock import patch
 
         store.insert_one("kpis", {"_id": "doc_x", "sample_id": "s0001", "eui": 150.5})
-        with patch.object(store._redis_client, "hset", side_effect=ConnectionError("Connection refused")):
+        with patch.object(
+            store._redis_client, "hset", side_effect=ConnectionError("Connection refused")
+        ):
             with pytest.raises(DocumentStoreError, match="update_one failed"):
                 store.update_one("kpis", {"_id": "doc_x"}, {"$set": {"eui": 160.0}})
 
@@ -998,7 +1002,9 @@ class TestRedisDocumentStoreErrorPaths:
     ) -> None:
         from unittest.mock import patch
 
-        with patch.object(store._redis_client, "hget", side_effect=ConnectionError("Connection refused")):
+        with patch.object(
+            store._redis_client, "hget", side_effect=ConnectionError("Connection refused")
+        ):
             with pytest.raises(DocumentStoreError):
                 store.find_one("kpis", {"_id": "doc_1"})
 
@@ -1007,7 +1013,9 @@ class TestRedisDocumentStoreErrorPaths:
     ) -> None:
         from unittest.mock import patch
 
-        with patch.object(store._redis_client, "hgetall", side_effect=ConnectionError("Connection refused")):
+        with patch.object(
+            store._redis_client, "hgetall", side_effect=ConnectionError("Connection refused")
+        ):
             with pytest.raises(DocumentStoreError):
                 store.find_many("kpis", {})
 
@@ -1017,7 +1025,9 @@ class TestRedisDocumentStoreErrorPaths:
         from unittest.mock import patch
 
         store.insert_one("kpis", {"_id": "doc_del", "sample_id": "s0001", "eui": 150.5})
-        with patch.object(store._redis_client, "hdel", side_effect=ConnectionError("Connection refused")):
+        with patch.object(
+            store._redis_client, "hdel", side_effect=ConnectionError("Connection refused")
+        ):
             with pytest.raises(DocumentStoreError):
                 store.delete_one("kpis", {"_id": "doc_del"})
 
@@ -1026,7 +1036,9 @@ class TestRedisDocumentStoreErrorPaths:
     ) -> None:
         from unittest.mock import patch
 
-        with patch.object(store._redis_client, "smembers", side_effect=ConnectionError("Connection refused")):
+        with patch.object(
+            store._redis_client, "smembers", side_effect=ConnectionError("Connection refused")
+        ):
             with pytest.raises(DocumentStoreError):
                 store.list_collections()
 
@@ -1035,6 +1047,8 @@ class TestRedisDocumentStoreErrorPaths:
     ) -> None:
         from unittest.mock import patch
 
-        with patch.object(store._redis_client, "hgetall", side_effect=ConnectionError("Connection refused")):
+        with patch.object(
+            store._redis_client, "hgetall", side_effect=ConnectionError("Connection refused")
+        ):
             with pytest.raises(DocumentStoreError):
                 store.count_documents("kpis")
