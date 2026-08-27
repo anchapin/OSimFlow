@@ -248,10 +248,7 @@ class DistributedJobQueue:
             async def _main() -> None:
                 reconnect_delay = 1.0
                 max_reconnect_delay = 60.0
-                channels = [
-                    f"{self._channel_prefix}:{sid}_*"
-                    for sid in self._sample_ids
-                ]
+                channels = [f"{self._channel_prefix}:{sid}_*" for sid in self._sample_ids]
 
                 while not self._stop_subscriber.is_set():
                     client = redis_async.from_url(
@@ -414,6 +411,7 @@ class DistributedJobQueue:
             asyncio.get_running_loop()
             asyncio.create_task(_pub())
         except RuntimeError:
+
             def _run() -> None:
                 asyncio.run(_pub())
 
@@ -465,7 +463,9 @@ class DistributedJobQueue:
                 self._start_subscriber()
         sample_id = _extract_sample_id(job_id)
         self._local.mark_failed(job_id, error)
-        self._publish({"action": "mark_failed", "job_id": job_id, "sample_id": sample_id, "error": error})
+        self._publish(
+            {"action": "mark_failed", "job_id": job_id, "sample_id": sample_id, "error": error}
+        )
 
     def pending_jobs(self) -> list[dict[str, Any]]:
         """List all pending jobs (local only)."""
