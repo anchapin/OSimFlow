@@ -890,3 +890,151 @@ class TestBuildDocumentStoreRedisDispatch:
                 backend="redis",
                 db_path=tmp_path / "documents.sqlite",
             )
+
+
+@requires_fakeredis
+class TestRedisDocumentStoreErrorPaths:
+    """Error-path tests for RedisDocumentStore (issue #1220).
+
+    AGENTS.md §8 gotcha #15 requires RedisDocumentStore to "fail loud"
+    on Redis outages: every operation raises ``DocumentStoreError``,
+    not silently degrade to local-only state.
+
+    These tests simulate Redis failures at two levels:
+    1. Circuit-breaker open (fail-fast after repeated failures).
+    2. Individual Redis operations raising exceptions.
+    """
+
+    @pytest.fixture
+    def store(self) -> RedisDocumentStore:
+        import fakeredis
+
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        store = RedisDocumentStore(
+            redis_url="redis://localhost:6379/0",
+            namespace="error-path-test",
+            db_path=Path("/tmp/documents.sqlite"),
+        )
+        store._redis_client = fake
+        return store
+
+    def test_insert_one_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.insert_one("kpis", {"sample_id": "s0001"})
+
+    def test_find_one_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.find_one("kpis", {"sample_id": "s0001"})
+
+    def test_find_many_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.find_many("kpis", {})
+
+    def test_update_one_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.update_one("kpis", {"sample_id": "s0001"}, {"$set": {"eui": 1.0}})
+
+    def test_delete_one_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.delete_one("kpis", {"sample_id": "s0001"})
+
+    def test_create_index_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.create_index("kpis", "sample_id")
+
+    def test_list_collections_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.list_collections()
+
+    def test_count_documents_raises_when_circuit_open(self, store: RedisDocumentStore) -> None:
+        for _ in range(store._breaker.failure_threshold):
+            store._breaker.record_failure()
+        assert store._breaker.state == "open"
+        with pytest.raises(DocumentStoreError, match="Redis unavailable"):
+            store.count_documents("kpis")
+
+    def test_insert_one_redis_failure_raises_document_store_error(
+        self, store: RedisDocumentStore
+    ) -> None:
+        from unittest.mock import patch
+
+        with patch.object(store._redis_client, "hset", side_effect=ConnectionError("Connection refused")):
+            with pytest.raises(DocumentStoreError, match="insert_one failed"):
+                store.insert_one("kpis", {"sample_id": "s0001", "eui": 150.5})
+
+    def test_update_one_redis_failure_raises_document_store_error(
+        self, store: RedisDocumentStore
+    ) -> None:
+        from unittest.mock import patch
+
+        store.insert_one("kpis", {"_id": "doc_x", "sample_id": "s0001", "eui": 150.5})
+        with patch.object(store._redis_client, "hset", side_effect=ConnectionError("Connection refused")):
+            with pytest.raises(DocumentStoreError, match="update_one failed"):
+                store.update_one("kpis", {"_id": "doc_x"}, {"$set": {"eui": 160.0}})
+
+    def test_find_one_redis_failure_raises_document_store_error(
+        self, store: RedisDocumentStore
+    ) -> None:
+        from unittest.mock import patch
+
+        with patch.object(store._redis_client, "hget", side_effect=ConnectionError("Connection refused")):
+            with pytest.raises(DocumentStoreError):
+                store.find_one("kpis", {"_id": "doc_1"})
+
+    def test_find_many_redis_failure_raises_document_store_error(
+        self, store: RedisDocumentStore
+    ) -> None:
+        from unittest.mock import patch
+
+        with patch.object(store._redis_client, "hgetall", side_effect=ConnectionError("Connection refused")):
+            with pytest.raises(DocumentStoreError):
+                store.find_many("kpis", {})
+
+    def test_delete_one_redis_failure_raises_document_store_error(
+        self, store: RedisDocumentStore
+    ) -> None:
+        from unittest.mock import patch
+
+        store.insert_one("kpis", {"_id": "doc_del", "sample_id": "s0001", "eui": 150.5})
+        with patch.object(store._redis_client, "hdel", side_effect=ConnectionError("Connection refused")):
+            with pytest.raises(DocumentStoreError):
+                store.delete_one("kpis", {"_id": "doc_del"})
+
+    def test_list_collections_redis_failure_raises_document_store_error(
+        self, store: RedisDocumentStore
+    ) -> None:
+        from unittest.mock import patch
+
+        with patch.object(store._redis_client, "smembers", side_effect=ConnectionError("Connection refused")):
+            with pytest.raises(DocumentStoreError):
+                store.list_collections()
+
+    def test_count_documents_redis_failure_raises_document_store_error(
+        self, store: RedisDocumentStore
+    ) -> None:
+        from unittest.mock import patch
+
+        with patch.object(store._redis_client, "hgetall", side_effect=ConnectionError("Connection refused")):
+            with pytest.raises(DocumentStoreError):
+                store.count_documents("kpis")
