@@ -68,6 +68,22 @@ class TestCircuitBreakerStates:
         breaker.record_failure()  # probe fails -> straight back to open
         assert breaker.state == "open"
 
+    def test_half_open_failure_counter_is_1_immediately_after(self) -> None:
+        """Assert _consecutive_failures == 1 immediately after a half_open failure (issue #1222)."""
+        import time
+
+        breaker = CircuitBreaker(failure_threshold=3, cooldown_s=0.01)
+        for _ in range(3):
+            breaker.record_failure()
+        assert breaker.state == "open"
+
+        time.sleep(0.02)
+        assert breaker.allow() is True  # half-open probe admitted
+        assert breaker.consecutive_failures == 3  # still 3 in half_open
+
+        breaker.record_failure()  # probe fails -> counter resets to 1
+        assert breaker.consecutive_failures == 1  # immediately after record_failure()
+
     def test_half_open_failure_resets_counter_to_1(self) -> None:
         """Failure in half_open should reset _consecutive_failures to 1 (issue #1188)."""
         import time
