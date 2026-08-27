@@ -1195,12 +1195,13 @@ class TestContainerDigestFor:
             b = _container_digest_for(self._LABEL)
         assert a == b
 
-    def test_unresolved_sentinel_for_any_label(self) -> None:
-        """When docker is unavailable, all labels map to the same unresolved sentinel."""
+    def test_unresolved_sentinel_preserves_label(self) -> None:
+        """When docker is unavailable, the unresolved sentinel preserves the label."""
         with mock.patch("osimflow.cache.shutil.which", return_value=None):
             a = _container_digest_for("nrel/openstudio:3.11.0")
             b = _container_digest_for("nrel/openstudio:3.9.0")
-        assert a == b == "nrel/openstudio:3.11.0@unresolved"
+        assert a == "nrel/openstudio:3.11.0@unresolved"
+        assert b == "nrel/openstudio:3.9.0@unresolved"
 
     def test_empty_label_does_not_produce_ambiguous_row(self) -> None:
         """Defensive: an empty label returns ``unresolved`` sentinel."""
