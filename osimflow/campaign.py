@@ -2311,6 +2311,9 @@ class Campaign:
         # Write campaign metadata manifest at start (issue #277).
         self._write_campaign_meta()
 
+        # Start periodic observability flush (issue #1186).
+        self._obs.start_periodic_flush()
+
         try:
             # Pre-campaign cancellation check: if cancellation is requested
             # BEFORE the campaign starts, the except/finally blocks below
@@ -2404,6 +2407,7 @@ class Campaign:
             duration = time.time() - t0
             # Observability: record campaign duration and flush backend.
             self._obs.record_campaign_duration(duration)
+            self._obs.stop_periodic_flush()
             self._obs.flush()
             self._run_finalize_script(campaign_status, duration)
             # Re-write run.json to include finalize hook timing

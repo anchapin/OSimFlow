@@ -774,6 +774,7 @@ class ObservabilityConfig:
     enable_cost_tracking: bool = False
     cost_on_demand_price: float = 0.05
     cost_spot_price: float = 0.03
+    flush_interval_seconds: float = 30.0
 
 
 # ======================================================================
@@ -1091,6 +1092,7 @@ class CampaignConfig:
     enable_cost_tracking: bool = False
     cost_on_demand_price: float = 0.05
     cost_spot_price: float = 0.03
+    flush_interval_seconds: float = 30.0
 
     # --- Legacy flat chaos fields (issue #1013) ---
     chaos_enabled: bool = False
@@ -1168,6 +1170,7 @@ class CampaignConfig:
             enable_cost_tracking=self.enable_cost_tracking,
             cost_on_demand_price=self.cost_on_demand_price,
             cost_spot_price=self.cost_spot_price,
+            flush_interval_seconds=self.flush_interval_seconds,
         )
 
         # Slurm config
@@ -1862,6 +1865,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         cost_spot_price=float(str(args["cost_spot_price"]))
         if args.get("cost_spot_price") is not None
         else 0.03,
+        flush_interval_seconds=float(str(args.get("observability_flush_interval", 30.0))),
         alert_rules=(Path(str(args["alert_rules"])).resolve() if args.get("alert_rules") else None),
         alert_destinations=(
             Path(str(args["alert_destinations"])).resolve()

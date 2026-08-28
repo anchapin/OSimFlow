@@ -6,6 +6,7 @@ including:
 - Per-step duration recording
 - Per-sample metric recording
 - Campaign duration and flush
+- Periodic flush to prevent metric loss on early crash (issue #1186)
 
 The ObservabilityManager is constructed with a CampaignConfig and exposes
 a clean interface for the Campaign to call without directly coupling to
@@ -17,6 +18,7 @@ from __future__ import annotations
 __all__ = ["ObservabilityManager"]
 
 import logging
+import threading
 
 from .config import CampaignConfig
 from .observability import (
@@ -52,7 +54,10 @@ class ObservabilityManager:
     """
 
     def __init__(self, cfg: CampaignConfig) -> None:
+        self._cfg = cfg
         self._backend: ObservabilityBackend = self._build_backend(cfg)
+        self._periodic_flush_thread: threading.Thread | None = None
+        self._periodic_flush_stop_event = threading.Event()
 
     @property
     def backend(self) -> ObservabilityBackend:
@@ -185,6 +190,57 @@ class ObservabilityManager:
         Call this at campaign end to ensure all metrics are delivered.
         """
         self._backend.flush()
+
+    def start_periodic_flush(self) -> None:
+        """Start a background thread that periodically flushes metrics (issue #1186).
+
+        The periodic flush ensures metrics are not lost if the process crashes
+        before the campaign finishes normally. The thread runs until
+        ``stop_periodic_flush()`` is called.
+
+        The flush interval is controlled by ``flush_interval_seconds`` in
+        ``CampaignConfig`` (default: 30 seconds).
+        """
+        if self._periodic_flush_thread is not None:
+            log.warning("periodic flush thread already running")
+            return
+        if isinstance(self._backend, NullBackend):
+            log.debug("periodic flush skipped for NullBackend")
+            return
+        flush_interval = getattr(self._cfg, "flush_interval_seconds", 30.0)
+        self._periodic_flush_stop_event.clear()
+        self._periodic_flush_thread = threading.Thread(
+            target=self._periodic_flush_loop,
+            args=(flush_interval,),
+            name="observability-periodic-flush",
+            daemon=True,
+        )
+        self._periodic_flush_thread.start()
+        log.info("periodic observability flush started (interval=%.1fs)", flush_interval)
+
+    def stop_periodic_flush(self) -> None:
+        """Stop the periodic flush background thread.
+
+        Also performs a final flush to ensure all metrics are delivered.
+        """
+        if self._periodic_flush_thread is None:
+            return
+        log.info("stopping periodic observability flush")
+        self._periodic_flush_stop_event.set()
+        thread = self._periodic_flush_thread
+        self._periodic_flush_thread = None
+        thread.join(timeout=5.0)
+        self._backend.flush()
+        log.info("periodic observability flush stopped")
+
+    def _periodic_flush_loop(self, interval_seconds: float) -> None:
+        """Background loop that periodically flushes metrics."""
+        while not self._periodic_flush_stop_event.wait(timeout=interval_seconds):
+            try:
+                self._backend.flush()
+                log.debug("periodic observability flush completed")
+            except Exception:  # noqa: BLE001
+                log.exception("periodic observability flush failed")
 
     # ------------------------------------------------------------------
     # Trace ID helpers
