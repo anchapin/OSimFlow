@@ -2715,6 +2715,9 @@ class ExecutorRegistry:
 
         [project.entry-points."osimflow.executors"]
         my_exec = "my_package.executors:MyExecutor"
+
+    Plugin executors that need CLI configuration should accept ``**kwargs``
+    in their ``__init__`` and receive forwarded CLI arguments (issue #1275).
     """
 
     _registry: dict[str, type[BaseExecutor]] = {}

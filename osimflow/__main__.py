@@ -313,9 +313,9 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
         )
 
     # Fall back to the ExecutorRegistry for plugin-discovered executors
-    # (issue #432).  Third-party executors registered via entry_points
-    # are available here.  They must accept no required constructor args
-    # (or accept the same kwargs the built-ins do).
+    # (issue #432, #1275).  Third-party executors registered via entry_points
+    # are available here.  CLI args are forwarded as kwargs so plugin
+    # executors can receive configuration (issue #1275).
     from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
 
     if args.executor in ExecutorRegistry.list_available():
@@ -325,7 +325,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             args.executor,
             executor_cls.__qualname__,
         )
-        return executor_cls()
+        return executor_cls(**vars(args))
 
     raise ValueError(f"unknown executor: {args.executor}")
 
