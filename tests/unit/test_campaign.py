@@ -1553,9 +1553,7 @@ class TestFanOutRecoveryPath:
                 resubmit_callback=resubmit_callback,
             )
 
-            completed_keys = [
-                call[0][0] for call in mock_jq.mark_completed.call_args_list
-            ]
+            completed_keys = [call[0][0] for call in mock_jq.mark_completed.call_args_list]
             assert "sample_0_RUN_OPENSTUDIO_SIM" in completed_keys
             assert "sample_1_RUN_OPENSTUDIO_SIM" in completed_keys
             assert "sample_2_RUN_OPENSTUDIO_SIM" in completed_keys
@@ -1572,7 +1570,10 @@ class TestFanOutRecoveryPath:
 
         submissions: dict[str, tuple[Handle, Any]] = {
             "sample_0": (self._make_failing_handle(), MagicMock()),
-            "sample_1": (self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}), MagicMock()),
+            "sample_1": (
+                self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}),
+                MagicMock(),
+            ),
         }
 
         from osimflow.monitoring import WorkerRecoveryManager
@@ -1587,14 +1588,10 @@ class TestFanOutRecoveryPath:
                 resubmit_callback=MagicMock(return_value=None),
             )
 
-            failed_keys = [
-                call[0][0] for call in mock_jq.mark_failed.call_args_list
-            ]
+            failed_keys = [call[0][0] for call in mock_jq.mark_failed.call_args_list]
             assert "sample_0_RUN_OPENSTUDIO_SIM" in failed_keys
 
-            completed_keys = [
-                call[0][0] for call in mock_jq.mark_completed.call_args_list
-            ]
+            completed_keys = [call[0][0] for call in mock_jq.mark_completed.call_args_list]
             assert "sample_1_RUN_OPENSTUDIO_SIM" in completed_keys
 
     def test_run_json_records_sample_failure(
@@ -1609,7 +1606,10 @@ class TestFanOutRecoveryPath:
 
         submissions: dict[str, tuple[Handle, Any]] = {
             "sample_0": (self._make_failing_handle(), MagicMock()),
-            "sample_1": (self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}), MagicMock()),
+            "sample_1": (
+                self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}),
+                MagicMock(),
+            ),
         }
 
         from osimflow.monitoring import WorkerRecoveryManager
@@ -1649,7 +1649,10 @@ class TestFanOutRecoveryPath:
 
         submissions: dict[str, tuple[Handle, Any]] = {
             "sample_0": (self._make_failing_handle(), MagicMock()),
-            "sample_1": (self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}), MagicMock()),
+            "sample_1": (
+                self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}),
+                MagicMock(),
+            ),
         }
 
         from osimflow.monitoring import WorkerRecoveryManager
@@ -1671,8 +1674,6 @@ class TestFanOutRecoveryPath:
                 resubmit_callback=resubmit_callback,
             )
 
-            failed_keys = [
-                call[0][0] for call in mock_jq.mark_failed.call_args_list
-            ]
+            failed_keys = [call[0][0] for call in mock_jq.mark_failed.call_args_list]
             assert "sample_0_RUN_OPENSTUDIO_SIM" in failed_keys
             assert resubmit_count == 1
