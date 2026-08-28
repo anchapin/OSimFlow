@@ -297,6 +297,18 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         outputs=StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
         method="step_aggregate_results",
     ),
+    "COMPUTE_SENSITIVITY_INDICES": DAGStep(
+        inputs=StepInputs(),
+        outputs=StepOutputs(produced=("sensitivity_indices.json",)),
+        method="step_compute_sensitivity_indices",
+        condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "sobol",
+    ),
+    "COMPUTE_UQ_INDICES": DAGStep(
+        inputs=StepInputs(),
+        outputs=StepOutputs(produced=("uq_results.json",)),
+        method="step_compute_uq_indices",
+        condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
+    ),
     "GENERATE_BASIC_PLOTS": DAGStep(
         inputs=StepInputs(required=("aggregated_results.csv",)),
         outputs=StepOutputs(produced=("plots/",)),
