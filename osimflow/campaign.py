@@ -2931,6 +2931,7 @@ class Campaign:
         parameterized: SampleDict | None = None
         simulated: SampleDict = {}
         kpi_files: list[Path] = []
+        aggregated: dict[str, Path] = {}
 
         for step_name, step_info in _STEP_DEPENDENCIES.items():
             if step_info.condition is not None and not step_info.condition(
@@ -2966,9 +2967,9 @@ class Campaign:
                 assert simulated is not None
                 kpi_files = step_method(simulated, generation=generation)
             elif step_name == "AGGREGATE_RESULTS":
-                step_method(kpi_files, generation=generation)
+                aggregated = step_method(kpi_files, simulated)
             elif step_name == "GENERATE_BASIC_PLOTS":
-                step_method(generation=generation)
+                step_method(aggregated)
 
             self._maybe_inject_chaos(step_name, "after_step")
             log.debug("step %s completed", step_name)
