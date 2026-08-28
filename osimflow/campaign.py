@@ -106,8 +106,7 @@ from .observability import new_trace_id
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
-from .taskqueue import TaskHandle as TQHandle
-from .taskqueue import TaskQueue
+from .taskqueue import ConsumerQueue, TaskHandle as TQHandle
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .webhook import WebhookClient
 from .work import (
@@ -424,7 +423,7 @@ class Campaign:
         apply_fn: Callable[..., Path | None] | None = None,
         extract_fn: Callable[..., Path] | None = None,
         max_workers: int = 1,
-        task_queue: TaskQueue | None = None,
+        task_queue: ConsumerQueue | None = None,
         data_point_manager: DataPointManager | None = None,
         chaos_engine: ChaosEngine | None = None,
     ):
