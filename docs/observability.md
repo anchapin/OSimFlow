@@ -232,19 +232,15 @@ The `CircuitBreaker` accepts an `on_transition` callback `(name, from_state, to_
 
 ```python
 from osimflow.circuit_breaker import CircuitBreaker, CircuitOpenError
-from osimflow.observability import ObservabilityBackend
+from osimflow.observability import NullBackend
 
-backend: ObservabilityBackend = self._obs.backend  # your backend instance
-
-def _record(circuit_name: str, from_state: str, to_state: str) -> None:
-    """Wires circuit-breaker state transitions into the observability backend."""
-    backend.record_circuit_breaker_event(circuit_name, from_state, to_state)
+backend = NullBackend()  # concrete backend instance
 
 breaker = CircuitBreaker(
     name="redis",
     failure_threshold=5,
     cooldown_s=30.0,
-    on_transition=_record,
+    on_transition=lambda n, f, t: backend.record_circuit_breaker_event(n, f, t),
 )
 ```
 
