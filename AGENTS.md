@@ -337,9 +337,10 @@ name in this section.
   `S3Storage`, `GCSStorage`, `AzureBlobStorage`,
   `S3ArtifactStorage`, `ResultStorageUploader`,
   `build_result_storage`.
-- `osimflow/taskqueue.py` — `TaskQueue` ABC + `DaskTaskQueue`,
-  `NoOpTaskQueue`, `TaskHandle`, `TaskQueueStatus`,
-  `build_task_queue`.
+- `osimflow/taskqueue.py` — `ProducerQueue` ABC (fan-out / push) +
+  `ConsumerQueue` ABC (fan-in / pull) + `DaskTaskQueue`
+  (implements both), `NoOpTaskQueue` (implements both),
+  `TaskHandle`, `TaskQueueStatus`, `build_task_queue`.
 - `osimflow/document_store.py` — `DocumentStore` ABC,
   `DocumentStoreError`, `DocumentNotFoundError`,
   `DuplicateDocumentError`, `SQLiteDocumentStore`,
@@ -348,8 +349,9 @@ name in this section.
   `build_cache`).
 - `osimflow/jobqueue.py` — filesystem-based `JobQueue`
   (crash recovery).
-- `osimflow/monitoring.py` — `RunTrace` + `StepTrace`; writes
-  `run.json`.
+- `osimflow/monitoring.py` — `RunTrace` (includes
+  `chaos_schedule`, `circuit_breaker_states`, `alerts_fired`) +
+  `StepTrace`; writes `run.json`.
 - `osimflow/observability.py` — `ObservabilityBackend` ABC +
   `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`
   + `new_trace_id` + `record_circuit_breaker_event`.
