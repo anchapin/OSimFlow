@@ -270,7 +270,7 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         condition=lambda campaign, algo, generation, **_: generation == 0,
     ),
     "APPLY_PARAMETERS": DAGStep(
-        inputs=StepInputs(required=("template_sim_package", "samples.json")),
+        inputs=StepInputs(required=("samples.json",)),
         outputs=StepOutputs(produced=("apply/*/",)),
         method="step_apply_parameters",
         fan_out=False,
