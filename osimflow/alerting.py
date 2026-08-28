@@ -297,10 +297,17 @@ class LogDestination(AlertDestination):
 class AlertManager:
     """Registers rules and destinations, evaluates events, and dispatches alerts."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        on_alert: Callable[[Alert], None] | None = None,
+    ) -> None:
         self._rules: list[AlertRule] = []
         self._destinations: list[AlertDestination] = []
         self._cache_stats: dict[str, Any] = {}
+        # Optional callback invoked for every alert dispatched (issue #1308).
+        # Intended to forward fired alerts to RunTrace.alerts_fired.
+        self._on_alert: Callable[[Alert], None] | None = on_alert
         # Bounded ring buffer of alerts whose delivery failed (issue #1185).
         # Retried opportunistically at the start of every notify() call.
         self._alert_history: deque[_PendingAlert] = deque(maxlen=_ALERT_HISTORY_MAXLEN)
@@ -343,6 +350,12 @@ class AlertManager:
                 context=context,
                 timestamp=time.time(),
             )
+
+            if self._on_alert is not None:
+                try:
+                    self._on_alert(alert)
+                except Exception as exc:
+                    log.warning("on_alert callback raised — continuing: %s", exc)
 
             for dest in self._destinations:
                 error = ""
@@ -679,6 +692,8 @@ def build_alert_manager(
     rules_path: Path | None = None,
     destinations_path: Path | None = None,
     include_builtin: bool = True,
+    *,
+    on_alert: Callable[[Alert], None] | None = None,
 ) -> AlertManager:
     """Build and configure an AlertManager from YAML files.
 
@@ -693,8 +708,11 @@ def build_alert_manager(
     include_builtin
         When ``True`` (default), the built-in rules are registered
         before loading custom rules.
+    on_alert
+        Optional callback invoked for every alert dispatched (issue #1308).
+        Intended to forward fired alerts to RunTrace.alerts_fired.
     """
-    manager = AlertManager()
+    manager = AlertManager(on_alert=on_alert)
 
     if include_builtin:
         for rule in manager.builtin_rules():

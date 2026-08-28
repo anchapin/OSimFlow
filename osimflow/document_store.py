@@ -1777,6 +1777,11 @@ class RedisDocumentStore(DocumentStore):
             return len(docs)
         return sum(1 for d in docs if _document_matches(d, filter_spec))
 
+    @property
+    def breaker_state(self) -> str:
+        """Current circuit breaker state (issue #1310)."""
+        return self._breaker.state
+
     def close(self) -> None:
         """Close the Redis client and drop the in-process LRU."""
         self._lru_invalidate()

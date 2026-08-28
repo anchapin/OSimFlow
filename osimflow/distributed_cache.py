@@ -643,6 +643,11 @@ class DistributedCache:
         """
         return self._local.get_stats()
 
+    @property
+    def breaker_state(self) -> str:
+        """Current circuit breaker state (issue #1310)."""
+        return self._breaker.state
+
     def close(self) -> None:
         """Stop the subscriber thread, close Redis clients, close the local cache."""
         # Signal the subscriber to stop.
