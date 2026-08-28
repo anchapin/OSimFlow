@@ -39,8 +39,9 @@
   - [7.5 Cache and Resume Behavior](#75-cache-and-resume-behavior)
   - [7.6 OpenStudio Version Selection](#76-openstudio-version-selection)
   - [7.7 Importing from OpenStudio Analysis Spreadsheet (.osa)](#77-importing-from-openstudio-analysis-spreadsheet-osa)
-- [8. Troubleshooting](#8-troubleshooting)
-- [9. Reference](#9-reference)
+- [8. Health Checks](#8-health-checks)
+- [9. Troubleshooting](#9-troubleshooting)
+- [10. Reference](#10-reference)
 
 ---
 
@@ -1057,7 +1058,98 @@ compatible with OSimFlow's LHS sampler.
 
 ---
 
-## 8. Troubleshooting
+## 8. Health Checks
+
+Run `osimflow health` before starting a campaign to catch configuration problems early. The command probes Python version, core packages, SQLite, write permissions, external tools (OpenStudio CLI, Docker), disk space, and per-executor substrates.
+
+```bash
+# Full check (default output)
+osimflow health
+
+# JSON output (machine-readable)
+osimflow health --json
+
+# Skip network checks (air-gapped environments)
+osimflow health --offline
+
+# Promote a specific executor's check to CRITICAL (fail-fast if misconfigured)
+osimflow health --executor slurm
+```
+
+### Exit codes
+
+| Exit code | Meaning |
+|---|---|
+| `0` | All critical checks passed |
+| `1` | One or more critical checks failed |
+
+### Check categories
+
+**Critical** — failures here mean OSimFlow cannot run at all:
+
+- Python version >= 3.12
+- Core packages (numpy, scipy, pandas, pyarrow, matplotlib, seaborn, tqdm, openpyxl, yaml)
+- SQLite functional
+- Write permissions in the campaign output directory
+
+**Informational** — failures limit functionality but basic local runs still work:
+
+- Optional packages (AWS SDK, Slurm, MLflow, etc.)
+- External tools (OpenStudio CLI, Docker, Podman)
+- Disk space
+- Network connectivity
+- Per-executor substrate checks (see below)
+
+### Per-executor substrate checks
+
+Each registered executor has a health check registered in `ExecutorRegistry`. These return **INFORMATIONAL** by default — a warning is printed but the command exits `0`. However, when you pass `--executor <name>`, that executor's check is promoted to **CRITICAL** because a failure there means the campaign cannot dispatch any sample:
+
+```bash
+# Check Slurm (INFORMATIONAL — warns but exits 0 even if Slurm is missing)
+osimflow health
+
+# Check Slurm (CRITICAL — exits 1 if Slurm is unreachable)
+osimflow health --executor slurm
+
+# Check AWS Batch (CRITICAL — exits 1 if boto3 or AWS region is missing)
+osimflow health --executor aws_batch
+```
+
+Available executor checks: `local`, `slurm`, `pbs`, `aws_batch`, `azure_batch`, `google_batch`, `nomad`, `kubernetes`, `docker_swarm`, `dask_jobqueue`.
+
+### JSON output format
+
+`--json` emits a structured JSON document:
+
+```json
+{
+  "summary": {
+    "total": 17,
+    "passed": 14,
+    "failed": 1,
+    "warnings": 2,
+    "skipped": 0,
+    "critical_failures": 1,
+    "healthy": false
+  },
+  "checks": [
+    {
+      "name": "Python Version",
+      "status": "pass",
+      "category": "critical",
+      "message": "Python 3.12 >= required 3.12",
+      "detail": "Running Python 3.12.4 (CPython)"
+    },
+    ...
+  ]
+}
+```
+
+Use `--json` to integrate with monitoring dashboards or CI pipelines.
+
+---
+
+## 9. Troubleshooting
 
 ### "PRE-FLIGHT check failed: unmapped parameter"
 
@@ -1163,7 +1255,7 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 
 ---
 
-## 9. Reference
+## 10. Reference
 
 ### CLI Reference
 
