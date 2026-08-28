@@ -1143,29 +1143,6 @@ class AWSBatchExecutor(BaseExecutor):
             return
         raise RuntimeError(msg)
 
-    @staticmethod
-    def _infer_step_name(submit_name: str) -> str:
-        """Map a submit name to the remote_runner step identifier.
-
-        Same mapping as ``NomadExecutor._infer_step_name`` and
-        ``KubernetesExecutor._infer_step_name``: the Campaign names
-        fan-out tasks ``apply_<sid>`` / ``sim_<sid>`` / ``kpi_<sid>`` and
-        the single-shot steps ``aggregate`` / ``plots``; the remote runner
-        resolves the work function from the step identifier.
-        """
-        lower = submit_name.lower()
-        if lower.startswith("apply_"):
-            return "apply"
-        if lower.startswith("sim_"):
-            return "sim"
-        if lower.startswith("kpi_"):
-            return "extract"
-        if lower.startswith("aggregate"):
-            return "aggregate"
-        if lower.startswith("plots"):
-            return "plots"
-        return "unknown"
-
     def _build_environment(
         self,
         *,
@@ -2700,21 +2677,6 @@ class NomadExecutor(BaseExecutor):
 
     def shutdown(self) -> None:
         self._local_pool.shutdown(wait=True)
-
-    @staticmethod
-    def _infer_step_name(submit_name: str) -> str:
-        lower = submit_name.lower()
-        if lower.startswith("apply_"):
-            return "apply"
-        if lower.startswith("sim_"):
-            return "sim"
-        if lower.startswith("kpi_"):
-            return "extract"
-        if lower.startswith("aggregate"):
-            return "aggregate"
-        if lower.startswith("plots"):
-            return "plots"
-        return "unknown"
 
 
 # ======================================================================
