@@ -885,6 +885,41 @@ load time. Ready-to-use templates are in `user_scripts/templates/`, and
 worked examples are in `user_scripts/examples/`. See
 [user_scripts/README.md](../user_scripts/README.md) for the full walkthrough.
 
+#### Security Considerations
+
+BYOS scripts are treated as **untrusted** in production environments. OSimFlow
+provides two execution modes controlled by `--byos-trust-level`:
+
+| Trust level | Isolation | Production safe? | Notes |
+|---|---|---|---|
+| `subprocess` (default) | Isolated child process | **Yes** — recommended | Cannot access orchestrator memory, credentials, or open file handles. |
+| `inprocess` | Same process as orchestrator | No | Loads user script directly via `importlib`. Can access all orchestrator state. Legacy mode. |
+
+**Production recommendation:** Always use the default `subprocess` mode. Enable
+`inprocess` only for local development when you trust the script author.
+
+**`--require-trusted-scripts`** enforces `subprocess` mode and rejects `inprocess`
+loading outright — use this flag on shared clusters or any environment where
+script authors may be untrusted:
+
+```bash
+osimflow run \
+  --require-trusted-scripts \
+  --custom_apply_script user_scripts/untrusted_contributor.py ...
+```
+
+When `inprocess` is requested without `--require-trusted-scripts`, OSimFlow emits
+a warning but proceeds:
+
+```
+WARNING: BYOS script running inprocess without --require-trusted-scripts.
+Set --require-trusted-scripts to enforce subprocess isolation in production.
+```
+
+Cloud executors (AWS Batch, Slurm, Kubernetes) already run each job inside a
+container or job isolation boundary. The `subprocess` BYOS mode provides an
+additional defence-in-depth layer on top of that isolation.
+
 ### 7.2 Time-Series Management
 
 By default, OSimFlow aggregates time-series data to **monthly** resolution
