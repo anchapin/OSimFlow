@@ -45,3 +45,24 @@ def test_upload_artifacts_object_storage_file_and_dir(
 
     assert (str(file_path), "aggregated_results.csv") in fake.uploaded
     assert (str(sim_dir), "work/sim/0001") in fake.uploaded
+
+
+class TestVerifyContractVersion:
+    def test_version_mismatch_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OSIMFLOW_CONTRACT_VERSION", "0.0.0")
+        with pytest.raises(RuntimeError, match="BYOS contract version mismatch"):
+            remote_runner._verify_contract_version()  # noqa: SLF001
+
+    def test_version_match_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "OSIMFLOW_CONTRACT_VERSION",
+            remote_runner.BYOS_CONTRACT_VERSION,
+        )
+        remote_runner._verify_contract_version()  # noqa: SLF001 — no exception
+
+    def test_missing_version_warns(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        monkeypatch.delenv("OSIMFLOW_CONTRACT_VERSION", raising=False)
+        with caplog.at_level("WARNING"):
+            remote_runner._verify_contract_version()  # noqa: SLF001 — no exception
+        assert "OSIMFLOW_CONTRACT_VERSION is not set" in caplog.text
+

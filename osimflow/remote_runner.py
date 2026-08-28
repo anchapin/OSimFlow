@@ -6,6 +6,8 @@ remote containers without requiring extra orchestration dependencies.
 
 from __future__ import annotations
 
+__all__ = ["main", "BYOS_CONTRACT_VERSION"]
+
 import json
 import logging
 import os
@@ -13,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .byos_contract import BYOS_CONTRACT_VERSION
 from .executors.transport import (
     coerce_transport_mode,
     decode_transport_value,
@@ -75,6 +78,34 @@ def _verify_payload_signature(raw: str) -> None:
             "(issue #1177)"
         )
     log.info("task payload signature verified (HMAC-SHA256)")
+
+
+def _verify_contract_version() -> None:
+    """Verify the BYOS contract version matches the parent osimflow package (issue #1281).
+
+    The parent orchestrator sets ``OSIMFLOW_CONTRACT_VERSION`` in the task
+    payload environment.  The remote runner verifies this matches the
+    version baked into this runner at build time (``BYOS_CONTRACT_VERSION``).
+    A mismatch indicates the remote container is running a different
+    osimflow version than the orchestrator, which could cause BYOS
+    contract incompatibilities.
+    """
+    expected = BYOS_CONTRACT_VERSION
+    received = os.environ.get("OSIMFLOW_CONTRACT_VERSION")
+    if received is None:
+        log.warning(
+            "OSIMFLOW_CONTRACT_VERSION is not set — cannot verify "
+            "BYOS contract version compatibility with parent osimflow package"
+        )
+        return
+    if received != expected:
+        raise RuntimeError(
+            f"BYOS contract version mismatch: remote runner has "
+            f"version {expected!r} but parent orchestrator sent {received!r}. "
+            f"Ensure the remote container image matches the osimflow version "
+            f"used by the orchestrator (issue #1281)."
+        )
+    log.info("BYOS contract version verified: %s", expected)
 
 
 def _load_payload() -> dict[str, Any]:
@@ -210,6 +241,7 @@ def main() -> int:
     )
     try:
         payload = _load_payload()
+        _verify_contract_version()
         result = _run_payload(payload)
         _upload_artifacts_for_object_storage(result)
         result_json = json.dumps({"ok": True, "result": encode_transport_value(result)})

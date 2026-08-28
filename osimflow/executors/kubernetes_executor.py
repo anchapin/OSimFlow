@@ -48,6 +48,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, cast
 
+from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.transport import (
     coerce_transport_mode,
@@ -319,6 +320,9 @@ class KubernetesExecutor(BaseExecutor):
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
+            # Issue #1281: verify BYOS contract version compatibility between
+            # orchestrator and remote runner.
+            env.append({"name": "OSIMFLOW_CONTRACT_VERSION", "value": BYOS_CONTRACT_VERSION})
             # Issue #1177: when a shared secret is configured, sign the
             # exact payload bytes and propagate secret + signature so the
             # remote_runner verifies before decoding/executing. No-op in

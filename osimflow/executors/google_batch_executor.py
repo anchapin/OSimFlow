@@ -42,6 +42,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
+from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.transport import resolve_result_for_callback
 
@@ -273,6 +274,8 @@ class GoogleBatchExecutor(BaseExecutor):
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
+            # Issue #1281: verify BYOS contract version compatibility.
+            env.append({"name": "OSIMFLOW_CONTRACT_VERSION", "value": BYOS_CONTRACT_VERSION})
         if result_transport_mode is not None:
             env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": result_transport_mode})
         if result_storage_backend is not None:
