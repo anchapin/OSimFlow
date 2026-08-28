@@ -36,7 +36,7 @@ A practical guide to getting OSimFlow installed and running your first parametri
 # Install from source (recommended for development)
 git clone https://github.com/anchapin/OSimFlow.git
 cd OSimFlow
-pip install -e ".[dev,aws,slurm]"
+pip install -e ".[dev,aws,slurm,api,sensitivity,optimization,ga]"
 
 # Or install from PyPI (when available)
 pip install osimflow
