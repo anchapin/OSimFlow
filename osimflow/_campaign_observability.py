@@ -184,7 +184,7 @@ class ObservabilityManager:
             backend.record_sample_metric(sample_id, metric_name, value, trace_id=trace_id)
 
     def record_sample_cost(
-        self, sample_id: str, cost_usd: float, trace_id: str | None = None
+        self, sample_id: str, cost_usd: float | None, trace_id: str | None = None
     ) -> None:
         """Record per-sample cost metric.
 
