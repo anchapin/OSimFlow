@@ -120,6 +120,17 @@ class CircuitBreaker:
             if prev_state != "closed" and self._on_transition is not None:
                 self._on_transition(self.name, prev_state, "closed")
 
+    def set_on_transition_callback(
+        self, callback: Callable[[str, str, str], None] | None
+    ) -> None:
+        """Set or clear the state-transition callback (issue #1310).
+
+        Can be called after construction to wire the breaker to an
+        ObservabilityBackend without requiring the callback at init time.
+        """
+        with self._lock:
+            self._on_transition = callback
+
     def record_failure(self) -> None:
         """Record a failed operation (opens the circuit past threshold)."""
         with self._lock:

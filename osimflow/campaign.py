@@ -617,6 +617,11 @@ class Campaign:
         # overhead) or a real backend when configured.
         self._obs = ObservabilityManager(cfg)
 
+        # Wire CircuitBreaker state transitions to observability (issue #1310).
+        # _breaker callbacks are set here after _obs is available; the breakers
+        # themselves were created earlier in self.cache and self._document_store.
+        self._wire_circuit_breaker_callbacks()
+
         # Alerting (issue #1180). Built from cfg so alerts fire for
         # step failures, sample failures, worker death, and quota-exceeded
         # events during campaign execution.
@@ -627,6 +632,7 @@ class Campaign:
                 self._alert_manager = build_alert_manager(
                     rules_path=obs_cfg.alert_rules,
                     destinations_path=obs_cfg.alert_destinations,
+                    on_alert=self.trace.record_alert,
                 )
                 log.info(
                     "alerting enabled: rules=%s destinations=%s",
@@ -758,6 +764,28 @@ class Campaign:
                 self._alert_manager.notify(event_type, context)
             except Exception as exc:
                 log.warning("alert %s failed: %s", event_type, exc)
+
+    def _wire_circuit_breaker_callbacks(self) -> None:
+        """Wire CircuitBreaker state transitions to the observability backend (issue #1310).
+
+        Called after ``self._obs`` is initialised so the backend is available.
+        The circuit breakers themselves were created earlier during
+        ``self.cache`` and ``self._document_store`` construction.
+        """
+        backend = self._obs.backend
+
+        def _record(circuit_name: str, from_state: str, to_state: str) -> None:
+            backend.record_circuit_breaker_event(circuit_name, from_state, to_state)
+
+        # Wire DistributedCache breaker.
+        cache = getattr(self, "cache", None)
+        if cache is not None and hasattr(cache, "_breaker"):
+            cache._breaker.set_on_transition_callback(_record)
+
+        # Wire RedisDocumentStore breaker.
+        doc_store = getattr(self, "_document_store", None)
+        if doc_store is not None and hasattr(doc_store, "_breaker"):
+            doc_store._breaker.set_on_transition_callback(_record)
 
     def _enforce_start_quota(self) -> None:
         """Fail fast if the campaign's resource quota is already exceeded at start.
@@ -2360,6 +2388,11 @@ class Campaign:
         # restarting (issue #798).
         with self._pause_lock:
             self._pause_requested = False
+
+        # Wire chaos_schedule to RunTrace (issue #1309).
+        chaos_cfg_obj = getattr(self.cfg, "chaos", None)
+        if chaos_cfg_obj is not None:
+            self.trace.chaos_schedule = str(getattr(chaos_cfg_obj, "schedule", "none"))
 
         run_name = maybe_start_mlflow_run(self.cfg.mlflow_tracking_uri, self.trace.campaign_id)
         if run_name is not None:

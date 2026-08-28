@@ -172,7 +172,8 @@ bypass `_verify_step_inputs` when adding a step.
 `measure` / `list-measures` (BCL), `aggregate-runs` /
 `query-results` / `export-results` (cross-campaign),
 `health` (per-executor substrate check; `--executor <name>` promotes
-that one to CRITICAL — issue #1024).
+that one to CRITICAL — issue #1024),
+`cancel` / `pause` / `resume` (campaign lifecycle).
 
 ---
 
@@ -188,7 +189,6 @@ appear in this document. Listed in run-subcommand groups (or
   `--aws-batch-on-demand-price`, `--aws-batch-queue`, `--aws-batch-spot-price`,
   `--aws-batch-submit-rps`, `--aws-batch-fallback-to-on-demand`,
   `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-location`,
-  `--azure-batch-account-url`, `--azure-batch-location`,
   `--azure-batch-pool-id`, `--azure-fallback-to-on-demand`,
   `--azure-max-retries`, `--azure-use-spot`, `--coordinator-url`,
   `--container-digest`, `--dask-cluster-type`, `--dask-cpus-per-worker`,
@@ -223,13 +223,14 @@ appear in this document. Listed in run-subcommand groups (or
   `--uq-n-samples`.
 
 - **Inputs / outputs:** `--archive_intermediates`,
-  `--bcl-api-key`, `--dry-run`, `--editor`, `--finalize-script`,
+  `--bcl-api-key`, `--dry-run`, `--finalize-script`,
   `--init-script`, `--input_variables`, `--kpis`, `--log_level`,
   `--n_samples`, `--no-tui`, `--offline`, `--offline-bundle`,
   `--openstudio_version`, `--outdir`, `--result-storage-backend`,
   `--result-storage-bucket`, `--result-storage-endpoint`,
   `--sample`, `--skip-preflight`, `--template_sim_package`,
-  `--track-costs`, `--validate-measures`.
+  `--track-costs`, `--validate-measures`,
+  `--weather_dir`.
 
 - **BYOS:** `--byos-resource-limits`, `--byos-timeout-s`,
   `--byos-trust-level`,
@@ -255,7 +256,7 @@ appear in this document. Listed in run-subcommand groups (or
 
 - **Subcommand flags (non-`run`):** `serve` —
   `--api-key`, `--api-redis-url`, `--cors-origins`, `--dashboard`,
-  `--enable-writes`, `--host`, `--port`, `--rate-limit`,
+  `--editor`, `--enable-writes`, `--host`, `--port`, `--rate-limit`,
   `--rate-limit-key`, `--read-only`,
   `--read-write`, `--registry`, `--tls-cert`, `--tls-key`, `--ui`;
   `export` — `--algorithm`, `--format`, `--limit`, `--n_samples`,
@@ -271,7 +272,8 @@ appear in this document. Listed in run-subcommand groups (or
   `aggregate-runs` / `compare` / `query-results` / `export-results` —
   `--campaign-ids`, `--include-failed`,
   `--no-include-failed`, `--labels`, `--outdirs`, `--page`,
-  `--per-page`.
+  `--per-page`;
+  `warm-cache` — `--n_warm`.
 
 ---
 
@@ -532,8 +534,8 @@ submitit-based `SlurmExecutor`), `docker_swarm_executor.py`
 
 ### `osimflow/importers/`, `osimflow/exporters/`
 
-`importers/osa.py` (`parse_osa`, `parse_analysis_json`,
-`osa_to_variables_yml`); `exporters/osa.py` (`OSAExporter`,
+`osimflow/importers/osa.py` (`parse_osa`, `parse_analysis_json`,
+`osa_to_variables_yml`); `osimflow/exporters/osa.py` (`OSAExporter`,
 `pack_osa` — PAT `.osa` archive).
 
 ### Top-level

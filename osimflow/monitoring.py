@@ -214,6 +214,22 @@ class RunTrace:
         """Record a completed generation (issue #270)."""
         self.generations.append(trace)
 
+    def record_alert(self, alert: object) -> None:
+        """Record an alert dispatched by AlertManager (issue #1308).
+
+        ``alert`` is an :class:`osimflow.alerting.Alert` dataclass
+        serialised to a plain dict so the trace stays JSON-friendly.
+        """
+        if self.alerts_fired is None:
+            self.alerts_fired = []
+        d: dict[str, object] = {}
+        for key in ("rule_name", "event_type", "severity", "message"):
+            v = getattr(alert, key, None)
+            if v is not None:
+                d[key] = v
+        d["timestamp"] = getattr(alert, "timestamp", None)
+        self.alerts_fired.append(d)
+
     def record_chaos_invocation(
         self,
         step: str,
