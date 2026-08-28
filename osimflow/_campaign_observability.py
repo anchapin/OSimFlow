@@ -7,10 +7,15 @@ including:
 - Per-sample metric recording
 - Campaign duration and flush
 - Periodic flush to prevent metric loss on early crash (issue #1186)
+- Multi-backend composition with coordinated flush (issue #1332)
 
 The ObservabilityManager is constructed with a CampaignConfig and exposes
 a clean interface for the Campaign to call without directly coupling to
 the ObservabilityBackend implementation.
+
+When multiple backends are configured (issue #1332), the ObservabilityManager
+coordinates flush across all backends, catching per-backend exceptions
+individually and re-raising only after all backends have attempted flush.
 """
 
 from __future__ import annotations
@@ -37,58 +42,97 @@ class ObservabilityManager:
     """Manages observability backend lifecycle and metric recording.
 
     This class encapsulates all observability operations for a Campaign,
-    constructing the appropriate backend from CampaignConfig at initialization
+    constructing the appropriate backend(s) from CampaignConfig at initialization
     and providing a clean interface for recording metrics throughout the
     campaign lifecycle.
+
+    When multiple backends are configured (e.g., "cloudwatch,prometheus"),
+    all record methods fan out to every backend, and flush() coordinates
+    across all of them, catching per-backend exceptions individually and
+    re-raising only after every backend has attempted its flush (issue #1332).
 
     Parameters
     ----------
     cfg
-        Campaign configuration used to determine which backend to instantiate.
+        Campaign configuration used to determine which backend(s) to instantiate.
 
     Attributes
     ----------
     backend : ObservabilityBackend
-        The underlying observability backend ( NullBackend when observability
-        is disabled for zero overhead).
+        The primary observability backend (read-only).  When multiple backends
+        are active this is the first one in the list; use ``backends`` to
+        access all of them.
+    backends : list[ObservabilityBackend]
+        All active backends (never empty — ``"none"`` produces a list
+        containing only the NullBackend).
     """
 
     def __init__(self, cfg: CampaignConfig) -> None:
         self._cfg = cfg
-        self._backend: ObservabilityBackend = self._build_backend(cfg)
+        self._backends: list[ObservabilityBackend] = self._build_backends(cfg)
         self._periodic_flush_thread: threading.Thread | None = None
         self._periodic_flush_stop_event = threading.Event()
 
     @property
     def backend(self) -> ObservabilityBackend:
-        """The underlying observability backend (read-only)."""
-        return self._backend
+        """The primary backend (backwards-compatible alias for single-backend code)."""
+        return self._backends[0]
+
+    @property
+    def backends(self) -> list[ObservabilityBackend]:
+        """All active backends (never empty)."""
+        return self._backends
 
     # ------------------------------------------------------------------
     # Backend construction
     # ------------------------------------------------------------------
     @staticmethod
-    def _build_backend(cfg: CampaignConfig) -> ObservabilityBackend:
-        """Instantiate the correct observability backend from config.
+    def _build_backends(cfg: CampaignConfig) -> list[ObservabilityBackend]:
+        """Instantiate one or more observability backends from config.
 
-        Returns NullBackend when ``cfg.observability == "none"`` (zero
-        overhead — all methods are empty ``pass`` bodies).
+        Returns a list containing only NullBackend when
+        ``cfg.observability == "none"`` (zero overhead — all methods are
+        empty ``pass`` bodies).
+
+        Multiple backends can be specified by passing a comma-separated string
+        (e.g., ``"cloudwatch,prometheus"``) or a list of backend names.
+        Each backend is constructed with the shared CampaignConfig settings.
         """
-        backend_type = cfg.observability
-        if backend_type == "none":
-            return NullBackend()
+        backend_types = ObservabilityManager._parse_observability(cfg.observability)
+        if not backend_types or backend_types == ["none"]:
+            return [NullBackend()]
+        backends: list[ObservabilityBackend] = []
+        for backend_type in backend_types:
+            backend = ObservabilityManager._build_single_backend(cfg, backend_type)
+            if backend is not None:
+                backends.append(backend)
+        if not backends:
+            return [NullBackend()]
+        return backends
+
+    @staticmethod
+    def _parse_observability(value: str | list[str]) -> list[str]:
+        """Parse ``observability`` config value into a list of backend names."""
+        if isinstance(value, list):
+            return value
+        return [v.strip() for v in value.split(",") if v.strip()]
+
+    @staticmethod
+    def _build_single_backend(
+        cfg: CampaignConfig, backend_type: str
+    ) -> ObservabilityBackend | None:
+        """Instantiate a single named backend, or None if the type is unknown."""
         if backend_type == "cloudwatch":
-            return CloudWatchBackend(
-                namespace=cfg.cloudwatch_namespace,
-            )
+            return CloudWatchBackend(namespace=cfg.cloudwatch_namespace)
         if backend_type == "prometheus":
-            return PrometheusBackend(
-                pushgateway_url=f"localhost:{cfg.prometheus_port}",
-            )
+            return PrometheusBackend(pushgateway_url=f"localhost:{cfg.prometheus_port}")
         if backend_type == "opentelemetry":
             endpoint = cfg.otel_endpoint or "http://localhost:4317"
             return OpenTelemetryBackend(endpoint=endpoint)
-        raise ValueError(f"unknown observability backend: {backend_type}")
+        if backend_type in ("none", ""):
+            return None
+        log.warning("unknown observability backend type: %s — ignoring", backend_type)
+        return None
 
     # ------------------------------------------------------------------
     # Per-step metrics
@@ -110,7 +154,8 @@ class ObservabilityManager:
         generation
             Generation number for iterative algorithms.
         """
-        self._backend.record_step_duration(step_name, duration_s, generation=generation)
+        for backend in self._backends:
+            backend.record_step_duration(step_name, duration_s, generation=generation)
 
     # ------------------------------------------------------------------
     # Per-sample metrics
@@ -135,7 +180,8 @@ class ObservabilityManager:
         trace_id
             Optional trace ID for distributed correlation.
         """
-        self._backend.record_sample_metric(sample_id, metric_name, value, trace_id=trace_id)
+        for backend in self._backends:
+            backend.record_sample_metric(sample_id, metric_name, value, trace_id=trace_id)
 
     def record_sample_cost(
         self, sample_id: str, cost_usd: float, trace_id: str | None = None
@@ -146,7 +192,8 @@ class ObservabilityManager:
         "cost_usd" as the metric name.
         """
         if cost_usd is not None:
-            self._backend.record_sample_metric(sample_id, "cost_usd", cost_usd, trace_id=trace_id)
+            for backend in self._backends:
+                backend.record_sample_metric(sample_id, "cost_usd", cost_usd, trace_id=trace_id)
 
     def record_sample_status(
         self,
@@ -169,7 +216,8 @@ class ObservabilityManager:
             Optional trace ID for distributed correlation.
         """
         value = 1.0 if status == "ok" else 0.0
-        self._backend.record_sample_metric(sample_id, "status", value, trace_id=trace_id)
+        for backend in self._backends:
+            backend.record_sample_metric(sample_id, "status", value, trace_id=trace_id)
 
     # ------------------------------------------------------------------
     # Campaign-level metrics
@@ -182,14 +230,36 @@ class ObservabilityManager:
         duration_s
             Total elapsed time in seconds.
         """
-        self._backend.record_campaign_duration(duration_s)
+        for backend in self._backends:
+            backend.record_campaign_duration(duration_s)
 
     def flush(self) -> None:
-        """Flush any buffered metrics to the backend.
+        """Flush all buffered metrics to every backend (issue #1332).
 
-        Call this at campaign end to ensure all metrics are delivered.
+        Calls ``flush()`` on every configured backend, catching any exception
+        raised by a backend so that flush attempts on the remaining backends
+        are not suppressed.  After all backends have attempted to flush, the
+        first exception encountered is re-raised; if no backend raised an
+        exception, the method returns normally.
+
+        This ensures that a failing flush on one backend (e.g., CloudWatch
+        throttling) does not silently suppress flushes on other backends
+        (e.g., Prometheus pushgateway).
         """
-        self._backend.flush()
+        errors: list[Exception] = []
+        for backend in self._backends:
+            try:
+                backend.flush()
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "observability backend %s flush failed: %s",
+                    type(backend).__name__,
+                    exc,
+                    exc_info=True,
+                )
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     def start_periodic_flush(self) -> None:
         """Start a background thread that periodically flushes metrics (issue #1186).
@@ -204,8 +274,8 @@ class ObservabilityManager:
         if self._periodic_flush_thread is not None:
             log.warning("periodic flush thread already running")
             return
-        if isinstance(self._backend, NullBackend):
-            log.debug("periodic flush skipped for NullBackend")
+        if all(isinstance(b, NullBackend) for b in self._backends):
+            log.debug("periodic flush skipped for NullBackend only")
             return
         flush_interval = getattr(self._cfg, "flush_interval_seconds", 30.0)
         self._periodic_flush_stop_event.clear()
@@ -221,7 +291,7 @@ class ObservabilityManager:
     def stop_periodic_flush(self) -> None:
         """Stop the periodic flush background thread.
 
-        Also performs a final flush to ensure all metrics are delivered.
+        Also performs a final coordinated flush to ensure all metrics are delivered.
         """
         if self._periodic_flush_thread is None:
             return
@@ -230,14 +300,14 @@ class ObservabilityManager:
         thread = self._periodic_flush_thread
         self._periodic_flush_thread = None
         thread.join(timeout=5.0)
-        self._backend.flush()
+        self.flush()
         log.info("periodic observability flush stopped")
 
     def _periodic_flush_loop(self, interval_seconds: float) -> None:
-        """Background loop that periodically flushes metrics."""
+        """Background loop that periodically flushes metrics to all backends."""
         while not self._periodic_flush_stop_event.wait(timeout=interval_seconds):
             try:
-                self._backend.flush()
+                self.flush()
                 log.debug("periodic observability flush completed")
             except Exception:  # noqa: BLE001
                 log.exception("periodic observability flush failed")
