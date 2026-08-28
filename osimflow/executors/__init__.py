@@ -243,6 +243,15 @@ class LocalExecutor(BaseExecutor):
 
         log.info("local submit name=%s cpus=%d mem=%dMB", name, cpus, memory_mb)
 
+        if cpus > 1 or memory_mb > 1024:
+            log.warning(
+                "LocalExecutor.submit: cpus=%d and memory_mb=%d are advisory only — "
+                "ThreadPoolExecutor does not enforce per-task resource limits. "
+                "For hard limits use SlurmExecutor or AWSBatchExecutor.",
+                cpus,
+                memory_mb,
+            )
+
         if env:
 
             def _with_env() -> Any:
