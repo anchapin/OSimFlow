@@ -72,6 +72,7 @@ import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from .cache import CacheKey, CacheStats, SQLiteCache
 from .circuit_breaker import CircuitBreaker
@@ -79,6 +80,53 @@ from .circuit_breaker import CircuitBreaker
 if TYPE_CHECKING:
     import redis as redis_sync
     import redis.asyncio as redis_async
+
+
+# ---------------------------------------------------------------------------
+# Security validation (issue #1277)
+# ---------------------------------------------------------------------------
+
+_NONLOCALHOST_BLOCKLIST = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+
+
+def _validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
+    """Validate that a Redis URL meets the minimum security baseline.
+
+    When ``redis_url`` points to a non-localhost host, the connection must
+    either use ``rediss://`` (TLS) or embed credentials
+    (``redis://user:pass@host:port``).  The ``require_auth=True`` flag
+    allows operators who configure authentication externally (e.g. via
+    ``AUTH`` environment variable consumed by the Redis server, not the
+    client) to explicitly opt out of the URL-credential check.
+
+    Raises
+    ------
+    ValueError
+        When a non-localhost URL lacks both TLS and embedded credentials
+        and ``require_auth`` is False.
+    """
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or ""
+
+    # Single-node localhost is always fine (no network exposure).
+    if host in _NONLOCALHOST_BLOCKLIST:
+        return
+
+    has_tls = parsed.scheme == "rediss"
+    has_creds = bool(parsed.username and parsed.password)
+
+    if has_tls or has_creds or require_auth:
+        return
+
+    raise ValueError(
+        f"insecure Redis URL (issue #1277): host {host!r} is not localhost "
+        f"but the URL uses {parsed.scheme!r} without embedded credentials. "
+        f"Non-localhost Redis requires either:\n"
+        f"  (a) TLS: rediss://user:pass@{host}:PORT\n"
+        f"  (b) credentials in URL: redis://user:pass@{host}:PORT\n"
+        f"  (c) --require-redis-auth (set this if Redis auth is handled "
+        f"externally, e.g. via an AUTH file or environment variable)."
+    )
 
 log = logging.getLogger("osimflow.distributed_cache")
 
@@ -647,6 +695,8 @@ def build_cache(
     db_path: Path,
     redis_url: str | None,
     campaign_id: str,
+    *,
+    require_auth: bool = False,
 ) -> SQLiteCache | DistributedCache:
     """Factory: build the appropriate cache from configuration.
 
@@ -671,14 +721,25 @@ def build_cache(
         Stable campaign namespace (see ``campaign_state_namespace``).
         Used for both the shared entry store key and the pub/sub channel
         so concurrent campaigns are isolated.
+    require_auth
+        When True, skips the URL-level credential check.  Set this when
+        Redis authentication is handled externally (e.g. via an ``AUTH``
+        file consumed by the Redis server, not the client).  Issue #1277.
 
     Returns
     -------
     SQLiteCache | DistributedCache
         The concrete cache instance.
+
+    Raises
+    ------
+    ValueError
+        When a non-localhost Redis URL lacks both TLS (``rediss://``)
+        and embedded credentials and ``require_auth`` is False (issue #1277).
     """
     if redis_url is None:
         return SQLiteCache(db_path)
+    _validate_redis_url(redis_url, require_auth)
     return DistributedCache(
         db_path=db_path,
         redis_url=redis_url,
