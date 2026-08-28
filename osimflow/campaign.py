@@ -2820,7 +2820,9 @@ class Campaign:
         self._maybe_inject_chaos("APPLY_PARAMETERS", "after_step")
         self.step_validate_measure_variables()
         self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "before_step")
-        simulated: SampleDict = self.step_run_openstudio_sim(parameterized, generation=generation).samples
+        simulated: SampleDict = self.step_run_openstudio_sim(
+            parameterized, generation=generation
+        ).samples
         self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "after_step")
         self._maybe_inject_chaos("EXTRACT_KPIS", "before_step")
         kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
@@ -4038,9 +4040,7 @@ class Campaign:
                     },
                 )
 
-        any_failed = any(
-            ctx["state"].get("sim_exit_code", 0) != 0 for ctx in pending.values()
-        )
+        any_failed = any(ctx["state"].get("sim_exit_code", 0) != 0 for ctx in pending.values())
         self.trace.step_finished(
             "RUN_OPENSTUDIO_SIM",
             cache="MISS×N" if n else "SKIPPED",
