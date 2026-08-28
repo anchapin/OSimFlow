@@ -1,40 +1,53 @@
-# tests/ — End-to-end integration tests (placeholder)
+# tests/ — OSimFlow test suite
 
-> **Status:** Comprehensive E2E tests are a Phase 3 deliverable (PRD §5.2).
-> This directory will house the cross-profile test suite that verifies
-> `aggregated_results.csv`, `failed_simulations.csv`, per-sample KPI JSONs,
-> and plot outputs across `local`, `docker`, `aws_batch`, and `slurm` profiles.
+OSimFlow uses **pytest** throughout. All tests live under `tests/` and are
+organised into four categories.
 
-## Planned layout
+## Directory layout
 
 ```
 tests/
-├── README.md                       (this file)
-├── fixtures/
-│   └── tiny_template/              # minimal .osm + .osw + measures
-├── integration/
-│   ├── test_local.nf
-│   ├── test_docker.nf
-│   ├── test_aws_batch.nf
-│   └── test_slurm.nf
-├── unit/
-│   ├── test_generate_lhs.py
-│   ├── test_apply_params_to_model.py
-│   ├── test_extract_kpis.py
-│   ├── test_aggregate_results.py
-│   └── test_generate_plots.py
-└── benchmark/
-    └── perf_smoke.nf               # PRD §5.2 "Performance Benchmarking" workflow
+├── README.md                  (this file)
+├── __init__.py
+├── test_preflight.py          # pre-flight validation smoke test
+├── unit/                     # unit tests — isolated components
+│   ├── fixtures/             # minimal .osm + .osw + variables for unit tests
+│   ├── conftest.py
+│   └── test_*.py             # one file per module/class being tested
+├── integration/              # integration & E2E tests — full campaign runs
+│   ├── conftest.py
+│   └── test_*.py             # executor, coordinator, API, algorithm tests
+├── benchmarks/               # performance smoke tests
+│   ├── bench_campaign.py
+│   └── test_bench_regression.py
+└── contract/                 # contract tests — AGENTS.md, CLI, API surface
+    ├── test_api_contract.py
+    ├── test_developer_practices.py
+    └── test_quickstart.py
 ```
+
+The `example_package/` directory at the project root (sibling to `tests/`)
+holds the canonical tiny template (`.osm`, `.osw`, `variables.yml`) used by
+integration and benchmark tests.
 
 ## Conventions
 
-- All E2E tests use `n_samples = 3` against `fixtures/tiny_template/`.
-- Assertions are made in Python (pytest) on the resulting `--outdir` contents.
-- A passing test must produce **all four** of:
-  - `aggregated_results.csv` with the right number of rows.
+- All campaign-level tests use **3 samples** against `example_package/`.
+- A passing campaign-integration test must produce all four of:
+  - `aggregated_results.csv` with the correct number of rows.
   - `failed_simulations.csv` (may be empty for a clean fixture).
   - One KPI JSON per sample.
   - At least one PNG plot.
-- Per-profile tests are skipped automatically if the executor isn't available
-  in the CI runner (e.g., no Slurm on GitHub-hosted runners).
+- Per-executor integration tests are **skipped automatically** when the
+  executor is not available in the CI runner (e.g. no Slurm on GitHub-hosted
+  runners). See `docs/substrate-coverage.md` for the full skip-gate matrix.
+- Run the full suite with `make test`; fast contract-only with `make test-fast`.
+
+## Adding new tests
+
+| What to test | Where to add it |
+|---|---|
+| Single function / class | `tests/unit/test_<name>.py` |
+| Executor or multi-step workflow | `tests/integration/test_<name>.py` |
+| CLI flag or public API contract | `tests/contract/test_<name>.py` |
+| Performance regression | `tests/benchmarks/test_<name>.py` |
