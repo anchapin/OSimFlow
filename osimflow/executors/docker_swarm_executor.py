@@ -30,6 +30,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, cast
 
+from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.executors.base import BaseExecutor, Handle
 
 log = logging.getLogger("osimflow.executors.docker_swarm")
@@ -425,6 +426,8 @@ class DockerSwarmExecutor(BaseExecutor):
         env.append(f"OSIMFLOW_CONTAINER={image}")
         if task_payload is not None:
             env.append(f"OSIMFLOW_TASK_PAYLOAD={task_payload}")
+            # Issue #1281: verify BYOS contract version compatibility.
+            env.append(f"OSIMFLOW_CONTRACT_VERSION={BYOS_CONTRACT_VERSION}")
         if result_transport_mode is not None:
             env.append(f"OSIMFLOW_RESULT_TRANSPORT_MODE={result_transport_mode}")
         if result_storage_backend is not None:

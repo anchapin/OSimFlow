@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+BYOS_CONTRACT_VERSION = "1.0.0"
+
 
 class ByosContractEntry(NamedTuple):
     """A single BYOS contract entry.
@@ -76,4 +78,4 @@ _BYOS_CONTRACT: dict[str, ByosContractEntry] = {
 }
 
 
-__all__ = ["ByosContractEntry", "_BYOS_CONTRACT"]
+__all__ = ["ByosContractEntry", "_BYOS_CONTRACT", "BYOS_CONTRACT_VERSION"]

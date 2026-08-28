@@ -45,6 +45,7 @@ from osimflow.executors.transport import (
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
+from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SIG_ENV,
@@ -2300,6 +2301,8 @@ class NomadExecutor(BaseExecutor):
             env["OSIMFLOW_CONTAINER"] = container
         if task_payload is not None:
             env["OSIMFLOW_TASK_PAYLOAD"] = task_payload
+            # Issue #1281: verify BYOS contract version compatibility.
+            env["OSIMFLOW_CONTRACT_VERSION"] = BYOS_CONTRACT_VERSION
             # Issue #1177: when a shared secret is configured, sign the
             # exact payload bytes and propagate secret + signature so the
             # remote_runner verifies before decoding/executing. No-op in
