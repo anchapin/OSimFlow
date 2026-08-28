@@ -418,7 +418,7 @@ def build_task_queue(
     scheduler_address: str | None = None,
     *,
     max_retries: int = 3,
-) -> ProducerQueue | ConsumerQueue:
+) -> ConsumerQueue:
     """Factory to build a TaskQueue from a backend name.
 
     Parameters
@@ -433,7 +433,7 @@ def build_task_queue(
 
     Returns
     -------
-    ProducerQueue | ConsumerQueue
+    ConsumerQueue
         A queue instance implementing both ``ProducerQueue`` and
         ``ConsumerQueue`` interfaces (they are the same concrete class
         for all built-in backends).

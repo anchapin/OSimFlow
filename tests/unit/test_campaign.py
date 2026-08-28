@@ -1457,8 +1457,8 @@ class TestVerifyStepInputs:
         variables_yml, template_pkg, outdir = tmp_dirs
         cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
         campaign = Campaign(cfg=cfg, executor=MockExecutor())
-        with pytest.raises(FileNotFoundError, match=r"requires input 'template_sim_package'"):
-            campaign._verify_step_inputs("PREFLIGHT_RUN_MODEL")
+        with pytest.raises(FileNotFoundError, match=r"requires input 'samples.json'"):
+            campaign._verify_step_inputs("APPLY_PARAMETERS")
 
     def test_present_required_file_passes(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """No exception when all required files are present."""
@@ -1466,8 +1466,8 @@ class TestVerifyStepInputs:
         cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
         campaign = Campaign(cfg=cfg, executor=MockExecutor())
         campaign.cfg.work_dir.mkdir(parents=True, exist_ok=True)
-        (campaign.cfg.work_dir / "template_sim_package").touch()
-        campaign._verify_step_inputs("PREFLIGHT_RUN_MODEL")
+        (campaign.cfg.work_dir / "samples.json").touch()
+        campaign._verify_step_inputs("APPLY_PARAMETERS")
 
     def test_missing_glob_pattern_raises(self, tmp_dirs: tuple[Path, Path, Path]) -> None:
         """FileNotFoundError is raised when a required glob pattern has no matches."""

@@ -182,6 +182,7 @@ class KillSwitchSimulator(FaultInjector):
                 stacklevel=2,
             )
         self._fail_after = fail_after
+        self._signal_num: int | None = None
         self._call_count: dict[str, int] = {}
         self._active: set[str] = set()
 

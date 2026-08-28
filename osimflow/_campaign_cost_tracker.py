@@ -134,7 +134,12 @@ class CampaignCostTracker:
     # ------------------------------------------------------------------
     # Cost accumulation helpers
     # ------------------------------------------------------------------
-    def sum_sample_costs(self, sample_state: dict[str, dict[str, object]]) -> tuple[float, float]:
+    @classmethod
+    def sum_sample_costs(
+        cls,
+        sample_state: dict[str, dict[str, object]],
+        executor_name: str = "aws_batch",
+    ) -> tuple[float, float]:
         """Sum per-sample costs from sample state accumulator.
 
         Parameters
@@ -142,6 +147,8 @@ class CampaignCostTracker:
         sample_state
             The Campaign's ``_sample_state`` dict mapping sample_id to
             per-sample state dicts containing ``cost_usd`` entries.
+        executor_name
+            Executor name for pricing model (default: "aws_batch").
 
         Returns
         -------
@@ -154,9 +161,10 @@ class CampaignCostTracker:
             cost_usd = state.get("cost_usd")
             if cost_usd is not None:
                 total_cost += float(str(cost_usd))
-        return total_cost, self.compute_spot_savings(total_cost)
+        return total_cost, cls._compute_spot_savings(executor_name, total_cost)
 
-    def compute_spot_savings(self, total_cost: float) -> float:
+    @staticmethod
+    def _compute_spot_savings(executor_name: str, total_cost: float) -> float:
         """Compute estimated spot savings from on-demand total cost.
 
         Uses an executor-specific pricing model:
@@ -183,13 +191,21 @@ class CampaignCostTracker:
         """
         if total_cost <= 0:
             return 0.0
-        if self._executor_name in _EXECUTORS_WITH_FLAT_RATE:
+        if executor_name in _EXECUTORS_WITH_FLAT_RATE:
             return 0.0
         savings_ratio = (
             AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
             - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
         ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
         return round(total_cost * savings_ratio, 6)
+
+    @staticmethod
+    def compute_spot_savings(total_cost: float) -> float:
+        """Compute estimated spot savings from on-demand total cost.
+
+        Convenience alias for ``_compute_spot_savings("aws_batch", total_cost)``.
+        """
+        return CampaignCostTracker._compute_spot_savings("aws_batch", total_cost)
 
     # ------------------------------------------------------------------
     # Campaign-level summary
