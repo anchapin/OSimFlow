@@ -49,6 +49,7 @@ __all__ = [
 
 import logging
 import random
+import signal
 import threading
 import time
 import warnings
@@ -182,7 +183,7 @@ class KillSwitchSimulator(FaultInjector):
                 stacklevel=2,
             )
         self._fail_after = fail_after
-        self._signal_num = signal_num
+        self._signal_num = signal_num if not force else signal.SIGKILL
         self._call_count: dict[str, int] = {}
         self._active: set[str] = set()
 

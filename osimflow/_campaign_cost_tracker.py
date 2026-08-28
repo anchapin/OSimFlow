@@ -199,6 +199,14 @@ class CampaignCostTracker:
         ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
         return round(total_cost * savings_ratio, 6)
 
+    @staticmethod
+    def compute_spot_savings(total_cost: float) -> float:
+        """Compute estimated spot savings from on-demand total cost.
+
+        Convenience alias for ``_compute_spot_savings("aws_batch", total_cost)``.
+        """
+        return CampaignCostTracker._compute_spot_savings("aws_batch", total_cost)
+
     # ------------------------------------------------------------------
     # Campaign-level summary
     # ------------------------------------------------------------------
