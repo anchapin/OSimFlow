@@ -26,6 +26,7 @@ __all__ = [
     "build_result_storage",
 ]
 
+import asyncio
 import concurrent.futures
 import logging
 import queue
@@ -48,9 +49,11 @@ log = logging.getLogger("osimflow.storage")
 class ResultStorage(ABC):
     """Abstract base class for result storage backends.
 
-    All concrete backends must implement the three sync methods.
-    The Campaign calls these after successful simulation and KPI extraction
-    to persist results to remote storage.
+    All concrete backends must implement the three sync methods and their
+    async equivalents.  The Campaign calls the sync methods after successful
+    simulation and KPI extraction to persist results to remote storage.
+    DaskTaskQueue and future async executors use the async methods directly,
+    avoiding blocking I/O in the worker event loop (issue #1282).
     """
 
     name: str
@@ -73,6 +76,15 @@ class ResultStorage(ABC):
         """
 
     @abstractmethod
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        """Async variant of :meth:`upload_file`.
+
+        Used by async executors (e.g. DaskTaskQueue) to avoid blocking the
+        event loop.  Concrete backends implement this using an async I/O
+        library or by running the sync method in a thread pool.
+        """
+
+    @abstractmethod
     def download_file(self, remote_path: str, local_path: Path) -> None:
         """Download a remote file to local storage.
 
@@ -92,6 +104,15 @@ class ResultStorage(ABC):
         """
 
     @abstractmethod
+    async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+        """Async variant of :meth:`download_file`.
+
+        Used by async executors (e.g. DaskTaskQueue) to avoid blocking the
+        event loop.  Concrete backends implement this using an async I/O
+        library or by running the sync method in a thread pool.
+        """
+
+    @abstractmethod
     def list_results(self, prefix: str = "") -> list[str]:
         """List all result paths under a prefix.
 
@@ -106,6 +127,15 @@ class ResultStorage(ABC):
         list[str]
             List of remote paths (relative to the bucket/container root)
             matching *prefix*, sorted lexicographically.
+        """
+
+    @abstractmethod
+    async def list_results_async(self, prefix: str = "") -> list[str]:
+        """Async variant of :meth:`list_results`.
+
+        Used by async executors (e.g. DaskTaskQueue) to avoid blocking the
+        event loop.  Concrete backends implement this using an async I/O
+        library or by running the sync method in a thread pool.
         """
 
     def upload_dir(self, local_dir: Path, remote_prefix: str) -> None:
@@ -159,6 +189,16 @@ class LocalStorage(ResultStorage):
 
     def list_results(self, prefix: str = "") -> list[str]:
         log.debug("LocalStorage: list_results(prefix=%r) — no-op", prefix)
+        return []
+
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        del local_path, remote_path
+
+    async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+        del remote_path, local_path
+
+    async def list_results_async(self, prefix: str = "") -> list[str]:
+        del prefix
         return []
 
 
@@ -265,6 +305,18 @@ class S3Storage(ResultStorage):
             log.error("S3Storage: list_results failed: %s", exc)
             raise OSError("S3Storage: list_results failed") from exc
 
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.upload_file, local_path, remote_path)
+
+    async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.download_file, remote_path, local_path)
+
+    async def list_results_async(self, prefix: str = "") -> list[str]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.list_results, prefix)
+
 
 class GCSStorage(ResultStorage):
     """Google Cloud Storage (GCS) backend.
@@ -368,6 +420,18 @@ class GCSStorage(ResultStorage):
         except Exception as exc:
             log.error("GCSStorage: list_results failed: %s", exc)
             raise OSError("GCSStorage: list_results failed") from exc
+
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.upload_file, local_path, remote_path)
+
+    async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.download_file, remote_path, local_path)
+
+    async def list_results_async(self, prefix: str = "") -> list[str]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.list_results, prefix)
 
 
 class AzureBlobStorage(ResultStorage):
@@ -597,6 +661,16 @@ class AzureBlobStorage(ResultStorage):
         except Exception as exc:
             log.error("AzureBlobStorage: list_results failed: %s", exc)
             raise OSError("AzureBlobStorage: list_results failed") from exc
+
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        await self._upload_file_async(local_path, remote_path)
+
+    async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+        await self._download_file_async(remote_path, local_path)
+
+    async def list_results_async(self, prefix: str = "") -> list[str]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.list_results, prefix)
 
 
 class S3ArtifactStorage:
@@ -986,6 +1060,15 @@ class ResultStorageUploader:
                 raise OSError("result storage uploader is closed")
         self._queue.put((local_path, remote_path))
         self._raise_if_failed()
+
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        """Direct async upload using the backend's native async method.
+
+        Unlike :meth:`upload_file`, this does not use the worker queue.
+        Use this from async executors (e.g. DaskTaskQueue workers) to avoid
+        blocking the event loop.
+        """
+        await self._storage.upload_file_async(local_path, remote_path)
 
     def upload_dir(self, local_dir: Path, remote_prefix: str) -> None:
         """Enqueue a directory tree for upload."""
