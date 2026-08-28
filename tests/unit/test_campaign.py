@@ -1486,3 +1486,151 @@ class TestVerifyStepInputs:
         apply_dir.mkdir(parents=True)
         (apply_dir / "sample_0").mkdir()
         campaign._verify_step_inputs("RUN_OPENSTUDIO_SIM")
+
+
+# ---------------------------------------------------------------------------
+# Fan-out recovery path (issue #1234)
+# ---------------------------------------------------------------------------
+
+
+class TestFanOutRecoveryPath:
+    """Tests for the recovery_sid path in _submit_and_await_all (lines 1284-1302).
+
+    When a sample's handle fails and recovery_manager.check_and_recover returns
+    True, the code captures recovery_sid = sid, calls resubmit_callback to get a
+    new handle, and if the resubmit succeeds it marks the recovery_sid as
+    completed and returns recovery_sid.  These tests assert that path is taken
+    and that run.json records the outcome correctly.
+    """
+
+    def _make_failing_handle(self) -> Handle:
+        """Handle whose result() raises RuntimeError on every call."""
+        fut: Future[Any] = Future()
+        fut.set_exception(RuntimeError("simulator crashed"))
+        return Handle(job_id="failing-job", _future=fut, worker_id="local")
+
+    def _make_successful_handle(self, result_value: Any = None) -> Handle:
+        fut: Future[Any] = Future()
+        fut.set_result(result_value)
+        return Handle(job_id="ok-job", _future=fut, worker_id="local")
+
+    def test_recovery_sid_path_taken_when_resubmit_succeeds(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """recovery_sid path is taken when handle fails and resubmit succeeds."""
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, n_samples=3)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+
+        sample_ids = ["sample_0", "sample_1", "sample_2"]
+
+        submissions: dict[str, tuple[Handle, Any]] = {}
+        for sid in sample_ids:
+            submissions[sid] = (self._make_failing_handle(), MagicMock())
+
+        recovery_manager = MagicMock()
+        recovery_manager.check_and_recover.return_value = (True, 1)
+        recovery_manager.reset = MagicMock()
+
+        resubmit_count = 0
+
+        def resubmit_callback(sid: str) -> Handle | None:
+            nonlocal resubmit_count
+            resubmit_count += 1
+            return self._make_successful_handle({"eplusout_sql": f"/tmp/{sid}.sql"})
+
+        from osimflow.monitoring import WorkerRecoveryManager
+
+        real_recovery_manager = WorkerRecoveryManager(outdir)
+
+        with patch.object(campaign, "_job_queue") as mock_jq:
+            campaign._submit_and_await_all(
+                submissions=submissions,
+                step_name="RUN_OPENSTUDIO_SIM",
+                recovery_manager=real_recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+
+            completed_keys = [call[0][0] for call in mock_jq.mark_completed.call_args_list]
+            assert "sample_0_RUN_OPENSTUDIO_SIM" in completed_keys
+            assert "sample_1_RUN_OPENSTUDIO_SIM" in completed_keys
+            assert "sample_2_RUN_OPENSTUDIO_SIM" in completed_keys
+
+    def test_error_path_marks_failed_and_records_in_sample_state(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """When handle fails and recovery is not possible, mark_failed is called."""
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, n_samples=2)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+
+        submissions: dict[str, tuple[Handle, Any]] = {
+            "sample_0": (self._make_failing_handle(), MagicMock()),
+            "sample_1": (
+                self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}),
+                MagicMock(),
+            ),
+        }
+
+        from osimflow.monitoring import WorkerRecoveryManager
+
+        real_recovery_manager = WorkerRecoveryManager(outdir)
+
+        with patch.object(campaign, "_job_queue") as mock_jq:
+            campaign._submit_and_await_all(
+                submissions=submissions,
+                step_name="RUN_OPENSTUDIO_SIM",
+                recovery_manager=real_recovery_manager,
+                resubmit_callback=MagicMock(return_value=None),
+            )
+
+            failed_keys = [call[0][0] for call in mock_jq.mark_failed.call_args_list]
+            assert "sample_0_RUN_OPENSTUDIO_SIM" in failed_keys
+
+            completed_keys = [call[0][0] for call in mock_jq.mark_completed.call_args_list]
+            assert "sample_1_RUN_OPENSTUDIO_SIM" in completed_keys
+
+    def test_resubmit_failure_falls_through_to_mark_failed(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """When recovery_sid resubmit also fails, mark_failed is called for recovery_sid."""
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, n_samples=2)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+
+        submissions: dict[str, tuple[Handle, Any]] = {
+            "sample_0": (self._make_failing_handle(), MagicMock()),
+            "sample_1": (
+                self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}),
+                MagicMock(),
+            ),
+        }
+
+        from osimflow.monitoring import WorkerRecoveryManager
+
+        real_recovery_manager = WorkerRecoveryManager(outdir)
+
+        resubmit_count = 0
+
+        def resubmit_callback(sid: str) -> Handle | None:
+            nonlocal resubmit_count
+            resubmit_count += 1
+            return self._make_failing_handle()
+
+        with patch.object(campaign, "_job_queue") as mock_jq:
+            campaign._submit_and_await_all(
+                submissions=submissions,
+                step_name="RUN_OPENSTUDIO_SIM",
+                recovery_manager=real_recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+
+            failed_keys = [call[0][0] for call in mock_jq.mark_failed.call_args_list]
+            assert "sample_0_RUN_OPENSTUDIO_SIM" in failed_keys
+            assert resubmit_count == 1
