@@ -6,7 +6,7 @@ remote containers without requiring extra orchestration dependencies.
 
 from __future__ import annotations
 
-__all__ = ["main", "BYOS_CONTRACT_VERSION"]
+__all__ = ["main", "BYOS_CONTRACT_VERSION", "StepFunctionRegistry"]
 
 import json
 import logging
@@ -29,19 +29,103 @@ from .task_payload_hmac import (
     resolve_payload_secret,
     verify_task_payload,
 )
-from .work import (
-    aggregate_results,
-    default_apply_parameters,
-    extract_kpis,
-    generate_plots,
-    run_openstudio_sim,
-)
+
+STEP_ENTRY_POINT_GROUP = "osimflow.remote_steps"
 
 log = logging.getLogger("osimflow.remote_runner")
 
 
-def _decode_payload_value(value: Any) -> Any:  # noqa: ANN401
-    return decode_transport_value(value)
+class StepFunctionRegistry:
+    """Registry for remote-executable step functions (issue #1274).
+
+    Mirrors the ``AlgorithmRegistry`` pattern: built-in step functions are
+    registered explicitly, and third-party step functions can be auto-discovered
+    via ``entry_points`` by calling :meth:`discover_plugins`.
+
+    This enables new DAG steps to be added via PyPI packages without forking
+    ``remote_runner.py``.
+
+    Typical usage::
+
+        fn = StepFunctionRegistry.get("apply")
+        result = fn(*args, **kwargs)
+
+    For third-party step packages, add this to ``pyproject.toml``::
+
+        [project.entry-points."osimflow.remote_steps"]
+        my_step = "my_package.steps:my_step_function"
+    """
+
+    _registry: dict[str, Any] = {}
+
+    @classmethod
+    def register(cls, name: str, fn: Any) -> None:
+        """Register *fn* as the step function for *name*."""
+        cls._registry[name] = fn
+
+    @classmethod
+    def get(cls, name: str) -> Any:  # noqa: ANN401
+        """Return the step function registered under *name*.
+
+        Raises
+        ------
+        RuntimeError
+            If *name* is not registered.
+        """
+        if name not in cls._registry:
+            available = ", ".join(sorted(cls._registry)) or "(none)"
+            raise RuntimeError(
+                f"unknown remote step {name!r}. Available steps: {available} (issue #1274)"
+            )
+        return cls._registry[name]
+
+    @classmethod
+    def discover_plugins(cls) -> int:
+        """Discover and auto-register step functions from installed entry points.
+
+        Scans the ``osimflow.remote_steps`` entry point group and loads each
+        entry point.  Loaded objects are registered under the entry-point name.
+
+        Safe: missing metadata or import errors are logged at WARNING and skipped.
+
+        Returns
+        -------
+        int
+            Number of plug-ins successfully registered.
+        """
+        try:
+            from importlib.metadata import entry_points
+        except Exception:  # noqa: BLE001
+            return 0
+        try:
+            eps = list(entry_points(group=STEP_ENTRY_POINT_GROUP))
+        except Exception:  # noqa: BLE001
+            return 0
+        if not eps:
+            return 0
+        count = 0
+        for ep in eps:
+            try:
+                obj = ep.load()
+                cls.register(ep.name, obj)
+                count += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("failed to load remote step plugin %r: %s", ep.name, exc)
+        return count
+
+
+def _register_builtin_steps() -> None:
+    """Register the built-in step functions from osimflow.work."""
+    from .work import aggregate_results, default_apply_parameters, extract_kpis, generate_plots, run_openstudio_sim
+
+    StepFunctionRegistry.register("apply", default_apply_parameters)
+    StepFunctionRegistry.register("sim", run_openstudio_sim)
+    StepFunctionRegistry.register("extract", extract_kpis)
+    StepFunctionRegistry.register("aggregate", aggregate_results)
+    StepFunctionRegistry.register("plots", generate_plots)
+
+
+_decode_payload_value = decode_transport_value
 
 
 def _verify_payload_signature(raw: str) -> None:
@@ -128,17 +212,7 @@ def _load_payload() -> dict[str, Any]:
 
 
 def _resolve_step_fn(step: str) -> Any:  # noqa: ANN401
-    if step == "apply":
-        return default_apply_parameters
-    if step == "sim":
-        return run_openstudio_sim
-    if step == "extract":
-        return extract_kpis
-    if step == "aggregate":
-        return aggregate_results
-    if step == "plots":
-        return generate_plots
-    raise RuntimeError(f"unsupported remote runner step: {step}")
+    return StepFunctionRegistry.get(step)
 
 
 def _run_payload(payload: dict[str, Any]) -> Any:  # noqa: ANN401
@@ -235,6 +309,8 @@ def _upload_artifacts_for_object_storage(result: Any) -> None:  # noqa: ANN401
 
 
 def main() -> int:
+    _register_builtin_steps()
+    StepFunctionRegistry.discover_plugins()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
