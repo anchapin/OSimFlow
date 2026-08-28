@@ -278,6 +278,20 @@ class TestExtractFailure:
         assert result["root_cause_line"] != ""
         assert result["diagnosis_suggestion"] != ""
 
+    def test_first_severe_only_with_multiple_severe_lines(self, tmp_path):
+        sim_dir = tmp_path / "0077"
+        sim_dir.mkdir()
+        first = "** Severe  ** Exceeded max iterations for plant loop HW"
+        second = "** Severe  ** Controller unstable"
+        third = "** Severe  ** Plant loop temperature mismatch"
+        (sim_dir / "eplusout.err").write_text(f"   {first}\n   {second}\n   {third}\n")
+        result = extract_failure(sim_dir)
+        assert result is not None
+        assert result["total_severe_errors"] == 3
+        assert result["error_summary"] == first
+        assert second not in result["error_summary"]
+        assert third not in result["error_summary"]
+
     def test_missing_sql_without_err_file(self, tmp_path):
         sim_dir = tmp_path / "0087"
         sim_dir.mkdir()
