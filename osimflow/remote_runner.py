@@ -29,6 +29,13 @@ from .task_payload_hmac import (
     resolve_payload_secret,
     verify_task_payload,
 )
+from .work import (
+    aggregate_results,
+    default_apply_parameters,
+    extract_kpis,
+    generate_plots,
+    run_openstudio_sim,
+)
 
 STEP_ENTRY_POINT_GROUP = "osimflow.remote_steps"
 
@@ -94,7 +101,7 @@ class StepFunctionRegistry:
             Number of plug-ins successfully registered.
         """
         try:
-            from importlib.metadata import entry_points
+            from importlib.metadata import entry_points  # noqa: PLC0415
         except Exception:  # noqa: BLE001
             return 0
         try:
@@ -116,8 +123,6 @@ class StepFunctionRegistry:
 
 def _register_builtin_steps() -> None:
     """Register the built-in step functions from osimflow.work."""
-    from .work import aggregate_results, default_apply_parameters, extract_kpis, generate_plots, run_openstudio_sim
-
     StepFunctionRegistry.register("apply", default_apply_parameters)
     StepFunctionRegistry.register("sim", run_openstudio_sim)
     StepFunctionRegistry.register("extract", extract_kpis)

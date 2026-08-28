@@ -249,6 +249,7 @@ appear in this document. Listed in run-subcommand groups (or
   `--alert-rules`, `--api-keys-file`, `--cloudwatch-log-group`,
   `--cloudwatch-namespace`, `--cost-on-demand-price`,
   `--cost-spot-price`, `--log-aggregation-url`, `--observability`,
+  `--observability-flush-interval`,
   `--otel-endpoint`, `--prometheus-port`, `--rate-limit-key`,
   `--resource-quota`, `--webhook-url`.
 
