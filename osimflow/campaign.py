@@ -282,13 +282,13 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "RUN_OPENSTUDIO_SIM": DAGStep(
         inputs=StepInputs(required_patterns=("apply/*/",)),
-        outputs=StepOutputs(produced=("work/sim/*/",)),
+        outputs=StepOutputs(produced=("sim/*/",)),
         method="step_run_openstudio_sim",
         fan_out=True,
     ),
     "EXTRACT_KPIS": DAGStep(
-        inputs=StepInputs(required_patterns=("work/sim/*/",)),
-        outputs=StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
+        inputs=StepInputs(required_patterns=("sim/*/",)),
+        outputs=StepOutputs(kpi_pattern="sim/*/kpi_*.json"),
         method="step_extract_kpis",
         fan_out=True,
     ),
@@ -310,7 +310,7 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
     ),
     "GENERATE_BASIC_PLOTS": DAGStep(
-        inputs=StepInputs(required=("aggregated_results.csv",)),
+        inputs=StepInputs(required=("../aggregated_results.csv",)),
         outputs=StepOutputs(produced=("plots/",)),
         method="step_generate_plots",
     ),
@@ -2529,6 +2529,19 @@ class Campaign:
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
 
+            # Transfer alert delivery-failure history to run.json (issue #1339).
+            if self._alert_manager is not None:
+                history = self._alert_manager.get_alert_history()
+                if history:
+                    if self.trace.alerts_fired is None:
+                        self.trace.alerts_fired = []
+                    self.trace.alerts_fired.extend(history)
+
+            # Re-write run.json with updated alerts_fired (issue #1339).
+            self.trace.finalize()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+
             # Close the SQLite cache. ``close()`` runs a PASSIVE WAL
             # checkpoint and the connection; it never raises and never
             # removes the auxiliary ``.sqlite-wal`` / ``.sqlite-shm``
@@ -2917,6 +2930,7 @@ class Campaign:
         parameterized: SampleDict | None = None
         simulated: SampleDict = {}
         kpi_files: list[Path] = []
+        aggregated: dict[str, Path] = {}
 
         for step_name, step_info in _STEP_DEPENDENCIES.items():
             if step_info.condition is not None and not step_info.condition(
@@ -2952,9 +2966,9 @@ class Campaign:
                 assert simulated is not None
                 kpi_files = step_method(simulated, generation=generation)
             elif step_name == "AGGREGATE_RESULTS":
-                step_method(kpi_files, generation=generation)
+                aggregated = step_method(kpi_files, simulated)
             elif step_name == "GENERATE_BASIC_PLOTS":
-                step_method(generation=generation)
+                step_method(aggregated)
 
             self._maybe_inject_chaos(step_name, "after_step")
             log.debug("step %s completed", step_name)
