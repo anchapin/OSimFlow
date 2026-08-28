@@ -413,7 +413,7 @@ name in this section.
 - `osimflow/chaos.py` — `ChaosEngine` + `ChaosResult` +
   `FaultType` + `ChaosScenario` + `FaultInjector` ABC + `CPUSpikeInjector`,
   `MemoryPressureInjector`, `NetworkDelayInjector`,
-  `KillSwitchInjector`, `run_chaos_scenario`.
+  `KillSwitchSimulator`, `run_chaos_scenario`.
 - `osimflow/cost_tracking.py` — `CostEstimate`, `CostTracker`,
   `CampaignCostSummary`.
 - `osimflow/data_point_manager.py` — `DataPoint`,
