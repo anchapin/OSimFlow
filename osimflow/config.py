@@ -27,6 +27,7 @@ import dataclasses
 import json
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Any, cast
 
@@ -809,7 +810,10 @@ class ChaosConfig:
         Comma-separated list of scenario names to enable. Built-in
         scenarios:
 
-        - ``kill_switch``  — ``KillSwitchInjector(fail_after=fail_after)``
+        - ``kill_switch_simulator`` — ``KillSwitchSimulator(fail_after=fail_after)``
+          (logs a warning; does not actually terminate a process — issue #1179)
+        - ``kill_switch``  — alias for ``kill_switch_simulator`` (deprecated;
+          emits a ``DeprecationWarning``)
         - ``network_delay`` — ``NetworkDelayInjector(delay_s=delay_s,
           jitter_s=jitter_s, probability=probability)``
         - ``cpu_spike``     — ``CPUSpikeInjector(duration_s=duration_s,
@@ -842,7 +846,7 @@ class ChaosConfig:
     size_mb
         Size in MB for ``MemoryPressureInjector``.
     fail_after
-        Number of inject calls before ``KillSwitchInjector`` fires.
+        Number of inject calls before ``KillSwitchSimulator`` fires.
     """
 
     enabled: bool = False
@@ -1499,6 +1503,7 @@ def _validate_script_path(raw: object) -> None:
 _VALID_CHAOS_SCENARIOS = frozenset(
     [
         "kill_switch",
+        "kill_switch_simulator",
         "network_delay",
         "cpu_spike",
         "memory_pressure",
@@ -1537,6 +1542,15 @@ def _parse_chaos_scenarios(raw: object) -> list[str]:
         raise ValidationError(
             f"chaos: unknown scenario name(s): {', '.join(unknown)!r}. "
             f"Valid names are: {', '.join(sorted(_VALID_CHAOS_SCENARIOS))}."
+        )
+    if "kill_switch" in names:
+        warnings.warn(
+            "The 'kill_switch' chaos scenario name is deprecated; "
+            "use 'kill_switch_simulator' instead (issue #1179). "
+            "The underlying class KillSwitchInjector has been renamed "
+            "KillSwitchSimulator.",
+            DeprecationWarning,
+            stacklevel=2,
         )
     return names
 

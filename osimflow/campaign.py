@@ -73,7 +73,7 @@ from .cache import CacheKey, _container_digest_for, sha256_of_dict, sha256_of_fi
 from .chaos import (
     ChaosEngine,
     CPUSpikeInjector,
-    KillSwitchInjector,
+    KillSwitchSimulator,
     MemoryPressureInjector,
     NetworkDelayInjector,
 )
@@ -432,8 +432,8 @@ def _build_default_chaos_engine(cfg: Any) -> ChaosEngine:
     engine = ChaosEngine(enabled=True)
     scenarios = list(cfg.scenarios)
     for name in scenarios:
-        if name == "kill_switch":
-            engine.register(KillSwitchInjector(fail_after=cfg.fail_after))
+        if name in ("kill_switch", "kill_switch_simulator"):
+            engine.register(KillSwitchSimulator(fail_after=cfg.fail_after))
         elif name == "network_delay":
             engine.register(
                 NetworkDelayInjector(

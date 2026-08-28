@@ -21,6 +21,7 @@ from .chaos import (
     FaultInjector,
     FaultType,
     KillSwitchInjector,
+    KillSwitchSimulator,
     MemoryPressureInjector,
     NetworkDelayInjector,
     run_chaos_scenario,
