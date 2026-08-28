@@ -7,7 +7,7 @@ from them before the full __init__.py is initialized.
 
 from __future__ import annotations
 
-__all__ = ["BaseExecutor", "Handle"]
+__all__ = ["BaseExecutor", "Handle", "SubmitRequest"]
 
 import abc
 import dataclasses
@@ -64,6 +64,57 @@ class Handle:
         return self.error is not None
 
 
+@dataclasses.dataclass
+class SubmitRequest:
+    """Structured submit request replacing implicit kwargs (issue #725, #1273).
+
+    Construct and pass a ``SubmitRequest`` to ``BaseExecutor.submit()`` instead
+    of passing keyword arguments.  This enforces field completeness at the
+    type-checker level: missing required fields become mypy errors rather
+    than silent runtime failures when executors receive unexpected ``**kwargs``.
+
+    Example::
+
+        request = SubmitRequest(
+            fn=run_openstudio_sim,
+            args=(mod_pkg, sid, os_version, out_dir),
+            name=f"sim_{sid}",
+            cpus=4,
+            memory_mb=8 * 1024,
+            time_min=240,
+            container="nrel/openstudio:3.11.0",
+        )
+        handle = executor.submit_request(request)
+    """
+
+    fn: Callable[..., Any]
+    """The callable to execute."""
+
+    args: tuple[Any, ...] = ()
+    """Positional arguments passed to *fn*."""
+
+    name: str = "task"
+    cpus: int = 1
+    memory_mb: int = 1024
+    time_min: int = 60
+    container: str | None = None
+    container_digest: str | None = None
+    openstudio_version: str | None = None
+    result_hint: Any = None
+    remote_command: str | None = None
+    result_transport_mode: str | None = None
+    result_storage_backend: str | None = None
+    result_storage_bucket: str | None = None
+    result_storage_prefix: str | None = None
+    result_storage_endpoint: str | None = None
+    variables_json: str | None = None
+    env: dict[str, str] | None = None
+    stdout_path: Any = None
+    stderr_path: Any = None
+    max_retries: int | None = None
+    worker_id: str | None = None
+
+
 class BaseExecutor(abc.ABC):
     """All executors conform to this interface."""
 
@@ -109,6 +160,49 @@ class BaseExecutor(abc.ABC):
         worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle: ...
+
+    def submit_request(self, request: SubmitRequest) -> Handle:
+        """Submit a structured request (preferred over raw kwargs, issue #725).
+
+        This is the type-safe path for ``executor.submit()`` calls.
+        All fan-out submit calls in campaign.py should use this method
+        rather than passing implicit ``**kwargs`` to ``submit()``.
+
+        Args:
+            request: A ``SubmitRequest`` dataclass describing the callable,
+                positional args, and resource requirements.
+
+        Returns:
+            A ``Handle`` that can be used to retrieve the result.
+
+        Raises:
+            TypeError: If called with any kwargs (enforced by the
+                ``submit_request`` overload signature).
+        """
+        return self.submit(
+            request.fn,
+            *request.args,
+            name=request.name,
+            cpus=request.cpus,
+            memory_mb=request.memory_mb,
+            time_min=request.time_min,
+            container=request.container,
+            container_digest=request.container_digest,
+            openstudio_version=request.openstudio_version,
+            result_hint=request.result_hint,
+            remote_command=request.remote_command,
+            result_transport_mode=request.result_transport_mode,
+            result_storage_backend=request.result_storage_backend,
+            result_storage_bucket=request.result_storage_bucket,
+            result_storage_prefix=request.result_storage_prefix,
+            result_storage_endpoint=request.result_storage_endpoint,
+            variables_json=request.variables_json,
+            env=request.env,
+            stdout_path=request.stdout_path,
+            stderr_path=request.stderr_path,
+            max_retries=request.max_retries,
+            worker_id=request.worker_id,
+        )
 
     @abc.abstractmethod
     def shutdown(self) -> None: ...

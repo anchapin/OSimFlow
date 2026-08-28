@@ -85,7 +85,7 @@ from .cost_tracking import (
 from .data_point_manager import DataPointManager
 from .distributed_cache import build_cache, campaign_state_namespace
 from .distributed_jobqueue import build_job_queue
-from .executors import BaseExecutor, Handle
+from .executors import BaseExecutor, Handle, SubmitRequest
 from .json_utils import safe_json_dumps, safe_json_loads
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (

@@ -33,7 +33,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
 
-from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.base import BaseExecutor, Handle, SubmitRequest
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
 from osimflow.executors.dask_jobqueue_executor import DaskJobQueueExecutor as DaskJobQueueExecutor
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
@@ -76,6 +76,7 @@ __all__ = [
     "NomadExecutor",
     "PBSExecutor",
     "SlurmExecutor",
+    "SubmitRequest",
 ]
 
 
