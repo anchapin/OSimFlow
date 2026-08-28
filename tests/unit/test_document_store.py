@@ -697,6 +697,89 @@ class TestRedisDocumentStore:
         # LRU is bounded.
         assert len(store._lru) <= 2
 
+    def test_connection_pool_max_connections_parameter(self) -> None:
+        """connection_pool_max_connections is accepted and stored (issue #1343)."""
+        store = RedisDocumentStore(
+            redis_url="redis://localhost:6379/0",
+            namespace="pool-test",
+            connection_pool_max_connections=25,
+        )
+        assert store._connection_pool_max_connections == 25
+        assert store._pool is None
+        assert store._redis_client is None
+
+    def test_connection_pool_created_on_first_get_client(self) -> None:
+        """_get_client() creates a ConnectionPool and passes it to Redis (issue #1343)."""
+        from unittest.mock import MagicMock, patch
+
+        mock_pool_instance = MagicMock(name="pool_instance")
+        mock_pool_class = MagicMock(name="ConnectionPool")
+        mock_pool_class.from_url.return_value = mock_pool_instance
+        mock_redis_instance = MagicMock(name="redis_instance")
+        mock_redis_class = MagicMock(name="Redis", return_value=mock_redis_instance)
+        mock_redis_module = MagicMock(
+            name="redis_module",
+            ConnectionPool=mock_pool_class,
+            Redis=mock_redis_class,
+        )
+
+        with patch(
+            "osimflow.document_store._get_redis_sync",
+            return_value=mock_redis_module,
+        ):
+            store = RedisDocumentStore(
+                redis_url="redis://localhost:6379/0",
+                namespace="pool-creation-test",
+                connection_pool_max_connections=30,
+            )
+            client = store._get_client()
+
+        mock_pool_class.from_url.assert_called_once_with(
+            "redis://localhost:6379/0",
+            decode_responses=True,
+            socket_timeout=5.0,
+            socket_connect_timeout=5.0,
+            max_connections=30,
+        )
+        mock_redis_class.assert_called_once_with(connection_pool=mock_pool_instance)
+        assert store._pool is mock_pool_instance
+        # Client is the BreakerClient wrapper around the raw Redis instance.
+        assert store._redis_client is not None
+
+    def test_close_disconnects_pool(self) -> None:
+        """close() disconnects the connection pool (issue #1343)."""
+        from unittest.mock import MagicMock, patch
+
+        mock_pool_instance = MagicMock(name="pool_instance")
+        mock_pool_class = MagicMock(name="ConnectionPool")
+        mock_pool_class.from_url.return_value = mock_pool_instance
+        mock_redis_instance = MagicMock(name="redis_instance")
+        mock_redis_class = MagicMock(name="Redis", return_value=mock_redis_instance)
+        mock_redis_module = MagicMock(
+            name="redis_module",
+            ConnectionPool=mock_pool_class,
+            Redis=mock_redis_class,
+        )
+
+        with patch(
+            "osimflow.document_store._get_redis_sync",
+            return_value=mock_redis_module,
+        ):
+            store = RedisDocumentStore(
+                redis_url="redis://localhost:6379/0",
+                namespace="pool-close-test",
+            )
+            # Trigger _get_client() to create the pool and client.
+            store._get_client()
+            assert store._pool is mock_pool_instance
+            assert store._redis_client is not None
+
+            # close() should disconnect the pool.
+            store.close()
+            mock_pool_instance.disconnect.assert_called_once()
+            assert store._pool is None
+            assert store._redis_client is None
+
 
 @requires_fakeredis
 class TestRedisDocumentStoreRaceScenario:
