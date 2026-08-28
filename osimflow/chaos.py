@@ -49,7 +49,6 @@ __all__ = [
 
 import logging
 import random
-import signal
 import threading
 import time
 import warnings
