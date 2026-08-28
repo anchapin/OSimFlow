@@ -104,10 +104,11 @@ from .observability import (
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRecord, CampaignRegistry
 from .taskqueue import (
+    ConsumerQueue,
     DaskTaskQueue,
     NoOpTaskQueue,
+    ProducerQueue,
     TaskHandle,
-    TaskQueue,
     TaskQueueStatus,
     build_task_queue,
 )
@@ -248,9 +249,10 @@ __all__ = [
     "ResultStorageUploader",
     "build_result_storage",
     # Task queue
-    "TaskQueue",
+    "ConsumerQueue",
     "DaskTaskQueue",
     "NoOpTaskQueue",
+    "ProducerQueue",
     "TaskHandle",
     "TaskQueueStatus",
     "build_task_queue",

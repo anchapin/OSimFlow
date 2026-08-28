@@ -1,8 +1,9 @@
 """Distributed task queue abstraction for OSimFlow campaigns.
 
-This module provides a Celery-like queue that can accept jobs from multiple
-producers, distribute work to multiple workers, and provide retry / dead-letter
-/ result persistence. The primary implementation uses ``dask.distributed``.
+This module provides two Celery-like queue interfaces that can accept jobs
+from multiple producers, distribute work to multiple workers, and provide
+retry / dead-letter / result persistence. The primary implementation uses
+``dask.distributed``.
 
 ARCH-001 gap: all job submission currently goes through the Campaign orchestrator
 directly to executors. There is no queue that can accept jobs from multiple
@@ -13,10 +14,10 @@ result persistence. Integrating dask.distributed resolves ARCH-001 and ARCH-004
 Design
 ~~~~~~
 
-``TaskQueue`` is the abstract interface. ``DaskTaskQueue`` is the production
-implementation backed by a Dask scheduler. The Campaign can optionally be
-configured to use a ``TaskQueue`` instead of direct ``executor.submit()`` for
-the fan-out steps (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS).
+``ProducerQueue`` is the abstract push interface (enqueue). ``ConsumerQueue``
+is the abstract pull interface (dequeue). ``DaskTaskQueue`` and ``NoOpTaskQueue``
+implement both since dask.distributed and the no-op pass-through handle both
+push and pull semantics internally.
 
 The queue is opt-in via the ``--task-queue`` CLI flag. When ``none`` (the
 default), behaviour is identical to the existing direct-executor pattern.
@@ -34,10 +35,11 @@ out-of-the-box without any external infrastructure.
 from __future__ import annotations
 
 __all__ = [
+    "ConsumerQueue",
     "DaskTaskQueue",
     "NoOpTaskQueue",
+    "ProducerQueue",
     "TaskHandle",
-    "TaskQueue",
     "TaskQueueStatus",
     "build_task_queue",
 ]
@@ -52,14 +54,6 @@ from enum import Enum
 from typing import Any
 
 log = logging.getLogger("osimflow.taskqueue")
-
-__all__ = [
-    "DaskTaskQueue",
-    "NoOpTaskQueue",
-    "TaskHandle",
-    "TaskQueue",
-    "TaskQueueStatus",
-]
 
 
 class TaskQueueStatus(Enum):
@@ -123,11 +117,57 @@ class TaskHandle:
         log.info("retry requested for task %s", self.task_id)
 
 
-class TaskQueue(abc.ABC):
-    """Abstract distributed task queue.
+class ProducerQueue(abc.ABC):
+    """Abstract push-based task queue (enqueue side).
 
-    Subclass this to add a new queue backend. The Campaign uses this
-    interface exclusively for fan-out steps when a queue is configured.
+    Subclass this to add a push-based queue backend (e.g. Celery, RabbitMQ)
+    where producers enqueue work and workers consume it asynchronously.
+
+    The Campaign uses this interface for fan-out steps when a push-based
+    queue is configured.
+    """
+
+    name: str = "base"
+
+    @abc.abstractmethod
+    def enqueue(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        """Submit a callable to the queue and return a handle.
+
+        Parameters
+        ----------
+        fn
+            The Python callable to execute.
+        args
+            Positional arguments passed to *fn*.
+        kwargs
+            Keyword arguments passed to *fn*.
+
+        Returns
+        -------
+        TaskHandle
+            A handle that can be used to await the result or retry the task.
+        """
+        ...
+
+    @abc.abstractmethod
+    def shutdown(self) -> None:
+        """Shutdown the producer client and release resources."""
+        ...
+
+
+class ConsumerQueue(abc.ABC):
+    """Abstract pull-based task queue (dequeue side).
+
+    Subclass this to add a pull-based queue backend where the queue
+    itself manages worker scheduling (e.g. dask.distributed, Ray).
+
+    The Campaign uses this interface for fan-out steps when a pull-based
+    queue is configured.
     """
 
     name: str = "base"
@@ -175,7 +215,7 @@ class TaskQueue(abc.ABC):
 
     @abc.abstractmethod
     def shutdown(self) -> None:
-        """Shutdown the queue client and release resources."""
+        """Shutdown the consumer client and release resources."""
         ...
 
 
@@ -184,18 +224,22 @@ class TaskQueue(abc.ABC):
 # ---------------------------------------------------------------------------
 
 
-class NoOpTaskQueue(TaskQueue):
+class NoOpTaskQueue(ProducerQueue, ConsumerQueue):
     """A no-op queue that runs tasks synchronously in the caller thread.
 
-    This is the identity queue: ``submit`` runs ``fn(*args, **kwargs)``
+    This is the identity queue: ``submit`` / ``enqueue`` runs ``fn(*args, **kwargs)``
     immediately and returns a handle in SUCCESS state. It is used when
     ``--task-queue none`` (the default) so the Campaign has a consistent
     interface regardless of whether a distributed queue is configured.
+
+    Implements both ``ProducerQueue`` (push/enqueue) and ``ConsumerQueue``
+    (pull/submit) for API symmetry — in practice both methods behave identically
+    in this no-op implementation.
     """
 
     name = "none"
 
-    def submit(
+    def enqueue(
         self,
         fn: Callable[..., Any],
         *args: Any,
@@ -216,6 +260,14 @@ class NoOpTaskQueue(TaskQueue):
             worker_id="main",
         )
 
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        return self.enqueue(fn, *args, **kwargs)
+
     def get_result(self, handle: TaskHandle, timeout: float | None = None) -> Any:
         if handle._future is None:
             raise RuntimeError(f"task {handle.task_id!r} has no backing future")
@@ -233,7 +285,7 @@ class NoOpTaskQueue(TaskQueue):
 # ---------------------------------------------------------------------------
 
 
-class DaskTaskQueue(TaskQueue):
+class DaskTaskQueue(ProducerQueue, ConsumerQueue):
     """Distributed task queue backed by ``dask.distributed``.
 
     Connects to a Dask scheduler at the address provided via
@@ -250,6 +302,11 @@ class DaskTaskQueue(TaskQueue):
     Security: credentials are sourced from the environment (DASK_SCHEDULER_URI
     env var, TLS certs, etc.). The constructor does **not** accept long-lived
     credentials.
+
+    Implements both ``ProducerQueue`` (enqueue) and ``ConsumerQueue`` (submit).
+    In dask.distributed the scheduler acts as both a push target (submit from
+    the client) and a pull source (workers call get()), so a single
+    ``DaskTaskQueue`` instance handles both interfaces.
     """
 
     name = "dask"
@@ -289,6 +346,15 @@ class DaskTaskQueue(TaskQueue):
             set_as_default=False,
         )
         return self._client
+
+    def enqueue(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> TaskHandle:
+        """Alias for ``submit`` — dask.distributed is brokerless and handles both."""
+        return self.submit(fn, *args, **kwargs)
 
     def submit(
         self,
@@ -352,7 +418,7 @@ def build_task_queue(
     scheduler_address: str | None = None,
     *,
     max_retries: int = 3,
-) -> TaskQueue:
+) -> ProducerQueue | ConsumerQueue:
     """Factory to build a TaskQueue from a backend name.
 
     Parameters
@@ -364,6 +430,13 @@ def build_task_queue(
         Required when *backend* is ``"dask"``.
     max_retries
         Maximum retry attempts for failed tasks (default: 3).
+
+    Returns
+    -------
+    ProducerQueue | ConsumerQueue
+        A queue instance implementing both ``ProducerQueue`` and
+        ``ConsumerQueue`` interfaces (they are the same concrete class
+        for all built-in backends).
     """
     if backend == "none":
         return NoOpTaskQueue()
