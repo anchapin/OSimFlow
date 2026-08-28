@@ -264,7 +264,7 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         condition=_always_run,
     ),
     "PREFLIGHT_RUN_MODEL": DAGStep(
-        inputs=StepInputs(),
+        inputs=StepInputs(required=()),
         outputs=StepOutputs(produced=("preflight_OK",)),
         method="step_preflight_run_model",
         condition=lambda campaign, algo, generation, **_: generation == 0,
@@ -282,25 +282,19 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "RUN_OPENSTUDIO_SIM": DAGStep(
         inputs=StepInputs(required_patterns=("apply/*/",)),
-        outputs=StepOutputs(produced=("sim/*/",)),
+        outputs=StepOutputs(produced=("work/sim/*/",)),
         method="step_run_openstudio_sim",
         fan_out=True,
     ),
     "EXTRACT_KPIS": DAGStep(
-        inputs=StepInputs(required_patterns=("sim/*/",)),
-        outputs=StepOutputs(kpi_pattern="sim/*/kpi_*.json"),
+        inputs=StepInputs(required_patterns=("work/sim/*/",)),
+        outputs=StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
         method="step_extract_kpis",
         fan_out=True,
     ),
     "AGGREGATE_RESULTS": DAGStep(
         inputs=StepInputs(),
-        outputs=StepOutputs(
-            produced=(
-                "aggregated_results.csv",
-                "aggregated_results.parquet",
-                "failed_simulations.csv",
-            )
-        ),
+        outputs=StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
         method="step_aggregate_results",
     ),
     "COMPUTE_SENSITIVITY_INDICES": DAGStep(
@@ -314,6 +308,11 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         outputs=StepOutputs(produced=("uq_results.json",)),
         method="step_compute_uq_indices",
         condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
+    ),
+    "GENERATE_BASIC_PLOTS": DAGStep(
+        inputs=StepInputs(required=("aggregated_results.csv",)),
+        outputs=StepOutputs(produced=("plots/",)),
+        method="step_generate_plots",
     ),
 }
 
@@ -2952,6 +2951,11 @@ class Campaign:
             elif step_name == "EXTRACT_KPIS":
                 assert simulated is not None
                 kpi_files = step_method(simulated, generation=generation)
+            elif step_name == "AGGREGATE_RESULTS":
+                step_method(kpi_files, generation=generation)
+            elif step_name == "GENERATE_BASIC_PLOTS":
+                step_method(generation=generation)
+
             self._maybe_inject_chaos(step_name, "after_step")
             log.debug("step %s completed", step_name)
 
@@ -3834,9 +3838,7 @@ class Campaign:
 
                 submissions[sid] = (handle, _on_success)
             self._submit_and_await_all(submissions, "APPLY_PARAMETERS")
-        total_cost, total_savings = self._cost_tracker.sum_sample_costs(
-            self._sample_state, self._cost_tracker._executor_name
-        )
+        total_cost, total_savings = self._cost_tracker.sum_sample_costs(self._sample_state)
         self._record_costs("APPLY_PARAMETERS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
@@ -4147,9 +4149,7 @@ class Campaign:
                 recovery_manager=recovery_manager,
                 resubmit_callback=resubmit_callback,
             )
-        total_cost, total_savings = self._cost_tracker.sum_sample_costs(
-            self._sample_state, self._cost_tracker._executor_name
-        )
+        total_cost, total_savings = self._cost_tracker.sum_sample_costs(self._sample_state)
         self._record_costs("RUN_OPENSTUDIO_SIM", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
@@ -4415,9 +4415,7 @@ class Campaign:
 
                 submissions[sid] = (handle, _on_success)
             self._submit_and_await_all(submissions, "EXTRACT_KPIS")
-        total_cost, total_savings = self._cost_tracker.sum_sample_costs(
-            self._sample_state, self._cost_tracker._executor_name
-        )
+        total_cost, total_savings = self._cost_tracker.sum_sample_costs(self._sample_state)
         self._record_costs("EXTRACT_KPIS", total_cost, total_savings)
 
         # Record failures for samples that didn't succeed.
