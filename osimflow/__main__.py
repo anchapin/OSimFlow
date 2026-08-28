@@ -2385,7 +2385,7 @@ def _warn_if_cleartext_nonlocal(tls_cert: Path | None, host: str, port: int) -> 
     log.warning("SEC-004: TLS disabled for non-local bind %s:%d — traffic is cleartext", host, port)
 
 
-def _cmd_serve(args: argparse.Namespace) -> int:
+def _cmd_serve(args: argparse.Namespace) -> int:  # noqa: PLR0912
     """Start the REST API server."""
     try:
         import uvicorn  # noqa: PLC0415
@@ -2445,6 +2445,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
+        # SEC-001: require auth on non-local binds (issue #1319)  # noqa: PLR0912
+        if not api_key and not api_keys_file:
+            print(
+                "ERROR: SEC-001 — authentication required on non-localhost bind.\n"
+                "Pass --api-key (or --api-keys-file) to enable authentication.\n"
+                "See issue #1319.",
+                file=sys.stderr,
+            )
+            return 1
 
     tls_cert: Path | None = args.tls_cert if args.tls_cert else None
     tls_key: Path | None = args.tls_key if args.tls_key else None
