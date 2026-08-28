@@ -294,7 +294,7 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "AGGREGATE_RESULTS": DAGStep(
         inputs=StepInputs(),
-        outputs=StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
+        outputs=StepOutputs(produced=("aggregated_results.csv", "aggregated_results.parquet", "failed_simulations.csv")),
         method="step_aggregate_results",
     ),
     "COMPUTE_SENSITIVITY_INDICES": DAGStep(
