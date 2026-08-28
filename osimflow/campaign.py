@@ -282,13 +282,13 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "RUN_OPENSTUDIO_SIM": DAGStep(
         inputs=StepInputs(required_patterns=("apply/*/",)),
-        outputs=StepOutputs(produced=("work/sim/*/",)),
+        outputs=StepOutputs(produced=("sim/*/",)),
         method="step_run_openstudio_sim",
         fan_out=True,
     ),
     "EXTRACT_KPIS": DAGStep(
-        inputs=StepInputs(required_patterns=("work/sim/*/",)),
-        outputs=StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
+        inputs=StepInputs(required_patterns=("sim/*/",)),
+        outputs=StepOutputs(kpi_pattern="sim/*/kpi_*.json"),
         method="step_extract_kpis",
         fan_out=True,
     ),
