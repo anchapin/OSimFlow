@@ -2708,17 +2708,16 @@ class ExecutorRegistry:
 
     Typical usage::
 
-        executor = ExecutorRegistry.get("local", max_workers=4)
-        # or for plugin executors, passing CLI args:
-        executor = ExecutorRegistry.get("my_exec", **vars(cli_args))
+        cls = ExecutorRegistry.get("local")
+        executor = cls(max_workers=4)
 
     For third-party executor packages, add this to ``pyproject.toml``::
 
         [project.entry-points."osimflow.executors"]
         my_exec = "my_package.executors:MyExecutor"
 
-    Plugin executors should accept ``**kwargs`` in their ``__init__`` to
-    receive forwarded CLI arguments (issue #1275).
+    Plugin executors that need CLI configuration should accept ``**kwargs``
+    in their ``__init__`` and receive forwarded CLI arguments (issue #1275).
     """
 
     _registry: dict[str, type[BaseExecutor]] = {}
@@ -2731,16 +2730,8 @@ class ExecutorRegistry:
         log.debug("registered executor %s -> %s", name, executor_cls.__qualname__)
 
     @classmethod
-    def get(cls, name: str, **kwargs: Any) -> BaseExecutor:
-        """Return an executor instance registered under *name*.
-
-        Parameters
-        ----------
-        name
-            Executor name to look up.
-        **kwargs
-            Additional keyword arguments passed to the executor constructor.
-            Useful for passing CLI args to plugin executors (issue #1275).
+    def get(cls, name: str) -> type[BaseExecutor]:
+        """Return the executor class registered under *name*.
 
         Raises
         ------
@@ -2751,7 +2742,7 @@ class ExecutorRegistry:
         if name not in cls._registry:
             available = ", ".join(sorted(cls._registry)) or "(none)"
             raise ValueError(f"unknown executor '{name}'. Available executors: {available}")
-        return cls._registry[name](**kwargs)
+        return cls._registry[name]
 
     @classmethod
     def list_available(cls) -> list[str]:
