@@ -88,6 +88,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
+from urllib.parse import urlparse
 
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
 
@@ -1802,12 +1803,49 @@ class DocumentStoreConfig(TypedDict, total=False):
     namespace: str
 
 
+_NONLOCALHOST_BLOCKLIST = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+
+
+def _validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
+    """Validate that a Redis URL meets the minimum security baseline (issue #1277).
+
+    Mirrors the validation in ``distributed_cache._validate_redis_url``.
+    When ``redis_url`` points to a non-localhost host, the connection must
+    either use ``rediss://`` (TLS) or embed credentials
+    (``redis://user:pass@host:port``).
+    """
+    parsed = urlparse(redis_url)
+    host = parsed.hostname or ""
+
+    if host in _NONLOCALHOST_BLOCKLIST:
+        return
+
+    has_tls = parsed.scheme == "rediss"
+    has_creds = bool(parsed.username and parsed.password)
+
+    if has_tls or has_creds or require_auth:
+        return
+
+    raise ValueError(
+        f"insecure Redis URL (issue #1277): host {host!r} is not localhost "
+        f"but the URL uses {parsed.scheme!r} without embedded credentials. "
+        f"Non-localhost Redis requires either:\n"
+        f"  (a) TLS: rediss://user:pass@{host}:PORT\n"
+        f"  (b) credentials in URL: redis://user:pass@{host}:PORT\n"
+        f"  (c) --require-redis-auth (set this if Redis auth is handled "
+        f"externally, e.g. via an AUTH file or environment variable)."
+    )
+
+
 def _build_document_store_redis(
     redis_url: str,
     namespace: str,
     db_path: Path,
+    *,
+    require_auth: bool = False,
 ) -> DocumentStore:
     """Return a ``RedisDocumentStore`` for distributed campaigns (issue #1014)."""
+    _validate_redis_url(redis_url, require_auth)
     return RedisDocumentStore(
         redis_url=redis_url,
         namespace=namespace,
@@ -1821,6 +1859,7 @@ def build_document_store(
     namespace: str | None = None,
     *,
     backend: str | None = None,
+    require_auth: bool = False,
 ) -> DocumentStore:
     """Factory: build the appropriate ``DocumentStore`` from configuration.
 
@@ -1853,6 +1892,10 @@ def build_document_store(
         to ``redis_url=None``; ``backend="redis"`` requires
         ``redis_url`` + ``namespace``.  Raises ``ValueError`` for
         unknown values.
+    require_auth
+        When True, skips the URL-level credential check.  Set this when
+        Redis authentication is handled externally (e.g. via an ``AUTH``
+        file consumed by the Redis server, not the client).  Issue #1277.
 
     Returns
     -------
@@ -1864,11 +1907,9 @@ def build_document_store(
     ValueError
         When ``backend`` is not ``"sqlite"`` or ``"redis"``, or when
         ``backend="redis"`` is requested without ``redis_url`` and
-        ``namespace``.
+        ``namespace``, or when a non-localhost Redis URL lacks TLS and
+        credentials (issue #1277).
     """
-    # Legacy path: explicit backend string.  Preserves the original
-    # ``build_document_store(backend="sqlite", db_path=...)`` API used
-    # by the existing tests and downstream callers (issue #1014).
     if backend is not None:
         if backend == "sqlite":
             return SQLiteDocumentStore(db_path=db_path)
@@ -1877,15 +1918,14 @@ def build_document_store(
                 raise ValueError(
                     "build_document_store: backend='redis' requires redis_url and namespace"
                 )
-            return _build_document_store_redis(redis_url, namespace, db_path)
+            return _build_document_store_redis(redis_url, namespace, db_path, require_auth=require_auth)
         raise ValueError(f"unknown document_store_backend: {backend!r}")
 
-    # Modern path: dispatch on redis_url (mirrors ``build_cache``).
     if redis_url is None:
         return SQLiteDocumentStore(db_path=db_path)
     if namespace is None:
         raise ValueError(
             "build_document_store: redis_url requires a namespace "
-            "(use campaign_state_namespace(outdir) to derive one)."
+            "(use campaign_state_namespace(outdir) to derive one).",
         )
-    return _build_document_store_redis(redis_url, namespace, db_path)
+    return _build_document_store_redis(redis_url, namespace, db_path, require_auth=require_auth)

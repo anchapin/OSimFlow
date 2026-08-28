@@ -93,9 +93,34 @@ The namespace is derived from the resolved `outdir` (`campaign_state_namespace`,
 {"action": "invalidate_sample", "step": "APPLY_PARAMETERS", "sample_id": "s0001"}
 ```
 
-### Security
+### Security (issue #1277)
 
 Redis credentials are carried in the URL (`user:pass@host:port/db`). TLS is supported via the `rediss://` scheme. No credentials are hardcoded anywhere in the config.
+
+**Minimum security baseline for non-localhost Redis:** When `--redis-url` points to a host other than `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0`, the connection must satisfy one of:
+
+1. **TLS + AUTH:** `rediss://user:pass@redis.example.com:6379`
+2. **AUTH without TLS:** `redis://user:pass@redis.example.com:6379`
+3. **Explicit opt-out:** pass `require_auth=True` to `build_cache()` / `build_document_store()` when Redis authentication is handled externally (e.g. via an `AUTH` file or environment variable consumed by the Redis server, not the client).
+
+```python
+# Good: TLS + credentials (recommended for cloud/HPC)
+cache = build_cache(db_path, redis_url="rediss://app:secret@redis.example.com:6379", campaign_id=cid)
+
+# Good: credentials without TLS (internal network only)
+cache = build_cache(db_path, redis_url="redis://app:secret@internal-redis:6379", campaign_id=cid)
+
+# Good: localhost (single-node, no network exposure)
+cache = build_cache(db_path, redis_url="redis://localhost:6379", campaign_id=cid)
+
+# Good: external auth (require_auth=True skips the URL check)
+cache = build_cache(db_path, redis_url="redis://redis.example.com:6379", campaign_id=cid, require_auth=True)
+
+# BAD: non-localhost without TLS or credentials — raises ValueError
+cache = build_cache(db_path, redis_url="redis://redis.example.com:6379", campaign_id=cid)  # raises!
+```
+
+The same baseline applies to `build_document_store` (the document store factory) and the API server's `--api-redis-url` flag.
 
 Example URLs:
 
