@@ -2530,6 +2530,19 @@ class Campaign:
             # failures are logged but do not affect campaign status.
             self._maybe_fire_webhook(campaign_status, duration)
 
+            # Transfer alert delivery-failure history to run.json (issue #1339).
+            if self._alert_manager is not None:
+                history = self._alert_manager.get_alert_history()
+                if history:
+                    if self.trace.alerts_fired is None:
+                        self.trace.alerts_fired = []
+                    self.trace.alerts_fired.extend(history)
+
+            # Re-write run.json with updated alerts_fired (issue #1339).
+            self.trace.finalize()
+            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
+            self.trace.write(self.cfg.outdir / "run.json")
+
             # Close the SQLite cache. ``close()`` runs a PASSIVE WAL
             # checkpoint and the connection; it never raises and never
             # removes the auxiliary ``.sqlite-wal`` / ``.sqlite-shm``
