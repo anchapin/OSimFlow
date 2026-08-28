@@ -228,46 +228,91 @@ class StepInputs:
     """Expected number of files from a fan-out step (None = no check)."""
 
 
+@dataclasses.dataclass(frozen=True)
+class DAGStep:
+    """Describes a DAG step for data-driven execution (issue #1276).
+
+    Extends ``StepInputs``/``StepOutputs`` with step execution metadata so
+    that ``_run_one_generation`` can iterate over steps from configuration
+    instead of calling step methods by name.
+    """
+
+    inputs: StepInputs
+    outputs: StepOutputs
+    method: str
+    condition: Callable[..., bool] | None = None
+    fan_out: bool = False
+
+
+def _always_run(campaign: "Campaign", algo: Any, **kwargs: Any) -> bool:
+    return True
+
+
 # Cross-step data dependency map (issue #850).
 # Maps each step name to the outputs it PRODUCES and the inputs it CONSUMES.
 # Before running a step, _verify_step_inputs() confirms all required inputs
 # are present so e.g. AGGREGATE_RESULTS cannot run until all EXTRACT_KPIS
 # outputs are confirmed on disk.
-_STEP_DEPENDENCIES: dict[str, tuple[StepInputs, StepOutputs]] = {
-    "GENERATE_LHS_SAMPLES": (
-        StepInputs(),
-        StepOutputs(produced=("samples.json",)),
+#
+# For issue #1276, this is extended with execution metadata (method name,
+# condition, fan_out) so new steps can be added via configuration alone.
+_STEP_DEPENDENCIES: dict[str, DAGStep] = {
+    "GENERATE_LHS_SAMPLES": DAGStep(
+        inputs=StepInputs(),
+        outputs=StepOutputs(produced=("samples.json",)),
+        method="step_generate_samples",
+        condition=_always_run,
     ),
-    "PREFLIGHT_RUN_MODEL": (
-        StepInputs(required=("template_sim_package",)),
-        StepOutputs(produced=("preflight_OK",)),
+    "PREFLIGHT_RUN_MODEL": DAGStep(
+        inputs=StepInputs(required=("template_sim_package",)),
+        outputs=StepOutputs(produced=("preflight_OK",)),
+        method="step_preflight_run_model",
+        condition=lambda campaign, algo, **_: campaign._generation == 0,
     ),
-    "APPLY_PARAMETERS": (
-        StepInputs(required=("template_sim_package", "samples.json")),
-        StepOutputs(produced=("apply/*/",)),
+    "APPLY_PARAMETERS": DAGStep(
+        inputs=StepInputs(required=("template_sim_package", "samples.json")),
+        outputs=StepOutputs(produced=("apply/*/",)),
+        method="step_apply_parameters",
+        fan_out=False,
     ),
-    "RUN_OPENSTUDIO_SIM": (
-        StepInputs(required_patterns=("apply/*/",)),
-        StepOutputs(produced=("work/sim/*/",)),
+    "VALIDATE_MEASURE_VARIABLES": DAGStep(
+        inputs=StepInputs(),
+        outputs=StepOutputs(produced=()),
+        method="step_validate_measure_variables",
     ),
-    "VALIDATE_MEASURE_VARIABLES": (
-        StepInputs(),
-        StepOutputs(produced=()),
+    "RUN_OPENSTUDIO_SIM": DAGStep(
+        inputs=StepInputs(required_patterns=("apply/*/",)),
+        outputs=StepOutputs(produced=("work/sim/*/",)),
+        method="step_run_openstudio_sim",
+        fan_out=True,
     ),
-    "EXTRACT_KPIS": (
-        StepInputs(required_patterns=("work/sim/*/",)),
-        StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
+    "EXTRACT_KPIS": DAGStep(
+        inputs=StepInputs(required_patterns=("work/sim/*/",)),
+        outputs=StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
+        method="step_extract_kpis",
+        fan_out=True,
     ),
-    "AGGREGATE_RESULTS": (
-        StepInputs(
-            required_patterns=(),
-            count=None,  # verified via kpi_files argument
-        ),
-        StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
+    "AGGREGATE_RESULTS": DAGStep(
+        inputs=StepInputs(),
+        outputs=StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
+        method="step_aggregate_results",
     ),
-    "GENERATE_BASIC_PLOTS": (
-        StepInputs(required=("aggregated_results.csv",)),
-        StepOutputs(produced=("plots/",)),
+    "COMPUTE_SENSITIVITY_INDICES": DAGStep(
+        inputs=StepInputs(),
+        outputs=StepOutputs(produced=("sensitivity_indices.json",)),
+        method="step_compute_sensitivity_indices",
+        condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "sobol",
+    ),
+    "COMPUTE_UQ_INDICES": DAGStep(
+        inputs=StepInputs(),
+        outputs=StepOutputs(produced=("uq_results.json",)),
+        method="step_compute_uq_indices",
+        condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
+    ),
+    "GENERATE_BASIC_PLOTS": DAGStep(
+        inputs=StepInputs(required=("aggregated_results.csv",)),
+        outputs=StepOutputs(produced=("plots/",)),
+        method="step_generate_plots",
     ),
 }
 
@@ -829,7 +874,8 @@ class Campaign:
         if step_name not in _STEP_DEPENDENCIES:
             return
 
-        inputs, outputs = _STEP_DEPENDENCIES[step_name]
+        step_info = _STEP_DEPENDENCIES[step_name]
+        inputs = step_info.inputs
 
         # Check exact-file requirements.
         for rel_path in inputs.required:
@@ -2803,8 +2849,6 @@ class Campaign:
                 )
 
         samples = self.step_generate_samples(algo, generation=generation)
-        # GAP-009: inject per-sample seed_model / weather_file overrides
-        # from the DataPointManager before processing.
         samples = self._inject_dp_overrides(samples)
         samples = self._apply_sharding(samples, generation=generation)
         samples_link = self._samples_manifest_path()
@@ -2812,25 +2856,50 @@ class Campaign:
         safe_json_dumps({"samples": samples}, samples_link, indent=2, raise_on_error=True)
         self._latest_samples_file = samples_link
 
-        if generation == 0:
-            self.step_preflight_run_model()
+        parameterized: SampleDict | None = None
+        simulated: SampleDict = {}
+        kpi_files: list[Path] = []
 
-        # Chaos wiring (issue #1013): inject before the per-sample
-        # fan-out steps. ``_maybe_inject_chaos`` is a no-op unless
-        # ``cfg.chaos.schedule`` matches ``"before_step"``, so this
-        # call has zero overhead on non-chaos campaigns.
-        self._maybe_inject_chaos("APPLY_PARAMETERS", "before_step")
-        parameterized: SampleDict = self.step_apply_parameters(samples, generation=generation)
-        self._maybe_inject_chaos("APPLY_PARAMETERS", "after_step")
-        self.step_validate_measure_variables()
-        self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "before_step")
-        simulated: SampleDict = self.step_run_openstudio_sim(
-            parameterized, generation=generation
-        ).samples
-        self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "after_step")
-        self._maybe_inject_chaos("EXTRACT_KPIS", "before_step")
-        kpi_files: list[Path] = self.step_extract_kpis(simulated, generation=generation)
-        self._maybe_inject_chaos("EXTRACT_KPIS", "after_step")
+        for step_name, step_info in _STEP_DEPENDENCIES.items():
+            if step_info.condition is not None and not step_info.condition(
+                self, algo, generation=generation
+            ):
+                log.debug("step %s skipped (condition returned False)", step_name)
+                continue
+
+            self._verify_step_inputs(step_name)
+            step_method = getattr(self, step_info.method, None)
+            if step_method is None:
+                log.warning(
+                    "step method %r for %r not found; skipping", step_info.method, step_name
+                )
+                continue
+
+            self._maybe_inject_chaos(step_name, "before_step")
+
+            if step_name == "GENERATE_LHS_SAMPLES":
+                step_method(algo, generation=generation)
+            elif step_name == "PREFLIGHT_RUN_MODEL":
+                step_method()
+            elif step_name == "APPLY_PARAMETERS":
+                assert parameterized is None
+                parameterized = step_method(samples, generation=generation)
+            elif step_name == "VALIDATE_MEASURE_VARIABLES":
+                step_method()
+            elif step_name == "RUN_OPENSTUDIO_SIM":
+                assert parameterized is not None
+                sim_result = step_method(parameterized, generation=generation)
+                simulated = sim_result.samples
+            elif step_name == "EXTRACT_KPIS":
+                assert simulated is not None
+                kpi_files = step_method(simulated, generation=generation)
+            elif step_name == "AGGREGATE_RESULTS":
+                step_method(kpi_files, generation=generation)
+            elif step_name == "GENERATE_BASIC_PLOTS":
+                step_method(generation=generation)
+
+            self._maybe_inject_chaos(step_name, "after_step")
+            log.debug("step %s completed", step_name)
 
         # Sobol sensitivity indices (issue #346): compute after KPI extraction.
         if self.cfg.algorithm == "sobol":
@@ -2846,13 +2915,13 @@ class Campaign:
 
         # UQ analysis (issue #530): compute POF, CIs, and distribution summaries.
         if self.cfg.algorithm == "uq":
-            variables = {}
+            uq_variables: dict[str, Any] = {}
             if self.cfg.input_variables.exists():
                 with self.cfg.input_variables.open() as fh:
                     raw = yaml.safe_load(fh)
                     if isinstance(raw, dict):
-                        variables = raw
-            self.step_compute_uq_indices(samples, kpi_files, variables, generation=generation)
+                        uq_variables = raw
+            self.step_compute_uq_indices(samples, kpi_files, uq_variables, generation=generation)
 
         # Per-generation Pareto front persistence for multi-objective
         # algorithms (issue #141).  When the algorithm reports
