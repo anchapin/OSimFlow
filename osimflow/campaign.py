@@ -2320,6 +2320,22 @@ class Campaign:
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
+    def _collect_circuit_breaker_states(self) -> dict[str, str]:
+        """Collect final state of all CircuitBreaker instances (issue #1307).
+
+        Returns a dict mapping breaker name to state (closed/open/half_open).
+        Only DistributedCache has a circuit breaker; SQLiteCache does not.
+        """
+        states: dict[str, str] = {}
+        cache = getattr(self, 'cache', None)
+        if cache is not None:
+            breaker = getattr(cache, '_breaker', None)
+            if breaker is not None:
+                with contextlib.suppress(Exception):
+                    states[breaker.name] = breaker.state
+        return states
+
+
     def run(self) -> dict[str, object]:  # noqa: PLR0912, PLR0915
         log.info("=" * 60)
         log.info("OSimFlow campaign start")
@@ -2414,6 +2430,8 @@ class Campaign:
             log.warning("campaign cancelled by user or signal")
             self.trace.status = "cancelled"
             self._cancel_active_jobs()
+            # Collect circuit breaker states for run.json (issue #1307)
+            self.trace.circuit_breaker_states = self._collect_circuit_breaker_states()
             self.trace.finalize()
             # Always write the trace on cancellation so callers can inspect
             # the partial state.  The file may not exist yet when
@@ -2430,6 +2448,8 @@ class Campaign:
             campaign_status = "failure"
             self.trace.status = "failure"
             self.trace.error_summary = f"{type(exc).__name__}: {exc}"
+            # Collect circuit breaker states for run.json (issue #1307)
+            self.trace.circuit_breaker_states = self._collect_circuit_breaker_states()
             self.trace.finalize()
             self.cfg.outdir.mkdir(parents=True, exist_ok=True)
             log.exception("campaign failed")
@@ -2515,6 +2535,8 @@ class Campaign:
         log.warning("cancellation requested mid-run-path — writing partial trace")
         self._finalize_samples()
         self.trace.status = "cancelled"
+        # Collect circuit breaker states for run.json (issue #1307)
+        self.trace.circuit_breaker_states = self._collect_circuit_breaker_states()
         self.trace.finalize()
         self.cfg.outdir.mkdir(parents=True, exist_ok=True)
         self.trace.write(self.cfg.outdir / "run.json")
@@ -2601,6 +2623,8 @@ class Campaign:
         t1 = time.time()
 
         self._finalize_samples()
+        # Collect circuit breaker states for run.json (issue #1307)
+        self.trace.circuit_breaker_states = self._collect_circuit_breaker_states()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
@@ -2703,6 +2727,8 @@ class Campaign:
         t1 = time.time()
 
         self._finalize_samples()
+        # Collect circuit breaker states for run.json (issue #1307)
+        self.trace.circuit_breaker_states = self._collect_circuit_breaker_states()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
@@ -3091,6 +3117,8 @@ class Campaign:
             log.warning("cancellation requested before aggregation — writing partial trace")
             self._finalize_samples()
             self.trace.status = "cancelled"
+            # Collect circuit breaker states for run.json (issue #1307)
+            self.trace.circuit_breaker_states = self._collect_circuit_breaker_states()
             self.trace.finalize()
             self.trace.write(self.cfg.outdir / "run.json")
             return {
@@ -3113,6 +3141,8 @@ class Campaign:
         self._maybe_archive_inputs()
 
         self._finalize_samples()
+        # Collect circuit breaker states for run.json (issue #1307)
+        self.trace.circuit_breaker_states = self._collect_circuit_breaker_states()
         self.trace.finalize()
         self.trace.write(self.cfg.outdir / "run.json")
 
