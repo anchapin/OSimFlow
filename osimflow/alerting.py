@@ -478,6 +478,32 @@ class AlertManager:
     def update_cache_stats(self, stats: dict[str, Any]) -> None:
         self._cache_stats = stats
 
+    def get_alert_history(self) -> list[dict[str, Any]]:
+        """Return the current alert delivery-failure history as a list of dicts.
+
+        Each entry contains the alert fields (``rule_name``, ``event_type``,
+        ``severity``, ``message``, ``timestamp``) plus ``destination`` (the
+        destination class name), ``failed_at``, ``error``, and
+        ``delivery_status`` (``"failed"`` for all entries in the history).
+        """
+        with self._history_lock:
+            entries = list(self._alert_history)
+        result: list[dict[str, Any]] = []
+        for entry in entries:
+            d: dict[str, Any] = {
+                "rule_name": entry.alert.rule_name,
+                "event_type": entry.alert.event_type,
+                "severity": entry.alert.severity,
+                "message": entry.alert.message,
+                "timestamp": entry.alert.timestamp,
+                "destination": type(entry.destination).__name__,
+                "failed_at": entry.failed_at,
+                "error": entry.error,
+                "delivery_status": "failed",
+            }
+            result.append(d)
+        return result
+
     # ------------------------------------------------------------------
     # Pre-defined rules
     # ------------------------------------------------------------------

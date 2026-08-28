@@ -491,6 +491,16 @@ class TestSQLiteCache:
             "Expected temp_store=2 (MEMORY)"
         )
 
+    def test_synchronous_normal(self, tmp_path: Path) -> None:
+        """Regression test for issue #1340: PRAGMA synchronous=NORMAL must be
+        set on the cache connection to avoid the ~1-3ms fsync() penalty per
+        committed transaction that synchronous=FULL (the SQLite default) incurs."""
+        db_path = tmp_path / "test_synchronous.sqlite"
+        cache = SQLiteCache(db_path)
+        conn = cache._ensure_conn()
+        result = conn.execute("PRAGMA synchronous").fetchone()[0]
+        assert result == 1, f"Expected synchronous=NORMAL (1), got {result}"
+
     def test_concurrent_store_and_lookup(self, tmp_path: Path) -> None:
         db_path = tmp_path / "test_concurrent.sqlite"
         cache = SQLiteCache(db_path)

@@ -19,6 +19,7 @@ Also covers:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,15 @@ class _FakeObjectStorage(ResultStorage):
 
     def list_results(self, prefix: str = "") -> list[str]:
         return sorted(k for k in self._objects if k.startswith(prefix))
+
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+    async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+        return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+    async def list_results_async(self, prefix: str = "") -> list[str]:
+        return asyncio.to_thread(self.list_results, prefix)
 
 
 class _RecordingBackend(NotifyBackend):

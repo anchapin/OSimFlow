@@ -60,9 +60,10 @@ class TestVerifyContractVersion:
         )
         remote_runner._verify_contract_version()  # noqa: SLF001 — no exception
 
-    def test_missing_version_warns(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    def test_missing_version_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         monkeypatch.delenv("OSIMFLOW_CONTRACT_VERSION", raising=False)
         with caplog.at_level("WARNING"):
             remote_runner._verify_contract_version()  # noqa: SLF001 — no exception
         assert "OSIMFLOW_CONTRACT_VERSION is not set" in caplog.text
-
