@@ -8,6 +8,24 @@
 
 ---
 
+## Table of Contents
+
+- [0. Precedence and project-type boundaries](#0-precedence-and-project-type-boundaries)
+  - [0.1 Precedence](#01-precedence) · [0.2 Project type](#02-project-type--read-this-first) · [0.3 The contract checker](#03-the-contract-checker-hard-gate)
+- [1. Stack at a glance](#1-stack-at-a-glance)
+- [2. Build & run commands](#2-build--run-commands)
+- [3. CLI flags (compact, alphabetical, grouped)](#3-cli-flags-compact-alphabetical-grouped)
+- [4. Testing](#4-testing)
+- [5. Directory map (contract-checked)](#5-directory-map-contract-checked)
+- [6. Code style](#6-code-style)
+- [7. Domain glossary](#7-domain-glossary)
+- [8. Gotchas (from PRD §6 — verify before changing)](#8-gotchas-from-prd-6--verify-before-changing)
+- [9. Task routing hints](#9-task-routing-hints)
+- [10. Security & data handling](#10-security--data-handling)
+- [11. References](#11-references)
+
+---
+
 ## 0. Precedence and project-type boundaries
 
 ### 0.1 Precedence
