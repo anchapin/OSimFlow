@@ -144,6 +144,192 @@ On shared Slurm clusters, your fairshare score determines scheduling priority. T
 2. **Submit during off-peak hours** for large campaigns (>500 samples).
 3. **Set realistic `time_min`.** Overestimating wall-time hurts your fairshare; underestimating kills jobs. Start with a 3-sample pilot run to measure actual wall-time, then add a 25% buffer.
 
+## Azure Batch Cost Model
+
+### Compute Pricing (US-East, as of early 2025)
+
+Azure Batch uses the same Azure Virtual Machines pricing as other Azure compute services:
+
+| Instance Family | Use Case | vCPU-Hour (On-Demand) | vCPU-Hour (Low-Priority/Spot) | Spot Savings |
+|---|---|---|---|---|
+| **Dsv3** (general) | Default simulations | ~$0.096 | ~$0.029 | ~70% |
+| **Fsv2** (compute) | CPU-heavy models | ~$0.10 | ~$0.030 | ~70% |
+| **Esv4** (memory) | Large models (>16 GB) | ~$0.13 | ~$0.039 | ~70% |
+
+### Per-Sample Cost Formula (Azure Batch)
+
+```python
+cost_per_sample = (
+    vcpus * price_per_vcpu_hour
+    + memory_gb * price_per_gb_hour  # often bundled in VM price
+) * time_hours
+```
+
+### Spot/Low-Priority Strategy
+
+Azure Batch Low-Priority VMs are equivalent to AWS Spot Instances:
+
+1. **Use Low-Priority for all simulation steps.** Same checkpointing advantage as AWS Batch — interrupted samples resume from cache.
+2. **Configure fallback to On-Demand.** Use `--azure-fallback-to-on-demand` to ensure campaign completion when Spot capacity is exhausted.
+3. **Set `--azure-max-retries`** to bound wasted compute on repeated interruptions.
+
+### Azure-Specific Costs
+
+| Cost Component | Rate | Notes |
+|---|---|---|
+| Blob storage | ~$0.018/GB/month | Archived results + intermediates |
+| Data transfer (out) | $0.087/GB (first 10 TB) | Downloading results out of Azure |
+| Batch accounts | ~$1/day | Batch account management fee |
+
+### CLI Flags for Azure Batch Cost Optimization
+
+| Flag | Default | Cost impact |
+|---|---|---|
+| `--azure-use-spot` | on | Use Low-Priority VMs (70% savings) |
+| `--azure-fallback-to-on-demand` | off | Prevents campaign failure when Spot exhausted |
+| `--azure-max-retries` | 3 | Bounds wasted compute on repeated interruptions |
+| `--azure-batch-instance-type` | (unset) | Scopes the VM type selection |
+
+## Google Cloud Batch Cost Model
+
+### Compute Pricing (us-central1, as of early 2025)
+
+Google Cloud Batch uses the same machine types as Compute Engine:
+
+| Instance Family | Use Case | vCPU-Hour (On-Demand) | vCPU-Hour (Spot/Preemptible) | Spot Savings |
+|---|---|---|---|---|
+| **n2** (general) | Default simulations | ~$0.10 | ~$0.030 | ~70% |
+| **c2** (compute) | CPU-heavy models | ~$0.11 | ~$0.033 | ~70% |
+| **m2** (memory) | Large models (>16 GB) | ~$0.15 | ~$0.045 | ~70% |
+
+### Spot/Preemptible Strategy
+
+Google Cloud Spot VMs are the equivalent of AWS Spot Instances:
+
+1. **Use Spot for all simulation steps.** Same checkpointing advantage — interrupted samples resume from cache.
+2. **Configure fallback.** Google Batch handles this automatically with the `spot` allocation mode.
+3. **Set `--google-max-retries`** to bound wasted compute.
+
+### Google-Specific Costs
+
+| Cost Component | Rate | Notes |
+|---|---|---|
+| Cloud Storage | ~$0.020/GB/month | Archived results + intermediates |
+| Data transfer (out) | $0.12/GB (first 10 TB) | Downloading results out of GCP |
+| Batch service fee | None | No per-batch fees |
+
+### CLI Flags for Google Batch Cost Optimization
+
+| Flag | Default | Cost impact |
+|---|---|---|
+| `--google-use-spot` | on | Use Spot/Preemptible VMs (70% savings) |
+| `--google-fallback-to-on-demand` | off | Prevents campaign failure when Spot exhausted |
+| `--google-max-retries` | 3 | Bounds wasted compute on repeated interruptions |
+
+## Nomad Cost Model
+
+Nomad is typically used for **on-premise or self-managed cloud** workloads. There is no Nomad cloud pricing — you pay for the underlying infrastructure (EC2 instances, bare metal, etc.).
+
+### On-Premise Nomad
+
+On-premise Nomad clusters typically have **no per-job monetary cost** — the hardware is already purchased. The relevant costs are:
+
+| Cost | Description |
+|---|---|
+| **Chargeback rate** | Many institutions charge departments per CPU-hour (e.g., $0.02–$0.10/CPU-hour). Check with your HPC admin. |
+| **Opportunity cost** | Your fairshare allocation consumed by a campaign is unavailable for other users. |
+| **Storage** | Home directory and scratch filesystem quotas. |
+
+### Cloud-Based Nomad (AWS EC2, etc.)
+
+Cloud Nomad costs are the same as running EC2 instances directly:
+
+| Cost Component | Rate | Notes |
+|---|---|---|
+| EC2 instances | Same as AWS Batch EC2 prices | See [AWS Batch Cost Model](#aws-batch-cost-model) |
+| Nomad server nodes | ~$0.05–$0.10/hr | 3-server HA cluster recommended; can be t3.micro for dev |
+| Network traffic | ~$0.09/GB | Inter-node communication + results egress |
+
+### Idle-Compute Auto-Shutdown
+
+Terminate idle EC2 instances when the campaign finishes using Auto Scaling or a shutdown script:
+
+```bash
+# Example: scale-to-zero on campaign completion
+aws autoscaling set-desired-capacity --auto-scaling-group-name my-nomad-workers --desired-capacity 0
+```
+
+## PBS Pro Cost Model
+
+PBS Pro is typically used on **on-premise HPC clusters**. There is no PBS cloud pricing — you pay for the underlying hardware.
+
+### On-Premise PBS
+
+On-premise PBS clusters typically have **no per-job monetary cost** — the hardware is already purchased:
+
+| Cost | Description |
+|---|---|
+| **Chargeback rate** | Many institutions charge departments per CPU-hour (e.g., $0.02–$0.10/CPU-hour). Check with your HPC admin. |
+| **Queue priority** | Higher-priority queues may have different rates or fairshare impact. |
+| **Storage** | Home directory and scratch filesystem quotas. |
+
+### PBS-Specific CLI Flags
+
+| Flag | Default | Cost impact |
+|---|---|---|
+| `--pbs-queue` | (unset) | Routes jobs to a specific queue with specific pricing |
+| `--pbs-real` | off | Use real PBS (`qsub`) instead of submitit debug mode |
+| `--pbs-server` | (unset) | PBS server host for multi-server setups |
+
+## Kubernetes Cost Model
+
+Kubernetes costs depend entirely on the underlying cloud provider or on-premise infrastructure.
+
+### Cloud-Based Kubernetes (EKS, GKE, AKS)
+
+Cloud Kubernetes costs are the same as running the underlying VM instances:
+
+| Cost Component | AWS (EKS) | GCP (GKE) | Azure (AKS) |
+|---|---|---|---|
+| Control plane | ~$0.10/hr (EKS) | Free (GKE) | ~$0.10/hr (AKS) |
+| Worker nodes | Same as EC2 | Same as GCP VMs | Same as Azure VMs |
+| Block storage | ~$0.08/GB/mo | ~$0.04/GB/mo | ~$0.05/GB/mo |
+| Network egress | ~$0.09/GB | ~$0.12/GB | ~$0.087/GB |
+
+### Kubernetes-Specific Cost Optimization
+
+1. **Use Spot/Preemptible nodes** for worker pods. Configure `pod.spec.terminationGracePeriodSeconds` to allow graceful shutdown for cache checkpointing.
+2. **Set resource requests and limits** correctly — over-provisioned requests waste budget; under-provisioned limits cause OOM kills.
+3. **Use a node autoscaler** to scale to zero when idle.
+
+### Resource Requests and Limits
+
+| Parameter | OSimFlow Setting | K8s Equivalent |
+|---|---|---|
+| `cpus` | Per-step CPU request | `resources.requests.cpu` |
+| `memory_mb` | Per-step memory request | `resources.requests.memory` |
+| `time_min` | Per-step timeout | `activeDeadlineSeconds` |
+
+## Docker Swarm Cost Model
+
+Docker Swarm runs on Docker Engine nodes — costs depend entirely on the underlying infrastructure (same as running containers on bare metal or VMs).
+
+### On-Premise Docker Swarm
+
+On-premise Docker Swarm has **no per-container monetary cost** — the hardware is already purchased:
+
+| Cost | Description |
+|---|---|
+| **Infrastructure** | Bare metal or VM costs for manager/worker nodes |
+| **Power/cooling** | Physical data center costs |
+| **Storage** | Docker volumes and bind mounts |
+
+### Docker Swarm-Specific Considerations
+
+1. **No native spot/preemptible support** — Docker Swarm does not have built-in Spot Instance support. Use on-demand instances or configure your orchestrator to handle interruptions.
+2. **Overlay network** — minor network overhead for inter-container communication.
+3. **Volume management** — use local volumes for performance; NFS volumes for shared storage (with associated NFS costs).
+
 ## Resource Directives
 
 OSimFlow's Campaign passes per-step resource directives to the executor via `submit()`:
@@ -161,11 +347,11 @@ The `RUN_OPENSTUDIO_SIM` step dominates cost — it runs N times with the heavie
 
 ### How Resources Flow to Executors
 
-| Parameter | LocalExecutor | SlurmExecutor | AWSBatchExecutor |
-|---|---|---|---|
-| `cpus` | Advisory (logged) | `#SBATCH --cpus-per-task` | `containerOverrides.vcpus` |
-| `memory_mb` | Advisory (logged) | `#SBATCH --mem` (converted to GB, rounded up) | `containerOverrides.memory` (MiB) |
-| `time_min` | Advisory (logged) | `#SBATCH --time` (minutes) | `timeout.attemptDurationSeconds` (converted to seconds) |
+| Parameter | LocalExecutor | SlurmExecutor | AWSBatchExecutor | AzureBatchExecutor | GoogleBatchExecutor | NomadExecutor | PBSExecutor | DaskJobQueueExecutor | KubernetesExecutor | DockerSwarmExecutor |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `cpus` | Advisory (logged) | `#SBATCH --cpus-per-task` | `containerOverrides.vcpus` | `containerResources.vcpus` | `containerResources.vcpus` | `resources.cpu` | `-l select=ncpus=X` | `cores=X` (in worker spec) | `resources.requests.cpu` | `--cpus` (service spec) |
+| `memory_mb` | Advisory (logged) | `#SBATCH --mem` (converted to GB) | `containerOverrides.memory` (MiB) | `containerResources.memoryMbs` | `containerResources.memoryMbs` | `resources.memoryMB` | `-l select=mem=XG` | `memory=XGB` (in worker spec) | `resources.requests.memory` | `--memory` (service spec) |
+| `time_min` | Advisory (logged) | `#SBATCH --time` (minutes) | `timeout.attemptDurationSeconds` | `executionTimeout.seconds` | `executionTimeout.seconds` | `constraints["runtime"]` | `-l walltime=HH:MM:SS` | `walltime=Xmin` (in worker spec) | `activeDeadlineSeconds` | N/A ( Swarm services are long-running) |
 
 On `LocalExecutor`, resource directives are advisory — the jobs run in a thread pool with `--max-workers` controlling parallelism, not per-job CPU/memory limits.
 
@@ -351,13 +537,23 @@ osimflow run --executor dask_jobqueue \
 | `--aws-batch-fallback-to-on-demand` | off | Prevents total campaign failure when Spot is exhausted (at a price premium) |
 | `--aws-batch-instance-type` | (unset) | Scopes the Spot ceiling check to one instance type (e.g. m5.large); avoids misleading cross-family minimums |
 | `--aws-batch-max-retries` | 3 | Bounds wasted compute on repeated Spot interruptions |
-| `--aws-batch-submit-rps` | 800 | Rate-limits Batch `submit_job` calls via a shared token-bucket limiter, preventing `ThrottlingException` on large campaigns (issue #1010) — keeps retry/charge waste from rate-limit failures |
+| `--aws-batch-submit-rps` | 800 | Rate-limits Batch `submit_job` calls via a shared token-bucket limiter, preventing `ThrottlingException` on large campaigns (issue #1010) |
+| `--azure-use-spot` | on | Use Low-Priority VMs (70% savings vs on-demand) |
+| `--azure-fallback-to-on-demand` | off | Prevents campaign failure when Spot exhausted |
+| `--azure-max-retries` | 3 | Bounds wasted compute on repeated interruptions |
+| `--azure-batch-instance-type` | (unset) | Scopes the VM type selection |
+| `--google-use-spot` | on | Use Spot/Preemptible VMs (70% savings) |
+| `--google-fallback-to-on-demand` | off | Prevents campaign failure when Spot exhausted |
+| `--google-max-retries` | 3 | Bounds wasted compute on repeated interruptions |
 | `--slurm-partition` | `short` | Routes jobs to the cheapest queue that fits the model (see [Partition Selection](#partition-selection)) |
 | `--slurm-account` | (unset) | Chargeback routing on institutional clusters |
+| `--pbs-queue` | (unset) | Routes jobs to a specific PBS queue |
+| `--pbs-real` | off | Use real PBS (`qsub`) instead of submitit debug mode |
 | `--dask-min-workers` | 0 | Idle-worker floor; `0` releases all workers between campaigns (scale to zero) |
 | `--dask-max-workers` | 10 | Concurrency ceiling for Dask campaigns |
 | `--dask-cpus-per-worker` | 2 | Per-worker vCPU sizing (right-size to the model) |
 | `--dask-memory-per-worker` | `4GiB` | Per-worker memory; raise for large models instead of adding workers |
+| `--nomad-address` | (unset) | Nomad server address for remote cluster access |
 | `--max-workers` | 4 | Local-executor parallelism (advisory on cloud executors) |
 | `--enable-cost-tracking` | off | Records per-campaign cost estimates in `run.json` (issue #447) |
 | `--cost-on-demand-price` | (unset) | On-demand $/vCPU-hour for cost tracking |
@@ -375,10 +571,39 @@ osimflow run --executor aws_batch \
   --n_samples 500 --outdir ./results \
   --input_variables variables.yml --template_sim_package ./pkg
 
+# Azure Batch: Spot-optimized with fallback
+osimflow run --executor azure_batch \
+  --azure-batch-account-name mybatchaccount \
+  --azure-batch-location eastus \
+  --azure-pool-id mypool \
+  --azure-use-spot --azure-fallback-to-on-demand \
+  --n_samples 500 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+
+# Google Cloud Batch: Spot-optimized
+osimflow run --executor google_batch \
+  --google-batch-project-id myproject \
+  --google-batch-region us-central1 \
+  --google-use-spot --google-fallback-to-on-demand \
+  --n_samples 500 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+
 # Slurm: right-sized partition, real cluster
 osimflow run --executor slurm --slurm-real \
   --slurm-partition short --slurm-account myproject \
   --n_samples 1000 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+
+# PBS Pro: real cluster
+osimflow run --executor pbs --pbs-real \
+  --pbs-queue default \
+  --n_samples 500 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+
+# Nomad: on-premise or cloud (AWS EC2)
+osimflow run --executor nomad \
+  --nomad-address http://nomad.service.consul:4646 \
+  --n_samples 500 --outdir ./results \
   --input_variables variables.yml --template_sim_package ./pkg
 
 # Dask: scale to zero when idle, right-sized workers
@@ -386,6 +611,19 @@ osimflow run --executor dask_jobqueue \
   --dask-min-workers 0 --dask-max-workers 64 \
   --dask-cpus-per-worker 2 --dask-memory-per-worker 4GiB \
   --n_samples 1000 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+
+# Kubernetes: EKS/GKE/AKS
+osimflow run --executor kubernetes \
+  --kubernetes-namespace osimflow \
+  --kubernetes-queue-name default \
+  --n_samples 500 --outdir ./results \
+  --input_variables variables.yml --template_sim_package ./pkg
+
+# Docker Swarm
+osimflow run --executor docker_swarm \
+  --docker-swarm-image nrel/openstudio:3.11.0 \
+  --n_samples 500 --outdir ./results \
   --input_variables variables.yml --template_sim_package ./pkg
 
 # Re-run (cache hit): ~$0 regardless of executor
