@@ -55,6 +55,8 @@ PATH_SKIP_SUBSTRINGS = (
     "limits.cpu",  # Kubernetes API field path, not a local path
     "requests.memory",  # Kubernetes API field path, not a local path
     "limits.memory",  # Kubernetes API field path, not a local path
+    "containerResources",  # AWS Batch API field path, not a local path
+    "resources.cpu",  # Kubernetes API field path, not a local path
     ".egg-info",
     "measure.rb",  # OpenStudio measure pattern (example in docs)
     "measure.py",  # OpenStudio measure pattern (example in docs)
