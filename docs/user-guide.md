@@ -1446,7 +1446,7 @@ for the endpoint reference and `osimflow serve --help` for the full list.
 | [Migration from openstudio-server](migration-openstudio-server.md) | Migrating from PAT and openstudio-server |
 | [user_scripts/README.md](../user_scripts/README.md) | BYOS script templates and examples |
 
-### The Six-Step DAG
+### The Seven-Step DAG
 
 Every campaign runs through these steps:
 
