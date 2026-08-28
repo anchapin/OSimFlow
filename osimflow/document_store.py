@@ -81,6 +81,7 @@ __all__ = [
 import contextlib
 import json
 import logging
+import re
 import sqlite3
 import threading
 from abc import ABC, abstractmethod
@@ -97,6 +98,11 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger("osimflow.document_store")
+
+# Whitelist pattern for JSON field names used in ORDER BY and index expressions.
+# Only alphanumeric characters, dots (for nested keys), and underscores are allowed.
+# This prevents SQL injection via malicious field names (issue #1269).
+_FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9._]+$")
 
 
 class DocumentStoreError(Exception):
@@ -797,6 +803,10 @@ class SQLiteDocumentStore(DocumentStore):
         if sort:
             order_parts = []
             for field, direction in sort:
+                if not isinstance(field, str) or not _FIELD_NAME_RE.match(field):
+                    raise ValueError(
+                        f"Invalid sort field {field!r}: must be alphanumeric with optional dots/underscores"
+                    )
                 dir_str = "ASC" if direction > 0 else "DESC"
                 order_parts.append(f"json_extract(doc, '$.{field}') {dir_str}")
             order_by = f" ORDER BY {', '.join(order_parts)}"
@@ -925,6 +935,10 @@ class SQLiteDocumentStore(DocumentStore):
         unique: bool = False,
     ) -> None:
         """Create an index on a JSON field in a collection."""
+        if not isinstance(field, str) or not _FIELD_NAME_RE.match(field):
+            raise ValueError(
+                f"Invalid field {field!r}: must be alphanumeric with optional dots/underscores"
+            )
         self._ensure_collection(collection)
         table = self._collection_table(collection)
         index_name = f"idx_{table}_{field.replace('.', '_')}"
