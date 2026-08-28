@@ -334,7 +334,10 @@ name in this section.
 - `osimflow/work.py` — per-step work functions + `BYOS` contract
   (`default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`,
   `aggregate_results`, `generate_plots`,
-  `SevereEnergyPlusError`).
+  `SevereEnergyPlusError`).  `aggregate_results` produces
+  `aggregated_results.csv` + `aggregated_results.parquet` (both
+  always written) + `failed_simulations.csv` in the campaign
+  ``outdir``.
 - `osimflow/byos_contract.py` — single source of truth for the BYOS
   function-signature contract (`_BYOS_CONTRACT` + `ByosContractEntry`,
   issue #1061).  Both ``osimflow.byos`` and the inline subprocess
@@ -351,7 +354,8 @@ name in this section.
   `build_cache` + `campaign_state_namespace` (Redis-backed;
   pid-private local SQLite files in distributed mode).
 - `osimflow/circuit_breaker.py` — `CircuitBreaker` +
-  `CircuitOpenError` (closed/open/half-open; guards the Redis
+  `CircuitOpenError` + `set_on_transition_callback()`
+  (closed/open/half-open; guards the Redis
   data plane in `DistributedCache` and `RedisDocumentStore`
   against persistent outages, issue #1111; `_consecutive_failures`
   is reset to 1 on ``half_open`` → ``open`` transition).
@@ -375,7 +379,7 @@ name in this section.
   (crash recovery).
 - `osimflow/monitoring.py` — `RunTrace` (includes
   `chaos_schedule`, `circuit_breaker_states`, `alerts_fired`) +
-  `StepTrace`; writes `run.json`.
+  `StepTrace` + `record_alert()`; writes `run.json`.
 - `osimflow/observability.py` — `ObservabilityBackend` ABC +
   `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`
   + `new_trace_id` + `record_circuit_breaker_event`.
@@ -407,7 +411,8 @@ name in this section.
   `ExecutorRegistry` executor (issue #1024); each returns
   `INFORMATIONAL` by default, promoted to `CRITICAL` when
   `--executor <name>` is passed.
-- `osimflow/alerting.py` — `AlertManager`,
+- `osimflow/alerting.py` — `AlertManager`
+  (`on_alert` callback for `RunTrace.record_alert` wiring),
   `build_alert_manager`.
 - `osimflow/notify.py` — `NotifyBackend` ABC +
   `EmailNotifyBackend`, `NullNotifyBackend`, `SNSNotifyBackend`,

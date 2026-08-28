@@ -120,9 +120,7 @@ class CircuitBreaker:
             if prev_state != "closed" and self._on_transition is not None:
                 self._on_transition(self.name, prev_state, "closed")
 
-    def set_on_transition_callback(
-        self, callback: Callable[[str, str, str], None] | None
-    ) -> None:
+    def set_on_transition_callback(self, callback: Callable[[str, str, str], None] | None) -> None:
         """Set or clear the state-transition callback (issue #1310).
 
         Can be called after construction to wire the breaker to an

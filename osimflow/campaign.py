@@ -294,7 +294,13 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "AGGREGATE_RESULTS": DAGStep(
         inputs=StepInputs(),
-        outputs=StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
+        outputs=StepOutputs(
+            produced=(
+                "aggregated_results.csv",
+                "aggregated_results.parquet",
+                "failed_simulations.csv",
+            )
+        ),
         method="step_aggregate_results",
     ),
     "COMPUTE_SENSITIVITY_INDICES": DAGStep(
@@ -2355,14 +2361,13 @@ class Campaign:
         Only DistributedCache has a circuit breaker; SQLiteCache does not.
         """
         states: dict[str, str] = {}
-        cache = getattr(self, 'cache', None)
+        cache = getattr(self, "cache", None)
         if cache is not None:
-            breaker = getattr(cache, '_breaker', None)
+            breaker = getattr(cache, "_breaker", None)
             if breaker is not None:
                 with contextlib.suppress(Exception):
                     states[breaker.name] = breaker.state
         return states
-
 
     def run(self) -> dict[str, object]:  # noqa: PLR0912, PLR0915
         log.info("=" * 60)

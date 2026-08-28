@@ -128,6 +128,7 @@ def _validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
         f"externally, e.g. via an AUTH file or environment variable)."
     )
 
+
 log = logging.getLogger("osimflow.distributed_cache")
 
 # Lazy import holders — replaced in tests via patch().
