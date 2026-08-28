@@ -2445,6 +2445,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     )
     if args.host not in ("127.0.0.1", "localhost"):
         log.warning("Binding to %s — the API is now network-accessible.", args.host)
+        # SEC-001: require auth on non-local binds (issue #1319)
+        if not api_key and not api_keys_file:
+            print(
+                "ERROR: SEC-001 — authentication required on non-localhost bind.
+"
+                "Pass --api-key (or --api-keys-file) to enable authentication.
+"
+                "See issue #1319.",
+                file=sys.stderr,
+            )
+            return 1
 
     tls_cert: Path | None = args.tls_cert if args.tls_cert else None
     tls_key: Path | None = args.tls_key if args.tls_key else None
