@@ -234,8 +234,7 @@ def KillSwitchInjector(
     compatibility but have no effect (issue #1179).
     """
     warnings.warn(
-        "KillSwitchInjector is deprecated, use KillSwitchSimulator instead "
-        "(issue #1179)",
+        "KillSwitchInjector is deprecated, use KillSwitchSimulator instead (issue #1179)",
         DeprecationWarning,
         stacklevel=2,
     )

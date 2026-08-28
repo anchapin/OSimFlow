@@ -1,4 +1,5 @@
 # Cost Estimation & Optimization Guide
+<!-- docs-skip -->
 
 This guide helps you estimate and optimize the cost of running OSimFlow campaigns on AWS Batch and Slurm.
 

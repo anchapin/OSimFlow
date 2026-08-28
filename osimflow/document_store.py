@@ -1937,7 +1937,9 @@ def build_document_store(
                 raise ValueError(
                     "build_document_store: backend='redis' requires redis_url and namespace"
                 )
-            return _build_document_store_redis(redis_url, namespace, db_path, require_auth=require_auth)
+            return _build_document_store_redis(
+                redis_url, namespace, db_path, require_auth=require_auth
+            )
         raise ValueError(f"unknown document_store_backend: {backend!r}")
 
     if redis_url is None:

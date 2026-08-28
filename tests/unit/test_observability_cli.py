@@ -671,9 +671,7 @@ class TestPeriodicFlush:
         cfg = _make_cfg()
         assert cfg.flush_interval_seconds == 30.0
 
-    def test_load_config_includes_flush_interval(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_config_includes_flush_interval(self, tmp_path: Path) -> None:
         """load_config should accept observability_flush_interval arg."""
         from osimflow.config import load_config
 
@@ -696,9 +694,7 @@ class TestPeriodicFlush:
         cfg = load_config(args)
         assert cfg.flush_interval_seconds == 45.0
 
-    def test_load_config_default_flush_interval(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_config_default_flush_interval(self, tmp_path: Path) -> None:
         """flush_interval_seconds should default to 30.0."""
         from osimflow.config import load_config
 
