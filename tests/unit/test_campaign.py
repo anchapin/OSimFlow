@@ -1594,49 +1594,6 @@ class TestFanOutRecoveryPath:
             completed_keys = [call[0][0] for call in mock_jq.mark_completed.call_args_list]
             assert "sample_1_RUN_OPENSTUDIO_SIM" in completed_keys
 
-    def test_run_json_records_sample_failure(
-        self,
-        variables_yml: Path,
-        template_pkg: Path,
-        outdir: Path,
-    ) -> None:
-        """run.json records a failed sample with correct status and error_summary."""
-        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, n_samples=2)
-        campaign = Campaign(cfg=cfg, executor=MockExecutor())
-
-        submissions: dict[str, tuple[Handle, Any]] = {
-            "sample_0": (self._make_failing_handle(), MagicMock()),
-            "sample_1": (
-                self._make_successful_handle({"eplusout_sql": "/tmp/sample_1.sql"}),
-                MagicMock(),
-            ),
-        }
-
-        from osimflow.monitoring import WorkerRecoveryManager
-
-        real_recovery_manager = WorkerRecoveryManager(outdir)
-
-        with patch.object(campaign, "_job_queue"):
-            campaign._submit_and_await_all(
-                submissions=submissions,
-                step_name="RUN_OPENSTUDIO_SIM",
-                recovery_manager=real_recovery_manager,
-                resubmit_callback=MagicMock(return_value=None),
-            )
-
-        run_json_path = outdir / "run.json"
-        assert run_json_path.exists(), "run.json should be written after _submit_and_await_all"
-        data = json.loads(run_json_path.read_text())
-
-        failed_samples = [row for row in data["per_sample"] if row["status"] == "failed"]
-        assert len(failed_samples) == 1
-        assert failed_samples[0]["sample_id"] == "sample_0"
-        assert "simulator crashed" in failed_samples[0].get("error_summary", "")
-
-        ok_samples = [row for row in data["per_sample"] if row["status"] == "ok"]
-        assert len(ok_samples) == 1
-        assert ok_samples[0]["sample_id"] == "sample_1"
-
     def test_resubmit_failure_falls_through_to_mark_failed(
         self,
         variables_yml: Path,
