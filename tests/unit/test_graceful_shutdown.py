@@ -50,11 +50,26 @@ class StubExecutor(BaseExecutor):
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
+        container_digest: str | None = None,
+        openstudio_version: str | None = None,
+        result_hint: Any = None,
+        remote_command: str | None = None,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        variables_json: str | None = None,
+        stdout_path: Any = None,
+        stderr_path: Any = None,
+        max_retries: int | None = None,
+        worker_id: str | None = None,
         **kwargs: Any,
     ) -> Handle:
+        self._container_digest = container_digest
         fut: Future[Any] = Future()
         try:
-            result = fn(*args, **kwargs)
+            result = fn(*args)
             fut.set_result(result)
         except Exception as e:
             fut.set_exception(e)
