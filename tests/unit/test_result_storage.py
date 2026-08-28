@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -188,6 +189,15 @@ class TestResultStorageUploader:
             def list_results(self, prefix: str = "") -> list[str]:
                 return []
 
+            async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+                return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+            async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+                return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+            async def list_results_async(self, prefix: str = "") -> list[str]:
+                return asyncio.to_thread(self.list_results, prefix)
+
         local_file = tmp_path / "retry.txt"
         local_file.write_text("x")
         store = FlakyStorage()
@@ -228,6 +238,15 @@ class TestResultStorageUploader:
 
             def delete_file(self, remote_path: str) -> None:
                 pass
+
+            async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+                return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+            async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+                return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+            async def list_results_async(self, prefix: str = "") -> list[str]:
+                return asyncio.to_thread(self.list_results, prefix)
 
         from unittest.mock import patch
 
@@ -272,6 +291,15 @@ class TestResultStorageUploader:
             def list_results(self, prefix: str = "") -> list[str]:
                 return []
 
+            async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+                return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+            async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+                return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+            async def list_results_async(self, prefix: str = "") -> list[str]:
+                return asyncio.to_thread(self.list_results, prefix)
+
         local_file = tmp_path / "fail.txt"
         local_file.write_text("x")
         uploader = ResultStorageUploader(
@@ -298,6 +326,15 @@ class TestResultStorageUploader:
 
             def list_results(self, prefix: str = "") -> list[str]:
                 return []
+
+            async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+                return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+            async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+                return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+            async def list_results_async(self, prefix: str = "") -> list[str]:
+                return asyncio.to_thread(self.list_results, prefix)
 
         files = [tmp_path / f"bp-{idx}.txt" for idx in range(3)]
         for file_path in files:
