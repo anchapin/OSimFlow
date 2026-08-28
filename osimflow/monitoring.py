@@ -157,6 +157,16 @@ class RunTrace:
         # a list of dicts so ``run.json`` shows the recovery evidence
         # the integration test asserts on.
         self.chaos_invocations: list[dict[str, object]] = []
+        # Chaos schedule (issue #1191). Set once at campaign start from
+        # ``cfg.chaos.schedule`` so run.json records which schedule was active.
+        self.chaos_schedule: str | None = None
+        # Circuit-breaker final states (issue #1191). Populated from
+        # ``CircuitBreaker`` instances at campaign end; keys are the
+        # breaker names (e.g. "cache:campaign_id", "docs:namespace").
+        self.circuit_breaker_states: dict[str, str] | None = None
+        # Alerts fired (issue #1191). One dict per alert dispatched with
+        # event_type, severity, and delivery_status keys.
+        self.alerts_fired: list[dict[str, object]] | None = None
         self.status: str = "running"  # "running", "success", "cancelled", "failed", "paused"
         # Timestamp when the campaign was paused (None if not paused).
         self.paused_at: float | None = None
@@ -303,6 +313,15 @@ class RunTrace:
         # so downstream tooling can rely on the key — the value is
         # ``[]`` when chaos was never enabled or never fired.
         d["chaos_invocations"] = list(self.chaos_invocations)
+        # Chaos schedule (issue #1191). Present when chaos is configured.
+        if self.chaos_schedule is not None:
+            d["chaos_schedule"] = self.chaos_schedule
+        # Circuit-breaker states (issue #1191). Present when circuit breakers exist.
+        if self.circuit_breaker_states is not None:
+            d["circuit_breaker_states"] = self.circuit_breaker_states
+        # Alerts fired (issue #1191). Present when alerts were dispatched.
+        if self.alerts_fired is not None:
+            d["alerts_fired"] = list(self.alerts_fired)
         # Paused timestamp (issue #553). Present when the campaign has been paused.
         if self.paused_at is not None:
             d["paused_at"] = self.paused_at
