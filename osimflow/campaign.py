@@ -267,7 +267,7 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         inputs=StepInputs(required=("template_sim_package",)),
         outputs=StepOutputs(produced=("preflight_OK",)),
         method="step_preflight_run_model",
-        condition=lambda campaign, algo, **_: campaign._generation == 0,
+        condition=lambda campaign, algo, generation, **_: generation == 0,
     ),
     "APPLY_PARAMETERS": DAGStep(
         inputs=StepInputs(required=("template_sim_package", "samples.json")),
