@@ -23,6 +23,19 @@ from .executors import AWSBatchExecutor
 
 log = logging.getLogger("osimflow.campaign")
 
+_EXECUTORS_WITH_SPOT = frozenset({"aws_batch"})
+_EXECUTORS_WITH_FLAT_RATE = frozenset(
+    {
+        "slurm",
+        "pbs",
+        "nomad",
+        "kubernetes",
+        "dask_jobqueue",
+        "local",
+        "docker_swarm",
+    }
+)
+
 
 class CampaignCostTracker:
     """Manages cost tracker lifecycle and per-sample cost accumulation.
@@ -53,6 +66,7 @@ class CampaignCostTracker:
         cfg: CampaignConfig,
         executor_name: str,
     ) -> None:
+        self._executor_name = executor_name
         self._tracker: CostTracker | None = self._build_tracker(
             campaign_id=campaign_id,
             cfg=cfg,
@@ -120,8 +134,7 @@ class CampaignCostTracker:
     # ------------------------------------------------------------------
     # Cost accumulation helpers
     # ------------------------------------------------------------------
-    @staticmethod
-    def sum_sample_costs(sample_state: dict[str, dict[str, object]]) -> tuple[float, float]:
+    def sum_sample_costs(self, sample_state: dict[str, dict[str, object]]) -> tuple[float, float]:
         """Sum per-sample costs from sample state accumulator.
 
         Parameters
@@ -134,23 +147,28 @@ class CampaignCostTracker:
         -------
         tuple[float, float]
             Tuple of (total_cost, total_savings) where savings is
-            ``compute_spot_savings(total_cost)`` — a fixed fraction
-            (~40%) of total_cost for AWS Batch.
+            computed using the executor-specific pricing model.
         """
         total_cost = 0.0
         for state in sample_state.values():
             cost_usd = state.get("cost_usd")
             if cost_usd is not None:
                 total_cost += float(str(cost_usd))
-        return total_cost, CampaignCostTracker.compute_spot_savings(total_cost)
+        return total_cost, self.compute_spot_savings(total_cost)
 
-    @staticmethod
-    def compute_spot_savings(total_cost: float) -> float:
+    def compute_spot_savings(self, total_cost: float) -> float:
         """Compute estimated spot savings from on-demand total cost.
 
-        Spot savings is the difference between on-demand and spot pricing.
-        Uses a fixed fraction (~40%) matching the default pricing ratio
-        ($0.05 on-demand vs $0.03 spot).
+        Uses an executor-specific pricing model:
+
+        - **AWS Batch**: Uses the configured on-demand vs. spot price ratio
+          (default: ~40% savings — $0.05 on-demand vs. $0.03 spot).
+        - **Flat-rate executors** (Slurm, PBS, Nomad, Kubernetes,
+          Dask-JobQueue, Local, Docker Swarm): These bill at flat
+          node-hour rates with no spot market — returns 0.0.
+        - **Other cloud executors** (Azure, Google Batch): Falls back
+          to the AWS Batch ratio until executor-specific pricing is
+          implemented (issue #1190).
 
         Parameters
         ----------
@@ -160,9 +178,12 @@ class CampaignCostTracker:
         Returns
         -------
         float
-            Estimated savings if jobs ran on spot instances.
+            Estimated savings if jobs ran on spot instances (0.0 for
+            flat-rate executors).
         """
         if total_cost <= 0:
+            return 0.0
+        if self._executor_name in _EXECUTORS_WITH_FLAT_RATE:
             return 0.0
         savings_ratio = (
             AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
