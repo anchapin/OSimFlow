@@ -106,7 +106,8 @@ from .observability import new_trace_id
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
-from .taskqueue import ConsumerQueue, TaskHandle as TQHandle
+from .taskqueue import ConsumerQueue
+from .taskqueue import TaskHandle as TQHandle
 from .weather import EPWValidationError, validate_all_epw_files, validate_epw
 from .webhook import WebhookClient
 from .work import (
