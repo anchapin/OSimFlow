@@ -577,3 +577,145 @@ class TestLoadConfigIntegration:
         assert cfg.observability == "cloudwatch"
         assert cfg.cloudwatch_namespace == "MyOrg/Sims"
         assert cfg.cloudwatch_log_group == "/osimflow/logs"
+
+
+# ---------------------------------------------------------------------------
+# Periodic flush (issue #1186)
+# ---------------------------------------------------------------------------
+
+
+class TestPeriodicFlush:
+    """Tests for ObservabilityManager periodic flush mechanism."""
+
+    def test_start_periodic_flush_skips_null_backend(self) -> None:
+        """NullBackend is a no-op; periodic flush should not start a thread."""
+        cfg = _make_cfg(observability="none")
+        mgr = ObservabilityManager(cfg)
+        mgr.start_periodic_flush()
+        assert mgr._periodic_flush_thread is None
+
+    def test_start_periodic_flush_starts_thread_for_cloudwatch(self) -> None:
+        """For real backends, a daemon thread should be started."""
+        cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
+        mgr = ObservabilityManager(cfg)
+        with patch.object(mgr._backend, "flush") as mock_flush:
+            mgr.start_periodic_flush()
+            assert mgr._periodic_flush_thread is not None
+            assert mgr._periodic_flush_thread.daemon is True
+            assert mgr._periodic_flush_thread.name == "observability-periodic-flush"
+            mgr.stop_periodic_flush()
+            mock_flush.assert_called()
+
+    def test_start_periodic_flush_idempotent(self) -> None:
+        """Calling start twice should not start multiple threads."""
+        cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
+        mgr = ObservabilityManager(cfg)
+        with patch.object(mgr._backend, "flush"):
+            mgr.start_periodic_flush()
+            first_thread = mgr._periodic_flush_thread
+            mgr.start_periodic_flush()
+            assert mgr._periodic_flush_thread is first_thread
+            mgr.stop_periodic_flush()
+
+    def test_stop_periodic_flush_stops_thread_and_flushes(self) -> None:
+        """stop_periodic_flush should join the thread and call flush on backend."""
+        cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
+        mgr = ObservabilityManager(cfg)
+        with patch.object(mgr._backend, "flush") as mock_flush:
+            mgr.start_periodic_flush()
+            mgr.stop_periodic_flush()
+            assert mgr._periodic_flush_thread is None
+            assert mock_flush.call_count >= 1
+
+    def test_stop_periodic_flush_noop_when_not_started(self) -> None:
+        """stop_periodic_flush should be safe to call even if not started."""
+        cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
+        mgr = ObservabilityManager(cfg)
+        mgr.stop_periodic_flush()
+
+    def test_stop_periodic_flush_idempotent(self) -> None:
+        """Calling stop multiple times should be safe."""
+        cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
+        mgr = ObservabilityManager(cfg)
+        with patch.object(mgr._backend, "flush"):
+            mgr.start_periodic_flush()
+            mgr.stop_periodic_flush()
+            mgr.stop_periodic_flush()
+
+    def test_periodic_flush_loop_calls_flush_periodically(self) -> None:
+        """The background thread should call flush at the configured interval."""
+        cfg = _make_cfg(
+            observability="cloudwatch",
+            cloudwatch_namespace="TestNS",
+            flush_interval_seconds=0.05,
+        )
+        mgr = ObservabilityManager(cfg)
+        with patch.object(mgr._backend, "flush") as mock_flush:
+            mgr.start_periodic_flush()
+            time.sleep(0.18)
+            mgr.stop_periodic_flush()
+            assert mock_flush.call_count >= 3
+
+    def test_observability_config_flush_interval(self) -> None:
+        """ObservabilityConfig should accept flush_interval_seconds."""
+        from osimflow.config import ObservabilityConfig
+
+        obs_cfg = ObservabilityConfig(
+            observability="none",
+            flush_interval_seconds=60.0,
+        )
+        assert obs_cfg.flush_interval_seconds == 60.0
+
+    def test_campaign_config_flush_interval_default(self) -> None:
+        """CampaignConfig should have flush_interval_seconds defaulting to 30.0."""
+        cfg = _make_cfg()
+        assert cfg.flush_interval_seconds == 30.0
+
+    def test_load_config_includes_flush_interval(
+        self, tmp_path: Path
+    ) -> None:
+        """load_config should accept observability_flush_interval arg."""
+        from osimflow.config import load_config
+
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+        )
+        template = tmp_path / "template"
+        template.mkdir()
+        (template / "workflow.osw").write_text("{}")
+
+        args = {
+            "input_variables": str(variables_yml),
+            "template_sim_package": str(template),
+            "n_samples": 3,
+            "outdir": str(tmp_path / "out"),
+            "openstudio_version": "3.11.0",
+            "observability_flush_interval": 45.0,
+        }
+        cfg = load_config(args)
+        assert cfg.flush_interval_seconds == 45.0
+
+    def test_load_config_default_flush_interval(
+        self, tmp_path: Path
+    ) -> None:
+        """flush_interval_seconds should default to 30.0."""
+        from osimflow.config import load_config
+
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text(
+            "variables:\n  - name: test\n    distribution: uniform\n    min: 0\n    max: 1\n"
+        )
+        template = tmp_path / "template"
+        template.mkdir()
+        (template / "workflow.osw").write_text("{}")
+
+        args = {
+            "input_variables": str(variables_yml),
+            "template_sim_package": str(template),
+            "n_samples": 3,
+            "outdir": str(tmp_path / "out"),
+            "openstudio_version": "3.11.0",
+        }
+        cfg = load_config(args)
+        assert cfg.flush_interval_seconds == 30.0

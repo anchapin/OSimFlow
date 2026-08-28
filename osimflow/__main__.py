@@ -1146,6 +1146,17 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         help='OpenTelemetry OTLP gRPC endpoint (e.g. "http://localhost:4317").',
     )
     run.add_argument(
+        "--observability-flush-interval",
+        type=float,
+        default=30.0,
+        help=(
+            "Periodic flush interval in seconds for observability backends (issue #1186). "
+            "Metrics are flushed at this interval to prevent loss on early crash. "
+            "Set to 0 to disable periodic flush (flush only at campaign end). "
+            "Default: 30.0 seconds."
+        ),
+    )
+    run.add_argument(
         "--no-tui",
         action="store_true",
         help=(
