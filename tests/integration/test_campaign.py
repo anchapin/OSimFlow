@@ -186,7 +186,7 @@ def test_step_apply_parameters_writes_per_sample_dirs(campaign: Campaign) -> Non
 def test_step_run_openstudio_sim_writes_eplusout_sql(campaign: Campaign) -> None:
     samples = campaign.step_generate_lhs()
     parameterized = campaign.step_apply_parameters(samples)
-    simulated = campaign.step_run_openstudio_sim(parameterized)
+    simulated = campaign.step_run_openstudio_sim(parameterized).samples
     for _sid, path in simulated.items():
         assert path.is_dir()
         assert (path / "eplusout.sql").is_file()
@@ -197,7 +197,7 @@ def test_step_run_openstudio_sim_writes_eplusout_sql(campaign: Campaign) -> None
 def test_step_extract_kpis_writes_per_sample_files(campaign: Campaign) -> None:
     samples = campaign.step_generate_lhs()
     parameterized = campaign.step_apply_parameters(samples)
-    simulated = campaign.step_run_openstudio_sim(parameterized)
+    simulated = campaign.step_run_openstudio_sim(parameterized).samples
     kpi_files = campaign.step_extract_kpis(simulated)
     assert len(kpi_files) == 2
     for kpi in kpi_files:
@@ -213,7 +213,7 @@ def test_step_aggregate_results_writes_csv_and_failed(
 ) -> None:
     samples = campaign.step_generate_lhs()
     parameterized = campaign.step_apply_parameters(samples)
-    simulated = campaign.step_run_openstudio_sim(parameterized)
+    simulated = campaign.step_run_openstudio_sim(parameterized).samples
     kpi_files = campaign.step_extract_kpis(simulated)
     agg = campaign.step_aggregate_results(kpi_files, simulated)
     assert agg["csv"].is_file()
@@ -227,7 +227,7 @@ def test_step_aggregate_results_writes_csv_and_failed(
 def test_step_generate_plots_creates_output_dir(campaign: Campaign) -> None:
     samples = campaign.step_generate_lhs()
     parameterized = campaign.step_apply_parameters(samples)
-    simulated = campaign.step_run_openstudio_sim(parameterized)
+    simulated = campaign.step_run_openstudio_sim(parameterized).samples
     kpi_files = campaign.step_extract_kpis(simulated)
     agg = campaign.step_aggregate_results(kpi_files, simulated)
     plots = campaign.step_generate_plots(agg)
