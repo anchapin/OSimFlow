@@ -1556,9 +1556,9 @@ class TestFanOutRecoveryPath:
             completed_keys = [
                 call[0][0] for call in mock_jq.mark_completed.call_args_list
             ]
-            assert f"sample_0_RUN_OPENSTUDIO_SIM" in completed_keys
-            assert f"sample_1_RUN_OPENSTUDIO_SIM" in completed_keys
-            assert f"sample_2_RUN_OPENSTUDIO_SIM" in completed_keys
+            assert "sample_0_RUN_OPENSTUDIO_SIM" in completed_keys
+            assert "sample_1_RUN_OPENSTUDIO_SIM" in completed_keys
+            assert "sample_2_RUN_OPENSTUDIO_SIM" in completed_keys
 
     def test_error_path_marks_failed_and_records_in_sample_state(
         self,
