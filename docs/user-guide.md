@@ -1262,10 +1262,25 @@ osimflow serve --outdir ./results --host 0.0.0.0 --port 8000 --read-write
 ```
 
 `--read-write` enables campaign start/stop and SSE event streaming
-(issue #143); omit it for read-only monitoring. Other `serve` flags:
-`--api-key`, `--cors-origins`, `--rate-limit`, `--tls-cert` / `--tls-key`,
-`--ui`, `--editor`, `--dashboard`, `--api-redis-url`. See [api.md](api.md)
+(issue #143); omit it for read-only monitoring. See [api.md](api.md)
 for the endpoint reference and `osimflow serve --help` for the full list.
+
+| Flag | Description |
+|---|---|
+| `--host` | Bind address (default: `127.0.0.1`). |
+| `--port` | Port number (default: `8000`). |
+| `--read-write` | Enable campaign start/stop and SSE event streaming (issue #143). |
+| `--ui` | Serve the Streamlit dashboard UI. |
+| `--editor` | Enable the interactive variable designer. |
+| `--dashboard` | Enable the campaign comparison dashboard. |
+| `--api-redis-url` | Redis URL for distributed rate limiting and document store. |
+| `--api-key` | Single-key API authentication (SEC-001; required on non-local interfaces). |
+| `--api-keys-file` | Path to JSON file with multiple API keys and per-user roles (issue #395). |
+| `--cors-origins` | Comma-separated allowed CORS origins (e.g. `http://localhost:3000`). |
+| `--rate-limit` | Rate limit string, e.g. `60/minute` (default: `60/minute`). |
+| `--rate-limit-key` | Rate limit key type: `ip` (default), `user`, or `campaign` (issue #445). |
+| `--tls-cert` | Path to PEM-encoded TLS certificate (SEC-004; requires `--tls-key`). |
+| `--tls-key` | Path to PEM-encoded TLS private key (SEC-004; requires `--tls-cert`). |
 
 #### Other subcommands
 
