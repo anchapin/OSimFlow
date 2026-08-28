@@ -408,7 +408,7 @@ name in this section.
   `EmailNotifyBackend`, `NullNotifyBackend`, `SNSNotifyBackend`,
   `WebhookNotifyBackend` + `build_notify_backend`.
 - `osimflow/chaos.py` — `ChaosEngine` + `ChaosResult` +
-  `ChaosScenario` + `FaultInjector` ABC + `CPUSpikeInjector`,
+  `FaultType` + `ChaosScenario` + `FaultInjector` ABC + `CPUSpikeInjector`,
   `MemoryPressureInjector`, `NetworkDelayInjector`,
   `KillSwitchInjector`, `run_chaos_scenario`.
 - `osimflow/cost_tracking.py` — `CostEstimate`, `CostTracker`,
