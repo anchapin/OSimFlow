@@ -310,7 +310,7 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
     ),
     "GENERATE_BASIC_PLOTS": DAGStep(
-        inputs=StepInputs(required=("aggregated_results.csv",)),
+        inputs=StepInputs(required=("../aggregated_results.csv",)),
         outputs=StepOutputs(produced=("plots/",)),
         method="step_generate_plots",
     ),
