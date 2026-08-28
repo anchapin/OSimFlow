@@ -24,11 +24,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "LICENSE"
-      - ".agents/**"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -68,15 +63,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — typecheck not required"
+          echo "::notice::Docs-only PR: typecheck skipped (no Python code changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -85,11 +100,13 @@ jobs:
             venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + dev extras)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       - name: mypy osimflow/
+        if: steps.changed.outputs.any_changed == 'true'
         run: .venv/bin/mypy osimflow
 
   contract:
@@ -133,12 +150,31 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — security audit not required"
+          echo "::notice::Docs-only PR: pip-audit skipped (no Python dependencies changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         # Use the runner's system Python (provided by actions/setup-python,
         # which uses the cpython.org-hosted builds) rather than
         # `uv python install` because pip-audit internally creates a
@@ -150,6 +186,7 @@ jobs:
           python-version: "3.12"
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -158,14 +195,17 @@ jobs:
             venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + dev extras)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       - name: Install pip-audit
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv pip install --python .venv/bin/python "pip-audit>=2.7"
 
       - name: Audit dependencies
+        if: steps.changed.outputs.any_changed == 'true'
         # pip-audit scans the *installed* package set and looks each one
         # up against the OSV / PyPA advisory database. We freeze the
         # venv (excluding the local `osimflow` editable install, which
@@ -201,15 +241,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — test not required"
+          echo "::notice::Docs-only PR: pytest skipped (no Python code changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -218,12 +278,14 @@ jobs:
             venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + all extras + pytest-xdist)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
           uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
 
       - name: pytest with coverage gate
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           .venv/bin/pytest \
             --cov=osimflow \
@@ -238,7 +300,7 @@ jobs:
             -q
 
       - name: Upload coverage
-        if: success()
+        if: steps.changed.outputs.any_changed == 'true' && success()
         uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
@@ -268,15 +330,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — mlflow test not required"
+          echo "::notice::Docs-only PR: mlflow-real skipped (no Python code changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -285,11 +367,13 @@ jobs:
             venv-${{ runner.os }}-py3.12-mlflow-
 
       - name: Install (editable + dev + mlflow extras)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,mlflow]"
 
       - name: pytest (real MLflow file-tracking smoke test)
+        if: steps.changed.outputs.any_changed == 'true'
         env:
           OSIMFLOW_MLFLOW_E2E: "1"
         run: .venv/bin/pytest tests/integration/test_mlflow_real_tracking.py -v --timeout=300 --no-cov
@@ -313,15 +397,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — slow tests not required"
+          echo "::notice::Docs-only PR: slow tests skipped (no Python code changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -330,12 +434,14 @@ jobs:
             venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + all extras)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
           uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
 
       - name: pytest -m slow
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           .venv/bin/pytest \
             -m slow \
@@ -364,15 +470,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — chaos tests not required"
+          echo "::notice::Docs-only PR: chaos tests skipped (no Python code changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -381,11 +507,13 @@ jobs:
             venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + all extras)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
 
       - name: pytest -m chaos
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           .venv/bin/pytest \
             -m chaos \
@@ -407,15 +535,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — AWS Batch mocked tests not required"
+          echo "::notice::Docs-only PR: aws-batch-mock skipped (no Python code changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -424,11 +572,13 @@ jobs:
             venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + dev + aws extras)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
 
       - name: pytest (AWS Batch mocked tests)
+        if: steps.changed.outputs.any_changed == 'true'
         run: .venv/bin/pytest tests/integration/test_aws_batch_mocked.py -v --no-cov
 
   # ---------------------------------------------------------------------------
@@ -446,15 +596,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check for non-docs changes
+        id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          files_ignore: |
+            docs/**
+            "**/*.md"
+            LICENSE
+            .agents/**
+
+      - name: Skip if docs-only
+        if: steps.changed.outputs.any_changed != 'true'
+        run: |
+          echo "No non-docs files changed — Nomad tests not required"
+          echo "::notice::Docs-only PR: Nomad tests skipped (no Python code changed)"
+          exit 0
+
       - name: Install uv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.x"
 
       - name: Setup Python
+        if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
       - name: Cache venv
+        if: steps.changed.outputs.any_changed == 'true'
         uses: actions/cache@v6
         with:
           path: .venv
@@ -463,6 +633,7 @@ jobs:
             venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + dev extras)
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
@@ -474,6 +645,7 @@ jobs:
       # info so that skip/xfail reasons can be diagnosed from CI logs.
       # -------------------------------------------------------------------
       - name: Docker diagnostics
+        if: steps.changed.outputs.any_changed == 'true'
         id: docker_check
         run: |
           echo "::group::Docker availability"
@@ -512,6 +684,7 @@ jobs:
       # Mock-based Nomad tests (always run, no Docker needed)
       # -------------------------------------------------------------------
       - name: Run mock-based Nomad tests
+        if: steps.changed.outputs.any_changed == 'true'
         run: |
           .venv/bin/pytest \
             tests/integration/nomad_e2e/test_single_node_mock.py \
@@ -522,14 +695,14 @@ jobs:
       # If Docker is unavailable, FAIL instead of silently skipping.
       # -------------------------------------------------------------------
       - name: Run Docker-based Nomad E2E tests
-        if: steps.docker_check.outputs.docker_info == 'available'
+        if: steps.changed.outputs.any_changed == 'true' && steps.docker_check.outputs.docker_info == 'available'
         run: |
           .venv/bin/pytest \
             tests/integration/nomad_e2e/test_single_node.py \
             -v -m nomad_e2e --no-cov -ra
 
       - name: Fail if Docker unavailable for E2E tests
-        if: steps.docker_check.outputs.docker_info != 'available'
+        if: steps.changed.outputs.any_changed == 'true' && steps.docker_check.outputs.docker_info != 'available'
         run: |
           echo "::error title=Docker unavailable::Docker is not available on this runner — Nomad E2E tests cannot run. This is a hard failure, not a silent skip (issue #195)."
           exit 1
