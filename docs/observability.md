@@ -197,6 +197,63 @@ sink config:
 | OpenTelemetry | `OSIMFLOW_OTEL_ENDPOINT` | OTLP gRPC endpoint (e.g. `localhost:4317`). |
 | OpenTelemetry | `OSIMFLOW_OTEL_OUTPUT_FILE` | File the collector's file exporter writes to. |
 
+## Circuit Breaker
+
+When running distributed campaigns with `--redis-url`, OSimFlow uses a circuit breaker to guard the Redis data plane against persistent outages (issue #1111).
+
+### State Machine
+
+The breaker implements the classic **closed → open → half-open** pattern:
+
+| State | Behavior |
+|-------|----------|
+| **closed** | Normal operation; Redis calls proceed normally. Consecutive failures are counted. |
+| **open** | After `failure_threshold` (default: 5) consecutive failures, callers are rejected immediately (fail-fast) for `cooldown_s` (default: 30 s). |
+| **half-open** | After the cooldown elapses, one probe request is allowed through. Success → closed; failure → re-open. |
+
+### CircuitOpenError
+
+When a operation is attempted while the circuit is open, OSimFlow raises `CircuitOpenError`:
+
+```
+CircuitOpenError: circuit 'redis' is open after 5 consecutive failures
+— fail-fast for 30s cooldown
+```
+
+This propagates to the caller as a `RuntimeError`. In a distributed campaign, all concurrent workers that hit the open circuit will receive this error and mark their samples as failed.
+
+### consecutive_failures
+
+`_consecutive_failures` is reset to 0 on every successful Redis operation. It is set to 1 (not 0) when transitioning from `half_open → open` on failure, ensuring the circuit re-opens quickly if the Redis probe fails.
+
+### Observability Integration
+
+The `CircuitBreaker` accepts an `on_transition` callback `(name, from_state, to_state) → None` that is invoked on every state change. Pass this to the ObservabilityBackend to emit a metric or log line when the circuit opens:
+
+```python
+from osimflow.circuit_breaker import CircuitBreaker, CircuitOpenError
+from osimflow.observability import record_circuit_breaker_event
+
+breaker = CircuitBreaker(
+    name="redis",
+    failure_threshold=5,
+    cooldown_s=30.0,
+    on_transition=record_circuit_breaker_event,
+)
+```
+
+### Interaction with run.json
+
+Circuit breaker state transitions are recorded in `run.json.chaos_invocations` when `--chaos-enabled` is used, and in the `RunTrace.circuit_breaker_states` field for observability backends that support it.
+
+### When the Circuit Opens
+
+If your campaign fails with `CircuitOpenError`:
+
+1. Check Redis connectivity (`redis-cli ping`)
+2. Verify the Redis host/port is reachable from all campaign nodes
+3. The circuit will auto-reset after `cooldown_s` seconds; re-run the campaign
+
 ### Running a single backend
 
 Each test records a `status` metric carrying a unique marker (a UUID-derived
