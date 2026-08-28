@@ -22,7 +22,7 @@ study, examined the output artifacts, and know how to scale up.
 ## Part 1: Install OSimFlow (2 minutes)
 
 ```bash
-pip install -e .
+pip install -e ".[dev,aws,slurm]"
 ```
 
 This installs:
