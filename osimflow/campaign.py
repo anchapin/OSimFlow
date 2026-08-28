@@ -1094,8 +1094,7 @@ class Campaign:
             # Forward the per-sample trace_id so the metric can be joined
             # to a distributed trace (issue #436).
             trace_id = self._trace_id_for(sid)
-            if cost_usd is not None:
-                self._obs.record_sample_metric(sid, "cost_usd", cost_usd, trace_id=trace_id)
+            self._obs.record_sample_cost(sid, cost_usd, trace_id=trace_id)
             trace = SampleTrace(
                 sample_id=sid,
                 status=status,
