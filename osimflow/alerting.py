@@ -87,6 +87,7 @@ class Alert:
     message: str
     context: dict[str, Any]
     timestamp: float
+    delivery_status: str = "unknown"
 
 
 @dataclasses.dataclass
@@ -349,7 +350,10 @@ class AlertManager:
                 message=message,
                 context=context,
                 timestamp=time.time(),
+                delivery_status="unknown",
             )
+
+            alert.delivery_status = self._dispatch_to_destinations(alert, rule)
 
             if self._on_alert is not None:
                 try:
@@ -357,30 +361,45 @@ class AlertManager:
                 except Exception as exc:
                     log.warning("on_alert callback raised — continuing: %s", exc)
 
-            for dest in self._destinations:
-                error = ""
-                try:
-                    delivered = bool(dest.send(alert))
-                except Exception as exc:
-                    delivered = False
-                    error = str(exc)
-                    log.warning(
-                        "alert destination %s failed for rule %s: %s",
-                        type(dest).__name__,
-                        rule.name,
-                        exc,
-                    )
-                if delivered:
-                    continue
-                if not error:
-                    error = "destination reported delivery failure"
-                    log.warning(
-                        "alert destination %s failed for rule %s: %s",
-                        type(dest).__name__,
-                        rule.name,
-                        error,
-                    )
-                self._enqueue_pending(alert, dest, error)
+    def _dispatch_to_destinations(self, alert: Alert, rule: AlertRule) -> str:
+        """Send alert to all destinations and return overall delivery status."""
+        if not self._destinations:
+            return "no_destinations"
+
+        delivered_count = 0
+        failed_count = 0
+        for dest in self._destinations:
+            error = ""
+            try:
+                delivered = bool(dest.send(alert))
+            except Exception as exc:
+                delivered = False
+                error = str(exc)
+                log.warning(
+                    "alert destination %s failed for rule %s: %s",
+                    type(dest).__name__,
+                    rule.name,
+                    exc,
+                )
+            if delivered:
+                delivered_count += 1
+                continue
+            failed_count += 1
+            if not error:
+                error = "destination reported delivery failure"
+                log.warning(
+                    "alert destination %s failed for rule %s: %s",
+                    type(dest).__name__,
+                    rule.name,
+                    error,
+                )
+            self._enqueue_pending(alert, dest, error)
+
+        if failed_count == 0:
+            return "delivered"
+        if delivered_count == 0:
+            return "failed"
+        return "partial"
 
     def _enqueue_pending(
         self,
