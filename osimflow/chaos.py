@@ -12,11 +12,11 @@ with the :class:`~osimflow.observability.ObservabilityBackend` interface.
 
 Usage::
 
-    from osimflow.chaos import ChaosEngine, KillSwitchInjector, run_chaos_scenario
+    from osimflow.chaos import ChaosEngine, KillSwitchSimulator, run_chaos_scenario
 
     # Standalone usage
     engine = ChaosEngine()
-    engine.register(KillSwitchInjector(fail_after=5))
+    engine.register(KillSwitchSimulator(fail_after=5))
     result = run_chaos_scenario(engine, target_fn, *args)
 
     # Integration with observability
@@ -41,6 +41,7 @@ __all__ = [
     "FaultInjector",
     "FaultType",
     "KillSwitchInjector",
+    "KillSwitchSimulator",
     "MemoryPressureInjector",
     "NetworkDelayInjector",
     "run_chaos_scenario",
@@ -48,9 +49,9 @@ __all__ = [
 
 import logging
 import random
-import signal
 import threading
 import time
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -145,34 +146,42 @@ class FaultInjector(ABC):
         return None
 
 
-class KillSwitchInjector(FaultInjector):
-    """Inject a kill switch that terminates the target process.
+class KillSwitchSimulator(FaultInjector):
+    """Simulate a kill switch that would terminate the target process.
 
-    This injector sends SIGTERM (or SIGKILL if force is True) to the
-    process associated with the target. Use this to validate that
-    the campaign handles unexpected process termination gracefully.
+    This injector logs a warning when the kill switch activates for a given
+    target. It does **not** send an actual OS signal because the current
+    wiring does not map sample IDs to worker PIDs or container IDs across
+    all executors (issue #1179).
+
+    Use this to validate that the campaign handles process termination
+    gracefully — the warning fires and the sample is marked failed, but
+    no actual process is terminated.
 
     Parameters
     ----------
     fail_after
         Number of calls after which the kill switch activates.
         If 0, the kill switch activates immediately on the first call.
-    signal_num
-        Signal number to send (default: SIGTERM=15, SIGKILL=9).
-    force
-        If True, use SIGKILL instead of SIGTERM.
     """
 
-    name = "kill_switch"
+    name = "kill_switch_simulator"
 
     def __init__(
         self,
         fail_after: int = 1,
-        signal_num: int = signal.SIGTERM,
+        signal_num: int | None = None,
         force: bool = False,
+        **kwargs: Any,
     ) -> None:
+        if signal_num is not None or force or kwargs:
+            warnings.warn(
+                "The signal_num and force parameters are deprecated and have no effect "
+                "on KillSwitchSimulator (issue #1179).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._fail_after = fail_after
-        self._signal_num = signal_num if not force else signal.SIGKILL
         self._call_count: dict[str, int] = {}
         self._active: set[str] = set()
 
@@ -192,27 +201,45 @@ class KillSwitchInjector(FaultInjector):
             )
 
         self._active.add(target_id)
-        try:
-            # Attempt to find and signal the process
-            # In a real campaign, the target_id would map to a worker process
-            log.warning("Kill switch activated for target %s", target_id)
-            return ChaosResult(
-                fault_type=self.fault_type,
-                target_id=target_id,
-                injected=True,
-                duration_s=0.0,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.error("Kill switch injection failed for %s: %s", target_id, exc, exc_info=True)
-            return ChaosResult(
-                fault_type=self.fault_type,
-                target_id=target_id,
-                injected=False,
-                error=str(exc),
-            )
+        log.warning(
+            "Kill switch simulator activated for target %s "
+            "(no actual process was terminated — issue #1179)",
+            target_id,
+        )
+        return ChaosResult(
+            fault_type=self.fault_type,
+            target_id=target_id,
+            injected=True,
+            duration_s=0.0,
+        )
 
     def recover(self, target_id: str) -> None:
         self._active.discard(target_id)
+
+
+def KillSwitchInjector(
+    *args: Any,
+    fail_after: int = 1,
+    signal_num: int | None = None,
+    force: bool = False,
+    **kwargs: Any,
+) -> KillSwitchSimulator:
+    """Deprecated alias for :class:`KillSwitchSimulator`.
+
+    ``KillSwitchInjector`` was renamed because the implementation only
+    logs a warning and does not actually terminate a process (issue #1179).
+    Use :class:`KillSwitchSimulator` for new code.
+
+    The ``signal_num`` and ``force`` parameters are accepted for backward
+    compatibility but have no effect (issue #1179).
+    """
+    warnings.warn(
+        "KillSwitchInjector is deprecated, use KillSwitchSimulator instead "
+        "(issue #1179)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return KillSwitchSimulator(fail_after=fail_after, signal_num=signal_num, force=force, **kwargs)
 
 
 class NetworkDelayInjector(FaultInjector):
@@ -460,7 +487,7 @@ class ChaosEngine:
     Example
     -------
     >>> engine = ChaosEngine()
-    >>> engine.register(KillSwitchInjector(fail_after=3))
+    >>> engine.register(KillSwitchSimulator(fail_after=3))
     >>> engine.register(NetworkDelayInjector(delay_s=1.5))
     >>> result = engine.inject("sample-001")
     """
