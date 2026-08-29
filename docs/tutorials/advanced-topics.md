@@ -24,17 +24,17 @@ OSimFlow supports pluggable sampling and optimization algorithms.
 
 ### 1.1 Built-in Algorithms
 
-| Algorithm | Type | Use Case |
-|---|---|---|
-| `lhs` | Sampling | Latin Hypercube Sampling (default) |
-| `sobol` | Sampling | Sobol quasi-random sequence |
-| `halton` | Sampling | Halton quasi-random sequence |
-| `morris` | Sensitivity | Morris method sensitivity analysis |
-| `fast99` | Sensitivity | FAST99 sensitivity analysis |
-| `de` | Optimization | Differential Evolution |
-| `da` | Optimization | Dual Annealing |
-| `nsga2` | Optimization | NSGA-II multi-objective |
-| `pso` | Optimization | Particle Swarm Optimization |
+| Algorithm | Type | Use Case | Extra |
+|---|---|---|---|
+| `lhs` | Sampling | Latin Hypercube Sampling (default) | — |
+| `sobol` | Sampling | Sobol quasi-random sequence | `[sensitivity]` |
+| `halton` | Sampling | Halton quasi-random sequence | — |
+| `morris` | Sensitivity | Morris method sensitivity analysis | `[sensitivity]` |
+| `fast99` | Sensitivity | FAST99 sensitivity analysis | `[sensitivity]` |
+| `de` | Optimization | Differential Evolution | — |
+| `da` | Optimization | Dual Annealing | — |
+| `nsga2` | Optimization | NSGA-II multi-objective | `[optimization]` |
+| `pso` | Optimization | Particle Swarm Optimization | `[optimization]` |
 
 ### 1.2 Using Non-Default Algorithms
 
