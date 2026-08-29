@@ -156,6 +156,11 @@ class TestLocalExecutor:
         assert ex._pool._max_workers == 1
         ex.shutdown()
 
+    def test_default_max_workers_is_cpu_count(self) -> None:
+        ex = LocalExecutor()
+        assert ex._pool._max_workers == os.cpu_count()
+        ex.shutdown()
+
     def test_handle_job_id_starts_with_local(self) -> None:
         ex = LocalExecutor(max_workers=1)
         handle = ex.submit(lambda: None)
