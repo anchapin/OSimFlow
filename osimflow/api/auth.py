@@ -153,13 +153,10 @@ class MultiUserAPIKeyStore:
         """
         resolved = file_path.resolve()
         if not resolved.is_file():
-            raise ValueError(
-                f"api_keys_file must be a regular file, got {resolved}"
-            )
+            raise ValueError(f"api_keys_file must be a regular file, got {resolved}")
         if resolved.suffix not in (".json", ".keys"):
             raise ValueError(
-                f"api_keys_file must have .json or .keys extension, "
-                f"got {resolved.suffix!r}"
+                f"api_keys_file must have .json or .keys extension, got {resolved.suffix!r}"
             )
         try:
             keys_data = json.loads(resolved.read_text())

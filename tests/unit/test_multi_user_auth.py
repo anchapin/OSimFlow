@@ -223,7 +223,9 @@ class TestMultiUserAuth:
     def test_api_key_file_keys_extension_accepted(self, tmp_outdir: Path, tmp_path: Path) -> None:
         """Test that .keys extension is accepted."""
         keys_file = tmp_path / "api_keys.keys"
-        keys_file.write_text(json.dumps({"users": [{"key": "key1", "user_id": "alice", "role": "admin"}]}))
+        keys_file.write_text(
+            json.dumps({"users": [{"key": "key1", "user_id": "alice", "role": "admin"}]})
+        )
         app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
         client = TestClient(app)
         resp = client.get("/api/v1/campaign", headers={"X-API-Key": "key1"})
