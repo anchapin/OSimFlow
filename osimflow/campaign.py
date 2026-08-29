@@ -264,13 +264,13 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         condition=_always_run,
     ),
     "PREFLIGHT_RUN_MODEL": DAGStep(
-        inputs=StepInputs(required=("template_sim_package",)),
+        inputs=StepInputs(),
         outputs=StepOutputs(produced=("preflight_OK",)),
         method="step_preflight_run_model",
-        condition=lambda campaign, algo, **_: campaign._generation == 0,
+        condition=lambda campaign, algo, generation, **_: generation == 0,
     ),
     "APPLY_PARAMETERS": DAGStep(
-        inputs=StepInputs(required=("template_sim_package", "samples.json")),
+        inputs=StepInputs(required=("samples.json",)),
         outputs=StepOutputs(produced=("apply/*/",)),
         method="step_apply_parameters",
         fan_out=False,
@@ -282,13 +282,13 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "RUN_OPENSTUDIO_SIM": DAGStep(
         inputs=StepInputs(required_patterns=("apply/*/",)),
-        outputs=StepOutputs(produced=("work/sim/*/",)),
+        outputs=StepOutputs(produced=("sim/*/",)),
         method="step_run_openstudio_sim",
         fan_out=True,
     ),
     "EXTRACT_KPIS": DAGStep(
-        inputs=StepInputs(required_patterns=("work/sim/*/",)),
-        outputs=StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
+        inputs=StepInputs(required_patterns=("sim/*/",)),
+        outputs=StepOutputs(kpi_pattern="sim/*/kpi_*.json"),
         method="step_extract_kpis",
         fan_out=True,
     ),
