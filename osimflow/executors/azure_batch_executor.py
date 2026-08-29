@@ -233,6 +233,7 @@ class AzureBatchExecutor(BaseExecutor):
     """
 
     name = "azure_batch"
+    supports_spot_market = True
 
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
         "Preemption",

@@ -690,7 +690,7 @@ class Campaign:
         self._cost_tracker = CampaignCostTracker(
             campaign_id=self.trace.campaign_id,
             cfg=cfg,
-            executor_name=executor.name,
+            executor=executor,
         )
 
         # Chaos engine (issue #1013). When the user passes an explicit

@@ -887,6 +887,7 @@ class AWSBatchExecutor(BaseExecutor):
     """
 
     name = "aws_batch"
+    supports_spot_market = True
 
     @property
     def requires_remote_runner_payload(self) -> bool:
