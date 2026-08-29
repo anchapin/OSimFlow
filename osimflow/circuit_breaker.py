@@ -139,6 +139,6 @@ class CircuitBreaker:
                 self._state = "open"
                 self._opened_at = time.monotonic()
                 if was_half_open:
-                    self._consecutive_failures = 1
+                    self._consecutive_failures = 0
                 if self._on_transition is not None:
                     self._on_transition(self.name, prev_state, "open")
