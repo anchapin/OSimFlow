@@ -660,6 +660,7 @@ class Campaign:
                     bucket=cfg.result_storage_bucket,
                     prefix=str(cfg.outdir.name),
                     endpoint_url=cfg.result_storage_endpoint,
+                    allow_insecure_endpoint=cfg.allow_insecure_storage_endpoint,
                 )
                 self._result_storage = ResultStorageUploader(store)
                 log.info(

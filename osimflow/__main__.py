@@ -1507,6 +1507,20 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--allow-insecure-storage-endpoint",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt-in flag to allow plaintext 'http://' --result-storage-endpoint "
+            "and --s3-artifact-endpoint URLs (issue #1386). Defaults to False "
+            "(fail-closed) — non-HTTPS endpoints are rejected by the storage "
+            "backend to prevent AWS SigV4 signing material from leaking in "
+            "cleartext. Use only for dev/test against a local MinIO; loopback "
+            "hosts are exempt without this flag. Mirrors the Redis 'rediss://' "
+            "enforcement from issue #1321."
+        ),
+    )
+    run.add_argument(
         "--s3-artifact-presigned-url-expiration",
         type=int,
         default=3600,

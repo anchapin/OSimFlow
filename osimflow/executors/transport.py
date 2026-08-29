@@ -142,6 +142,7 @@ def materialize_object_storage_result(
     result_storage_bucket: str | None,
     result_storage_prefix: str | None,
     result_storage_endpoint: str | None = None,
+    allow_insecure_storage_endpoint: bool = False,
 ) -> Any:  # noqa: ANN401
     """Download object-storage artifacts so callbacks can consume local paths."""
     mode = coerce_transport_mode(transport_mode)
@@ -160,6 +161,7 @@ def materialize_object_storage_result(
         bucket=result_storage_bucket,
         prefix=str(result_storage_prefix or ""),
         endpoint_url=result_storage_endpoint,
+        allow_insecure_endpoint=allow_insecure_storage_endpoint,
     )
 
     downloaded: set[str] = set()
