@@ -7,6 +7,7 @@ Covers:
     OSIMFLOW_TASK_PAYLOAD + OSIMFLOW_RESULT_* env propagation,
     remote_command override, and object-storage result materialization
     against a mocked storage backend.
+  - Pod hardening (issue #1383): strict vs. relaxed SecurityContext.
 """
 
 from __future__ import annotations
@@ -69,6 +70,12 @@ class TestKubernetesExecutor:
         ex.backoff_limit = 0
         ex.ttl_seconds_after_finished = None
         ex.queue_name = None
+        # Pod hardening (issue #1383) — default is strict.
+        ex.security_context_strict = True
+        # Issue #1331: short-circuit the version-check pod (see helper).
+        ex._negotiated_versions = ["1.0.0"]
+        ex._negotiated_image = "nrel/openstudio:latest"
+        ex._container_digest = None
         with patch.object(
             ex,
             "_wait_for_terminal",
@@ -89,6 +96,10 @@ class TestKubernetesExecutor:
         ex.backoff_limit = 0
         ex.ttl_seconds_after_finished = None
         ex.queue_name = None
+        ex.security_context_strict = True
+        ex._negotiated_versions = ["1.0.0"]
+        ex._negotiated_image = "nrel/openstudio:latest"
+        ex._container_digest = None
         with patch.object(
             ex,
             "_wait_for_terminal",
@@ -107,6 +118,10 @@ class TestKubernetesExecutor:
         ex.backoff_limit = 0
         ex.ttl_seconds_after_finished = None
         ex.queue_name = None
+        ex.security_context_strict = True
+        ex._negotiated_versions = ["1.0.0"]
+        ex._negotiated_image = "nrel/openstudio:3.11.0"
+        ex._container_digest = None
         with patch.object(
             ex,
             "_wait_for_terminal",
@@ -144,6 +159,20 @@ class TestKubernetesExecutor:
         ex.backoff_limit = 0
         ex.ttl_seconds_after_finished = None
         ex.queue_name = None
+        # Pod hardening (issue #1383) — default is strict; override per
+        # test to exercise the relaxed (legacy) path.
+        ex.security_context_strict = True
+        # Issue #1331: ``submit`` calls ``_check_contract_version_compatibility``
+        # which builds and submits a real version-check Pod. The
+        # ``__new__``-style helpers bypass the constructor (so the
+        # cached ``_negotiated_versions`` attribute is missing) and the
+        # default ``_get_core_api()`` would try to talk to a real
+        # cluster. Short-circuit by stubbing the negotiation to a
+        # compatible version list. Individual tests that need to
+        # exercise the negotiation path can override the patch.
+        ex._negotiated_versions = ["1.0.0"]
+        ex._negotiated_image = "nrel/openstudio:latest"
+        ex._container_digest = None
         return mock_client, ex
 
     def _make_executor_with(
@@ -152,18 +181,21 @@ class TestKubernetesExecutor:
         backoff_limit: int = 0,
         ttl_seconds_after_finished: int | None = None,
         queue_name: str | None = None,
+        security_context_strict: bool = True,
     ) -> tuple[MagicMock, KubernetesExecutor]:
         """Build an executor with the native Job controls pre-set.
 
-        Helper for issue #997 — used by the parametrised tests that
-        exercise the new fields. The default values still match the
-        pre-#997 manifest exactly, so callers only need to override
-        the fields they care about.
+        Helper for issue #997 / #1383 — used by the parametrised tests
+        that exercise the new fields. The default values still match
+        the pre-#997 manifest exactly (except for the issue #1383
+        SecurityContext fields, which are now the strict default), so
+        callers only need to override the fields they care about.
         """
         mock_client, ex = self._make_executor()
         ex.backoff_limit = backoff_limit
         ex.ttl_seconds_after_finished = ttl_seconds_after_finished
         ex.queue_name = queue_name
+        ex.security_context_strict = security_context_strict
         return mock_client, ex
 
     @staticmethod
@@ -365,22 +397,24 @@ class TestKubernetesExecutor:
         # The spec only carries the fields we explicitly set.
         assert isinstance(job.spec.template, object)
 
-    def test_default_manifest_dist_to_pre_997_is_no_new_keys(self) -> None:
+    def test_default_manifest_dist_to_pre_1383_is_no_new_keys(self) -> None:
         """Compare the K8s API payload of the default manifest to the
-        pre-#997 baseline.
+        pre-#1383 baseline.
 
         The K8s Python client's ``ApiClient.sanitize_for_serialization``
         is what the wire serializer uses to build the JSON payload sent
         to the API server (it strips ``None`` values). This is the
-        authoritative, byte-level test of the "byte-identical manifest"
-        acceptance criterion: defaults produce the same payload as the
-        pre-#997 executor, key for key, value for value.
+        authoritative, byte-level test that defaults produce the same
+        payload as the baseline — only the SecurityContext / runAsUser
+        / automountServiceAccountToken keys from issue #1383 are
+        allowed to appear under the strict default.
         """
         import json
+        from copy import deepcopy
 
         from kubernetes.client import ApiClient, V1Job, V1JobSpec, V1ObjectMeta
 
-        # --- Post-#997 manifest from the executor with defaults ---
+        # --- Post-#1383 manifest from the executor with defaults ---
         mock_client, ex = self._make_executor_with()
         with patch.object(
             ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
@@ -388,13 +422,25 @@ class TestKubernetesExecutor:
             ex.submit(lambda: None, name="sim_s0")
         post_job = self._submitted_job(mock_client)
 
-        # --- Pre-#997 baseline (mirror of the post-#996 manifest) ---
-        # Rebuild with the SAME call parameters the executor used
-        # (so the only difference is the absence of the three new
-        # fields). Any non-default Kubernetes ``__init__`` kwargs
-        # absent here would themselves be a test bug.
+        # --- Pre-#1383 baseline (pre-strict) ---
+        # Mirror the post-#997 manifest with the pre-#1383 SecurityContext
+        # profile so any structural drift introduced by the strict
+        # defaults surfaces as a diff here. Issue #1383 added the strict
+        # pod-level ``securityContext``, the container-level
+        # ``securityContext``, ``runAsUser``, and
+        # ``automountServiceAccountToken``; the baseline reuses the
+        # actual values from the executor (not hard-coded mirrors) so
+        # the diff cannot be masked by a hard-coded reference drift.
+        # Deep-copy so the post-#1383 manifest keeps its SecurityContext
+        # keys for the acceptance-criterion assertions below.
+        pre_template = deepcopy(post_job.spec.template)
+        pre_template.spec.security_context = None
+        pre_template.spec.automount_service_account_token = None
+        for c in pre_template.spec.containers:
+            c.security_context = None
+
         pre_spec = V1JobSpec(
-            template=post_job.spec.template,
+            template=pre_template,
             backoff_limit=0,
             active_deadline_seconds=post_job.spec.active_deadline_seconds,
         )
@@ -402,7 +448,7 @@ class TestKubernetesExecutor:
         # We compare the serializer-output leaves, not the live objects.
         api_client = ApiClient()
         post_payload = api_client.sanitize_for_serialization(post_job)
-        # Build a pre-#997 V1Job strawman to serialize identically.
+        # Build a pre-#1383 V1Job strawman to serialize identically.
         pre_job = V1Job(
             api_version="batch/v1",
             kind="Job",
@@ -411,14 +457,29 @@ class TestKubernetesExecutor:
         )
         pre_payload = api_client.sanitize_for_serialization(pre_job)
 
-        # Both payloads sort_keys=False; the diff is structural.
-        assert json.dumps(pre_payload, sort_keys=True) == json.dumps(post_payload, sort_keys=True)
+        # The pre-#1383 and post-#1383 manifests must agree on every
+        # field EXCEPT the strict hardening keys added by #1383. Compare
+        # the pre payload against a copy of the post payload with the
+        # strict keys stripped, so the test still flags any structural
+        # drift introduced outside the documented hardening fields.
+        post_minus_strict = deepcopy(post_payload)
+        post_minus_strict["spec"]["template"]["spec"].pop("securityContext", None)
+        post_minus_strict["spec"]["template"]["spec"].pop("automountServiceAccountToken", None)
+        for c in post_minus_strict["spec"]["template"]["spec"]["containers"]:
+            c.pop("securityContext", None)
+        assert json.dumps(pre_payload, sort_keys=True) == json.dumps(
+            post_minus_strict, sort_keys=True
+        )
 
-        # Final acceptance-criterion summary: the new fields are absent
-        # from the post-#997 payload (they would appear if a non-default
-        # value were set).
+        # Final acceptance-criterion summary: the #997-era fields are
+        # absent from the post-#1383 payload (they would appear if a
+        # non-default value were set), and the #1383 SecurityContext
+        # fields ARE present.
         assert "ttlSecondsAfterFinished" not in post_payload["spec"]
         assert "labels" not in post_payload["metadata"]
+        assert "securityContext" in post_payload["spec"]["template"]["spec"]
+        assert "automountServiceAccountToken" in post_payload["spec"]["template"]["spec"]
+        assert post_payload["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
 
     def test_backoff_limit_set_on_spec(self) -> None:
         """Non-zero ``backoff_limit`` is reflected on the V1JobSpec."""
@@ -490,6 +551,175 @@ class TestKubernetesExecutor:
         assert ex.backoff_limit == 0
         assert ex.ttl_seconds_after_finished is None
         assert ex.queue_name is None
+
+    # ------------------------------------------------------------------
+    # Pod hardening (issue #1383)
+    # ------------------------------------------------------------------
+    def test_init_security_context_strict_defaults_to_true(self) -> None:
+        """The constructor default for ``security_context_strict`` is True."""
+        ex = KubernetesExecutor()
+        assert ex.security_context_strict is True
+
+    def test_init_security_context_strict_can_be_disabled(self) -> None:
+        """``security_context_strict=False`` is honored and coerced to bool."""
+        ex = KubernetesExecutor(security_context_strict=False)
+        assert ex.security_context_strict is False
+        # Coerced through ``bool(...)`` — passing truthy non-bool
+        # values still yields True.
+        ex2 = KubernetesExecutor(security_context_strict=1)  # type: ignore[arg-type]
+        assert ex2.security_context_strict is True
+
+    @staticmethod
+    def _submitted_pod_spec(mock_client: MagicMock) -> Any:
+        """Return the V1PodSpec from the single create_namespaced_job call."""
+        mock_client.create_namespaced_job.assert_called_once()
+        job = mock_client.create_namespaced_job.call_args.kwargs["body"]
+        return job.spec.template.spec
+
+    def test_default_security_context_emits_all_strict_fields(self) -> None:
+        """Strict default (issue #1383) emits every required hardening field.
+
+        Required fields:
+          - runAsNonRoot: true  (both pod-level and container-level)
+          - readOnlyRootFilesystem: true
+          - allowPrivilegeEscalation: false
+          - capabilities.drop: ["ALL"]
+          - automountServiceAccountToken: false
+          - runAsUser: non-zero (1000)
+        """
+        mock_client, ex = self._make_executor_with()  # default = strict
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        pod_spec = self._submitted_pod_spec(mock_client)
+        container = pod_spec.containers[0]
+
+        # Pod-level V1PodSecurityContext.
+        pod_sc = pod_spec.security_context
+        assert pod_sc is not None
+        assert pod_sc.run_as_non_root is True
+        assert pod_sc.run_as_user is not None and pod_sc.run_as_user > 0
+
+        # Container-level V1SecurityContext — all four required flags.
+        container_sc = container.security_context
+        assert container_sc is not None
+        assert container_sc.run_as_non_root is True
+        assert container_sc.read_only_root_filesystem is True
+        assert container_sc.allow_privilege_escalation is False
+        assert container_sc.capabilities is not None
+        assert container_sc.capabilities.drop == ["ALL"]
+
+        # automountServiceAccountToken on the V1PodSpec itself.
+        assert pod_spec.automount_service_account_token is False
+
+    def test_relaxed_security_context_emits_no_security_context(self) -> None:
+        """``security_context_strict=False`` omits all hardening fields.
+
+        Relaxed mode is the documented legacy escape hatch for clusters
+        that reject the strict admission profile. The manifest must
+        carry no pod-level ``securityContext``, no container-level
+        ``securityContext``, and ``automountServiceAccountToken`` is
+        left unset (cluster default) so the legacy clusters that
+        require the SA token mount keep working.
+        """
+        mock_client, ex = self._make_executor_with(security_context_strict=False)
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        pod_spec = self._submitted_pod_spec(mock_client)
+        container = pod_spec.containers[0]
+
+        # Pod-level security context: not present.
+        assert pod_spec.security_context is None
+        # Container-level security context: not present.
+        assert container.security_context is None
+        # automountServiceAccountToken: not present (cluster default).
+        # The K8s Python client represents an unset field as the
+        # ``sentinel`` singleton; equality with None catches the
+        # ``__init__``-not-called branch.
+        assert pod_spec.automount_service_account_token is None
+
+    def test_strict_run_as_user_is_nonzero_uid(self) -> None:
+        """The strict default pins ``runAsUser`` to a documented non-zero UID.
+
+        Kubernetes rejects UID 0 when ``runAsNonRoot: true`` is set,
+        so the strict profile must commit to a specific non-zero UID.
+        1000 is the standard first-user UID on the Debian/Ubuntu base
+        images used by ``nrel/openstudio``.
+        """
+        mock_client, ex = self._make_executor_with()
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        pod_spec = self._submitted_pod_spec(mock_client)
+        pod_sc = pod_spec.security_context
+        assert pod_sc is not None
+        assert pod_sc.run_as_user == 1000
+        assert pod_sc.run_as_user > 0
+
+    def test_strict_payload_serialization_contains_required_keys(self) -> None:
+        """The wire-serialized payload carries the #1383 hardening keys.
+
+        This is the byte-level acceptance check: the actual JSON sent
+        to the API server contains ``runAsNonRoot``, ``readOnlyRootFilesystem``,
+        ``allowPrivilegeEscalation``, ``capabilities.drop: ["ALL"]``,
+        ``automountServiceAccountToken: false``, and ``runAsUser: 1000``.
+        """
+        from kubernetes.client import ApiClient
+
+        mock_client, ex = self._make_executor_with()
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        job = self._submitted_job(mock_client)
+        payload = ApiClient().sanitize_for_serialization(job)
+        pod_spec_payload = payload["spec"]["template"]["spec"]
+        container_payload = pod_spec_payload["containers"][0]
+        pod_sc_payload = pod_spec_payload["securityContext"]
+        container_sc_payload = container_payload["securityContext"]
+        caps_payload = container_sc_payload["capabilities"]
+
+        # Pod-level.
+        assert pod_sc_payload["runAsNonRoot"] is True
+        assert pod_sc_payload["runAsUser"] == 1000
+        assert pod_spec_payload["automountServiceAccountToken"] is False
+        # Container-level.
+        assert container_sc_payload["runAsNonRoot"] is True
+        assert container_sc_payload["readOnlyRootFilesystem"] is True
+        assert container_sc_payload["allowPrivilegeEscalation"] is False
+        assert caps_payload["drop"] == ["ALL"]
+
+    def test_relaxed_payload_serialization_omits_hardening_keys(self) -> None:
+        """The wire-serialized payload for the relaxed profile omits
+        every #1383 hardening key.
+
+        Mirrors the strict test above; when the legacy escape hatch
+        is engaged, the wire payload must look like the pre-#1383
+        baseline (no ``securityContext`` anywhere, no
+        ``automountServiceAccountToken`` override).
+        """
+        from kubernetes.client import ApiClient
+
+        mock_client, ex = self._make_executor_with(security_context_strict=False)
+        with patch.object(
+            ex, "_wait_for_terminal", return_value={"status": {"phase": "Succeeded"}}
+        ):
+            ex.submit(lambda: None, name="sim_s0")
+        job = self._submitted_job(mock_client)
+        payload = ApiClient().sanitize_for_serialization(job)
+        pod_spec_payload = payload["spec"]["template"]["spec"]
+        container_payload = pod_spec_payload["containers"][0]
+
+        # sanitize_for_serialization drops None values, so the only
+        # safe assertion is that no hardening key is present in the
+        # wire payload.
+        assert "securityContext" not in pod_spec_payload
+        assert "automountServiceAccountToken" not in pod_spec_payload
+        assert "securityContext" not in container_payload
 
     def test_infer_step_name_mapping(self) -> None:
         assert KubernetesExecutor._infer_step_name("apply_s0") == "apply"  # noqa: SLF001
