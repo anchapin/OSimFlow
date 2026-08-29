@@ -227,7 +227,7 @@ All flags are passed to the `osimflow run` subcommand.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--executor` | choice | `local` | Executor backend. Accepted values: `local`, `slurm`, `aws_batch`, `azure_batch`, `google_batch`, `kubernetes`, `pbs`, `dask_jobqueue`, `nomad`, `docker_swarm`. See [§5 Running Campaigns](#5-running-campaigns) for one-paragraph quick-starts per executor. |
-| `--max-workers` | int | `4` | Thread pool size for `local` executor. |
+| `--max-workers` | int | `cpu_count() or 4` | Thread pool size for `local` executor. Defaults to the host CPU count (PR #1375). |
 
 #### Slurm-specific
 
@@ -391,8 +391,9 @@ osimflow run \
 
 **Notes:**
 
-- `--max-workers` controls the thread pool parallelism. Set to `1` for
-  serial execution (easier debugging).
+- `--max-workers` controls the thread pool parallelism. Defaults to the
+  host CPU count (with a fallback of 4); set to `1` for serial execution
+  (easier debugging).
 - Without Docker/the OpenStudio CLI on PATH, the campaign runs in **stub
   mode** (simulated work, placeholder outputs). This is useful for testing
   the pipeline without a real simulation engine.
@@ -1272,7 +1273,7 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 | Flag | Description |
 |---|---|
 | `--executor {local,slurm,aws_batch,azure_batch,google_batch,kubernetes,pbs,dask_jobqueue,nomad,docker_swarm}` | Executor backend (default: `local`). See [§5](#5-running-campaigns) for per-executor quick-starts. |
-| `--max-workers INT` | `local` executor thread-pool size (default: 4). |
+| `--max-workers INT` | `local` executor thread-pool size (default: host CPU count, fallback 4 — PR #1375). |
 | `--task-queue {none,dask}` | Distributed task-queue backend for multi-node fan-out (default: `none`). |
 
 #### Campaign basics
