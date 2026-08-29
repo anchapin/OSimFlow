@@ -145,13 +145,15 @@ CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 # therefore exposed to supply-chain risk when --container-digest is absent
 # (issue #1320).  Slurm and PBS are HPC but not cloud-hosted container
 # registries, so they are excluded.
-_CLOUD_EXECUTORS: frozenset[str] = frozenset({
-    "aws_batch",
-    "azure_batch",
-    "google_batch",
-    "kubernetes",
-    "docker_swarm",
-})
+_CLOUD_EXECUTORS: frozenset[str] = frozenset(
+    {
+        "aws_batch",
+        "azure_batch",
+        "google_batch",
+        "kubernetes",
+        "docker_swarm",
+    }
+)
 
 
 class QuotaExceededError(RuntimeError):

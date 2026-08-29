@@ -252,7 +252,11 @@ class TestCampaignInit:
         assert campaign.extract_fn is my_extract
 
     def test_mutable_tag_warning_for_cloud_executor(
-        self, variables_yml: Path, template_pkg: Path, outdir: Path, caplog: pytest.LogCaptureFixture
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         import logging
 
@@ -268,7 +272,11 @@ class TestCampaignInit:
         )
 
     def test_no_mutable_tag_warning_when_digest_set(
-        self, variables_yml: Path, template_pkg: Path, outdir: Path, caplog: pytest.LogCaptureFixture
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         import logging
 
@@ -278,21 +286,21 @@ class TestCampaignInit:
         cfg = _cfg(variables_yml, template_pkg, outdir, container_digest="sha256:abc123")
         with caplog.at_level(logging.WARNING, logger="osimflow.campaign"):
             Campaign(cfg=cfg, executor=CloudMockExecutor())
-        assert not any(
-            "no --container-digest set" in r.message for r in caplog.records
-        )
+        assert not any("no --container-digest set" in r.message for r in caplog.records)
 
     def test_no_mutable_tag_warning_for_local_executor(
-        self, variables_yml: Path, template_pkg: Path, outdir: Path, caplog: pytest.LogCaptureFixture
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         import logging
 
         cfg = _cfg(variables_yml, template_pkg, outdir)
         with caplog.at_level(logging.WARNING, logger="osimflow.campaign"):
             Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        assert not any(
-            "no --container-digest set" in r.message for r in caplog.records
-        )
+        assert not any("no --container-digest set" in r.message for r in caplog.records)
 
 
 # -----------------------------------------------------------------------

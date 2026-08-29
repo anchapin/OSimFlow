@@ -176,6 +176,7 @@ class LocalExecutor(BaseExecutor):
     def __init__(self, max_workers: int | None = None, max_concurrent_samples: int | None = None):
         if max_workers is None:
             import os
+
             max_workers = os.cpu_count() or 4
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="osimflow")
         if max_concurrent_samples is not None:
