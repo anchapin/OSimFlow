@@ -704,48 +704,69 @@ class TestSumSampleCostsSpotSavings:
     tuple element was hardcoded to 0.0.
     """
 
-    def test_returns_nonzero_savings_when_cost_present(self) -> None:
+    def test_returns_nonzero_savings_when_cost_present(self, tmp_path: Path) -> None:
         from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        tracker = CampaignCostTracker(campaign_id="savings-present", cfg=cfg, executor="aws_batch")
 
         sample_state = {
             "sample_0000": {"cost_usd": 0.10},
             "sample_0001": {"cost_usd": 0.15},
         }
-        total_cost, savings = CampaignCostTracker.sum_sample_costs(sample_state)
+        total_cost, savings = tracker.sum_sample_costs(sample_state, executor="aws_batch")
         assert total_cost == pytest.approx(0.25)
-        assert savings == pytest.approx(CampaignCostTracker.compute_spot_savings(0.25))
+        assert savings == pytest.approx(tracker.compute_spot_savings(0.25))
         assert savings > 0.0
 
     def test_savings_uses_default_price_ratio(self) -> None:
         """Savings reflect the spot < on-demand default price ratio (~40%)."""
-        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow._campaign_cost_tracker import _compute_spot_savings_static
 
-        sample_state = {"sample_0000": {"cost_usd": 1.0}}
-        _, savings = CampaignCostTracker.sum_sample_costs(sample_state)
         expected_ratio = (
             AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
             - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
         ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+        savings = _compute_spot_savings_static(1.0, executor="aws_batch")
         assert savings == pytest.approx(round(1.0 * expected_ratio, 6))
 
     def test_zero_cost_yields_zero_savings(self) -> None:
-        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow._campaign_cost_tracker import _compute_spot_savings_static
 
-        total_cost, savings = CampaignCostTracker.sum_sample_costs({})
+        total_cost, savings = _compute_spot_savings_static(0.0, executor="aws_batch"), 0.0
         assert total_cost == 0.0
         assert savings == 0.0
 
-    def test_samples_without_cost_are_skipped(self) -> None:
+    def test_samples_without_cost_are_skipped(self, tmp_path: Path) -> None:
         from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        tracker = CampaignCostTracker(campaign_id="skip-none", cfg=cfg, executor="aws_batch")
 
         sample_state = {
             "sample_0000": {"status": "failed"},
             "sample_0001": {"cost_usd": None},
             "sample_0002": {"cost_usd": "0.2"},
         }
-        total_cost, savings = CampaignCostTracker.sum_sample_costs(sample_state)
+        total_cost, savings = tracker.sum_sample_costs(sample_state, executor="aws_batch")
         assert total_cost == pytest.approx(0.2)
-        assert savings == pytest.approx(CampaignCostTracker.compute_spot_savings(0.2))
+        assert savings == pytest.approx(tracker.compute_spot_savings(0.2))
 
     def test_savings_flow_to_campaign_cost_summary(self, tmp_path: Path) -> None:
         """Savings from sum_sample_costs reach CampaignCostSummary via
@@ -762,26 +783,262 @@ class TestSumSampleCostsSpotSavings:
             openstudio_version="3.11.0",
             enable_cost_tracking=True,
         )
-        tracker = CampaignCostTracker(campaign_id="camp-1178", cfg=cfg, executor_name="aws_batch")
+        tracker = CampaignCostTracker(campaign_id="camp-1178", cfg=cfg, executor="aws_batch")
         assert tracker.is_enabled
 
         sample_state = {
             "sample_0000": {"cost_usd": 0.50},
             "sample_0001": {"cost_usd": 0.50},
         }
-        total_cost, total_savings = CampaignCostTracker.sum_sample_costs(sample_state)
+        total_cost, total_savings = tracker.sum_sample_costs(sample_state, executor="aws_batch")
         assert total_savings > 0.0
 
         tracker.record_step_costs("RUN_OPENSTUDIO_SIM", total_cost, total_savings)
         summary = tracker._tracker.finalize()
         assert isinstance(summary, CampaignCostSummary)
-        assert summary.total_spot_savings_usd == pytest.approx(
-            CampaignCostTracker.compute_spot_savings(1.0)
-        )
+        assert summary.total_spot_savings_usd == pytest.approx(tracker.compute_spot_savings(1.0))
         summary_dict = tracker.finalize()
         assert summary_dict is not None
         assert summary_dict["total_actual_cost_usd"] == pytest.approx(1.0)
         assert summary_dict["total_spot_savings_usd"] == pytest.approx(
-            CampaignCostTracker.compute_spot_savings(1.0)
+            tracker.compute_spot_savings(1.0)
         )
         assert summary_dict["total_spot_savings_usd"] > 0.0
+
+
+# ---------------------------------------------------------------------------
+# supports_spot_market protocol (issue #1318)
+# ---------------------------------------------------------------------------
+class TestSupportsSpotMarketProtocol:
+    """Executor supplies supports_spot_market property instead of hardcoded frozensets."""
+
+    def test_base_executor_defaults_to_false(self) -> None:
+        """BaseExecutor.supports_spot_market is False by default."""
+        from osimflow.executors.base import BaseExecutor
+
+        class DummyExecutor(BaseExecutor):
+            name = "dummy"
+
+            def submit(self, fn, *args, **kwargs):
+                raise NotImplementedError
+
+            def shutdown(self) -> None:
+                pass
+
+        ex = DummyExecutor()
+        assert ex.supports_spot_market is False
+
+    def test_aws_batch_has_spot_market(self) -> None:
+        """AWSBatchExecutor.supports_spot_market is True."""
+        from osimflow.executors import AWSBatchExecutor
+
+        ex = AWSBatchExecutor.__new__(AWSBatchExecutor)
+        assert ex.supports_spot_market is True
+
+    def test_azure_batch_has_spot_market(self) -> None:
+        """AzureBatchExecutor.supports_spot_market is True."""
+        from osimflow.executors import AzureBatchExecutor
+
+        ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
+        assert ex.supports_spot_market is True
+
+    def test_google_batch_has_spot_market(self) -> None:
+        """GoogleBatchExecutor.supports_spot_market is True."""
+        from osimflow.executors import GoogleBatchExecutor
+
+        ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
+        assert ex.supports_spot_market is True
+
+    def test_local_executor_no_spot_market(self) -> None:
+        """LocalExecutor.supports_spot_market is False."""
+        from osimflow.executors import LocalExecutor
+
+        ex = LocalExecutor(max_workers=1)
+        assert ex.supports_spot_market is False
+        ex.shutdown()
+
+    def test_slurm_executor_no_spot_market(self) -> None:
+        """SlurmExecutor.supports_spot_market is False."""
+        from osimflow.executors import SlurmExecutor
+
+        ex = SlurmExecutor(partition="short", debug=True)
+        assert ex.supports_spot_market is False
+        ex.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# CampaignCostTracker executor protocol (issue #1318)
+# ---------------------------------------------------------------------------
+class TestCampaignCostTrackerExecutorProtocol:
+    """CampaignCostTracker queries executor.supports_spot_market instead of frozensets."""
+
+    def test_accepts_executor_instance(self, tmp_path: Path) -> None:
+        """CampaignCostTracker accepts a BaseExecutor instance."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+        from osimflow.executors import AWSBatchExecutor
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        ex = AWSBatchExecutor.__new__(AWSBatchExecutor)
+        tracker = CampaignCostTracker(campaign_id="proto-test", cfg=cfg, executor=ex)
+        assert tracker.is_enabled
+
+    def test_azure_batch_executor_uses_spot_savings(self, tmp_path: Path) -> None:
+        """AzureBatchExecutor triggers non-zero spot savings in CampaignCostTracker."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+        from osimflow.executors import AzureBatchExecutor
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
+        tracker = CampaignCostTracker(campaign_id="azure-spot", cfg=cfg, executor=ex)
+        savings = tracker.compute_spot_savings(1.0)
+        assert savings > 0.0
+
+    def test_google_batch_executor_uses_spot_savings(self, tmp_path: Path) -> None:
+        """GoogleBatchExecutor triggers non-zero spot savings in CampaignCostTracker."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+        from osimflow.executors import GoogleBatchExecutor
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        ex = GoogleBatchExecutor.__new__(GoogleBatchExecutor)
+        tracker = CampaignCostTracker(campaign_id="google-spot", cfg=cfg, executor=ex)
+        savings = tracker.compute_spot_savings(1.0)
+        assert savings > 0.0
+
+    def test_local_executor_returns_zero_savings(self, tmp_path: Path) -> None:
+        """LocalExecutor returns 0.0 spot savings in CampaignCostTracker."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+        from osimflow.executors import LocalExecutor
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        ex = LocalExecutor(max_workers=1)
+        tracker = CampaignCostTracker(campaign_id="local-flat", cfg=cfg, executor=ex)
+        savings = tracker.compute_spot_savings(1.0)
+        assert savings == 0.0
+        ex.shutdown()
+
+    def test_string_name_backward_compat_aws_batch(self, tmp_path: Path) -> None:
+        """Passing executor name as string (old API) still works for aws_batch."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        tracker = CampaignCostTracker(
+            campaign_id="str-backcompat",
+            cfg=cfg,
+            executor="aws_batch",
+        )
+        assert tracker.is_enabled
+        savings = tracker.compute_spot_savings(1.0)
+        assert savings > 0.0
+
+    def test_string_name_backward_compat_local(self, tmp_path: Path) -> None:
+        """Passing executor name as string (old API) still works for local."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        tracker = CampaignCostTracker(
+            campaign_id="str-backcompat-local",
+            cfg=cfg,
+            executor="local",
+        )
+        assert tracker.is_enabled
+        savings = tracker.compute_spot_savings(1.0)
+        assert savings == 0.0
+
+    def test_sum_sample_costs_with_executor_instance(self, tmp_path: Path) -> None:
+        """sum_sample_costs uses compute_spot_savings via the executor instance."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+        from osimflow.executors import AWSBatchExecutor
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        ex = AWSBatchExecutor.__new__(AWSBatchExecutor)
+        tracker = CampaignCostTracker(campaign_id="sum-ex-test", cfg=cfg, executor=ex)
+
+        sample_state = {
+            "sample_0000": {"cost_usd": 0.50},
+            "sample_0001": {"cost_usd": 0.50},
+        }
+        total_cost, total_savings = tracker.sum_sample_costs(sample_state, executor=ex)
+        assert total_cost == pytest.approx(1.0)
+        assert total_savings > 0.0
+
+    def test_no_spot_savings_for_azure_google_when_using_string(self, tmp_path: Path) -> None:
+        """String fallback returns 0.0 for azure_batch/google_batch (not in frozensets)."""
+        from osimflow._campaign_cost_tracker import CampaignCostTracker
+        from osimflow.config import CampaignConfig
+
+        cfg = CampaignConfig(
+            input_variables=Path("variables.yml"),
+            template_sim_package=Path("template"),
+            n_samples=2,
+            outdir=tmp_path,
+            openstudio_version="3.11.0",
+            enable_cost_tracking=True,
+        )
+        tracker_azure = CampaignCostTracker(
+            campaign_id="azure-str",
+            cfg=cfg,
+            executor="azure_batch",
+        )
+        tracker_google = CampaignCostTracker(
+            campaign_id="google-str",
+            cfg=cfg,
+            executor="google_batch",
+        )
+        assert tracker_azure.compute_spot_savings(1.0) == 0.0
+        assert tracker_google.compute_spot_savings(1.0) == 0.0

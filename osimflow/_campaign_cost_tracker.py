@@ -15,13 +15,16 @@ throughout the campaign lifecycle.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Union
 
 from .config import CampaignConfig
 from .cost_tracking import CostTracker
 from .executors import AWSBatchExecutor
+from .executors.base import BaseExecutor
 
 log = logging.getLogger("osimflow.campaign")
+
+_ExecutorArg = Union["BaseExecutor", str]
 
 _EXECUTORS_WITH_SPOT = frozenset({"aws_batch"})
 _EXECUTORS_WITH_FLAT_RATE = frozenset(
@@ -35,6 +38,36 @@ _EXECUTORS_WITH_FLAT_RATE = frozenset(
         "docker_swarm",
     }
 )
+
+
+def _supports_spot_from_name(name: str) -> bool:
+    """Fallback for backward compatibility when only executor name is available."""
+    if name in _EXECUTORS_WITH_FLAT_RATE:
+        return False
+    return name in _EXECUTORS_WITH_SPOT
+
+
+def _compute_spot_savings_static(total_cost: float, executor: _ExecutorArg | None) -> float:
+    """Compute estimated spot savings. Supports both executor instance and string name."""
+    if total_cost <= 0:
+        return 0.0
+
+    supports_spot: bool
+    if executor is None:
+        supports_spot = False
+    elif isinstance(executor, BaseExecutor):
+        supports_spot = executor.supports_spot_market
+    else:
+        supports_spot = _supports_spot_from_name(executor)
+
+    if not supports_spot:
+        return 0.0
+
+    savings_ratio = (
+        AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+        - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+    ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+    return round(total_cost * savings_ratio, 6)
 
 
 class CampaignCostTracker:
@@ -51,8 +84,11 @@ class CampaignCostTracker:
         Unique campaign identifier (used for CostTracker initialization).
     cfg
         Campaign configuration used to determine pricing and backend.
-    executor_name
-        Name of the executor (e.g., "aws_batch", "slurm", "local").
+    executor
+        A BaseExecutor instance (preferred) or an executor name string.
+        When an executor instance is provided, the ``supports_spot_market``
+        property is queried directly. When a string is provided, the
+        hardcoded frozenset fallback is used (backward compatibility).
 
     Attributes
     ----------
@@ -64,23 +100,26 @@ class CampaignCostTracker:
         self,
         campaign_id: str,
         cfg: CampaignConfig,
-        executor_name: str,
+        executor: _ExecutorArg,
     ) -> None:
-        self._executor_name = executor_name
+        if isinstance(executor, BaseExecutor):
+            self._executor: BaseExecutor | str = executor
+            self._executor_name: str = executor.name
+        else:
+            self._executor = executor
+            self._executor_name = executor
         self._tracker: CostTracker | None = self._build_tracker(
             campaign_id=campaign_id,
             cfg=cfg,
-            executor_name=executor_name,
         )
 
     # ------------------------------------------------------------------
     # Tracker construction
     # ------------------------------------------------------------------
-    @staticmethod
     def _build_tracker(
+        self,
         campaign_id: str,
         cfg: CampaignConfig,
-        executor_name: str,
     ) -> CostTracker | None:
         """Build a CostTracker from CampaignConfig, or None if disabled.
 
@@ -93,7 +132,7 @@ class CampaignCostTracker:
 
             return build_cost_tracker(
                 campaign_id=campaign_id,
-                executor_type=executor_name,
+                executor_type=self._executor_name,
                 result_storage_backend=cfg.result_storage_backend,
                 result_storage_bucket=cfg.result_storage_bucket,
                 result_storage_prefix=str(cfg.outdir.name),
@@ -134,11 +173,10 @@ class CampaignCostTracker:
     # ------------------------------------------------------------------
     # Cost accumulation helpers
     # ------------------------------------------------------------------
-    @classmethod
+    @staticmethod
     def sum_sample_costs(
-        cls,
         sample_state: dict[str, dict[str, object]],
-        executor_name: str = "aws_batch",
+        executor: _ExecutorArg | None = None,
     ) -> tuple[float, float]:
         """Sum per-sample costs from sample state accumulator.
 
@@ -147,8 +185,11 @@ class CampaignCostTracker:
         sample_state
             The Campaign's ``_sample_state`` dict mapping sample_id to
             per-sample state dicts containing ``cost_usd`` entries.
-        executor_name
-            Executor name for pricing model (default: "aws_batch").
+        executor
+            A BaseExecutor instance or executor name string. When provided,
+            the ``supports_spot_market`` property is used to determine
+            spot savings. When None, the hardcoded frozenset fallback is
+            used (backward-compatible static call).
 
         Returns
         -------
@@ -161,22 +202,14 @@ class CampaignCostTracker:
             cost_usd = state.get("cost_usd")
             if cost_usd is not None:
                 total_cost += float(str(cost_usd))
-        return total_cost, cls._compute_spot_savings(executor_name, total_cost)
+        return total_cost, _compute_spot_savings_static(total_cost, executor)
 
-    @staticmethod
-    def _compute_spot_savings(executor_name: str, total_cost: float) -> float:
+    def compute_spot_savings(self, total_cost: float) -> float:
         """Compute estimated spot savings from on-demand total cost.
 
-        Uses an executor-specific pricing model:
-
-        - **AWS Batch**: Uses the configured on-demand vs. spot price ratio
-          (default: ~40% savings — $0.05 on-demand vs. $0.03 spot).
-        - **Flat-rate executors** (Slurm, PBS, Nomad, Kubernetes,
-          Dask-JobQueue, Local, Docker Swarm): These bill at flat
-          node-hour rates with no spot market — returns 0.0.
-        - **Other cloud executors** (Azure, Google Batch): Falls back
-          to the AWS Batch ratio until executor-specific pricing is
-          implemented (issue #1190).
+        Uses the executor's ``supports_spot_market`` property when an
+        executor instance is available, otherwise falls back to the
+        hardcoded frozenset (backward compatibility).
 
         Parameters
         ----------
@@ -189,23 +222,7 @@ class CampaignCostTracker:
             Estimated savings if jobs ran on spot instances (0.0 for
             flat-rate executors).
         """
-        if total_cost <= 0:
-            return 0.0
-        if executor_name in _EXECUTORS_WITH_FLAT_RATE:
-            return 0.0
-        savings_ratio = (
-            AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-            - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
-        ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-        return round(total_cost * savings_ratio, 6)
-
-    @staticmethod
-    def compute_spot_savings(total_cost: float) -> float:
-        """Compute estimated spot savings from on-demand total cost.
-
-        Convenience alias for ``_compute_spot_savings("aws_batch", total_cost)``.
-        """
-        return CampaignCostTracker._compute_spot_savings("aws_batch", total_cost)
+        return _compute_spot_savings_static(total_cost, self._executor)
 
     # ------------------------------------------------------------------
     # Campaign-level summary

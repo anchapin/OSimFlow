@@ -224,6 +224,16 @@ class BaseExecutor(abc.ABC):
         """
         return []
 
+    @property
+    def supports_spot_market(self) -> bool:
+        """Whether this executor supports spot/preemptible VMs with variable pricing.
+
+        When True, the CampaignCostTracker estimates spot savings using
+        the executor's pricing model. Subclasses that support spot markets
+        (AWS Batch, Azure Batch, Google Batch) override this to return True.
+        """
+        return False
+
     @abc.abstractmethod
     def shutdown(self) -> None: ...
 

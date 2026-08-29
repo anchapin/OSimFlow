@@ -228,6 +228,7 @@ class GoogleBatchExecutor(BaseExecutor):
     """
 
     name = "google_batch"
+    supports_spot_market = True
 
     @property
     def requires_remote_runner_payload(self) -> bool:
