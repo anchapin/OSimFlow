@@ -121,6 +121,27 @@ class TestBaseExecutor:
         ex = _Complete()
         assert ex.name == "complete"
 
+    def test_fanout_submit_chunk_size_bounded_by_default(self) -> None:
+        class _Complete(BaseExecutor):
+            name = "complete"
+
+            def submit(self, fn, *args, **kwargs) -> Handle:  # type: ignore[override]
+                raise NotImplementedError
+
+            def shutdown(self) -> None:
+                pass
+
+        ex = _Complete()
+        import os
+
+        cpu_count = os.cpu_count() or 1
+        expected_upper_bound = max(1, cpu_count * 4, 50)
+        assert ex.fanout_submit_chunk_size(0) == 1
+        assert ex.fanout_submit_chunk_size(1) == 1
+        assert ex.fanout_submit_chunk_size(1000) == expected_upper_bound
+        assert ex.fanout_submit_chunk_size(10) == 10
+        assert ex.fanout_submit_chunk_size(expected_upper_bound) == expected_upper_bound
+
 
 # ---------------------------------------------------------------------------
 # LocalExecutor
