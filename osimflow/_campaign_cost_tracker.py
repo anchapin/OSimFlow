@@ -18,8 +18,11 @@ import logging
 from typing import Any, Union
 
 from .config import CampaignConfig
-from .cost_tracking import CostTracker
-from .executors import AWSBatchExecutor
+from .cost_tracking import (
+    DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
+    DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
+    CostTracker,
+)
 from .executors.base import BaseExecutor
 
 log = logging.getLogger("osimflow.campaign")
@@ -64,9 +67,8 @@ def _compute_spot_savings_static(total_cost: float, executor: _ExecutorArg | Non
         return 0.0
 
     savings_ratio = (
-        AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-        - AWSBatchExecutor.DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
-    ) / AWSBatchExecutor.DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
+        DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR - DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
+    ) / DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
     return round(total_cost * savings_ratio, 6)
 
 
