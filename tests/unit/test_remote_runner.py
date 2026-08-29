@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -65,4 +68,29 @@ class TestVerifyContractVersion:
         with caplog.at_level("WARNING"):
             remote_runner._verify_contract_version()  # noqa: SLF001 — no exception
         assert "OSIMFLOW_CONTRACT_VERSION is not set" in caplog.text
+
+
+class TestNegotiateVersion:
+    def test_negotiate_version_returns_supported_versions(self) -> None:
+        result = remote_runner.negotiate_version()
+        assert result["ok"] is True
+        assert isinstance(result["supported_versions"], list)
+        assert remote_runner.BYOS_CONTRACT_VERSION in result["supported_versions"]
+
+    def test_negotiate_version_cli_flag(self, tmp_path: Path) -> None:
+        import os
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        result = subprocess.run(
+            [sys.executable, "-m", "osimflow.remote_runner", "--negotiate-version"],
+            capture_output=True,
+            text=True,
+            cwd=str(tmp_path),
+            env=env,
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        parsed = json.loads(result.stdout.strip())
+        assert parsed["ok"] is True
+        assert remote_runner.BYOS_CONTRACT_VERSION in parsed["supported_versions"]
+
 

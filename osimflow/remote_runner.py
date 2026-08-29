@@ -6,8 +6,9 @@ remote containers without requiring extra orchestration dependencies.
 
 from __future__ import annotations
 
-__all__ = ["main", "BYOS_CONTRACT_VERSION", "StepFunctionRegistry"]
+__all__ = ["main", "BYOS_CONTRACT_VERSION", "StepFunctionRegistry", "negotiate_version"]
 
+import argparse
 import json
 import logging
 import os
@@ -313,9 +314,39 @@ def _upload_artifacts_for_object_storage(result: Any) -> None:  # noqa: ANN401
         log.warning("object-storage upload skipped missing path: %s", path)
 
 
+def negotiate_version() -> dict[str, Any]:
+    """Return the runner's supported BYOS contract versions for version negotiation.
+
+    This is the "hand-off" hook that allows the Campaign to verify version
+    compatibility *before* submitting work, rather than discovering a mismatch
+    at runtime inside the remote container (issue #1331).
+
+    Returns a dict with the shape:
+        {"ok": True, "supported_versions": [BYOS_CONTRACT_VERSION]}
+    """
+    return {
+        "ok": True,
+        "supported_versions": [BYOS_CONTRACT_VERSION],
+    }
+
+
 def main() -> int:
     _register_builtin_steps()
     StepFunctionRegistry.discover_plugins()
+
+    parser = argparse.ArgumentParser(prog="osimflow.remote_runner")
+    parser.add_argument(
+        "--negotiate-version",
+        action="store_true",
+        help="Output supported BYOS contract versions as JSON and exit (issue #1331)",
+    )
+    args, _ = parser.parse_known_args()
+
+    if args.negotiate_version:
+        result = negotiate_version()
+        print(json.dumps(result))
+        return 0
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
