@@ -1,22 +1,40 @@
-"""Unit tests for AzureBatchExecutor (issue #254, #352)."""
+"""Unit tests for AzureBatchExecutor (issue #254, #352, #1396)."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from osimflow.executors.azure_batch_executor import (
+    _THROTTLE_ERROR_CODES,
     AzureBatchExecutor,
+    _azure_throttle_code,
     _AzureBatchHandle,
+    _retry_azure_submit,
 )
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SIG_ENV,
     sign_task_payload,
 )
+
+
+class _FakeBatchError(Exception):
+    """Duck-typed stand-in for ``azure.batch.models.BatchErrorException``.
+
+    Carries the ``.error.code`` attribute the retry helper reads. We
+    avoid importing the real SDK so these tests run in environments
+    where ``azure-batch`` isn't installed.
+    """
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"azure batch error code={code}")
+        self.error = MagicMock()
+        self.error.code = code
 
 
 class TestAzureBatchExecutor:
@@ -410,3 +428,185 @@ class TestAzureBatchHandle:
         with patch("osimflow.executors.azure_batch_executor.time.sleep"):
             result = handle.result()
         assert result is None
+
+
+class TestAzureBatchThrottleRetry:
+    """Throttle / network retry on client.job.add and client.task.add (issue #1396)."""
+
+    def test_throttle_error_codes_contains_expected_codes(self) -> None:
+        """The documented Azure Batch throttle set is locked in (issue #1396)."""
+        assert "TooManyRequests" in _THROTTLE_ERROR_CODES
+        assert "ServerBusy" in _THROTTLE_ERROR_CODES
+        assert "RequestTimeout" in _THROTTLE_ERROR_CODES
+        assert isinstance(_THROTTLE_ERROR_CODES, frozenset)
+
+    def test_azure_throttle_code_recognizes_throttle(self) -> None:
+        """Recognizes BatchErrorException with a throttle code."""
+        assert _azure_throttle_code(_FakeBatchError("TooManyRequests")) == "TooManyRequests"
+        assert _azure_throttle_code(_FakeBatchError("ServerBusy")) == "ServerBusy"
+        assert _azure_throttle_code(_FakeBatchError("RequestTimeout")) == "RequestTimeout"
+
+    def test_azure_throttle_code_ignores_non_throttle(self) -> None:
+        """Non-throttle BatchErrorException codes return None (no retry)."""
+        assert _azure_throttle_code(_FakeBatchError("AuthenticationFailed")) is None
+        assert _azure_throttle_code(_FakeBatchError("NotFound")) is None
+        assert _azure_throttle_code(RuntimeError("boom")) is None
+
+    def test_retry_returns_success_after_transient_throttle(self) -> None:
+        """Regression: a transient 429 (TooManyRequests) is retried, second attempt wins (issue #1396)."""
+        call_count = {"n": 0}
+
+        def flaky() -> str:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise _FakeBatchError("TooManyRequests")
+            return "ok"
+
+        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+            result = _retry_azure_submit(flaky)
+
+        assert result == "ok"
+        assert call_count["n"] == 2
+
+    def test_retry_handles_each_throttle_code(self) -> None:
+        """All three documented throttle codes trigger a retry, then succeed."""
+        for code in ("TooManyRequests", "ServerBusy", "RequestTimeout"):
+
+            def make_flaky(throttle_code: str) -> Callable[[], str]:
+                state = {"n": 0}
+
+                def flaky() -> str:
+                    state["n"] += 1
+                    if state["n"] == 1:
+                        raise _FakeBatchError(throttle_code)
+                    return "ok"
+
+                return flaky
+
+            flaky_fn = make_flaky(code)
+            with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+                result = _retry_azure_submit(flaky_fn)
+
+            assert result == "ok"
+
+    def test_retry_exhausts_after_max_attempts(self) -> None:
+        """Persistent throttle exhausts retries and re-raises the last exception."""
+        always_fail = MagicMock(side_effect=_FakeBatchError("TooManyRequests"))
+
+        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+            with pytest.raises(_FakeBatchError, match="TooManyRequests"):
+                _retry_azure_submit(always_fail, max_attempts=5)
+
+        assert always_fail.call_count == 5
+
+    def test_retry_does_not_swallow_permanent_errors(self) -> None:
+        """Non-throttle exceptions propagate immediately without retry."""
+        permanent = MagicMock(side_effect=RuntimeError("not throttled"))
+
+        with patch("osimflow.executors.azure_batch_executor.time.sleep") as sleep_mock:
+            with pytest.raises(RuntimeError, match="not throttled"):
+                _retry_azure_submit(permanent)
+
+        assert permanent.call_count == 1
+        assert sleep_mock.call_count == 0
+
+    def test_retry_caps_total_backoff_seconds(self) -> None:
+        """The cap argument bounds the per-attempt jitter sleep."""
+        sleeps: list[float] = []
+
+        def fail_then_succeed() -> str:
+            if sleeps:
+                return "ok"
+            raise _FakeBatchError("TooManyRequests")
+
+        with patch(
+            "osimflow.executors.azure_batch_executor.time.sleep",
+            side_effect=sleeps.append,
+        ):
+            _retry_azure_submit(
+                fail_then_succeed,
+                max_attempts=5,
+                total_cap_seconds=2.0,
+            )
+
+        for duration in sleeps:
+            assert duration <= 2.0
+
+    def test_retry_logs_warning_on_each_throttle(self) -> None:
+        """Each retry emits a log.warning carrying the throttle code (issue #1396)."""
+        call_count = {"n": 0}
+
+        def flaky() -> str:
+            call_count["n"] += 1
+            if call_count["n"] < 3:
+                raise _FakeBatchError("ServerBusy")
+            return "ok"
+
+        with (
+            patch("osimflow.executors.azure_batch_executor.time.sleep"),
+            patch("osimflow.executors.azure_batch_executor.log") as mock_log,
+        ):
+            _retry_azure_submit(flaky)
+
+        assert call_count["n"] == 3
+        warning_codes = [
+            call.args[0]
+            for call in mock_log.warning.call_args_list
+            if call.args and "ServerBusy" in str(call.args)
+        ]
+        assert len(warning_codes) == 2
+
+    def test_submit_retries_on_throttled_job_add(self) -> None:
+        """Regression: AzureBatchExecutor._submit_job retries a throttled client.job.add (issue #1396)."""
+        ex = self._executor_with_throttle([_FakeBatchError("TooManyRequests"), None])
+
+        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+            job_id = ex._submit_job(
+                name="throttled-job",
+                cpus=1,
+                memory_mb=1024,
+                time_min=60,
+                environment=[],
+            )
+
+        assert job_id == "osimflow-throttled-job"
+        assert ex._client.job.add.call_count == 2
+        assert ex._client.task.add.call_count == 1
+
+    def test_submit_propagates_after_throttle_exhaustion(self) -> None:
+        """If every retry is throttled, the throttle exception propagates (issue #1396)."""
+        ex = self._executor_with_throttle(_FakeBatchError("TooManyRequests"))
+
+        with (
+            patch("osimflow.executors.azure_batch_executor.time.sleep"),
+            pytest.raises(_FakeBatchError, match="TooManyRequests"),
+        ):
+            ex._submit_job(
+                name="perma-throttle",
+                cpus=1,
+                memory_mb=1024,
+                time_min=60,
+                environment=[],
+            )
+
+        assert ex._client.job.add.call_count == 5
+
+    def _executor_with_throttle(
+        self, exc: Exception | list[Exception | None]
+    ) -> AzureBatchExecutor:
+        ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
+        ex._azure_batch = MagicMock()
+        ex._azure_identity = MagicMock()
+        ex.account_name = "testaccount"
+        ex.account_url = "https://testaccount.eastus.batch.azure.com"
+        ex.pool_id = "test-pool"
+        ex.location = "eastus"
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.use_spot = False
+        ex.fallback_to_on_demand = False
+        ex.max_retries = 3
+        ex._client = MagicMock()
+        ex._client.job.add.side_effect = exc
+        ex._client.task.add.return_value = None
+        return ex
