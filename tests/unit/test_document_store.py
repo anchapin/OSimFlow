@@ -1004,7 +1004,6 @@ class TestBuildDocumentStoreRedisDispatch:
         # type: ignore[name-defined]
         import ssl
 
-
         ctx = ssl.create_default_context()
         pool_mock = MagicMock()
         fake_client = MagicMock()
@@ -1015,11 +1014,7 @@ class TestBuildDocumentStoreRedisDispatch:
                 "ConnectionPool": type(
                     "FP",
                     (),
-                    {
-                        "from_url": staticmethod(
-                            lambda *a, **k: pool_mock.from_url(*a, **k)
-                        )
-                    },
+                    {"from_url": staticmethod(lambda *a, **k: pool_mock.from_url(*a, **k))},
                 ),
                 "Redis": staticmethod(lambda *a, **k: fake_client),
             },
