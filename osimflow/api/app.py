@@ -1409,19 +1409,11 @@ def create_app(
         description="REST API for monitoring OSimFlow campaigns",
     )
 
-    # --- Build API key store (issue #395) ---
+    # --- Build API key store (issue #395, #1328) ---
     key_store: MultiUserAPIKeyStore | None = None
     if api_keys_file is not None:
-        try:
-            keys_data = json.loads(api_keys_file.read_text())
-            users = keys_data.get("users", [])
-            if not users:
-                raise ValueError("No users found in api_keys_file")
-            key_store = MultiUserAPIKeyStore.from_users(users)
-            log.info("Loaded %d API keys from %s", len(users), api_keys_file)
-        except Exception as exc:
-            log.error("Failed to load API keys from %s: %s", api_keys_file, exc)
-            raise ValueError(f"Invalid api_keys_file: {exc}") from exc
+        key_store = MultiUserAPIKeyStore.from_file(api_keys_file)
+        log.info("Loaded API keys from %s", api_keys_file)
     elif api_key is not None:
         key_store = MultiUserAPIKeyStore.from_single_key(api_key)
 

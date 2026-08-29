@@ -193,8 +193,41 @@ class TestMultiUserAuth:
         """Test that invalid JSON raises error."""
         keys_file = tmp_path / "invalid_keys.json"
         keys_file.write_text("not valid json")
-        with pytest.raises(ValueError, match="Invalid api_keys_file"):
+        with pytest.raises(ValueError, match="Invalid JSON in api_keys_file"):
             create_app(outdir=tmp_path, api_keys_file=keys_file)
+
+    def test_api_key_file_wrong_extension_rejected(self, tmp_path: Path) -> None:
+        """Test that files without .json or .keys extension are rejected (issue #1328)."""
+        keys_file = tmp_path / "api_keys.txt"
+        keys_file.write_text(json.dumps({"users": [{"key": "k", "user_id": "a", "role": "admin"}]}))
+        with pytest.raises(ValueError, match="must have .json or .keys extension"):
+            create_app(outdir=tmp_path, api_keys_file=keys_file)
+
+    def test_api_key_file_symlink_to_dev_null_rejected(self, tmp_path: Path) -> None:
+        """Test that symlinks to non-regular files are rejected (issue #1328)."""
+        keys_link = tmp_path / "api_keys.json"
+        keys_link.symlink_to("/dev/null")
+        with pytest.raises(ValueError, match="must be a regular file"):
+            create_app(outdir=tmp_path, api_keys_file=keys_link)
+
+    def test_api_key_file_symlink_to_etc_passwd_rejected(self, tmp_path: Path) -> None:
+        """Test that symlinks to sensitive files are rejected (issue #1328).
+
+        /etc/passwd has no .json/.keys extension, so it fails the extension check.
+        """
+        keys_link = tmp_path / "api_keys.json"
+        keys_link.symlink_to("/etc/passwd")
+        with pytest.raises(ValueError, match="must have .json or .keys extension"):
+            create_app(outdir=tmp_path, api_keys_file=keys_link)
+
+    def test_api_key_file_keys_extension_accepted(self, tmp_outdir: Path, tmp_path: Path) -> None:
+        """Test that .keys extension is accepted."""
+        keys_file = tmp_path / "api_keys.keys"
+        keys_file.write_text(json.dumps({"users": [{"key": "key1", "user_id": "alice", "role": "admin"}]}))
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+        resp = client.get("/api/v1/campaign", headers={"X-API-Key": "key1"})
+        assert resp.status_code == 200
 
 
 class TestPermissionLevels:

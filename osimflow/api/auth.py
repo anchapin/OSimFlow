@@ -143,16 +143,36 @@ class MultiUserAPIKeyStore:
                     {"key": "api-key-2", "user_id": "bob", "role": "readonly"}
                 ]
             }
+
+        Raises
+        ------
+        ValueError
+            If the file does not have a ``.json`` or ``.keys`` extension,
+            is not a regular file (e.g. a symlink to ``/dev/null`` or
+            ``/etc/passwd``), cannot be read, or contains invalid JSON.
         """
+        resolved = file_path.resolve()
+        if not resolved.is_file():
+            raise ValueError(
+                f"api_keys_file must be a regular file, got {resolved}"
+            )
+        if resolved.suffix not in (".json", ".keys"):
+            raise ValueError(
+                f"api_keys_file must have .json or .keys extension, "
+                f"got {resolved.suffix!r}"
+            )
         try:
-            keys_data = json.loads(file_path.read_text())
-            users = keys_data.get("users", [])
-            if not users:
-                raise ValueError("No users found in api_keys_file")
-            return cls.from_users(users)
-        except Exception as exc:
-            log.error("Failed to load API keys from %s: %s", file_path, exc)
-            raise ValueError(f"Invalid api_keys_file: {exc}") from exc
+            keys_data = json.loads(resolved.read_text())
+        except json.JSONDecodeError as exc:
+            log.error("Failed to parse JSON from %s: %s", resolved, exc)
+            raise ValueError(f"Invalid JSON in api_keys_file: {exc}") from exc
+        except OSError as exc:
+            log.error("Failed to read %s: %s", resolved, exc)
+            raise ValueError(f"Cannot read api_keys_file: {exc}") from exc
+        users = keys_data.get("users", [])
+        if not users:
+            raise ValueError("No users found in api_keys_file")
+        return cls.from_users(users)
 
     def validate(self, provided_key: str | None) -> APIKeyUser | None:
         """Validate an API key and return the user if valid.
