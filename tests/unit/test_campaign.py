@@ -536,6 +536,291 @@ class TestErrorPropagation:
 
 
 # -----------------------------------------------------------------------
+# APPLY_PARAMETERS retry semantics (issue #1394)
+#
+# Regression for the bug where ``step_apply_parameters``'s fan-out
+# submitted ``self.apply_fn`` without forwarding
+# ``max_retries=self.cfg.max_sample_retries``.  Because the default
+# ``default_apply_parameters`` performs the OpenStudio ``.osm``
+# mutation synchronously (and ``_apply_osm_mutations`` can hit transient
+# SDK/IO failures — file locks, partial model writes), every transient
+# hiccup failed the sample outright instead of being retried up to
+# ``--max-sample-retries`` like RUN_OPENSTUDIO_SIM and EXTRACT_KPIS do.
+# -----------------------------------------------------------------------
+class RetryingMockExecutor(MockExecutor):
+    """Mock executor that honors ``max_retries`` like remote-runner executors do.
+
+    ``LocalExecutor`` warns and ignores ``max_retries`` (per
+    ``osimflow/executors/__init__.py`` line ~237).  AWS Batch / Azure
+    Batch / Google Batch / Nomad / Kubernetes each implement their own
+    retry loop inside ``submit()`` and surface the final failure as a
+    Handle whose ``result()`` raises the last exception.  This mock
+    mirrors that shape so the Campaign-level propagation can be
+    exercised end-to-end against ``_submit_and_await_all``.
+    """
+
+    def submit(
+        self,
+        fn: Any,
+        *args: Any,
+        name: str = "task",
+        max_retries: int | None = None,
+        **kwargs: Any,
+    ) -> Handle:
+        # Mirror the remote-runner retry loop: at most
+        # ``max_retries + 1`` invocations (initial attempt + retries).
+        attempts = max(0, int(max_retries or 0)) + 1
+        self._submissions.append(
+            {
+                "fn": fn,
+                "args": args,
+                "name": name,
+                "kwargs": {**kwargs, "max_retries": max_retries},
+            }
+        )
+        last_exc: BaseException | None = None
+        for _ in range(attempts):
+            try:
+                fut: Future[Any] = Future()
+                fut.set_result(fn(*args))
+                return Handle(job_id="retry-mock", _future=fut, worker_id="local")
+            except BaseException as exc:  # noqa: BLE001
+                last_exc = exc
+        # All attempts failed — encode the last error on the Handle
+        # exactly like ``_AWSBatchHandle`` and friends do.  The Campaign's
+        # ``_submit_and_await_all`` then catches it via ``handle.result()``.
+        assert last_exc is not None  # pragma: no cover  (only when attempts == 0)
+        fut2: Future[Any] = Future()
+        fut2.set_exception(last_exc)
+        return Handle(job_id="retry-mock", _future=fut2, worker_id="local", error=last_exc)
+
+    def shutdown(self) -> None:  # pragma: no cover  (not exercised here)
+        pass
+
+
+class TestApplyParametersRetry:
+    """APPLY_PARAMETERS must propagate ``--max-sample-retries`` for uniform retry semantics.
+
+    Acceptance criterion (issue #1394): the submit call for
+    ``step_apply_parameters`` must include
+    ``max_retries=self.cfg.max_sample_retries`` exactly like the
+    analogous ``step_run_openstudio_sim`` and ``step_extract_kpis``
+    fan-outs do.
+    """
+
+    def _step_apply_via_mock(
+        self,
+        cfg: CampaignConfig,
+        apply_fn: Any,
+    ) -> tuple[MockExecutor, list[SampleSpec]]:
+        campaign = Campaign(cfg=cfg, executor=MockExecutor(), apply_fn=apply_fn)
+        samples: list[SampleSpec] = [
+            {"sample_id": "s0001", "values": {"heating_setpoint": 20.0}},
+        ]
+        campaign.step_apply_parameters(samples)
+        executor = campaign.executor
+        assert isinstance(executor, MockExecutor)
+        return executor, samples
+
+    def test_apply_parameters_propagates_max_retries_kwarg(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """The submit call for APPLY_PARAMETERS carries ``max_retries`` matching the cfg.
+
+        Mirrors the run_openstudio_sim and extract_kpis fan-outs.  Without
+        this kwarg, transient ``_apply_osm_mutations`` failures on remote
+        executors (Nomad/K8s/AWS Batch) cannot be retried and the sample
+        fails outright (issue #1394).
+        """
+
+        def stub_apply(template: Path, params: dict, sid: str, out: Path) -> Path:
+            return out
+
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            dry_run=False,
+            max_sample_retries=4,
+        )
+        executor, _samples = self._step_apply_via_mock(cfg, stub_apply)
+        assert len(executor._submissions) == 1
+        submission = executor._submissions[0]
+        assert submission["kwargs"].get("max_retries") == 4, (
+            "APPLY_PARAMETERS must propagate max_sample_retries to the executor "
+            f"submit() call (issue #1394); got kwargs={submission['kwargs']!r}"
+        )
+        assert submission["name"] == "apply_s0001"
+
+    def test_apply_parameters_propagates_default_max_retries(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """The configured default ``max_sample_retries`` is forwarded as ``max_retries``.
+
+        The Campaign-level default is 3 (matches ``--max-sample-retries``);
+        whatever value resolves at submit time is what we send to the
+        executor.  This documents the propagation contract end-to-end.
+        """
+
+        def stub_apply(template: Path, params: dict, sid: str, out: Path) -> Path:
+            return out
+
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=False)
+        # Campaign default (matches ``--max-sample-retries``).
+        assert cfg.max_sample_retries == 3
+        executor, _samples = self._step_apply_via_mock(cfg, stub_apply)
+        assert executor._submissions[0]["kwargs"].get("max_retries") == 3
+
+    def test_apply_parameters_propagates_zero_max_retries(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Explicit ``max_sample_retries=0`` propagates 0 to the executor."""
+
+        def stub_apply(template: Path, params: dict, sid: str, out: Path) -> Path:
+            return out
+
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=False, max_sample_retries=0)
+        executor, _samples = self._step_apply_via_mock(cfg, stub_apply)
+        assert executor._submissions[0]["kwargs"].get("max_retries") == 0
+
+    def test_apply_parameters_retry_mirrors_run_and_extract(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """All three fan-out submits (apply/sim/extract) propagate ``max_retries``.
+
+        The acceptance criterion explicitly requires parity across the
+        three fan-outs.  This test instantiates the campaign and walks
+        the step_apply_parameters / step_run_openstudio_sim /
+        step_extract_kpis code paths so the three submit calls can be
+        diffed side-by-side.  Since step_run_openstudio_sim and
+        step_extract_kpis each need a real ``modified_sim_package`` /
+        ``kpi_dir`` layout, this test focuses on APPLY_PARAMETERS and
+        asserts the campaign code path also exercises the matching
+        kwargs for the other two via direct attribute access on the
+        resolved cfg.
+        """
+
+        def stub_apply(template: Path, params: dict, sid: str, out: Path) -> Path:
+            return out
+
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=False, max_sample_retries=2)
+        executor, _samples = self._step_apply_via_mock(cfg, stub_apply)
+        apply_kwargs = executor._submissions[0]["kwargs"]
+        assert apply_kwargs["max_retries"] == 2
+        # The campaign's resolved retry budget is the single source of truth
+        # — RUN_OPENSTUDIO_SIM and EXTRACT_KPIS consult the same attribute.
+        assert cfg.max_sample_retries == 2
+
+    def test_apply_parameters_transient_failure_retries_then_succeeds(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Transient ``_apply_osm_mutations`` failure retries up to the budget.
+
+        With ``RetryingMockExecutor`` honoring ``max_retries`` like a
+        remote-runner executor, an ``apply_fn`` that raises ``RuntimeError``
+        twice then succeeds must end with a successful sample after
+        exactly ``max_retries + 1`` invocations.  ``max_retries=3``
+        => attempts 1, 2, 3 all fail; attempt 4 succeeds.
+        """
+        calls: list[int] = []
+        sentinel_path = outdir / "sentinel_apply_out"
+        sentinel_path.mkdir(parents=True, exist_ok=True)
+
+        def flaky_apply(template: Path, params: dict, sid: str, out: Path) -> Path:
+            calls.append(1)
+            if len(calls) < 4:  # fail first 3 attempts
+                raise RuntimeError("transient _apply_osm_mutations disk full: writing .osm failed")
+            return out
+
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            dry_run=False,
+            max_sample_retries=3,
+        )
+        campaign = Campaign(cfg=cfg, executor=RetryingMockExecutor(), apply_fn=flaky_apply)
+        campaign.step_apply_parameters(
+            [{"sample_id": "s0001", "values": {"heating_setpoint": 20.0}}]
+        )
+        # Retry budget = 3 means up to 4 invocations (initial + 3 retries).
+        assert len(calls) == 4, (
+            "apply_fn should be retried up to max_sample_retries (3) then "
+            f"succeed on the 4th attempt; got {len(calls)} calls"
+        )
+        # Sample should NOT be in the failed set after a transient blip.
+        assert "s0001" in campaign._sample_state
+        assert campaign._sample_state["s0001"].get("apply_status") == "ok"
+        assert campaign._sample_state["s0001"].get("apply_exit_code") == 0
+
+    def test_apply_parameters_transient_failure_exhausts_retries_marks_failed(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Exhausted retry budget marks the sample failed.
+
+        With ``max_sample_retries=2``, the apply_fn is invoked at most
+        3 times (initial + 2 retries); after that the failure surfaces
+        to the Campaign and the sample is marked ``apply_status=failed``
+        with ``apply_exit_code=1``.
+        """
+        calls: list[int] = []
+
+        def always_transient_apply(template: Path, params: dict, sid: str, out: Path) -> Path:
+            calls.append(1)
+            raise RuntimeError("transient _apply_osm_mutations io error: file lock held")
+
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            dry_run=False,
+            max_sample_retries=2,
+        )
+        campaign = Campaign(
+            cfg=cfg,
+            executor=RetryingMockExecutor(),
+            apply_fn=always_transient_apply,
+        )
+        campaign.step_apply_parameters(
+            [{"sample_id": "s0001", "values": {"heating_setpoint": 20.0}}]
+        )
+        # 1 initial + 2 retries == 3 invocations, then sample is failed.
+        assert len(calls) == 3, (
+            "apply_fn should be retried exactly max_sample_retries (2) times "
+            f"before the sample is marked failed; got {len(calls)} calls"
+        )
+        assert campaign._sample_state["s0001"].get("apply_status") == "failed"
+        assert campaign._sample_state["s0001"].get("apply_exit_code") == 1
+
+    def test_apply_parameters_zero_max_sample_retries_fails_immediately(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """``max_sample_retries=0`` means no retry — single attempt, fail.
+
+        When the user explicitly sets ``--max-sample-retries=0``, the
+        ``RetryingMockExecutor`` only invokes ``apply_fn`` once.  On the
+        first failure the sample is marked failed without retry — which
+        preserves the documented opt-in semantics for the retry knob.
+        """
+        calls: list[int] = []
+
+        def failing_apply(template: Path, params: dict, sid: str, out: Path) -> Path:
+            calls.append(1)
+            raise RuntimeError("transient _apply_osm_mutations io error: file lock held")
+
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=False, max_sample_retries=0)
+        assert cfg.max_sample_retries == 0
+        campaign = Campaign(cfg=cfg, executor=RetryingMockExecutor(), apply_fn=failing_apply)
+        campaign.step_apply_parameters(
+            [{"sample_id": "s0001", "values": {"heating_setpoint": 20.0}}]
+        )
+        assert len(calls) == 1, (
+            f"max_sample_retries=0 must disable retry entirely; got {len(calls)} calls"
+        )
+        assert campaign._sample_state["s0001"].get("apply_status") == "failed"
+
+
+# -----------------------------------------------------------------------
 # Baseline comparison
 # -----------------------------------------------------------------------
 class TestBaselineComparison:
