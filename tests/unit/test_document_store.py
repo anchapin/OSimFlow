@@ -981,6 +981,7 @@ class TestBuildDocumentStoreRedisDispatch:
     ) -> None:
         # type: ignore[name-defined]
         import ssl
+
         import fakeredis
 
         ctx = ssl.create_default_context()
@@ -1002,7 +1003,7 @@ class TestBuildDocumentStoreRedisDispatch:
     ) -> None:
         # type: ignore[name-defined]
         import ssl
-        import fakeredis
+
 
         ctx = ssl.create_default_context()
         pool_mock = MagicMock()
