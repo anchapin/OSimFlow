@@ -304,6 +304,11 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         method="step_compute_uq_indices",
         condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
     ),
+    "GENERATE_BASIC_PLOTS": DAGStep(
+        inputs=StepInputs(required=("../aggregated_results.csv",)),
+        outputs=StepOutputs(produced=("plots/",)),
+        method="step_generate_plots",
+    ),
 }
 
 
@@ -2906,6 +2911,7 @@ class Campaign:
         parameterized: SampleDict | None = None
         simulated: SampleDict = {}
         kpi_files: list[Path] = []
+        aggregated: dict[str, Path] = {}
 
         for step_name, step_info in _STEP_DEPENDENCIES.items():
             if step_info.condition is not None and not step_info.condition(
@@ -2940,6 +2946,10 @@ class Campaign:
             elif step_name == "EXTRACT_KPIS":
                 assert simulated is not None
                 kpi_files = step_method(simulated, generation=generation)
+            elif step_name == "AGGREGATE_RESULTS":
+                aggregated = step_method(kpi_files, simulated)
+            elif step_name == "GENERATE_BASIC_PLOTS":
+                step_method(aggregated)
 
             self._maybe_inject_chaos(step_name, "after_step")
             log.debug("step %s completed", step_name)
