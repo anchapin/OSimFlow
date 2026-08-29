@@ -9,20 +9,24 @@ Covers:
   - PBSExecutor.submit: returns handle, wires through to qsub
   - _PBSHandle: result() and done() polling
   - _default_pbs_server: env var resolution
+  - _retry_pbs_call: transient-error retry helper (issue #1405)
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from osimflow.executors.pbs_executor import (
+    PBS_STATE_TRANSIENT,
     PBSExecutor,
     _default_pbs_server,
     _PBSHandle,
+    _retry_pbs_call,
 )
 
 # ---------------------------------------------------------------------------
@@ -216,7 +220,7 @@ class TestPBSExecutorQueryState:
     def test_unknown_job_returns_F(self) -> None:
         ex = self._make()
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout="")
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
             state = ex._query_job_state("999.pbs")
             assert state == "F"
 
@@ -405,3 +409,268 @@ class TestPBSHandle:
         assert handle.worker_id == "123.pbs"
         assert handle.worker_ip is None
         assert handle.worker_region is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1405: transient retry on qsub/qstat failures
+# ---------------------------------------------------------------------------
+
+
+def _cpe(returncode: int, stderr: str = "") -> subprocess.CalledProcessError:
+    """Build a CalledProcessError the way subprocess.run(check=True) would."""
+    return subprocess.CalledProcessError(returncode=returncode, cmd=["qsub"], stderr=stderr)
+
+
+class TestRetryPBSCall:
+    """_retry_pbs_call retries qsub on transient subprocess failures."""
+
+    def test_returns_first_success(self) -> None:
+        sentinel = MagicMock(stdout="123.pbs")
+        with patch("osimflow.executors.pbs_executor.time.sleep"):
+            result = _retry_pbs_call(lambda: sentinel)
+        assert result is sentinel
+
+    def test_retries_on_transient_stderr(self) -> None:
+        """Two 'connection refused' failures then success -> returns success."""
+        attempts = {"n": 0}
+        success = MagicMock(stdout="456.pbs")
+
+        def _call() -> MagicMock:
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise _cpe(255, "qsub: connection refused by pbsserver")
+            return success
+
+        with patch("osimflow.executors.pbs_executor.time.sleep") as mock_sleep:
+            result = _retry_pbs_call(_call)
+        assert result is success
+        assert attempts["n"] == 3
+        # Two retries -> two sleep calls (the success path does not sleep).
+        assert mock_sleep.call_count == 2
+
+    def test_raises_after_max_attempts(self) -> None:
+        """Persistent transient failure propagates after max_attempts."""
+        attempts = {"n": 0}
+
+        def _call() -> None:
+            attempts["n"] += 1
+            raise _cpe(255, "qsub: server unavailable, retry later")
+
+        with (
+            patch("osimflow.executors.pbs_executor.time.sleep"),
+            pytest.raises(subprocess.CalledProcessError) as excinfo,
+        ):
+            _retry_pbs_call(_call, max_attempts=3)
+        # The last exception's stderr should be preserved on the re-raise.
+        assert excinfo.value.stderr == "qsub: server unavailable, retry later"
+        assert attempts["n"] == 3
+
+    def test_non_transient_failure_propagates_immediately(self) -> None:
+        """Non-transient stderr: no retry, exception bubbles up."""
+        attempts = {"n": 0}
+
+        def _call() -> None:
+            attempts["n"] += 1
+            raise _cpe(2, "qsub: invalid request, syntax error")
+
+        with (
+            patch("osimflow.executors.pbs_executor.time.sleep") as mock_sleep,
+            pytest.raises(subprocess.CalledProcessError) as excinfo,
+        ):
+            _retry_pbs_call(_call)
+        assert excinfo.value.stderr == "qsub: invalid request, syntax error"
+        assert attempts["n"] == 1
+        # No retries -> no sleep calls.
+        assert mock_sleep.call_count == 0
+
+    def test_timeout_stderr_is_transient(self) -> None:
+        attempts = {"n": 0}
+
+        def _call() -> MagicMock:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise _cpe(255, "qsub: operation timed out after 30s")
+            return MagicMock(stdout="789.pbs")
+
+        with patch("osimflow.executors.pbs_executor.time.sleep"):
+            result = _retry_pbs_call(_call)
+        assert result.stdout == "789.pbs"
+        assert attempts["n"] == 2
+
+    def test_connection_reset_stderr_is_transient(self) -> None:
+        attempts = {"n": 0}
+
+        def _call() -> MagicMock:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise _cpe(255, "qsub: connection reset by peer")
+            return MagicMock(stdout="111.pbs")
+
+        with patch("osimflow.executors.pbs_executor.time.sleep"):
+            result = _retry_pbs_call(_call)
+        assert result.stdout == "111.pbs"
+
+    def test_logs_warning_on_each_retry(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        def _call() -> MagicMock:
+            raise _cpe(255, "qsub: connection refused")
+
+        with (
+            patch("osimflow.executors.pbs_executor.time.sleep"),
+            caplog.at_level(logging.WARNING, logger="osimflow.executors"),
+        ):
+            with pytest.raises(subprocess.CalledProcessError):
+                _retry_pbs_call(_call, max_attempts=3)
+        warnings = [r for r in caplog.records if "transient failure" in r.message]
+        # 3 attempts -> 2 retry warnings (the final attempt's failure
+        # does not log a retry warning, it re-raises).
+        assert len(warnings) == 2
+
+
+class TestSubmitJobRetriesTransient:
+    """_submit_job wraps subprocess.run in _retry_pbs_call."""
+
+    def _make(self) -> PBSExecutor:
+        return PBSExecutor(debug=False)
+
+    def test_qsub_transient_then_success(self) -> None:
+        ex = self._make()
+        attempts = {"n": 0}
+
+        def _fake_run(*_a: object, **_kw: object) -> MagicMock:
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise _cpe(255, "qsub: connection refused by pbsserver")
+            return MagicMock(stdout="999.pbs\n")
+
+        with (
+            patch("subprocess.run", side_effect=_fake_run),
+            patch("osimflow.executors.pbs_executor.time.sleep"),
+        ):
+            job_id = ex._submit_job(
+                name="t",
+                cpus=1,
+                memory_mb=512,
+                time_min=10,
+                container=None,
+                openstudio_version=None,
+                script_lines=["true"],
+            )
+        assert job_id == "999.pbs"
+        assert attempts["n"] == 3
+
+    def test_qsub_persistent_transient_raises(self) -> None:
+        ex = self._make()
+
+        def _fake_run(*_a: object, **_kw: object) -> None:
+            raise _cpe(255, "qsub: server unavailable")
+
+        with (
+            patch("subprocess.run", side_effect=_fake_run),
+            patch("osimflow.executors.pbs_executor.time.sleep"),
+            pytest.raises(subprocess.CalledProcessError) as excinfo,
+        ):
+            ex._submit_job(
+                name="t",
+                cpus=1,
+                memory_mb=512,
+                time_min=10,
+                container=None,
+                openstudio_version=None,
+                script_lines=["true"],
+            )
+        assert excinfo.value.stderr == "qsub: server unavailable"
+
+
+class TestQueryJobStateTransient:
+    """_query_job_state returns PBS_STATE_TRANSIENT on transient qstat errors."""
+
+    def _make(self) -> PBSExecutor:
+        return PBSExecutor(debug=False)
+
+    def test_qstat_transient_returns_transient_marker(self) -> None:
+        ex = self._make()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=255,
+                stdout="",
+                stderr="qstat: connection refused by pbsserver\n",
+            )
+            state = ex._query_job_state("123.pbs")
+        assert state is PBS_STATE_TRANSIENT
+        assert state is None
+
+    def test_qstat_timeout_returns_transient_marker(self) -> None:
+        ex = self._make()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1,
+                stdout="",
+                stderr="qstat: connection reset by peer\n",
+            )
+            state = ex._query_job_state("123.pbs")
+        assert state is PBS_STATE_TRANSIENT
+
+    def test_qstat_non_transient_error_still_returns_F(self) -> None:
+        ex = self._make()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1,
+                stdout="",
+                stderr="qstat: Unknown Job Id\n",
+            )
+            state = ex._query_job_state("999.pbs")
+        assert state == "F"
+
+    def test_qstat_empty_stdout_returns_F(self) -> None:
+        ex = self._make()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            state = ex._query_job_state("999.pbs")
+        assert state == "F"
+
+
+class TestWaitForTerminalTransient:
+    """_wait_for_terminal treats PBS_STATE_TRANSIENT as 'still polling'."""
+
+    def _make(self) -> PBSExecutor:
+        return PBSExecutor(debug=False, poll_interval_s=0.01, max_poll_interval_s=0.02)
+
+    def test_transient_marker_keeps_polling_until_terminal(self) -> None:
+        ex = self._make()
+        call_count = {"n": 0}
+
+        def _state(_job_id: str) -> str | None:
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                return PBS_STATE_TRANSIENT
+            return "F"
+
+        with (
+            patch.object(ex, "_query_job_state", side_effect=_state),
+            patch.object(ex, "_parse_exit_status", return_value=0),
+            patch("osimflow.executors.pbs_executor.time.sleep"),
+        ):
+            state, code = ex._wait_for_terminal("123.pbs")
+        assert state == "F"
+        assert code == 0
+        assert call_count["n"] == 3
+
+    def test_transient_marker_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """_query_job_state logs a warning when it returns the transient marker."""
+        import logging
+
+        ex = self._make()
+        with (
+            patch("subprocess.run") as mock_run,
+            caplog.at_level(logging.WARNING, logger="osimflow.executors"),
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=255,
+                stdout="",
+                stderr="qstat: connection refused by pbsserver\n",
+            )
+            state = ex._query_job_state("123.pbs")
+        assert state is PBS_STATE_TRANSIENT
+        assert any("qstat transient failure" in r.message for r in caplog.records)
