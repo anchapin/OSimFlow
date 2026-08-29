@@ -236,6 +236,12 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
         )
     # Nomad executor — address and datacentre.
     if args.executor == "nomad":
+        # Issue #1316: derive a unique dispatch job ID per campaign to prevent
+        # concurrent campaigns on the same Nomad cluster from overwriting each other's
+        # parameterized job spec. The user can override with --nomad-dispatch-job-id.
+        dispatch_job_id = args.nomad_dispatch_job_id
+        if dispatch_job_id is None and getattr(args, "outdir", None):
+            dispatch_job_id = f"osimflow-worker-{abs(hash(str(args.outdir)))}"
         return NomadExecutor(
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
@@ -252,6 +258,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             cert=args.nomad_cert,
             key=args.nomad_key,
             ca_cert=args.nomad_ca_cert,
+            dispatch_job_id=dispatch_job_id,
         )
     # Azure Batch executor — account credentials, pool, and Spot handling.
     if args.executor == "azure_batch":
@@ -600,6 +607,16 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "DEPRECATED compatibility toggle. True (default) keeps Nomad in remote-results mode. "
             "Set --no-nomad-remote-results-only only for temporary migration compatibility; "
             "the legacy local-callable mode is scheduled for removal after one minor release."
+        ),
+    )
+    run.add_argument(
+        "--nomad-dispatch-job-id",
+        default=None,
+        help=(
+            "Override the Nomad dispatch job ID in dispatch mode (issue #1316). "
+            "When not set, the executor derives a unique ID from the campaign outdir hash. "
+            "Setting this is only needed when multiple campaigns must share the same job ID "
+            "(e.g., to leverage a pre-registered job spec)."
         ),
     )
     run.add_argument(
