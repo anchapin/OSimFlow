@@ -555,7 +555,7 @@ osimflow run --executor dask_jobqueue \
 | `--dask-cpus-per-worker` | 2 | Per-worker vCPU sizing (right-size to the model) |
 | `--dask-memory-per-worker` | `4GiB` | Per-worker memory; raise for large models instead of adding workers |
 | `--nomad-address` | (unset) | Nomad server address for remote cluster access |
-| `--max-workers` | 4 | Local-executor parallelism (advisory on cloud executors) |
+| `--max-workers` | `cpu_count() or 4` | Local-executor parallelism (default is host CPU count, fallback 4 — PR #1375; advisory on cloud executors) |
 | `--enable-cost-tracking` | off | Records per-campaign cost estimates in `run.json` (issue #447) |
 | `--cost-on-demand-price` | (unset) | On-demand $/vCPU-hour for cost tracking |
 | `--cost-spot-price` | (unset) | Spot $/vCPU-hour for cost tracking |
