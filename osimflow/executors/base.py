@@ -12,6 +12,7 @@ __all__ = ["BaseExecutor", "Handle", "SubmitRequest"]
 import abc
 import dataclasses
 import json
+import os
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
@@ -252,9 +253,13 @@ class BaseExecutor(abc.ABC):
 
         Override in executors that need to limit the number of
         concurrent submissions (e.g., Nomad's rate-limiting).
-        The default returns *total* (no chunking).
+        The default returns a bounded chunk size so that unbounded
+        submission bursts are avoided even when the caller passes a
+        very large ``total`` (issue #1342).
         """
-        return total
+        if total <= 0:
+            return 1
+        return min(total, max(1, (os.cpu_count() or 1) * 4, 50))
 
     def get_bounded_fanout_chunk_size(self, total: int) -> int:
         """Return the bounded chunk size; delegates to fanout_submit_chunk_size.
