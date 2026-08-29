@@ -81,14 +81,13 @@ class TestBuildCache:
         self, tmp_path: Path
     ) -> None:
         import ssl
+
         ctx = ssl.create_default_context()
         mock_rs = MagicMock()
         mock_rs.from_url.return_value = MagicMock()
         mock_ra = AsyncMock()
         with patch("osimflow.distributed_cache._get_redis_sync", return_value=mock_rs):
-            with patch(
-                "osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra
-            ):
+            with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
                 cache = build_cache(
                     db_path=tmp_path / "cache.sqlite",
                     redis_url="redis://localhost:6379/0",
@@ -97,18 +96,15 @@ class TestBuildCache:
                 )
         assert cache._redis_ssl_context is ctx
 
-    def test_distributed_cache_stores_redis_ssl_context(
-        self, tmp_path: Path
-    ) -> None:
+    def test_distributed_cache_stores_redis_ssl_context(self, tmp_path: Path) -> None:
         import ssl
+
         ctx = ssl.create_default_context()
         mock_rs = MagicMock()
         mock_rs.from_url.return_value = MagicMock()
         mock_ra = AsyncMock()
         with patch("osimflow.distributed_cache._get_redis_sync", return_value=mock_rs):
-            with patch(
-                "osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra
-            ):
+            with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
                 cache = DistributedCache(
                     db_path=tmp_path / "dist.sqlite",
                     redis_url="redis://localhost:6379/0",
@@ -117,19 +113,16 @@ class TestBuildCache:
                 )
         assert cache._redis_ssl_context is ctx
 
-    def test_distributed_cache_sync_client_receives_ssl_context(
-        self, tmp_path: Path
-    ) -> None:
+    def test_distributed_cache_sync_client_receives_ssl_context(self, tmp_path: Path) -> None:
         import ssl
+
         ctx = ssl.create_default_context()
         mock_rs = MagicMock()
         mock_client = MagicMock()
         mock_rs.from_url.return_value = mock_client
         mock_ra = AsyncMock()
         with patch("osimflow.distributed_cache._get_redis_sync", return_value=mock_rs):
-            with patch(
-                "osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra
-            ):
+            with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
                 cache = DistributedCache(
                     db_path=tmp_path / "dist.sqlite",
                     redis_url="redis://localhost:6379/0",
