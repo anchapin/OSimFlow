@@ -722,6 +722,47 @@ class TestRateLimiting:
         )
 
 
+class TestRateLimitKeyValidation:
+    """Tests for rate_limit_key validation (issue #1329)."""
+
+    def test_rate_limit_key_valid_values(self, tmp_outdir: Path) -> None:
+        """Valid rate_limit_key values should be accepted."""
+        for key in ("ip", "user", "campaign"):
+            app = create_app(outdir=tmp_outdir, rate_limit_key=key)
+            assert app.state.rate_limit_key == key
+
+    def test_rate_limit_key_empty_raises(self, tmp_outdir: Path) -> None:
+        """Empty rate_limit_key should raise ValueError."""
+        with pytest.raises(ValueError, match="non-empty"):
+            create_app(outdir=tmp_outdir, rate_limit_key="")
+
+    def test_rate_limit_key_too_long_raises(self, tmp_outdir: Path) -> None:
+        """rate_limit_key longer than 64 characters should raise ValueError."""
+        long_key = "a" * 65
+        with pytest.raises(ValueError, match="at most 64"):
+            create_app(outdir=tmp_outdir, rate_limit_key=long_key)
+
+    def test_rate_limit_key_64_chars_ok(self, tmp_outdir: Path) -> None:
+        """Valid rate_limit_key at max length should be accepted."""
+        app = create_app(outdir=tmp_outdir, rate_limit_key="ip")
+        assert app.state.rate_limit_key == "ip"
+
+    def test_rate_limit_key_non_ascii_raises(self, tmp_outdir: Path) -> None:
+        """rate_limit_key with non-ASCII characters should raise ValueError."""
+        with pytest.raises(ValueError, match="printable ASCII"):
+            create_app(outdir=tmp_outdir, rate_limit_key="us\u00e9r")
+
+    def test_rate_limit_key_control_chars_raises(self, tmp_outdir: Path) -> None:
+        """rate_limit_key with control characters should raise ValueError."""
+        with pytest.raises(ValueError, match="printable ASCII"):
+            create_app(outdir=tmp_outdir, rate_limit_key="user\n")
+
+    def test_rate_limit_key_unknown_value_raises(self, tmp_outdir: Path) -> None:
+        """Unknown rate_limit_key value should raise ValueError."""
+        with pytest.raises(ValueError, match="must be one of"):
+            create_app(outdir=tmp_outdir, rate_limit_key="unknown")
+
+
 class TestReadOnlyDefault:
     """Tests for the secure read-only default."""
 

@@ -179,10 +179,36 @@ def _make_per_campaign_key_func(
     return key_func
 
 
+# Allowed rate_limit_key values
+_ALLOWED_RATE_LIMIT_KEYS = frozenset({"ip", "user", "campaign"})
+
+# Maximum length for rate_limit_key
+_MAX_RATE_LIMIT_KEY_LENGTH = 64
+
+
+def _validate_rate_limit_key(rate_limit_key: str) -> None:
+    """Validate rate_limit_key parameter (issue #1329).
+
+    Raises ValueError if the key is:
+    - Empty
+    - Longer than 64 characters
+    - Contains non-printable ASCII characters
+    - Not one of the allowed values ("ip", "user", "campaign")
+    """
+    if not rate_limit_key:
+        raise ValueError("rate_limit_key must be non-empty")
+    if len(rate_limit_key) > _MAX_RATE_LIMIT_KEY_LENGTH:
+        raise ValueError(f"rate_limit_key must be at most {_MAX_RATE_LIMIT_KEY_LENGTH} characters")
+    if not rate_limit_key.isascii() or not rate_limit_key.isprintable():
+        raise ValueError("rate_limit_key must be a printable ASCII string")
+    if rate_limit_key not in _ALLOWED_RATE_LIMIT_KEYS:
+        raise ValueError(f"rate_limit_key must be one of {sorted(_ALLOWED_RATE_LIMIT_KEYS)}")
+
+
 def _get_rate_limit_key_func(
     rate_limit_key: str,
 ) -> Callable[[Request], str]:
-    """Get the appropriate rate limit key function based on the configured mode (issue #445).
+    """Get the appropriate rate limit key function based on the configured mode (issue #445, #1329).
 
     Parameters
     ----------
@@ -195,7 +221,14 @@ def _get_rate_limit_key_func(
     -------
     Callable[[Request], str]
         A key function that maps a request to a rate limit bucket key.
+
+    Raises
+    ------
+    ValueError
+        If rate_limit_key is empty, too long, contains non-ASCII characters,
+        or is not one of the allowed values.
     """
+    _validate_rate_limit_key(rate_limit_key)
     if rate_limit_key == "user":
         return _make_per_user_key_func()
     elif rate_limit_key == "campaign":
