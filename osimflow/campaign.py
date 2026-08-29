@@ -141,6 +141,18 @@ log = logging.getLogger("osimflow.campaign")
 CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 
+# Cloud executors that pull the nrel/openstudio container image and are
+# therefore exposed to supply-chain risk when --container-digest is absent
+# (issue #1320).  Slurm and PBS are HPC but not cloud-hosted container
+# registries, so they are excluded.
+_CLOUD_EXECUTORS: frozenset[str] = frozenset({
+    "aws_batch",
+    "azure_batch",
+    "google_batch",
+    "kubernetes",
+    "docker_swarm",
+})
+
 
 class QuotaExceededError(RuntimeError):
     """Raised when a campaign resource quota is exceeded (issue #446)."""
@@ -549,6 +561,14 @@ class Campaign:
             self._python_container_digest = cfg.container_digest
             self._os_container_digest = cfg.container_digest
             log.info("container images pinned by digest: %s", cfg.container_digest)
+        elif executor.name in _CLOUD_EXECUTORS:
+            log.warning(
+                "no --container-digest set: cloud executor %r uses mutable "
+                "nrel/openstudio:<version> tags. A compromised tag update would "
+                "affect all running campaigns. Pass --container-digest "
+                "sha256:... to pin the image (issue #1320).",
+                executor.name,
+            )
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
