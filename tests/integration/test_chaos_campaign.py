@@ -3,7 +3,9 @@
 Acceptance criteria (issue #1013):
 
 * ``Campaign`` invokes ``ChaosEngine`` at the configured schedule
-  (``before_step``, ``after_step``, ``per_sample``).
+  (``before_step``, ``after_step``, ``per_sample``).  At present this
+  test covers ``per_sample`` and ``before_step``; ``after_step`` is
+  tracked in issue #1336.
 * When the engine fires, every invocation is recorded in
   ``run.json`` under the ``chaos_invocations`` key.
 * A non-chaos campaign (``chaos_enabled=False``) is byte-for-byte
