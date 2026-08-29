@@ -605,3 +605,52 @@ class TestDistributedCacheConcurrent:
                 f.result()
 
         assert not errors, f"Concurrent access errors: {errors}"
+
+
+class TestValidateRedisUrl:
+    """Regression tests for _validate_redis_url (issue #1321)."""
+
+    def test_localhost_passthrough(self) -> None:
+        from osimflow.distributed_cache import _validate_redis_url
+
+        _validate_redis_url("redis://localhost:6379")
+        _validate_redis_url("redis://127.0.0.1:6379")
+        _validate_redis_url("redis://[::1]:6379")
+        _validate_redis_url("redis://0.0.0.0:6379")
+        _validate_redis_url("rediss://localhost:6379")
+        _validate_redis_url("redis://localhost:6379", require_auth=True)
+
+    def test_nonlocalhost_rediss_with_creds_ok(self) -> None:
+        from osimflow.distributed_cache import _validate_redis_url
+
+        _validate_redis_url("rediss://user:pass@redis.example.com:6379")
+        _validate_redis_url("rediss://user:pass@redis.example.com:6379", require_auth=True)
+
+    def test_nonlocalhost_rediss_no_creds_require_auth_ok(self) -> None:
+        from osimflow.distributed_cache import _validate_redis_url
+
+        _validate_redis_url("rediss://redis.example.com:6379", require_auth=True)
+
+    def test_nonlocalhost_rediss_no_creds_no_require_auth_fails(self) -> None:
+        from osimflow.distributed_cache import _validate_redis_url
+
+        with pytest.raises(ValueError, match="issue #1277"):
+            _validate_redis_url("rediss://redis.example.com:6379")
+
+    def test_nonlocalhost_redis_no_tls_fails_even_with_require_auth(self) -> None:
+        from osimflow.distributed_cache import _validate_redis_url
+
+        with pytest.raises(ValueError, match="issue #1321"):
+            _validate_redis_url("redis://redis.example.com:6379", require_auth=True)
+
+    def test_nonlocalhost_redis_no_tls_no_creds_fails(self) -> None:
+        from osimflow.distributed_cache import _validate_redis_url
+
+        with pytest.raises(ValueError, match="issue #1321"):
+            _validate_redis_url("redis://redis.example.com:6379")
+
+    def test_nonlocalhost_redis_no_tls_with_creds_fails(self) -> None:
+        from osimflow.distributed_cache import _validate_redis_url
+
+        with pytest.raises(ValueError, match="issue #1321"):
+            _validate_redis_url("redis://user:pass@redis.example.com:6379")
