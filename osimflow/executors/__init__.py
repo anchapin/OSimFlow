@@ -2091,6 +2091,7 @@ class NomadExecutor(BaseExecutor):
         cert: str | None = None,
         key: str | None = None,
         ca_cert: str | None = None,
+        dispatch_job_id: str | None = None,
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -2169,6 +2170,12 @@ class NomadExecutor(BaseExecutor):
                 self.address,
             )
         self._dispatch_job_registered = False
+        # Issue #1316: dispatch job ID is configurable so concurrent campaigns
+        # on the same Nomad cluster use distinct parameterized jobs instead
+        # of overwriting each other's job spec.
+        self._dispatch_job_id = (
+            dispatch_job_id if dispatch_job_id is not None else self.DISPATCH_JOB_ID
+        )
         # Compatibility mode:
         # - remote_results_only=True (default): do not run local callables; Handle.result()
         #   returns result_hint on terminal success, enabling fully remote flows.
@@ -2383,7 +2390,7 @@ class NomadExecutor(BaseExecutor):
 
         Returns a Nomad ``batch`` job spec with ``ParameterizedJob`` set
         so the executor can dispatch child jobs via
-        ``POST /v1/job/osimflow-worker/dispatch``.
+        ``POST /v1/job/<dispatch_job_id>/dispatch``.
 
         Security:
           * ``privileged = false`` — no host-level access.
@@ -2396,8 +2403,8 @@ class NomadExecutor(BaseExecutor):
         )
         return {
             "Job": {
-                "ID": self.DISPATCH_JOB_ID,
-                "Name": self.DISPATCH_JOB_ID,
+                "ID": self._dispatch_job_id,
+                "Name": self._dispatch_job_id,
                 "Type": "batch",
                 "Datacenters": [self.datacentre],
                 "ParameterizedJob": {
@@ -2464,7 +2471,7 @@ class NomadExecutor(BaseExecutor):
         if self._dispatch_job_registered:
             return
         spec = self._build_dispatch_job_spec()
-        log.info("nomad: registering parameterized dispatch job %s", self.DISPATCH_JOB_ID)
+        log.info("nomad: registering parameterized dispatch job %s", self._dispatch_job_id)
         self._client.register_job(spec)
         self._dispatch_job_registered = True
 
@@ -2624,7 +2631,7 @@ class NomadExecutor(BaseExecutor):
             if result_storage_endpoint is not None:
                 meta["result_storage_endpoint"] = str(result_storage_endpoint)
 
-            response = self._client.dispatch_job(self.DISPATCH_JOB_ID, meta=meta)
+            response = self._client.dispatch_job(self._dispatch_job_id, meta=meta)
         else:
             # Legacy (direct) mode: build and submit a unique job per call.
             spec = self._build_job_spec(

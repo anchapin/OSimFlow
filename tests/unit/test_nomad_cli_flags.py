@@ -151,3 +151,62 @@ def test_is_local_address_variants() -> None:
     assert is_local("127.0.0.1:4646") is True
     assert is_local("https://nomad.example.com:4646") is False
     assert is_local("http://10.0.0.5:4646") is False
+
+
+class TestDispatchJobId:
+    """Tests for issue #1316 — unique dispatch job ID per campaign."""
+
+    def test_dispatch_job_id_defaults_to_class_constant(self) -> None:
+        """When dispatch_job_id is not provided, use the class constant."""
+        ex = NomadExecutor()
+        assert ex._dispatch_job_id == NomadExecutor.DISPATCH_JOB_ID
+        assert ex._dispatch_job_id == "osimflow-worker"
+
+    def test_dispatch_job_id_can_be_overridden(self) -> None:
+        """When dispatch_job_id is provided, use it instead of the class constant."""
+        ex = NomadExecutor(dispatch_job_id="my-custom-job")
+        assert ex._dispatch_job_id == "my-custom-job"
+
+    def test_dispatch_job_id_from_outdir_hash_is_unique(self) -> None:
+        """Different outdir paths produce different dispatch job IDs."""
+        ex1 = NomadExecutor(dispatch_job_id="osimflow-worker-{hash1}")
+        ex2 = NomadExecutor(dispatch_job_id="osimflow-worker-{hash2}")
+        assert ex1._dispatch_job_id != ex2._dispatch_job_id
+
+    def test_build_executor_passes_dispatch_job_id_from_outdir(self) -> None:
+        """_build_executor derives a unique dispatch job ID from args.outdir."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                *_base_run_args(),
+                "--outdir",
+                "/tmp/campaign-a",
+            ]
+        )
+        executor = _build_executor(args)
+        assert isinstance(executor, NomadExecutor)
+        assert "osimflow-worker-" in executor._dispatch_job_id
+        assert executor._dispatch_job_id.startswith("osimflow-worker-")
+
+    def test_build_executor_uses_explicit_dispatch_job_id(self) -> None:
+        """_build_executor uses --nomad-dispatch-job-id when explicitly set."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                *_base_run_args(),
+                "--outdir",
+                "/tmp/campaign-b",
+                "--nomad-dispatch-job-id",
+                "my-fixed-job-id",
+            ]
+        )
+        executor = _build_executor(args)
+        assert isinstance(executor, NomadExecutor)
+        assert executor._dispatch_job_id == "my-fixed-job-id"
+
+    def test_dispatch_job_id_in_job_spec(self) -> None:
+        """_build_dispatch_job_spec uses the instance's _dispatch_job_id."""
+        ex = NomadExecutor(dispatch_job_id="osimflow-worker-test123")
+        spec = ex._build_dispatch_job_spec()
+        assert spec["Job"]["ID"] == "osimflow-worker-test123"
+        assert spec["Job"]["Name"] == "osimflow-worker-test123"

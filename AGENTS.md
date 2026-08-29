@@ -207,7 +207,7 @@ appear in this document. Listed in run-subcommand groups (or
   `--max-generations`, `--max-sample-retries`, `--max-workers`,
   `--mlflow_tracking_uri`, `--nomad-address`, `--nomad-allocation-resolution-timeout-s`,
   `--nomad-ca-cert`, `--nomad-cert`, `--nomad-datacentre`,
-  `--nomad-dispatch-policy`, `--nomad-fanout-submit-chunk-size`,
+  `--nomad-dispatch-job-id`, `--nomad-dispatch-policy`, `--nomad-fanout-submit-chunk-size`,
   `--nomad-fanout-submit-rate-per-sec`, `--nomad-key`,
   `--nomad-max-poll-interval-s`, `--nomad-poll-interval-s`,
   `--nomad-remote-results-only`, `--nomad-tls`, `--nomad-tls-verify`,
