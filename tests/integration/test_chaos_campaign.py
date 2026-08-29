@@ -332,3 +332,40 @@ def test_chaos_before_step_memory_pressure_completes(
     for inv in invocations:
         assert inv["results"][0]["fault_type"] == FaultType.MEMORY_PRESSURE.value
         assert inv["results"][0]["injected"] is True
+
+
+def test_chaos_after_step_memory_pressure_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``after_step`` schedule with ``memory_pressure`` does not break the campaign.
+
+    This is the missing third-schedule regression test for issue #1322.
+    MemoryPressureInjector is registered on the ``after_step`` schedule;
+    the campaign must still complete and emit per-step chaos invocations
+    with ``when == "after_step"``.
+    """
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["memory_pressure"],
+        chaos_schedule="after_step",
+        chaos_delay_s=0.0,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(MemoryPressureInjector(size_mb=50, duration_s=0.1, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()
+
+    trace = json.loads((outdir / "run.json").read_text())
+    assert trace["config"]["chaos"]["schedule"] == "after_step"
+    invocations = [inv for inv in trace["chaos_invocations"] if inv["when"] == "after_step"]
+    assert invocations, "expected at least one after_step chaos invocation"
+    for inv in invocations:
+        assert inv["results"][0]["fault_type"] == FaultType.MEMORY_PRESSURE.value
+        assert inv["results"][0]["injected"] is True
