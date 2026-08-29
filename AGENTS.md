@@ -222,7 +222,8 @@ appear in this document. Listed in run-subcommand groups (or
   `--task-queue`, `--uq-failure-threshold`, `--uq-method`,
   `--uq-n-samples`.
 
-- **Inputs / outputs:** `--archive_intermediates`,
+- **Inputs / outputs:** `--allow-insecure-storage-endpoint`,
+  `--archive_intermediates`,
   `--bcl-api-key`, `--dry-run`, `--finalize-script`,
   `--init-script`, `--input_variables`, `--kpis`, `--log_level`,
   `--n_samples`, `--no-tui`, `--offline`, `--offline-bundle`,
@@ -364,7 +365,12 @@ name in this section.
 - `osimflow/storage.py` — `ResultStorage` ABC + `LocalStorage`,
   `S3Storage`, `GCSStorage`, `AzureBlobStorage`,
   `S3ArtifactStorage`, `ResultStorageUploader`,
-  `build_result_storage`.
+  `build_result_storage`.  `_validate_storage_endpoint`
+  enforces `https://` for non-loopback
+  `--result-storage-endpoint` /
+  `--s3-artifact-endpoint` URLs unless
+  `--allow-insecure-storage-endpoint` is set (issue #1386);
+  mirrors `osimflow.distributed_cache._validate_redis_url`.
 - `osimflow/taskqueue.py` — `ProducerQueue` ABC (fan-out / push) +
   `ConsumerQueue` ABC (fan-in / pull) + `DaskTaskQueue`
   (implements both), `NoOpTaskQueue` (implements both),
@@ -828,6 +834,12 @@ context-mode / codebase-memory-mcp are exposed):
   roles: a task role scoped to the campaign S3 bucket and
   CloudWatch Logs, a task-execution role for ECR image pulls,
   and a Batch service role.
+- **S3 storage endpoints** (issue #1386): `--result-storage-endpoint`
+  and `--s3-artifact-endpoint` must use `https://` unless
+  `--allow-insecure-storage-endpoint` is set (fail-closed;
+  loopback hosts exempt). Plaintext HTTP endpoints leak AWS
+  SigV4 signing material in cleartext — do not enable
+  `--allow-insecure-storage-endpoint` in production.
 - **Singularity on shared HPC:** never bind-mount secrets;
   pass via env vars or `submitit`'s
   `ex.update_parameters(setup=...)`, not as container mounts.

@@ -36,6 +36,7 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     import azure.storage.blob.aio as azure_blob_async
@@ -44,6 +45,75 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger("osimflow.storage")
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def _validate_storage_endpoint(endpoint_url: str | None, *, allow_insecure: bool = False) -> None:
+    """Validate that an S3 endpoint URL uses TLS (issue #1386).
+
+    Mirrors :func:`osimflow.distributed_cache._validate_redis_url`: rejects
+    ``http://`` endpoints unless the operator has explicitly opted in with
+    ``allow_insecure=True`` (typically only for local MinIO / dev).  The
+    loopback hosts (localhost, ``127.0.0.1``, ``::1``, ``0.0.0.0``) are
+    exempt because they never traverse a real network — same exception
+    the Redis validator uses.
+
+    Parameters
+    ----------
+    endpoint_url
+        The candidate endpoint URL.  ``None`` and ``""`` pass silently —
+        there is no custom endpoint to validate.
+    allow_insecure
+        When ``True``, ``http://`` endpoints are accepted with a loud
+        ``WARNING``.  Defaults to ``False`` (fail-closed).
+
+    Raises
+    ------
+    ValueError
+        When ``endpoint_url`` is non-empty, non-loopback, and uses a
+        scheme other than ``https`` while ``allow_insecure`` is ``False``.
+    """
+    if not endpoint_url:
+        return
+
+    parsed = urlparse(endpoint_url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+
+    if scheme == "https":
+        return
+
+    if scheme != "http":
+        raise ValueError(
+            f"invalid S3 endpoint URL (issue #1386): {endpoint_url!r} "
+            f"uses scheme {scheme!r}; expected 'https://'. "
+            f"Non-HTTPS endpoints are rejected unless "
+            f"--allow-insecure-storage-endpoint is set."
+        )
+
+    if host in _LOOPBACK_HOSTS:
+        return
+
+    if allow_insecure:
+        log.warning(
+            "INSECURE S3 endpoint (issue #1386): %s uses plaintext HTTP; "
+            "SigV4 signing material and campaign artifacts will traverse "
+            "the network in cleartext. This is allowed because "
+            "--allow-insecure-storage-endpoint was set — do not use in "
+            "production.",
+            endpoint_url,
+        )
+        return
+
+    raise ValueError(
+        f"insecure S3 endpoint URL (issue #1386): {endpoint_url!r} uses "
+        f"plaintext HTTP and is not a loopback host. Non-HTTPS storage "
+        f"endpoints leak AWS SigV4 signing material and campaign "
+        f"artifacts in cleartext. Use https:// or pass "
+        f"--allow-insecure-storage-endpoint to override (dev/test only)."
+    )
 
 
 class ResultStorage(ABC):
@@ -219,6 +289,7 @@ class S3Storage(ResultStorage):
         prefix: str = "",
         *,
         endpoint_url: str | None = None,
+        allow_insecure_endpoint: bool = False,
     ) -> None:
         """Initialize the S3 backend.
 
@@ -230,10 +301,17 @@ class S3Storage(ResultStorage):
             Prefix prepended to all remote paths (e.g. ``"run1/results"``).
         endpoint_url
             Optional custom endpoint URL for S3-compatible stores
-            (MinIO, Cloudflare R2, etc.).
+            (MinIO, Cloudflare R2, etc.).  Must use ``https://`` for
+            non-loopback hosts (issue #1386).
+        allow_insecure_endpoint
+            Allow ``http://`` endpoints for non-loopback hosts.  When
+            ``True``, a ``WARNING`` is logged.  Defaults to ``False``
+            (fail-closed).  Mirrors the Redis
+            ``--require-redis-auth`` opt-in.
         """
         import boto3  # noqa: PLC0415
 
+        _validate_storage_endpoint(endpoint_url, allow_insecure=allow_insecure_endpoint)
         self.bucket = bucket
         self.prefix = prefix.rstrip("/")
         self.endpoint_url = endpoint_url
@@ -705,6 +783,7 @@ class S3ArtifactStorage:
         endpoint_url: str | None = None,
         region: str | None = None,
         presigned_url_expiration_seconds: int = 3600,
+        allow_insecure_endpoint: bool = False,
     ) -> None:
         """Initialize the S3 artifact storage backend.
 
@@ -716,7 +795,8 @@ class S3ArtifactStorage:
             Prefix prepended to all artifact paths (e.g. ``"campaign-123"``).
         endpoint_url
             Optional custom endpoint URL for S3-compatible stores
-            (MinIO, Cloudflare R2, etc.).
+            (MinIO, Cloudflare R2, etc.).  Must use ``https://`` for
+            non-loopback hosts (issue #1386).
         region
             AWS region for the S3 bucket. When None, uses the region from
             the IAM role or default credential chain. Required for
@@ -724,9 +804,15 @@ class S3ArtifactStorage:
         presigned_url_expiration_seconds
             How long pre-signed URLs remain valid (default: 3600 = 1 hour).
             Remote nodes should download artifacts within this window.
+        allow_insecure_endpoint
+            Allow ``http://`` endpoints for non-loopback hosts.  When
+            ``True``, a ``WARNING`` is logged.  Defaults to ``False``
+            (fail-closed).  Mirrors the Redis
+            ``--require-redis-auth`` opt-in.
         """
         import boto3  # noqa: PLC0415
 
+        _validate_storage_endpoint(endpoint_url, allow_insecure=allow_insecure_endpoint)
         self.bucket = bucket
         self.prefix = prefix.rstrip("/") if prefix else ""
         self.endpoint_url = endpoint_url
@@ -918,6 +1004,7 @@ def build_result_storage(
     endpoint_url: str | None = None,
     project_id: str | None = None,
     account_url: str | None = None,
+    allow_insecure_endpoint: bool = False,
 ) -> ResultStorage:
     """Factory: build the correct ResultStorage from a backend name.
 
@@ -930,11 +1017,16 @@ def build_result_storage(
     prefix
         Prefix prepended to all remote paths.
     endpoint_url
-        Custom S3 endpoint (MinIO, R2, etc.) for ``"s3"`` backend.
+        Custom S3 endpoint (MinIO, R2, etc.) for ``"s3"`` backend.  Must
+        use ``https://`` for non-loopback hosts unless
+        ``allow_insecure_endpoint=True`` (issue #1386).
     project_id
         Google Cloud project for ``"gs"`` backend.
     account_url
         Azure Blob account URL for ``"azure"`` backend.
+    allow_insecure_endpoint
+        Opt-in flag for plaintext ``http://`` S3 endpoints (dev/test
+        only — logs a ``WARNING`` and forwards to the storage backend).
 
     Returns
     -------
@@ -944,12 +1036,19 @@ def build_result_storage(
     Raises
     ------
     ValueError
-        When *backend* is not one of the supported values.
+        When *backend* is not one of the supported values, or when
+        ``endpoint_url`` is a non-HTTPS non-loopback URL and
+        ``allow_insecure_endpoint`` is ``False`` (issue #1386).
     """
     if backend == "local":
         return LocalStorage()
     if backend == "s3":
-        return S3Storage(bucket=bucket, prefix=prefix, endpoint_url=endpoint_url)
+        return S3Storage(
+            bucket=bucket,
+            prefix=prefix,
+            endpoint_url=endpoint_url,
+            allow_insecure_endpoint=allow_insecure_endpoint,
+        )
     if backend == "gs":
         return GCSStorage(bucket=bucket, prefix=prefix, project_id=project_id)
     if backend == "azure":

@@ -288,6 +288,14 @@ def _upload_artifacts_for_object_storage(result: Any) -> None:  # noqa: ANN401
         env_key="OSIMFLOW_RESULT_STORAGE_ENDPOINT",
         meta_key="result_storage_endpoint",
     )
+    # Forward the opt-in plaintext flag (issue #1386).  Loopback hosts
+    # are exempt without this; see ``_validate_storage_endpoint``.
+    allow_insecure = bool(
+        _get_env_or_nomad_meta(
+            env_key="OSIMFLOW_ALLOW_INSECURE_STORAGE_ENDPOINT",
+            meta_key="allow_insecure_storage_endpoint",
+        )
+    )
 
     if not backend or not bucket:
         raise RuntimeError(
@@ -299,6 +307,7 @@ def _upload_artifacts_for_object_storage(result: Any) -> None:  # noqa: ANN401
         bucket=bucket,
         prefix=str(prefix or ""),
         endpoint_url=endpoint,
+        allow_insecure_endpoint=allow_insecure,
     )
 
     uploaded: set[str] = set()

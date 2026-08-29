@@ -713,6 +713,12 @@ class StorageConfig:
         S3-compatible endpoint for artifact storage.
     s3_artifact_presigned_url_expiration
         Pre-signed URL expiration in seconds.
+    allow_insecure_storage_endpoint
+        Opt-in flag for plaintext ``http://`` S3 storage endpoints
+        (issue #1386).  Defaults to ``False`` (fail-closed — mirrors the
+        Redis ``rediss://`` enforcement from issue #1321).  When ``True``
+        the storage backend emits a loud ``WARNING`` and uses the
+        plaintext endpoint anyway.
     """
 
     result_storage_backend: str = "local"
@@ -723,6 +729,7 @@ class StorageConfig:
     s3_artifact_region: str | None = None
     s3_artifact_endpoint: str | None = None
     s3_artifact_presigned_url_expiration: int = 3600
+    allow_insecure_storage_endpoint: bool = False
 
 
 @dataclasses.dataclass
@@ -1080,6 +1087,7 @@ class CampaignConfig:
     s3_artifact_region: str | None = None
     s3_artifact_endpoint: str | None = None
     s3_artifact_presigned_url_expiration: int = 3600
+    allow_insecure_storage_endpoint: bool = False
 
     # --- Legacy flat observability fields (for backward compatibility) ---
     observability: str = "none"
@@ -1156,6 +1164,7 @@ class CampaignConfig:
             s3_artifact_region=self.s3_artifact_region,
             s3_artifact_endpoint=self.s3_artifact_endpoint,
             s3_artifact_presigned_url_expiration=self.s3_artifact_presigned_url_expiration,
+            allow_insecure_storage_endpoint=self.allow_insecure_storage_endpoint,
         )
 
         # Initialize observability config from flat fields (always, since init=False)
@@ -1318,6 +1327,10 @@ class CampaignConfig:
                 "s3_artifact_presigned_url_expiration": (
                     "storage",
                     "s3_artifact_presigned_url_expiration",
+                ),
+                "allow_insecure_storage_endpoint": (
+                    "storage",
+                    "allow_insecure_storage_endpoint",
                 ),
                 # Observability config delegation
                 "observability": ("_observability", "observability"),
@@ -1913,6 +1926,10 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         s3_artifact_presigned_url_expiration=int(str(args["s3_artifact_presigned_url_expiration"]))
         if args.get("s3_artifact_presigned_url_expiration") is not None
         else 3600,
+        # Opt-in flag for plaintext ``http://`` S3 storage endpoints
+        # (issue #1386).  Mirrors the Redis ``rediss://`` enforcement from
+        # issue #1321 — defaults to ``False`` (fail-closed).
+        allow_insecure_storage_endpoint=bool(args.get("allow_insecure_storage_endpoint", False)),
         # Chaos testing settings (issue #1013). All off by default; the
         # ``chaos`` composed config is built from these flat fields in
         # ``__post_init__``. ``chaos_scenarios`` is parsed from a

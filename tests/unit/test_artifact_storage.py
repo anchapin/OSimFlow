@@ -7,6 +7,7 @@ for remote executor nodes.
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -534,3 +535,217 @@ class TestS3ArtifactStorageIntegration:
                 fake_client.generate_presigned_url.assert_called_once()
 
                 assert url == expected_url
+
+
+class TestS3EndpointTLSPolicy:
+    """Endpoint TLS validation for S3 backends (issue #1386).
+
+    Mirrors the Redis ``_validate_redis_url`` policy: reject non-`https://`
+    endpoints unless the operator explicitly opts in via
+    ``allow_insecure_endpoint=True`` / ``--allow-insecure-storage-endpoint``.
+    Loopback hosts (``localhost``, ``127.0.0.1``, ``::1``, ``0.0.0.0``) are
+    exempt because they never traverse a real network — same exemption the
+    Redis validator uses.
+    """
+
+    @pytest.fixture
+    def mock_boto3(self) -> tuple[MagicMock, MagicMock, MagicMock]:
+        """Mock boto3 at the import site (boto3.Session() called in __init__)."""
+        fake_boto3 = MagicMock()
+        fake_session = MagicMock()
+        fake_client = MagicMock()
+        fake_session.client.return_value = fake_client
+        fake_boto3.Session.return_value = fake_session
+        return fake_boto3, fake_session, fake_client
+
+    def test_http_non_loopback_rejected_by_default(self) -> None:
+        """http:// to a non-loopback host raises ValueError (issue #1386)."""
+        from osimflow.storage import _validate_storage_endpoint
+
+        with pytest.raises(ValueError, match="issue #1386"):
+            _validate_storage_endpoint("http://minio.example.com:9000")
+
+    def test_http_non_loopback_accepted_when_allow_insecure(self, caplog) -> None:
+        """allow_insecure=True accepts http:// with a WARNING (issue #1386)."""
+        from osimflow.storage import _validate_storage_endpoint
+
+        with caplog.at_level(logging.WARNING, logger="osimflow.storage"):
+            _validate_storage_endpoint("http://minio.example.com:9000", allow_insecure=True)
+        assert any("INSECURE S3 endpoint" in rec.message for rec in caplog.records)
+
+    def test_http_loopback_passes_without_opt_in(self) -> None:
+        """http://loopback is allowed even without allow_insecure (no network)."""
+        from osimflow.storage import _validate_storage_endpoint
+
+        # Should not raise.
+        _validate_storage_endpoint("http://localhost:9000")
+        _validate_storage_endpoint("http://127.0.0.1:9000")
+        _validate_storage_endpoint("http://0.0.0.0:9000")
+        _validate_storage_endpoint("http://[::1]:9000")
+
+    def test_https_always_passes(self) -> None:
+        """https:// endpoints are accepted unconditionally."""
+        from osimflow.storage import _validate_storage_endpoint
+
+        # Should not raise.
+        _validate_storage_endpoint("https://s3.amazonaws.com")
+        _validate_storage_endpoint("https://minio.example.com:9000")
+
+    def test_none_and_empty_pass(self) -> None:
+        """None and empty endpoint URLs are no-ops."""
+        from osimflow.storage import _validate_storage_endpoint
+
+        # Should not raise.
+        _validate_storage_endpoint(None)
+        _validate_storage_endpoint("")
+        _validate_storage_endpoint(None, allow_insecure=True)
+        _validate_storage_endpoint("", allow_insecure=True)
+
+    def test_unknown_scheme_rejected(self) -> None:
+        """A non-http(s) scheme raises ValueError (issue #1386)."""
+        from osimflow.storage import _validate_storage_endpoint
+
+        with pytest.raises(ValueError, match="issue #1386"):
+            _validate_storage_endpoint("ftp://s3.example.com")
+        with pytest.raises(ValueError, match="issue #1386"):
+            _validate_storage_endpoint("s3://my-bucket/")
+
+    def test_s3_storage_rejects_plaintext_endpoint(self) -> None:
+        """S3Storage(bucket, endpoint_url='http://...') raises ValueError."""
+        from osimflow.storage import S3Storage
+
+        with pytest.raises(ValueError, match="issue #1386"):
+            S3Storage(bucket="b", endpoint_url="http://minio.example.com:9000")
+
+    def test_s3_storage_accepts_https_endpoint(self, mock_boto3) -> None:
+        """S3Storage with https:// endpoint constructs cleanly."""
+        fake_boto3, fake_session, _ = mock_boto3
+        with patch("boto3.Session", return_value=fake_session):
+            with patch.dict("sys.modules", {"boto3": fake_boto3}):
+                import importlib
+
+                import osimflow.storage as storage_mod
+
+                importlib.reload(storage_mod)
+                from osimflow.storage import S3Storage
+
+                store = S3Storage(bucket="b", endpoint_url="https://minio.example.com:9000")
+                assert store.endpoint_url == "https://minio.example.com:9000"
+
+    def test_s3_storage_allows_plaintext_with_opt_in(self, mock_boto3, caplog) -> None:
+        """S3Storage with http + allow_insecure_endpoint=True emits WARNING."""
+        fake_boto3, fake_session, _ = mock_boto3
+        with patch("boto3.Session", return_value=fake_session):
+            with patch.dict("sys.modules", {"boto3": fake_boto3}):
+                import importlib
+
+                import osimflow.storage as storage_mod
+
+                importlib.reload(storage_mod)
+                from osimflow.storage import S3Storage
+
+                with caplog.at_level(logging.WARNING, logger="osimflow.storage"):
+                    store = S3Storage(
+                        bucket="b",
+                        endpoint_url="http://minio.example.com:9000",
+                        allow_insecure_endpoint=True,
+                    )
+                assert store.endpoint_url == "http://minio.example.com:9000"
+                assert any("INSECURE S3 endpoint" in rec.message for rec in caplog.records)
+
+    def test_s3_storage_loopback_endpoint_passes(self, mock_boto3) -> None:
+        """S3Storage with http://localhost passes without allow_insecure."""
+        fake_boto3, fake_session, _ = mock_boto3
+        with patch("boto3.Session", return_value=fake_session):
+            with patch.dict("sys.modules", {"boto3": fake_boto3}):
+                import importlib
+
+                import osimflow.storage as storage_mod
+
+                importlib.reload(storage_mod)
+                from osimflow.storage import S3Storage
+
+                # No opt-in needed for loopback.
+                store = S3Storage(bucket="b", endpoint_url="http://localhost:9000")
+                assert store.endpoint_url == "http://localhost:9000"
+
+    def test_s3_artifact_storage_rejects_plaintext_endpoint(self) -> None:
+        """S3ArtifactStorage rejects http:// endpoint by default (issue #1386)."""
+        from osimflow.storage import S3ArtifactStorage
+
+        with pytest.raises(ValueError, match="issue #1386"):
+            S3ArtifactStorage(bucket="b", endpoint_url="http://minio.example.com:9000")
+
+    def test_s3_artifact_storage_accepts_https_endpoint(self, mock_boto3) -> None:
+        """S3ArtifactStorage with https:// endpoint constructs cleanly."""
+        fake_boto3, fake_session, _ = mock_boto3
+        with patch("boto3.Session", return_value=fake_session):
+            with patch.dict("sys.modules", {"boto3": fake_boto3}):
+                import importlib
+
+                import osimflow.storage as storage_mod
+
+                importlib.reload(storage_mod)
+                from osimflow.storage import S3ArtifactStorage
+
+                store = S3ArtifactStorage(bucket="b", endpoint_url="https://minio.example.com:9000")
+                assert store.endpoint_url == "https://minio.example.com:9000"
+
+    def test_s3_artifact_storage_allows_plaintext_with_opt_in(self, mock_boto3, caplog) -> None:
+        """S3ArtifactStorage with http + opt-in emits WARNING."""
+        fake_boto3, fake_session, _ = mock_boto3
+        with patch("boto3.Session", return_value=fake_session):
+            with patch.dict("sys.modules", {"boto3": fake_boto3}):
+                import importlib
+
+                import osimflow.storage as storage_mod
+
+                importlib.reload(storage_mod)
+                from osimflow.storage import S3ArtifactStorage
+
+                with caplog.at_level(logging.WARNING, logger="osimflow.storage"):
+                    store = S3ArtifactStorage(
+                        bucket="b",
+                        endpoint_url="http://minio.example.com:9000",
+                        allow_insecure_endpoint=True,
+                    )
+                assert store.endpoint_url == "http://minio.example.com:9000"
+                assert any("INSECURE S3 endpoint" in rec.message for rec in caplog.records)
+
+    def test_build_result_storage_rejects_plaintext_endpoint(self) -> None:
+        """build_result_storage enforces the TLS policy (issue #1386)."""
+        from osimflow.storage import build_result_storage
+
+        with pytest.raises(ValueError, match="issue #1386"):
+            build_result_storage(
+                backend="s3",
+                bucket="my-bucket",
+                endpoint_url="http://minio.example.com:9000",
+            )
+
+    def test_build_result_storage_passes_https_endpoint(self) -> None:
+        """build_result_storage with https:// endpoint constructs cleanly."""
+        from osimflow.storage import S3Storage, build_result_storage
+
+        store = build_result_storage(
+            backend="s3",
+            bucket="my-bucket",
+            endpoint_url="https://minio.example.com:9000",
+        )
+        assert isinstance(store, S3Storage)
+        assert store.endpoint_url == "https://minio.example.com:9000"
+
+    def test_build_result_storage_passes_opt_in_flag(self, caplog) -> None:
+        """build_result_storage forwards allow_insecure_endpoint to the backend."""
+        from osimflow.storage import S3Storage, build_result_storage
+
+        with caplog.at_level(logging.WARNING, logger="osimflow.storage"):
+            store = build_result_storage(
+                backend="s3",
+                bucket="my-bucket",
+                endpoint_url="http://minio.example.com:9000",
+                allow_insecure_endpoint=True,
+            )
+        assert isinstance(store, S3Storage)
+        assert store.endpoint_url == "http://minio.example.com:9000"
+        assert any("INSECURE S3 endpoint" in rec.message for rec in caplog.records)

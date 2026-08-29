@@ -1249,6 +1249,7 @@ def _storage_from_campaign(rec: dict[str, Any]) -> ResultStorage | None:
             bucket=str(bucket),
             prefix="",
             endpoint_url=endpoint,
+            allow_insecure_endpoint=bool(payload.get("allow_insecure_storage_endpoint")),
         )
     except ValueError as exc:
         log.warning("aggregate: unknown result_storage_backend %r: %s", backend, exc)
