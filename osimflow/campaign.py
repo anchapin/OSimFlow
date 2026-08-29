@@ -893,7 +893,13 @@ class Campaign:
 
         Also validates that the expected number of fan-out files are present
         when a ``count`` expectation is declared (e.g. all N KPI files exist
-        before AGGREGATE_RESULTS runs).
+        before AGGREGATE_RESULTS runs).  When the upstream step exposes a
+        ``StepOutputs.kpi_pattern``, that pattern drives the canonical
+        sample-count check (issue #1391): an explicit ``inputs.count``
+        that disagrees with the upstream-derived count is rejected, and
+        ``count`` may be left explicitly ``None`` to skip the consistency
+        check (i.e. the contract is "set ``count`` to match upstream
+        ``kpi_pattern`` or leave it ``None``").
         """
         if step_name not in _STEP_DEPENDENCIES:
             return
@@ -911,7 +917,10 @@ class Campaign:
                     f"Ensure all upstream steps completed successfully."
                 )
 
-        # Check glob-pattern requirements — ALL patterns must match at least one file.
+        # Check glob-pattern requirements — ALL patterns must match at least one
+        # file, and the aggregated match count must satisfy ``inputs.count``
+        # when declared (issue #1391).
+        all_matches: list[Path] = []
         for pattern in inputs.required_patterns:
             matches = sorted(self.cfg.work_dir.glob(pattern))
             if not matches:
@@ -920,6 +929,64 @@ class Campaign:
                     f"pattern {pattern!r} in {self.cfg.work_dir}, but none were found. "
                     f"Ensure all upstream steps completed successfully."
                 )
+            all_matches.extend(matches)
+
+        # Enforce ``inputs.count`` against the actual on-disk match count when
+        # set.  An explicit count is the canonical contract for fan-out
+        # steps — it must match the number of files the upstream step
+        # actually produced.  ``count=None`` opts out of the check.
+        if inputs.count is not None and len(all_matches) != inputs.count:
+            raise FileNotFoundError(
+                f"Step {step_name!r} declared count={inputs.count} but found "
+                f"{len(all_matches)} files matching its required patterns in "
+                f"{self.cfg.work_dir}. Ensure all upstream samples completed "
+                f"successfully."
+            )
+
+        # Validate ``inputs.count`` against the count derived from the
+        # upstream ``StepOutputs.kpi_pattern`` (issue #1391).  When a fan-out
+        # step that produces this input declared a ``kpi_pattern``, that
+        # pattern is the authoritative source of the per-sample file count.
+        # An explicit ``inputs.count`` that disagrees with the upstream-
+        # derived count is a configuration error (or, equivalently, a sign
+        # that the upstream step is missing expected KPI files).  ``count``
+        # may be left explicitly ``None`` to skip this consistency check.
+        upstream_expected = self._upstream_kpi_match_count(step_name)
+        if (
+            upstream_expected is not None
+            and inputs.count is not None
+            and inputs.count != upstream_expected
+        ):
+            raise FileNotFoundError(
+                f"Step {step_name!r} declared count={inputs.count} but the "
+                f"upstream kpi_pattern produced {upstream_expected} files "
+                f"in {self.cfg.work_dir}. The count must match the "
+                f"upstream fan-out's ``kpi_pattern`` match count (or be "
+                f"left explicitly ``None``)."
+            )
+
+    def _upstream_kpi_match_count(self, step_name: str) -> int | None:
+        """Return the count of files matching any upstream step's ``kpi_pattern``.
+
+        Used by ``_verify_step_inputs`` (issue #1391) to derive the canonical
+        expected sample count from the upstream fan-out step.  Returns the
+        count of files matching the upstream ``kpi_pattern`` that exactly
+        appears in this step's ``required_patterns``, or ``None`` when no
+        upstream step exposes a ``kpi_pattern`` that the current step
+        consumes.
+        """
+        step_info = _STEP_DEPENDENCIES.get(step_name)
+        if step_info is None:
+            return None
+        required = set(step_info.inputs.required_patterns)
+        for other_name, other_info in _STEP_DEPENDENCIES.items():
+            if other_name == step_name:
+                continue
+            kpi_pattern = other_info.outputs.kpi_pattern
+            if kpi_pattern is None or kpi_pattern not in required:
+                continue
+            return len(sorted(self.cfg.work_dir.glob(kpi_pattern)))
+        return None
 
     def _compute_code_hashes(self, cfg: CampaignConfig | None = None) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
