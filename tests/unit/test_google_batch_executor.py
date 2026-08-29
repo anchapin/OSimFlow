@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,11 @@ import pytest
 from osimflow.executors.google_batch_executor import (
     GoogleBatchExecutor,
     _GoogleBatchHandle,
+)
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SIG_ENV,
+    sign_task_payload,
 )
 
 
@@ -83,6 +89,41 @@ class TestGoogleBatchExecutor:
         names = [e["name"] for e in env]
         assert "OSIMFLOW_OS_VERSION" not in names
         assert "OSIMFLOW_CONTAINER" in names
+
+    def test_build_environment_signs_task_payload_when_secret_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1177/#1384: the Batch task env must carry the HMAC over payload bytes."""
+        secret = "google-shared-secret"
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
+        task_payload = json.dumps({"step": "sim", "args": [], "kwargs": {}})
+        ex = self._make_executor()
+        env = ex._build_environment(
+            container="nrel/openstudio:3.11",
+            openstudio_version="3.11.0",
+            task_payload=task_payload,
+        )
+        env_map = {e["name"]: e["value"] for e in env}
+        assert env_map["OSIMFLOW_TASK_PAYLOAD"] == task_payload
+        assert env_map[TASK_PAYLOAD_SECRET_ENV] == secret
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(task_payload, secret)
+
+    def test_build_environment_omits_signature_env_without_secret(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy unsigned mode must leave the Batch task env unchanged (issue #1177)."""
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        task_payload = json.dumps({"step": "sim", "args": [], "kwargs": {}})
+        ex = self._make_executor()
+        env = ex._build_environment(
+            container="nrel/openstudio:3.11",
+            openstudio_version="3.11.0",
+            task_payload=task_payload,
+        )
+        env_map = {e["name"]: e["value"] for e in env}
+        assert env_map["OSIMFLOW_TASK_PAYLOAD"] == task_payload
+        assert TASK_PAYLOAD_SIG_ENV not in env_map
+        assert TASK_PAYLOAD_SECRET_ENV not in env_map
 
     def test_shutdown_is_noop(self) -> None:
         ex = self._make_executor()

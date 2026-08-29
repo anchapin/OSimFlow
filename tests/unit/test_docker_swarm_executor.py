@@ -19,12 +19,18 @@ This correctly handles all three states:
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SIG_ENV,
+    sign_task_payload,
+)
 
 
 class TestDockerSwarmExecutorShutdown:
@@ -219,3 +225,95 @@ class TestDockerSwarmExecutorFailDense:
                 # _stub_executor should remain None (real mode)
                 assert ex._stub_executor is None
                 assert handle is not None
+
+
+class TestDockerSwarmExecutorTaskPayloadSigning:
+    """Issue #1177/#1384: DockerSwarmExecutor must sign OSIMFLOW_TASK_PAYLOAD.
+
+    The executor sets ``requires_remote_runner_payload = True`` and ships
+    the per-task serialized step call as ``OSIMFLOW_TASK_PAYLOAD`` in the
+    service env. ``osimflow.remote_runner`` fails closed when the HMAC
+    secret is unset, so the executor must propagate the secret + signature
+    alongside the payload whenever a secret is configured.
+    """
+
+    @staticmethod
+    def _parse_service_env(env_list: list[str]) -> dict[str, str]:
+        """Convert a Docker Swarm env list (KEY=VALUE) into a dict."""
+        parsed: dict[str, str] = {}
+        for entry in env_list:
+            if "=" not in entry:
+                continue
+            key, _, value = entry.partition("=")
+            parsed[key] = value
+        return parsed
+
+    def _make_executor(self) -> DockerSwarmExecutor:
+        """Build a DockerSwarmExecutor without invoking __init__."""
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)  # noqa: SLF001
+        ex.poll_interval_s = 5.0
+        ex.max_poll_interval_s = 60.0
+        ex.image = "nrel/openstudio:latest"
+        ex.network = None
+        ex._client = MagicMock()
+        ex._stub_executor = None
+        return ex
+
+    @staticmethod
+    def _stub_create_service(ex: DockerSwarmExecutor) -> dict[str, object]:
+        """Stub the docker SDK call and capture the kwargs passed to services.create."""
+        captured: dict[str, object] = {}
+
+        def fake_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            fake_service = MagicMock()
+            fake_service.name = "osimflow-test"
+            return fake_service
+
+        ex._client.services.create = MagicMock(side_effect=fake_create)  # type: ignore[method-assign]  # noqa: E501
+        return captured
+
+    def test_submit_service_signs_task_payload_when_secret_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1177/#1384: service env must carry the HMAC over payload bytes."""
+        secret = "swarm-shared-secret"
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
+        task_payload = json.dumps({"step": "sim", "args": [], "kwargs": {}})
+        ex = self._make_executor()
+        captured = self._stub_create_service(ex)
+        ex._submit_service(  # noqa: SLF001
+            name="test",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+            task_payload=task_payload,
+        )
+        env_map = self._parse_service_env(captured["env"])  # type: ignore[arg-type]
+        assert env_map["OSIMFLOW_TASK_PAYLOAD"] == task_payload
+        assert env_map[TASK_PAYLOAD_SECRET_ENV] == secret
+        assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(task_payload, secret)
+
+    def test_submit_service_omits_signature_env_without_secret(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Legacy unsigned mode must leave the service env unchanged (issue #1177)."""
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        task_payload = json.dumps({"step": "sim", "args": [], "kwargs": {}})
+        ex = self._make_executor()
+        captured = self._stub_create_service(ex)
+        ex._submit_service(  # noqa: SLF001
+            name="test",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+            task_payload=task_payload,
+        )
+        env_map = self._parse_service_env(captured["env"])  # type: ignore[arg-type]
+        assert env_map["OSIMFLOW_TASK_PAYLOAD"] == task_payload
+        assert TASK_PAYLOAD_SIG_ENV not in env_map
+        assert TASK_PAYLOAD_SECRET_ENV not in env_map
