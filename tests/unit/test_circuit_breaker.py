@@ -68,8 +68,8 @@ class TestCircuitBreakerStates:
         breaker.record_failure()  # probe fails -> straight back to open
         assert breaker.state == "open"
 
-    def test_half_open_failure_counter_is_1_immediately_after(self) -> None:
-        """Assert _consecutive_failures == 1 immediately after a half_open failure (issue #1222)."""
+    def test_half_open_failure_counter_is_0_immediately_after(self) -> None:
+        """Assert _consecutive_failures == 0 immediately after a half_open failure (issue #1330)."""
         import time
 
         breaker = CircuitBreaker(failure_threshold=3, cooldown_s=0.01)
@@ -81,11 +81,11 @@ class TestCircuitBreakerStates:
         assert breaker.allow() is True  # half-open probe admitted
         assert breaker.consecutive_failures == 3  # still 3 in half_open
 
-        breaker.record_failure()  # probe fails -> counter resets to 1
-        assert breaker.consecutive_failures == 1  # immediately after record_failure()
+        breaker.record_failure()  # probe fails -> counter resets to 0
+        assert breaker.consecutive_failures == 0  # immediately after record_failure()
 
-    def test_half_open_failure_resets_counter_to_1(self) -> None:
-        """Failure in half_open should reset _consecutive_failures to 1 (issue #1188)."""
+    def test_half_open_failure_resets_counter_to_0(self) -> None:
+        """Failure in half_open should reset _consecutive_failures to 0 (issue #1330)."""
         import time
 
         breaker = CircuitBreaker(failure_threshold=3, cooldown_s=0.01)
@@ -98,14 +98,14 @@ class TestCircuitBreakerStates:
         assert breaker.allow() is True  # half-open probe admitted
         assert breaker.consecutive_failures == 3  # not yet incremented
 
-        breaker.record_failure()  # probe fails -> re-open, counter reset to 1
+        breaker.record_failure()  # probe fails -> re-open, counter reset to 0
         assert breaker.state == "open"
-        assert breaker.consecutive_failures == 1  # reset to 1, not 4
+        assert breaker.consecutive_failures == 0  # reset to 0 per issue #1330
 
-        # Second half-open failure should also have counter=1 before the failure
+        # Second half-open failure: counter was 0, now 1 before re-open
         time.sleep(0.02)
         breaker.record_failure()
-        assert breaker.consecutive_failures == 2
+        assert breaker.consecutive_failures == 1
 
     def test_check_raises_when_open(self) -> None:
         breaker = CircuitBreaker(failure_threshold=1)
