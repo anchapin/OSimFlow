@@ -558,6 +558,85 @@ def _nomad_error_code(exc: Exception) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Nomad HTTP retry (issue #1395)
+# ---------------------------------------------------------------------------
+# Nomad HA failover (infra/nomad/examples/ha/) can produce transient
+# 5xx responses during leader election. A single blip must not propagate
+# as a sample failure — wrap every urllib.request call with this helper
+# so 500/502/503/504 and URLError are absorbed with exponential backoff.
+#
+# Mirrors the AWS Batch ``_submit_job_with_retry`` defense-in-depth
+# contract: 5 attempts, per-retry backoff capped at 30s, jittered sleep.
+_NOMAD_RETRYABLE_HTTP_CODES: frozenset[int] = frozenset({500, 502, 503, 504})
+_NOMAD_RETRY_MAX_ATTEMPTS: int = 5
+_NOMAD_RETRY_INITIAL_DELAY_S: float = 0.5
+_NOMAD_RETRY_CAP_S: float = 30.0
+
+
+def _retry_nomad_request(
+    call_fn: Callable[[], Any],
+    *,
+    max_attempts: int = _NOMAD_RETRY_MAX_ATTEMPTS,
+    total_cap_seconds: float = _NOMAD_RETRY_CAP_S,
+) -> Any:
+    """Invoke *call_fn*, retrying on transient 5xx and URLError (issue #1395).
+
+    Nomad HA leader election and brief proxy restarts produce 502/503/504
+    blips; this helper absorbs them so a sample does not fail on a
+    network hiccup. Mirrors the AWS Batch ``_submit_job_with_retry``
+    pattern: exponential backoff with up to *max_attempts* attempts and a
+    per-retry sleep cap of *total_cap_seconds* (defaults to 5 attempts /
+    30 s).
+
+    Only HTTPError codes in {500, 502, 503, 504} and URLError are
+    retried; every other exception (HTTPError 4xx, RuntimeError, etc.)
+    propagates immediately so genuine failures surface without delay.
+    """
+    import urllib.error  # noqa: PLC0415
+
+    delay = _NOMAD_RETRY_INITIAL_DELAY_S
+    last_exc: BaseException | None = None
+    for attempt in range(max_attempts):
+        try:
+            return call_fn()
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if exc.code not in _NOMAD_RETRYABLE_HTTP_CODES:
+                raise
+            if attempt >= max_attempts - 1:
+                raise
+            sleep_for = min(delay, total_cap_seconds)
+            log.warning(
+                "Nomad HTTP %s (attempt %d/%d), retrying in %.1fs",
+                exc.code,
+                attempt + 1,
+                max_attempts,
+                sleep_for,
+            )
+            time.sleep(random.uniform(0, sleep_for))
+            delay = min(delay * 2, total_cap_seconds)
+        except urllib.error.URLError as exc:
+            last_exc = exc
+            if attempt >= max_attempts - 1:
+                raise
+            sleep_for = min(delay, total_cap_seconds)
+            log.warning(
+                "Nomad URLError (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1,
+                max_attempts,
+                sleep_for,
+                exc,
+            )
+            time.sleep(random.uniform(0, sleep_for))
+            delay = min(delay * 2, total_cap_seconds)
+    # Unreachable — the loop either returns or raises — but keep the
+    # type checker happy.
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Nomad retry loop exited unexpectedly")  # pragma: no cover
+
+
 class _AWSBatchHandle(Handle):
     """Handle that polls Batch on `.result()`.
 
@@ -1690,19 +1769,33 @@ class _NomadClient:
                     self._ssl_context.load_cert_chain(certfile=self.cert, keyfile=self.key)
                 self._ssl_context = None  # only load once
 
-            if self._opener is not None:
-                # verify_tls=False or mTLS: use the custom opener.
-                with self._opener.open(request) as resp:
-                    payload = resp.read()
-            else:
+            # Issue #1395: retry transient 5xx and URLError with
+            # exponential backoff so Nomad HA leader-election blips do
+            # not propagate as sample failures. The retry helper returns
+            # the response object on success; we then read it inside a
+            # context manager so the socket is closed on success.
+            def _open() -> Any:
+                if self._opener is not None:
+                    # verify_tls=False or mTLS: use the custom opener.
+                    return self._opener.open(request)
                 # verify_tls=True: use stdlib urlopen (system CA certs, test-mockable).
-                with self.urlopen(request) as resp:
-                    payload = resp.read()
+                return self.urlopen(request)
+
+            resp = _retry_nomad_request(_open)
+            with resp:
+                payload = resp.read()
         except urllib.error.HTTPError as exc:  # pragma: no cover — error path
+            # Non-retryable HTTPError (4xx), or a retryable 5xx that
+            # exhausted 5 attempts. Convert to RuntimeError so the
+            # caller-facing contract is preserved.
             body_text = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"Nomad {method} {path} failed: HTTP {exc.code} {body_text!r}"
             ) from exc
+        except urllib.error.URLError as exc:  # pragma: no cover — error path
+            # URLError that exhausted retries (DNS, connection refused,
+            # etc.). Convert to RuntimeError to match the HTTPError path.
+            raise RuntimeError(f"Nomad {method} {path} failed: {exc.reason}") from exc
         if not payload:
             return {}
         return cast(dict[str, Any], json.loads(payload.decode("utf-8")))
