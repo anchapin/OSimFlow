@@ -271,3 +271,34 @@ class TestDistributedJobQueueAutoRecovery:
         assert sleep_delays[0] <= 2.0
         assert sleep_delays[1] <= 4.0
         assert sleep_delays[1] >= sleep_delays[0]
+
+
+class TestDistributedJobQueuePublishThreadBoundedness:
+    """Thread pool boundedness for _publish (issue #1326)."""
+
+    def test_publish_uses_bounded_thread_pool(self, queue_dir: Path) -> None:
+        """Multiple publishes reuse the same ThreadPoolExecutor (max_workers=8)."""
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-thread-bounded",
+        )
+        # Trigger several publishes in a context where there is no running loop.
+        for i in range(20):
+            dq.enqueue(f"job_{i}", {"step": "SIM"})
+        # The executor should exist and have max_workers=8.
+        assert dq._publish_executor is not None
+        assert dq._publish_executor._max_workers == 8  # type: ignore[attr-defined]
+        dq.close()
+
+    def test_close_shuts_down_publish_executor(self, queue_dir: Path) -> None:
+        """close() shuts down the publish executor."""
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-close-executor",
+        )
+        dq.enqueue("job_1", {"step": "SIM"})
+        assert dq._publish_executor is not None
+        dq.close()
+        assert dq._publish_executor is None

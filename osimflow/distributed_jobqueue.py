@@ -79,6 +79,7 @@ __all__ = ["DistributedJobQueue", "build_job_queue"]
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -214,6 +215,10 @@ class DistributedJobQueue:
         self._subscriber_thread: threading.Thread | None = None
         self._stop_subscriber = threading.Event()
         self._sub_lock = threading.Lock()
+
+        # Bounded thread pool for fire-and-forget async publish (issue #1326).
+        self._publish_executor: ThreadPoolExecutor | None = None
+        self._pub_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Redis client (lazy, thread-safe)
@@ -381,6 +386,10 @@ class DistributedJobQueue:
     def _publish(self, payload: dict[str, Any], channel: str | None = None) -> None:
         """Publish an action message to a Redis channel (async, non-blocking).
 
+        Uses a bounded ThreadPoolExecutor (max_workers=8) for the fire-and-forget
+        path when no running event loop is available, avoiding thread explosion
+        (issue #1326).
+
         Parameters
         ----------
         payload
@@ -411,12 +420,15 @@ class DistributedJobQueue:
             asyncio.get_running_loop()
             asyncio.create_task(_pub())
         except RuntimeError:
-
-            def _run() -> None:
-                asyncio.run(_pub())
-
-            t = threading.Thread(target=_run, daemon=True)
-            t.start()
+            # No running loop: submit to bounded thread pool instead of spawning
+            # a new thread per call (issue #1326).
+            with self._pub_lock:
+                if self._publish_executor is None:
+                    self._publish_executor = ThreadPoolExecutor(
+                        max_workers=8,
+                        thread_name_prefix="osimflow-jobqueue-pub",
+                    )
+            self._publish_executor.submit(asyncio.run, _pub())
 
     # ------------------------------------------------------------------
     # Public queue interface (same as JobQueue)
@@ -502,6 +514,14 @@ class DistributedJobQueue:
         if self._subscriber_thread is not None:
             self._subscriber_thread.join(timeout=5.0)
             self._subscriber_thread = None
+
+        # Shutdown the publish executor (issue #1326).
+        # Cannot call shutdown(wait=True) if we are already running in one of
+        # the executor's worker threads — it would try to join() itself and raise
+        # RuntimeError.  Use cancel_futures=True to avoid blocking.
+        if self._publish_executor is not None:
+            self._publish_executor.shutdown(wait=False, cancel_futures=True)
+            self._publish_executor = None
 
         # Close the Redis client.
         if self._redis_client is not None:
