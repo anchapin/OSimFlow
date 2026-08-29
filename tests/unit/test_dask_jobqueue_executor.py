@@ -17,7 +17,7 @@ class TestDaskJobQueueExecutor:
     def _make_executor(self, **kw: str | int | None) -> DaskJobQueueExecutor:
         ex = DaskJobQueueExecutor.__new__(DaskJobQueueExecutor)
         ex.cluster_type = kw.get("cluster_type", "slurm")
-        ex.min_workers = kw.get("min_workers", 0)
+        ex.min_workers = kw.get("min_workers", 1)
         ex.max_workers = kw.get("max_workers", 10)
         ex.cpus_per_worker = kw.get("cpus_per_worker", 2)
         ex.memory_per_worker = kw.get("memory_per_worker", "4GiB")
@@ -41,7 +41,7 @@ class TestDaskJobQueueExecutor:
 
     def test_default_min_workers(self) -> None:
         ex = self._make_executor()
-        assert ex.min_workers == 0
+        assert ex.min_workers == 1
 
     def test_default_max_workers(self) -> None:
         ex = self._make_executor()

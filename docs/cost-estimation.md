@@ -514,9 +514,9 @@ TreeWidth             = 50
 
 `SuspendProgram` is invoked on nodes idle longer than `SuspendTime`; `ResumeProgram` starts them when jobs are queued. On cloud Slurm (AWS ParallelCluster, etc.) these scripts call `aws ec2 stop-instances` / `start-instances`. On on-prem clusters with no per-node power cost, leave this unconfigured — there is no money to save. OSimFlow submits via `submitit`, which is power-save-aware: suspended nodes simply show as `DOWN~` until resumed.
 
-**Dask — `--dask-min-workers 0`:**
+**Dask — `--dask-min-workers 1`:**
 
-The `dask_jobqueue` executor scales workers between a floor and ceiling. Set the floor to zero so the cluster releases all workers when the campaign finishes:
+The `dask_jobqueue` executor scales workers between a floor and ceiling. The default floor of 1 keeps a warm worker available so the first submitted task does not pay cold-start latency (issue #1325). Set the floor to zero only when minimizing idle cost between campaigns matters more than first-batch latency:
 
 ```bash
 osimflow run --executor dask_jobqueue \
@@ -528,7 +528,7 @@ osimflow run --executor dask_jobqueue \
   --input_variables variables.yml --template_sim_package ./pkg
 ```
 
-`--dask-min-workers 0` (the default) lets the Dask cluster scale down to zero idle workers once the work is done, so you stop paying for compute between campaigns. A non-zero floor keeps that many workers permanently allocated — useful only for low-latency ad-hoc analysis after the campaign, not for batch simulation throughput.
+`--dask-min-workers 1` (the default) keeps one worker warm so the first batch starts without waiting for job scheduling. A zero floor releases all workers between campaigns to stop paying for idle compute.
 
 ## Quick Reference: CLI Flags for Cost Optimization
 
@@ -550,7 +550,7 @@ osimflow run --executor dask_jobqueue \
 | `--slurm-account` | (unset) | Chargeback routing on institutional clusters |
 | `--pbs-queue` | (unset) | Routes jobs to a specific PBS queue |
 | `--pbs-real` | off | Use real PBS (`qsub`) instead of submitit debug mode |
-| `--dask-min-workers` | 0 | Idle-worker floor; `0` releases all workers between campaigns (scale to zero) |
+| `--dask-min-workers` | 1 | Idle-worker floor; `1` keeps a warm worker (default, issue #1325); `0` releases all workers between campaigns |
 | `--dask-max-workers` | 10 | Concurrency ceiling for Dask campaigns |
 | `--dask-cpus-per-worker` | 2 | Per-worker vCPU sizing (right-size to the model) |
 | `--dask-memory-per-worker` | `4GiB` | Per-worker memory; raise for large models instead of adding workers |

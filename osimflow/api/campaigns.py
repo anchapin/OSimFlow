@@ -366,7 +366,7 @@ def _build_executor_from_request(body: CampaignCreateRequest) -> BaseExecutor:
             DaskJobQueueExecutor,
             {
                 "cluster_type": body.dask_cluster_type or "slurm",
-                "min_workers": body.dask_min_workers or 0,
+                "min_workers": 1 if body.dask_min_workers is None else body.dask_min_workers,
                 "max_workers": body.dask_max_workers or 10,
                 "cpus_per_worker": body.dask_cpus_per_worker or 2,
                 "memory_per_worker": body.dask_memory_per_worker or "4GiB",

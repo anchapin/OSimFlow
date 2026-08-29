@@ -799,8 +799,8 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--dask-min-workers",
         type=int,
-        default=0,
-        help="Minimum number of Dask workers to keep alive (default: 0).",
+        default=1,
+        help="Minimum number of Dask workers to keep alive (default: 1).",
     )
     run.add_argument(
         "--dask-max-workers",

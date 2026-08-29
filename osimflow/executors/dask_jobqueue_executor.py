@@ -85,7 +85,7 @@ class DaskJobQueueExecutor(BaseExecutor):
     def __init__(
         self,
         cluster_type: str = "slurm",
-        min_workers: int = 0,
+        min_workers: int = 1,
         max_workers: int = 10,
         cpus_per_worker: int = 2,
         memory_per_worker: str = "4GiB",
