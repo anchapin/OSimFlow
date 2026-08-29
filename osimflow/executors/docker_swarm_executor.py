@@ -32,6 +32,7 @@ from typing import Any, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.task_payload_hmac import build_signature_env
 
 log = logging.getLogger("osimflow.executors.docker_swarm")
 
@@ -428,6 +429,12 @@ class DockerSwarmExecutor(BaseExecutor):
             env.append(f"OSIMFLOW_TASK_PAYLOAD={task_payload}")
             # Issue #1281: verify BYOS contract version compatibility.
             env.append(f"OSIMFLOW_CONTRACT_VERSION={BYOS_CONTRACT_VERSION}")
+            # Issue #1177/#1384: when a shared secret is configured, sign the
+            # exact payload bytes and propagate secret + signature so the
+            # remote_runner verifies before decoding/executing. No-op in
+            # legacy unsigned mode.
+            for key, value in build_signature_env(task_payload).items():
+                env.append(f"{key}={value}")
         if result_transport_mode is not None:
             env.append(f"OSIMFLOW_RESULT_TRANSPORT_MODE={result_transport_mode}")
         if result_storage_backend is not None:
