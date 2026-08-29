@@ -261,9 +261,9 @@ def test_chaos_per_sample_cpu_spike_records_invocations(
 ) -> None:
     """``per_sample`` schedule with ``cpu_spike`` records per-sample entries.
 
-    CPUSpikeInjector burns CPU cycles; the campaign must still complete and
-    emit per-sample chaos invocations with the correct fault_type.  Duration
-    is kept short so the test stays within budget.
+    CPUSpikeInjector spawns CPU-burning threads; the campaign must still
+    complete and emit per-sample chaos invocations with the correct fault_type.
+    Duration is kept short so the test stays within budget.
     """
     cfg = _make_cfg(
         workdir,
