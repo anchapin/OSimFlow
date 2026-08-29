@@ -258,6 +258,9 @@ class KubernetesExecutor(BaseExecutor):
         # ``submit()`` (e.g. unit tests); overridden by ``submit()``.
         self._container_digest: str | None = None
         self._client: Any = None
+        # Issue #1331: cached version negotiation results.
+        self._negotiated_versions: list[str] | None = None
+        self._negotiated_image: str | None = None
 
     def _get_client(self) -> Any:
         """Lazy Kubernetes client construction using config.load_kube_config
@@ -272,6 +275,35 @@ class KubernetesExecutor(BaseExecutor):
                 config.load_incluster_config()
             self._client = client.BatchV1Api()
         return self._client
+
+    def _check_contract_version_compatibility(
+        self,
+        container: str | None,
+        container_digest: str | None,
+        openstudio_version: str | None,
+    ) -> None:
+        """Verify BYOS contract version compatibility before submitting (issue #1331).
+
+        Queries the remote runner for its supported contract versions and raises
+        ``RuntimeError`` if the orchestrator's ``BYOS_CONTRACT_VERSION`` is not
+        in the supported list.
+
+        This enables fail-fast at submission time rather than discovering a
+        version mismatch at runtime inside the container.
+        """
+        supported = self.negotiate_contract_version(
+            container=container,
+            container_digest=container_digest,
+            openstudio_version=openstudio_version,
+        )
+        if BYOS_CONTRACT_VERSION not in supported:
+            raise RuntimeError(
+                f"BYOS contract version mismatch: orchestrator has "
+                f"version {BYOS_CONTRACT_VERSION!r} but remote runner "
+                f"only supports {supported!r}. Cannot submit work to this "
+                f"container image. Ensure the container image matches the "
+                f"osimflow version used by the orchestrator (issue #1331)."
+            )
 
     def _build_job_name(self, name: str) -> str:
         """Build a valid Kubernetes job name from the task name.
@@ -535,6 +567,13 @@ class KubernetesExecutor(BaseExecutor):
             container,
         )
 
+        # Issue #1331: fail-fast version negotiation before creating any pods.
+        self._check_contract_version_compatibility(
+            container=container,
+            container_digest=container_digest,
+            openstudio_version=openstudio_version,
+        )
+
         # Ephemeral-runner contract (issue #996), mirroring NomadExecutor:
         # serialize the step call into the task payload; the Job-side
         # ``python -m osimflow.remote_runner`` decodes it and executes the
@@ -606,6 +645,160 @@ class KubernetesExecutor(BaseExecutor):
                 str(result_storage_endpoint) if result_storage_endpoint is not None else None
             ),
         )
+
+    def negotiate_contract_version(
+        self,
+        container: str | None = None,
+        container_digest: str | None = None,
+        openstudio_version: str | None = None,
+    ) -> list[str]:
+        """Query the remote runner for its supported BYOS contract versions (issue #1331).
+
+        Creates a minimal pod that runs ``python -m osimflow.remote_runner --negotiate-version``
+        in the target container image, waits for completion, and returns the list of
+        supported contract versions. This allows the Campaign to fail fast at submission
+        time rather than discovering a version mismatch at runtime inside the container.
+
+        Arguments ``container``, ``container_digest``, and ``openstudio_version`` determine
+        the image to query. If not provided, the method uses cached values from a prior
+        ``submit()`` call or falls back to ``nrel/openstudio:latest``.
+
+        The result is cached on the instance after the first call, so subsequent calls
+        with the same image do not create additional pods.
+
+        Returns
+        -------
+        list[str]
+            Supported BYOS contract version strings, e.g. ``["1.0.0"]``.
+
+        Raises
+        ------
+        RuntimeError
+            If the version negotiation fails (pod creation, timeout, or incompatible versions).
+        """
+        if self._negotiated_versions is not None:
+            cached_image = self._negotiated_image
+            current_image = self._resolve_container_image(
+                container, container_digest, openstudio_version
+            )
+            if cached_image == current_image:
+                return self._negotiated_versions
+
+        import json
+        import uuid
+
+        from kubernetes import client
+
+        container_image = self._resolve_container_image(
+            container, container_digest, openstudio_version
+        )
+        job_name = f"osimflow-version-check-{uuid.uuid4().hex[:8]}"
+
+        env_vars = [
+            client.V1EnvVar(name="OSIMFLOW_TASK_PAYLOAD", value="{}"),
+        ]
+
+        container = client.V1Container(
+            name="osimflow",
+            image=container_image,
+            command=["python", "-m", "osimflow.remote_runner", "--negotiate-version"],
+            env=env_vars,
+            resources=client.V1ResourceRequirements(
+                requests={"cpu": "100m", "memory": "64Mi"},
+                limits={"cpu": "100m", "memory": "64Mi"},
+            ),
+        )
+
+        pod_spec = client.V1PodSpec(
+            containers=[container],
+            restart_policy="Never",
+        )
+
+        pod = client.V1Pod(
+            api_version="v1",
+            kind="Pod",
+            metadata=client.V1ObjectMeta(
+                name=job_name,
+                namespace=self.namespace,
+                labels={"osimflow-version-check": "true"},
+            ),
+            spec=pod_spec,
+        )
+
+        core_api = self._get_core_api()
+        try:
+            core_api.create_namespaced_pod(namespace=self.namespace, body=pod)
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to create version-check pod for image {container_image!r}: {exc}"
+            ) from exc
+
+        try:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                try:
+                    status = core_api.read_namespaced_pod_status(
+                        name=job_name, namespace=self.namespace
+                    )
+                    phase = status.status.phase if status.status else "Pending"
+                    if phase == "Succeeded":
+                        logs = core_api.read_namespaced_pod_log(
+                            name=job_name,
+                            namespace=self.namespace,
+                            container="osimflow",
+                        )
+                        try:
+                            parsed = json.loads(logs.strip())
+                            if not parsed.get("ok"):
+                                raise RuntimeError(f"version check returned error: {parsed}")
+                            self._negotiated_versions = parsed.get("supported_versions", [])
+                            self._negotiated_image = container_image
+                            return self._negotiated_versions
+                        except json.JSONDecodeError as exc:
+                            raise RuntimeError(
+                                f"invalid JSON from version-check pod: {logs!r}"
+                            ) from exc
+                    elif phase in ("Failed", "Error"):
+                        raise RuntimeError(
+                            f"version-check pod {phase.lower()} for image {container_image!r}"
+                        )
+                except Exception as exc:
+                    log.debug("version-check pod status poll error (retrying): %s", exc)
+                time.sleep(2)
+            raise RuntimeError(
+                f"version-check pod timed out after 60s for image {container_image!r}"
+            )
+        finally:
+            try:
+                core_api.delete_namespaced_pod(
+                    name=job_name,
+                    namespace=self.namespace,
+                    body=client.V1DeleteOptions(),
+                )
+            except Exception as exc:
+                log.debug("failed to delete version-check pod %s: %s", job_name, exc)
+
+    def _get_core_api(self) -> Any:
+        """Return the CoreV1Api client (lazy)."""
+        from kubernetes import client
+
+        return client.CoreV1Api()
+
+    def _resolve_container_image(
+        self,
+        container: str | None,
+        container_digest: str | None,
+        openstudio_version: str | None,
+    ) -> str:
+        """Return the container image to use for version checking.
+
+        Mirrors the resolution logic in ``_build_environment``.
+        """
+        if container_digest is not None:
+            return container_digest
+        if container is not None:
+            return container
+        return f"nrel/openstudio:{openstudio_version or 'latest'}"
 
     def shutdown(self) -> None:
         pass

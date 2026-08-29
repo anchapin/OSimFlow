@@ -204,6 +204,26 @@ class BaseExecutor(abc.ABC):
             worker_id=request.worker_id,
         )
 
+    def negotiate_contract_version(self) -> list[str]:
+        """Return the remote runner's supported BYOS contract versions for version negotiation.
+
+        This is the "hand-off" hook (issue #1331) that allows the Campaign to
+        verify version compatibility *before* submitting work, rather than
+        discovering a mismatch at runtime inside the remote container.
+
+        The default implementation returns ``[]`` (no version info available),
+        which means the runtime check inside the container will verify the version.
+        Executors that use a remote-runner payload (Kubernetes, Nomad, etc.)
+        should override this to actually query the container image.
+
+        Raises
+        ------
+        RuntimeError
+            If the remote runner is incompatible with the local BYOS contract
+            version.
+        """
+        return []
+
     @abc.abstractmethod
     def shutdown(self) -> None: ...
 
