@@ -678,7 +678,9 @@ class KubernetesExecutor(BaseExecutor):
         """
         if self._negotiated_versions is not None:
             cached_image = self._negotiated_image
-            current_image = self._resolve_container_image(container, container_digest, openstudio_version)
+            current_image = self._resolve_container_image(
+                container, container_digest, openstudio_version
+            )
             if cached_image == current_image:
                 return self._negotiated_versions
 
@@ -687,7 +689,9 @@ class KubernetesExecutor(BaseExecutor):
 
         from kubernetes import client
 
-        container_image = self._resolve_container_image(container, container_digest, openstudio_version)
+        container_image = self._resolve_container_image(
+            container, container_digest, openstudio_version
+        )
         job_name = f"osimflow-version-check-{uuid.uuid4().hex[:8]}"
 
         env_vars = [
@@ -733,7 +737,9 @@ class KubernetesExecutor(BaseExecutor):
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 try:
-                    status = core_api.read_namespaced_pod_status(name=job_name, namespace=self.namespace)
+                    status = core_api.read_namespaced_pod_status(
+                        name=job_name, namespace=self.namespace
+                    )
                     phase = status.status.phase if status.status else "Pending"
                     if phase == "Succeeded":
                         logs = core_api.read_namespaced_pod_log(

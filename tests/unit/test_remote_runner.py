@@ -63,7 +63,9 @@ class TestVerifyContractVersion:
         )
         remote_runner._verify_contract_version()  # noqa: SLF001 — no exception
 
-    def test_missing_version_warns(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    def test_missing_version_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         monkeypatch.delenv("OSIMFLOW_CONTRACT_VERSION", raising=False)
         with caplog.at_level("WARNING"):
             remote_runner._verify_contract_version()  # noqa: SLF001 — no exception
@@ -79,6 +81,7 @@ class TestNegotiateVersion:
 
     def test_negotiate_version_cli_flag(self, tmp_path: Path) -> None:
         import os
+
         env = os.environ.copy()
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
         result = subprocess.run(
@@ -92,5 +95,3 @@ class TestNegotiateVersion:
         parsed = json.loads(result.stdout.strip())
         assert parsed["ok"] is True
         assert remote_runner.BYOS_CONTRACT_VERSION in parsed["supported_versions"]
-
-
