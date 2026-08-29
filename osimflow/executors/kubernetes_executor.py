@@ -190,33 +190,48 @@ class _KubernetesHandle(Handle):
 class KubernetesExecutor(BaseExecutor):
     """Kubernetes executor for OSimFlow campaigns (issue #254).
 
-    Wraps the Kubernetes Python client (`kubernetes`) to create a Job per
-    call, then polls the job status with exponential backoff until the
-    pod reaches a terminal state. The returned Handle carries the job
-    name and blocks on `.result()` until the task succeeds; on failure
-    it re-raises a RuntimeError.
+        Wraps the Kubernetes Python client (`kubernetes`) to create a Job per
+        call, then polls the job status with exponential backoff until the
+        pod reaches a terminal state. The returned Handle carries the job
+        name and blocks on `.result()` until the task succeeds; on failure
+        it re-raises a RuntimeError.
 
-    Each Job runs the ephemeral-runner pattern (issue #996), mirroring
-    ``NomadExecutor``: the container command defaults to
-    ``python -m osimflow.remote_runner`` (or an explicit
-    ``remote_command`` override run via ``/bin/sh -c``), the task
-    payload travels in ``OSIMFLOW_TASK_PAYLOAD``, and the
-    result-transport contract in ``OSIMFLOW_RESULT_TRANSPORT_MODE`` /
-    ``OSIMFLOW_RESULT_STORAGE_*`` env vars. Worker images must ship the
-    ``osimflow`` package for the default command to resolve (see
-    ``docs/kubernetes-deployment.md``).
+        Each Job runs the ephemeral-runner pattern (issue #996), mirroring
+        ``NomadExecutor``: the container command defaults to
+        ``python -m osimflow.remote_runner`` (or an explicit
+        ``remote_command`` override run via ``/bin/sh -c``), the task
+        payload travels in ``OSIMFLOW_TASK_PAYLOAD``, and the
+        result-transport contract in ``OSIMFLOW_RESULT_TRANSPORT_MODE`` /
+        ``OSIMFLOW_RESULT_STORAGE_*`` env vars. Worker images must ship the
+        ``osimflow`` package for the default command to resolve (see
+        ``docs/kubernetes-deployment.md``).
 
-    Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
-    Kubernetes resource requests and limits. Per-sample
-    `OSIMFLOW_OS_VERSION` and `OSIMFLOW_CONTAINER` are carried as
-    environment variables — the same env vars `SlurmExecutor` and
-    `AWSBatchExecutor` export, so downstream work scripts can be
-    substrate-agnostic.
+        Resource directives (`cpus`, `memory_mb`, `time_min`) are mapped to
+        Kubernetes resource requests and limits. Per-sample
+        `OSIMFLOW_OS_VERSION` and `OSIMFLOW_CONTAINER` are carried as
+        environment variables — the same env vars `SlurmExecutor` and
+        `AWSBatchExecutor` export, so downstream work scripts can be
+        substrate-agnostic.
 
     Security: credentials are sourced from the in-cluster service account
     or from `~/.kube/config`. The constructor does **not** accept explicit
     credentials; using the configured kubeconfig or in-cluster service
     account is the recommended path.
+
+    Pod hardening (issue #1383): the constructor accepts a
+    ``security_context_strict: bool = True`` flag. When strict (the
+    default) the Job's pod is submitted with a hardened
+    ``V1PodSecurityContext`` (``runAsNonRoot: true``, ``runAsUser: 1000``)
+    and a hardened container ``V1SecurityContext``
+    (``runAsNonRoot: true``, ``readOnlyRootFilesystem: true``,
+    ``allowPrivilegeEscalation: false``, ``capabilities.drop: ["ALL"]``)
+    plus ``automountServiceAccountToken: false`` on the ``V1PodSpec``.
+    Together these block the cluster-default service-account token
+    pivot and the writable-runtime container-escape path. Set
+    ``security_context_strict=False`` to fall back to the legacy
+    permissive manifest for clusters that reject the strict profile
+    (e.g. older admission controllers without the required PodSecurity
+    policy admission plugin).
 
     The Kubernetes Python client is lazy-imported inside `__init__` so
     the local-executor / slurm-executor paths do not pay the import cost.
@@ -236,6 +251,7 @@ class KubernetesExecutor(BaseExecutor):
         backoff_limit: int = 0,
         ttl_seconds_after_finished: int | None = None,
         queue_name: str | None = None,
+        security_context_strict: bool = True,
     ):
         self.namespace = namespace
         self.poll_interval_s = poll_interval_s
@@ -253,6 +269,19 @@ class KubernetesExecutor(BaseExecutor):
         # on the Job's metadata. Inert on clusters without Kueue
         # installed (the label is harmless without the controller).
         self.queue_name = queue_name
+        # Pod hardening (issue #1383). When True (default), the Job's
+        # pod is submitted with a hardened ``V1PodSecurityContext``
+        # (``runAsNonRoot: true``, ``runAsUser: 1000``), a hardened
+        # container ``V1SecurityContext`` (``runAsNonRoot: true``,
+        # ``readOnlyRootFilesystem: true``,
+        # ``allowPrivilegeEscalation: false``, ``capabilities.drop:
+        # ["ALL"]``) and ``automountServiceAccountToken: false`` on the
+        # ``V1PodSpec``. Together these block the cluster-default
+        # service-account token pivot and the writable-runtime
+        # container-escape path. Set to False to fall back to the
+        # legacy permissive manifest for clusters that reject the
+        # strict profile (e.g. older admission controllers).
+        self.security_context_strict = bool(security_context_strict)
         # Issue #1081: digest pinning. Initialized in the constructor so
         # ``_resolve_container_image`` is callable without going through
         # ``submit()`` (e.g. unit tests); overridden by ``submit()``.
@@ -477,19 +506,65 @@ class KubernetesExecutor(BaseExecutor):
             limits={"cpu": str(cpus), "memory": f"{memory_mb}Mi"},
         )
 
+        # Pod hardening (issue #1383). Strict mode emits a hardened
+        # container ``V1SecurityContext`` (``runAsNonRoot: true``,
+        # ``readOnlyRootFilesystem: true``,
+        # ``allowPrivilegeEscalation: false``,
+        # ``capabilities.drop: ["ALL"]``) so a compromised remote-runner
+        # image cannot pivot via the writable runtime path. Relaxed
+        # mode (legacy clusters without the strict admission profile)
+        # emits no container security context at all.
+        container_security_context: client.V1SecurityContext | None
+        pod_security_context: client.V1PodSecurityContext | None
+        pod_automount_token: bool | None
+        if self.security_context_strict:
+            container_security_context = client.V1SecurityContext(
+                run_as_non_root=True,
+                read_only_root_filesystem=True,
+                allow_privilege_escalation=False,
+                capabilities=client.V1Capabilities(drop=["ALL"]),
+            )
+            # Pod-level ``runAsNonRoot`` + a fixed non-zero UID enforce
+            # the same invariant at the Pod boundary, so init containers
+            # and sidecars inherit the non-root guarantee. ``runAsUser``
+            # must be > 0 (Kubernetes rejects UID 0 with
+            # ``runAsNonRoot: true``); 1000 is the standard
+            # first-user UID on the Debian/Ubuntu base images used by
+            # ``nrel/openstudio``.
+            pod_security_context = client.V1PodSecurityContext(
+                run_as_non_root=True,
+                run_as_user=1000,
+            )
+            # ``automountServiceAccountToken: false`` blocks the
+            # cluster-default service-account token pivot that issue
+            # #1177 raised in the threat model. The flag lives on the
+            # ``V1PodSpec`` (not the ``V1PodSecurityContext``) per the
+            # Kubernetes API spec.
+            pod_automount_token = False
+        else:
+            container_security_context = None
+            pod_security_context = None
+            pod_automount_token = None
+
         container = client.V1Container(
             name="osimflow",
             image=container_image,
             command=command or ["python", "-m", "osimflow.remote_runner"],
             env=env_vars,
             resources=resources,
+            security_context=container_security_context,
         )
 
+        pod_spec_kwargs: dict[str, Any] = {
+            "containers": [container],
+            "restart_policy": "Never",
+            "security_context": pod_security_context,
+        }
+        if pod_automount_token is not None:
+            pod_spec_kwargs["automount_service_account_token"] = pod_automount_token
+
         template = client.V1PodTemplateSpec(
-            spec=client.V1PodSpec(
-                containers=[container],
-                restart_policy="Never",
-            ),
+            spec=client.V1PodSpec(**pod_spec_kwargs),
         )
 
         # Native Job controls (issue #997): plumb ``backoff_limit`` /
@@ -676,13 +751,13 @@ class KubernetesExecutor(BaseExecutor):
         RuntimeError
             If the version negotiation fails (pod creation, timeout, or incompatible versions).
         """
-        if self._negotiated_versions is not None:
-            cached_image = self._negotiated_image
+        if getattr(self, "_negotiated_versions", None) is not None:
+            cached_image = getattr(self, "_negotiated_image", None)
             current_image = self._resolve_container_image(
                 container, container_digest, openstudio_version
             )
             if cached_image == current_image:
-                return self._negotiated_versions
+                return cast("list[str]", self._negotiated_versions)
 
         import json
         import uuid
@@ -698,7 +773,11 @@ class KubernetesExecutor(BaseExecutor):
             client.V1EnvVar(name="OSIMFLOW_TASK_PAYLOAD", value="{}"),
         ]
 
-        container = client.V1Container(
+        # Apply the same pod hardening (issue #1383) as the real
+        # submission path: the version-check pod runs the same image
+        # with the same SA, so omitting the security context here would
+        # leave a privilege-escalation gap on every campaign startup.
+        version_check_container: client.V1Container = client.V1Container(
             name="osimflow",
             image=container_image,
             command=["python", "-m", "osimflow.remote_runner", "--negotiate-version"],
@@ -708,11 +787,24 @@ class KubernetesExecutor(BaseExecutor):
                 limits={"cpu": "100m", "memory": "64Mi"},
             ),
         )
+        version_check_pod_kwargs: dict[str, Any] = {
+            "containers": [version_check_container],
+            "restart_policy": "Never",
+        }
+        if self.security_context_strict:
+            version_check_container.security_context = client.V1SecurityContext(
+                run_as_non_root=True,
+                read_only_root_filesystem=True,
+                allow_privilege_escalation=False,
+                capabilities=client.V1Capabilities(drop=["ALL"]),
+            )
+            version_check_pod_kwargs["security_context"] = client.V1PodSecurityContext(
+                run_as_non_root=True,
+                run_as_user=1000,
+            )
+            version_check_pod_kwargs["automount_service_account_token"] = False
 
-        pod_spec = client.V1PodSpec(
-            containers=[container],
-            restart_policy="Never",
-        )
+        pod_spec = client.V1PodSpec(**version_check_pod_kwargs)
 
         pod = client.V1Pod(
             api_version="v1",

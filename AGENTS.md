@@ -521,7 +521,11 @@ submitit-based `SlurmExecutor`), `docker_swarm_executor.py`
 (`KubernetesExecutor` — each Job runs
 `python -m osimflow.remote_runner`;
 `OSIMFLOW_TASK_PAYLOAD` carries the step call,
-`OSIMFLOW_RESULT_*` carries the transport contract),
+`OSIMFLOW_RESULT_*` carries the transport contract;
+`security_context_strict=True` constructor flag, issue #1383,
+emits `runAsNonRoot`, `readOnlyRootFilesystem`,
+`allowPrivilegeEscalation: false`, `capabilities.drop: ["ALL"]`
+plus `automountServiceAccountToken: false`),
 `pbs_executor.py` (`PBSExecutor`, submitit).
 
 ### `osimflow/api/` (optional, `[api]` extra)
