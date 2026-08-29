@@ -3778,6 +3778,13 @@ class Campaign:
                 # user-supplied BYOS apply script. Forward all four
                 # positional args so the contract and the default
                 # implement the same shape.
+                # APPLY_PARAMETERS must propagate --max-sample-retries for
+                # uniform retry semantics: RUN_OPENSTUDIO_SIM and EXTRACT_KPIS
+                # both forward ``max_retries=self.cfg.max_sample_retries`` so
+                # transient ``_apply_osm_mutations`` failures (file locks,
+                # partial .osm writes) are retried instead of failing the
+                # sample outright.  ``max_retries<=0`` disables retry.  See
+                # issue #1394.
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(
                         self.apply_fn,
@@ -3785,6 +3792,7 @@ class Campaign:
                         ctx["resolved_params"],
                         sid,
                         apply_out_dir,
+                        max_retries=self.cfg.max_sample_retries,
                     )
                 else:
                     handle = self.executor.submit(
@@ -3800,6 +3808,7 @@ class Campaign:
                         container=self._python_container_image,
                         container_digest=self._python_container_digest,
                         result_hint=apply_out_dir,
+                        max_retries=self.cfg.max_sample_retries,
                         **self._executor_submit_transport_kwargs,
                     )
 
