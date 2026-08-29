@@ -1859,12 +1859,14 @@ _NONLOCALHOST_BLOCKLIST = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
 
 def _validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
-    """Validate that a Redis URL meets the minimum security baseline (issue #1277).
+    """Validate that a Redis URL meets the minimum security baseline (issue #1277, #1321).
 
     Mirrors the validation in ``distributed_cache._validate_redis_url``.
     When ``redis_url`` points to a non-localhost host, the connection must
-    either use ``rediss://`` (TLS) or embed credentials
-    (``redis://user:pass@host:port``).
+    use ``rediss://`` (TLS).  The ``require_auth=True`` flag allows operators
+    who configure authentication externally (e.g. via ``AUTH`` environment
+    variable consumed by the Redis server, not the client) to explicitly opt
+    out of the URL-embedded-credentials check.
     """
     parsed = urlparse(redis_url)
     host = parsed.hostname or ""
@@ -1875,18 +1877,25 @@ def _validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
     has_tls = parsed.scheme == "rediss"
     has_creds = bool(parsed.username and parsed.password)
 
-    if has_tls or has_creds or require_auth:
-        return
+    # TLS is always required for non-localhost (issue #1321).
+    if not has_tls:
+        raise ValueError(
+            f"insecure Redis URL (issue #1321): host {host!r} is not localhost "
+            f"but the URL uses {parsed.scheme!r} without TLS. "
+            f"Non-localhost Redis requires TLS (rediss://). "
+            f"Set --require-redis-auth only if TLS is handled externally."
+        )
 
-    raise ValueError(
-        f"insecure Redis URL (issue #1277): host {host!r} is not localhost "
-        f"but the URL uses {parsed.scheme!r} without embedded credentials. "
-        f"Non-localhost Redis requires either:\n"
-        f"  (a) TLS: rediss://user:pass@{host}:PORT\n"
-        f"  (b) credentials in URL: redis://user:pass@{host}:PORT\n"
-        f"  (c) --require-redis-auth (set this if Redis auth is handled "
-        f"externally, e.g. via an AUTH file or environment variable)."
-    )
+    # Credentials are optional when require_auth=True (external auth mechanism).
+    if not has_creds and not require_auth:
+        raise ValueError(
+            f"insecure Redis URL (issue #1277): host {host!r} is not localhost "
+            f"but the URL has no embedded credentials. "
+            f"Non-localhost Redis requires either:\n"
+            f"  (a) credentials in URL: rediss://user:pass@{host}:PORT\n"
+            f"  (b) --require-redis-auth (set this if Redis auth is handled "
+            f"externally, e.g. via an AUTH file or environment variable)."
+        )
 
 
 def _build_document_store_redis(
