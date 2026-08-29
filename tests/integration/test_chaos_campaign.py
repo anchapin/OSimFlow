@@ -34,7 +34,9 @@ from osimflow import (
     Campaign,
     CampaignConfig,
     ChaosEngine,
+    CPUSpikeInjector,
     KillSwitchInjector,
+    MemoryPressureInjector,
     NetworkDelayInjector,
 )
 from osimflow.chaos import FaultType
@@ -252,3 +254,81 @@ def test_chaos_engine_failure_does_not_crash_campaign(
     # the campaign still finalised cleanly.
     assert trace["status"] == "success"
     assert trace["chaos_invocations"] == []
+
+
+def test_chaos_per_sample_cpu_spike_records_invocations(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``per_sample`` schedule with ``cpu_spike`` records per-sample entries.
+
+    CPUSpikeInjector burns CPU cycles; the campaign must still complete and
+    emit per-sample chaos invocations with the correct fault_type.  Duration
+    is kept short so the test stays within budget.
+    """
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["cpu_spike"],
+        chaos_schedule="per_sample",
+        chaos_delay_s=0.0,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(CPUSpikeInjector(duration_s=0.05, intensity=0.1, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()
+
+    trace = json.loads((outdir / "run.json").read_text())
+    assert trace["config"]["chaos"]["enabled"] is True
+    assert trace["config"]["chaos"]["schedule"] == "per_sample"
+    assert "cpu_spike" in trace["config"]["chaos"]["scenarios"]
+
+    per_sample_invocations = [
+        inv for inv in trace["chaos_invocations"] if inv["when"] == "per_sample"
+    ]
+    assert per_sample_invocations, "expected at least one per_sample chaos invocation"
+    for inv in per_sample_invocations:
+        assert inv["step"] in {"RUN_OPENSTUDIO_SIM", "EXTRACT_KPIS"}
+        assert len(inv["results"]) == 1
+        assert inv["results"][0]["fault_type"] == FaultType.CPU_SPIKE.value
+
+
+def test_chaos_before_step_memory_pressure_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``before_step`` schedule with ``memory_pressure`` does not break the campaign.
+
+    MemoryPressureInjector allocates memory temporarily; the campaign must still
+    complete and emit the per-step chaos invocations.  The allocation is small
+    (50 MB) so the test stays under the per-test budget.
+    """
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["memory_pressure"],
+        chaos_schedule="before_step",
+        chaos_delay_s=0.0,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(MemoryPressureInjector(size_mb=50, duration_s=0.1, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()
+
+    trace = json.loads((outdir / "run.json").read_text())
+    assert trace["config"]["chaos"]["schedule"] == "before_step"
+    invocations = [inv for inv in trace["chaos_invocations"] if inv["when"] == "before_step"]
+    assert invocations, "expected at least one before_step chaos invocation"
+    for inv in invocations:
+        assert inv["results"][0]["fault_type"] == FaultType.MEMORY_PRESSURE.value
+        assert inv["results"][0]["injected"] is True
