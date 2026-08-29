@@ -361,7 +361,11 @@ name in this section.
   against persistent outages, issue #1111; `_consecutive_failures`
   is reset to 1 on ``half_open`` → ``open`` transition).
 - `osimflow/distributed_jobqueue.py` — `DistributedJobQueue` +
-  `build_job_queue` (Redis pub/sub wrapper).
+  `build_job_queue` (Redis pub/sub wrapper).  Carries its own
+  `CircuitBreaker(name=f"jobqueue:{campaign_id}")` (issue #1397) so
+  persistent Redis outages fail-fast at the publish boundary instead of
+  burning the 5 s socket timeout on every job state transition; closes
+  the control-plane sibling of issue #1111.
 - `osimflow/storage.py` — `ResultStorage` ABC + `LocalStorage`,
   `S3Storage`, `GCSStorage`, `AzureBlobStorage`,
   `S3ArtifactStorage`, `ResultStorageUploader`,
