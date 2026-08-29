@@ -51,10 +51,15 @@ PATH_SKIP_SUBSTRINGS = (
     "importlib.util",  # stdlib module, not a file
     "openstudio.cli",  # CLI binary shipped inside container, not a local path
     "containerOverride",  # AWS Batch API field, not a local path
+    "containerResources",  # Azure/Google Batch API field, not a local path
+    "resources.cpu",  # Nomad API field, not a local path
+    "resources.memoryMB",  # Nomad API field, not a local path
     "requests.cpu",  # Kubernetes API field path, not a local path
     "limits.cpu",  # Kubernetes API field path, not a local path
     "requests.memory",  # Kubernetes API field path, not a local path
     "limits.memory",  # Kubernetes API field path, not a local path
+    "containerResources",  # AWS Batch API field path, not a local path
+    "resources.cpu",  # Kubernetes API field path, not a local path
     ".egg-info",
     "measure.rb",  # OpenStudio measure pattern (example in docs)
     "measure.py",  # OpenStudio measure pattern (example in docs)
@@ -67,6 +72,7 @@ PATH_SKIP_SUBSTRINGS = (
     "osimflow_work.py",  # example script name (illustrative, not a repo file)
     "shutil.which",  # stdlib API, not a file
     "pypi.org",  # domain name, not a path
+    "campaign_results",  # conventional campaign output dir (created at runtime)
     "tar.gz",  # generated archive artifact, not a repo file
     "variables.foo.bar",  # MongoDB field name example in migration docs
 )

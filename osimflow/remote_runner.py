@@ -218,6 +218,9 @@ def _load_payload() -> dict[str, Any]:
 
 
 def _resolve_step_fn(step: str) -> Any:  # noqa: ANN401
+    if not StepFunctionRegistry._registry:
+        _register_builtin_steps()
+        StepFunctionRegistry.discover_plugins()
     return StepFunctionRegistry.get(step)
 
 

@@ -1128,6 +1128,7 @@ class RedisDocumentStore(DocumentStore):
         db_path: Path | None = None,
         *,
         lru_max_entries: int = 1024,
+        connection_pool_max_connections: int = 50,
     ) -> None:
         """Initialize the Redis document store.
 
@@ -1151,12 +1152,19 @@ class RedisDocumentStore(DocumentStore):
             Maximum number of ``(collection, doc_id)`` entries to keep
             in the in-process LRU.  Defaults to 1024; tune to bound
             memory for very read-heavy workloads.
+        connection_pool_max_connections
+            Maximum number of connections in the shared Redis connection
+            pool.  Defaults to 50.  Each ``RedisDocumentStore`` instance
+            maintains its own pool so concurrent campaigns stay isolated.
+            Issue #1343.
         """
         self._redis_url = redis_url
         self.namespace = namespace
         self.requested_db_path = db_path
         self._lru_max_entries = int(lru_max_entries)
+        self._connection_pool_max_connections = int(connection_pool_max_connections)
         self._redis_client: Any = None
+        self._pool: Any = None
         # Circuit breaker (issue #1111): after repeated consecutive Redis
         # failures, fail fast (DocumentStoreError) instead of burning the
         # 5 s socket timeout on every operation until Redis recovers.
@@ -1184,11 +1192,13 @@ class RedisDocumentStore(DocumentStore):
     def _get_client(self) -> Any:
         """Lazily create the sync Redis client used for all data ops.
 
-        Socket timeouts bound every call so a hung Redis does not stall
-        the campaign (mirrors the same timeouts in
+        Uses an explicit ``ConnectionPool`` shared across all operations
+        so connections are reused instead of opened/closed per call
+        (issue #1343).  Socket timeouts bound every call so a hung Redis
+        does not stall the campaign (mirrors the same timeouts in
         ``DistributedCache._get_sync_client``).  The returned client is
         wrapped in a recording proxy that feeds every operation's outcome
-        into the circuit breaker;         while the breaker is open, operations
+        into the circuit breaker; while the breaker is open, operations
         fail fast with :class:`DocumentStoreError` instead of waiting for
         another socket timeout (issue #1111).
         """
@@ -1201,12 +1211,15 @@ class RedisDocumentStore(DocumentStore):
         if self._redis_client is None:
             redis_sync = _get_redis_sync()
             try:
-                raw_client = redis_sync.from_url(
-                    self._redis_url,
-                    decode_responses=True,
-                    socket_timeout=5.0,
-                    socket_connect_timeout=5.0,
-                )
+                if self._pool is None:
+                    self._pool = redis_sync.ConnectionPool.from_url(
+                        self._redis_url,
+                        decode_responses=True,
+                        socket_timeout=5.0,
+                        socket_connect_timeout=5.0,
+                        max_connections=self._connection_pool_max_connections,
+                    )
+                raw_client = redis_sync.Redis(connection_pool=self._pool)
             except Exception:
                 # Construction itself failed (bad URL, immediate connection
                 # error): count it toward the circuit (issue #1111).
@@ -1783,7 +1796,7 @@ class RedisDocumentStore(DocumentStore):
         return self._breaker.state
 
     def close(self) -> None:
-        """Close the Redis client and drop the in-process LRU."""
+        """Close the Redis client, connection pool, and drop the in-process LRU."""
         self._lru_invalidate()
         if self._redis_client is not None:
             try:
@@ -1795,6 +1808,16 @@ class RedisDocumentStore(DocumentStore):
                     exc,
                 )
             self._redis_client = None
+        if self._pool is not None:
+            try:
+                self._pool.disconnect()
+            except Exception as exc:
+                log.warning(
+                    "RedisDocumentStore: error closing pool namespace=%s: %s",
+                    self.namespace,
+                    exc,
+                )
+            self._pool = None
         log.debug("RedisDocumentStore closed namespace=%s", self.namespace)
 
     def __enter__(self) -> RedisDocumentStore:
@@ -1937,7 +1960,9 @@ def build_document_store(
                 raise ValueError(
                     "build_document_store: backend='redis' requires redis_url and namespace"
                 )
-            return _build_document_store_redis(redis_url, namespace, db_path, require_auth=require_auth)
+            return _build_document_store_redis(
+                redis_url, namespace, db_path, require_auth=require_auth
+            )
         raise ValueError(f"unknown document_store_backend: {backend!r}")
 
     if redis_url is None:

@@ -223,7 +223,7 @@ class RunTrace:
         if self.alerts_fired is None:
             self.alerts_fired = []
         d: dict[str, object] = {}
-        for key in ("rule_name", "event_type", "severity", "message"):
+        for key in ("rule_name", "event_type", "severity", "message", "delivery_status"):
             v = getattr(alert, key, None)
             if v is not None:
                 d[key] = v

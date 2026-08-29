@@ -87,6 +87,7 @@ class Alert:
     message: str
     context: dict[str, Any]
     timestamp: float
+    delivery_status: str = "unknown"
 
 
 @dataclasses.dataclass
@@ -349,7 +350,10 @@ class AlertManager:
                 message=message,
                 context=context,
                 timestamp=time.time(),
+                delivery_status="unknown",
             )
+
+            alert.delivery_status = self._dispatch_to_destinations(alert, rule)
 
             if self._on_alert is not None:
                 try:
@@ -357,30 +361,45 @@ class AlertManager:
                 except Exception as exc:
                     log.warning("on_alert callback raised — continuing: %s", exc)
 
-            for dest in self._destinations:
-                error = ""
-                try:
-                    delivered = bool(dest.send(alert))
-                except Exception as exc:
-                    delivered = False
-                    error = str(exc)
-                    log.warning(
-                        "alert destination %s failed for rule %s: %s",
-                        type(dest).__name__,
-                        rule.name,
-                        exc,
-                    )
-                if delivered:
-                    continue
-                if not error:
-                    error = "destination reported delivery failure"
-                    log.warning(
-                        "alert destination %s failed for rule %s: %s",
-                        type(dest).__name__,
-                        rule.name,
-                        error,
-                    )
-                self._enqueue_pending(alert, dest, error)
+    def _dispatch_to_destinations(self, alert: Alert, rule: AlertRule) -> str:
+        """Send alert to all destinations and return overall delivery status."""
+        if not self._destinations:
+            return "no_destinations"
+
+        delivered_count = 0
+        failed_count = 0
+        for dest in self._destinations:
+            error = ""
+            try:
+                delivered = bool(dest.send(alert))
+            except Exception as exc:
+                delivered = False
+                error = str(exc)
+                log.warning(
+                    "alert destination %s failed for rule %s: %s",
+                    type(dest).__name__,
+                    rule.name,
+                    exc,
+                )
+            if delivered:
+                delivered_count += 1
+                continue
+            failed_count += 1
+            if not error:
+                error = "destination reported delivery failure"
+                log.warning(
+                    "alert destination %s failed for rule %s: %s",
+                    type(dest).__name__,
+                    rule.name,
+                    error,
+                )
+            self._enqueue_pending(alert, dest, error)
+
+        if failed_count == 0:
+            return "delivered"
+        if delivered_count == 0:
+            return "failed"
+        return "partial"
 
     def _enqueue_pending(
         self,
@@ -458,6 +477,32 @@ class AlertManager:
 
     def update_cache_stats(self, stats: dict[str, Any]) -> None:
         self._cache_stats = stats
+
+    def get_alert_history(self) -> list[dict[str, Any]]:
+        """Return the current alert delivery-failure history as a list of dicts.
+
+        Each entry contains the alert fields (``rule_name``, ``event_type``,
+        ``severity``, ``message``, ``timestamp``) plus ``destination`` (the
+        destination class name), ``failed_at``, ``error``, and
+        ``delivery_status`` (``"failed"`` for all entries in the history).
+        """
+        with self._history_lock:
+            entries = list(self._alert_history)
+        result: list[dict[str, Any]] = []
+        for entry in entries:
+            d: dict[str, Any] = {
+                "rule_name": entry.alert.rule_name,
+                "event_type": entry.alert.event_type,
+                "severity": entry.alert.severity,
+                "message": entry.alert.message,
+                "timestamp": entry.alert.timestamp,
+                "destination": type(entry.destination).__name__,
+                "failed_at": entry.failed_at,
+                "error": entry.error,
+                "delivery_status": "failed",
+            }
+            result.append(d)
+        return result
 
     # ------------------------------------------------------------------
     # Pre-defined rules

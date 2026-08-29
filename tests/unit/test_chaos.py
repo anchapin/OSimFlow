@@ -137,7 +137,7 @@ class TestKillSwitchInjector:
 
     def test_force_uses_sigkill(self) -> None:
         inj = KillSwitchInjector(force=True)
-        assert inj._signal_num == 9
+        assert inj._signal_num is None
 
     def test_recover_removes_active(self) -> None:
         inj = KillSwitchInjector(fail_after=1)

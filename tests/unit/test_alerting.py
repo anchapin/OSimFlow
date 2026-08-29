@@ -426,3 +426,53 @@ class TestPendingAlertRetryQueue:
 
         # Ring buffer bound holds under concurrent queue mutations.
         assert len(manager._alert_history) <= 100
+
+    def test_get_alert_history_returns_failed_deliveries_with_status(self):
+        dest = FlakyDestination(fail=True)
+        manager = _manager_with(dest)
+
+        before = time.time()
+        manager.notify("campaign.completed", {"i": 1})
+
+        history = manager.get_alert_history()
+        assert len(history) == 1
+        entry = history[0]
+        assert entry["rule_name"] == "test-rule"
+        assert entry["event_type"] == "campaign.completed"
+        assert entry["severity"] == "WARNING"
+        assert entry["message"] == "alert 1"
+        assert entry["timestamp"] >= before
+        assert entry["destination"] == "FlakyDestination"
+        assert entry["failed_at"] >= before
+        assert "destination down" in entry["error"]
+        assert entry["delivery_status"] == "failed"
+
+    def test_get_alert_history_empty_when_all_delivered(self):
+        dest = FlakyDestination(fail=False)
+        manager = _manager_with(dest)
+
+        manager.notify("campaign.completed", {"i": 1})
+
+        assert manager.get_alert_history() == []
+
+    def test_get_alert_history_thread_safe(self):
+        dest = FlakyDestination(fail=True)
+        manager = _manager_with(dest)
+
+        def worker() -> None:
+            for i in range(10):
+                manager.notify("campaign.completed", {"i": i})
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Ring buffer is capped at 100; we sent 800 alerts so we may have
+        # fewer entries depending on timing, but never more than 100.
+        history = manager.get_alert_history()
+        assert len(history) <= 100
+        for entry in history:
+            assert entry["delivery_status"] == "failed"
+            assert "destination down" in entry["error"]

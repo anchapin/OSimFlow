@@ -260,52 +260,69 @@ class TestCampaignConfigFields:
 
 
 class TestBackendInstantiation:
-    """Test that ObservabilityManager._build_backend produces the correct backend."""
+    """Test that ObservabilityManager._build_backends produces the correct backend(s)."""
 
     def test_none_produces_null_backend(self) -> None:
         cfg = _make_cfg(observability="none")
-        backend = ObservabilityManager._build_backend(cfg)
-        assert isinstance(backend, NullBackend)
+        backends = ObservabilityManager._build_backends(cfg)
+        assert len(backends) == 1
+        assert isinstance(backends[0], NullBackend)
 
     def test_cloudwatch_produces_cloudwatch_backend(self) -> None:
         cfg = _make_cfg(
             observability="cloudwatch",
             cloudwatch_namespace="TestNS",
         )
-        backend = ObservabilityManager._build_backend(cfg)
-        assert isinstance(backend, CloudWatchBackend)
-        assert backend._namespace == "TestNS"
+        backends = ObservabilityManager._build_backends(cfg)
+        assert len(backends) == 1
+        assert isinstance(backends[0], CloudWatchBackend)
+        assert backends[0]._namespace == "TestNS"
 
     def test_prometheus_produces_prometheus_backend(self) -> None:
         cfg = _make_cfg(
             observability="prometheus",
             prometheus_port=9091,
         )
-        backend = ObservabilityManager._build_backend(cfg)
-        assert isinstance(backend, PrometheusBackend)
-        assert backend._url == "localhost:9091"
+        backends = ObservabilityManager._build_backends(cfg)
+        assert len(backends) == 1
+        assert isinstance(backends[0], PrometheusBackend)
+        assert backends[0]._url == "localhost:9091"
 
     def test_opentelemetry_produces_otel_backend(self) -> None:
         cfg = _make_cfg(
             observability="opentelemetry",
             otel_endpoint="http://collector:4317",
         )
-        backend = ObservabilityManager._build_backend(cfg)
-        assert isinstance(backend, OpenTelemetryBackend)
-        assert backend._endpoint == "http://collector:4317"
+        backends = ObservabilityManager._build_backends(cfg)
+        assert len(backends) == 1
+        assert isinstance(backends[0], OpenTelemetryBackend)
+        assert backends[0]._endpoint == "http://collector:4317"
 
     def test_opentelemetry_default_endpoint(self) -> None:
         cfg = _make_cfg(
             observability="opentelemetry",
         )
-        backend = ObservabilityManager._build_backend(cfg)
-        assert isinstance(backend, OpenTelemetryBackend)
-        assert backend._endpoint == "http://localhost:4317"
+        backends = ObservabilityManager._build_backends(cfg)
+        assert len(backends) == 1
+        assert isinstance(backends[0], OpenTelemetryBackend)
+        assert backends[0]._endpoint == "http://localhost:4317"
 
-    def test_unknown_backend_raises_value_error(self) -> None:
-        cfg = _make_cfg(observability="datadog")  # type: ignore[call-arg]
-        with pytest.raises(ValueError, match="unknown observability backend"):
-            ObservabilityManager._build_backend(cfg)
+    def test_unknown_backend_produces_null_backend(self) -> None:
+        cfg = _make_cfg(observability="datadog")
+        backends = ObservabilityManager._build_backends(cfg)
+        assert len(backends) == 1
+        assert isinstance(backends[0], NullBackend)
+
+    def test_multiple_backends_separated_by_comma(self) -> None:
+        cfg = _make_cfg(
+            observability="cloudwatch,prometheus",
+            cloudwatch_namespace="TestNS",
+            prometheus_port=9091,
+        )
+        backends = ObservabilityManager._build_backends(cfg)
+        assert len(backends) == 2
+        assert isinstance(backends[0], CloudWatchBackend)
+        assert isinstance(backends[1], PrometheusBackend)
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +615,7 @@ class TestPeriodicFlush:
         """For real backends, a daemon thread should be started."""
         cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
         mgr = ObservabilityManager(cfg)
-        with patch.object(mgr._backend, "flush") as mock_flush:
+        with patch.object(mgr.backend, "flush") as mock_flush:
             mgr.start_periodic_flush()
             assert mgr._periodic_flush_thread is not None
             assert mgr._periodic_flush_thread.daemon is True
@@ -610,7 +627,7 @@ class TestPeriodicFlush:
         """Calling start twice should not start multiple threads."""
         cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
         mgr = ObservabilityManager(cfg)
-        with patch.object(mgr._backend, "flush"):
+        with patch.object(mgr.backend, "flush"):
             mgr.start_periodic_flush()
             first_thread = mgr._periodic_flush_thread
             mgr.start_periodic_flush()
@@ -621,7 +638,7 @@ class TestPeriodicFlush:
         """stop_periodic_flush should join the thread and call flush on backend."""
         cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
         mgr = ObservabilityManager(cfg)
-        with patch.object(mgr._backend, "flush") as mock_flush:
+        with patch.object(mgr.backend, "flush") as mock_flush:
             mgr.start_periodic_flush()
             mgr.stop_periodic_flush()
             assert mgr._periodic_flush_thread is None
@@ -637,7 +654,7 @@ class TestPeriodicFlush:
         """Calling stop multiple times should be safe."""
         cfg = _make_cfg(observability="cloudwatch", cloudwatch_namespace="TestNS")
         mgr = ObservabilityManager(cfg)
-        with patch.object(mgr._backend, "flush"):
+        with patch.object(mgr.backend, "flush"):
             mgr.start_periodic_flush()
             mgr.stop_periodic_flush()
             mgr.stop_periodic_flush()
@@ -650,7 +667,7 @@ class TestPeriodicFlush:
             flush_interval_seconds=0.05,
         )
         mgr = ObservabilityManager(cfg)
-        with patch.object(mgr._backend, "flush") as mock_flush:
+        with patch.object(mgr.backend, "flush") as mock_flush:
             mgr.start_periodic_flush()
             time.sleep(0.18)
             mgr.stop_periodic_flush()
@@ -671,9 +688,7 @@ class TestPeriodicFlush:
         cfg = _make_cfg()
         assert cfg.flush_interval_seconds == 30.0
 
-    def test_load_config_includes_flush_interval(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_config_includes_flush_interval(self, tmp_path: Path) -> None:
         """load_config should accept observability_flush_interval arg."""
         from osimflow.config import load_config
 
@@ -696,9 +711,7 @@ class TestPeriodicFlush:
         cfg = load_config(args)
         assert cfg.flush_interval_seconds == 45.0
 
-    def test_load_config_default_flush_interval(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_config_default_flush_interval(self, tmp_path: Path) -> None:
         """flush_interval_seconds should default to 30.0."""
         from osimflow.config import load_config
 

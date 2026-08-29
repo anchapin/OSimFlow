@@ -334,7 +334,10 @@ name in this section.
 - `osimflow/work.py` — per-step work functions + `BYOS` contract
   (`default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`,
   `aggregate_results`, `generate_plots`,
-  `SevereEnergyPlusError`).
+  `SevereEnergyPlusError`).  `aggregate_results` produces
+  `aggregated_results.csv` + `aggregated_results.parquet` (both
+  always written) + `failed_simulations.csv` in the campaign
+  ``outdir``.
 - `osimflow/byos_contract.py` — single source of truth for the BYOS
   function-signature contract (`_BYOS_CONTRACT` + `ByosContractEntry`,
   issue #1061).  Both ``osimflow.byos`` and the inline subprocess

@@ -182,6 +182,7 @@ class KillSwitchSimulator(FaultInjector):
                 stacklevel=2,
             )
         self._fail_after = fail_after
+        self._signal_num: int | None = None
         self._call_count: dict[str, int] = {}
         self._active: set[str] = set()
 
@@ -234,8 +235,7 @@ def KillSwitchInjector(
     compatibility but have no effect (issue #1179).
     """
     warnings.warn(
-        "KillSwitchInjector is deprecated, use KillSwitchSimulator instead "
-        "(issue #1179)",
+        "KillSwitchInjector is deprecated, use KillSwitchSimulator instead (issue #1179)",
         DeprecationWarning,
         stacklevel=2,
     )

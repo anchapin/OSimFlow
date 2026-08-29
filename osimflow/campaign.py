@@ -264,13 +264,13 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         condition=_always_run,
     ),
     "PREFLIGHT_RUN_MODEL": DAGStep(
-        inputs=StepInputs(required=("template_sim_package",)),
+        inputs=StepInputs(),
         outputs=StepOutputs(produced=("preflight_OK",)),
         method="step_preflight_run_model",
-        condition=lambda campaign, algo, **_: campaign._generation == 0,
+        condition=lambda campaign, algo, generation, **_: generation == 0,
     ),
     "APPLY_PARAMETERS": DAGStep(
-        inputs=StepInputs(required=("template_sim_package", "samples.json")),
+        inputs=StepInputs(required=("samples.json",)),
         outputs=StepOutputs(produced=("apply/*/",)),
         method="step_apply_parameters",
         fan_out=False,
@@ -282,20 +282,15 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "RUN_OPENSTUDIO_SIM": DAGStep(
         inputs=StepInputs(required_patterns=("apply/*/",)),
-        outputs=StepOutputs(produced=("work/sim/*/",)),
+        outputs=StepOutputs(produced=("sim/*/",)),
         method="step_run_openstudio_sim",
         fan_out=True,
     ),
     "EXTRACT_KPIS": DAGStep(
-        inputs=StepInputs(required_patterns=("work/sim/*/",)),
-        outputs=StepOutputs(kpi_pattern="work/sim/*/kpi_*.json"),
+        inputs=StepInputs(required_patterns=("sim/*/",)),
+        outputs=StepOutputs(kpi_pattern="sim/*/kpi_*.json"),
         method="step_extract_kpis",
         fan_out=True,
-    ),
-    "AGGREGATE_RESULTS": DAGStep(
-        inputs=StepInputs(),
-        outputs=StepOutputs(produced=("aggregated_results.csv", "failed_simulations.csv")),
-        method="step_aggregate_results",
     ),
     "COMPUTE_SENSITIVITY_INDICES": DAGStep(
         inputs=StepInputs(),
@@ -308,11 +303,6 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         outputs=StepOutputs(produced=("uq_results.json",)),
         method="step_compute_uq_indices",
         condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
-    ),
-    "GENERATE_BASIC_PLOTS": DAGStep(
-        inputs=StepInputs(required=("aggregated_results.csv",)),
-        outputs=StepOutputs(produced=("plots/",)),
-        method="step_generate_plots",
     ),
 }
 
@@ -1104,8 +1094,7 @@ class Campaign:
             # Forward the per-sample trace_id so the metric can be joined
             # to a distributed trace (issue #436).
             trace_id = self._trace_id_for(sid)
-            if cost_usd is not None:
-                self._obs.record_sample_metric(sid, "cost_usd", cost_usd, trace_id=trace_id)
+            self._obs.record_sample_cost(sid, cost_usd, trace_id=trace_id)
             trace = SampleTrace(
                 sample_id=sid,
                 status=status,
@@ -2355,14 +2344,13 @@ class Campaign:
         Only DistributedCache has a circuit breaker; SQLiteCache does not.
         """
         states: dict[str, str] = {}
-        cache = getattr(self, 'cache', None)
+        cache = getattr(self, "cache", None)
         if cache is not None:
-            breaker = getattr(cache, '_breaker', None)
+            breaker = getattr(cache, "_breaker", None)
             if breaker is not None:
                 with contextlib.suppress(Exception):
                     states[breaker.name] = breaker.state
         return states
-
 
     def run(self) -> dict[str, object]:  # noqa: PLR0912, PLR0915
         log.info("=" * 60)
@@ -2952,10 +2940,6 @@ class Campaign:
             elif step_name == "EXTRACT_KPIS":
                 assert simulated is not None
                 kpi_files = step_method(simulated, generation=generation)
-            elif step_name == "AGGREGATE_RESULTS":
-                step_method(kpi_files, generation=generation)
-            elif step_name == "GENERATE_BASIC_PLOTS":
-                step_method(generation=generation)
 
             self._maybe_inject_chaos(step_name, "after_step")
             log.debug("step %s completed", step_name)
