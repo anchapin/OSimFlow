@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -740,6 +741,7 @@ class TestRedisDocumentStore:
             socket_timeout=5.0,
             socket_connect_timeout=5.0,
             max_connections=30,
+            ssl=None,
         )
         mock_redis_class.assert_called_once_with(connection_pool=mock_pool_instance)
         assert store._pool is mock_pool_instance
@@ -973,6 +975,66 @@ class TestBuildDocumentStoreRedisDispatch:
                 backend="redis",
                 db_path=tmp_path / "documents.sqlite",
             )
+
+    def test_redis_ssl_context_is_stored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # type: ignore[name-defined]
+        import ssl
+        import fakeredis
+
+        ctx = ssl.create_default_context()
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        fake_module = type("FakeModule", (), {"from_url": staticmethod(lambda *a, **k: fake)})
+        monkeypatch.setattr("osimflow.document_store._get_redis_sync", lambda: fake_module)
+        store = build_document_store(
+            db_path=tmp_path / "documents.sqlite",
+            redis_url="redis://localhost:6379/0",
+            namespace="test-ns",
+            redis_ssl_context=ctx,
+        )
+        assert isinstance(store, RedisDocumentStore)
+        assert store._redis_ssl_context is ctx
+        store.close()
+
+    def test_redis_ssl_context_passed_to_connection_pool(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # type: ignore[name-defined]
+        import ssl
+        import fakeredis
+
+        ctx = ssl.create_default_context()
+        pool_mock = MagicMock()
+        fake_client = MagicMock()
+        fake_module = type(
+            "FakeModule",
+            (),
+            {
+                "ConnectionPool": type(
+                    "FP",
+                    (),
+                    {
+                        "from_url": staticmethod(
+                            lambda *a, **k: pool_mock.from_url(*a, **k)
+                        )
+                    },
+                ),
+                "Redis": staticmethod(lambda *a, **k: fake_client),
+            },
+        )
+        monkeypatch.setattr("osimflow.document_store._get_redis_sync", lambda: fake_module)
+        store = RedisDocumentStore(
+            redis_url="redis://localhost:6379/0",
+            namespace="test-ns",
+            db_path=tmp_path / "documents.sqlite",
+            redis_ssl_context=ctx,
+        )
+        # Force pool creation by accessing _get_client which is lazy.
+        store._get_client()
+        pool_mock.from_url.assert_called_once()
+        call_kwargs = pool_mock.from_url.call_args.kwargs
+        assert call_kwargs.get("ssl") is ctx
 
 
 @requires_fakeredis

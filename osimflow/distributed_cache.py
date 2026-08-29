@@ -68,6 +68,7 @@ import hashlib
 import json
 import logging
 import os
+import ssl
 import threading
 import time
 from pathlib import Path
@@ -253,6 +254,8 @@ class DistributedCache:
         db_path: Path,
         redis_url: str,
         campaign_id: str,
+        *,
+        redis_ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         """Initialize the distributed cache.
 
@@ -272,11 +275,17 @@ class DistributedCache:
             and the pub/sub channel name.  Pass
             ``campaign_state_namespace(outdir)`` so all processes targeting
             the same ``outdir`` share one namespace.
+        redis_ssl_context
+            Optional ``ssl.SSLContext`` to use for the Redis connection.
+            When provided, it is passed to ``redis.from_url()`` as the
+            ``ssl`` argument, enabling custom CA bundle or disabled
+            verification for air-gapped deployments (issue #1327).
         """
         self.requested_db_path = db_path
         self._local = SQLiteCache(_private_db_path(db_path))
         self._redis_url = redis_url
         self._campaign_id = campaign_id
+        self._redis_ssl_context = redis_ssl_context
         self._channel = f"osimflow:cache:invalidate:{campaign_id}"
         self._shared_key = f"osimflow:cache:entries:{campaign_id}"
         # Circuit breaker (issue #1111): after repeated consecutive Redis
@@ -308,6 +317,7 @@ class DistributedCache:
                 decode_responses=True,
                 socket_timeout=5.0,
                 socket_connect_timeout=5.0,
+                ssl=self._redis_ssl_context,
             )
         return self._sync_client
 
@@ -419,6 +429,7 @@ class DistributedCache:
                 self._redis_url,
                 encoding="utf-8",
                 decode_responses=True,
+                ssl=self._redis_ssl_context,
             )
         return self._redis_client
 
@@ -444,6 +455,7 @@ class DistributedCache:
                         self._redis_url,
                         encoding="utf-8",
                         decode_responses=True,
+                        ssl=self._redis_ssl_context,
                     )
                     try:
                         log.info(
@@ -703,6 +715,7 @@ def build_cache(
     campaign_id: str,
     *,
     require_auth: bool = False,
+    redis_ssl_context: ssl.SSLContext | None = None,
 ) -> SQLiteCache | DistributedCache:
     """Factory: build the appropriate cache from configuration.
 
@@ -731,6 +744,9 @@ def build_cache(
         When True, skips the URL-level credential check.  Set this when
         Redis authentication is handled externally (e.g. via an ``AUTH``
         file consumed by the Redis server, not the client).  Issue #1277.
+    redis_ssl_context
+        Optional ``ssl.SSLContext`` to pass to ``redis.from_url()`` for
+        custom CA bundles or disabled verification (issue #1327).
 
     Returns
     -------
@@ -750,4 +766,5 @@ def build_cache(
         db_path=db_path,
         redis_url=redis_url,
         campaign_id=campaign_id,
+        redis_ssl_context=redis_ssl_context,
     )

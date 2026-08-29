@@ -83,6 +83,7 @@ import json
 import logging
 import re
 import sqlite3
+import ssl
 import threading
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -1129,6 +1130,7 @@ class RedisDocumentStore(DocumentStore):
         *,
         lru_max_entries: int = 1024,
         connection_pool_max_connections: int = 50,
+        redis_ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         """Initialize the Redis document store.
 
@@ -1157,8 +1159,15 @@ class RedisDocumentStore(DocumentStore):
             pool.  Defaults to 50.  Each ``RedisDocumentStore`` instance
             maintains its own pool so concurrent campaigns stay isolated.
             Issue #1343.
+        redis_ssl_context
+            Optional ``ssl.SSLContext`` to use for the Redis connection.
+            When provided, it is passed to
+            ``redis.ConnectionPool.from_url()`` as the ``ssl`` argument,
+            enabling custom CA bundle or disabled verification for
+            air-gapped deployments (issue #1327).
         """
         self._redis_url = redis_url
+        self._redis_ssl_context = redis_ssl_context
         self.namespace = namespace
         self.requested_db_path = db_path
         self._lru_max_entries = int(lru_max_entries)
@@ -1218,6 +1227,7 @@ class RedisDocumentStore(DocumentStore):
                         socket_timeout=5.0,
                         socket_connect_timeout=5.0,
                         max_connections=self._connection_pool_max_connections,
+                        ssl=self._redis_ssl_context,
                     )
                 raw_client = redis_sync.Redis(connection_pool=self._pool)
             except Exception:
@@ -1885,6 +1895,7 @@ def _build_document_store_redis(
     db_path: Path,
     *,
     require_auth: bool = False,
+    redis_ssl_context: ssl.SSLContext | None = None,
 ) -> DocumentStore:
     """Return a ``RedisDocumentStore`` for distributed campaigns (issue #1014)."""
     _validate_redis_url(redis_url, require_auth)
@@ -1892,6 +1903,7 @@ def _build_document_store_redis(
         redis_url=redis_url,
         namespace=namespace,
         db_path=db_path,
+        redis_ssl_context=redis_ssl_context,
     )
 
 
@@ -1902,6 +1914,7 @@ def build_document_store(
     *,
     backend: str | None = None,
     require_auth: bool = False,
+    redis_ssl_context: ssl.SSLContext | None = None,
 ) -> DocumentStore:
     """Factory: build the appropriate ``DocumentStore`` from configuration.
 
@@ -1938,6 +1951,10 @@ def build_document_store(
         When True, skips the URL-level credential check.  Set this when
         Redis authentication is handled externally (e.g. via an ``AUTH``
         file consumed by the Redis server, not the client).  Issue #1277.
+    redis_ssl_context
+        Optional ``ssl.SSLContext`` to pass to
+        ``redis.ConnectionPool.from_url()`` for custom CA bundles or
+        disabled verification (issue #1327).
 
     Returns
     -------
@@ -1961,7 +1978,11 @@ def build_document_store(
                     "build_document_store: backend='redis' requires redis_url and namespace"
                 )
             return _build_document_store_redis(
-                redis_url, namespace, db_path, require_auth=require_auth
+                redis_url,
+                namespace,
+                db_path,
+                require_auth=require_auth,
+                redis_ssl_context=redis_ssl_context,
             )
         raise ValueError(f"unknown document_store_backend: {backend!r}")
 
@@ -1972,4 +1993,10 @@ def build_document_store(
             "build_document_store: redis_url requires a namespace "
             "(use campaign_state_namespace(outdir) to derive one).",
         )
-    return _build_document_store_redis(redis_url, namespace, db_path, require_auth=require_auth)
+    return _build_document_store_redis(
+        redis_url,
+        namespace,
+        db_path,
+        require_auth=require_auth,
+        redis_ssl_context=redis_ssl_context,
+    )
