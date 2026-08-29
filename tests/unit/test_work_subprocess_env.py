@@ -9,9 +9,11 @@ Coverage:
 
 * :class:`TestSanitizeEnv` — direct unit tests of the ``_sanitize_env``
   allowlist (drop secrets, keep whitelist).
-* :class:`TestSubprocessSitesPassSanitizedEnv` — every one of the five
-  call sites identified in issue #1027 passes ``env=_sanitize_env()``
-  to its ``subprocess.run`` / ``run_subprocess`` invocation.
+* :class:`TestSubprocessSitesPassSanitizedEnv` — every one of the six
+  call sites identified in issue #1027 (and the two follow-ups
+  ``aggregate_results`` / ``generate_plots`` tightened in issue #1388)
+  passes ``env=_sanitize_env()`` to its ``subprocess.run`` /
+  ``run_subprocess`` invocation.
 * :class:`TestRealSubprocessPropagation` — a real subprocess spawned
   with ``env=work._sanitize_env()`` does NOT see
   ``AWS_SECRET_ACCESS_KEY`` in its environment (probed via
@@ -50,10 +52,12 @@ class TestSanitizeEnv:
     2. Preserve whitelisted variables (``PATH``, ``HOME``, ``LANG``,
        ``LC_ALL``, ``TMPDIR``) so the child can locate binaries, locale
        data, and the temp directory.
-    3. Forward ``OSIMFLOW_*`` framework flags and ``PYTHON*``
-       interpreter variables (covered by the prefix-match allowlist).
-    4. Reject everything else, even other framework-internal vars that
-       are not in the allowlist.
+    3. Forward legitimate ``OSIMFLOW_*`` framework flags and ``PYTHON*``
+       interpreter variables by exact name (issue #1388: explicit
+       allowlist, no prefix wildcards).
+    4. Reject everything else, including ``OSIMFLOW_TASK_PAYLOAD_SECRET``
+       and ``OSIMFLOW_TASK_PAYLOAD_SIG`` (issue #1388 — see
+       :class:`TestTaskPayloadSecretExcluded`).
     """
 
     def test_aws_credentials_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,22 +118,43 @@ class TestSanitizeEnv:
         assert clean["TEMP"] == "/tmp"
         assert clean["TMP"] == "/tmp"
 
-    def test_osimlow_wildcard_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """OSIMFLOW_* framework vars must be forwarded (prefix match)."""
+    def test_osimlow_explicit_allowlist_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Legitimate ``OSIMFLOW_*`` framework flags must be forwarded (exact match).
+
+        Issue #1388 replaced the legacy ``OSIMFLOW_*`` prefix-match
+        wildcard with an explicit allowlist of named vars.  Each
+        ``OSIMFLOW_*`` var that a work script reads must be listed by
+        name; arbitrary ``OSIMFLOW_RANDOM_FLAG`` style vars are no
+        longer forwarded.
+        """
         monkeypatch.setenv("OSIMFLOW_STUB_SIM", "1")
+        monkeypatch.setenv("OSIMFLOW_RUN_ID", "campaign-xyz")
+        monkeypatch.setenv("OSIMFLOW_LOG_LEVEL", "DEBUG")
+        # An arbitrary, non-allowlisted OSIMFLOW_* var must be dropped.
         monkeypatch.setenv("OSIMFLOW_RANDOM_FLAG", "value")
 
         clean = _sanitize_env()
 
         assert clean["OSIMFLOW_STUB_SIM"] == "1"
-        assert clean["OSIMFLOW_RANDOM_FLAG"] == "value"
+        assert clean["OSIMFLOW_RUN_ID"] == "campaign-xyz"
+        assert clean["OSIMFLOW_LOG_LEVEL"] == "DEBUG"
+        assert "OSIMFLOW_RANDOM_FLAG" not in clean
 
-    def test_python_wildcard_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """PYTHON* interpreter variables must be forwarded (prefix match)."""
+    def test_python_explicit_allowlist_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PYTHON interpreter variables are forwarded by exact name (issue #1388).
+
+        Issue #1388 replaced the legacy ``PYTHON*`` prefix-match wildcard
+        with an explicit allowlist.  Each Python interpreter var the
+        child needs (``PYTHONPATH`` / ``PYTHONHOME`` / ``PYTHONIOENCODING``
+        / ``PYTHONUNBUFFERED`` / ``PYTHONHASHSEED``) is listed by name;
+        arbitrary ``PYTHON_*`` style vars are no longer forwarded.
+        """
         monkeypatch.setenv("PYTHONPATH", "/sandbox/py")
         monkeypatch.setenv("PYTHONHOME", "/sandbox/pyhome")
         monkeypatch.setenv("PYTHONIOENCODING", "utf-8")
         monkeypatch.setenv("PYTHONUNBUFFERED", "1")
+        monkeypatch.setenv("PYTHONHASHSEED", "42")
+        # Arbitrary PYTHON_* var (no longer in the allowlist) must be dropped.
         monkeypatch.setenv("PYTHON_FROZEN_GARBAGE", "ignore_me")
 
         clean = _sanitize_env()
@@ -138,10 +163,8 @@ class TestSanitizeEnv:
         assert clean["PYTHONHOME"] == "/sandbox/pyhome"
         assert clean["PYTHONIOENCODING"] == "utf-8"
         assert clean["PYTHONUNBUFFERED"] == "1"
-        # The PYTHON* prefix is intentionally liberal: any var starting
-        # with PYTHON is forwarded.  This documents the current
-        # behaviour so a future tightening is a conscious decision.
-        assert clean["PYTHON_FROZEN_GARBAGE"] == "ignore_me"
+        assert clean["PYTHONHASHSEED"] == "42"
+        assert "PYTHON_FROZEN_GARBAGE" not in clean
 
     def test_unknown_vars_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Vars outside the allowlist must be dropped even if they look benign."""
@@ -154,15 +177,14 @@ class TestSanitizeEnv:
         assert "UNRELATED_CONFIG_VAR" not in clean
 
     def test_empty_parent_env_yields_empty_clean_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """With no parent vars, _sanitize_env() returns an empty dict (deny-all)."""
-        # Wipe the relevant prefixes; the allowlist is exact + prefix
-        # match, so an empty parent env means an empty sanitized env.
+        """With no parent vars, _sanitize_env() returns an empty dict (deny-all).
+
+        Issue #1388: the allowlist is now exact-match only.  We delete
+        every var in the allowlist from the parent env; ``_sanitize_env``
+        must then return ``{}`` because nothing is forwarded.
+        """
         for key in list(os.environ):
-            if (
-                key in {"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP"}
-                or key.startswith("OSIMFLOW_")
-                or key.startswith("PYTHON")
-            ):
+            if key in work_mod._WORK_SUBPROCESS_ENV_ALLOWLIST:
                 monkeypatch.delenv(key, raising=False)
 
         assert _sanitize_env() == {}
@@ -182,6 +204,8 @@ class TestSubprocessSitesPassSanitizedEnv:
     2. ``run_openstudio_sim`` stub branch — ``run_subprocess``
     3. ``_run_real_openstudio``          — ``run_subprocess``
     4. ``generate_lhs``                  — ``subprocess.run``
+    5. ``aggregate_results``             — ``subprocess.run`` (issue #1388)
+    6. ``generate_plots``                — ``subprocess.run`` (issue #1388)
 
     ``_extract_kpis_impl`` is no longer a subprocess site (issue #1015:
     it now calls :func:`osimflow._work_scripts.extract_kpis.run_extract_kpis`
@@ -337,6 +361,296 @@ class TestSubprocessSitesPassSanitizedEnv:
     # Site 5 (removed, issue #1015): _extract_kpis_impl no longer
     # spawns a subprocess — see TestExtractKpisNoSubprocess below.
     # ---------------------------------------------------------------------
+
+    # ---------------------------------------------------------------------
+    # Site 5: aggregate_results (issue #1388)
+    # ---------------------------------------------------------------------
+    def test_aggregate_results_passes_sanitized_env(self, tmp_path: Path) -> None:
+        """aggregate_results must pass env=_sanitize_env() to subprocess.run (issue #1388).
+
+        Pre-fix the call site called ``subprocess.run(...)`` with no
+        ``env=`` kwarg, which inherited the orchestrator's full env —
+        including ``OSIMFLOW_TASK_PAYLOAD_SECRET``.  This regression
+        test pins the fix.
+        """
+        kpi_files = [tmp_path / "k1.json"]
+        kpi_files[0].write_text("{}")
+        sim_dirs = [tmp_path / "s1"]
+        sim_dirs[0].mkdir()
+        out = tmp_path / "agg_out"
+
+        with patch("osimflow.work.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod.aggregate_results(kpi_files, sim_dirs, out)
+
+        self._assert_sanitized(mock_run)
+
+    # ---------------------------------------------------------------------
+    # Site 6: generate_plots (issue #1388)
+    # ---------------------------------------------------------------------
+    def test_generate_plots_passes_sanitized_env(self, tmp_path: Path) -> None:
+        """generate_plots must pass env=_sanitize_env() (with PYTHONPATH
+        override) to subprocess.run — NOT ``os.environ.copy()`` (issue #1388).
+
+        Pre-fix the call site did ``env = os.environ.copy()`` which
+        re-leaked every secret including ``OSIMFLOW_TASK_PAYLOAD_SECRET``.
+        The fix is to start from the sanitized env and only override
+        ``PYTHONPATH`` to point at the project root (issue #876).
+        """
+        csv_path = tmp_path / "agg.csv"
+        csv_path.write_text("sample_id,eui\n0001,100\n")
+        failed_path = tmp_path / "fail.csv"
+        failed_path.write_text("sample_id,error\n")
+        out = tmp_path / "plots"
+        out.mkdir(parents=True, exist_ok=True)
+
+        with patch("osimflow.work.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod.generate_plots(csv_path, failed_path, out)
+
+        assert mock_run.called  # type: ignore[attr-defined]
+        call_kwargs = mock_run.call_args.kwargs  # type: ignore[attr-defined]
+        env = call_kwargs.get("env")
+        assert env is not None, f"subprocess helper was called without env= (kwargs: {call_kwargs})"
+        # generate_plots legitimately augments the sanitized env with
+        # a PYTHONPATH override (issue #876).  We require the env to
+        # be a superset of _sanitize_env() (with the extra PYTHONPATH
+        # key) — anything else means a future refactor leaked a parent
+        # var back into the child env.
+        sanitized = work_mod._sanitize_env()
+        for key, value in sanitized.items():
+            assert env.get(key) == value, (
+                f"env[{key!r}] drifted from _sanitize_env(): "
+                f"expected {value!r}, got {env.get(key)!r}"
+            )
+        # The PYTHONPATH override must still be applied on top of the
+        # sanitized env so the child can ``import osimflow`` (issue #876).
+        assert "PYTHONPATH" in env, "generate_plots must still set PYTHONPATH for the child"
+        # Belt-and-braces: even if the equality check above is loosened
+        # in the future, the secrets must still be absent.
+        for secret in (
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ACCESS_KEY_ID",
+            "GITHUB_TOKEN",
+            "REDIS_URL",
+        ):
+            assert secret not in env
+            assert not any(k.startswith("AWS_") for k in env)
+
+
+# ===========================================================================
+# Issue #1388 — HMAC task-payload secret must NEVER reach work-script
+# subprocesses.  The orchestrator signs task payloads with a shared
+# secret (``OSIMFLOW_TASK_PAYLOAD_SECRET``) so remote_runner can verify
+# their provenance; that secret is the cap on what cloud-side workloads
+# the orchestrator may submit.  Loss permits forging arbitrary step
+# calls.  This block pins the fix: a planted secret must be absent from
+# every ``subprocess.run`` / ``run_subprocess`` invocation triggered
+# from ``osimflow.work``, while the positive control shows
+# ``osimflow.remote_runner`` still receives the secret via its own env
+# path (which is the legitimate consumer).
+# ===========================================================================
+class TestTaskPayloadSecretExcluded:
+    """``OSIMFLOW_TASK_PAYLOAD_SECRET`` must NEVER leak into a work-script
+    subprocess env (issue #1388).
+
+    These tests plant the secret in ``os.environ`` (the way a real
+    orchestrator running on Nomad / K8s with the secret mounted as an
+    env var would have it) and then drive each call site that spawns a
+    work-script subprocess.  The secret (and its signature companion
+    ``OSIMFLOW_TASK_PAYLOAD_SIG``) must be absent from every captured
+    env.
+    """
+
+    FAKE_SECRET = "deadbeef-coordinator-shared-secret-DO-NOT-LOG"
+    FAKE_SIG = "f" * 64  # hex HMAC-SHA256 digest is 64 chars
+
+    @pytest.fixture(autouse=True)
+    def _plant_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Plant the HMAC secret + signature in the parent env as the
+        orchestrator would when running with HMAC enforcement enabled."""
+        monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", self.FAKE_SECRET)
+        monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SIG", self.FAKE_SIG)
+
+    def _assert_no_secret(self, mock_subprocess: object) -> None:
+        """Assert neither the secret nor the signature is in the captured env."""
+        assert mock_subprocess.called  # type: ignore[attr-defined]
+        call_kwargs = mock_subprocess.call_args.kwargs  # type: ignore[attr-defined]
+        env = call_kwargs.get("env")
+        assert env is not None, f"subprocess helper was called without env= (kwargs: {call_kwargs})"
+        assert "OSIMFLOW_TASK_PAYLOAD_SECRET" not in env, (
+            f"OSIMFLOW_TASK_PAYLOAD_SECRET leaked to subprocess env: "
+            f"{env.get('OSIMFLOW_TASK_PAYLOAD_SECRET')!r}"
+        )
+        assert "OSIMFLOW_TASK_PAYLOAD_SIG" not in env, (
+            f"OSIMFLOW_TASK_PAYLOAD_SIG leaked to subprocess env: "
+            f"{env.get('OSIMFLOW_TASK_PAYLOAD_SIG')!r}"
+        )
+        assert "OSIMFLOW_TASK_PAYLOAD" not in env, (
+            f"OSIMFLOW_TASK_PAYLOAD leaked to subprocess env (would let "
+            f"a work script forge its own payloads): "
+            f"{env.get('OSIMFLOW_TASK_PAYLOAD')!r}"
+        )
+
+    # ---------------------------------------------------------------------
+    # Direct allowlist-level test
+    # ---------------------------------------------------------------------
+    def test_sanitize_env_directly_excludes_secret(self) -> None:
+        """``_sanitize_env()`` must drop both the secret and the signature."""
+        clean = _sanitize_env()
+        assert "OSIMFLOW_TASK_PAYLOAD_SECRET" not in clean
+        assert "OSIMFLOW_TASK_PAYLOAD_SIG" not in clean
+        assert "OSIMFLOW_TASK_PAYLOAD" not in clean
+        # The planted secret value must not appear anywhere in the
+        # sanitized dict, even under a renamed key (belt-and-braces).
+        for value in clean.values():
+            assert self.FAKE_SECRET not in str(value), (
+                f"planted secret value found in subprocess env: {value!r}"
+            )
+
+    # ---------------------------------------------------------------------
+    # Every work-script subprocess site must scrub the secret.
+    # ---------------------------------------------------------------------
+    def test_apply_parameters_stub_excludes_secret(self, tmp_path: Path) -> None:
+        """_apply_parameters_stub must scrub OSIMFLOW_TASK_PAYLOAD_SECRET."""
+        template = tmp_path / "template"
+        template.mkdir()
+        (template / "model.osm").write_text("{}")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        param_file = tmp_path / "params.json"
+        param_file.write_text("{}")
+        with patch("osimflow.work.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod._apply_parameters_stub(template, "0001", out_dir, param_file)
+        self._assert_no_secret(mock_run)
+
+    def test_run_openstudio_sim_stub_branch_excludes_secret(self, tmp_path: Path) -> None:
+        """run_openstudio_sim stub branch must scrub OSIMFLOW_TASK_PAYLOAD_SECRET."""
+        stdout_path = tmp_path / "stdout.log"
+        stderr_path = tmp_path / "stderr.log"
+        sim_out = tmp_path / "sim"
+        sim_out.mkdir()
+        (sim_out / "model.osm").write_text("{}")
+        (sim_out / "workflow.osw").write_text(json.dumps({"name": "t"}))
+        with (
+            patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}),
+            patch("osimflow.work._is_openstudio_available", return_value=False),
+            patch("osimflow.work.run_subprocess") as mock_run_subprocess,
+        ):
+            mock_run_subprocess.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod.run_openstudio_sim(
+                modified_sim_package=sim_out,
+                sample_id="0001",
+                openstudio_version="3.11.0",
+                out=sim_out,
+                simulate_work_s=0.0,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        self._assert_no_secret(mock_run_subprocess)
+
+    def test_run_real_openstudio_excludes_secret(self, tmp_path: Path) -> None:
+        """_run_real_openstudio must scrub OSIMFLOW_TASK_PAYLOAD_SECRET."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "workflow.osw").write_text(json.dumps({"name": "t"}))
+        stdout_path = tmp_path / "stdout.log"
+        stderr_path = tmp_path / "stderr.log"
+        with patch("osimflow.work.run_subprocess") as mock_run_subprocess:
+            mock_run_subprocess.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod._run_real_openstudio(
+                modified_sim_package=pkg,
+                sample_id="0001",
+                sim_out=pkg,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        self._assert_no_secret(mock_run_subprocess)
+
+    def test_generate_lhs_excludes_secret(self, tmp_path: Path) -> None:
+        """generate_lhs must scrub OSIMFLOW_TASK_PAYLOAD_SECRET."""
+        variables_yml = tmp_path / "variables.yml"
+        variables_yml.write_text("variables: []\n")
+        out = tmp_path / "out"
+        out.mkdir()
+        with patch("osimflow.work.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod.generate_lhs(variables_yml, 5, out)
+        self._assert_no_secret(mock_run)
+
+    def test_aggregate_results_excludes_secret(self, tmp_path: Path) -> None:
+        """aggregate_results must scrub OSIMFLOW_TASK_PAYLOAD_SECRET (issue #1388)."""
+        kpi_files = [tmp_path / "k1.json"]
+        kpi_files[0].write_text("{}")
+        sim_dirs = [tmp_path / "s1"]
+        sim_dirs[0].mkdir()
+        out = tmp_path / "agg_out"
+        with patch("osimflow.work.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod.aggregate_results(kpi_files, sim_dirs, out)
+        self._assert_no_secret(mock_run)
+
+    def test_generate_plots_excludes_secret(self, tmp_path: Path) -> None:
+        """generate_plots must scrub OSIMFLOW_TASK_PAYLOAD_SECRET (issue #1388).
+
+        Pre-fix the site did ``env = os.environ.copy()`` which
+        re-leaked every secret — including the HMAC task-payload
+        secret.  This regression test pins the sanitized-env fix.
+        """
+        csv_path = tmp_path / "agg.csv"
+        csv_path.write_text("sample_id,eui\n0001,100\n")
+        failed_path = tmp_path / "fail.csv"
+        failed_path.write_text("sample_id,error\n")
+        out = tmp_path / "plots"
+        out.mkdir(parents=True, exist_ok=True)
+        with patch("osimflow.work.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            work_mod.generate_plots(csv_path, failed_path, out)
+        self._assert_no_secret(mock_run)
+
+    # ---------------------------------------------------------------------
+    # Positive control: ``osimflow.remote_runner`` IS the legitimate
+    # consumer.  Its env-reading path (``os.environ.get``) is NOT
+    # routed through ``work._sanitize_env``; the secret arrives via
+    # the Nomad / K8s Job spec set by the executor.  This test pins
+    # that distinction so a future refactor cannot silently route
+    # remote_runner's env through ``_sanitize_env``.
+    # ---------------------------------------------------------------------
+    def test_remote_runner_legitimately_sees_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Positive control: ``osimflow.remote_runner`` (via
+        :func:`osimflow.task_payload_hmac.resolve_payload_secret`) still
+        reads the secret from ``os.environ``.
+
+        This is the legitimate consumer (issue #1177).  Its env path
+        must NOT be the one we sanitized in ``osimflow.work``.
+        """
+        from osimflow.task_payload_hmac import (  # noqa: PLC0415 — test-local import
+            TASK_PAYLOAD_SECRET_ENV,
+            resolve_payload_secret,
+        )
+
+        # The autouse fixture already plants the secret in os.environ.
+        # Verify resolve_payload_secret reads it back from the bare env,
+        # not from a sanitized dict.
+        assert os.environ.get(TASK_PAYLOAD_SECRET_ENV) == self.FAKE_SECRET
+        assert resolve_payload_secret() == self.FAKE_SECRET
 
 
 # ===========================================================================

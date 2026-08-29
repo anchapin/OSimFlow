@@ -98,9 +98,28 @@ _TRANSIENT_EXIT_CODES = frozenset([-1, 2, 4, 5, 6, 11, 12, 15, 24, 25, 26, 27, 2
 # interpreter variables to start; it does not need user-shell vars like
 # ``USER`` / ``USERNAME`` and we don't want any framework flags that are
 # only meaningful to the orchestrator itself.
+#
+# SECURITY — HMAC task-payload secret (issue #1388):
+#   ``OSIMFLOW_TASK_PAYLOAD_SECRET`` and ``OSIMFLOW_TASK_PAYLOAD_SIG``
+#   are the HMAC shared secret and signature that gate which cloud-side
+#   workloads the orchestrator may submit (issue #1177).  Compromise of
+#   the secret lets an attacker forge ``OSIMFLOW_TASK_PAYLOAD`` +
+#   ``OSIMFLOW_TASK_PAYLOAD_SIG`` and pivot into arbitrary
+#   ``python -m osimflow.remote_runner`` invocations on Nomad /
+#   Kubernetes — that is, into the entire step-call surface.  The
+#   legitimate consumer of these vars is *only* ``osimflow.remote_runner``,
+#   which runs inside a Nomad / Kubernetes Job that receives its env
+#   directly from the substrate's Job spec (set by the executor via
+#   :func:`osimflow.task_payload_hmac.build_signature_env`) — it never
+#   reads its env through this allowlist.  Therefore we ship an explicit
+#   allowlist of *named* vars and refuse to forward ``OSIMFLOW_*``
+#   wildcards: every byte that reaches ``bin/*.py`` or the local stub
+#   subprocess must be justified by name.
 # ---------------------------------------------------------------------------
-_WORK_SUBPROCESS_ENV_EXACT_ALLOWLIST: frozenset[str] = frozenset(
+_WORK_SUBPROCESS_ENV_ALLOWLIST: frozenset[str] = frozenset(
     {
+        # POSIX basics the child needs to locate binaries, locale data,
+        # and the temp dir.
         "PATH",
         "HOME",
         "LANG",
@@ -108,42 +127,54 @@ _WORK_SUBPROCESS_ENV_EXACT_ALLOWLIST: frozenset[str] = frozenset(
         "TMPDIR",
         "TEMP",
         "TMP",
+        # Python interpreter variables.  An explicit list rather than the
+        # legacy ``PYTHON*`` prefix keeps the surface tight — a future
+        # ``PYTHON_TEMP_SECRET`` style mistake cannot leak by accident.
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONIOENCODING",
+        "PYTHONUNBUFFERED",
+        "PYTHONHASHSEED",
+        # Legitimate OSIMFLOW_* flags consumed by work scripts.
+        # ``OSIMFLOW_STUB_SIM`` is the testing / development escape
+        # hatch (see :func:`_is_stub_mode`); ``OSIMFLOW_RUN_ID`` lets
+        # child logs correlate with the parent campaign;
+        # ``OSIMFLOW_LOG_LEVEL`` lets the CLI surface log-verbosity
+        # overrides.  ``OSIMFLOW_TASK_PAYLOAD_SECRET`` and
+        # ``OSIMFLOW_TASK_PAYLOAD_SIG`` are **deliberately absent** —
+        # see the SECURITY block above (issue #1388).
+        "OSIMFLOW_STUB_SIM",
+        "OSIMFLOW_RUN_ID",
+        "OSIMFLOW_LOG_LEVEL",
     }
-)
-# Wildcard prefixes — any variable whose name starts with one of these
-# is forwarded to the child.  ``OSIMFLOW_*`` covers framework flags like
-# ``OSIMFLOW_STUB_SIM``; ``PYTHON*`` covers interpreter variables
-# (``PYTHONPATH``, ``PYTHONHOME``, ``PYTHONIOENCODING``,
-# ``PYTHONUNBUFFERED``).
-_WORK_SUBPROCESS_ENV_PREFIX_ALLOWLIST: tuple[str, ...] = (
-    "OSIMFLOW_",
-    "PYTHON",
 )
 
 
 def _sanitize_env() -> dict[str, str]:
     """Return a sanitized env for subprocesses spawned from this module (issue #1027).
 
-    Builds a clean ``dict[str, str]`` from a small allowlist:
+    Builds a clean ``dict[str, str]`` from an explicit per-call allowlist
+    (issue #1388):
 
-    * exact-match vars (``PATH``, ``HOME``, ``LANG``, ``LC_ALL``,
-      ``TMPDIR``, ``TEMP``, ``TMP``) — needed to locate binaries, locale
-      data, and the temp directory;
-    * prefix-match vars (``OSIMFLOW_*``, ``PYTHON*``) — framework flags
-      and Python interpreter variables.
+    * POSIX basics (``PATH``, ``HOME``, ``LANG``, ``LC_ALL``, ``TMPDIR``,
+      ``TEMP``, ``TMP``) — needed to locate binaries, locale data, and
+      the temp directory;
+    * Python interpreter variables (``PYTHONPATH``, ``PYTHONHOME``,
+      ``PYTHONIOENCODING``, ``PYTHONUNBUFFERED``, ``PYTHONHASHSEED``);
+    * a short list of legitimate ``OSIMFLOW_*`` framework flags
+      (``OSIMFLOW_STUB_SIM``, ``OSIMFLOW_RUN_ID``, ``OSIMFLOW_LOG_LEVEL``).
 
     Everything else from ``os.environ`` (notably ``AWS_*``, ``GITHUB_TOKEN``,
-    ``REDIS_URL``, ``*_SECRET*``) is **dropped**.  This is the single
+    ``REDIS_URL``, ``*_SECRET*``, **and the HMAC task-payload secret /
+    signature pair** ``OSIMFLOW_TASK_PAYLOAD_SECRET`` /
+    ``OSIMFLOW_TASK_PAYLOAD_SIG``) is **dropped**.  This is the single
     defence against accidental credential leakage from the orchestrator
     to ``openstudio.cli run -w ...`` and the bundled ``bin/*.py`` work
     scripts.
     """
     clean: dict[str, str] = {}
     for name, value in os.environ.items():
-        if name in _WORK_SUBPROCESS_ENV_EXACT_ALLOWLIST:
-            clean[name] = value
-            continue
-        if name.startswith(_WORK_SUBPROCESS_ENV_PREFIX_ALLOWLIST):
+        if name in _WORK_SUBPROCESS_ENV_ALLOWLIST:
             clean[name] = value
     return clean
 
@@ -1546,6 +1577,7 @@ def aggregate_results(
             check=True,
             capture_output=True,
             text=True,
+            env=_sanitize_env(),
         )
     except subprocess.CalledProcessError as e:
         log.error("aggregate_results failed: %s", e.stderr or "<empty>")
@@ -1596,9 +1628,14 @@ def generate_plots(
     if pareto_dir is not None:
         cmd.extend(["--pareto_dir", str(pareto_dir)])
 
-    # Ensure osimflow is importable in the subprocess (issue #876)
-    # Add the project root (parent of osimflow package) to PYTHONPATH
-    env = os.environ.copy()
+    # Ensure osimflow is importable in the subprocess (issue #876) while
+    # still passing the sanitized env (issue #1027).  We start from the
+    # sanitized dict (which intentionally drops OSIMFLOW_TASK_PAYLOAD_*
+    # — issue #1388) and only override ``PYTHONPATH`` to prepend the
+    # project root so the child can ``import osimflow``.  We do NOT
+    # call ``os.environ.copy()`` here: that would re-leak every parent
+    # secret.
+    env = _sanitize_env()
     project_root = Path(__file__).resolve().parent.parent
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
