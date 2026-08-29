@@ -77,6 +77,63 @@ class TestBuildCache:
             )
         assert isinstance(cache, DistributedCache)
 
+    def test_build_cache_passes_redis_ssl_context_to_distributed_cache(
+        self, tmp_path: Path
+    ) -> None:
+        import ssl
+
+        ctx = ssl.create_default_context()
+        mock_rs = MagicMock()
+        mock_rs.from_url.return_value = MagicMock()
+        mock_ra = AsyncMock()
+        with patch("osimflow.distributed_cache._get_redis_sync", return_value=mock_rs):
+            with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
+                cache = build_cache(
+                    db_path=tmp_path / "cache.sqlite",
+                    redis_url="redis://localhost:6379/0",
+                    campaign_id="test-campaign",
+                    redis_ssl_context=ctx,
+                )
+        assert cache._redis_ssl_context is ctx
+
+    def test_distributed_cache_stores_redis_ssl_context(self, tmp_path: Path) -> None:
+        import ssl
+
+        ctx = ssl.create_default_context()
+        mock_rs = MagicMock()
+        mock_rs.from_url.return_value = MagicMock()
+        mock_ra = AsyncMock()
+        with patch("osimflow.distributed_cache._get_redis_sync", return_value=mock_rs):
+            with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
+                cache = DistributedCache(
+                    db_path=tmp_path / "dist.sqlite",
+                    redis_url="redis://localhost:6379/0",
+                    campaign_id="test-campaign",
+                    redis_ssl_context=ctx,
+                )
+        assert cache._redis_ssl_context is ctx
+
+    def test_distributed_cache_sync_client_receives_ssl_context(self, tmp_path: Path) -> None:
+        import ssl
+
+        ctx = ssl.create_default_context()
+        mock_rs = MagicMock()
+        mock_client = MagicMock()
+        mock_rs.from_url.return_value = mock_client
+        mock_ra = AsyncMock()
+        with patch("osimflow.distributed_cache._get_redis_sync", return_value=mock_rs):
+            with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
+                cache = DistributedCache(
+                    db_path=tmp_path / "dist.sqlite",
+                    redis_url="redis://localhost:6379/0",
+                    campaign_id="test-campaign",
+                    redis_ssl_context=ctx,
+                )
+                cache._get_sync_client()
+        mock_rs.from_url.assert_called_once()
+        call_kwargs = mock_rs.from_url.call_args.kwargs
+        assert call_kwargs.get("ssl") is ctx
+
     def test_sqlite_cache_has_correct_db_path(self, tmp_path: Path) -> None:
         db_path = tmp_path / "subdir" / "cache.sqlite"
         cache = build_cache(
