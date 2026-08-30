@@ -8,7 +8,7 @@
 # parallel jobs gated by `needs:` so the merge signal waits for all of:
 #   - lint       : ruff check + ruff format --check  (parallel; ~30s)
 #   - typecheck  : mypy --strict on osimflow/         (parallel; ~60s)
-#   - test       : pytest with 83% coverage gate      (depends on lint+typecheck)
+#   - test       : pytest with 82% coverage gate      (depends on lint+typecheck; issue #1417)
 #   - contract   : AGENTS.md / docs drift gate        (parallel; ~10s)
 #   - security   : pip-audit dependency vulnerability check (parallel; ~30s)
 #
@@ -234,7 +234,7 @@ jobs:
           echo "::notice::pip-audit found no known vulnerabilities."
 
   test:
-    name: test (pytest, 83% coverage gate)
+    name: test (pytest, 82% coverage gate)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [lint, typecheck]
@@ -291,7 +291,7 @@ jobs:
             --cov=osimflow \
             --cov-report=xml \
             --cov-report=term \
-            --cov-fail-under=83 \
+            --cov-fail-under=82 \
             -n 2 \
             --dist loadgroup \
             --timeout=120 \

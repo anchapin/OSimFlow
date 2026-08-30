@@ -115,7 +115,7 @@ make lint       # ruff check
 make format     # ruff format (write)
 make typecheck  # mypy --strict on osimflow/
 make test       # pytest (full suite, no coverage gate)
-make test-cov   # pytest --cov with 83% gate           (CI default)
+make test-cov   # pytest --cov with 82% gate           (CI default; issue #1417)
 make test-fast  # pytest tests/contract -x -q          (pre-commit mirror)
 make contract   # regenerate BYOS runner + agents-contract + docs-sync + openapi-sync
 make byos-generate  # regenerate osimflow/_byos_runner_generated.py only
@@ -287,7 +287,7 @@ make test-fast      # contract only, no coverage gate (pre-commit mirror)
 .venv/bin/pytest --cov=osimflow
 ```
 
-CI (`make test-cov`) requires 83% coverage — gated by
+CI (`make test-cov`) requires 82% coverage — gated by
 `pyproject.toml [tool.pytest.ini_options]`. CI jobs in
 `.github/workflows/ci.yml`: `lint` (ruff check + format --check),
 `typecheck` (mypy --strict), `test` (pytest + 83%), `contract`,

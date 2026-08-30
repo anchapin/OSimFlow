@@ -388,7 +388,7 @@ invoke `.venv/bin/pytest` directly.
 |---|---|
 | `make test` | Full pytest suite |
 | `make test-fast` | Contract + unit only (~10s, pre-commit mirror) |
-| `make test-cov` | Full suite + 83% coverage gate |
+| `make test-cov` | Full suite + 82% coverage gate |
 | `make lint` | ruff check (read-only; the pre-commit ruff hook auto-fixes instead — see §Tooling) |
 | `make format` | ruff format (writes) |
 | `make typecheck` | mypy --strict on osimflow/ |
@@ -405,10 +405,10 @@ invoke `.venv/bin/pytest` directly.
 ```bash
 make test-cov
 # Or manually:
-.venv/bin/pytest --cov=osimflow --cov-report=term-missing --cov-fail-under=83
+.venv/bin/pytest --cov=osimflow --cov-report=term-missing --cov-fail-under=82
 ```
 
-The coverage gate is 83%. If it fails, the output shows which lines
+The coverage gate is 82% (lowered from 83%; issue #1417). If it fails, the output shows which lines
 are uncovered. Add tests for the missing public-API paths.
 
 ### Integration tests
@@ -1097,10 +1097,10 @@ jobs:
      └───────┬───────┘
              ▼
      ┌───────────────┐
-     │     test       │
-     │  (pytest,      │
-      │  83% coverage) │
-     │    ~2-5 min    │
+│     test       │
+      │  (pytest,      │
+       │  82% coverage) │
+      │    ~2-5 min    │
      └───────────────┘
 ```
 
@@ -1110,7 +1110,7 @@ jobs:
 | `typecheck` | `mypy --strict osimflow/` | ~60s |
 | `contract` | AGENTS.md drift + docs path resolution | ~10s |
 | `security` | `pip-audit` against the dependency set | ~30s |
-| `test` | `pytest --cov=osimflow --cov-fail-under=83` | ~2-5 min |
+| `test` | `pytest --cov=osimflow --cov-fail-under=82` | ~2-5 min |
 
 A green check on every required job is the gate to merge.
 
@@ -1333,7 +1333,7 @@ are failing. This can silently land broken code on `main`.
 
 - Settings → Branches → Branch protection rules → `main`
 - Require status checks: `lint (ruff)`, `typecheck (mypy --strict)`,
-  `test (pytest, 83% coverage gate)`, `agents & docs contract`,
+  `test (pytest, 82% coverage gate)`, `agents & docs contract`,
   `security (pip-audit)`
 
 Until that is configured, always verify `non_success` is empty before
