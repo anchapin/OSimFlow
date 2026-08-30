@@ -141,10 +141,24 @@ def test_is_stub_mode_false_when_env_not_one() -> None:
 # ---------------------------------------------------------------------------
 # run_openstudio_sim: stub fallback path (existing behavior)
 # ---------------------------------------------------------------------------
-def test_stub_mode_writes_placeholder_sql(
+def test_stub_mode_writes_valid_sqlite_sql(
     sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
 ) -> None:
-    """When OSIMFLOW_STUB_SIM=1, the stub writes placeholder eplusout.sql."""
+    """When OSIMFLOW_STUB_SIM=1, the stub writes a parseable SQLite DB.
+
+    Issue #1419 — the previous contract wrote the literal string
+    ``"-- placeholder sql"`` to ``eplusout.sql``, which is not a valid
+    SQLite database.  ``extract_kpis`` then logged
+    ``Corrupt eplusout.sql: file is not a database`` and emitted a KPI
+    JSON missing the critical KPIs ``eui_kwh_m2_yr`` and
+    ``total_site_energy_kwh``.  Every sample failed the validator and
+    ``_verify_step_inputs("GENERATE_BASIC_PLOTS")`` raised
+    ``FileNotFoundError``.  The new contract delegates to
+    :func:`osimflow.work._write_stub_eplusout_sql` which writes a real
+    SQLite database that ``extract_kpis`` can open.
+    """
+    import sqlite3
+
     stdout_path, stderr_path = log_paths
     with patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}):
         result = run_openstudio_sim(
@@ -157,8 +171,23 @@ def test_stub_mode_writes_placeholder_sql(
             stderr_path=stderr_path,
         )
     assert result == out_dir / "0001"
-    assert (result / "eplusout.sql").is_file()
-    assert (result / "eplusout.sql").read_text() == "-- placeholder sql"
+    sql_path = result / "eplusout.sql"
+    assert sql_path.is_file()
+    # Round-trip through sqlite3 — the stub file must NOT be the old
+    # ``-- placeholder sql`` literal (issue #1419 root cause).  The new
+    # file is binary SQLite, so we read raw bytes rather than going
+    # through UTF-8 text decoding.
+    assert sql_path.read_bytes() != b"-- placeholder sql"
+    assert sql_path.read_bytes().startswith(b"SQLite format 3")
+    conn = sqlite3.connect(str(sql_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cur.fetchall()}
+        assert "TabularDataWithStrings" in tables
+        assert "Zones" in tables
+    finally:
+        conn.close()
 
 
 def test_no_cli_falls_back_to_stub(

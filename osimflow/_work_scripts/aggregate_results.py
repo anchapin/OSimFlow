@@ -628,15 +628,33 @@ def main() -> int:
                 log.info("no input parameters loaded — writing KPIs only")
         else:
             log.info("no --samples_json provided — writing KPIs only")
-
-        df.to_csv(args.out_csv, index=False)
-        if args.out_parquet:
-            df.to_parquet(args.out_parquet, index=False)
     else:
+        # Every sample failed to produce a usable KPI JSON (issue #1419
+        # root-cause path).  Still emit a header-only CSV so
+        # ``_verify_step_inputs("GENERATE_BASIC_PLOTS")`` downstream
+        # does not raise FileNotFoundError — the failure is already
+        # surfaced via ``failed_simulations.csv`` and the per-sample
+        # run.json records.
         df = pd.DataFrame(columns=["sample_id"])
-        df.to_csv(args.out_csv, index=False)
-        if args.out_parquet:
+        log.warning(
+            "aggregate_results: zero KPI inputs (all samples failed) — writing header-only %s",
+            args.out_csv,
+        )
+
+    df.to_csv(args.out_csv, index=False)
+    if args.out_parquet:
+        try:
             df.to_parquet(args.out_parquet, index=False)
+        except (ImportError, ValueError) as exc:
+            # pyarrow / fastparquet missing or the empty DataFrame is
+            # unwritable to parquet (no inferable schema).  Log and
+            # continue — the CSV is the canonical artifact and the
+            # parquet is best-effort.
+            log.warning(
+                "aggregate_results: skipping parquet write at %s (%s)",
+                args.out_parquet,
+                exc,
+            )
 
     # 2. Extract failures
     failures = []

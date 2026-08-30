@@ -245,9 +245,21 @@ class TestGenerateLhs:
 # run_openstudio_sim — stub mode
 # ===========================================================================
 class TestRunOpenstudioSimStub:
-    def test_stub_writes_placeholder_sql(
+    def test_stub_writes_valid_sqlite_sql(
         self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
     ) -> None:
+        """Issue #1419 — stub ``eplusout.sql`` is now a parseable SQLite DB.
+
+        The previous contract wrote the literal string ``"-- placeholder sql"``
+        which is not a valid SQLite database, so ``extract_kpis`` raised
+        ``sqlite3.DatabaseError`` on every sample.  The new contract
+        delegates to :func:`osimflow.work._write_stub_eplusout_sql` which
+        writes a SQLite database that opens cleanly and contains the
+        ``TabularDataWithStrings`` + ``Zones`` fields
+        ``extract_kpis`` reads.
+        """
+        import sqlite3
+
         stdout_path, stderr_path = log_paths
         with patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}):
             result = run_openstudio_sim(
@@ -261,7 +273,22 @@ class TestRunOpenstudioSimStub:
             )
         assert result == out_dir / "0001"
         assert (result / "eplusout.sql").is_file()
-        assert (result / "eplusout.sql").read_text() == "-- placeholder sql"
+        # Round-trip through sqlite3 — the stub file must NOT be the old
+        # ``-- placeholder sql`` literal (issue #1419 root cause).  The
+        # new file is binary SQLite, so we read raw bytes rather than
+        # going through UTF-8 text decoding.
+        sql_path = result / "eplusout.sql"
+        assert sql_path.read_bytes() != b"-- placeholder sql"
+        assert sql_path.read_bytes().startswith(b"SQLite format 3")
+        conn = sqlite3.connect(str(sql_path))
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cur.fetchall()}
+            assert "TabularDataWithStrings" in tables
+            assert "Zones" in tables
+        finally:
+            conn.close()
         assert (result / "eplusout.err").read_text() == ""
 
     def test_stub_writes_stdout_stderr_logs(

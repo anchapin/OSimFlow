@@ -115,8 +115,25 @@ class TestCircuitBreakerStates:
 
 
 def _failing_sync_module() -> MagicMock:
+    """Return a sync redis-shaped MagicMock that fails on construction.
+
+    Both call sites consume this helper:
+
+    * ``DistributedCache._get_sync_client`` -> ``redis_sync.from_url(...)``
+    * ``RedisDocumentStore._get_client`` ->
+      ``redis_sync.ConnectionPool.from_url(...)``
+
+    A bare ``MagicMock`` auto-creates child attributes on access, so
+    setting ``side_effect`` on ``module.from_url`` alone leaves the
+    ``module.ConnectionPool.from_url`` chain entirely unaffected and the
+    document-store path silently returns a MagicMock instead of raising.
+    Mirror the side_effect on both attribute chains so every consumer
+    actually sees the simulated outage.
+    """
     module = MagicMock()
-    module.from_url.side_effect = ConnectionError("no redis in tests")
+    err = ConnectionError("no redis in tests")
+    module.from_url.side_effect = err
+    module.ConnectionPool.from_url.side_effect = err
     return module
 
 
