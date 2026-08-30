@@ -315,6 +315,22 @@ def _build_kubernetes() -> tuple[Any, Any]:
     ex.backoff_limit = 0
     ex.ttl_seconds_after_finished = None
     ex.queue_name = None
+    # ``__new__`` skips ``__init__``, so the constructor's pod-hardening
+    # flag (issue #1383) is not initialised. Without it, ``submit()``
+    # raises ``AttributeError`` when consulting ``self.security_context_strict``
+    # while building the manifest. Match the constructor default
+    # (``True``) so the hardened path is exercised verbatim, mirroring
+    # production behaviour.
+    ex.security_context_strict = True
+    # ``submit()`` first calls ``_check_contract_version_compatibility``
+    # which spins up an ephemeral CoreV1Api pod to query the remote
+    # runner's BYOS contract version (issue #1331). That negotiation
+    # involves a real ``kubernetes.client.CoreV1Api()`` round-trip and
+    # a 60 s status poll, neither of which can succeed in this fully
+    # mocked contract test. Stub the compatibility check at its entry
+    # point — the resource-mapping assertions below depend only on the
+    # BatchV1Api manifest construction, not on the version negotiation.
+    ex._check_contract_version_compatibility = MagicMock()  # type: ignore[method-assign]
     ex.submit(lambda: None, name="contract", cpus=CPUS, memory_mb=MEMORY_MB, time_min=TIME_MIN)
     return ex, mock_client
 
