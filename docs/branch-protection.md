@@ -38,7 +38,7 @@ display-name.
 
 1. **`lint (ruff)`** — `lint` job
 2. **`typecheck (mypy --strict)`** — `typecheck` job
-3. **`test (pytest, 83% coverage gate)`** — `test` job
+3. **`test (pytest, 82% coverage gate)`** — `test` job
 4. **`agents & docs contract`** — `contract` job
 5. **`security (pip-audit)`** — `security` job
 

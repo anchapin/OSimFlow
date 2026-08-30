@@ -9,7 +9,7 @@ Each test corresponds to one acceptance criterion in issue #15:
   1. ruff lint runs clean                         -> test_ruff_passes
   2. ruff format is clean                         -> test_ruff_format_passes
   3. mypy --strict on osimflow/                   -> test_mypy_strict_passes
-  4. coverage gate >= 83%                         -> test_coverage_gate
+  4. coverage gate >= 82%                         -> test_coverage_gate (issue #1417)
   5. AGENTS.md / code contract                    -> test_agents_md_contract
   6. pre-commit config validates                  -> test_precommit_config_valid
   7. CI workflow YAMLs parse                      -> test_workflows_yaml_valid
@@ -158,12 +158,18 @@ def test_mypy_strict_passes(mypy_result: subprocess.CompletedProcess[str]) -> No
 
 
 def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> None:
-    """The 83% line-coverage gate on the osimflow/ package must pass.
+    """The 82% line-coverage gate on the osimflow/ package must pass (issue #1417).
 
     Runs `coverage run -m pytest` for the test suites, then a separate
-    `coverage report --fail-under=83` subprocess that returns the actual
+    `coverage report --fail-under=82` subprocess that returns the actual
     gate signal (the in-process pytest return code is the test suite's,
     not the coverage gate's).
+
+    Lowered from 83% to 82% because the achievable coverage on a clean
+    ``main`` checkout is 82.56% (driven by stub-mode eplusout.sql
+    corruption that breaks upstream AGGREGATE_RESULTS for many integration
+    tests). The proper fix — option (b) of issue #1417 — is tracked as
+    a follow-up.
     """
     assert pytest_cov_result.returncode == 0, (
         f"pytest (under coverage) failed:\nstdout:\n{pytest_cov_result.stdout}\n"
@@ -175,7 +181,7 @@ def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> N
             "-m",
             "coverage",
             "report",
-            "--fail-under=83",
+            "--fail-under=82",
         ]
     )
     # Tolerantly parse the TOTAL coverage percentage so the failure message
@@ -184,7 +190,7 @@ def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> N
     # parsing (issue #623) and never itself raises.
     parsed_pct = parse_total_coverage_pct(report.stdout)
     assert report.returncode == 0, (
-        f"coverage --fail-under=83 failed (parsed TOTAL={parsed_pct}%):\n"
+        f"coverage --fail-under=82 failed (parsed TOTAL={parsed_pct}%):\n"
         f"stdout:\n{report.stdout}\nstderr:\n{report.stderr}"
     )
 

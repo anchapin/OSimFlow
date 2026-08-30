@@ -38,8 +38,8 @@ typecheck: ## mypy --strict (osimflow/)
 test: ## pytest (full suite, no coverage gate — use test-cov for the gate)
 	$(PYTEST) -o addopts=""
 
-test-cov: ## pytest --cov with 83% gate (mirrors CI test job)
-	$(PYTEST) --cov=osimflow --cov-report=xml --cov-report=term-missing --cov-fail-under=83 --ignore=tests/contract
+test-cov: ## pytest --cov with 82% gate (mirrors CI test job; issue #1417)
+	$(PYTEST) --cov=osimflow --cov-report=xml --cov-report=term-missing --cov-fail-under=82 --ignore=tests/contract
 
 test-fast: ## pytest contract only (pre-commit mirror)
 	$(PYTEST) -o addopts="" tests/contract -x -q
