@@ -155,6 +155,10 @@ class TestTLSServeCLI:
         key = tmp_path / "key.pem"
         cert.touch()
         key.touch()
+        # SEC-001 (issue #1319) refuses to bind a non-local interface
+        # without authentication. The TLS contract is orthogonal to auth,
+        # so we satisfy SEC-001 with an explicit --api-key here and let
+        # the test focus on the host/port translation it actually owns.
         args = parser.parse_args(
             [
                 "serve",
@@ -168,6 +172,8 @@ class TestTLSServeCLI:
                 "0.0.0.0",
                 "--port",
                 "443",
+                "--api-key",
+                "tls-host-port-fixture",
             ]
         )
 
@@ -244,8 +250,23 @@ class TestNonLocalTLSWarning:
         import pytest
 
         parser = _build_parser()
+        # SEC-001 (issue #1319) raises SystemExit for a non-local bind
+        # without --api-key, which would short-circuit the SEC-004 warning
+        # path we actually want to exercise here. Provide --api-key so the
+        # auth gate passes and the cleartext-non-local warning (SEC-004)
+        # is what fires.
         args = parser.parse_args(
-            ["serve", "--outdir", str(tmp_path), "--host", "0.0.0.0", "--port", "8000"]
+            [
+                "serve",
+                "--outdir",
+                str(tmp_path),
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000",
+                "--api-key",
+                "nonlocal-cleartext-fixture",
+            ]
         )
         mock_app = MagicMock()
         mock_uvicorn = MagicMock()
