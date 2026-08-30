@@ -288,7 +288,7 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
     ),
     "EXTRACT_KPIS": DAGStep(
         inputs=StepInputs(required_patterns=("sim/*/",)),
-        outputs=StepOutputs(kpi_pattern="sim/*/kpi_*.json"),
+        outputs=StepOutputs(kpi_pattern="kpis/kpi_*.json"),
         method="step_extract_kpis",
         fan_out=True,
     ),
@@ -304,11 +304,17 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         method="step_compute_uq_indices",
         condition=lambda campaign, algo, **_: campaign.cfg.algorithm == "uq",
     ),
-    "GENERATE_BASIC_PLOTS": DAGStep(
-        inputs=StepInputs(required=("../aggregated_results.csv",)),
-        outputs=StepOutputs(produced=("plots/",)),
-        method="step_generate_plots",
-    ),
+    # Note (issue #1419): ``AGGREGATE_RESULTS`` and ``GENERATE_BASIC_PLOTS``
+    # are intentionally NOT declared in this dict.  Both are single-shot
+    # steps that run exactly once in ``_finalize_full_campaign`` after the
+    # per-generation loop completes.  Including them here would cause two
+    # problems: (a) ``_verify_step_inputs("GENERATE_BASIC_PLOTS")`` would
+    # fire inside the loop and demand ``../aggregated_results.csv`` before
+    # AGGREGATE_RESULTS has had a chance to write it (the bug from the
+    # v0 stub-mode failure), and (b) per-generation calls would either
+    # over-cache or overwrite the canonical single-shot result with
+    # partial data.  Keeping them out of the loop preserves both the
+    # "single-shot" semantics and the original cache-key behaviour.
 }
 
 
