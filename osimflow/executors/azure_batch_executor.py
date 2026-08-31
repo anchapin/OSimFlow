@@ -18,6 +18,16 @@ environment variables (AZURE_TENANT_ID, AZURE_CLIENT_ID,
 AZURE_CLIENT_SECRET). The constructor does **not** accept long-lived
 access keys; passing them would violate the security policy.
 
+Throttle / network retry (issue #1396):
+``client.job.add`` and ``client.task.add`` are wrapped in
+``_retry_azure_submit`` which retries ``BatchErrorException`` whose
+``error.code`` is in ``_THROTTLE_ERROR_CODES``
+(``TooManyRequests``, ``ServerBusy``, ``RequestTimeout``) with full-jitter
+exponential backoff capped at 30s, up to 5 attempts.  This mirrors the
+``_submit_job_with_retry`` pattern on ``AWSBatchExecutor`` (issue #1010)
+so a single transient 429 doesn't burn a full sample cycle on the
+orchestrator's ``--max-sample-retries`` path.
+
 Spot instance handling (issue #352):
 When `use_spot` is True, the executor submits jobs using Azure Spot VMs
 (low-priority VMs). When a Spot interruption occurs, the handle's
@@ -43,6 +53,67 @@ from osimflow.executors.transport import resolve_result_for_callback
 from osimflow.task_payload_hmac import build_signature_env
 
 log = logging.getLogger("osimflow.executors.azure_batch")
+
+# Azure Batch error codes that should trigger a submit retry (issue #1396).
+# These are the documented throttling and transient retry-after codes
+# returned by the Batch service. Non-throttle errors (e.g.
+# AuthenticationError, NotFound) are treated as permanent and surfaced
+# immediately without burning the sample-cycle retry budget.
+_THROTTLE_ERROR_CODES: frozenset[str] = frozenset(
+    {"TooManyRequests", "ServerBusy", "RequestTimeout"}
+)
+
+
+def _azure_throttle_code(exc: Exception) -> str | None:
+    """Return the Azure Batch error code on a throttle error, else ``None``.
+
+    Accepts ``BatchErrorException`` (legacy ``azure-batch-sdk``) and any
+    duck-typed exception carrying an ``.error.code`` attribute.  Returns
+    ``None`` for unrelated exceptions so the caller can re-raise.
+    """
+    error = getattr(exc, "error", None)
+    code = getattr(error, "code", None) if error is not None else None
+    if isinstance(code, str) and code in _THROTTLE_ERROR_CODES:
+        return code
+    return None
+
+
+def _retry_azure_submit(
+    call_fn: Callable[[], Any],
+    *,
+    max_attempts: int = 5,
+    total_cap_seconds: float = 30.0,
+) -> Any:
+    """Invoke ``call_fn`` with throttle-aware exponential backoff (issue #1396).
+
+    Catches ``BatchErrorException`` whose ``error.code`` is in
+    ``_THROTTLE_ERROR_CODES`` and retries with full-jitter exponential
+    backoff capped at ``total_cap_seconds``. Other exceptions propagate
+    immediately so we don't mask permanent failures.
+    """
+    delay = 0.5
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return call_fn()
+        except Exception as exc:  # noqa: BLE001 — propagate non-throttle as-is
+            code = _azure_throttle_code(exc)
+            if code is None or attempt >= max_attempts - 1:
+                raise
+            sleep_for = min(random.uniform(0, delay), total_cap_seconds)
+            log.warning(
+                "azure_batch submit throttled (attempt %d/%d, code=%s), retrying in %.1fs",
+                attempt + 1,
+                max_attempts,
+                code,
+                sleep_for,
+            )
+            time.sleep(sleep_for)
+            delay = min(delay * 2, total_cap_seconds)
+            last_exc = exc
+    raise RuntimeError(
+        f"azure_batch submit throttle retry exhausted after {max_attempts} attempts"
+    ) from last_exc
 
 
 class _AzureErrorInfo:
@@ -404,15 +475,17 @@ class AzureBatchExecutor(BaseExecutor):
 
         client = self._get_client()
 
-        client.job.add(
-            self.account_name,
-            self._azure_batch.models.JobAddParameter(
-                id=job_id,
-                pool_info=self._azure_batch.models.PoolInformation(pool_id=self.pool_id),
-                on_all_tasks_complete="terminate",
-                on_task_failure="terminate",
-                priority=0 if use_spot_final else 1000,
-            ),
+        _retry_azure_submit(
+            lambda: client.job.add(
+                self.account_name,
+                self._azure_batch.models.JobAddParameter(
+                    id=job_id,
+                    pool_info=self._azure_batch.models.PoolInformation(pool_id=self.pool_id),
+                    on_all_tasks_complete="terminate",
+                    on_task_failure="terminate",
+                    priority=0 if use_spot_final else 1000,
+                ),
+            )
         )
 
         resolved_container = "nrel/openstudio:latest"
@@ -443,7 +516,7 @@ class AzureBatchExecutor(BaseExecutor):
                 max_retry_count=0,
             )
 
-        client.task.add(self.account_name, job_id, task_params)
+        _retry_azure_submit(lambda: client.task.add(self.account_name, job_id, task_params))
 
         log.info(
             "azure_batch submit_job -> jobId=%s use_spot=%s",
