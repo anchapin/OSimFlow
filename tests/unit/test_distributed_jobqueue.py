@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from osimflow.circuit_breaker import CircuitBreaker
 from osimflow.distributed_jobqueue import (
     DistributedJobQueue,
     build_job_queue,
@@ -22,14 +24,20 @@ def queue_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def mock_redis():
-    """Mock redis.asyncio module."""
-    with patch("osimflow.distributed_jobqueue._redis_asyncio_module") as mock:
+    """Mock redis.asyncio module via ``_get_redis_asyncio``.
+
+    Patches the ``_get_redis_asyncio`` accessor (not the bare dict) so the
+    mock is actually returned to callers; patching the dict with a
+    ``MagicMock`` causes ``mock["module"]`` to short-circuit to an
+    auto-generated child mock and silently break publish assertions.
+    """
+    with patch("osimflow.distributed_jobqueue._get_redis_asyncio") as get_module:
         mock_client = MagicMock()
-        mock_client.publish = MagicMock(return_value=1)
-        mock_client.aclose = MagicMock()
+        mock_client.publish = AsyncMock(return_value=1)
+        mock_client.aclose = AsyncMock()
         mock_module = MagicMock()
         mock_module.from_url = MagicMock(return_value=mock_client)
-        mock["module"] = mock_module
+        get_module.return_value = mock_module
         yield mock_client
 
 
@@ -302,3 +310,186 @@ class TestDistributedJobQueuePublishThreadBoundedness:
         assert dq._publish_executor is not None
         dq.close()
         assert dq._publish_executor is None
+
+
+class TestDistributedJobQueueCircuitBreaker:
+    """CircuitBreaker wiring for _publish (issue #1397).
+
+    Mirrors the data-plane breaker pattern used in ``DistributedCache`` and
+    ``RedisDocumentStore`` (issue #1111): after repeated consecutive Redis
+    failures, the publish path is short-circuited so a persistent outage
+    cannot burn the 5 s socket timeout on every job state transition.
+    """
+
+    def _wait_for_executor(self, dq: DistributedJobQueue) -> None:
+        """Block until all submitted _pub coroutines complete.
+
+        ``_publish`` is fire-and-forget (issue #1326), so the test must wait
+        for the executor's in-flight work to finish before asserting on the
+        breaker's recorded outcome.  ``shutdown(wait=True)`` blocks until
+        every queued task has run; ``cancel_futures=True`` ensures we drain
+        only what was submitted (no new work accepted after this point).
+        """
+        with dq._pub_lock:  # type: ignore[attr-defined]
+            executor = dq._publish_executor
+            if executor is None:
+                return
+            executor.shutdown(wait=True, cancel_futures=True)
+            dq._publish_executor = None
+
+    def test_breaker_constructed_with_campaign_id(self, queue_dir: Path) -> None:
+        """``_breaker`` is constructed eagerly and named after the campaign (issue #1397)."""
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="issue-1397-test",
+        )
+        assert isinstance(dq._breaker, CircuitBreaker)
+        assert dq._breaker.name == "jobqueue:issue-1397-test"
+        assert dq._breaker.state == "closed"
+        assert dq.breaker_state == "closed"
+
+    def test_publish_records_failure_then_success(
+        self, queue_dir: Path, mock_redis: MagicMock
+    ) -> None:
+        """ConnectionError on first publish → record_failure; success on retry → record_success.
+
+        The breaker should stay closed across a transient failure, with
+        ``consecutive_failures`` climbing to 1 then back to 0 after the
+        successful retry.
+        """
+        success_calls = threading.Event()
+        call_count = [0]
+
+        async def publish_side_effect(*args: object, **kwargs: object) -> int:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise ConnectionError("redis down")
+            success_calls.set()
+            return 1
+
+        # First call raises ConnectionError; subsequent calls succeed.
+        mock_redis.publish = AsyncMock(side_effect=publish_side_effect)
+
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-mixed",
+            sample_ids=set(),  # avoid subscriber thread; pure publish path
+        )
+
+        # First enqueue: publishes once → ConnectionError → record_failure.
+        dq.enqueue("sample_0_job_1", {"step": "SIM"})
+        # Second enqueue: publishes once → success → record_success.
+        dq.enqueue("sample_0_job_2", {"step": "SIM"})
+
+        # Wait for the second publish attempt to complete (success).
+        assert success_calls.wait(timeout=5.0)
+        self._wait_for_executor(dq)
+
+        # After the failure + the success, the counter is back to 0
+        # and the circuit is closed.
+        assert dq._breaker.consecutive_failures == 0
+        assert dq._breaker.state == "closed"
+        # Both publishes were attempted (failure + success).
+        assert mock_redis.publish.call_count == 2
+
+        dq.close()
+
+    def test_persistent_outage_opens_breaker_and_short_circuits(
+        self, queue_dir: Path, mock_redis: MagicMock
+    ) -> None:
+        """Always-failing publish opens the breaker; subsequent enqueues short-circuit locally.
+
+        This is the regression test for issue #1397: under a persistent
+        Redis outage, ``enqueue`` must short-circuit to local-only state
+        without burning socket timeouts on every state transition.
+        """
+        # Always raise — simulates a Redis outage with the 5 s socket
+        # timeout burned on each attempt.
+        mock_redis.publish = AsyncMock(side_effect=ConnectionError("redis down"))
+
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-persistent-outage",
+            sample_ids=set(),  # no subscriber thread; pure publish path
+        )
+
+        # Trigger enough publishes to drive the breaker open (default threshold is 5).
+        for i in range(dq._breaker.failure_threshold + 2):
+            dq.enqueue(f"job_{i}", {"step": "SIM"})
+
+        self._wait_for_executor(dq)
+        assert dq._breaker.state == "open"
+        calls_during_outage = mock_redis.publish.call_count
+
+        # After the breaker is open, additional enqueues must short-circuit
+        # before reaching the Redis client — i.e. ``publish.call_count``
+        # must not keep growing.  Each enqueue still records the job
+        # locally so the campaign keeps running in local-only mode.
+        for i in range(20):
+            dq.enqueue(f"job_post_open_{i}", {"step": "SIM"})
+
+        self._wait_for_executor(dq)
+        # Breaker stays open — no half-open transition within the test window.
+        assert dq._breaker.state == "open"
+        # ``client.publish`` must not have been called again after the
+        # breaker opened; the short-circuit path skips the async work.
+        assert mock_redis.publish.call_count == calls_during_outage
+
+        # Local state is fully consistent: every enqueue landed on disk
+        # even though the publish was short-circuited.
+        pending = dq.pending_jobs()
+        assert len(pending) == (dq._breaker.failure_threshold + 2 + 20)
+        assert all(job["id"].startswith(("job_", "job_post_open_")) for job in pending)
+
+        dq.close()
+
+    def test_enqueue_returns_local_only_state_when_breaker_open(
+        self, queue_dir: Path, mock_redis: MagicMock
+    ) -> None:
+        """With the breaker already open, ``enqueue`` returns local-only state.
+
+        Mirrors the acceptance criterion for issue #1397: state transitions
+        never burn socket timeouts when the breaker is open.
+        """
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-short-circuit",
+            sample_ids=set(),
+        )
+
+        # Force the breaker open without ever calling publish.
+        for _ in range(dq._breaker.failure_threshold):
+            dq._breaker.record_failure()
+        assert dq._breaker.state == "open"
+
+        mock_redis.publish.reset_mock()
+
+        # ``enqueue`` should return a local path even though the breaker
+        # is open; the Redis publish path must be skipped entirely.
+        result = dq.enqueue("sample_0_job_short_circuit", {"step": "SIM"})
+        assert result.exists()
+        assert result.name == "sample_0_job_short_circuit.json"
+
+        # ``mark_completed`` / ``mark_failed`` must also short-circuit
+        # without touching the Redis client.
+        dq.mark_completed("sample_0_job_short_circuit")
+        dq.enqueue("sample_0_job_failed", {})
+        dq.mark_failed("sample_0_job_failed", "boom")
+
+        # Give any in-flight work a chance to (incorrectly) complete.
+        self._wait_for_executor(dq)
+
+        # No Redis publish attempts were dispatched while the breaker
+        # was open — local-only behaviour is preserved.
+        assert mock_redis.publish.call_count == 0
+        # Local state is consistent with the operations performed.
+        assert len(dq.jobs_by_state("completed")) == 1
+        assert len(dq.jobs_by_state("failed")) == 1
+        # Breaker stays open.
+        assert dq._breaker.state == "open"
+
+        dq.close()

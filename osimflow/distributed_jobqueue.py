@@ -83,6 +83,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .circuit_breaker import CircuitBreaker, CircuitOpenError
 from .jobqueue import JobQueue
 
 if TYPE_CHECKING:
@@ -209,6 +210,13 @@ class DistributedJobQueue:
         self._campaign_id = campaign_id
         self._sample_ids: set[str] = sample_ids if sample_ids is not None else set()
         self._channel_prefix = f"{_CHANNEL_PREFIX}:{campaign_id}"
+
+        # Circuit breaker (issue #1397): after repeated consecutive Redis
+        # failures, skip the publish path entirely for a cooldown period
+        # instead of burning a 5 s socket timeout on every job state
+        # transition.  Mirrors the data-plane breaker wired into
+        # ``DistributedCache`` and ``RedisDocumentStore`` (issue #1111).
+        self._breaker = CircuitBreaker(name=f"jobqueue:{campaign_id}")
 
         # Lazily-created async Redis client and subscriber thread.
         self._redis_client: redis_async.Redis | None = None
@@ -390,6 +398,13 @@ class DistributedJobQueue:
         path when no running event loop is available, avoiding thread explosion
         (issue #1326).
 
+        Wraps the publish in a :class:`CircuitBreaker` (issue #1397) so that
+        a persistent Redis outage does not burn the 5 s socket timeout on
+        every job state transition.  On open, the synchronous pre-check
+        short-circuits before the asyncio work is dispatched, and the
+        in-``_pub`` ``breaker.check()`` catches any race where the breaker
+        opens between the sync check and the async execution.
+
         Parameters
         ----------
         payload
@@ -399,22 +414,61 @@ class DistributedJobQueue:
             Optional explicit channel name.  When ``None``, derives the
             per-sample channel from the payload's ``sample_id`` field.
         """
+        # Synchronous pre-check (issue #1397): avoid spawning the asyncio
+        # work when the breaker is already open.  The in-_pub check below
+        # catches the race where the breaker opens between this check and
+        # the async execution.
+        if not self._breaker.allow():
+            log.debug(
+                "DistributedJobQueue: circuit open, skipping publish for campaign=%s",
+                self._campaign_id,
+            )
+            return
+
         import asyncio  # noqa: PLC0415
 
         sample_id = payload.get("sample_id", "")
         target_channel = channel or f"{self._channel_prefix}:{sample_id}_"
 
         async def _pub() -> None:
+            # In-async check (issue #1397): fail-fast at the await boundary
+            # even when the sync pre-check above was passed but the breaker
+            # has since opened (e.g. via a concurrent op).
             try:
-                client = self._get_redis()
-                await client.publish(target_channel, json.dumps(payload))
-            except Exception as exc:
-                log.warning(
-                    "DistributedJobQueue: failed to publish action for campaign=%s channel=%s: %s",
+                self._breaker.check()
+            except CircuitOpenError as exc:
+                log.debug(
+                    "DistributedJobQueue: circuit open at publish time for campaign=%s channel=%s: %s",
                     self._campaign_id,
                     target_channel,
                     exc,
                 )
+                return
+            try:
+                client = self._get_redis()
+                await client.publish(target_channel, json.dumps(payload))
+            except (ConnectionError, TimeoutError) as exc:
+                # Only connection-class failures should pollute the breaker
+                # (issue #1397); programming bugs (e.g. JSON errors) are
+                # logged but do not move the breaker toward open.
+                self._breaker.record_failure()
+                log.warning(
+                    "DistributedJobQueue: failed to publish action for campaign=%s channel=%s: %s"
+                    " (circuit failures: %d)",
+                    self._campaign_id,
+                    target_channel,
+                    exc,
+                    self._breaker.consecutive_failures,
+                )
+            except Exception as exc:
+                log.warning(
+                    "DistributedJobQueue: unexpected error publishing action for campaign=%s channel=%s: %s",
+                    self._campaign_id,
+                    target_channel,
+                    exc,
+                )
+            else:
+                self._breaker.record_success()
 
         try:
             asyncio.get_running_loop()
@@ -506,6 +560,16 @@ class DistributedJobQueue:
     def has_pending(self) -> bool:
         """Return ``True`` if there are any pending jobs (local only)."""
         return self._local.has_pending()
+
+    @property
+    def breaker_state(self) -> str:
+        """Current circuit breaker state (issues #1310, #1397).
+
+        One of ``closed``, ``open``, or ``half_open``.  When ``open``, the
+        publish path is short-circuited and job state transitions degrade
+        to local-only behaviour until the cooldown elapses.
+        """
+        return self._breaker.state
 
     def close(self) -> None:
         """Stop the subscriber thread and close the local queue."""
