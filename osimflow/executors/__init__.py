@@ -2483,6 +2483,12 @@ class NomadExecutor(BaseExecutor):
             }
         }
 
+    #: Per-container tmpfs working-directory size in bytes (100 MB).
+    #: Sized for a typical OSimFlow sample: a handful of ``.osw`` /
+    #: ``.osm`` artifacts plus ``eplusout.sql`` staging before the
+    #: result-transport uploader ships them out. Issue #1387.
+    _DISPATCH_TMPFS_SIZE_BYTES: int = 100_000_000
+
     def _build_dispatch_job_spec(self) -> dict[str, Any]:
         """Build the parameterized job spec for dispatch mode (issue #135).
 
@@ -2492,6 +2498,16 @@ class NomadExecutor(BaseExecutor):
 
         Security:
           * ``privileged = false`` — no host-level access.
+          * ``cap_drop = ["ALL"]`` — drop the full default Linux
+            capability set so a compromised ``remote_runner`` cannot
+            ``mount``, ``ptrace``, ``setuid`` or load kernel modules
+            even on a kernel that would otherwise allow them. Issue #1387.
+          * ``read_only = true`` — root filesystem is read-only;
+            every writable path is on an explicit ``tmpfs`` mount.
+          * ``tmpfs`` mounts at ``/tmp`` and ``/work`` give the
+            per-sample ``remote_runner`` the writable scratch it needs
+            (the default container working dir is on the read-only
+            rootfs otherwise).
           * Memory limited to 4096 MB, CPU to 2000 MHz (2 logical CPUs).
           * No host network, no bind mounts.
         """
@@ -2499,6 +2515,25 @@ class NomadExecutor(BaseExecutor):
             container=os.environ.get("OSIMFLOW_NOMAD_PREFERRED_IMAGE"),
             openstudio_version="3.11.0",
         )
+        tmpfs_size = self._DISPATCH_TMPFS_SIZE_BYTES
+        # The Nomad Docker driver expects ``mount`` as a list of mount
+        # blocks (the HCL ``mount { ... }`` desugars to this JSON shape).
+        # Both mounts are tmpfs so they live in memory only and vanish
+        # with the container — no host filesystem exposure.
+        dispatch_mounts: list[dict[str, Any]] = [
+            {
+                "type": "tmpfs",
+                "target": "/tmp",
+                "read_only": False,
+                "tmpfs_options": {"size": tmpfs_size},
+            },
+            {
+                "type": "tmpfs",
+                "target": "/work",
+                "read_only": False,
+                "tmpfs_options": {"size": tmpfs_size},
+            },
+        ]
         return {
             "Job": {
                 "ID": self._dispatch_job_id,
@@ -2544,6 +2579,9 @@ class NomadExecutor(BaseExecutor):
                                     "command": "/bin/sh",
                                     "args": ["-c", "python -m osimflow.remote_runner"],
                                     "privileged": False,
+                                    "cap_drop": ["ALL"],
+                                    "read_only": True,
+                                    "mount": dispatch_mounts,
                                 },
                                 "Resources": {
                                     "CPU": 2000,
