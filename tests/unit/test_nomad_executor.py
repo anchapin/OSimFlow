@@ -450,3 +450,115 @@ class TestNomadExecutorEndToEndTransientFailure:
         # 4 wire calls: submit, eval allocs, alloc poll (502→retried),
         # alloc poll (complete).
         assert len(responses) == 0
+
+
+# ---------------------------------------------------------------------------
+# Nomad-server-mode dispatch hardening regression (issue #1387)
+# ---------------------------------------------------------------------------
+# Mirrors the Kubernetes ``security_context_strict`` hardening from issue
+# #1383 / PR #1407: the Nomad dispatch Docker task spec must drop the full
+# default Linux capability set, mark the rootfs read-only, and provide
+# tmpfs mounts for the per-sample ``remote_runner`` to write into.
+# Acceptance criterion from issue #1387: a Nomad-``nominal-server-mode``
+# regression test asserts all three keys appear in the dispatched spec.
+class TestNomadDispatchSpecHardening:
+    """Issue #1387 — Nomad dispatch container hardening.
+
+    Verifies that ``_build_dispatch_job_spec`` produces a Docker task
+    config with ``cap_drop = ["ALL"]``, ``read_only = True``, and
+    ``tmpfs`` mounts for ``/tmp`` and ``/work``. This is the
+    Nomad-substrate analogue of the Kubernetes
+    ``security_context_strict=True`` flag (issue #1383, PR #1407).
+    """
+
+    def _dispatch_task_config(self) -> dict[str, object]:
+        """Build a Nomad dispatch spec and return the Docker task Config block."""
+        ex = NomadExecutor(use_dispatch=True)
+        try:
+            spec = ex._build_dispatch_job_spec()  # noqa: SLF001
+        finally:
+            ex.shutdown()
+        tasks = spec["Job"]["TaskGroups"][0]["Tasks"]
+        assert len(tasks) == 1, f"expected one task, got {len(tasks)}"
+        return tasks[0]["Config"]
+
+    def test_dispatch_spec_drops_all_capabilities(self) -> None:
+        """The dispatch Docker config must set ``cap_drop = ["ALL"]``."""
+        config = self._dispatch_task_config()
+        cap_drop = config.get("cap_drop")
+        assert cap_drop == ["ALL"], (
+            f"cap_drop must equal ['ALL'] to drop the full default Linux "
+            f"capability set (issue #1387), got {cap_drop!r}"
+        )
+
+    def test_dispatch_spec_marks_rootfs_read_only(self) -> None:
+        """The dispatch Docker config must set ``read_only = True`` so the
+        container rootfs is immutable and the only writable paths live on
+        the explicit tmpfs mounts."""
+        config = self._dispatch_task_config()
+        read_only = config.get("read_only")
+        assert read_only is True, f"read_only must be True (issue #1387), got {read_only!r}"
+
+    def test_dispatch_spec_has_tmpfs_mount_for_tmp(self) -> None:
+        """The dispatch Docker config must declare a tmpfs mount at ``/tmp``
+        so the in-container ``remote_runner`` can stage files."""
+        config = self._dispatch_task_config()
+        mounts = config.get("mount", [])
+        assert isinstance(mounts, list), f"mount must be a list, got {type(mounts).__name__}"
+        tmp_mounts = [m for m in mounts if isinstance(m, dict) and m.get("target") == "/tmp"]
+        assert tmp_mounts, f"expected a tmpfs mount at /tmp (issue #1387), got mounts={mounts!r}"
+        tmp_mount = tmp_mounts[0]
+        assert tmp_mount.get("type") == "tmpfs", (
+            f"/tmp mount must be tmpfs, got type={tmp_mount.get('type')!r}"
+        )
+        assert tmp_mount.get("read_only") is False, (
+            f"/tmp mount must be writable (read_only=False), got "
+            f"read_only={tmp_mount.get('read_only')!r}"
+        )
+        size = (tmp_mount.get("tmpfs_options") or {}).get("size")
+        assert isinstance(size, int) and size > 0, (
+            f"/tmp tmpfs_options.size must be a positive int, got {size!r}"
+        )
+
+    def test_dispatch_spec_has_tmpfs_mount_for_work_dir(self) -> None:
+        """The dispatch Docker config must declare a tmpfs mount at the
+        per-sample working directory (``/work``) so the ``remote_runner``
+        has a writable scratch path on the read-only rootfs."""
+        config = self._dispatch_task_config()
+        mounts = config.get("mount", [])
+        assert isinstance(mounts, list), f"mount must be a list, got {type(mounts).__name__}"
+        work_mounts = [m for m in mounts if isinstance(m, dict) and m.get("target") == "/work"]
+        assert work_mounts, f"expected a tmpfs mount at /work (issue #1387), got mounts={mounts!r}"
+        work_mount = work_mounts[0]
+        assert work_mount.get("type") == "tmpfs", (
+            f"/work mount must be tmpfs, got type={work_mount.get('type')!r}"
+        )
+        assert work_mount.get("read_only") is False, (
+            f"/work mount must be writable (read_only=False), got "
+            f"read_only={work_mount.get('read_only')!r}"
+        )
+        size = (work_mount.get("tmpfs_options") or {}).get("size")
+        assert isinstance(size, int) and size > 0, (
+            f"/work tmpfs_options.size must be a positive int, got {size!r}"
+        )
+
+    def test_dispatch_spec_privileged_remains_false(self) -> None:
+        """The pre-existing ``privileged = False`` invariant must hold
+        after the hardening change (regression guard)."""
+        config = self._dispatch_task_config()
+        assert config.get("privileged") is False, (
+            f"privileged must remain False, got {config.get('privileged')!r}"
+        )
+
+    def test_dispatch_spec_hardening_keys_all_present(self) -> None:
+        """Aggregated acceptance check: ``cap_drop``, ``read_only``, and a
+        non-empty ``mount`` list covering ``/tmp`` and ``/work`` must all
+        appear in the same Docker task config."""
+        config = self._dispatch_task_config()
+        assert config.get("cap_drop") == ["ALL"]
+        assert config.get("read_only") is True
+        mounts = config.get("mount") or []
+        targets = {m.get("target") for m in mounts if isinstance(m, dict)}
+        assert {"/tmp", "/work"} <= targets, (
+            f"mount targets must include /tmp and /work, got {targets!r}"
+        )
