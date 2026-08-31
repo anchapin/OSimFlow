@@ -94,9 +94,7 @@ class TestClassAttributeParity:
     @pytest.mark.parametrize("executor_name", SPOT_CAPABLE_EXECUTORS)
     def test_spot_capable_classes_report_true(self, executor_name: str) -> None:
         cls = ExecutorRegistry.get(executor_name)
-        assert cls.supports_spot_market is True, (
-            f"{executor_name} should advertise spot support"
-        )
+        assert cls.supports_spot_market is True, f"{executor_name} should advertise spot support"
 
     @pytest.mark.parametrize("executor_name", FLAT_RATE_EXECUTORS)
     def test_flat_rate_classes_report_false(self, executor_name: str) -> None:
@@ -168,8 +166,7 @@ class TestCampaignCostTrackerAllExecutors:
         savings = tracker.compute_spot_savings(total_cost)
         expected_savings = round(total_cost * EXPECTED_SAVINGS_RATIO, 6)
         assert savings > 0.0, (
-            f"{executor_name} spot savings should be > 0 when total_cost > 0 "
-            f"(got {savings})"
+            f"{executor_name} spot savings should be > 0 when total_cost > 0 (got {savings})"
         )
         assert savings == pytest.approx(expected_savings), (
             f"{executor_name} savings mismatch: got {savings}, expected {expected_savings}"
@@ -233,9 +230,7 @@ class TestSumSampleCostsAllExecutors:
             "s1": {"cost_usd": "4.0"},
             "s2": {"cost_usd": "6.0"},
         }
-        total_cost, savings = CampaignCostTracker.sum_sample_costs(
-            sample_state, executor_name
-        )
+        total_cost, savings = CampaignCostTracker.sum_sample_costs(sample_state, executor_name)
         assert total_cost == pytest.approx(10.0)
         assert savings > 0.0
         assert savings == pytest.approx(round(10.0 * EXPECTED_SAVINGS_RATIO, 6))
@@ -246,9 +241,7 @@ class TestSumSampleCostsAllExecutors:
             "s1": {"cost_usd": "4.0"},
             "s2": {"cost_usd": "6.0"},
         }
-        total_cost, savings = CampaignCostTracker.sum_sample_costs(
-            sample_state, executor_name
-        )
+        total_cost, savings = CampaignCostTracker.sum_sample_costs(sample_state, executor_name)
         assert total_cost == pytest.approx(10.0)
         assert savings == 0.0
 
@@ -273,9 +266,7 @@ class TestInstanceAndNameParity:
         assert _supports_spot_from_name(executor_name) == instance.supports_spot_market
 
     @pytest.mark.parametrize("executor_name", FLAT_RATE_EXECUTORS)
-    def test_instance_and_name_paths_agree_for_flat_rate(
-        self, executor_name: str
-    ) -> None:
+    def test_instance_and_name_paths_agree_for_flat_rate(self, executor_name: str) -> None:
         cls = ExecutorRegistry.get(executor_name)
         instance = cls.__new__(cls)
         assert _supports_spot_from_name(executor_name) == instance.supports_spot_market
