@@ -230,11 +230,19 @@ class StepInputs:
 
 @dataclasses.dataclass(frozen=True)
 class DAGStep:
-    """Describes a DAG step for data-driven execution (issue #1276).
+    """Describes a DAG step for data-driven execution (issues #1276, #1392).
 
     Extends ``StepInputs``/``StepOutputs`` with step execution metadata so
     that ``_run_one_generation`` can iterate over steps from configuration
     instead of calling step methods by name.
+
+    Issue #1392: each step now declares its own input/output contract via
+    :attr:`inputs_signature` and :attr:`outputs_signature`.  The prior
+    if/elif chain in ``_run_one_generation`` was the only contract for
+    step-method signatures — any new step declared in ``_STEP_DEPENDENCIES``
+    had no documented path to register its own args.  With the new
+    signatures, ``step_method(*inputs_signature(state))`` is generic;
+    new steps just plug in their own callable.
     """
 
     inputs: StepInputs
@@ -242,10 +250,87 @@ class DAGStep:
     method: str
     condition: Callable[..., bool] | None = None
     fan_out: bool = False
+    inputs_signature: Callable[..., tuple[Any, ...]] | None = None
+    """Callable returning the positional arg tuple for ``method``.
+
+    Receives the per-generation state namespace (a ``SimpleNamespace``
+    exposing ``samples``, ``parameterized``, ``simulated``, ``kpi_files``,
+    ``aggregated``, ``campaign``, ``algo``, ``generation``).  Each step's
+    signature callable picks the slots it needs and ignores the rest.
+    When ``None``, ``method`` is called with no args.
+    """
+    outputs_signature: Callable[[Any], tuple[str, Any] | None] | None = None
+    """Callable taking the method's return value and returning
+    ``(slot_name, slot_value)`` to merge into the per-generation state.
+
+    Built-in slot names: ``"parameterized"``, ``"simulated"``,
+    ``"kpi_files"``, ``"aggregated"``.  When ``None``, the return value
+    is ignored (e.g. for ``step_generate_samples`` whose result is
+    captured before the dispatcher loop runs)."""
 
 
 def _always_run(campaign: "Campaign", algo: Any, **kwargs: Any) -> bool:
     return True
+
+
+# ---------------------------------------------------------------------------
+# Per-step inputs/outputs signatures (issue #1392).
+#
+# These helpers close over the per-generation state namespace exposed by
+# ``_run_one_generation``.  Each step reads only the slots it needs and
+# returns the positional arg tuple for its method.
+#
+# Output-signature helpers take the method's return value and return a
+# ``(slot_name, slot_value)`` pair that the dispatcher writes back into
+# the per-generation state.  Steps whose return value is not consumed by
+# any downstream step leave ``outputs_signature=None``.
+# ---------------------------------------------------------------------------
+
+
+def _sig_lhs_samples(
+    state: Any, campaign: "Campaign", algo: Any, generation: int
+) -> tuple[Any, ...]:
+    return (algo, generation)
+
+
+def _sig_preflight(state: Any, campaign: "Campaign", algo: Any, generation: int) -> tuple[Any, ...]:
+    return ()
+
+
+def _sig_apply(state: Any, campaign: "Campaign", algo: Any, generation: int) -> tuple[Any, ...]:
+    return (state.samples, generation)
+
+
+def _sig_validate_measure(
+    state: Any, campaign: "Campaign", algo: Any, generation: int
+) -> tuple[Any, ...]:
+    return ()
+
+
+def _sig_run_sim(state: Any, campaign: "Campaign", algo: Any, generation: int) -> tuple[Any, ...]:
+    return (state.parameterized, generation)
+
+
+def _sig_extract_kpis(
+    state: Any, campaign: "Campaign", algo: Any, generation: int
+) -> tuple[Any, ...]:
+    return (state.simulated, generation)
+
+
+def _out_parameterized(result: Any) -> tuple[str, Any]:
+    return ("parameterized", result)
+
+
+def _out_simulated(result: Any) -> tuple[str, Any]:
+    """``step_run_openstudio_sim`` returns a ``SimResult`` whose ``.samples``
+    field is the per-sample ``{sample_id: sim_dir}`` mapping the
+    dispatcher feeds into ``step_extract_kpis``."""
+
+    return ("simulated", result.samples)
+
+
+def _out_kpi_files(result: Any) -> tuple[str, Any]:
+    return ("kpi_files", result)
 
 
 # Cross-step data dependency map (issue #850).
@@ -262,35 +347,44 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
         outputs=StepOutputs(produced=("samples.json",)),
         method="step_generate_samples",
         condition=_always_run,
+        inputs_signature=_sig_lhs_samples,
     ),
     "PREFLIGHT_RUN_MODEL": DAGStep(
         inputs=StepInputs(),
         outputs=StepOutputs(produced=("preflight_OK",)),
         method="step_preflight_run_model",
         condition=lambda campaign, algo, generation, **_: generation == 0,
+        inputs_signature=_sig_preflight,
     ),
     "APPLY_PARAMETERS": DAGStep(
         inputs=StepInputs(required=("samples.json",)),
         outputs=StepOutputs(produced=("apply/*/",)),
         method="step_apply_parameters",
         fan_out=False,
+        inputs_signature=_sig_apply,
+        outputs_signature=_out_parameterized,
     ),
     "VALIDATE_MEASURE_VARIABLES": DAGStep(
         inputs=StepInputs(),
         outputs=StepOutputs(produced=()),
         method="step_validate_measure_variables",
+        inputs_signature=_sig_validate_measure,
     ),
     "RUN_OPENSTUDIO_SIM": DAGStep(
         inputs=StepInputs(required_patterns=("apply/*/",)),
         outputs=StepOutputs(produced=("sim/*/",)),
         method="step_run_openstudio_sim",
         fan_out=True,
+        inputs_signature=_sig_run_sim,
+        outputs_signature=_out_simulated,
     ),
     "EXTRACT_KPIS": DAGStep(
         inputs=StepInputs(required_patterns=("sim/*/",)),
         outputs=StepOutputs(kpi_pattern="kpis/kpi_*.json"),
         method="step_extract_kpis",
         fan_out=True,
+        inputs_signature=_sig_extract_kpis,
+        outputs_signature=_out_kpi_files,
     ),
     "COMPUTE_SENSITIVITY_INDICES": DAGStep(
         inputs=StepInputs(),
@@ -2982,10 +3076,20 @@ class Campaign:
         safe_json_dumps({"samples": samples}, samples_link, indent=2, raise_on_error=True)
         self._latest_samples_file = samples_link
 
-        parameterized: SampleDict | None = None
-        simulated: SampleDict = {}
-        kpi_files: list[Path] = []
-        aggregated: dict[str, Path] = {}
+        # Per-generation state namespace (issue #1392).  Each step's
+        # ``inputs_signature`` callable reads from this and each step's
+        # ``outputs_signature`` callable writes back into it.  ``samples``
+        # is seeded here from the pre-loop ``step_generate_samples`` call;
+        # ``parameterized``/``simulated``/``kpi_files``/``aggregated`` are
+        # populated by their respective ``outputs_signature`` as the
+        # dispatcher iterates.
+        gen_state = SimpleNamespace(
+            samples=samples,
+            parameterized=None,
+            simulated={},
+            kpi_files=[],
+            aggregated={},
+        )
 
         for step_name, step_info in _STEP_DEPENDENCIES.items():
             if step_info.condition is not None and not step_info.condition(
@@ -3004,29 +3108,44 @@ class Campaign:
 
             self._maybe_inject_chaos(step_name, "before_step")
 
-            if step_name == "GENERATE_LHS_SAMPLES":
-                step_method(algo, generation=generation)
-            elif step_name == "PREFLIGHT_RUN_MODEL":
-                step_method()
-            elif step_name == "APPLY_PARAMETERS":
-                assert parameterized is None
-                parameterized = step_method(samples, generation=generation)
-            elif step_name == "VALIDATE_MEASURE_VARIABLES":
-                step_method()
-            elif step_name == "RUN_OPENSTUDIO_SIM":
-                assert parameterized is not None
-                sim_result = step_method(parameterized, generation=generation)
-                simulated = sim_result.samples
-            elif step_name == "EXTRACT_KPIS":
-                assert simulated is not None
-                kpi_files = step_method(simulated, generation=generation)
-            elif step_name == "AGGREGATE_RESULTS":
-                aggregated = step_method(kpi_files, simulated)
-            elif step_name == "GENERATE_BASIC_PLOTS":
-                step_method(aggregated)
+            # Dispatcher consults ``inputs_signature``/``outputs_signature``
+            # instead of a hardcoded if/elif chain (issue #1392).  Each step
+            # declares its own arg tuple via ``inputs_signature``; each
+            # step captures its return value into ``gen_state`` via
+            # ``outputs_signature``.  New steps just register their own
+            # callables in ``_STEP_DEPENDENCIES`` — no dispatcher edit.
+            #
+            # A ``None`` ``inputs_signature`` means the step is configured
+            # in the table for monitoring / configuration purposes but is
+            # *not* dispatched by this loop (the legacy ``COMPUTE_*``
+            # steps are invoked explicitly in the post-loop code below;
+            # this preserves their pre-#1392 behaviour where the if/elif
+            # chain did not invoke them but still ran the
+            # before/after chaos hooks).
+            if step_info.inputs_signature is not None:
+                args: tuple[Any, ...] = step_info.inputs_signature(
+                    gen_state, self, algo, generation
+                )
+                result = step_method(*args)
+                if step_info.outputs_signature is not None:
+                    slot = step_info.outputs_signature(result)
+                    if slot is not None:
+                        slot_name, slot_value = slot
+                        setattr(gen_state, slot_name, slot_value)
+            else:
+                log.debug(
+                    "step %s has no inputs_signature; not invoked by dispatcher",
+                    step_name,
+                )
 
             self._maybe_inject_chaos(step_name, "after_step")
             log.debug("step %s completed", step_name)
+
+        # Mirror the per-generation state back to local variables for the
+        # post-loop code below (Sobol / UQ / Pareto / monitoring).
+        samples = gen_state.samples
+        simulated = gen_state.simulated
+        kpi_files = gen_state.kpi_files
 
         # Sobol sensitivity indices (issue #346): compute after KPI extraction.
         if self.cfg.algorithm == "sobol":
