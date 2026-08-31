@@ -1017,8 +1017,16 @@ class TestCampaignCostTrackerExecutorProtocol:
         assert total_cost == pytest.approx(1.0)
         assert total_savings > 0.0
 
-    def test_no_spot_savings_for_azure_google_when_using_string(self, tmp_path: Path) -> None:
-        """String fallback returns 0.0 for azure_batch/google_batch (not in frozensets)."""
+    def test_spot_savings_for_azure_google_when_using_string(self, tmp_path: Path) -> None:
+        """Static name fallback returns non-zero spot savings for spot executors.
+
+        Issue #1393 closed the dispatch-table hazard where the static
+        `_supports_spot_from_name` fallback relied on hardcoded
+        frozensets. ``azure_batch`` and ``google_batch`` both declare
+        ``supports_spot_market = True`` on the class, so the static
+        fallback must now match the executor-instance path and report
+        non-zero spot savings when ``total_cost > 0``.
+        """
         from osimflow._campaign_cost_tracker import CampaignCostTracker
         from osimflow.config import CampaignConfig
 
@@ -1040,5 +1048,5 @@ class TestCampaignCostTrackerExecutorProtocol:
             cfg=cfg,
             executor="google_batch",
         )
-        assert tracker_azure.compute_spot_savings(1.0) == 0.0
-        assert tracker_google.compute_spot_savings(1.0) == 0.0
+        assert tracker_azure.compute_spot_savings(1.0) > 0.0
+        assert tracker_google.compute_spot_savings(1.0) > 0.0
