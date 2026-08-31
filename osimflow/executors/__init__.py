@@ -32,6 +32,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, cast
+from unittest.mock import patch
 
 from osimflow.executors.base import BaseExecutor, Handle, SubmitRequest
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
@@ -259,13 +260,21 @@ class LocalExecutor(BaseExecutor):
         if env:
 
             def _with_env() -> Any:
-                original = os.environ.copy()
-                os.environ.update(env)
-                try:
+                # Issue #1406: replace the racy ``os.environ.clear()`` /
+                # ``os.environ.update(...)`` finally clause with a
+                # ``unittest.mock.patch.dict`` context manager. It is
+                # stdlib, transitive-dep-free, recursive-safe (nested
+                # ``with patch.dict(...)`` blocks compose correctly),
+                # and guarantees save/restore even when ``fn(*args)``
+                # raises. ``clear=False`` preserves the original
+                # merge semantic where the supplied ``env`` overrides
+                # pre-existing ``os.environ`` entries without wiping
+                # unmentioned vars. Snapshot mutation races against
+                # other threads remain inherent to ``os.environ`` being
+                # process-shared — callers must not rely on cross-thread
+                # ``os.environ`` reads inside ``fn`` for correctness.
+                with patch.dict(os.environ, env, clear=False):
                     return fn(*args)
-                finally:
-                    os.environ.clear()
-                    os.environ.update(original)
 
             if self._semaphore is not None:
                 sem = self._semaphore
