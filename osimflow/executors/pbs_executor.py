@@ -19,6 +19,7 @@ export, so downstream work scripts can be substrate-agnostic.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -29,6 +30,18 @@ from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.transport import resolve_result_for_callback
 
 log = logging.getLogger("osimflow.executors")
+
+# Issue #1405: transient stderr patterns we retry on. Covers PBS server
+# hiccups (queue manager restart, network blip, connection refused).
+_TRANSIENT_STDERR_RE = re.compile(
+    r"connection refused|server unavailable|timeout|timed out|connection reset",
+    re.IGNORECASE,
+)
+
+# Sentinel returned by ``_query_job_state`` when ``qstat`` itself failed
+# transiently (so we should keep polling instead of declaring the job
+# terminal). Distinct from any single-letter PBS state code.
+PBS_STATE_TRANSIENT: str | None = None
 
 # ---------------------------------------------------------------------------
 # PBSHandle
@@ -244,18 +257,22 @@ class PBSExecutor(BaseExecutor):
             openstudio_version=openstudio_version,
             script_lines=script_lines,
         )
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+
+        def _run() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        result = _retry_pbs_call(_run)
         # qsub outputs the job ID on stdout, e.g. "123.pbsserver"
         job_id = result.stdout.strip()
         log.info("pbs qsub -> jobId=%s", job_id)
         return job_id
 
-    def _query_job_state(self, job_id: str) -> str:
+    def _query_job_state(self, job_id: str) -> str | None:
         """Query the current state of a PBS job via ``qstat``.
 
         Returns a single-letter PBS state code:
@@ -267,6 +284,13 @@ class PBSExecutor(BaseExecutor):
           - T: transit
           - W: waiting
           - S: suspended
+
+        Returns ``PBS_STATE_TRANSIENT`` (sentinel ``None``) when ``qstat``
+        itself failed transiently (PBS server hiccup, connection
+        refused, etc.) — see issue #1405. The caller is expected to keep
+        polling instead of declaring the job terminal. Returns ``"F"``
+        only when the job is genuinely unknown (non-transient stderr,
+        empty stdout).
         """
         # ``qstat -f`` gives full output; ``qstat -x`` includes finished jobs.
         # We use ``qstat -f`` and look for ``job_state = X``.
@@ -279,6 +303,14 @@ class PBSExecutor(BaseExecutor):
         # qstat returns non-zero when the job is unknown (already completed
         # and purged, or never existed). Treat empty output as unknown.
         if result.returncode != 0 or not result.stdout.strip():
+            stderr = result.stderr or ""
+            if _TRANSIENT_STDERR_RE.search(stderr):
+                log.warning(
+                    "pbs qstat transient failure for job %s: %s",
+                    job_id,
+                    stderr.strip(),
+                )
+                return PBS_STATE_TRANSIENT
             return "F"  # treat unknown as terminal
 
         for raw_line in result.stdout.splitlines():
@@ -326,6 +358,21 @@ class PBSExecutor(BaseExecutor):
         start = time.monotonic()
         while True:
             state = self._query_job_state(job_id)
+            # Issue #1405: ``PBS_STATE_TRANSIENT`` means qstat itself
+            # failed transiently (PBS hiccup). Don't declare terminal;
+            # keep polling. Don't grow the delay (we don't want to
+            # back off further just because of a transient query
+            # failure — the job may still be running fine).
+            if state == PBS_STATE_TRANSIENT:
+                log.info("pbs poll jobId=%s state=TRANSIENT (retrying in %.1fs)", job_id, delay)
+                if timeout is not None:
+                    elapsed = time.monotonic() - start
+                    if elapsed >= timeout:
+                        raise TimeoutError(
+                            f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
+                        )
+                time.sleep(delay)
+                continue
             if state in ("F", "E", "C"):
                 exit_code = self._parse_exit_status(job_id)
                 return state, exit_code
@@ -467,6 +514,50 @@ class PBSExecutor(BaseExecutor):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _retry_pbs_call[T](
+    call_fn: Callable[[], T],
+    *,
+    max_attempts: int = 3,
+    total_cap_seconds: float = 15.0,
+) -> T:
+    """Run *call_fn* with retry on transient PBS subprocess failures.
+
+    Issue #1405: catches ``subprocess.CalledProcessError`` whose stderr
+    matches a transient-error pattern (``connection refused``,
+    ``server unavailable``, ``timeout``, ``connection reset``) and
+    retries with exponential backoff. Non-transient failures propagate
+    immediately.
+
+    The exponential schedule is ``1s, 2s, 4s, ...`` capped at
+    ``total_cap_seconds`` total wall time across all retries. After
+    ``max_attempts`` transient failures the last exception is re-raised.
+    """
+    delay = 1.0
+    last_exc: subprocess.CalledProcessError | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return call_fn()
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr or ""
+            if not _TRANSIENT_STDERR_RE.search(stderr):
+                raise
+            last_exc = exc
+            if attempt >= max_attempts:
+                break
+            capped = min(delay, total_cap_seconds)
+            log.warning(
+                "pbs transient failure (attempt %d/%d), retrying in %.1fs: %s",
+                attempt,
+                max_attempts,
+                capped,
+                stderr.strip(),
+            )
+            time.sleep(capped)
+            delay = min(delay * 2, total_cap_seconds)
+    assert last_exc is not None  # loop body above always sets this on raise
+    raise last_exc
 
 
 def _default_pbs_server() -> str | None:
