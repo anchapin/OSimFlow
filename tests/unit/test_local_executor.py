@@ -66,9 +66,7 @@ def _isolate_environ() -> Any:
 class TestLocalExecutorWithEnv:
     """LocalExecutor.submit(env=...) correctness."""
 
-    def test_single_task_sees_its_env_value(
-        self, threaded_executor: LocalExecutor
-    ) -> None:
+    def test_single_task_sees_its_env_value(self, threaded_executor: LocalExecutor) -> None:
         """The simplest case: a task submitted with ``env=`` observes it."""
         handle = threaded_executor.submit(
             lambda: os.environ.get(_env_key(0)),
@@ -93,9 +91,7 @@ class TestLocalExecutorWithEnv:
         assert not leaked, f"keys leaked: {sorted(leaked)}"
         threaded_executor.shutdown()
 
-    def test_env_restored_when_task_raises(
-        self, threaded_executor: LocalExecutor
-    ) -> None:
+    def test_env_restored_when_task_raises(self, threaded_executor: LocalExecutor) -> None:
         """Env is restored even when the task body raises."""
         baseline = _snapshot_test_keys()
         sentinel = "OSIMFLOW_TEST_INSIDE_RAISE"
@@ -196,15 +192,11 @@ class TestLocalExecutorWithEnv:
         finally:
             threaded_executor.shutdown()
 
-        assert sorted(seen) == sorted(
-            (_env_key(i), _env_value(i)) for i in range(N_TASKS)
-        )
+        assert sorted(seen) == sorted((_env_key(i), _env_value(i)) for i in range(N_TASKS))
         leaked = _snapshot_test_keys() - baseline
         assert not leaked, f"keys leaked into os.environ: {sorted(leaked)}"
 
-    def test_nested_with_env_does_not_deadlock(
-        self, threaded_executor: LocalExecutor
-    ) -> None:
+    def test_nested_with_env_does_not_deadlock(self, threaded_executor: LocalExecutor) -> None:
         """Recursive-safe: a task that opens a nested ``patch.dict`` works.
 
         ``patch.dict`` composes — nested contexts each capture and
