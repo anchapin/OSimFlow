@@ -14,6 +14,7 @@ throughout the campaign lifecycle.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Union
 
@@ -23,31 +24,53 @@ from .cost_tracking import (
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
     CostTracker,
 )
+from .executors import ExecutorRegistry
 from .executors.base import BaseExecutor
 
 log = logging.getLogger("osimflow.campaign")
 
 _ExecutorArg = Union["BaseExecutor", str]
 
-_EXECUTORS_WITH_SPOT = frozenset({"aws_batch"})
-_EXECUTORS_WITH_FLAT_RATE = frozenset(
-    {
-        "slurm",
-        "pbs",
-        "nomad",
-        "kubernetes",
-        "dask_jobqueue",
-        "local",
-        "docker_swarm",
-    }
-)
-
 
 def _supports_spot_from_name(name: str) -> bool:
-    """Fallback for backward compatibility when only executor name is available."""
-    if name in _EXECUTORS_WITH_FLAT_RATE:
+    """Fallback for backward compatibility when only executor name is available.
+
+    Looks up the executor class via :meth:`ExecutorRegistry.get` and reads
+    its ``supports_spot_market`` class attribute — the same source of
+    truth the executor-instance path uses. Issue #1393 closed the
+    dispatch-table hazard that left ``azure_batch`` and ``google_batch``
+    silently reporting flat-rate (no spot savings) for callers passing
+    only an executor name string.
+
+    Returns ``False`` for unknown executor names (best-effort static
+    detection — the underlying registry raises ``ValueError`` for
+    unregistered names, which we absorb at ``DEBUG`` level so that the
+    fallback never breaks a cost-tracker caller).
+
+    Notes
+    -----
+    ``BaseExecutor.supports_spot_market`` is a ``@property`` that defaults
+    to ``False``; spot-capable subclasses (``AWSBatchExecutor``,
+    ``AzureBatchExecutor``, ``GoogleBatchExecutor``) shadow it with a
+    plain class attribute set to ``True``. A naive
+    ``getattr(cls, "supports_spot_market", False)`` on a flat-rate
+    subclass returns the inherited *property descriptor object* — which
+    is truthy — so we use :func:`inspect.getattr_static` to read the raw
+    class attribute without triggering the descriptor protocol, then
+    fall back to ``False`` when only the inherited property is visible.
+    """
+    try:
+        cls = ExecutorRegistry.get(name)
+    except ValueError:
+        log.debug(
+            "_supports_spot_from_name: unknown executor %r; assuming flat-rate",
+            name,
+        )
         return False
-    return name in _EXECUTORS_WITH_SPOT
+    raw = inspect.getattr_static(cls, "supports_spot_market", False)
+    if isinstance(raw, property):
+        return False
+    return bool(raw)
 
 
 def _compute_spot_savings_static(total_cost: float, executor: _ExecutorArg | None) -> float:
@@ -89,8 +112,9 @@ class CampaignCostTracker:
     executor
         A BaseExecutor instance (preferred) or an executor name string.
         When an executor instance is provided, the ``supports_spot_market``
-        property is queried directly. When a string is provided, the
-        hardcoded frozenset fallback is used (backward compatibility).
+        property is queried directly. When a string is provided,
+        ``_supports_spot_from_name`` resolves the class via
+        ``ExecutorRegistry`` and reads the class attribute (issue #1393).
 
     Attributes
     ----------
@@ -190,8 +214,7 @@ class CampaignCostTracker:
         executor
             A BaseExecutor instance or executor name string. When provided,
             the ``supports_spot_market`` property is used to determine
-            spot savings. When None, the hardcoded frozenset fallback is
-            used (backward-compatible static call).
+            spot savings. When None, no spot savings are computed.
 
         Returns
         -------
@@ -210,8 +233,9 @@ class CampaignCostTracker:
         """Compute estimated spot savings from on-demand total cost.
 
         Uses the executor's ``supports_spot_market`` property when an
-        executor instance is available, otherwise falls back to the
-        hardcoded frozenset (backward compatibility).
+        executor instance is available, otherwise looks up the class
+        via ``ExecutorRegistry`` and reads the class attribute
+        (issue #1393).
 
         Parameters
         ----------
