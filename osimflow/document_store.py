@@ -93,6 +93,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from urllib.parse import urlparse
 
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
+from .errors import OSimFlowError
 
 if TYPE_CHECKING:
     pass
@@ -106,7 +107,7 @@ log = logging.getLogger("osimflow.document_store")
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9._]+$")
 
 
-class DocumentStoreError(Exception):
+class DocumentStoreError(OSimFlowError):
     """Base exception for document store errors."""
 
 

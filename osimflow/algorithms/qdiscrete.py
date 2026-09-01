@@ -46,13 +46,14 @@ if TYPE_CHECKING:
     from osimflow.algorithms import BaseAlgorithm
 
 from osimflow.algorithms import BaseAlgorithm  # noqa: E402
+from osimflow.errors import OSimFlowValueError
 
 log = logging.getLogger("osimflow.algorithms.qdiscrete")
 
 __all__ = ["qdiscrete", "pmf_from_distribution", "QDError", "QDiscreteAlgorithm"]
 
 
-class QDError(ValueError):
+class QDError(OSimFlowValueError):
     """Raised when qdiscrete receives invalid input."""
 
 

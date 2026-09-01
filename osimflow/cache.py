@@ -37,6 +37,8 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
+from .errors import OSimFlowError
+
 __all__ = [
     "CacheEntry",
     "CacheError",
@@ -67,7 +69,7 @@ class CacheStats:
     total_keys: int = 0
 
 
-class CacheError(Exception):
+class CacheError(OSimFlowError):
     """Raised when a cache operation (store/lookup) fails.
 
     Wraps low-level errors (e.g. ``sqlite3.OperationalError``) so that
@@ -76,7 +78,7 @@ class CacheError(Exception):
     """
 
 
-class ImageDigestUnavailableError(Exception):
+class ImageDigestUnavailableError(OSimFlowError):
     """Raised when the container image digest cannot be resolved (docker unavailable).
 
     This signals that the content-addressable digest is unknown, so cache

@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .errors import OSimFlowRuntimeError, OSimFlowValueError
+
 log = logging.getLogger("osimflow.apply_params")
 
 # Try to dynamically bind openstudio.openstudiomodelcore if openstudio is present
@@ -85,7 +87,7 @@ EPW_FILE_KEY = "__epw_file__"
 # ---------------------------------------------------------------------------
 # Exception hierarchy
 # ---------------------------------------------------------------------------
-class OpenStudioBindingsMissingError(RuntimeError):
+class OpenStudioBindingsMissingError(OSimFlowRuntimeError):
     """Raised when an operation requires the OpenStudio Python bindings
     but they are not installed on this host.
 
@@ -131,7 +133,7 @@ class MappedParameter:
     object_name: str | None = None
 
 
-class UnmappedParameterError(ValueError):
+class UnmappedParameterError(OSimFlowValueError):
     """Raised when one or more LHS variables do not map to the template.
 
     The error message lists every unmapped name so the user can fix
@@ -139,7 +141,7 @@ class UnmappedParameterError(ValueError):
     """
 
 
-class AmbiguousParameterError(ValueError):
+class AmbiguousParameterError(OSimFlowValueError):
     """Raised when a plain argument name matches multiple measures.
 
     The error message lists which measures share the argument name and
@@ -147,7 +149,7 @@ class AmbiguousParameterError(ValueError):
     """
 
 
-class CrossMeasureConflictError(ValueError):
+class CrossMeasureConflictError(OSimFlowValueError):
     """Raised when the same argument is specified for multiple measures.
 
     When a user specifies both ``MeasureA.argument`` and ``MeasureB.argument``
@@ -160,7 +162,7 @@ class CrossMeasureConflictError(ValueError):
     """
 
 
-class OSMAttributeError(ValueError):
+class OSMAttributeError(OSimFlowValueError):
     """Raised when a dotted .osm attribute path cannot be resolved."""
 
 

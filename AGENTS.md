@@ -471,6 +471,12 @@ name in this section.
   `osimflow/manifest.py`, `osimflow/results_db.py`,
   `osimflow/validation.py` (`ValidationError`),
   `osimflow/webhook.py` — internal supporting modules.
+- `osimflow/errors.py` — single package root
+  (`OSimFlowError`) + intermediate mixins
+  (`OSimFlowRuntimeError`, `OSimFlowValueError`) so every
+  module-level exception outside `client.py` / `api/`
+  inherits from `OSimFlowError` while keeping its historic
+  `RuntimeError` / `ValueError` catch behaviour (issue #1484).
 - `osimflow/client.py` — typed Python client for the `[api]`
   REST surface.
 - `osimflow/mlflow_hook.py` — optional MLflow integration

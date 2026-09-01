@@ -18,6 +18,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .errors import OSimFlowError
+
 log = logging.getLogger("osimflow.version_detection")
 
 # Docker container label for OpenStudio version string
@@ -25,7 +27,7 @@ _DOCKER_LABEL = "org.openstudio.build-string"
 _OPENSTUDIO_CLI = "openstudio"
 
 
-class VersionDetectionError(Exception):
+class VersionDetectionError(OSimFlowError):
     """Raised when OpenStudio version cannot be determined."""
 
 

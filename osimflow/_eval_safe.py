@@ -31,6 +31,8 @@ import operator
 from collections.abc import Callable
 from typing import Any
 
+from .errors import OSimFlowValueError
+
 __all__ = ["safe_eval", "ExpressionError"]
 
 _MAX_CONTAINER_DEPTH = 10
@@ -84,7 +86,7 @@ _ARITH_OPS: dict[type[ast.operator], Callable[[Any, Any], Any]] = {
 }
 
 
-class ExpressionError(ValueError):
+class ExpressionError(OSimFlowValueError):
     """Raised when an expression contains disallowed syntax."""
 
 

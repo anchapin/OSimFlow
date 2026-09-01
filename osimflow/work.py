@@ -32,6 +32,7 @@ from typing import Any
 
 from ._subprocess_utils import run_subprocess  # neutral location (issue #910)
 from .apply_params import OSMAttributeError
+from .errors import OSimFlowRuntimeError
 from .json_utils import safe_json_dumps
 from .storage import ResultStorage
 from .version_detection import VersionDetectionError, detect_openstudio_version
@@ -43,11 +44,11 @@ log = logging.getLogger("osimflow.work")
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
-class SevereEnergyPlusError(RuntimeError):
+class SevereEnergyPlusError(OSimFlowRuntimeError):
     """Raised when a preflight simulation encounters severe errors."""
 
 
-class TransientError(RuntimeError):
+class TransientError(OSimFlowRuntimeError):
     """Raised when a simulation failure is potentially transient and retryable.
 
     Examples: network timeout, resource contention, temporary file lock,

@@ -22,6 +22,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .errors import OSimFlowRuntimeError
+
 log = logging.getLogger("osimflow.cosign")
 
 #: Default lookaside rekor / OIDC issuer for keyless cosign signatures.
@@ -35,7 +37,7 @@ DEFAULT_COSIGN_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 COSIGN_VERIFY_TIMEOUT_S = 120.0
 
 
-class CosignVerificationError(RuntimeError):
+class CosignVerificationError(OSimFlowRuntimeError):
     """Raised when ``cosign verify`` rejects (or cannot check) an image.
 
     Mirrors the ``ImageDigestUnavailableError`` sentinel from issue

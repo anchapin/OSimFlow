@@ -92,6 +92,7 @@ from .cost_tracking import (
 from .data_point_manager import DataPointManager
 from .distributed_cache import build_cache, campaign_state_namespace
 from .distributed_jobqueue import build_job_queue
+from .errors import OSimFlowRuntimeError
 from .executors import BaseExecutor, Handle
 from .json_utils import safe_json_dumps, safe_json_loads
 from .measures import MeasureRegistry, UnmappedVariableError
@@ -149,7 +150,7 @@ CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 
 
-class QuotaExceededError(RuntimeError):
+class QuotaExceededError(OSimFlowRuntimeError):
     """Raised when a campaign resource quota is exceeded (issue #446)."""
 
     def __init__(
@@ -165,7 +166,7 @@ class QuotaExceededError(RuntimeError):
         self.current = current
 
 
-class CampaignError(RuntimeError):
+class CampaignError(OSimFlowRuntimeError):
     """Raised when a critical campaign-level error should abort execution.
 
     Unlike step-level errors that are caught and recorded in run.json,

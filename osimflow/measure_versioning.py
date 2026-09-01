@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from .errors import OSimFlowValueError
+
 log = logging.getLogger("osimflow.measure_versioning")
 
 # ---------------------------------------------------------------------------
@@ -49,7 +51,7 @@ class MeasureVersion:
 # ---------------------------------------------------------------------------
 
 
-class MeasureVersioningError(ValueError):
+class MeasureVersioningError(OSimFlowValueError):
     """Base exception for measure versioning errors."""
 
 

@@ -20,6 +20,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .errors import OSimFlowError
+
 log = logging.getLogger("osimflow.webhook")
 
 _BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
@@ -32,11 +34,11 @@ _BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
 ]
 
 
-class WebhookSSRFError(Exception):
+class WebhookSSRFError(OSimFlowError):
     """Raised when a webhook URL fails SSRF validation."""
 
 
-class WebhookDeliveryError(Exception):
+class WebhookDeliveryError(OSimFlowError):
     """Raised when all retry attempts for a webhook delivery fail."""
 
 
