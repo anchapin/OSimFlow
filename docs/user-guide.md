@@ -1345,10 +1345,21 @@ See [observability.md](observability.md) for backend configuration.
 |---|---|
 | `--result-storage-backend {local,s3,gs,azure}` | Result storage backend (default: `local`). Issue #339. |
 | `--result-storage-bucket NAME` | Bucket / container name for the chosen backend. |
-| `--result-storage-endpoint URL` | Custom S3-compatible endpoint URL. |
+| `--result-storage-endpoint URL` | Custom S3-compatible endpoint URL. Must use `https://` for non-loopback hosts unless `--allow-insecure-storage-endpoint` is set (issue #1386). |
 | `--enable-cost-tracking` / `--track-costs` | Enable cloud/HPC resource cost estimation (issue #447). |
 | `--cost-on-demand-price USD` / `--cost-spot-price USD` | Price per vCPU-hour for cost estimation. |
 | `--s3-artifact-bucket NAME` | Centralised S3 artifact bucket with optional presigned URLs (issue #601). |
+| `--s3-artifact-endpoint URL` | Custom S3-compatible endpoint for the artifact bucket; same `https://` rule as `--result-storage-endpoint`. |
+
+**HTTPS-only storage endpoints:** `--result-storage-endpoint` and
+`--s3-artifact-endpoint` must use `https://` for any non-loopback host
+(issue #1386); other schemes are rejected outright, and empty values pass
+through untouched. Loopback hosts (`localhost`, `127.0.0.1`, `::1`,
+`0.0.0.0`) are exempt — they never traverse a real network, so a local
+MinIO / dev endpoint works unchanged. To reach a non-loopback plain-HTTP
+endpoint, pass `--allow-insecure-storage-endpoint`: the campaign proceeds
+with a loud warning, but plaintext HTTP leaks AWS SigV4 signing material
+and campaign artifacts in cleartext — dev/test only, never production.
 
 See [cost-estimation.md](cost-estimation.md) for the cost model.
 
