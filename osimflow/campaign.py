@@ -36,6 +36,7 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 
 __all__ = ["Campaign", "CampaignError", "QuotaExceededError", "SimResult"]
 
+import ast
 import concurrent.futures
 import contextlib
 import dataclasses
@@ -470,6 +471,173 @@ def _scoped_dry_run_env() -> Iterator[None]:
             os.environ.pop("OSIMFLOW_DOCKER_SWARM_DRY_RUN", None)
         else:
             os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = prev
+
+
+_IMPORT_CLOSURE_CACHE: dict[Path, frozenset[Path]] = {}
+
+
+def _osimflow_prefixes(dotted: str) -> Iterator[str]:
+    """Yield the dotted prefixes of ``dotted`` restricted to ``osimflow.*``.
+
+    The bare ``osimflow`` package is deliberately excluded: its
+    ``__init__.py`` imports the entire public API surface, so hashing it
+    would collapse the per-module closure into a de-facto whole-package
+    hash (issue #1446). Subpackage ``__init__.py`` files (depth >= 1) are
+    included because Python executes them when their submodules are
+    imported.
+    """
+    parts = dotted.split(".")
+    if parts[0] != "osimflow":
+        return
+    for depth in range(2, len(parts) + 1):
+        yield ".".join(parts[:depth])
+
+
+def _module_file_for(package_root: Path, dotted: str) -> Path | None:
+    """Resolve a dotted ``osimflow.*`` module name to a file on disk.
+
+    Purely path-based — no modules are imported and site-packages is
+    never consulted. Returns ``None`` for third-party / stdlib names and
+    for ``osimflow.*`` names without a ``.py`` file or ``__init__.py``
+    under ``package_root``.
+    """
+    parts = dotted.split(".")
+    if parts[0] != "osimflow" or len(parts) < 2:
+        return None
+    base = package_root.joinpath(*parts[1:])
+    module_file = base.with_suffix(".py")
+    if module_file.is_file():
+        return module_file
+    package_init = base / "__init__.py"
+    if package_init.is_file():
+        return package_init
+    return None
+
+
+def _module_name_for_file(package_root: Path, module_file: Path) -> str:
+    """Dotted ``osimflow.*`` module name for a file inside ``package_root``."""
+    try:
+        rel = module_file.resolve().relative_to(package_root.resolve())
+    except ValueError:
+        return ""
+    parts = list(rel.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(["osimflow", *parts])
+
+
+def _importfrom_targets(
+    node: ast.ImportFrom,
+    package_parts: list[str],
+) -> list[str]:
+    """``osimflow.*`` module names referenced by one ``from ... import``.
+
+    ``package_parts`` is the dotted package path the import is relative
+    to (empty parts or a non-``osimflow`` base yield no targets, which
+    is how the stdlib and site-packages stay out of the closure).
+    """
+    if node.level > 0:
+        if node.level > 1:
+            base_parts = package_parts[: -(node.level - 1)]
+        else:
+            base_parts = list(package_parts)
+        if node.module:
+            base_parts = [*base_parts, *node.module.split(".")]
+    elif node.module:
+        base_parts = node.module.split(".")
+    else:
+        return []
+    if not base_parts or base_parts[0] != "osimflow":
+        return []
+    base = ".".join(base_parts)
+    targets = list(_osimflow_prefixes(base))
+    for alias in node.names:
+        targets.extend(_osimflow_prefixes(f"{base}.{alias.name}"))
+    return targets
+
+
+def _iter_import_targets(
+    tree: ast.Module,
+    package_root: Path,
+    module_file: Path,
+) -> Iterator[str]:
+    """Yield every ``osimflow.*`` module name imported anywhere in ``tree``.
+
+    Handles ``import a.b.c``, ``from a.b import c``, and relative imports
+    (``from . import x`` / ``from .x import y``). Imports are syntactically
+    statements, so the walk descends only through statement-bearing fields
+    (``body`` / ``orelse`` / ``finalbody`` / exception handlers / match
+    cases) and skips expression subtrees entirely — this keeps the walk
+    cheap while still covering conditional and function-level imports.
+    Over-approximating is safe for cache invalidation.
+    """
+    targets: list[str] = []
+    module_name = _module_name_for_file(package_root, module_file)
+    if module_file.name == "__init__.py":
+        package_parts = module_name.split(".")
+    else:
+        package_parts = module_name.split(".")[:-1]
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                targets.extend(_osimflow_prefixes(alias.name))
+            continue
+        if isinstance(node, ast.ImportFrom):
+            targets.extend(_importfrom_targets(node, package_parts))
+            continue
+        for field in ("body", "orelse", "finalbody", "handlers", "cases"):
+            children = getattr(node, field, None)
+            if children:
+                stack.extend(children)
+    yield from targets
+
+
+def _transitive_import_closure(package_root: Path) -> frozenset[Path]:
+    """Transitive ``osimflow``-internal import closure of the work layer.
+
+    Roots: ``osimflow.work``, ``osimflow.apply_params``, and every
+    ``osimflow._work_scripts`` module. Walks ``import`` / ``from ...
+    import`` statements (AST-based — deterministic, fast, no import side
+    effects) and keeps only files under ``package_root``; stdlib and
+    third-party imports are excluded (issue #1446).
+
+    Cached per ``package_root`` at module level: the closure is a
+    property of the source tree, and the *contents* of the listed files
+    are re-read on every ``_compute_code_hashes`` call, so the one-time
+    walk adds no measurable cost to ``Campaign`` construction.
+    """
+    cached = _IMPORT_CLOSURE_CACHE.get(package_root)
+    if cached is not None:
+        return cached
+    roots = ["osimflow.work", "osimflow.apply_params"]
+    scripts_dir = package_root / "_work_scripts"
+    if scripts_dir.is_dir():
+        roots.append("osimflow._work_scripts")
+        for script in sorted(scripts_dir.glob("*.py")):
+            if script.name != "__init__.py":
+                roots.append(f"osimflow._work_scripts.{script.stem}")
+    seen: set[Path] = set()
+    visited: set[str] = set()
+    pending = list(roots)
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        module_file = _module_file_for(package_root, name)
+        if module_file is None:
+            continue
+        seen.add(module_file)
+        try:
+            tree = ast.parse(module_file.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        pending.extend(_iter_import_targets(tree, package_root, module_file))
+    closure = frozenset(seen)
+    _IMPORT_CLOSURE_CACHE[package_root] = closure
+    return closure
 
 
 def _byos_file_hash(path: Path | None) -> str:
@@ -1137,6 +1305,14 @@ class Campaign:
         so dev checkouts and wheel installs agree on the cache key.
         Fixes issue #1021.
 
+        The union is extended with the transitive osimflow-internal
+        import closure of ``osimflow.work``, ``osimflow.apply_params``,
+        and every ``osimflow._work_scripts`` module (issue #1446), so
+        edits to indirectly imported modules (e.g.
+        ``algorithms.doe_analysis``, ``version_detection``) invalidate
+        the affected cache keys instead of silently serving stale
+        results.
+
         The work.py module is included because it is the work layer that
         the Campaign itself depends on; if a contributor edits it, we
         must re-run downstream steps.
@@ -1177,6 +1353,14 @@ class Campaign:
         for f in (work_file, apply_params_file):
             if f is not None and f.is_file():
                 candidates.append(f)
+        # Transitive osimflow-internal import closure of the work layer
+        # (issue #1446): the hashed modules import further osimflow
+        # modules (e.g. generate_plots.py → algorithms.doe_analysis,
+        # work.py → version_detection / weather / storage / ...) whose
+        # edits change per-step behaviour without touching any explicitly
+        # listed file. Deriving the file set from the import closure
+        # removes the hand-maintained-list drift permanently.
+        candidates.extend(_transitive_import_closure(package_root))
         files = sorted(set(candidates), key=str)
         # Pick the effective cfg. When ``__init__`` calls this with its
         # cfg we get the BYOS entries; when tests call it with no cfg
