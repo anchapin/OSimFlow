@@ -10,6 +10,31 @@ OSimFlow's AWS Batch jobs run inside the `nrel/openstudio` container image publi
 | **Reliability** — Docker Hub outages block simulations. | ECR runs within the AWS network; Batch jobs in the same region pull over a private path. |
 | **Cost** — Cross-region Docker Hub traffic is not free. | Same-region ECR pulls are free; cross-region is cheaper than Docker Hub. |
 
+## Production Default: Pin by Digest (issue #1320)
+
+For production campaigns, **digest pinning is the documented default**. A
+mutable `nrel/openstudio:<version>` tag can be re-pointed at any moment — by
+NREL's release process, by a registry compromise, or by a supply-chain
+attack — and every subsequently launched sample would silently run the
+substituted image.
+
+```bash
+# 1. Resolve the content-addressed digest of the version you validated:
+docker inspect --format '{{index .RepoDigests 0}}' nrel/openstudio:3.11.0
+#    -> docker.io/nrel/openstudio@sha256:abc123...
+
+# 2. Pass it to every campaign:
+osimflow run ... --container-digest docker.io/nrel/openstudio@sha256:abc123...
+```
+
+The CLI **warns** when a managed-cloud executor (`aws_batch`, `azure_batch`,
+`google_batch`) is selected without `--container-digest` — treat that
+warning as a production blocker, not a suggestion. For defense in depth,
+combine digest pinning with signature verification via
+`--require-cosign-identity` (issue #1385), and mirror the pinned digest
+into your private ECR registry (below) to decouple campaign launches from
+Docker Hub availability.
+
 ## Sync Script
 
 `infra/aws/scripts/sync-openstudio-to-ecr.sh` pulls a tagged image from Docker Hub and pushes it to ECR in one or more regions.
