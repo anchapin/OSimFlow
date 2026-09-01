@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_real_google_batch_3_samples(tmp_path: Path) -> None:
+def test_real_google_batch_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3-sample campaign against real Google Cloud Batch.
 
     This test exercises the full production path:
@@ -59,10 +59,21 @@ def test_real_google_batch_3_samples(tmp_path: Path) -> None:
 
     from osimflow import Campaign, CampaignConfig
     from osimflow.executors import GoogleBatchExecutor
+    from osimflow.task_payload_hmac import (  # noqa: PLC0415
+        TASK_PAYLOAD_SECRET_ENV,
+        TASK_PAYLOAD_SIG_ENV,
+        verify_task_payload,
+    )
 
     project_id = os.environ["OSIMFLOW_GOOGLE_BATCH_PROJECT_ID"]
     region = os.environ["OSIMFLOW_GOOGLE_BATCH_REGION"]
     service_account = os.environ["OSIMFLOW_GOOGLE_BATCH_SERVICE_ACCOUNT"]
+
+    # Issue #1453: configure the HMAC shared secret so the executor signs
+    # OSIMFLOW_TASK_PAYLOAD and the remote runner verifies (fail-closed)
+    # before decoding/executing.
+    secret = "osimflow-google-e2e-task-payload-secret"
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
 
     # Set up hermetic test fixtures (same pattern as other executor tests).
     example_pkg = REPO_ROOT / "example_package"
@@ -122,6 +133,51 @@ def test_real_google_batch_3_samples(tmp_path: Path) -> None:
         assert resources["cpu_cores"] == 4, f"Google Batch dropped cpus: {resources}"
         assert resources["memory_mb"] == 8192, f"Google Batch dropped memory_mb: {resources}"
     result = campaign.run()
+
+    # --- HMAC signature propagation (issue #1453) -------------------------
+    # Re-read the real Batch job via the google-cloud-batch SDK (the
+    # same probe style as ``google_job_compute_resource``) and assert
+    # the submitted job carries payload + signature + secret, and that
+    # the signature verifies against the configured secret. A SUCCEEDED
+    # job state is the remote-runner verification proof: with the shared
+    # secret configured, ``osimflow.remote_runner`` exits non-zero on a
+    # missing/tampered signature, which fails the job.
+    sim_job_names_hmac = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    assert len(sim_job_names_hmac) >= 3, (
+        f"expected >= 3 sim job names for the HMAC wire check, got {directives.records!r}"
+    )
+    for job_name in sim_job_names_hmac:
+        job = executor._client.get(name=job_name)  # noqa: SLF001
+        task_spec = job.task_groups[0].task_spec
+        env = dict(task_spec.environment.variables) if task_spec.environment else {}
+        assert env.get("OSIMFLOW_TASK_PAYLOAD"), (
+            f"Google Batch job {job_name} missing OSIMFLOW_TASK_PAYLOAD env var"
+        )
+        assert env.get(TASK_PAYLOAD_SIG_ENV), (
+            f"Google Batch job {job_name} missing {TASK_PAYLOAD_SIG_ENV} env var "
+            "(the HMAC signature did not propagate to the submitted spec)"
+        )
+        assert env.get(TASK_PAYLOAD_SECRET_ENV) == secret, (
+            f"Google Batch job {job_name} missing/mismatched {TASK_PAYLOAD_SECRET_ENV} "
+            f"env var: {env.get(TASK_PAYLOAD_SECRET_ENV)!r}"
+        )
+        assert verify_task_payload(
+            env["OSIMFLOW_TASK_PAYLOAD"],
+            env.get(TASK_PAYLOAD_SIG_ENV),
+            env[TASK_PAYLOAD_SECRET_ENV],
+        ), (
+            f"Google Batch job {job_name}: {TASK_PAYLOAD_SIG_ENV} does not verify "
+            f"against {TASK_PAYLOAD_SECRET_ENV} for the submitted payload"
+        )
+        assert job.status is not None and job.status.state.name == "SUCCEEDED", (
+            f"Google Batch job {job_name} did not succeed; the remote runner may "
+            f"have failed HMAC verification (status: {job.status!r})"
+        )
+
     executor.shutdown()
 
     # --- 4 output artifacts ---

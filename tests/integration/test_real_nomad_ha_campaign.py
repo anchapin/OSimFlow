@@ -90,7 +90,25 @@ def _nomad_api_reachable() -> bool:
     return body.get("client") == "ready"
 
 
-def test_real_nomad_3_samples(tmp_path: Path) -> None:
+def _nomad_job_env(address: str, job_id: str, *, token: str | None = None) -> dict[str, str]:
+    """Fetch a Nomad job's task Env block via the HTTP API (issue #1453).
+
+    Mirrors :func:`tests.integration._resource_contract.nomad_job_resources`
+    but returns the task ``Env`` mapping instead of the ``Resources`` block.
+    """
+    req = urllib.request.Request(  # noqa: S310 — operator-provided Nomad addr
+        f"{address.rstrip('/')}/v1/job/{job_id}"
+    )
+    if token:
+        req.add_header("X-Nomad-Token", token)
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+        job = json.loads(resp.read().decode("utf-8"))
+    task_group = (job.get("TaskGroups") or [{}])[0]
+    task = (task_group.get("Tasks") or [{}])[0]
+    return task.get("Env") or {}
+
+
+def test_real_nomad_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3-sample campaign against a real Nomad cluster (single- or multi-node).
 
     This test exercises the full production path:
@@ -131,8 +149,19 @@ def test_real_nomad_3_samples(tmp_path: Path) -> None:
 
     from osimflow import Campaign, CampaignConfig
     from osimflow.executors import NomadExecutor
+    from osimflow.task_payload_hmac import (  # noqa: PLC0415
+        TASK_PAYLOAD_SECRET_ENV,
+        TASK_PAYLOAD_SIG_ENV,
+        verify_task_payload,
+    )
 
     addr = os.environ.get("NOMAD_ADDR") or "http://127.0.0.1:4646"
+
+    # Issue #1453: configure the HMAC shared secret so the executor signs
+    # OSIMFLOW_TASK_PAYLOAD and the remote runner verifies (fail-closed)
+    # before decoding/executing.
+    secret = "osimflow-nomad-e2e-task-payload-secret"
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
 
     # --- Hermetic fixtures (same pattern as test_aws_batch_real.py) ---
     example_pkg = REPO_ROOT / "example_package"
@@ -208,6 +237,51 @@ def test_real_nomad_3_samples(tmp_path: Path) -> None:
         assert resources.get("CPU"), f"Nomad dropped cpus for {job_id}: {resources}"
     result = campaign.run()
     executor.shutdown()
+
+    # --- HMAC signature propagation (issue #1453) -------------------------
+    # Re-read the real job spec from the Nomad HTTP API and assert the
+    # submitted task carries payload + signature + secret, and that the
+    # signature verifies against the configured secret. Campaign success
+    # with the secret configured is itself the remote-runner verification
+    # proof: the runner exits non-zero on a missing/tampered signature,
+    # which would fail the job and the campaign.
+    sim_job_ids_hmac = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    if os.environ.get("OSIMFLOW_NOMAD_USE_DISPATCH") == "1":
+        # Dispatch mode carries the triple as the task_payload* dispatch
+        # meta keys on the dispatched job (issue #1177) rather than in the
+        # job-level Env block this direct-mode probe re-reads; the
+        # secret-configured campaign run above still exercises fail-closed
+        # verification on the dispatched allocations.
+        pass
+    else:
+        assert len(sim_job_ids_hmac) >= 3, (
+            f"expected >= 3 sim job ids for the HMAC wire check, got {directives.records!r}"
+        )
+        for job_id in sim_job_ids_hmac:
+            env = _nomad_job_env(_nomad_addr, job_id, token=_nomad_token)
+            assert env.get("OSIMFLOW_TASK_PAYLOAD"), (
+                f"Nomad job {job_id} missing OSIMFLOW_TASK_PAYLOAD env var"
+            )
+            assert env.get(TASK_PAYLOAD_SIG_ENV), (
+                f"Nomad job {job_id} missing {TASK_PAYLOAD_SIG_ENV} env var "
+                "(the HMAC signature did not propagate to the submitted spec)"
+            )
+            assert env.get(TASK_PAYLOAD_SECRET_ENV) == secret, (
+                f"Nomad job {job_id} missing/mismatched {TASK_PAYLOAD_SECRET_ENV} "
+                f"env var: {env.get(TASK_PAYLOAD_SECRET_ENV)!r}"
+            )
+            assert verify_task_payload(
+                env["OSIMFLOW_TASK_PAYLOAD"],
+                env.get(TASK_PAYLOAD_SIG_ENV),
+                env[TASK_PAYLOAD_SECRET_ENV],
+            ), (
+                f"Nomad job {job_id}: {TASK_PAYLOAD_SIG_ENV} does not verify "
+                f"against {TASK_PAYLOAD_SECRET_ENV} for the submitted payload"
+            )
 
     # --- 4 output artifacts (same contract as test_aws_batch_real.py) ---
     csv_path = outdir / "aggregated_results.csv"
