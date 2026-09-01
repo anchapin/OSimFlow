@@ -802,3 +802,83 @@ class TestParseBaseline:
         with caplog.at_level(logging.WARNING, logger="osimflow.config"):
             result = _parse_baseline(vyml)
         assert result is None
+
+
+class TestParseChaosScenarios:
+    """Unit tests for `_parse_chaos_scenarios` (issue #1402).
+
+    The parser is the CLI input boundary for `--chaos-scenarios`
+    (issue #1209): unknown names must raise ValidationError, whitespace
+    and empty entries must be stripped, and None must yield [].
+    """
+
+    def test_comma_separated_string(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        assert _parse_chaos_scenarios("network_delay,cpu_spike") == [
+            "network_delay",
+            "cpu_spike",
+        ]
+
+    def test_pre_parsed_list(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        assert _parse_chaos_scenarios(["memory_pressure", "cpu_spike"]) == [
+            "memory_pressure",
+            "cpu_spike",
+        ]
+
+    def test_pre_parsed_tuple(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        assert _parse_chaos_scenarios(("network_delay",)) == ["network_delay"]
+
+    def test_none_yields_empty(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        assert _parse_chaos_scenarios(None) == []
+
+    def test_empty_string_yields_empty(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        assert _parse_chaos_scenarios("") == []
+
+    def test_whitespace_padding_stripped(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        assert _parse_chaos_scenarios("  network_delay ,  cpu_spike  ") == [
+            "network_delay",
+            "cpu_spike",
+        ]
+
+    def test_trailing_comma_no_phantom_entries(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        assert _parse_chaos_scenarios("cpu_spike,") == ["cpu_spike"]
+        assert _parse_chaos_scenarios(",cpu_spike,,") == ["cpu_spike"]
+
+    def test_unknown_name_raises_validation_error(self) -> None:
+        from osimflow.config import ValidationError, _parse_chaos_scenarios
+
+        with pytest.raises(ValidationError, match="unknown scenario"):
+            _parse_chaos_scenarios("foo")
+
+    def test_unknown_name_names_the_offender(self) -> None:
+        from osimflow.config import ValidationError, _parse_chaos_scenarios
+
+        with pytest.raises(ValidationError) as excinfo:
+            _parse_chaos_scenarios("network_delay,foo")
+        assert "foo" in str(excinfo.value)
+
+    def test_valid_registry_accepted(self) -> None:
+        from osimflow.config import _parse_chaos_scenarios
+
+        valid = _parse_chaos_scenarios(
+            "kill_switch_simulator,network_delay,cpu_spike,memory_pressure"
+        )
+        assert sorted(valid) == [
+            "cpu_spike",
+            "kill_switch_simulator",
+            "memory_pressure",
+            "network_delay",
+        ]
