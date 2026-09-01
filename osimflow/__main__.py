@@ -199,6 +199,37 @@ def _extract_max_concurrent_samples(resource_quota: str | None) -> int | None:
         return None
 
 
+#: Executors whose jobs pull the OpenStudio image from a managed cloud
+#: registry at campaign scale. Running one of these without
+#: ``--container-digest`` triggers the mutable-tag supply-chain warning
+#: (issue #1320).
+_CLOUD_EXECUTORS = frozenset({"aws_batch", "azure_batch", "google_batch"})
+
+
+def _warn_if_mutable_tag(executor_name: str, container_digest: str | None) -> None:
+    """Warn when a cloud executor would pull by mutable tag (issue #1320).
+
+    A compromised or backdoored registry tag update would affect every
+    active campaign. Digest pinning is the documented production default
+    (docs/container-image-strategy.md); this warning makes skipping it a
+    conscious decision rather than an oversight.
+    """
+    if container_digest is not None:
+        return
+    if executor_name not in _CLOUD_EXECUTORS:
+        return
+    warnings.warn(
+        f"--container-digest is NOT set; executor '{executor_name}' will pull "
+        "nrel/openstudio:<version> by MUTABLE tag from the registry. A compromised "
+        "or backdoored tag update would affect this campaign (supply-chain risk). "
+        "Pin a content-addressed digest for production: "
+        "`docker inspect --format '{{index .RepoDigests 0}}' nrel/openstudio:<version>` "
+        "and pass it via --container-digest. See docs/container-image-strategy.md.",
+        UserWarning,
+        stacklevel=2,
+    )
+
+
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
     """Dispatch to the correct executor based on ``args.executor``."""
     max_concurrent_samples = _extract_max_concurrent_samples(args.resource_quota)
@@ -3951,6 +3982,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         log.info("DRY RUN: forcing LocalExecutor with 1 worker")
     else:
         executor = _build_executor(args)
+    # Issue #1320: cloud executors pull `nrel/openstudio:<version>` from a
+    # public registry by MUTABLE tag when --container-digest is not set.
+    _warn_if_mutable_tag(args.executor, cfg.container_digest)
     trust_level = ByosTrustLevel(args.byos_trust_level)
     if trust_level == ByosTrustLevel.INPROCESS:
         warnings.warn(
