@@ -23,8 +23,14 @@ PRECOMMIT := $(VENV)/bin/pre-commit
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: ## pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+install: | $(VENV) ## pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
 	$(PY) -m pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+
+# Bootstrap the virtualenv on fresh clones (issue #1447): created only
+# when absent (order-only prerequisite — never rebuilt once it exists).
+$(VENV):
+	python3 -m venv $(VENV)
+	$(VENV)/bin/python -m pip install --upgrade pip
 
 lint: ## ruff check (linter)
 	$(RUFF) check .
