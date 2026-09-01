@@ -38,10 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -61,11 +61,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -82,7 +82,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -92,7 +92,7 @@ jobs:
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -114,10 +114,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -125,7 +125,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Cache venv
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -148,11 +148,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -169,7 +169,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -181,13 +181,13 @@ jobs:
         # sub-venv to resolve dependencies, and that sub-venv's
         # `ensurepip` step exits 127 against uv-managed Python
         # interpreters (which do not ship `ensurepip`).
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -239,11 +239,11 @@ jobs:
     timeout-minutes: 30
     needs: [lint, typecheck]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -260,7 +260,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -270,7 +270,7 @@ jobs:
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -301,7 +301,7 @@ jobs:
 
       - name: Upload coverage
         if: steps.changed.outputs.any_changed == 'true' && success()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-xml
           path: coverage.xml
@@ -328,11 +328,11 @@ jobs:
     timeout-minutes: 10
     needs: [lint]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -349,7 +349,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -359,7 +359,7 @@ jobs:
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-mlflow-${{ hashFiles('pyproject.toml') }}
@@ -395,11 +395,11 @@ jobs:
     timeout-minutes: 20
     needs: [lint]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -416,7 +416,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -426,7 +426,7 @@ jobs:
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -468,11 +468,11 @@ jobs:
     timeout-minutes: 10
     needs: [lint]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -489,7 +489,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -499,7 +499,7 @@ jobs:
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -533,11 +533,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -554,7 +554,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -564,7 +564,7 @@ jobs:
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -594,11 +594,11 @@ jobs:
     timeout-minutes: 10
     needs: [lint, typecheck]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for non-docs changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files_ignore: |
             docs/**
@@ -615,7 +615,7 @@ jobs:
 
       - name: Install uv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.5.x"
 
@@ -625,7 +625,7 @@ jobs:
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
@@ -718,18 +718,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check for infra/ changes
         id: changed
-        uses: tj-actions/changed-files@v47
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
         with:
           files: |
             infra/**
 
       - name: Setup Terraform
         if: steps.changed.outputs.any_changed == 'true'
-        uses: hashicorp/setup-terraform@v4
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_wrapper: false
 
