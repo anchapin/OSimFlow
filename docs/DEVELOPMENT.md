@@ -411,6 +411,52 @@ make test-cov
 The coverage gate is 82% (lowered from 83%; issue #1417). If it fails, the output shows which lines
 are uncovered. Add tests for the missing public-API paths.
 
+### Coverage omissions
+
+Every entry in the `[tool.coverage.run]` `omit` list (`pyproject.toml`)
+must carry a documented rationale here — enforced by
+`tests/contract/test_coverage_omit_doc.py`, which fails when an omitted
+path has no bullet below or when a bullet below no longer appears in the
+config. Issue #1452 removed the blanket omissions of
+`osimflow/storage.py` and `osimflow/taskqueue.py`: both contain
+in-process logic exercised by the unit suite (including the
+security-critical https-only storage-endpoint validation from #1386),
+so the gate now measures them. The remaining omissions are:
+
+- `osimflow/__main__.py` — thin `argparse` entry point; it is exercised
+  only through subprocess-level CLI invocations, not by the in-process
+  pytest suite.
+- `osimflow/algorithms/fast99.py` — FAST99 sensitivity requires the
+  optional `[sensitivity]` extra (SALib), which the default CI
+  environment does not install.
+- `osimflow/algorithms/morris.py` — Morris screening; same `[sensitivity]`
+  extra (SALib) dependency as fast99.py.
+- `osimflow/algorithms/nsga2.py` — NSGA-II requires the optional
+  `[optimization]` extra (pymoo).
+- `osimflow/algorithms/pso.py` — PSO; same `[optimization]` extra (pymoo)
+  dependency as nsga2.py.
+- `osimflow/algorithms/ga.py` — genetic algorithm requires the optional
+  `[ga]` extra (DEAP).
+- `osimflow/api/*` — REST surface behind the optional `[api]` extra.
+  Its tests (`tests/unit/test_api_core.py` and friends) exist but are a
+  separate surface from the core campaign pipeline; the omission stays
+  for now (issue #1452 prioritized storage.py and taskqueue.py) and
+  should be revisited when API coverage is folded into the global gate.
+- `osimflow/viz/dashboard.py` — Streamlit dashboard UI (`[viz]` extra);
+  presentation-layer code that additionally requires an optional
+  dependency to import.
+- `osimflow/_work_scripts/*` — the per-step scripts are executed in
+  **subprocesses** by the work layer (`osimflow/work.py` shells out to
+  them), so in-process coverage cannot attribute their lines. Measuring
+  them would require `COVERAGE_PROCESS_START` subprocess coverage, which
+  was evaluated and rejected as fragile in this repo (issue #1452).
+  The scripts are exercised end-to-end by the integration suite, and
+  their contents are hashed into the per-step cache key
+  (`code_hashes["bin"]`), so any edit still invalidates prior results.
+
+When you add a new `omit` entry, add a matching bullet here in the same
+change — the contract test will fail otherwise.
+
 ### Integration tests
 
 The integration tests in `tests/integration/` run end-to-end campaigns
