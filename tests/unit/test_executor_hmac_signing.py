@@ -1,4 +1,4 @@
-"""Cross-executor HMAC signing symmetry regression test (issue #1384).
+"""Cross-executor HMAC signing symmetry regression test (issues #1384, #1445).
 
 The HMAC-SHA256 task-payload contract (issue #1177) requires that every
 executor with ``requires_remote_runner_payload = True`` propagates the
@@ -9,13 +9,15 @@ in their env builders, but ``AzureBatchExecutor``,
 ``GoogleBatchExecutor``, and ``DockerSwarmExecutor`` shipped
 ``OSIMFLOW_TASK_PAYLOAD`` unsigned, so the ``remote_runner`` fail-closed
 verification gate raised ``RuntimeError`` for any campaign dispatched
-through those substrates.
+through those substrates. Issue #1445 found the same drift in
+``AWSBatchExecutor`` — the one executor the hardcoded executor list in
+this module had left out.
 
-This test asserts the cross-executor symmetry contract directly: with a
-secret configured, every concrete executor in
-``RemoteRunnerPayloadExecutors`` produces a per-job env that includes
-``OSIMFLOW_TASK_PAYLOAD_SECRET`` and ``OSIMFLOW_TASK_PAYLOAD_SIG``; with
-no secret, the env remains unsigned (legacy mode is preserved).
+The parametrized executor list is therefore derived from the live
+``ExecutorRegistry`` via the ``requires_remote_runner_payload`` property
+so any future executor that adopts the remote-runner payload contract is
+automatically pulled into the symmetry test (and fails CI if its env
+builder does not sign).
 """
 
 from __future__ import annotations
@@ -33,16 +35,29 @@ from osimflow.task_payload_hmac import (
     sign_task_payload,
 )
 
-# All five remote-runner executors participate in the same contract.
-# Nomad + Kubernetes were already symmetric pre-#1384; the fix adds the
-# same wiring to AzureBatch / GoogleBatch / DockerSwarm.
-REMOTE_RUNNER_EXECUTORS: tuple[str, ...] = (
-    "nomad",
-    "kubernetes",
-    "azure_batch",
-    "google_batch",
-    "docker_swarm",
-)
+
+def _remote_runner_executor_names() -> tuple[str, ...]:
+    """Derive the remote-runner executor set from the live registry.
+
+    Every registered executor whose ``requires_remote_runner_payload``
+    property is True participates in the HMAC signing contract. Deriving
+    the list here (instead of hardcoding names) keeps the symmetry test
+    in lockstep with the registry: a new remote-runner executor is
+    parametrized automatically, and the completeness guard below fails
+    CI if its signing env builder is missing (issue #1445).
+    """
+    from osimflow.executors import ExecutorRegistry
+
+    names: list[str] = []
+    for name in ExecutorRegistry.list_available():
+        executor_cls = ExecutorRegistry.get(name)
+        instance = executor_cls.__new__(executor_cls)  # noqa: SLF001
+        if instance.requires_remote_runner_payload:
+            names.append(name)
+    return tuple(sorted(names))
+
+
+REMOTE_RUNNER_EXECUTORS: tuple[str, ...] = _remote_runner_executor_names()
 
 SECRET = "cross-executor-shared-secret"
 TASK_PAYLOAD = json.dumps({"step": "sim", "args": [], "kwargs": {}})
@@ -96,6 +111,16 @@ def _nomad_legacy_env(executor_factory: Callable[..., Any]) -> dict[str, str]:
     return spec["Job"]["TaskGroups"][0]["Tasks"][0]["Env"]
 
 
+def _aws_batch_env(executor_factory: Callable[..., Any]) -> dict[str, str]:
+    ex = executor_factory()
+    env_list = ex._build_environment(  # noqa: SLF001
+        container="nrel/openstudio:3.11.0",
+        openstudio_version="3.11.0",
+        task_payload=TASK_PAYLOAD,
+    )
+    return _parse_env(env_list)
+
+
 def _kubernetes_env(executor_factory: Callable[..., Any]) -> dict[str, str]:
     ex = executor_factory()
     env_list = ex._build_environment(  # noqa: SLF001
@@ -147,6 +172,14 @@ def _docker_swarm_env(executor_factory: Callable[..., Any]) -> dict[str, str]:
         task_payload=TASK_PAYLOAD,
     )
     return _parse_env(captured["env"])
+
+
+def _aws_batch_executor_factory() -> Any:
+    from osimflow.executors import AWSBatchExecutor
+
+    ex = AWSBatchExecutor.__new__(AWSBatchExecutor)  # noqa: SLF001
+    ex.ecr_repository = None
+    return ex
 
 
 def _nomad_executor_factory() -> Any:
@@ -220,6 +253,7 @@ def _docker_swarm_executor_factory() -> Any:
 
 
 ENV_BUILDERS: dict[str, Callable[[Callable[..., Any]], dict[str, str]]] = {
+    "aws_batch": _aws_batch_env,
     "nomad": _nomad_legacy_env,
     "kubernetes": _kubernetes_env,
     "azure_batch": _azure_batch_env,
@@ -228,6 +262,7 @@ ENV_BUILDERS: dict[str, Callable[[Callable[..., Any]], dict[str, str]]] = {
 }
 
 EXECUTOR_FACTORIES: dict[str, Callable[[], Any]] = {
+    "aws_batch": _aws_batch_executor_factory,
     "nomad": _nomad_executor_factory,
     "kubernetes": _kubernetes_executor_factory,
     "azure_batch": _azure_batch_executor_factory,
@@ -265,40 +300,45 @@ def test_executor_omits_signature_when_no_secret(
 
 
 def test_remote_runner_executor_registry_complete() -> None:
-    """Defensive guard: every concrete executor with remote-runner payload must be wired.
+    """Defensive guard: the registry-derived set must match this module's wiring.
 
-    If a new executor with ``requires_remote_runner_payload = True``
-    is added without HMAC signing, this list will go out of sync with
-    ``ENV_BUILDERS`` and the parametrized test will fail loud.
+    ``REMOTE_RUNNER_EXECUTORS`` is derived from the live
+    ``ExecutorRegistry`` via the ``requires_remote_runner_payload``
+    property (issue #1445 — the hardcoded list had left out AWS Batch).
+    This guard pins the derivation to an explicit class map so a broken
+    derivation (empty / over-matching) fails loud, and asserts
+    ``ENV_BUILDERS`` covers every derived executor — a new remote-runner
+    executor without HMAC signing in its env builder fails CI here and
+    in the parametrized symmetry tests above.
     """
     # Local imports keep the module importable without the heavy
     # substrate SDKs (azure.batch, google.cloud.batch_v1, docker, ...).
+    from osimflow.executors import AWSBatchExecutor, NomadExecutor
     from osimflow.executors.azure_batch_executor import AzureBatchExecutor
     from osimflow.executors.base import BaseExecutor
     from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
     from osimflow.executors.google_batch_executor import GoogleBatchExecutor
     from osimflow.executors.kubernetes_executor import KubernetesExecutor
 
-    expected_classes = {
+    expected_classes: dict[str, type[Any]] = {
+        "aws_batch": AWSBatchExecutor,
         "azure_batch": AzureBatchExecutor,
         "docker_swarm": DockerSwarmExecutor,
         "google_batch": GoogleBatchExecutor,
         "kubernetes": KubernetesExecutor,
+        "nomad": NomadExecutor,
     }
+    assert REMOTE_RUNNER_EXECUTORS == tuple(sorted(expected_classes)), (
+        f"registry-derived remote-runner set {REMOTE_RUNNER_EXECUTORS} "
+        f"diverged from the expected class map {tuple(sorted(expected_classes))}"
+    )
     for executor_name, executor_cls in expected_classes.items():
-        instance = executor_cls.__new__(executor_cls)
+        instance = executor_cls.__new__(executor_cls)  # noqa: SLF001
         assert isinstance(instance, BaseExecutor)
         assert instance.requires_remote_runner_payload is True, (
             f"{executor_name} must declare requires_remote_runner_payload = True"
         )
 
-    # Nomad is defined inline in osimflow.executors.__init__; verify it
-    # through the public name + same property contract.
-    from osimflow.executors import NomadExecutor
-
-    nomad_instance = NomadExecutor.__new__(NomadExecutor)
-    assert isinstance(nomad_instance, BaseExecutor)
-    assert nomad_instance.requires_remote_runner_payload is True
-
-    # ``ENV_BUILDERS`` must cover every executor in the registry list.
+    # ``ENV_BUILDERS`` must cover every executor in the registry-derived list.
     assert set(ENV_BUILDERS.keys()) == set(REMOTE_RUNNER_EXECUTORS)
+    assert set(EXECUTOR_FACTORIES.keys()) == set(REMOTE_RUNNER_EXECUTORS)
