@@ -103,6 +103,7 @@ is attached to the anonymous token.
 - [x] Docker task driver `allow_privileged = false` on client nodes; workload jobs `privileged = false`
 - [x] Docker socket consumed locally by the agent — not shared across a nested container boundary
 - [x] **Production**: TLS enabled for HTTP API (issue #344)
+- [x] **Production**: `NomadExecutor` fails closed when `NOMAD_TOKEN` is configured for a non-local address without TLS — the campaign refuses to start rather than transmit the ACL token in cleartext (SEC-009, issue #1450). Dev/test override: `--nomad-allow-insecure-token`.
 - [x] **Production**: native mTLS is the primary isolation/trust boundary (replaces nested containerization)
 - [ ] **Production**: Enable Gossip encryption with a pre-shared key
 - [ ] **Production**: Store management token in Vault or a secrets manager
@@ -302,6 +303,21 @@ The `NomadExecutor` supports TLS with the following CLI flags:
 | `--nomad-cert` | Path to client certificate PEM file (for mTLS) |
 | `--nomad-key` | Path to client private key PEM file (for mTLS) |
 | `--nomad-ca-cert` | Path to CA certificate PEM file (to verify server cert) |
+| `--nomad-allow-insecure-token` | Explicit opt-out permitting `NOMAD_TOKEN` over plaintext to a non-local address (dev/test only; issue #1450) |
+
+#### Fail-closed token guard (issue #1450)
+
+When `NOMAD_TOKEN` is set and the resolved Nomad address is **non-local**
+(anything other than `localhost` / `127.0.0.1` / `::1`) **without TLS**,
+`NomadExecutor` raises `ValueError` at construction — the campaign never
+starts, so a misconfigured `--nomad-address` can no longer silently degrade
+to plaintext token transmission. This mirrors the storage-endpoint guard
+from issue #1386 (`--allow-insecure-storage-endpoint`).
+
+To run a non-TLS cluster anyway (dev/test only), pass
+`--nomad-allow-insecure-token`; the executor then proceeds with a loud
+warning on both the warnings channel and the logger. Loopback addresses
+remain exempt because loopback traffic never leaves the host.
 
 Example usage with mTLS:
 
