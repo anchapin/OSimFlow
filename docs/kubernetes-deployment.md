@@ -127,6 +127,42 @@ Credentials are sourced from the in-cluster service account or from `~/.kube/con
 
 For production deployments, use RBAC to restrict the service account to the minimum required permissions (`create`, `get`, `list` on Jobs and Pods in the target namespace). When object-storage transport is enabled (issue #996), the **worker** service account additionally needs object-storage read/write permissions on the result bucket (see *Ephemeral Runner & Object-Storage Transport* above).
 
+### Strict Pod SecurityContext (issue #1383)
+
+By default, the `KubernetesExecutor` submits every pod with a hardened security context. The `security_context_strict` flag is a **constructor flag** on `KubernetesExecutor` (`osimflow/executors/kubernetes_executor.py`) — there is **no CLI flag**; it can only be set when instantiating the executor programmatically. The default is `True`.
+
+When strict, both the per-sample Job pods and the version-check pod carry:
+
+| Scope | Fields |
+|---|---|
+| Pod `securityContext` | `runAsNonRoot: true`, `runAsUser: 1000` |
+| Container `securityContext` | `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: ["ALL"]` |
+| Pod spec | `automountServiceAccountToken: false` |
+
+Equivalent manifest fragment:
+
+```yaml
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+  containers:
+    - name: osimflow
+      securityContext:
+        runAsNonRoot: true
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+```
+
+This profile satisfies the Pod Security Standards **`restricted`** level, so campaign pods are admitted on clusters enforcing `restricted` via namespace labels. Pod Security admission exempts unset fields from its checks, so the executor's unset `seccompProfile` is not a blocker; clusters whose admission configuration additionally requires `seccompProfile: RuntimeDefault` can layer it separately.
+
+`automountServiceAccountToken: false` blocks the cluster-default service-account token pivot raised in the issue #1177 threat model.
+
+Set `security_context_strict=False` to fall back to the legacy permissive manifest — only for clusters whose admission controllers reject the strict profile (e.g. older admission controllers without PodSecurity support).
+
 ## Resource Allocation
 
 The executor sets both requests and limits to the same values, ensuring the scheduler knows the guaranteed resources while also enforcing an upper bound:
