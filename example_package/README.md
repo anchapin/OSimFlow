@@ -96,14 +96,12 @@ EPW `LOCATION` header, which overrides the model's `OS:Site`). The fetched
 when run against the Golden `.epw` the simulation uses Golden, CO weather.
 
 > **Note on `workflow.osw` measures.** The committed `workflow.osw` references
-> `SetThermostatSchedule` and `SetEnvelopePerformance` with an empty
-> `measure_paths: []` and no bundled `measures/` directory. That is sufficient
-> for stub-mode apply (the test-mode JSON apply path), but a full real
-> `openstudio.cli run -w workflow.osw` additionally requires those measures to
-> resolve on disk. Bundling real NREL measures under `example_package/measures/`
-> is tracked by the companion real-CLI E2E issue (#939). The fetcher therefore
-> ships the real model + weather; resolving the measure set for a complete
-> end-to-end real simulation is a separate, follow-up change.
+> `SetThermostatSchedule` and `SetEnvelopePerformance`. Since #1486 those
+> measures are bundled under `example_package/measures/` and `workflow.osw`
+> points at them via `"measure_paths": ["measures"]`. A real
+> `openstudio.cli run -w workflow.osw` therefore resolves its measure set on
+> disk with no manual BCL download. The fetcher ships the real model + weather;
+> the measure set is now part of the package itself.
 
 ### workflow.osw
 
@@ -153,6 +151,14 @@ osimflow run \
   --n_samples 5 \
   --outdir ./results
 ```
+
+The `example_package/measures/` directory is bundled with the repository, so
+`workflow.osw` resolves its `SetThermostatSchedule` and
+`SetEnvelopePerformance` measures on disk without a manual BCL download. This
+means the same package works for stub-mode (`make test`) and for a real
+`openstudio.cli run -w workflow.osw` invocation (the nightly
+`openstudio-cli-e2e` workflow, gated on
+`OSIMFLOW_RUN_REAL_OPENSTUDIO=1`).
 
 ## Weather file
 
