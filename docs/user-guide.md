@@ -1289,7 +1289,25 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 | `--preset NAME` | none | Named preset of recommended flag values (issue #384); individual flags override the preset. |
 | `--init-script` / `--finalize-script PATH` | none | Pre/post-campaign shell hooks (issue #108). |
 | `--webhook-url URL` | none | Campaign-completion webhook callback (issue #283). |
-| `--max-sample-retries INT` | `3` | Max retries for transient per-sample failures (issue #252). |
+| `--max-sample-retries INT` | `3` | Max retries for transient per-sample failures. Honored by the `APPLY_PARAMETERS`, `RUN_OPENSTUDIO_SIM`, and `EXTRACT_KPIS` fan-out submits (issue #1394); see [Which DAG steps honor `--max-sample-retries`](#which-dag-steps-honor---max-sample-retries) below. |
+
+#### `--max-sample-retries`: which DAG steps honor it
+
+`--max-sample-retries` (default `3`, `0` disables retry) controls **orchestrator-side** retry on the per-sample fan-out submits that execute the heavy work of a campaign. As of the post-#1394 fan-out fix, `osimflow/campaign.py` forwards `max_retries=self.cfg.max_sample_retries` at **eight submission sites** spanning **three DAG steps**:
+
+| DAG step | What gets retried | Why it can fail transiently |
+|---|---|---|
+| `APPLY_PARAMETERS` | Per-sample measure-argument mutation + `.osm` write | File locks, partial `.osm` writes, transient `_apply_osm_mutations` errors |
+| `RUN_OPENSTUDIO_SIM` | Per-sample `openstudio.cli run -w workflow.osw` invocation | Container start failures, transient infrastructure errors, EnergyPlus convergence warnings that retried runs can clear |
+| `EXTRACT_KPIS` | Per-sample `eplusout.sql` → KPI JSON | Read-after-write races on slow object storage, transient parser errors |
+
+The remaining four DAG steps do **not** consume `--max-sample-retries`:
+
+- `GENERATE_LHS_SAMPLES`, `PREFLIGHT_RUN_MODEL`, `AGGREGATE_RESULTS`, `GENERATE_BASIC_PLOTS` — all run **once per generation** (no per-sample fan-out). They have no transient-retry failure mode that the orchestrator-level retry knob is designed to address; tune resilience for those steps via the underlying executor (e.g. `--kubernetes-backoffLimit`, see below).
+
+**Interaction with Kubernetes `backoffLimit`** — `--max-sample-retries` and `--kubernetes-backoffLimit` are **alternatives, not complements**. The kubelet-side `backoffLimit` restarts a failed pod inside the same Job without a resubmit round-trip through the orchestrator; `--max-sample-retries` resubmits the entire Job with the same parameter sample. Running both will **double-count failures** (a K8s pod restart counts as one failure to the orchestrator, which may then resubmit again). Pick one. See [`docs/kubernetes-deployment.md`](kubernetes-deployment.md#cli-flags) for the full `--kubernetes-backoffLimit` table and the "Kueue Interplay" section for the trade-off analysis.
+
+**Per-sample cost impact** — the retry knob is a primary lever on campaign cost and result completeness. With `--max-sample-retries 3` and a transient-failure rate of `p`, the expected number of orchestrator-side submissions per sample is roughly `1 / (1 - p)` for `p < 1`, so a 5% transient-failure rate on a 1000-sample campaign adds ~50 expected resubmits. Set to `0` for hard-fail-fast (debug) workflows.
 
 #### Algorithm & sampling
 

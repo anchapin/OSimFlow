@@ -4201,7 +4201,8 @@ class Campaign:
                 # transient ``_apply_osm_mutations`` failures (file locks,
                 # partial .osm writes) are retried instead of failing the
                 # sample outright.  ``max_retries<=0`` disables retry.  See
-                # issue #1394.
+                # issue #1394.  Documented in docs/user-guide.md
+                # §"--max-sample-retries: which DAG steps honor it".
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(
                         self.apply_fn,
@@ -4468,6 +4469,11 @@ class Campaign:
                 # schedule (network_delay / cpu_spike / kill_switch).
                 self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "per_sample", target_id=sid)
                 handle: Handle | TQHandle
+                # RUN_OPENSTUDIO_SIM consumes ``--max-sample-retries`` at both
+                # the auto-recovery resubmit (above) and the per-chunk fan-out
+                # submit (below) — issue #1394.  Documented in
+                # docs/user-guide.md §"--max-sample-retries: which DAG steps
+                # honor it".
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(
                         run_openstudio_sim,
@@ -4770,6 +4776,10 @@ class Campaign:
                 # ``per_sample``.
                 self._maybe_inject_chaos("EXTRACT_KPIS", "per_sample", target_id=sid)
                 handle: Handle | TQHandle
+                # EXTRACT_KPIS consumes ``--max-sample-retries`` at both
+                # ``self.task_queue.submit`` and ``self.executor.submit``
+                # below — issue #1394.  Documented in docs/user-guide.md
+                # §"--max-sample-retries: which DAG steps honor it".
                 if self.task_queue is not None:
                     handle = self.task_queue.submit(
                         self.extract_fn,
