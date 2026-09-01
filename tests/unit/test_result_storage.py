@@ -442,3 +442,151 @@ class TestLoadConfigStorageArgs:
         cfg = load_config(args)
         assert cfg.result_storage_backend == "local"
         assert cfg.result_storage_bucket == ""
+
+
+class TestTransientRetry:
+    """Transient storage errors retry with backoff (issue #1398)."""
+
+    @pytest.fixture(autouse=True)
+    def _fast_sleep(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("osimflow.storage.time.sleep", lambda _s: None)
+
+    def test_s3_download_retries_transient_then_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow.storage import S3Storage
+
+        store = S3Storage(bucket="b")
+        calls: list[int] = []
+
+        class _Client:
+            def download_file(self, bucket: str, remote: str, local: str) -> None:
+                calls.append(1)
+                target = Path(local)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if len(calls) < 3:
+                    raise ConnectionResetError("connection reset by peer")
+                target.write_text("data", encoding="utf-8")
+
+        monkeypatch.setattr(type(store), "client", property(lambda self: _Client()))
+        out = tmp_path / "out.sql"
+        store.download_file("sim/0001/eplusout.sql", out)
+        assert len(calls) == 3
+        assert out.read_text() == "data"
+
+    def test_s3_download_gives_up_after_three_attempts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow.storage import S3Storage
+
+        store = S3Storage(bucket="b")
+        calls: list[int] = []
+
+        class _Client:
+            def download_file(self, bucket: str, remote: str, local: str) -> None:
+                calls.append(1)
+                raise ConnectionError("connection refused")
+
+        monkeypatch.setattr(type(store), "client", property(lambda self: _Client()))
+        with pytest.raises(OSError, match="download failed"):
+            store.download_file("sim/0001/eplusout.sql", tmp_path / "out.sql")
+        assert len(calls) == 3
+
+    def test_s3_permanent_error_fails_fast(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow.storage import S3Storage
+
+        store = S3Storage(bucket="b")
+        calls: list[int] = []
+
+        class _Client:
+            def download_file(self, bucket: str, remote: str, local: str) -> None:
+                calls.append(1)
+                raise KeyError("NoSuchKey")
+
+        monkeypatch.setattr(type(store), "client", property(lambda self: _Client()))
+        with pytest.raises(OSError, match="download failed"):
+            store.download_file("missing.sql", tmp_path / "out.sql")
+        assert len(calls) == 1  # no retry on permanent errors
+
+    def test_s3_upload_retries_5xx_then_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow.storage import S3Storage
+
+        store = S3Storage(bucket="b")
+        src = tmp_path / "kpi.json"
+        src.write_text("{}", encoding="utf-8")
+        calls: list[int] = []
+
+        class _Client:
+            def upload_file(self, local: str, bucket: str, remote: str) -> None:
+                calls.append(1)
+                if len(calls) < 2:
+                    raise OSError("500 InternalError: internal error")
+
+        monkeypatch.setattr(type(store), "client", property(lambda self: _Client()))
+        store.upload_file(src, "kpis/kpi_0001.json")
+        assert len(calls) == 2
+
+    def test_gcs_download_retries_transient_then_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow.storage import GCSStorage
+
+        store = GCSStorage(bucket="b")
+        calls: list[int] = []
+
+        class _Blob:
+            def download_to_filename(self, local: str) -> None:
+                calls.append(1)
+                target = Path(local)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if len(calls) < 3:
+                    raise ConnectionResetError("503 Service Unavailable")
+                target.write_text("data", encoding="utf-8")
+
+        class _Bucket:
+            def blob(self, remote: str) -> _Blob:
+                return _Blob()
+
+        monkeypatch.setattr(type(store), "bucket_obj", property(lambda self: _Bucket()))
+        out = tmp_path / "kpi.json"
+        store.download_file("kpis/kpi_0001.json", out)
+        assert len(calls) == 3
+        assert out.read_text() == "data"
+
+    def test_gcs_upload_retries_throttle_then_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from osimflow.storage import GCSStorage
+
+        store = GCSStorage(bucket="b")
+        src = tmp_path / "kpi.json"
+        src.write_text("{}", encoding="utf-8")
+        calls: list[int] = []
+
+        class _Blob:
+            def upload_from_filename(self, local: str) -> None:
+                calls.append(1)
+                if len(calls) < 2:
+                    raise OSError("429 SlowDown: reduce your request rate")
+
+        class _Bucket:
+            def blob(self, remote: str) -> _Blob:
+                return _Blob()
+
+        monkeypatch.setattr(type(store), "bucket_obj", property(lambda self: _Bucket()))
+        store.upload_file(src, "kpis/kpi_0001.json")
+        assert len(calls) == 2
+
+    def test_transient_classifier(self) -> None:
+        from osimflow.storage import _is_transient_storage_error
+
+        assert _is_transient_storage_error(ConnectionError("conn reset"))
+        assert _is_transient_storage_error(TimeoutError("timed out"))
+        assert _is_transient_storage_error(OSError("503 Service Unavailable"))
+        assert _is_transient_storage_error(OSError("429 SlowDown"))
+        assert not _is_transient_storage_error(KeyError("NoSuchKey"))
+        assert not _is_transient_storage_error(OSError("403 Forbidden"))

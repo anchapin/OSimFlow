@@ -34,6 +34,7 @@ import random
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -114,6 +115,81 @@ def _validate_storage_endpoint(endpoint_url: str | None, *, allow_insecure: bool
         f"artifacts in cleartext. Use https:// or pass "
         f"--allow-insecure-storage-endpoint to override (dev/test only)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Transient-error retry for remote storage I/O (issue #1398)
+# ---------------------------------------------------------------------------
+
+#: Total attempts per operation (1 initial + this many retries - 1 ... i.e.
+#: ``_TRANSIENT_RETRY_ATTEMPTS`` calls total). Issue #1398 acceptance:
+#: "3 attempts / 30s cap".
+_TRANSIENT_RETRY_ATTEMPTS = 3
+#: Exponential backoff base (attempt N sleeps ``base * 2**(N-1)``).
+_TRANSIENT_RETRY_BASE_S = 2.0
+#: Backoff ceiling so a pathological outage doesn't stall the orchestrator.
+_TRANSIENT_RETRY_CAP_S = 30.0
+
+#: Lowercased substrings that mark an exception as a *transient* storage
+#: error — 5xx responses, throttling, and connection-level failures.
+#: Non-matching exceptions propagate immediately (fail fast on permanent
+#: errors such as 404 / auth denial).
+_TRANSIENT_ERROR_MARKERS = (
+    "503",
+    "502",
+    "500",
+    "429",
+    "slow down",
+    "throttl",
+    "service unavailable",
+    "internal error",
+    "bad gateway",
+    "connection reset",
+    "connection refused",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_storage_error(exc: BaseException) -> bool:
+    """Return True when *exc* looks like a retryable transient storage error.
+
+    ``ConnectionError`` covers ``urllib.error.URLError`` wrappers and
+    socket-level resets; ``TimeoutError`` covers read/connect timeouts.
+    Everything else is classified by scanning the exception text for
+    retryable HTTP / provider markers (5xx, throttling, 429).
+    """
+    if isinstance(exc, ConnectionError | TimeoutError):
+        return True
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _TRANSIENT_ERROR_MARKERS)
+
+
+def _retry_transient_storage(op: str, fn: Callable[[], None]) -> None:
+    """Run *fn* with exponential backoff on transient storage errors.
+
+    Retries up to ``_TRANSIENT_RETRY_ATTEMPTS`` total attempts, sleeping
+    ``min(base * 2**(attempt-1), cap)`` between them (issue #1398:
+    "3 attempts / 30s cap"). Permanent errors and exhausted retries
+    propagate immediately.
+    """
+    for attempt in range(1, _TRANSIENT_RETRY_ATTEMPTS + 1):
+        try:
+            fn()
+            return
+        except Exception as exc:  # noqa: BLE001 — classified below
+            if attempt >= _TRANSIENT_RETRY_ATTEMPTS or not _is_transient_storage_error(exc):
+                raise
+            delay = min(_TRANSIENT_RETRY_BASE_S * (2 ** (attempt - 1)), _TRANSIENT_RETRY_CAP_S)
+            log.warning(
+                "%s transient failure (attempt %d/%d), retrying in %.1fs: %s",
+                op,
+                attempt,
+                _TRANSIENT_RETRY_ATTEMPTS,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
 
 
 class ResultStorage(ABC):
@@ -339,7 +415,10 @@ class S3Storage(ResultStorage):
         remote = self._remote(remote_path)
         log.debug("S3Storage: upload %s -> s3://%s/%s", local_path, self.bucket, remote)
         try:
-            self.client.upload_file(str(local_path), self.bucket, remote)
+            _retry_transient_storage(
+                "S3Storage: upload",
+                lambda: self.client.upload_file(str(local_path), self.bucket, remote),
+            )
         except Exception as exc:
             log.error("S3Storage: upload failed s3://%s/%s: %s", self.bucket, remote, exc)
             raise OSError(f"S3Storage: upload failed for {remote_path}") from exc
@@ -348,7 +427,10 @@ class S3Storage(ResultStorage):
         remote = self._remote(remote_path)
         local_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self.client.download_file(self.bucket, remote, str(local_path))
+            _retry_transient_storage(
+                "S3Storage: download",
+                lambda: self.client.download_file(self.bucket, remote, str(local_path)),
+            )
         except Exception as exc:
             log.error(
                 "S3Storage: download failed s3://%s/%s -> %s: %s",
@@ -456,8 +538,10 @@ class GCSStorage(ResultStorage):
         remote = self._remote(remote_path)
         log.debug("GCSStorage: upload %s -> gs://%s/%s", local_path, self.bucket, remote)
         try:
-            blob = self.bucket_obj.blob(remote)
-            blob.upload_from_filename(str(local_path))
+            _retry_transient_storage(
+                "GCSStorage: upload",
+                lambda: self.bucket_obj.blob(remote).upload_from_filename(str(local_path)),
+            )
         except Exception as exc:
             log.error("GCSStorage: upload failed gs://%s/%s: %s", self.bucket, remote, exc)
             raise OSError(f"GCSStorage: upload failed for {remote_path}") from exc
@@ -466,8 +550,10 @@ class GCSStorage(ResultStorage):
         remote = self._remote(remote_path)
         local_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            blob = self.bucket_obj.blob(remote)
-            blob.download_to_filename(str(local_path))
+            _retry_transient_storage(
+                "GCSStorage: download",
+                lambda: self.bucket_obj.blob(remote).download_to_filename(str(local_path)),
+            )
         except Exception as exc:
             log.error(
                 "GCSStorage: download failed gs://%s/%s -> %s: %s",
@@ -604,7 +690,28 @@ class AzureBlobStorage(ResultStorage):
                 )
             blob_client = svc.get_blob_client(remote)
             with local_path.open("rb") as f:
-                await blob_client.upload_blob(f, overwrite=True)
+                for attempt in range(1, _TRANSIENT_RETRY_ATTEMPTS + 1):
+                    try:
+                        await blob_client.upload_blob(f, overwrite=True)
+                        break
+                    except Exception as exc:  # noqa: BLE001 — classified below
+                        if attempt >= _TRANSIENT_RETRY_ATTEMPTS or not _is_transient_storage_error(
+                            exc
+                        ):
+                            raise
+                        delay = min(
+                            _TRANSIENT_RETRY_BASE_S * (2 ** (attempt - 1)),
+                            _TRANSIENT_RETRY_CAP_S,
+                        )
+                        log.warning(
+                            "AzureBlobStorage: upload transient failure (attempt %d/%d), "
+                            "retrying in %.1fs: %s",
+                            attempt,
+                            _TRANSIENT_RETRY_ATTEMPTS,
+                            delay,
+                            exc,
+                        )
+                        await asyncio.sleep(delay)
         except Exception as exc:
             log.error(
                 "AzureBlobStorage: upload failed %s/%s: %s",
@@ -661,8 +768,29 @@ class AzureBlobStorage(ResultStorage):
                 )
             blob_client = svc.get_blob_client(remote)
             with local_path.open("wb") as f:
-                downloader = await blob_client.download_blob()
-                await downloader.readinto(f)
+                for attempt in range(1, _TRANSIENT_RETRY_ATTEMPTS + 1):
+                    try:
+                        downloader = await blob_client.download_blob()
+                        await downloader.readinto(f)
+                        break
+                    except Exception as exc:  # noqa: BLE001 — classified below
+                        if attempt >= _TRANSIENT_RETRY_ATTEMPTS or not _is_transient_storage_error(
+                            exc
+                        ):
+                            raise
+                        delay = min(
+                            _TRANSIENT_RETRY_BASE_S * (2 ** (attempt - 1)),
+                            _TRANSIENT_RETRY_CAP_S,
+                        )
+                        log.warning(
+                            "AzureBlobStorage: download transient failure (attempt %d/%d), "
+                            "retrying in %.1fs: %s",
+                            attempt,
+                            _TRANSIENT_RETRY_ATTEMPTS,
+                            delay,
+                            exc,
+                        )
+                        await asyncio.sleep(delay)
         except Exception as exc:
             log.error(
                 "AzureBlobStorage: download failed %s/%s -> %s: %s",
