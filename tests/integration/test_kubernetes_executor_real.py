@@ -143,7 +143,7 @@ def test_real_kubernetes_job_failure_reason_surfaces() -> None:
     executor.shutdown()
 
 
-def test_real_kubernetes_3_samples(tmp_path: Path) -> None:
+def test_real_kubernetes_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3-sample campaign against a real Kubernetes cluster.
 
     This test exercises the full production path:
@@ -157,10 +157,15 @@ def test_real_kubernetes_3_samples(tmp_path: Path) -> None:
          osimflow.remote_runner``) with the task payload in
          ``OSIMFLOW_TASK_PAYLOAD`` (issue #996) — the worker images must
          therefore ship the ``osimflow`` package.
-      4. The executor polls ``list_namespaced_pod`` until the pod reaches a
+      4. The executor signs the payload with the HMAC shared secret
+         configured by this test (issue #1453): the submitted Job must
+         carry ``OSIMFLOW_TASK_PAYLOAD`` + ``OSIMFLOW_TASK_PAYLOAD_SIG``
+         + ``OSIMFLOW_TASK_PAYLOAD_SECRET`` and the signature must
+         verify with the configured secret.
+      5. The executor polls ``list_namespaced_pod`` until the pod reaches a
          terminal phase (``Succeeded``/``Failed``), tolerating scheduling
          latency via exponential backoff.
-      5. The Campaign collects per-sample results from shared storage.
+      6. The Campaign collects per-sample results from shared storage.
 
     The test asserts the same 4-artifact contract as the local executor
     test (``test_local_executor.py``), plus the per-campaign ``run.json``
@@ -171,8 +176,19 @@ def test_real_kubernetes_3_samples(tmp_path: Path) -> None:
 
     from osimflow import Campaign, CampaignConfig
     from osimflow.executors import KubernetesExecutor
+    from osimflow.task_payload_hmac import (  # noqa: PLC0415
+        TASK_PAYLOAD_SECRET_ENV,
+        TASK_PAYLOAD_SIG_ENV,
+        verify_task_payload,
+    )
 
     namespace = os.environ.get("OSIMFLOW_KUBERNETES_NAMESPACE", "default")
+
+    # Issue #1453: configure the HMAC shared secret so the executor signs
+    # OSIMFLOW_TASK_PAYLOAD and the remote runner verifies (fail-closed)
+    # before decoding/executing.
+    secret = "osimflow-k8s-e2e-task-payload-secret"
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
 
     # Set up hermetic test fixtures (same pattern as other executor tests).
     example_pkg = REPO_ROOT / "example_package"
@@ -279,3 +295,32 @@ def test_real_kubernetes_3_samples(tmp_path: Path) -> None:
         payload = json.loads(env["OSIMFLOW_TASK_PAYLOAD"])
         assert payload["schema_version"] == 1
         assert payload["step"] == "sim"
+
+        # --- HMAC signature propagation (issue #1453) --------------------
+        # The signed job must carry payload + signature + secret, and the
+        # signature must verify against the configured secret.
+        assert TASK_PAYLOAD_SIG_ENV in env, (
+            f"Job {job.metadata.name} missing {TASK_PAYLOAD_SIG_ENV} env var "
+            "(the HMAC signature did not propagate to the submitted spec)"
+        )
+        assert env.get(TASK_PAYLOAD_SECRET_ENV) == secret, (
+            f"Job {job.metadata.name} missing/mismatched {TASK_PAYLOAD_SECRET_ENV} "
+            f"env var: {env.get(TASK_PAYLOAD_SECRET_ENV)!r}"
+        )
+        assert verify_task_payload(
+            env["OSIMFLOW_TASK_PAYLOAD"],
+            env.get(TASK_PAYLOAD_SIG_ENV),
+            env[TASK_PAYLOAD_SECRET_ENV],
+        ), (
+            f"Job {job.metadata.name}: {TASK_PAYLOAD_SIG_ENV} does not verify "
+            f"against {TASK_PAYLOAD_SECRET_ENV} for the submitted payload"
+        )
+        # Remote-runner verification succeeded (issue #1453): with the
+        # shared secret configured, ``osimflow.remote_runner`` exits
+        # non-zero on any missing/tampered signature, which would fail
+        # the Job — a Succeeded sim Job is the recorded proof.
+        assert (job.status.succeeded or 0) >= 1, (
+            f"Job {job.metadata.name} did not succeed; the remote runner may "
+            "have failed HMAC verification "
+            f"(status: succeeded={job.status.succeeded!r})"
+        )

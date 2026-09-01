@@ -40,7 +40,7 @@ pytestmark = pytest.mark.skipif(
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_real_azure_batch_3_samples(tmp_path: Path) -> None:
+def test_real_azure_batch_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3-sample campaign against real Azure Batch.
 
     This test exercises the full production path:
@@ -63,11 +63,22 @@ def test_real_azure_batch_3_samples(tmp_path: Path) -> None:
 
     from osimflow import Campaign, CampaignConfig
     from osimflow.executors import AzureBatchExecutor
+    from osimflow.task_payload_hmac import (  # noqa: PLC0415
+        TASK_PAYLOAD_SECRET_ENV,
+        TASK_PAYLOAD_SIG_ENV,
+        verify_task_payload,
+    )
 
     account_name = os.environ["OSIMFLOW_AZURE_BATCH_ACCOUNT_NAME"]
     account_url = os.environ["OSIMFLOW_AZURE_BATCH_ACCOUNT_URL"]
     pool_id = os.environ["OSIMFLOW_AZURE_BATCH_POOL_ID"]
     location = os.environ["OSIMFLOW_AZURE_BATCH_LOCATION"]
+
+    # Issue #1453: configure the HMAC shared secret so the executor signs
+    # OSIMFLOW_TASK_PAYLOAD and the remote runner verifies (fail-closed)
+    # before decoding/executing.
+    secret = "osimflow-azure-e2e-task-payload-secret"
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
 
     # Set up hermetic test fixtures (same pattern as other executor tests).
     example_pkg = REPO_ROOT / "example_package"
@@ -114,6 +125,56 @@ def test_real_azure_batch_3_samples(tmp_path: Path) -> None:
 
     assert_sim_fanout_directives(directives)
     result = campaign.run()
+
+    # --- HMAC signature propagation (issue #1453) -------------------------
+    # Re-read the real Batch task via the azure-batch SDK (the same
+    # probe style as ``tests/integration/_resource_contract.py``) and
+    # assert the submitted task carries payload + signature + secret,
+    # and that the signature verifies against the configured secret.
+    # A successful task execution is the remote-runner verification
+    # proof: with the shared secret configured, ``osimflow.remote_runner``
+    # exits non-zero on a missing/tampered signature, which fails the
+    # task.
+    sim_job_ids_hmac = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    assert len(sim_job_ids_hmac) >= 3, (
+        f"expected >= 3 sim job ids for the HMAC wire check, got {directives.records!r}"
+    )
+    batch_client = executor._client  # noqa: SLF001 — populated during campaign.run()
+    for job_id in sim_job_ids_hmac:
+        task = batch_client.task.get(account_name, job_id, job_id)
+        env = {e.name: e.value for e in (task.environment_settings or [])}
+        assert env.get("OSIMFLOW_TASK_PAYLOAD"), (
+            f"Azure Batch task {job_id} missing OSIMFLOW_TASK_PAYLOAD env var"
+        )
+        assert env.get(TASK_PAYLOAD_SIG_ENV), (
+            f"Azure Batch task {job_id} missing {TASK_PAYLOAD_SIG_ENV} env var "
+            "(the HMAC signature did not propagate to the submitted spec)"
+        )
+        assert env.get(TASK_PAYLOAD_SECRET_ENV) == secret, (
+            f"Azure Batch task {job_id} missing/mismatched {TASK_PAYLOAD_SECRET_ENV} "
+            f"env var: {env.get(TASK_PAYLOAD_SECRET_ENV)!r}"
+        )
+        assert verify_task_payload(
+            env["OSIMFLOW_TASK_PAYLOAD"],
+            env.get(TASK_PAYLOAD_SIG_ENV),
+            env[TASK_PAYLOAD_SECRET_ENV],
+        ), (
+            f"Azure Batch task {job_id}: {TASK_PAYLOAD_SIG_ENV} does not verify "
+            f"against {TASK_PAYLOAD_SECRET_ENV} for the submitted payload"
+        )
+        assert task.state == "completed", (
+            f"Azure Batch task {job_id} did not complete: {task.state!r}"
+        )
+        assert task.execution_info is not None and task.execution_info.result == "success", (
+            f"Azure Batch task {job_id} did not succeed; the remote runner may "
+            "have failed HMAC verification (execution_info: "
+            f"{task.execution_info!r})"
+        )
+
     executor.shutdown()
 
     # --- 4 output artifacts ---

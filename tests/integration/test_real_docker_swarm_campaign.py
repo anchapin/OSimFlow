@@ -37,6 +37,7 @@ responsibility; this is the production pattern).
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -79,7 +80,30 @@ def _docker_swarm_available() -> tuple[bool, str]:
     return True, ""
 
 
-def test_real_docker_swarm_3_samples(tmp_path: Path) -> None:
+def _swarm_service_env(service_name: str) -> dict[str, str]:
+    """Return the service's container env as a dict via service inspect (issue #1453).
+
+    Mirrors :func:`tests.integration._resource_contract.swarm_service_resources`
+    but returns ``Spec.TaskTemplate.ContainerSpec.Env`` (``KEY=value`` pairs)
+    instead of the ``Resources`` block.
+    """
+    proc = subprocess.run(  # noqa: S603
+        ["docker", "service", "inspect", service_name, "--format", "{{json .Spec}}"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    spec = json.loads(proc.stdout)
+    pairs = (spec.get("TaskTemplate", {}).get("ContainerSpec", {}) or {}).get("Env") or []
+    env: dict[str, str] = {}
+    for pair in pairs:
+        key, _, value = pair.partition("=")
+        env[key] = value
+    return env
+
+
+def test_real_docker_swarm_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3-sample campaign against a real Docker Swarm cluster (#582, #1020).
 
     This test exercises the full production path:
@@ -147,6 +171,17 @@ def test_real_docker_swarm_3_samples(tmp_path: Path) -> None:
 
     from osimflow import Campaign, CampaignConfig
     from osimflow.executors import DockerSwarmExecutor
+    from osimflow.task_payload_hmac import (  # noqa: PLC0415
+        TASK_PAYLOAD_SECRET_ENV,
+        TASK_PAYLOAD_SIG_ENV,
+        verify_task_payload,
+    )
+
+    # Issue #1453: configure the HMAC shared secret so the executor signs
+    # OSIMFLOW_TASK_PAYLOAD and the remote runner verifies (fail-closed)
+    # before decoding/executing.
+    secret = "osimflow-swarm-e2e-task-payload-secret"
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, secret)
 
     # Use the env-configurable image (default: python:3.12-slim — the
     # OSimFlow stub work function only needs Python; the real
@@ -228,6 +263,44 @@ def test_real_docker_swarm_3_samples(tmp_path: Path) -> None:
         )
     result = campaign.run()
     executor.shutdown()
+
+    # --- HMAC signature propagation (issue #1453) -------------------------
+    # Re-read the real service spec via ``docker service inspect`` and
+    # assert the submitted service carries payload + signature + secret,
+    # and that the signature verifies against the configured secret.
+    # Campaign success with the secret configured is itself the
+    # remote-runner verification proof: the runner exits non-zero on a
+    # missing/tampered signature, which would fail the service and the
+    # campaign.
+    sim_service_names_hmac = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    assert len(sim_service_names_hmac) >= 3, (
+        f"expected >= 3 sim service names for the HMAC wire check, got {directives.records!r}"
+    )
+    for service_name in sim_service_names_hmac:
+        env = _swarm_service_env(service_name)
+        assert env.get("OSIMFLOW_TASK_PAYLOAD"), (
+            f"Swarm service {service_name} missing OSIMFLOW_TASK_PAYLOAD env var"
+        )
+        assert env.get(TASK_PAYLOAD_SIG_ENV), (
+            f"Swarm service {service_name} missing {TASK_PAYLOAD_SIG_ENV} env var "
+            "(the HMAC signature did not propagate to the submitted spec)"
+        )
+        assert env.get(TASK_PAYLOAD_SECRET_ENV) == secret, (
+            f"Swarm service {service_name} missing/mismatched "
+            f"{TASK_PAYLOAD_SECRET_ENV} env var: {env.get(TASK_PAYLOAD_SECRET_ENV)!r}"
+        )
+        assert verify_task_payload(
+            env["OSIMFLOW_TASK_PAYLOAD"],
+            env.get(TASK_PAYLOAD_SIG_ENV),
+            env[TASK_PAYLOAD_SECRET_ENV],
+        ), (
+            f"Swarm service {service_name}: {TASK_PAYLOAD_SIG_ENV} does not verify "
+            f"against {TASK_PAYLOAD_SECRET_ENV} for the submitted payload"
+        )
 
     # --- 4 output artifacts (same contract as test_aws_batch_real.py) ---
     csv_path = outdir / "aggregated_results.csv"
