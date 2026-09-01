@@ -10,6 +10,10 @@ Covers:
 - Message format: correct JSON shape for invalidate_step / invalidate_sample
 - Idempotent subscriber start
 - Graceful handling of Redis connection failures
+- Circuit breaker: repeated Redis failures open the breaker and shared-store
+  calls fail fast (issue #1451); half-open success closes it; a failed
+  half-open probe re-opens with ``_consecutive_failures`` reset to 0
+  (the d1056b8/#1330 behaviour)
 """
 
 import json
@@ -22,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from osimflow.cache import CacheKey, SQLiteCache
+from osimflow.circuit_breaker import CircuitBreaker
 from osimflow.distributed_cache import DistributedCache, build_cache
 
 # Detect the optional `redis` extra ONCE at import time. The previous
@@ -495,6 +500,200 @@ class TestDistributedCacheHandleInvalidation:
         # Should not raise.
         dist_cache._handle_invalidation({"action": "unknown_action"})
         dist_cache._handle_invalidation({})
+
+
+class TestDistributedCacheBreaker:
+    """Circuit-breaker integration over the shared Redis paths (issue #1451).
+
+    Mirrors ``test_document_store.py::TestRedisDocumentStoreErrorPaths``:
+    ``DistributedCache`` wires a ``CircuitBreaker`` into the shared-store
+    read/write paths (``_shared_lookup`` / ``_shared_store`` /
+    ``_shared_invalidate``), and a refactor that bypasses it must fail
+    these tests.
+
+    The cooldown clock is controlled by monkeypatching
+    ``osimflow.circuit_breaker.time.monotonic`` so the open → half_open
+    transition happens deterministically without any real ``time.sleep``
+    (the sibling ``test_circuit_breaker.py`` sleeps; here the clock is
+    injected instead).
+    """
+
+    @pytest.fixture
+    def dist_cache(self, tmp_path: Path) -> DistributedCache:
+        mock_ra = AsyncMock()
+        with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
+            return DistributedCache(
+                db_path=tmp_path / "dist_breaker.sqlite",
+                redis_url="redis://localhost:6379/0",
+                campaign_id="test-breaker",
+            )
+
+    @pytest.fixture
+    def clock(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        """Controllable ``time.monotonic`` for the breaker's cooldown math."""
+        now = [1000.0]
+        monkeypatch.setattr("osimflow.circuit_breaker.time.monotonic", lambda: now[0])
+        return now
+
+    def _key(self, **overrides: Any) -> CacheKey:
+        defaults: dict[str, Any] = {
+            "step": "STEP_A",
+            "sample_id": "s1",
+            "openstudio_version": "N/A",
+            "inputs_sha256": "abc",
+            "code_sha256": "def",
+            "container_digest": "py",
+            "generation": 0,
+        }
+        defaults.update(overrides)
+        return CacheKey(**defaults)
+
+    @staticmethod
+    def _failing_module() -> MagicMock:
+        """Sync-redis module whose ``from_url`` simulates a Redis outage."""
+        module = MagicMock()
+        module.from_url.side_effect = ConnectionError("no redis in tests")
+        return module
+
+    # ------------------------------------------------------------------
+    # (a) repeated failures open the breaker; subsequent calls fail fast
+    # ------------------------------------------------------------------
+    def test_repeated_write_failures_open_breaker_and_fail_fast(
+        self, dist_cache: DistributedCache, tmp_path: Path
+    ) -> None:
+        dist_cache._breaker = CircuitBreaker(
+            name="cache:fail-fast", failure_threshold=2, cooldown_s=60.0
+        )
+        failing = self._failing_module()
+        out = tmp_path / "out"
+        out.mkdir()
+
+        with patch("osimflow.distributed_cache._get_redis_sync", return_value=failing):
+            # Each of the first two writes attempts (and fails) a Redis call.
+            dist_cache.store(self._key(), out, exit_code=0)
+            dist_cache.store(self._key(), out, exit_code=0)
+            assert dist_cache._breaker.state == "open"
+
+            # Circuit open: writes/lookups skip the shared data plane
+            # entirely — no further client-construction attempts.
+            for i in range(5):
+                dist_cache.store(self._key(sample_id=f"late{i}"), out, exit_code=0)
+                assert dist_cache.lookup(self._key(sample_id=f"late{i}")) == out
+            assert failing.from_url.call_count == 2
+
+        # The local layer kept working while the circuit was open
+        # (1 original key + 5 late keys, each a local hit above).
+        assert dist_cache.stats()["total"] == 6
+
+    def test_read_and_invalidate_fail_fast_when_circuit_open(
+        self, dist_cache: DistributedCache
+    ) -> None:
+        dist_cache._breaker = CircuitBreaker(
+            name="cache:fail-fast-ro", failure_threshold=2, cooldown_s=60.0
+        )
+        failing = self._failing_module()
+
+        with (
+            patch("osimflow.distributed_cache._get_redis_sync", return_value=failing),
+            patch.object(dist_cache, "_start_subscriber"),
+            patch.object(dist_cache, "_publish"),
+        ):
+            for _ in range(2):
+                assert dist_cache.lookup(self._key()) is None
+            assert dist_cache._breaker.state == "open"
+            assert failing.from_url.call_count == 2
+
+            # Read path: misses stay misses with no Redis contact.
+            for _ in range(5):
+                assert dist_cache.lookup(self._key(sample_id="miss")) is None
+            # Invalidate path: the shared HDEL is skipped too.
+            assert dist_cache.invalidate_step("STEP_A") == 0
+            assert failing.from_url.call_count == 2
+
+    # ------------------------------------------------------------------
+    # (b) a success in half-open closes the circuit
+    # ------------------------------------------------------------------
+    def test_half_open_success_closes_breaker(
+        self,
+        dist_cache: DistributedCache,
+        tmp_path: Path,
+        clock: list[float],
+    ) -> None:
+        dist_cache._breaker = CircuitBreaker(
+            name="cache:half-open-ok", failure_threshold=2, cooldown_s=30.0
+        )
+        failing = self._failing_module()
+        out = tmp_path / "out"
+        out.mkdir()
+
+        with patch("osimflow.distributed_cache._get_redis_sync", return_value=failing):
+            for _ in range(2):
+                assert dist_cache.lookup(self._key()) is None
+            assert dist_cache._breaker.state == "open"
+            assert dist_cache._breaker.consecutive_failures == 2
+
+        # Advance past the cooldown — no sleep — then let the probe read
+        # a real shared entry through a working client.
+        clock[0] += 31.0
+        assert dist_cache._breaker.state == "half_open"
+
+        working_client = MagicMock()
+        working_client.hget.return_value = json.dumps(
+            {"output_path": str(out), "exit_code": 0, "finished_at": 0.0}
+        )
+        working = MagicMock()
+        working.from_url.return_value = working_client
+        with patch("osimflow.distributed_cache._get_redis_sync", return_value=working):
+            assert dist_cache.lookup(self._key()) == out  # probe: shared hit
+            assert dist_cache._breaker.state == "closed"
+            assert dist_cache._breaker.consecutive_failures == 0
+
+            # Circuit closed: normal shared ops resume on the same client.
+            dist_cache.store(self._key(sample_id="s2"), out, exit_code=0)
+            assert dist_cache._breaker.state == "closed"
+            assert working.from_url.call_count == 1  # client was cached
+
+    # ------------------------------------------------------------------
+    # (c) d1056b8: a failed half-open probe re-opens with counter at 0
+    # ------------------------------------------------------------------
+    def test_half_open_failure_reopens_and_resets_counter(
+        self,
+        dist_cache: DistributedCache,
+        clock: list[float],
+    ) -> None:
+        """Failed half_open probe → open with ``_consecutive_failures`` == 0.
+
+        Regression guard for d1056b8 (issue #1330/#1379): the counter is
+        preserved across open → half_open, then reset to 0 — not 1 — when
+        the failed probe re-opens the circuit.
+        """
+        dist_cache._breaker = CircuitBreaker(
+            name="cache:half-open-fail", failure_threshold=2, cooldown_s=30.0
+        )
+        failing = self._failing_module()
+
+        with patch("osimflow.distributed_cache._get_redis_sync", return_value=failing):
+            for _ in range(2):
+                assert dist_cache.lookup(self._key()) is None
+            assert dist_cache._breaker.state == "open"
+            assert dist_cache._breaker.consecutive_failures == 2
+
+            clock[0] += 31.0
+            assert dist_cache._breaker.state == "half_open"
+            # Counter preserved across open → half_open (no premature reset).
+            assert dist_cache._breaker.consecutive_failures == 2
+
+            # The single half-open probe goes through and fails.
+            assert dist_cache.lookup(self._key()) is None
+            assert dist_cache._breaker.state == "open"  # fresh cooldown re-armed
+            # d1056b8: reset to 0, not 1.
+            assert dist_cache._breaker.consecutive_failures == 0
+
+            # Still inside the re-armed cooldown: fail fast, no Redis contact.
+            calls_before = failing.from_url.call_count
+            clock[0] += 1.0
+            assert dist_cache.lookup(self._key()) is None
+            assert failing.from_url.call_count == calls_before
 
 
 class TestDistributedCacheAutoRecovery:
