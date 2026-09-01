@@ -93,7 +93,34 @@ def test_real_google_batch_3_samples(tmp_path: Path) -> None:
         batch_service_account=service_account,
     )
 
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        record_submit_directives,
+    )
+
+    directives = record_submit_directives(executor)
+
     campaign = Campaign(cfg=cfg, executor=executor)
+    # --- Resource-directive propagation (issue #1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        assert_sim_fanout_directives,
+        record_submit_directives,
+    )
+
+    assert_sim_fanout_directives(directives)
+    # --- Google Batch wire check: ComputeResource sees the directives (#1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        google_job_compute_resource,
+    )
+
+    sim_job_names = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    for job_name in sim_job_names:
+        resources = google_job_compute_resource(executor._client, job_name)  # noqa: SLF001
+        assert resources["cpu_cores"] == 4, f"Google Batch dropped cpus: {resources}"
+        assert resources["memory_mb"] == 8192, f"Google Batch dropped memory_mb: {resources}"
     result = campaign.run()
     executor.shutdown()
 

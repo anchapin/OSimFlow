@@ -173,7 +173,39 @@ def test_real_nomad_3_samples(tmp_path: Path) -> None:
         "the address config did not propagate"
     )
 
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        record_submit_directives,
+    )
+
+    directives = record_submit_directives(executor)
+
     campaign = Campaign(cfg=cfg, executor=executor)
+    # --- Resource-directive propagation (issue #1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        assert_sim_fanout_directives,
+        record_submit_directives,
+    )
+
+    assert_sim_fanout_directives(directives)
+    # --- Nomad wire check: /v1/job sees the Resources block (#1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        nomad_job_resources,
+    )
+
+    _nomad_addr = os.environ.get("NOMAD_ADDR") or "http://127.0.0.1:4646"
+    _nomad_token = os.environ.get("NOMAD_TOKEN")
+    sim_job_ids = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    for job_id in sim_job_ids:
+        resources = nomad_job_resources(_nomad_addr, job_id, token=_nomad_token)
+        assert resources.get("MemoryMB") == 8192, (
+            f"Nomad dropped memory_mb for {job_id}: {resources}"
+        )
+        # Nomad stores CPU in MHz; the executor maps cpus -> MHz * 1000.
+        assert resources.get("CPU"), f"Nomad dropped cpus for {job_id}: {resources}"
     result = campaign.run()
     executor.shutdown()
 

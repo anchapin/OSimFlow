@@ -164,7 +164,20 @@ def test_real_slurm_cluster_3_samples(tmp_path: Path) -> None:
     # detection). We assert the wiring flag too for documentation.
     assert executor.debug is False
 
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        record_submit_directives,
+    )
+
+    directives = record_submit_directives(executor)
+
     campaign = Campaign(cfg=cfg, executor=executor)
+    # --- Resource-directive propagation (issue #1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        assert_sim_fanout_directives,
+        record_submit_directives,
+    )
+
+    assert_sim_fanout_directives(directives)
     result = campaign.run()
     executor.shutdown()
 
