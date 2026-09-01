@@ -388,6 +388,21 @@ class TestLoadConfig:
         assert cfg.nomad_fanout_submit_rate_per_sec == pytest.approx(9.0)
         assert cfg.nomad_fanout_submit_chunk_size == 25
 
+    def test_nomad_allow_insecure_token_option(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """--nomad-allow-insecure-token flows through load_config (issue #1450)."""
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            nomad_allow_insecure_token=True,
+        )
+        cfg = load_config(args)
+        assert cfg.nomad_allow_insecure_token is True
+        # Delegated flat access resolves to the nested NomadConfig field.
+        assert cfg.nomad.allow_insecure_token is True
+
     def test_partition_sharding_options(
         self, variables_yml: Path, template_pkg: Path, outdir: Path
     ) -> None:

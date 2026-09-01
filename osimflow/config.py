@@ -550,6 +550,9 @@ class NomadConfig:
         Path to client key file.
     ca_cert
         Path to CA certificate file.
+    allow_insecure_token
+        Explicit opt-out allowing the Nomad ACL token to transit without
+        TLS to a non-local address (issue #1450; dev/test only).
     """
 
     dispatch_policy: str = "keep_manual"
@@ -562,6 +565,7 @@ class NomadConfig:
     cert: Path | None = None
     key: Path | None = None
     ca_cert: Path | None = None
+    allow_insecure_token: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1074,6 +1078,7 @@ class CampaignConfig:
     nomad_cert: Path | None = None
     nomad_key: Path | None = None
     nomad_ca_cert: Path | None = None
+    nomad_allow_insecure_token: bool = False
 
     # --- Legacy flat Kubernetes executor fields (issue #997) ---
     # Native Job controls: ``backoff_limit`` (default 0 preserves the
@@ -1246,6 +1251,7 @@ class CampaignConfig:
                 cert=self.nomad_cert,
                 key=self.nomad_key,
                 ca_cert=self.nomad_ca_cert,
+                allow_insecure_token=self.nomad_allow_insecure_token,
             )
 
         # Chaos config (issue #1013). Built unconditionally so that
@@ -1392,6 +1398,7 @@ class CampaignConfig:
                 "nomad_cert": ("nomad", "cert"),
                 "nomad_key": ("nomad", "key"),
                 "nomad_ca_cert": ("nomad", "ca_cert"),
+                "nomad_allow_insecure_token": ("nomad", "allow_insecure_token"),
                 # Chaos config delegation (issue #1013)
                 "chaos_enabled": ("chaos", "enabled"),
                 "chaos_scenarios": ("chaos", "scenarios"),
@@ -1860,6 +1867,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         nomad_ca_cert=(
             Path(str(args["nomad_ca_cert"])).resolve() if args.get("nomad_ca_cert") else None
         ),
+        nomad_allow_insecure_token=bool(args.get("nomad_allow_insecure_token", False)),
         # Kubernetes native Job controls (issue #997). Defaults preserve
         # the pre-#997 manifest byte-for-byte: backoff_limit=0, no TTL,
         # no extra labels. ``kubernetes_backoff_limit`` of 0 is the

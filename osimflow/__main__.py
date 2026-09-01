@@ -305,6 +305,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             key=args.nomad_key,
             ca_cert=args.nomad_ca_cert,
             dispatch_job_id=dispatch_job_id,
+            allow_insecure_token=args.nomad_allow_insecure_token,
         )
     # Azure Batch executor — account credentials, pool, and Spot handling.
     if args.executor == "azure_batch":
@@ -618,6 +619,19 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Enable TLS for the Nomad HTTP API connection. "
             "When enabled, use --nomad-cert, --nomad-key, and --nomad-ca-cert "
             "to specify client certificate files for mTLS authentication."
+        ),
+    )
+    run.add_argument(
+        "--nomad-allow-insecure-token",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Allow NOMAD_TOKEN to be transmitted without TLS to a non-local "
+            "Nomad address. Fails closed by default (SEC-009, issue #1450): "
+            "without this flag, osimflow run --executor nomad raises when a "
+            "token is configured for a non-local address without TLS. "
+            "Dev/test only — mirrors --allow-insecure-storage-endpoint "
+            "(issue #1386)."
         ),
     )
     run.add_argument(

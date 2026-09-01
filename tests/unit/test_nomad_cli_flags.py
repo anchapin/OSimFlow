@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from osimflow import NomadExecutor
 from osimflow.__main__ import _build_executor, _build_parser
 
@@ -110,8 +112,6 @@ def test_nomad_tls_defaults_off() -> None:
 
 def test_nomad_cleartext_token_warns_for_non_local_address() -> None:
     """Constructing a NomadExecutor with TLS off + non-local address warns loudly (#1112)."""
-    import pytest
-
     with pytest.warns(UserWarning, match="SEC-009"):
         NomadExecutor(address="https://nomad.example.com:4646", tls=False)
 
@@ -139,6 +139,76 @@ def test_nomad_no_warning_when_tls_enabled() -> None:
             key="/tmp/key.pem",
         )
     assert ex.tls is True
+
+
+def test_nomad_cleartext_token_raises_by_default_for_non_local_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1450: token + non-local + no TLS fails closed by default."""
+    monkeypatch.setenv("NOMAD_TOKEN", "sentinel-secret")
+    with pytest.raises(ValueError, match="SEC-009.*--nomad-allow-insecure-token"):
+        NomadExecutor(address="http://nomad.example.com:4646", tls=False)
+
+
+def test_nomad_allow_insecure_token_opt_out_warns_and_proceeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1450: the explicit opt-out allows plaintext with a loud warning."""
+    monkeypatch.setenv("NOMAD_TOKEN", "sentinel-secret")
+    with pytest.warns(UserWarning, match="SEC-009"):
+        ex = NomadExecutor(
+            address="http://nomad.example.com:4646",
+            tls=False,
+            allow_insecure_token=True,
+        )
+    assert ex.allow_insecure_token is True
+    assert ex.tls is False
+
+
+def test_nomad_token_loopback_address_exempt_from_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1450: loopback addresses stay exempt even with a token set."""
+    import warnings as warnings_mod
+
+    monkeypatch.setenv("NOMAD_TOKEN", "sentinel-secret")
+    with warnings_mod.catch_warnings():
+        warnings_mod.simplefilter("error", UserWarning)
+        ex = NomadExecutor(address="http://127.0.0.1:4646", tls=False)
+    assert ex.tls is False
+
+
+def test_nomad_token_tls_enabled_address_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #1450: TLS-enabled non-local addresses never raise."""
+    import warnings as warnings_mod
+
+    monkeypatch.setenv("NOMAD_TOKEN", "sentinel-secret")
+    with warnings_mod.catch_warnings():
+        warnings_mod.simplefilter("error", UserWarning)
+        ex = NomadExecutor(
+            address="https://nomad.example.com:4646",
+            tls=True,
+            cert="/tmp/cert.pem",
+            key="/tmp/key.pem",
+        )
+    assert ex.tls is True
+
+
+def test_nomad_allow_insecure_token_flag_defaults_false() -> None:
+    """--nomad-allow-insecure-token keeps a fail-closed default of False."""
+    parser = _build_parser()
+    args = parser.parse_args(_base_run_args())
+    assert args.nomad_allow_insecure_token is False
+
+
+def test_nomad_allow_insecure_token_flag_wires_to_executor() -> None:
+    """--nomad-allow-insecure-token flows through _build_executor (issue #1450)."""
+    parser = _build_parser()
+    args = parser.parse_args([*_base_run_args(), "--nomad-allow-insecure-token"])
+    assert args.nomad_allow_insecure_token is True
+    executor = _build_executor(args)
+    assert isinstance(executor, NomadExecutor)
+    assert executor.allow_insecure_token is True
 
 
 def test_is_local_address_variants() -> None:

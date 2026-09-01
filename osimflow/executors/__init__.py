@@ -2265,6 +2265,7 @@ class NomadExecutor(BaseExecutor):
         key: str | None = None,
         ca_cert: str | None = None,
         dispatch_job_id: str | None = None,
+        allow_insecure_token: bool = False,
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -2324,11 +2325,35 @@ class NomadExecutor(BaseExecutor):
         self.ca_cert = ca_cert
         # SEC-009 (issue #1112): a bearer token sent over plain HTTP to a
         # non-local address can be intercepted by anyone on the network
-        # path. TLS stays opt-in for backwards compatibility with dev
-        # clusters, but non-local use without it is almost certainly a
-        # misconfiguration — warn loudly on both the warnings channel and
-        # the logger.
+        # path. Issue #1450 upgrades this guard from warn-only to
+        # fail-closed: when a token IS configured (``NOMAD_TOKEN``) and
+        # the resolved address is non-local without TLS, construction
+        # raises unless the operator explicitly opts in with
+        # ``allow_insecure_token=True`` (``--nomad-allow-insecure-token``),
+        # mirroring the ``--allow-insecure-storage-endpoint`` opt-out from
+        # issue #1386. Loopback addresses stay exempt — loopback traffic
+        # never leaves the host. Without a token the plaintext path
+        # carries no secret, so the loud warning is retained.
+        self.allow_insecure_token = allow_insecure_token
         if not tls and not self._is_local_address(self.address):
+            if os.environ.get("NOMAD_TOKEN") and not allow_insecure_token:
+                raise ValueError(
+                    f"insecure Nomad endpoint (issue #1450): {self.address} "
+                    "does not use TLS while NOMAD_TOKEN is configured — the "
+                    "ACL token would be transmitted in cleartext and can be "
+                    "intercepted (SEC-009), granting job submission/dispatch "
+                    "across the cluster. Enable TLS with --nomad-tls (plus "
+                    "--nomad-cert/--nomad-key/--nomad-ca-cert), or pass "
+                    "--nomad-allow-insecure-token to override (dev/test only)."
+                )
+            if allow_insecure_token:
+                log.warning(
+                    "SEC-009: Nomad TLS disabled for non-local address %s — "
+                    "NOMAD_TOKEN transmitted in cleartext because "
+                    "--nomad-allow-insecure-token was set; do not use in "
+                    "production",
+                    self.address,
+                )
             warnings.warn(
                 f"Nomad TLS is DISABLED for non-local address {self.address}: "
                 "the NOMAD_TOKEN ACL token is transmitted in cleartext and can "
