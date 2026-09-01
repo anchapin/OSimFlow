@@ -12,8 +12,17 @@ The authoritative gate value lives in ``.github/workflows/ci.yml``
 exactly that number, so a future gate change fails here until AGENTS.md is
 updated. Pure file reads — hermetic and fast.
 
+Issue #1455 extends the same guard to prose that the substring-only
+checker cannot verify: the ``circuit_breaker.py`` §5 entry claimed
+``_consecutive_failures`` reset to **1** on ``half_open`` → ``open``,
+but #1379 (commit d1056b8) made a failed half-open probe reset the
+counter to **0**. The tests below parse the reset value straight from
+``osimflow/circuit_breaker.py`` so the doc tracks the code.
+
   1. AGENTS.md states the CI gate percentage      -> test_agents_md_states_ci_coverage_gate
   2. AGENTS.md carries no stale 83% reference     -> test_agents_md_has_no_stale_83_percent
+  3. AGENTS.md states the half_open reset value   -> test_agents_md_states_half_open_reset_value
+  4. AGENTS.md carries no stale reset-to-1 claim  -> test_agents_md_has_no_stale_half_open_reset
 """
 
 import re
@@ -27,8 +36,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _MAKEFILE = REPO_ROOT / "Makefile"
 _AGENTS_MD = REPO_ROOT / "AGENTS.md"
+_CIRCUIT_BREAKER = REPO_ROOT / "osimflow" / "circuit_breaker.py"
 
 _COV_FAIL_UNDER_RE = re.compile(r"--cov-fail-under=(\d+)")
+_HALF_OPEN_RESET_RE = re.compile(r"was_half_open[^0-9]*_consecutive_failures\s*=\s*(\d+)")
 
 
 def _parse_ci_gate_pct() -> int:
@@ -83,4 +94,59 @@ def test_agents_md_has_no_stale_83_percent() -> None:
         "AGENTS.md contains a stale '83%' coverage-gate reference "
         f"(issue #1454 regression). The CI gate is {gate}% — see "
         ".github/workflows/ci.yml."
+    )
+
+
+def _parse_half_open_reset_value() -> int:
+    """Extract the half_open reset value from osimflow/circuit_breaker.py.
+
+    Returns the single distinct value ``_consecutive_failures`` is assigned
+    inside the failed half-open-probe branch (``if was_half_open:``).
+    Fails loudly if the assignment moves or becomes ambiguous — a silent
+    fallback would defeat the drift guard.
+    """
+    matches = _HALF_OPEN_RESET_RE.findall(_CIRCUIT_BREAKER.read_text(encoding="utf-8"))
+    assert matches, (
+        "No was_half_open -> _consecutive_failures assignment found in "
+        "osimflow/circuit_breaker.py. The reset moved; update this test "
+        "to parse the new location."
+    )
+    values = {int(v) for v in matches}
+    assert len(values) == 1, (
+        f"Ambiguous half_open reset in osimflow/circuit_breaker.py: "
+        f"{sorted(values)}. The code must assign exactly one reset value."
+    )
+    return values.pop()
+
+
+def test_agents_md_states_half_open_reset_value() -> None:
+    """AGENTS.md must describe exactly the half_open reset value the code uses.
+
+    A future change of the ``was_half_open`` reset value in
+    ``osimflow/circuit_breaker.py`` fails this test until AGENTS.md is
+    updated — the inversion #1455 fixed cannot reintroduce.
+    """
+    reset = _parse_half_open_reset_value()
+    text = _AGENTS_MD.read_text(encoding="utf-8")
+    assert f"reset to {reset} on a failed ``half_open`` → ``open`` transition" in text, (
+        f"AGENTS.md does not describe the circuit-breaker half_open reset "
+        f"value ({reset}). Update the §5 circuit_breaker.py entry to match "
+        "osimflow/circuit_breaker.py (issue #1379 behavior)."
+    )
+
+
+def test_agents_md_has_no_stale_half_open_reset() -> None:
+    """The literal stale claim from issue #1455 must stay gone.
+
+    Skips the negative assertion if the reset value ever legitimately
+    becomes 1 (then ``reset to 1 on`` in AGENTS.md would be correct, and
+    the positive test above is the binding check).
+    """
+    reset = _parse_half_open_reset_value()
+    if reset == 1:
+        pytest.skip("reset value is legitimately 1 now; the positive-reset test covers it")
+    assert "reset to 1 on ``half_open``" not in _AGENTS_MD.read_text(encoding="utf-8"), (
+        "AGENTS.md contains a stale 'reset to 1 on half_open → open' claim "
+        "(issue #1455 regression). The code resets _consecutive_failures to "
+        f"{reset} on a failed half-open probe — see osimflow/circuit_breaker.py."
     )

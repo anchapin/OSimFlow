@@ -359,7 +359,8 @@ name in this section.
   (closed/open/half-open; guards the Redis
   data plane in `DistributedCache` and `RedisDocumentStore`
   against persistent outages, issue #1111; `_consecutive_failures`
-  is reset to 1 on ``half_open`` → ``open`` transition).
+  is reset to 0 on a failed ``half_open`` → ``open`` transition,
+  issue #1379).
 - `osimflow/distributed_jobqueue.py` — `DistributedJobQueue` +
   `build_job_queue` (Redis pub/sub wrapper).  Carries its own
   `CircuitBreaker(name=f"jobqueue:{campaign_id}")` (issue #1397) so
