@@ -556,6 +556,117 @@ This syncs secrets from Vault/AWS Secrets Manager/GCP Secret Manager into native
 
 ---
 
+## HMAC Task-Payload Signing (remote executors)
+
+Issue #1177 added HMAC-SHA256 signing of the remote-runner task payload. Every
+remote-runner executor — `NomadExecutor`, `KubernetesExecutor`,
+`AWSBatchExecutor`, `AzureBatchExecutor`, `GoogleBatchExecutor`, and
+`DockerSwarmExecutor` — signs the payload at submission time via
+`osimflow.task_payload_hmac.build_signature_env`, and the worker process
+(`python -m osimflow.remote_runner`) verifies the signature **before decoding
+or executing anything**.
+
+### Threat model
+
+`OSIMFLOW_TASK_PAYLOAD` is a JSON-serialized step call that travels through the
+job environment (or Nomad dispatch meta) in plain sight. Anything that can
+modify that value between the orchestrator's submission and the worker's
+execution can otherwise redirect a simulation job into *arbitrary step calls* —
+the entire `remote_runner` step-call surface. The signature defends against
+**writers who do not know the shared secret**: an attacker who can rewrite the
+payload but cannot read the orchestrator-side secret cannot produce a matching
+`OSIMFLOW_TASK_PAYLOAD_SIG`, and the runner refuses to execute. Constant-time
+comparison (`hmac.compare_digest`) prevents signature-oracle timing leaks.
+
+### The three environment variables
+
+Defined in `osimflow/task_payload_hmac.py`:
+
+| Env Var | Purpose |
+|---|---|
+| `OSIMFLOW_TASK_PAYLOAD` | Serialized step call (`schema_version`, `name`, `step`, encoded `args`/`kwargs`, `result_hint`) |
+| `OSIMFLOW_TASK_PAYLOAD_SIG` | Hex HMAC-SHA256 digest computed over the **exact payload string bytes** (UTF-8) as submitted |
+| `OSIMFLOW_TASK_PAYLOAD_SECRET` | Shared secret used for signing (orchestrator side) and verification (worker side) |
+
+On Nomad dispatch jobs the same values travel as dispatch meta keys
+(`task_payload`, `task_payload_sig`, `task_payload_secret`), exposed inside the
+task as `NOMAD_META_task_payload`, `NOMAD_META_task_payload_sig`, and
+`NOMAD_META_task_payload_secret`. The worker resolves the secret env-first,
+then the Nomad meta fallback (`resolve_payload_secret`).
+
+### Provisioning the secret
+
+Set `OSIMFLOW_TASK_PAYLOAD_SECRET` in the **orchestrator** environment before
+launching a campaign. `build_signature_env` picks it up and ships the
+signature + secret pair alongside each job's payload. Without it the runner
+rejects every payload (see below), so it is effectively **required** for
+Nomad/Kubernetes/AWS Batch/Azure Batch/Google Batch/Docker Swarm campaigns.
+
+```bash
+# Generate a fresh secret (any 256-bit random value works)
+export OSIMFLOW_TASK_PAYLOAD_SECRET="$(openssl rand -hex 32)"
+osimflow run --executor nomad ...
+```
+
+Currently the secret is provisioned as a **plain environment variable** on both
+sides. The hardening direction (issue #1449) is per-substrate secret stores:
+inject `OSIMFLOW_TASK_PAYLOAD_SECRET` into worker pods via a Kubernetes Secret
+(and the orchestrator via IRSA/External Secrets — see
+[Kubernetes Secrets](#kubernetes-secrets) above), and via a Nomad Vault
+template stanza on Nomad, rather than a literal orchestrator environment
+variable. Note that because the secret travels in the same job env as the
+payload today, anything that can read the full job env (for example
+`kubectl get pod -o yaml` or `nomad alloc status` output on an insecure
+cluster) also sees it — mTLS + ACL hardening of the substrate (see the
+[Nomad Production Guide](nomad-production.md)) is part of the same defense.
+
+### Fail-closed verification semantics
+
+`osimflow.remote_runner` verifies the signature **before** `json.loads` or any
+step execution, and fails closed in every ambiguous case:
+
+1. **No secret configured** on the worker → `RuntimeError` — unsigned payloads
+   are rejected by design (issue #1205).
+2. **Missing or empty `OSIMFLOW_TASK_PAYLOAD_SIG`** → `RuntimeError`.
+3. **Signature mismatch** (tampered payload, wrong secret) → `RuntimeError`
+   via `hmac.compare_digest` (constant-time).
+
+The runner only proceeds to decode and execute after
+`verify_task_payload` returns True.
+
+### Rotation
+
+The signature and secret are bound to a job **at submission time** — a job
+already in flight carries its own `SIG` + `SECRET` pair and keeps verifying
+against it even after the orchestrator rotates. To rotate:
+
+1. Generate a new secret (`openssl rand -hex 32`).
+2. Update the orchestrator environment (restart the coordinator process).
+3. Revoke the old secret in your secret store once no in-flight campaigns
+   remain. Jobs submitted before the rotation complete normally; new
+   submissions use the new secret.
+
+### Work-script env scrub (issue #1388)
+
+`OSIMFLOW_TASK_PAYLOAD_SECRET` and `OSIMFLOW_TASK_PAYLOAD_SIG` are
+**deliberately absent** from the work-script subprocess environment.
+`osimflow/work.py:_sanitize_env` uses an explicit per-name allowlist (the
+legacy `OSIMFLOW_*` prefix wildcard was removed in commit 8470449), so the
+HMAC secret/signature pair never reaches `bin/*.py`, BYOS scripts, or
+`openstudio.cli` child processes. The only legitimate consumer is
+`osimflow.remote_runner`, whose environment comes directly from the substrate
+job spec — not through the work-script allowlist. This prevents a compromised
+work script from reading the signing secret and forging payloads.
+
+### See also
+
+- [Kubernetes Deployment Guide](kubernetes-deployment.md) — job env vars and
+  RBAC setup for the runner Jobs
+- [Nomad Production Guide](nomad-production.md) — ACL model, mTLS, and
+  dispatch-mode behavior
+
+---
+
 ## API Server Authentication
 
 The REST API server (`osimflow serve`) supports API key authentication for single-user and multi-user deployments.
