@@ -290,7 +290,7 @@ make test-fast      # contract only, no coverage gate (pre-commit mirror)
 CI (`make test-cov`) requires 82% coverage — gated by
 `pyproject.toml [tool.pytest.ini_options]`. CI jobs in
 `.github/workflows/ci.yml`: `lint` (ruff check + format --check),
-`typecheck` (mypy --strict), `test` (pytest + 83%), `contract`,
+`typecheck` (mypy --strict), `test` (pytest + 82%), `contract`,
 `security` (pip-audit + gitleaks), `mlflow-real` (real MLflow
 smoke), `slow` (-m slow), per-PR Nomad E2E. Per-substrate E2E
 (`aws-batch-e2e.yml`, `slurm-e2e.yml`, `kubernetes-e2e.yml`,
