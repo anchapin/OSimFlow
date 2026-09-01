@@ -115,6 +115,8 @@ There is no `aws_access_key_id`, `aws_secret_access_key`, or `aws_session_token`
 
 > **Never** put AWS credentials in `variables.yml`, the job definition container environment, or any file tracked in git.
 
+> Related: `--result-storage-endpoint` / `--s3-artifact-endpoint` must use `https://` for non-loopback hosts unless `--allow-insecure-storage-endpoint` is set (issue #1386) — plaintext HTTP exposes SigV4 signing material in transit. See [user-guide.md](user-guide.md#result-storage--cost-tracking).
+
 ---
 
 ## Slurm / HPC — Environment Variables
