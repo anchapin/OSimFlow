@@ -2,6 +2,31 @@
 
 Defines a small executor-agnostic contract for result references so
 remote handles can return stable callback-facing values.
+
+Executor participation matrix (issue #1333)
+-------------------------------------------
+
+``result_transport_mode="object_storage"`` must behave identically on
+every remote executor: the handle resolves the result hint through
+:func:`resolve_result_for_callback` and then downloads artifacts via
+:func:`materialize_object_storage_result` so Campaign callbacks receive
+**local paths**, never object-storage keys.
+
+======================  ======================================================
+Executor                Transport behaviour
+======================  ======================================================
+``kubernetes``          resolve + materialize (reference implementation)
+``nomad``               resolve + materialize
+``aws_batch``           resolve + materialize
+``azure_batch``         resolve + materialize
+``google_batch``        resolve + materialize
+``pbs``                 resolve + materialize
+``slurm``               exempt — submitit future returns the work result
+                        directly; the handle never consumes a result hint
+``docker_swarm``        exempt — same submitit-style future semantics
+``dask_jobqueue``       exempt — same future semantics
+``local``               exempt — in-process, no transport layer
+======================  ======================================================
 """
 
 from __future__ import annotations

@@ -27,7 +27,11 @@ from concurrent.futures import Future
 from typing import Any
 
 from osimflow.executors.base import BaseExecutor, Handle
-from osimflow.executors.transport import resolve_result_for_callback
+from osimflow.executors.transport import (
+    coerce_transport_mode,
+    materialize_object_storage_result,
+    resolve_result_for_callback,
+)
 
 log = logging.getLogger("osimflow.executors")
 
@@ -62,10 +66,29 @@ class _PBSHandle(Handle):
     state so concurrent callers don't re-poll.
     """
 
-    def __init__(self, job_id: str, executor: PBSExecutor, *, result_hint: Any = None) -> None:
+    def __init__(
+        self,
+        job_id: str,
+        executor: PBSExecutor,
+        *,
+        result_hint: Any = None,
+        result_transport_mode: str = "auto",
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+    ) -> None:
         self.job_id = job_id
         self._executor = executor
         self._result_hint = result_hint
+        # Result-transport contract (issue #1333): materialize object-storage
+        # artifacts on `.result()` so Campaign callbacks receive local paths
+        # — identical to the Nomad and Kubernetes handles.
+        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
+        self._result_storage_backend = result_storage_backend
+        self._result_storage_bucket = result_storage_bucket
+        self._result_storage_prefix = result_storage_prefix
+        self._result_storage_endpoint = result_storage_endpoint
         self._future: Future[Any] = Future()
         # Worker tracking fields.
         self.worker_id: str | None = job_id
@@ -85,7 +108,19 @@ class _PBSHandle(Handle):
             raise
 
         if exit_code == 0:
-            resolved = resolve_result_for_callback(self._result_hint, default=None)
+            resolved = resolve_result_for_callback(
+                self._result_hint,
+                default=None,
+                transport_mode=self._result_transport_mode,
+            )
+            resolved = materialize_object_storage_result(
+                resolved,
+                transport_mode=self._result_transport_mode,
+                result_storage_backend=self._result_storage_backend,
+                result_storage_bucket=self._result_storage_bucket,
+                result_storage_prefix=self._result_storage_prefix,
+                result_storage_endpoint=self._result_storage_endpoint,
+            )
             self._future.set_result(resolved)
             return resolved
 
@@ -418,8 +453,9 @@ class PBSExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         self._container_digest = container_digest
-        del remote_command, result_transport_mode, result_storage_backend  # noqa: F841
-        del result_storage_bucket, result_storage_prefix, result_storage_endpoint  # noqa: F841
+        del remote_command  # noqa: F841
+        # result_transport_mode / result_storage_* are consumed below when
+        # the handle is constructed (issue #1333 — object-storage materialization).
         del variables_json, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
         # env is used in debug mode; result_hint is used throughout.
         local_env: dict[str, str] = env if env is not None else {}
@@ -504,7 +540,26 @@ class PBSExecutor(BaseExecutor):
         # tracks the PBS job state.
         del fn, args  # noqa: ARG002
 
-        return _PBSHandle(job_id=job_id, executor=self, result_hint=result_hint)
+        return _PBSHandle(
+            job_id=job_id,
+            executor=self,
+            result_hint=result_hint,
+            result_transport_mode=(
+                str(result_transport_mode) if result_transport_mode is not None else "auto"
+            ),
+            result_storage_backend=(
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            result_storage_bucket=(
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            result_storage_prefix=(
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            result_storage_endpoint=(
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
+        )
 
     def shutdown(self) -> None:
         # PBS jobs are tracked by PBS itself; no local state to tear down.
