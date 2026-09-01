@@ -937,6 +937,95 @@ def _check_dask_jobqueue() -> CheckResult:
     )
 
 
+def _check_task_payload_signing(configured_executor: str | None) -> CheckResult:
+    """Warn when the HMAC task-payload contract is mis-wired (issue #1404).
+
+    ``remote_runner`` fails closed (issue #1205): with no
+    ``OSIMFLOW_TASK_PAYLOAD_SECRET`` configured, every per-sample job on a
+    payload-dispatching executor refuses to execute; with a secret
+    configured, an executor that does not sign its payloads fails
+    signature verification. This check makes both misconfigurations a
+    first-class health finding instead of a runtime surprise.
+
+    Returns SKIP for executors that do not dispatch via the remote-runner
+    payload contract, WARN for the two broken combinations above, and
+    PASS when the orchestrator secret is set and the executor signs.
+    """
+    name = _EXECUTOR_HEALTH_CHECK_NAME.format(name="task-payload-signing")
+    if configured_executor is None:
+        return CheckResult(
+            name=name,
+            status=CheckStatus.SKIP,
+            category=CheckCategory.INFORMATIONAL,
+            message="Skipped (no --executor selected)",
+            detail="Task-payload signing is only checked for the configured executor.",
+        )
+    try:
+        from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+
+        cls = ExecutorRegistry.get(configured_executor)
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name=name,
+            status=CheckStatus.SKIP,
+            category=CheckCategory.INFORMATIONAL,
+            message=f"Skipped (executor {configured_executor!r} unavailable)",
+            detail=str(exc),
+        )
+    # The overrides return constants, so evaluating the property on a
+    # bare instance (no __init__) is safe and avoids constructing a
+    # fully-configured executor here.
+    requires_payload = cls.__new__(cls).requires_remote_runner_payload
+    if not requires_payload:
+        return CheckResult(
+            name=name,
+            status=CheckStatus.SKIP,
+            category=CheckCategory.INFORMATIONAL,
+            message=f"{configured_executor} does not use the remote-runner payload contract",
+            detail="Task-payload HMAC signing is not applicable to this executor.",
+        )
+
+    secret_set = bool(os.environ.get("OSIMFLOW_TASK_PAYLOAD_SECRET"))
+    if not secret_set:
+        return CheckResult(
+            name=name,
+            status=CheckStatus.WARN,
+            category=CheckCategory.INFORMATIONAL,
+            message=(
+                f"OSIMFLOW_TASK_PAYLOAD_SECRET is not set; {configured_executor} "
+                "per-sample jobs will refuse to execute (remote_runner fails closed)"
+            ),
+            detail=(
+                "Configure OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator "
+                "to enable HMAC-SHA256 payload verification (issue #1205)."
+            ),
+        )
+    if not getattr(cls, "signs_task_payload", False):
+        return CheckResult(
+            name=name,
+            status=CheckStatus.WARN,
+            category=CheckCategory.INFORMATIONAL,
+            message=(
+                f"{configured_executor} requires the payload contract but does not "
+                "sign OSIMFLOW_TASK_PAYLOAD — per-sample jobs will fail signature "
+                "verification even though the orchestrator has a secret configured"
+            ),
+            detail=(
+                "The executor swallows OSIMFLOW_TASK_PAYLOAD_SECRET instead of "
+                "propagating it via build_signature_env (issue #1404)."
+            ),
+        )
+    return CheckResult(
+        name=name,
+        status=CheckStatus.PASS,
+        category=CheckCategory.INFORMATIONAL,
+        message=(
+            f"{configured_executor} signs OSIMFLOW_TASK_PAYLOAD and the "
+            "orchestrator secret is configured"
+        ),
+    )
+
+
 # Built-in executor ↔ health-check dispatch table. The orchestrator iterates
 # ``ExecutorRegistry.iter_health_checks()`` (registered below at module
 # import time) — keep these names in sync with the registrations in
@@ -1057,6 +1146,9 @@ def run_health_checks(
             if configured_executor is not None and name == configured_executor:
                 result = replace(result, category=CheckCategory.CRITICAL)
             results.append(result)
+
+    # --- Task-payload signing contract (issue #1404) ---
+    results.append(_check_task_payload_signing(configured_executor))
 
     return HealthReport(results=results)
 

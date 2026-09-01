@@ -817,3 +817,56 @@ class TestHealthCLIExecutorFlag:
         mock_run.assert_called_once()
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("configured_executor") == "local"
+
+
+class TestTaskPayloadSigningCheck:
+    """Health-check warning for HMAC task-payload contract (issue #1404)."""
+
+    @staticmethod
+    def _check(executor: str | None):
+        from osimflow.health import _check_task_payload_signing
+
+        return _check_task_payload_signing(executor)
+
+    def test_skipped_without_configured_executor(self) -> None:
+        result = self._check(None)
+        assert result.status.value in {"skip", "SKIP", "informational"}
+        assert "Skipped" in result.message or "no --executor" in result.message
+
+    def test_skipped_for_non_payload_executor(self) -> None:
+        for name in ("local", "slurm", "pbs"):
+            result = self._check(name)
+            assert result.status.value in {"skip", "SKIP", "informational"}, name
+
+    def test_warn_when_secret_missing_on_payload_executor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("OSIMFLOW_TASK_PAYLOAD_SECRET", raising=False)
+        result = self._check("nomad")
+        assert result.status.value.lower() == "warn"
+        assert "fails closed" in result.message
+
+    @pytest.mark.parametrize("executor", ["nomad", "kubernetes", "aws_batch", "azure_batch"])
+    def test_pass_when_secret_set_and_executor_signs(
+        self, executor: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "s" * 32)
+        result = self._check(executor)
+        assert result.status.value.lower() == "pass", result.message
+
+    def test_warn_when_executor_does_not_sign_but_secret_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The acceptance scenario: orchestrator-with-secret + executor-without-signing.
+
+        Simulated by flipping a real payload executor's ``signs_task_payload``
+        to ``False`` — the shape of a third-party executor (or a regression)
+        that consumes the payload contract without propagating the secret.
+        """
+        from osimflow.executors import NomadExecutor
+
+        monkeypatch.setattr(NomadExecutor, "signs_task_payload", False)
+        monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD_SECRET", "s" * 32)
+        result = self._check("nomad")
+        assert result.status.value.lower() == "warn", result.message
+        assert "signature verification" in result.message or "swallow" in result.detail

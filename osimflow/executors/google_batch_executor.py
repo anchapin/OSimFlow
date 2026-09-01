@@ -276,6 +276,8 @@ class GoogleBatchExecutor(BaseExecutor):
     def requires_remote_runner_payload(self) -> bool:
         return True
 
+    signs_task_payload = True
+
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
         "preempted",
         "preempt",

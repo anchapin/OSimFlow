@@ -201,6 +201,8 @@ class DockerSwarmExecutor(BaseExecutor):
     def requires_remote_runner_payload(self) -> bool:
         return True
 
+    signs_task_payload = True
+
     def __init__(
         self,
         poll_interval_s: float = 5.0,
