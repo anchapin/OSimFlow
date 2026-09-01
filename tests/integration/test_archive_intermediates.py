@@ -31,13 +31,21 @@ EXAMPLE_PKG = REPO_ROOT / "example_package"
 def workdir(tmp_path: Path) -> Path:
     wd = tmp_path / "work"
     wd.mkdir()
+    # Use a variable that maps to a vendored measure argument
+    # (SetEnvelopePerformance.wwr). #1486 added the measures/ directory
+    # under example_package, so the preflight measure-validation step now
+    # runs strictly and rejects plain .osm-attribute-only variable names
+    # like window_u_value. The archive-intermediates test exercises the
+    # Campaign's archive plumbing, not parameter resolution, so any valid
+    # measure argument is acceptable here.
     (wd / "variables.yml").write_text(
         "algorithm: lhs\n"
         "variables:\n"
-        "  - name: window_u_value\n"
+        "  - name: wwr\n"
         "    distribution: uniform\n"
-        "    min: 1.8\n"
-        "    max: 3.5\n"
+        "    min: 0.2\n"
+        "    max: 0.6\n"
+        "    measure_argument: SetEnvelopePerformance.wwr\n"
     )
     return wd
 
