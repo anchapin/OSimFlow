@@ -677,11 +677,25 @@ class _AWSBatchHandle(Handle):
         submit_params: dict[str, Any],
         *,
         result_hint: Any = None,
+        result_transport_mode: str = "auto",
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
     ) -> None:
         self.job_id = job_id
         self._executor = executor
         self._submit_params = submit_params
         self._result_hint = result_hint
+        # Result-transport contract (issue #1333): the handle materializes
+        # object-storage artifacts on `.result()` so Campaign callbacks
+        # receive local paths — identical to `_NomadHandle` and the
+        # Kubernetes handle.
+        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
+        self._result_storage_backend = result_storage_backend
+        self._result_storage_bucket = result_storage_bucket
+        self._result_storage_prefix = result_storage_prefix
+        self._result_storage_endpoint = result_storage_endpoint
         # Keep a `Future` so the base-class `.result(timeout=...)` /
         # `.done()` paths remain reachable; we cache the poll result
         # in it so concurrent callers don't re-poll.
@@ -733,7 +747,19 @@ class _AWSBatchHandle(Handle):
             self._apply_cost(job)
             status = job.get("status")
             if status == "SUCCEEDED":
-                resolved = resolve_result_for_callback(self._result_hint, default=None)
+                resolved = resolve_result_for_callback(
+                    self._result_hint,
+                    default=None,
+                    transport_mode=self._result_transport_mode,
+                )
+                resolved = materialize_object_storage_result(
+                    resolved,
+                    transport_mode=self._result_transport_mode,
+                    result_storage_backend=self._result_storage_backend,
+                    result_storage_bucket=self._result_storage_bucket,
+                    result_storage_prefix=self._result_storage_prefix,
+                    result_storage_endpoint=self._result_storage_endpoint,
+                )
                 self._future.set_result(resolved)
                 return resolved
 
@@ -775,7 +801,19 @@ class _AWSBatchHandle(Handle):
                     self._apply_cost(job)
                     status = job.get("status")
                     if status == "SUCCEEDED":
-                        resolved = resolve_result_for_callback(self._result_hint, default=None)
+                        resolved = resolve_result_for_callback(
+                            self._result_hint,
+                            default=None,
+                            transport_mode=self._result_transport_mode,
+                        )
+                        resolved = materialize_object_storage_result(
+                            resolved,
+                            transport_mode=self._result_transport_mode,
+                            result_storage_backend=self._result_storage_backend,
+                            result_storage_bucket=self._result_storage_bucket,
+                            result_storage_prefix=self._result_storage_prefix,
+                            result_storage_endpoint=self._result_storage_endpoint,
+                        )
                         self._future.set_result(resolved)
                         return resolved
                     reason = job.get("statusReason", "unknown reason")
@@ -1617,6 +1655,21 @@ class AWSBatchExecutor(BaseExecutor):
             executor=self,
             submit_params=submit_params,
             result_hint=result_hint,
+            result_transport_mode=(
+                str(result_transport_mode) if result_transport_mode is not None else "auto"
+            ),
+            result_storage_backend=(
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            result_storage_bucket=(
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            result_storage_prefix=(
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            result_storage_endpoint=(
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
         )
 
     def shutdown(self) -> None:

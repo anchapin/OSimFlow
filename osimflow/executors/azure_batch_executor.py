@@ -49,7 +49,11 @@ from typing import Any
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.executors.base import BaseExecutor, Handle
-from osimflow.executors.transport import resolve_result_for_callback
+from osimflow.executors.transport import (
+    coerce_transport_mode,
+    materialize_object_storage_result,
+    resolve_result_for_callback,
+)
 from osimflow.task_payload_hmac import build_signature_env
 
 log = logging.getLogger("osimflow.executors.azure_batch")
@@ -154,11 +158,24 @@ class _AzureBatchHandle(Handle):
         submit_params: dict[str, Any],
         *,
         result_hint: Any = None,
+        result_transport_mode: str = "auto",
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
     ) -> None:
         self.job_id = job_id
         self._executor = executor
         self._submit_params = submit_params
         self._result_hint = result_hint
+        # Result-transport contract (issue #1333): materialize object-storage
+        # artifacts on `.result()` so Campaign callbacks receive local paths
+        # — identical to the Nomad and Kubernetes handles.
+        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
+        self._result_storage_backend = result_storage_backend
+        self._result_storage_bucket = result_storage_bucket
+        self._result_storage_prefix = result_storage_prefix
+        self._result_storage_endpoint = result_storage_endpoint
         self._future: Future[Any] = Future()
         self.worker_id: str | None = job_id
         self.worker_ip: str | None = None
@@ -177,7 +194,19 @@ class _AzureBatchHandle(Handle):
 
             exit_code = job.properties.execution_info.exit_code
             if exit_code is None or exit_code == 0:
-                resolved = resolve_result_for_callback(self._result_hint, default=None)
+                resolved = resolve_result_for_callback(
+                    self._result_hint,
+                    default=None,
+                    transport_mode=self._result_transport_mode,
+                )
+                resolved = materialize_object_storage_result(
+                    resolved,
+                    transport_mode=self._result_transport_mode,
+                    result_storage_backend=self._result_storage_backend,
+                    result_storage_bucket=self._result_storage_bucket,
+                    result_storage_prefix=self._result_storage_prefix,
+                    result_storage_endpoint=self._result_storage_endpoint,
+                )
                 self._future.set_result(resolved)
                 return resolved
 
@@ -214,7 +243,19 @@ class _AzureBatchHandle(Handle):
                         raise
                     exit_code = job.properties.execution_info.exit_code
                     if exit_code is None or exit_code == 0:
-                        resolved = resolve_result_for_callback(self._result_hint, default=None)
+                        resolved = resolve_result_for_callback(
+                            self._result_hint,
+                            default=None,
+                            transport_mode=self._result_transport_mode,
+                        )
+                        resolved = materialize_object_storage_result(
+                            resolved,
+                            transport_mode=self._result_transport_mode,
+                            result_storage_backend=self._result_storage_backend,
+                            result_storage_bucket=self._result_storage_bucket,
+                            result_storage_prefix=self._result_storage_prefix,
+                            result_storage_endpoint=self._result_storage_endpoint,
+                        )
                         self._future.set_result(resolved)
                         return resolved
                     failure_reason = getattr(
@@ -619,6 +660,21 @@ class AzureBatchExecutor(BaseExecutor):
             executor=self,
             submit_params=submit_params,
             result_hint=result_hint,
+            result_transport_mode=(
+                str(result_transport_mode) if result_transport_mode is not None else "auto"
+            ),
+            result_storage_backend=(
+                str(result_storage_backend) if result_storage_backend is not None else None
+            ),
+            result_storage_bucket=(
+                str(result_storage_bucket) if result_storage_bucket is not None else None
+            ),
+            result_storage_prefix=(
+                str(result_storage_prefix) if result_storage_prefix is not None else None
+            ),
+            result_storage_endpoint=(
+                str(result_storage_endpoint) if result_storage_endpoint is not None else None
+            ),
         )
 
     def shutdown(self) -> None:
