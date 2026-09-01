@@ -27,8 +27,10 @@ import threading
 import time
 from collections.abc import Callable
 
+from .errors import OSimFlowRuntimeError
 
-class CircuitOpenError(RuntimeError):
+
+class CircuitOpenError(OSimFlowRuntimeError):
     """Raised when an operation is attempted while the circuit is open."""
 
 

@@ -33,6 +33,8 @@ from typing import Any
 
 import requests
 
+from .errors import OSimFlowValueError
+
 log = logging.getLogger("osimflow.measures")
 
 BCL_API_BASE = "https://bcl.nrel.gov/api/"
@@ -81,7 +83,7 @@ class DiscoveredMeasure:
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
-class MeasureRegistryError(ValueError):
+class MeasureRegistryError(OSimFlowValueError):
     """Base exception for measure registry errors."""
 
 

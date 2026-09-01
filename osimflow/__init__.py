@@ -56,6 +56,7 @@ from .document_store import (
     SQLiteDocumentStore,
     build_document_store,
 )
+from .errors import OSimFlowError
 from .executors import (
     AWSBatchExecutor,
     AzureBatchExecutor,
@@ -267,6 +268,8 @@ __all__ = [
     "SQLiteDocumentStore",
     "RedisDocumentStore",
     "build_document_store",
+    # Package exception root (issue #1484)
+    "OSimFlowError",
     # Measure registry (issue #532)
     "MeasureRegistry",
     "MeasureArgument",

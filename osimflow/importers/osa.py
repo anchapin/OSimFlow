@@ -74,6 +74,7 @@ from typing import Any
 import yaml
 
 from osimflow.algorithms import AlgorithmRegistry, BaseAlgorithm
+from osimflow.errors import OSimFlowError
 
 log = logging.getLogger("osimflow.importers.osa")
 
@@ -90,7 +91,7 @@ OSA_DISTRIBUTION_MAP: dict[str, str] = {
 }
 
 
-class OSAImportError(Exception):
+class OSAImportError(OSimFlowError):
     """Raised when an OSA file cannot be parsed or converted."""
 
 

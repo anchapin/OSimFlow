@@ -22,6 +22,8 @@ import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .errors import OSimFlowRuntimeError
+
 log = logging.getLogger("osimflow.handoff_record")
 
 #: Filename of the handoff record, written inside the campaign outdir.
@@ -37,7 +39,7 @@ HANDOFF_RECORD_VERSION = 1
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 
 
-class NoHandoffRecordError(RuntimeError):
+class NoHandoffRecordError(OSimFlowRuntimeError):
     """Raised when an outdir has no Coordinator handoff record.
 
     Carries the actionable, user-facing message required by issue #630:

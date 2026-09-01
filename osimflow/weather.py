@@ -43,6 +43,8 @@ import re
 import urllib.request
 from pathlib import Path
 
+from .errors import OSimFlowRuntimeError, OSimFlowValueError
+
 log = logging.getLogger("osimflow.weather")
 
 # Base URL for the EnergyPlus weather file repository.
@@ -54,11 +56,11 @@ EPW_REPOSITORY_BASE = "https://energyplus-weather.s3.amazonaws.com"
 MAX_EPW_DOWNLOAD_BYTES = 50 * 1024 * 1024
 
 
-class EPWValidationError(ValueError):
+class EPWValidationError(OSimFlowValueError):
     """Raised when a file fails EPW format validation."""
 
 
-class EPWDownloadError(RuntimeError):
+class EPWDownloadError(OSimFlowRuntimeError):
     """Raised when an EPW file download fails."""
 
 

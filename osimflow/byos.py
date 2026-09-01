@@ -42,11 +42,12 @@ from typing import Any, cast
 from osimflow._byos_runner_generated import _SUBPROCESS_RUNNER
 from osimflow.audit import AuditLogger
 from osimflow.byos_contract import _BYOS_CONTRACT, BYOS_CONTRACT_VERSION
+from osimflow.errors import OSimFlowError
 
 log = logging.getLogger("osimflow.byos")
 
 
-class ByosContractError(Exception):
+class ByosContractError(OSimFlowError):
     """Raised when a BYOS user function does not match the documented contract.
 
     Issue #1048: AGENTS.md §6 / §10 promises that BYOS user functions are

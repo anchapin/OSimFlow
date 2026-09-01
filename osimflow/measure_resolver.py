@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .errors import OSimFlowError
+
 log = logging.getLogger("osimflow.measure_resolver")
 
 # ---------------------------------------------------------------------------
@@ -24,7 +26,7 @@ log = logging.getLogger("osimflow.measure_resolver")
 # ---------------------------------------------------------------------------
 
 
-class MeasureDependencyError(Exception):
+class MeasureDependencyError(OSimFlowError):
     """Raised when measure dependencies cannot be resolved."""
 
 

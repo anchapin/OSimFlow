@@ -24,6 +24,8 @@ from typing import Any
 import jsonschema
 import yaml
 
+from .errors import OSimFlowError
+
 log = logging.getLogger("osimflow.validation")
 
 
@@ -32,7 +34,7 @@ log = logging.getLogger("osimflow.validation")
 # ======================================================================
 
 
-class ValidationError(Exception):
+class ValidationError(OSimFlowError):
     """Raised when user-supplied input fails validation.
 
     Carries a human-readable message describing the problem and
