@@ -41,6 +41,7 @@ from .config import (
     coerce_variable_type,
     load_config,
 )
+from .cosign import CosignVerificationError, verify_image_signature
 from .cost_tracking import CampaignCostSummary, CostEstimate, CostTracker
 from .cross_run_aggregator import CrossRunAggregator
 from .data_point_manager import DataPoint, DataPointManager, DataPointStatus
@@ -173,6 +174,7 @@ __all__ = [
     "CacheKey",
     "CacheStats",
     "SQLiteCache",
+    "CosignVerificationError",
     "CrossRunAggregator",
     "CampaignConfig",
     "ResourceQuota",
