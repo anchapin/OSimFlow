@@ -134,6 +134,15 @@ class BaseExecutor(abc.ABC):
         """
         return False
 
+    #: Whether this executor signs ``OSIMFLOW_TASK_PAYLOAD`` with the
+    #: orchestrator's HMAC secret via ``build_signature_env``. The health
+    #: check (issue #1404) warns when an executor requires the payload
+    #: contract but does not sign it while the orchestrator has a secret
+    #: configured — the per-sample jobs would fail signature verification
+    #: at runtime (remote_runner fails closed, issue #1205). Set to
+    #: ``True`` in every executor that calls ``build_signature_env``.
+    signs_task_payload: bool = False
+
     @abc.abstractmethod
     def submit(
         self,

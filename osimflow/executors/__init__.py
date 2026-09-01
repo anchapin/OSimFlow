@@ -1023,6 +1023,8 @@ class AWSBatchExecutor(BaseExecutor):
     def requires_remote_runner_payload(self) -> bool:
         return True
 
+    signs_task_payload = True
+
     # Default pricing estimates (USD per vCPU-hour). Conservative defaults
     # used when the Spot price cannot be queried or the instance type is
     # unknown. These are intentionally slightly above market average to
@@ -2219,6 +2221,8 @@ class NomadExecutor(BaseExecutor):
     @property
     def requires_remote_runner_payload(self) -> bool:
         return True
+
+    signs_task_payload = True
 
     # The parameterized job ID used for dispatch mode.
     DISPATCH_JOB_ID = "osimflow-worker"
