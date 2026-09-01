@@ -766,6 +766,132 @@ def test_apply_params_py_edit_invalidates_per_sample_bin_hash() -> None:
         apply_params_py.write_text(original_content)
 
 
+# ---------------------------------------------------------------------------
+# Issue #1446 — the hashed modules import further osimflow modules
+# (generate_plots.py → algorithms.doe_analysis, work.py → version_detection /
+# weather / storage / ...) whose edits change per-step behaviour. The code
+# hashes must therefore cover the transitive import closure of the work
+# layer, not just the hand-maintained two-file list.
+# ---------------------------------------------------------------------------
+def test_doe_analysis_edit_invalidates_bin_hash() -> None:
+    """Regression test for issue #1446 (plots pipeline).
+
+    ``osimflow/_work_scripts/generate_plots.py`` imports
+    ``osimflow.algorithms.doe_analysis`` at module level, so an edit to
+    ``doe_analysis.py`` changes the GENERATE_BASIC_PLOTS pipeline's
+    behaviour. GENERATE_BASIC_PLOTS itself is uncached (issue #1419
+    single-shot semantics), so the cache-relevant namespace for the plots
+    pipeline is ``code_hashes["bin"]`` — the hash that covers the
+    ``_work_scripts/*.py`` set. Editing ``doe_analysis.py`` must change
+    it; the ``work`` hash (work.py only, AGGREGATE_RESULTS scope) must
+    not.
+    """
+    import osimflow
+    from osimflow.campaign import Campaign
+
+    package_root = Path(osimflow.__file__).resolve().parent
+    target = package_root / "algorithms" / "doe_analysis.py"
+    assert target.is_file(), f"{target} must exist"
+
+    class _Stub:
+        pass
+
+    baseline = Campaign._compute_code_hashes(_Stub())
+    original_content = target.read_text()
+    try:
+        with target.open("a", encoding="utf-8") as f:
+            f.write("# no-op touch for issue #1446 regression test\n")
+
+        after = Campaign._compute_code_hashes(_Stub())
+
+        assert baseline["bin"] != after["bin"], (
+            "Editing osimflow/algorithms/doe_analysis.py must change the "
+            "'bin' code hash (it is imported by generate_plots.py). "
+            "If this fails, _compute_code_hashes is still hashing only "
+            "the hand-maintained file list (issue #1446)."
+        )
+        assert baseline["work"] == after["work"], (
+            "Editing osimflow/algorithms/doe_analysis.py must NOT change "
+            "the 'work' code hash (AGGREGATE_RESULTS scope is work.py only)."
+        )
+    finally:
+        target.write_text(original_content)
+
+
+def test_version_detection_edit_invalidates_sim_bin_hash() -> None:
+    """Regression test for issue #1446 (sim step).
+
+    ``osimflow/work.py`` imports ``osimflow.version_detection`` (the CLI
+    version selection that ``run_openstudio_sim`` relies on), and
+    RUN_OPENSTUDIO_SIM builds its cache key from
+    ``code_hashes["bin"]``. Editing ``version_detection.py`` must change
+    the ``bin`` hash so the sim step re-runs, while the ``work`` hash
+    (work.py only) stays put.
+    """
+    import osimflow
+    from osimflow.campaign import Campaign
+
+    package_root = Path(osimflow.__file__).resolve().parent
+    target = package_root / "version_detection.py"
+    assert target.is_file(), f"{target} must exist"
+
+    class _Stub:
+        pass
+
+    baseline = Campaign._compute_code_hashes(_Stub())
+    original_content = target.read_text()
+    try:
+        with target.open("a", encoding="utf-8") as f:
+            f.write("# no-op touch for issue #1446 regression test\n")
+
+        after = Campaign._compute_code_hashes(_Stub())
+
+        assert baseline["bin"] != after["bin"], (
+            "Editing osimflow/version_detection.py must change the 'bin' "
+            "code hash (RUN_OPENSTUDIO_SIM depends on it via work.py). "
+            "If this fails, _compute_code_hashes is still hashing only "
+            "the hand-maintained file list (issue #1446)."
+        )
+        assert baseline["work"] == after["work"], (
+            "Editing osimflow/version_detection.py must NOT change the "
+            "'work' code hash (AGGREGATE_RESULTS scope is work.py only)."
+        )
+    finally:
+        target.write_text(original_content)
+
+
+def test_import_closure_excludes_third_party_and_stdlib() -> None:
+    """The transitive import closure must stay inside the osimflow package.
+
+    work.py imports stdlib modules (pathlib, json, sqlite3, ...) and
+    generate_plots.py imports third-party ones (pandas, matplotlib,
+    plotly, ...). None of those may enter the hash set — only files under
+    the osimflow package. The closure must also cover the two modules
+    named in issue #1446 (positive controls) while excluding the bare
+    ``osimflow/__init__.py`` (its module-level re-exports would collapse
+    the closure into a de-facto whole-package hash).
+    """
+    import osimflow
+    from osimflow.campaign import _transitive_import_closure
+
+    package_root = Path(osimflow.__file__).resolve().parent
+    closure = _transitive_import_closure(package_root)
+
+    assert closure, "the import closure must not be empty"
+    outside = [p for p in closure if not p.is_relative_to(package_root)]
+    assert not outside, f"import closure leaked outside the osimflow package: {outside}"
+    stdlib_like = [
+        p for p in closure if p.name in {"pathlib.py", "json.py", "logging.py", "ast.py"}
+    ]
+    assert not stdlib_like, f"stdlib files leaked into the closure: {stdlib_like}"
+
+    assert (package_root / "algorithms" / "doe_analysis.py") in closure
+    assert (package_root / "version_detection.py") in closure
+    assert (package_root / "weather.py") in closure
+    assert (package_root / "storage.py") in closure
+    assert (package_root / "__init__.py") not in closure
+
+
 def test_store_raises_cache_error_on_db_error(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     """SQLiteCache.store() must raise CacheError on sqlite3.Error."""
     import sqlite3
