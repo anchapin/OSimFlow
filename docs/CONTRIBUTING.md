@@ -36,20 +36,20 @@ Quick setup (5 min):
 # Fork the repo on GitHub, then:
 git clone https://github.com/<your-username>/OSimFlow.git
 cd OSimFlow
-python -m pip install -e ".[dev,aws,slurm,api]"
+make install    # creates .venv + pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
 .venv/bin/pre-commit install
 ```
 
 For the minimal install (local executor only, no Slurm/Boto3):
 
 ```bash
-pip install -e .
+python3 -m venv .venv && .venv/bin/pip install -e .
 ```
 
 For optional MLflow integration:
 
 ```bash
-pip install -e ".[mlflow]"
+.venv/bin/pip install -e ".[mlflow]"
 ```
 
 Detailed commands and the day-to-day workflow live in
@@ -57,7 +57,7 @@ Detailed commands and the day-to-day workflow live in
 
 ```bash
 make help       # list all targets
-make install    # pip install -e ".[dev,aws,slurm,api]"
+make install    # pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
 make lint       # ruff check
 make format     # ruff format
 make typecheck  # mypy --strict osimflow/

@@ -28,8 +28,16 @@ The framework foundation (a custom Python driver built on `submitit` for Slurm, 
 ### 1. Install
 
 ```bash
-pip install -e ".[dev,aws,slurm,api]"
+make install    # creates .venv + pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+source .venv/bin/activate
 ```
+
+`make install` bootstraps `.venv` and installs the full development
+extras set — always invoke tools through `.venv/bin/` so a bare
+`pytest` never resolves to the wrong interpreter. Want a smaller
+footprint? Inside a virtualenv, `pip install -e ".[api]"` is a minimal
+local-executor-only subset, but `make install` is the supported full
+dev environment.
 
 ### 2. Run a sample campaign
 
