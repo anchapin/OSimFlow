@@ -41,6 +41,7 @@ Environment variables carried on every Job:
 | Env Var | Purpose |
 |---|---|
 | `OSIMFLOW_TASK_PAYLOAD` | JSON-serialized step call (`schema_version`, `name`, `step`, encoded `args`/`kwargs`, `result_hint`) — identical serialization to `NomadExecutor._build_task_payload()` |
+| `OSIMFLOW_TASK_PAYLOAD_SIG` / `OSIMFLOW_TASK_PAYLOAD_SECRET` | HMAC-SHA256 signature over the payload and the shared secret used to verify it (fail-closed on the runner) — see [HMAC Task-Payload Signing](secret-management.md#hmac-task-payload-signing-remote-executors) |
 | `OSIMFLOW_RESULT_TRANSPORT_MODE` | `shared_fs` (default) or `object_storage` |
 | `OSIMFLOW_RESULT_STORAGE_BACKEND` | Result backend (`s3`, `gs`, `azure`) when object-storage transport is active |
 | `OSIMFLOW_RESULT_STORAGE_BUCKET` | Bucket/container name |

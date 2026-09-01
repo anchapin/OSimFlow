@@ -389,6 +389,17 @@ def test_stats(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     assert s["by_step"] == {"A": 1, "B": 1}
 
 
+# Tests in this module that mutate real files under the repo tree (the
+# "no-op touch" regression tests) or that compare two ``_compute_code_hashes``
+# results computed at different instants must never run concurrently with
+# each other: an in-flight mutation by one test changes the hash observed by
+# another, producing spurious mismatches (seen in CI with ``-n 2 --dist
+# loadgroup`` — ``test_byos_script_unset_does_not_change_cache_key`` failed
+# while ``test_bin_py_edit_invalidates_code_hash_in_dev_mode`` had
+# ``bin/aggregate_results.py`` mid-mutation on the other worker).
+# The shared xdist group pins all of them to a single worker, matching the
+# ``cache_resume_solo`` pattern used by test_cache_resume.py.
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_bin_py_edit_invalidates_code_hash_in_dev_mode() -> None:
     """Regression test for issue #1021.
 
@@ -479,6 +490,7 @@ def _make_minimal_cfg(tmp_path: Path, **overrides: object) -> CampaignConfig:
     return CampaignConfig(**base_kwargs)  # type: ignore[arg-type]
 
 
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_byos_user_script_edit_invalidates_apply_cache_key(
     tmp_cache: SQLiteCache, tmp_path: Path
 ) -> None:
@@ -538,6 +550,7 @@ def test_byos_user_script_edit_invalidates_apply_cache_key(
     assert tmp_cache.lookup(key_v2) is not None
 
 
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_byos_kpi_extractor_edit_invalidates_extract_cache_key(
     tmp_cache: SQLiteCache, tmp_path: Path
 ) -> None:
@@ -601,6 +614,7 @@ def test_byos_script_missing_returns_missing_sentinel(tmp_path: Path) -> None:
     assert _byos_file_hash(missing) == "byos-missing"
 
 
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_byos_script_unset_does_not_change_cache_key(tmp_path: Path) -> None:
     """Without a BYOS script configured, ``_compute_code_hashes(cfg)`` must
     produce the same ``bin`` hash as ``_compute_code_hashes(None)`` so
@@ -626,6 +640,7 @@ def test_byos_script_unset_does_not_change_cache_key(tmp_path: Path) -> None:
     assert with_cfg["byos_kpi"] == "byos-unset"
 
 
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_byos_apply_and_kpi_are_independent(tmp_path: Path) -> None:
     """Editing only the apply script must change ``byos_apply`` but leave
     ``byos_kpi`` unchanged (and vice versa). The two cache keys are
@@ -661,6 +676,7 @@ def test_byos_apply_and_kpi_are_independent(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_work_py_edit_invalidates_per_sample_bin_hash() -> None:
     """Regression test for issue #1022.
 
@@ -722,6 +738,7 @@ def test_work_py_edit_invalidates_per_sample_bin_hash() -> None:
         work_py.write_text(original_content)
 
 
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_apply_params_py_edit_invalidates_per_sample_bin_hash() -> None:
     """Regression test for issue #1022.
 
@@ -773,6 +790,7 @@ def test_apply_params_py_edit_invalidates_per_sample_bin_hash() -> None:
 # hashes must therefore cover the transitive import closure of the work
 # layer, not just the hand-maintained two-file list.
 # ---------------------------------------------------------------------------
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_doe_analysis_edit_invalidates_bin_hash() -> None:
     """Regression test for issue #1446 (plots pipeline).
 
@@ -818,6 +836,7 @@ def test_doe_analysis_edit_invalidates_bin_hash() -> None:
         target.write_text(original_content)
 
 
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
 def test_version_detection_edit_invalidates_sim_bin_hash() -> None:
     """Regression test for issue #1446 (sim step).
 
