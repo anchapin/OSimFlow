@@ -44,6 +44,7 @@ from osimflow import (
     build_task_queue,
     load_config,
 )
+from osimflow.audit import AuditLogger
 from osimflow.byos import ByosTrustLevel, load_user_function, validate_trust_level
 from osimflow.cosign import DEFAULT_COSIGN_OIDC_ISSUER
 from osimflow.cross_run_aggregator import CrossRunAggregator
@@ -197,6 +198,19 @@ def _extract_max_concurrent_samples(resource_quota: str | None) -> int | None:
         return None
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def _byos_audit_logger(args: argparse.Namespace) -> AuditLogger | None:
+    """Audit logger bound to the campaign outdir for BYOS events (#1399).
+
+    Returns ``None`` when no outdir is resolvable (e.g. ``osimflow serve``
+    code paths that construct their own logger); callers treat ``None``
+    as "no audit sink configured".
+    """
+    outdir_raw = getattr(args, "outdir", None)
+    if not outdir_raw:
+        return None
+    return AuditLogger(Path(outdir_raw))
 
 
 #: Executors whose jobs pull the OpenStudio image from a managed cloud
@@ -3964,6 +3978,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         validate_trust_level(
             ByosTrustLevel(args.byos_trust_level),
             getattr(args, "require_trusted_scripts", None),
+            audit_logger=_byos_audit_logger(args),
+            script_path=Path(args.custom_apply_script)
+            if getattr(args, "custom_apply_script", None)
+            else (
+                Path(args.custom_kpi_extractor)
+                if getattr(args, "custom_kpi_extractor", None)
+                else None
+            ),
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -4008,12 +4030,14 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
                 f"error: --byos-resource-limits must be a valid JSON dict: {exc}", file=sys.stderr
             )
             return 1
+    _byos_audit = _byos_audit_logger(args)
     apply_fn = (
         load_user_function(
             Path(args.custom_apply_script),
             trust_level=trust_level,
             resource_limits=byos_resource_limits,
             timeout_s=args.byos_timeout_s,
+            audit_logger=_byos_audit,
         )
         if args.custom_apply_script
         else None
@@ -4024,6 +4048,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
             trust_level=trust_level,
             resource_limits=byos_resource_limits,
             timeout_s=args.byos_timeout_s,
+            audit_logger=_byos_audit,
         )
         if args.custom_kpi_extractor
         else None

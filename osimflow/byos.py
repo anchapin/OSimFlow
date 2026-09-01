@@ -40,7 +40,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from osimflow._byos_runner_generated import _SUBPROCESS_RUNNER
-from osimflow.byos_contract import _BYOS_CONTRACT
+from osimflow.audit import AuditLogger
+from osimflow.byos_contract import _BYOS_CONTRACT, BYOS_CONTRACT_VERSION
 
 log = logging.getLogger("osimflow.byos")
 
@@ -241,6 +242,9 @@ class ByosTrustLevel(enum.Enum):
 def validate_trust_level(
     trust_level: ByosTrustLevel,
     require_trusted_scripts: bool | None,
+    *,
+    audit_logger: AuditLogger | None = None,
+    script_path: Path | None = None,
 ) -> None:
     """Reject the ``INPROCESS`` trust level when not explicitly opted out.
 
@@ -266,6 +270,16 @@ def validate_trust_level(
             and ``require_trusted_scripts`` is not ``False``.
     """
     if trust_level is ByosTrustLevel.INPROCESS and require_trusted_scripts is not False:
+        # Issue #1399: the rejection must reach the audit trail so an
+        # operator flipping --require-trusted-scripts in production is
+        # traceable, not just warned at.
+        if audit_logger is not None:
+            audit_logger.byos_trust_level_rejected(
+                str(script_path) if script_path else None,
+                trust_level=trust_level.value,
+                require_trusted_scripts=require_trusted_scripts,
+                contract_version=BYOS_CONTRACT_VERSION,
+            )
         if require_trusted_scripts is None:
             raise ValueError(
                 "BYOS trust level 'inprocess' is not allowed by default. "
@@ -687,6 +701,7 @@ def load_user_function(
     trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS,
     resource_limits: dict[str, int] | None = None,
     timeout_s: float = 600.0,
+    audit_logger: AuditLogger | None = None,
 ) -> Callable[..., Any]:
     """Import a user ``.py`` file and return a callable that respects the trust level.
 
@@ -738,7 +753,15 @@ def load_user_function(
             UserWarning,
             stacklevel=2,
         )
-        return _load_inprocess(path)
+        fn = _load_inprocess(path)
+        if audit_logger is not None:
+            audit_logger.byos_loaded(
+                str(path),
+                trust_level=trust_level.value,
+                require_trusted_scripts=None,
+                contract_version=BYOS_CONTRACT_VERSION,
+            )
+        return fn
 
     function_name = _discover_function_name(path)
     script_path = path.resolve()
@@ -759,6 +782,14 @@ def load_user_function(
     _subprocess_wrapper._byos_trust_level = trust_level  # type: ignore[attr-defined]
     _subprocess_wrapper._byos_resource_limits = resource_limits  # type: ignore[attr-defined]
     _subprocess_wrapper._byos_timeout_s = timeout_s  # type: ignore[attr-defined]
+
+    if audit_logger is not None:
+        audit_logger.byos_loaded(
+            str(path),
+            trust_level=trust_level.value,
+            require_trusted_scripts=None,
+            contract_version=BYOS_CONTRACT_VERSION,
+        )
 
     return _subprocess_wrapper
 
