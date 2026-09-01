@@ -1321,6 +1321,15 @@ class AWSBatchExecutor(BaseExecutor):
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
+            # Issue #1445: when a shared secret is configured, sign the
+            # exact payload bytes and propagate secret + signature so
+            # the remote_runner verifies before decoding/executing
+            # (same contract as the Nomad / Azure / Google / DockerSwarm
+            # paths). No-op in legacy unsigned mode.
+            env.extend(
+                {"name": key, "value": value}
+                for key, value in build_signature_env(task_payload).items()
+            )
         if result_transport_mode is not None:
             env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": result_transport_mode})
         if result_storage_backend is not None:
