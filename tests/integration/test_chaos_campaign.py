@@ -369,3 +369,249 @@ def test_chaos_after_step_memory_pressure_completes(
     for inv in invocations:
         assert inv["results"][0]["fault_type"] == FaultType.MEMORY_PRESSURE.value
         assert inv["results"][0]["injected"] is True
+
+
+# ---------------------------------------------------------------------------
+# Full scenario × schedule matrix (issue #1390)
+#
+# The tests above grew organically and covered 5 of the 12 valid
+# scenario × schedule combinations. The seven tests below complete the
+# matrix so a regression in any ``_maybe_inject_chaos`` branch fails
+# the suite instead of silently rotting. Each test asserts the same
+# four invariants: (a) the campaign completes without raising, (b) the
+# ``chaos_invocations`` entry carries the expected ``when``, (c) the
+# injected ``fault_type`` matches the registered injector, and (d)
+# ``run.json.config.chaos`` records the correct scenario and schedule.
+# ---------------------------------------------------------------------------
+
+
+def _assert_matrix_invariants(
+    outdir: Path,
+    *,
+    scenario: str,
+    schedule: str,
+    expected_fault_type: str,
+    step_set: set[str] | None = None,
+) -> None:
+    """Shared invariants for one scenario × schedule combo (issue #1390)."""
+    trace = json.loads((outdir / "run.json").read_text())
+    assert trace["status"] == "success"
+    assert trace["config"]["chaos"]["enabled"] is True
+    assert trace["config"]["chaos"]["schedule"] == schedule
+    assert scenario in trace["config"]["chaos"]["scenarios"]
+
+    invocations = [inv for inv in trace["chaos_invocations"] if inv["when"] == schedule]
+    assert invocations, f"expected at least one {schedule} chaos invocation"
+    for inv in invocations:
+        if step_set is not None:
+            assert inv["step"] in step_set
+        assert len(inv["results"]) == 1
+        assert inv["results"][0]["fault_type"] == expected_fault_type
+
+
+def test_chaos_before_step_kill_switch_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``before_step`` schedule with ``kill_switch`` completes (matrix, #1390)."""
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["kill_switch"],
+        chaos_schedule="before_step",
+        chaos_fail_after=1,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(KillSwitchInjector(fail_after=cfg.chaos.fail_after))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()  # must not raise
+
+    _assert_matrix_invariants(
+        outdir,
+        scenario="kill_switch",
+        schedule="before_step",
+        expected_fault_type=FaultType.KILL_SWITCH.value,
+    )
+
+
+def test_chaos_after_step_kill_switch_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``after_step`` schedule with ``kill_switch`` completes (matrix, #1390)."""
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["kill_switch"],
+        chaos_schedule="after_step",
+        chaos_fail_after=1,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(KillSwitchInjector(fail_after=cfg.chaos.fail_after))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()  # must not raise
+
+    _assert_matrix_invariants(
+        outdir,
+        scenario="kill_switch",
+        schedule="after_step",
+        expected_fault_type=FaultType.KILL_SWITCH.value,
+    )
+
+
+def test_chaos_per_sample_network_delay_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``per_sample`` schedule with ``network_delay`` completes (matrix, #1390)."""
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["network_delay"],
+        chaos_schedule="per_sample",
+        chaos_delay_s=0.01,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(NetworkDelayInjector(delay_s=cfg.chaos.delay_s, jitter_s=0.0, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()  # must not raise
+
+    _assert_matrix_invariants(
+        outdir,
+        scenario="network_delay",
+        schedule="per_sample",
+        expected_fault_type=FaultType.NETWORK_DELAY.value,
+        step_set={"RUN_OPENSTUDIO_SIM", "EXTRACT_KPIS"},
+    )
+
+
+def test_chaos_after_step_network_delay_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``after_step`` schedule with ``network_delay`` completes (matrix, #1390)."""
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["network_delay"],
+        chaos_schedule="after_step",
+        chaos_delay_s=0.01,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(NetworkDelayInjector(delay_s=cfg.chaos.delay_s, jitter_s=0.0, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()  # must not raise
+
+    _assert_matrix_invariants(
+        outdir,
+        scenario="network_delay",
+        schedule="after_step",
+        expected_fault_type=FaultType.NETWORK_DELAY.value,
+    )
+
+
+def test_chaos_before_step_cpu_spike_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``before_step`` schedule with ``cpu_spike`` completes (matrix, #1390)."""
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["cpu_spike"],
+        chaos_schedule="before_step",
+        chaos_delay_s=0.0,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(CPUSpikeInjector(duration_s=0.05, intensity=0.1, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()  # must not raise
+
+    _assert_matrix_invariants(
+        outdir,
+        scenario="cpu_spike",
+        schedule="before_step",
+        expected_fault_type=FaultType.CPU_SPIKE.value,
+    )
+
+
+def test_chaos_after_step_cpu_spike_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``after_step`` schedule with ``cpu_spike`` completes (matrix, #1390)."""
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["cpu_spike"],
+        chaos_schedule="after_step",
+        chaos_delay_s=0.0,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(CPUSpikeInjector(duration_s=0.05, intensity=0.1, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()  # must not raise
+
+    _assert_matrix_invariants(
+        outdir,
+        scenario="cpu_spike",
+        schedule="after_step",
+        expected_fault_type=FaultType.CPU_SPIKE.value,
+    )
+
+
+def test_chaos_per_sample_memory_pressure_completes(
+    workdir: Path, template_pkg: Path, outdir: Path
+) -> None:
+    """``per_sample`` schedule with ``memory_pressure`` completes (matrix, #1390)."""
+    cfg = _make_cfg(
+        workdir,
+        template_pkg,
+        outdir,
+        chaos_enabled=True,
+        chaos_scenarios=["memory_pressure"],
+        chaos_schedule="per_sample",
+        chaos_delay_s=0.0,
+        chaos_jitter_s=0.0,
+        chaos_probability=1.0,
+    )
+
+    engine = ChaosEngine(enabled=True)
+    engine.register(MemoryPressureInjector(size_mb=50, duration_s=0.1, probability=1.0))
+    campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3), chaos_engine=engine)
+
+    campaign.run()  # must not raise
+
+    _assert_matrix_invariants(
+        outdir,
+        scenario="memory_pressure",
+        schedule="per_sample",
+        expected_fault_type=FaultType.MEMORY_PRESSURE.value,
+        step_set={"RUN_OPENSTUDIO_SIM", "EXTRACT_KPIS"},
+    )
