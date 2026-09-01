@@ -963,6 +963,12 @@ class CampaignConfig:
     # --- Container image pinning (issue #1081) ---
     container_digest: str | None = None
 
+    # --- Container signature verification (issue #1385) ---
+    # When set, campaign init shells out to `cosign verify` against the
+    # OpenStudio image ref and refuses to run on verification failure.
+    require_cosign_identity: str | None = None
+    cosign_oidc_issuer: str | None = None
+
     # --- Composed focused configs (issue #767, init=False for backward compat) ---
     dag: DAGConfig = dataclasses.field(init=False)
     storage: StorageConfig = dataclasses.field(init=False)
@@ -1735,6 +1741,12 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         outdir=outdir,
         openstudio_version=str(args["openstudio_version"]),
         container_digest=(str(args["container_digest"]) if args.get("container_digest") else None),
+        require_cosign_identity=(
+            str(args["require_cosign_identity"]) if args.get("require_cosign_identity") else None
+        ),
+        cosign_oidc_issuer=(
+            str(args["cosign_oidc_issuer"]) if args.get("cosign_oidc_issuer") else None
+        ),
         project=str(args.get("project", "")),
         archive_intermediates=bool(args.get("archive_intermediates", False)),
         custom_apply_script=Path(str(custom_apply)).resolve() if custom_apply else None,

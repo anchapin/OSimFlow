@@ -78,6 +78,12 @@ from .chaos import (
     NetworkDelayInjector,
 )
 from .config import CampaignConfig
+from .cosign import (
+    DEFAULT_COSIGN_OIDC_ISSUER,
+    CosignVerificationError,
+    build_cosign_image_ref,
+    verify_image_signature,
+)
 from .cost_tracking import (
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
@@ -649,6 +655,39 @@ class Campaign:
             self._python_container_digest = cfg.container_digest
             self._os_container_digest = cfg.container_digest
             log.info("container images pinned by digest: %s", cfg.container_digest)
+        # Issue #1385: when the operator opts in via
+        # ``--require-cosign-identity``, verify the OpenStudio image
+        # signature (keyless sigstore) BEFORE anything runs. A cache hit
+        # must never silently consume a substituted image — on
+        # verification failure the campaign refuses to start, which is
+        # strictly stronger than forcing a cache miss (nothing is
+        # written to the cache from an untrusted image).
+        if cfg.require_cosign_identity:
+            os_image_ref = build_cosign_image_ref(
+                container="docker.io/nrel/openstudio",
+                container_digest=cfg.container_digest,
+                openstudio_version=cfg.openstudio_version,
+            )
+            issuer = cfg.cosign_oidc_issuer or DEFAULT_COSIGN_OIDC_ISSUER
+            try:
+                verify_image_signature(
+                    os_image_ref,
+                    cfg.require_cosign_identity,
+                    issuer,
+                )
+            except CosignVerificationError:
+                log.error(
+                    "cosign verification failed for %s — refusing to run the campaign "
+                    "(issue #1385). The image may have been substituted by a registry "
+                    "compromise; investigate before re-running.",
+                    os_image_ref,
+                )
+                raise
+            log.info(
+                "cosign verification passed for %s (identity=%s)",
+                os_image_ref,
+                cfg.require_cosign_identity,
+            )
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in

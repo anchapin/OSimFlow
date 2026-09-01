@@ -45,6 +45,7 @@ from osimflow import (
     load_config,
 )
 from osimflow.byos import ByosTrustLevel, load_user_function, validate_trust_level
+from osimflow.cosign import DEFAULT_COSIGN_OIDC_ISSUER
 from osimflow.cross_run_aggregator import CrossRunAggregator
 from osimflow.exporters.osa import OSAExporter
 from osimflow.handoff_record import (
@@ -936,6 +937,24 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Pin container images by SHA256 digest (e.g. 'sha256:abc...' or "
             "'repo@sha256:abc...'). When set, overrides the mutable tag for ALL "
             "executors (issue #1081)."
+        ),
+    )
+    run.add_argument(
+        "--require-cosign-identity",
+        default=None,
+        help=(
+            "Verify the OpenStudio image signature at campaign init via "
+            "`cosign verify --certificate-identity <ID>` (keyless, sigstore). "
+            "The campaign refuses to run when verification fails or the cosign "
+            "binary is unavailable (issue #1385)."
+        ),
+    )
+    run.add_argument(
+        "--cosign-oidc-issuer",
+        default=None,
+        help=(
+            "Expected OIDC issuer for --require-cosign-identity keyless "
+            f"verification (default: {DEFAULT_COSIGN_OIDC_ISSUER})."
         ),
     )
     run.add_argument(

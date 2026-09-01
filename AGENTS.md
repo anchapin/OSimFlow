@@ -191,7 +191,7 @@ appear in this document. Listed in run-subcommand groups (or
   `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-location`,
   `--azure-batch-pool-id`, `--azure-fallback-to-on-demand`,
   `--azure-max-retries`, `--azure-use-spot`, `--coordinator-url`,
-  `--container-digest`, `--dask-cluster-type`, `--dask-cpus-per-worker`,
+  `--container-digest`, `--cosign-oidc-issuer`, `--dask-cluster-type`, `--dask-cpus-per-worker`,
   `--dask-max-workers`, `--dask-memory-per-worker`,
   `--dask-min-workers`, `--dask-project`, `--dask-queue`,
   `--dask-scheduler-address`, `--dask-walltime`, `--detach`,
@@ -236,7 +236,7 @@ appear in this document. Listed in run-subcommand groups (or
 - **BYOS:** `--byos-resource-limits`, `--byos-timeout-s`,
   `--byos-trust-level`,
   `--custom_apply_script`, `--custom_kpi_extractor`,
-  `--require-trusted-scripts`.
+  `--require-cosign-identity`, `--require-trusted-scripts`.
 
 - **Resilience (chaos fault injection, issue #1013):**
   `--chaos-delay-s`, `--chaos-duration-s`, `--chaos-enabled`,
@@ -433,6 +433,14 @@ name in this section.
   `KillSwitchSimulator`, `run_chaos_scenario`.
 - `osimflow/cost_tracking.py` — `CostEstimate`, `CostTracker`,
   `CampaignCostSummary`.
+- `osimflow/cosign.py` — container image signature verification
+  (issue #1385): `CosignVerificationError` +
+  `build_cosign_image_ref` + `verify_image_signature` +
+  `write_cosign_receipt` + `DEFAULT_COSIGN_OIDC_ISSUER`. When
+  `--require-cosign-identity` is set, `Campaign` init shells out to
+  `cosign verify` (keyless sigstore) against the OpenStudio image ref
+  and refuses to run on failure — a cache hit must never silently
+  consume a substituted image.
 - `osimflow/data_point_manager.py` — `DataPoint`,
   `DataPointManager`, `DataPointStatus`.
 - `osimflow/cross_run_aggregator.py` — `CrossRunAggregator`.
