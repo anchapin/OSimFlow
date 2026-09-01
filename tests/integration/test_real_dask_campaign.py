@@ -200,7 +200,20 @@ def test_real_dask_cluster_3_samples(tmp_path: Path) -> None:
             f"Dask cluster has no get_client(); type={type(executor._cluster).__name__}"
         )
 
+        from tests.integration._resource_contract import (  # noqa: PLC0415
+            record_submit_directives,
+        )
+
+        directives = record_submit_directives(executor)
+
         campaign = Campaign(cfg=cfg, executor=executor)
+        # --- Resource-directive propagation (issue #1403) ---
+        from tests.integration._resource_contract import (  # noqa: PLC0415
+            assert_sim_fanout_directives,
+            record_submit_directives,
+        )
+
+        assert_sim_fanout_directives(directives)
         result = campaign.run()
         executor.shutdown()
 

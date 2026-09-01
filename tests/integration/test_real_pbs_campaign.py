@@ -174,7 +174,34 @@ def test_real_pbs_cluster_3_samples(tmp_path: Path) -> None:
         "the queue config did not propagate"
     )
 
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        record_submit_directives,
+    )
+
+    directives = record_submit_directives(executor)
+
     campaign = Campaign(cfg=cfg, executor=executor)
+    # --- Resource-directive propagation (issue #1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        assert_sim_fanout_directives,
+        record_submit_directives,
+    )
+
+    assert_sim_fanout_directives(directives)
+    # --- PBS wire check: qstat -f sees Resource_List (#1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        pbs_job_resources,
+    )
+
+    sim_job_ids = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    for job_id in sim_job_ids:
+        resources = pbs_job_resources(job_id)
+        assert resources.get("ncpus") == "4", f"PBS dropped ncpus for {job_id}: {resources}"
+        assert resources.get("mem"), f"PBS dropped mem for {job_id}: {resources}"
     result = campaign.run()
     executor.shutdown()
 

@@ -193,7 +193,39 @@ def test_real_docker_swarm_3_samples(tmp_path: Path) -> None:
         "the hood instead of a real Swarm service."
     )
 
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        record_submit_directives,
+    )
+
+    directives = record_submit_directives(executor)
+
     campaign = Campaign(cfg=cfg, executor=executor)
+    # --- Resource-directive propagation (issue #1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        assert_sim_fanout_directives,
+        record_submit_directives,
+    )
+
+    assert_sim_fanout_directives(directives)
+    # --- Swarm wire check: service inspect sees Limits (#1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        swarm_service_resources,
+    )
+
+    sim_service_ids = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    for service_name in sim_service_ids:
+        resources = swarm_service_resources(service_name)
+        nano = int(4 * 1e9)
+        assert resources.get("Limits", {}).get("NanoCPUs") == nano, (
+            f"Swarm dropped cpus for {service_name}: {resources}"
+        )
+        assert resources.get("Limits", {}).get("MemoryBytes") == 8192 * 1024 * 1024, (
+            f"Swarm dropped memory_mb for {service_name}: {resources}"
+        )
     result = campaign.run()
     executor.shutdown()
 

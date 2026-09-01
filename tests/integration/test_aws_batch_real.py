@@ -88,7 +88,33 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
         region_name=region,
     )
 
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        record_submit_directives,
+    )
+
+    directives = record_submit_directives(executor)
+
     campaign = Campaign(cfg=cfg, executor=executor)
+    # --- Resource-directive propagation (issue #1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        assert_sim_fanout_directives,
+        record_submit_directives,
+    )
+
+    assert_sim_fanout_directives(directives)
+    # --- AWS Batch wire check: describe_jobs sees the directives (#1403) ---
+    from tests.integration._resource_contract import (  # noqa: PLC0415
+        aws_describe_jobs_resources,
+    )
+
+    sim_job_ids = [
+        r["job_id"]
+        for r in directives.records
+        if r["cpus"] == 4 and r["memory_mb"] == 8192 and r["job_id"]
+    ][:3]
+    for res in aws_describe_jobs_resources(sim_job_ids):
+        assert res["vcpus"] == 4, f"AWS Batch dropped cpus: {res}"
+        assert res["memory"] == 8192, f"AWS Batch dropped memory_mb: {res}"
     result = campaign.run()
     executor.shutdown()
 
