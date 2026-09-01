@@ -20,8 +20,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from osimflow.algorithms.doe_analysis import DOEAnalysis
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_plots")
 
@@ -330,6 +328,11 @@ def _generate_doe_plots(results_csv: Path, outdir: Path) -> list[Path]:
     if not results_csv.exists():
         log.warning("Results CSV not found for DOE plots: %s", results_csv)
         return plots
+
+    # Deferred import (issue #1485): keeps the plots-step subprocess from
+    # paying the `osimflow.algorithms` import cost on every invocation and
+    # keeps `_work_scripts` from reaching into `algorithms/` at module scope.
+    from osimflow.algorithms.doe_analysis import DOEAnalysis  # noqa: PLC0415
 
     try:
         analyzer = DOEAnalysis(results_csv)
