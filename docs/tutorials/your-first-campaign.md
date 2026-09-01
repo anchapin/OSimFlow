@@ -396,7 +396,9 @@ osimflow run \
 
 AWS Batch requires: `pip install osimflow[aws]`, a registered job
 definition, and IAM role credentials on the compute environment. See
-`docs/OSimFlow.md` for the full setup requirements.
+`docs/deployment/aws-batch.md` for the full setup requirements and
+`docs/aws-batch-terraform.md` for provisioning the infrastructure with
+Terraform.
 
 ---
 
