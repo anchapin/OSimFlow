@@ -58,14 +58,32 @@ Below is a practitioner-oriented walk-through of every field.
 |---|---|---|
 | `schema_version` | `int` | Schema revision. Currently `1`. |
 | `campaign_id` | `str` | Timestamp at campaign start (`YYYY-MM-DDTHH-MM-SS`). |
+| `status` | `str` | Lifecycle state: `"running"`, `"success"`, `"cancelled"`, `"failed"`, or `"paused"`. |
 | `started_at` | `float` | Unix epoch when the campaign began. |
 | `finished_at` | `float` | Unix epoch when the campaign ended. `null` if the run crashed. |
 | `elapsed_s` | `float` | Wall-clock seconds (`finished_at - started_at`). |
 | `config` | `object` | Campaign configuration snapshot (see below). |
 | `summary` | `object` | Aggregate sample counts. |
+| `quality_summary` | `object` | Aggregate output-quality counts (see §2.7). |
 | `steps` | `array` | Per-step timing rows (one per DAG step). |
 | `per_sample` | `array` | Per-sample status rows (one per LHS sample). |
+| `generations` | `array` | Per-generation summaries — present only for iterative/multi-generation campaigns (§2.10). |
 | `baseline_comparison` | `object` | Present only when `--baseline` is configured (issue #64). |
+| `init_script_duration_s` | `float` | Wall-clock seconds in the pre-campaign `--init-script` (issue #108). |
+| `finalize_script_duration_s` | `float` | Wall-clock seconds in the post-campaign `--finalize-script` (issue #108). |
+| `total_cost_usd` | `float` | Estimated total campaign cost — always present, `0.0` default (issue #126; §2.8). |
+| `spot_savings_usd` | `float` | Estimated spot/preemptible savings — always present, `0.0` default (issue #126; §2.8). |
+| `cost_summary` | `object` | Cost breakdown; present when `--enable_cost_tracking` is set (issue #447; §2.8). |
+| `cache_hit_rate` | `float` | Fraction of work served from cache, `0.0`–`1.0` (issue #426; §2.9). |
+| `chaos_invocations` | `array` | Chaos fault-injection records — always present, `[]` when chaos never fired (issue #1013; §2.11). |
+| `chaos_schedule` | `str` | Active chaos schedule (issue #1191; §2.11). |
+| `circuit_breaker_states` | `object` | Final circuit-breaker state per breaker name (issue #1191; §2.12). |
+| `alerts_fired` | `array` | Alerts dispatched, with `delivery_status` per alert (issues #1191, #1308; §2.13). |
+| `paused_at` | `float` | Unix epoch when the campaign was paused — present only when paused (issue #553). |
+| `error_summary` | `str` | Campaign-level error message — present only when the campaign failed (issue #737). |
+
+> Everything not marked "always present" may be absent from the JSON
+> entirely — `None` values are omitted by `RunTrace.to_dict()`.
 
 ### 2.2 `config` — campaign configuration snapshot
 
@@ -169,6 +187,17 @@ One entry per LHS sample. Fields with `null` values are omitted:
 | `error_summary` | No | One-line error message from the first step that failed. |
 | `stdout_log` | No | Path to per-sample stdout log from the simulation step. |
 | `stderr_log` | No | Path to per-sample stderr log from the simulation step. |
+| `quality_valid` | No | `true`/`false` result of output quality validation; omitted when quality checks did not run. |
+| `quality_warnings` | No | Number of quality warnings raised for this sample. |
+| `quality_failures` | No | Number of quality-check failures for this sample. |
+| `generation` | No | Generation index for iterative algorithms (issue #106). |
+| `worker_id` | No | Worker that executed the sample — Batch job ID, Slurm job ID, Nomad alloc ID, or `"local"` (issue #105). |
+| `worker_ip` | No | IP address or hostname of the worker (issue #105). |
+| `worker_region` | No | AWS region or Nomad datacenter of the worker (issue #105). |
+| `cost_usd` | No | Estimated cost for this sample (issue #126). |
+| `billed_duration_seconds` | No | Wall-time billed for this sample (issue #126). |
+| `register_values` | No | `runner.registerValue` outputs captured from the OpenStudio CLI (issue #251). |
+| `trace_id` | No | Per-sample trace ID for joining CloudWatch / Prometheus / OTel metrics to this sample (issue #436). |
 
 **A sample is `"ok"` only if all three exit codes are `0`.** Any non-zero
 exit code makes the sample `"failed"`.
@@ -188,6 +217,169 @@ percentages relative to the baseline sample:
 
 Positive values indicate improvement (lower EUI) relative to the baseline.
 Negative values indicate the parametric sample performed worse.
+
+### 2.6 `status`, `paused_at`, `error_summary` — campaign lifecycle
+
+`status` is the headline: `"success"` means every sample finished, `"failed"`
+means the campaign aborted (check `error_summary`), `"paused"` means a
+`osimflow pause` is in effect (`paused_at` records when), `"cancelled"`
+means a `osimflow cancel` terminated it, and `"running"` appears only in
+incremental checkpoints written mid-campaign.
+
+```json
+{
+  "status": "failed",
+  "error_summary": "CampaignError: 47 samples exceeded the failure threshold",
+  "paused_at": null
+}
+```
+
+A campaign-level `error_summary` is only set when an unhandled exception
+fails the whole campaign (issue #737) — per-sample errors stay in
+`per_sample[].error_summary`.
+
+### 2.7 `quality_summary` — output quality at a glance
+
+Aggregates the per-sample quality flags into three counts:
+
+```json
+"quality_summary": {
+  "n_quality_failures": 2,
+  "n_quality_warnings": 11,
+  "n_quality_ok": 487
+}
+```
+
+`n_quality_failures > 0` means some samples simulated "successfully"
+(exit code 0) but their outputs failed sanity validation — treat these
+like failures when computing KPIs. Per-sample detail lives in
+`quality_valid` / `quality_warnings` / `quality_failures`.
+
+### 2.8 Cost fields — `total_cost_usd`, `spot_savings_usd`, `cost_summary`
+
+`total_cost_usd` and `spot_savings_usd` are always present (issue #126);
+`0.0` when cost tracking is off or everything ran locally. Per-sample
+breakdown lives in `per_sample[].cost_usd` and
+`per_sample[].billed_duration_seconds`. With
+`--enable_cost_tracking`, `CostTracker.finalize()` adds a richer
+`cost_summary` object (issue #447):
+
+```json
+"total_cost_usd": 12.47,
+"spot_savings_usd": 3.12,
+"cost_summary": {
+  "total_usd": 12.47,
+  "spot_usd": 6.10,
+  "on_demand_usd": 6.37
+}
+```
+
+### 2.9 `cache_hit_rate` — was the cache pulling its weight?
+
+A `0.0`–`1.0` fraction set after `AGGREGATE_RESULTS` (issue #426).
+`0.0` on a cold run and `1.0` on a warm re-run are both healthy; a low
+value on what you expected to be a warm run points at cache
+invalidation (see §3.5).
+
+### 2.10 `generations[]` — iterative algorithm progress
+
+Present only for multi-generation campaigns (genetic algorithms,
+adaptive search — issue #270). One row per generation:
+
+```json
+"generations": [
+  {
+    "generation": 0,
+    "n_samples": 20,
+    "n_succeeded": 20,
+    "n_failed": 0,
+    "converged": false,
+    "best_objective": 142.7,
+    "elapsed_s": 912.4
+  }
+]
+```
+
+Watch `best_objective` plateau across generations to decide whether
+more generations are worth the compute.
+
+### 2.11 Chaos fields — `chaos_schedule`, `chaos_invocations`
+
+When `--chaos-enabled` is set, `chaos_schedule` records which injection
+schedule was active (`"before_step"`, `"after_step"`, or
+`"per_sample"` — issue #1191), and `chaos_invocations` lists every fault
+that actually fired (issue #1013). The key is **always present** — `[]`
+when chaos never fired — so scripts can iterate it unconditionally:
+
+```json
+"chaos_invocations": [
+  {
+    "step": "RUN_OPENSTUDIO_SIM",
+    "when": "per_sample",
+    "target_id": "sample_002",
+    "results": [
+      {
+        "fault_type": "network_delay",
+        "target_id": "sample_002",
+        "injected": true,
+        "duration_s": 5.0,
+        "error": null
+      }
+    ]
+  }
+]
+```
+
+Each entry pairs the DAG step and schedule phase that matched with the
+per-injector `results[]` rows (`fault_type`, `injected`, `duration_s`,
+`error`). Use this to verify resilience experiments actually exercised
+the faults you configured — see [`chaos-engine.md`](chaos-engine.md).
+
+### 2.12 `circuit_breaker_states` — Redis outage forensics
+
+Populated at campaign end from the live `CircuitBreaker` instances
+(issue #1191). Keys are breaker names (`cache:<campaign_id>` for the
+Redis data plane, `docs:<namespace>` for the document store,
+`jobqueue:<campaign_id>` for the distributed job queue); values are the
+final state: `"closed"` (healthy), `"open"` (fail-fast after repeated
+failures), or `"half_open"` (probing recovery):
+
+```json
+"circuit_breaker_states": {
+  "cache:2026-06-10T14-30-00": "closed",
+  "docs:myproject": "open"
+}
+```
+
+An `"open"` breaker at campaign end means Redis was down and the
+campaign ran on its local fallbacks — cross-worker coordination was
+degraded. See [`distributed-cache.md`](distributed-cache.md) for the
+recovery semantics.
+
+### 2.13 `alerts_fired` — what the alert rules told your destinations
+
+One entry per alert dispatched by `AlertManager` (issue #1191; the
+`RunTrace.record_alert` wiring is issue #1308):
+
+```json
+"alerts_fired": [
+  {
+    "rule_name": "sim_failure_rate",
+    "event_type": "campaign_summary",
+    "severity": "WARNING",
+    "message": "failure rate 33% exceeds threshold 5%",
+    "delivery_status": "delivered",
+    "timestamp": 1749565854.1
+  }
+]
+```
+
+`delivery_status` is the dispatch outcome across your configured
+`--alert-destinations`: `"delivered"` (all destinations accepted),
+`"partial"` (some failed), `"failed"` (none accepted), or
+`"no_destinations"` (no destinations configured). A `"failed"` status
+means the problem was detected but nobody was told — check your webhook
+/email configuration.
 
 ---
 
@@ -388,6 +580,31 @@ jq '.steps[] | select(.step == "RUN_OPENSTUDIO_SIM") | {total_s: .elapsed_s, per
 jq '[.steps[] | select(.exit_code != 0)]' results/run.json
 ```
 
+**Chaos injections that actually fired:**
+
+```bash
+jq '[.chaos_invocations[] | {step, when, faults: [.results[] | select(.injected) | .fault_type]}]' results/run.json
+```
+
+**Alerts that fired but were never delivered:**
+
+```bash
+jq '[.alerts_fired[] | select(.delivery_status != "delivered")]' results/run.json
+```
+
+**Circuit breakers that ended the campaign non-closed:**
+
+```bash
+jq '.circuit_breaker_states | with_entries(select(.value != "closed"))' results/run.json
+```
+
+**Total and per-sample cost:**
+
+```bash
+jq '{total_cost_usd, spot_savings_usd, cache_hit_rate}' results/run.json
+jq '[.per_sample[] | {sample_id, cost_usd, billed_duration_seconds}] | sort_by(-.cost_usd) | .[0:5]' results/run.json
+```
+
 ### 4.2 Python analysis script
 
 ```python
@@ -519,6 +736,7 @@ campaign with 1 failure, run locally with OpenStudio 3.11.0:
 {
   "schema_version": 1,
   "campaign_id": "2026-06-10T14-30-00",
+  "status": "success",
   "started_at": 1749565800.0,
   "finished_at": 1749565855.3,
   "elapsed_s": 55.3,
@@ -535,6 +753,11 @@ campaign with 1 failure, run locally with OpenStudio 3.11.0:
     "n_samples": 5,
     "n_succeeded": 4,
     "n_failed": 1
+  },
+  "quality_summary": {
+    "n_quality_failures": 0,
+    "n_quality_warnings": 1,
+    "n_quality_ok": 4
   },
   "steps": [
     {
@@ -583,6 +806,12 @@ campaign with 1 failure, run locally with OpenStudio 3.11.0:
       "sim_exit_code": 0,
       "extract_exit_code": 0,
       "eplusout_sql": "/tmp/results/work/sim/sample_000/eplusout.sql",
+      "quality_valid": true,
+      "quality_warnings": 1,
+      "quality_failures": 0,
+      "worker_id": "local",
+      "cost_usd": 0.0021,
+      "trace_id": "trace-0a1b2c3d",
       "stdout_log": "/tmp/results/work/sim/sample_000/stdout.log",
       "stderr_log": "/tmp/results/work/sim/sample_000/stderr.log"
     },
@@ -627,8 +856,29 @@ campaign with 1 failure, run locally with OpenStudio 3.11.0:
       "sim_exit_code": 1,
       "extract_exit_code": 1,
       "error_summary": "SIM: RuntimeError('openstudio.cli returned 1')",
+      "worker_id": "local",
+      "cost_usd": 0.0004,
+      "trace_id": "trace-8c9d0e1f",
       "stdout_log": "/tmp/results/work/sim/sample_004/stdout.log",
       "stderr_log": "/tmp/results/work/sim/sample_004/stderr.log"
+    }
+  ],
+  "total_cost_usd": 0.0089,
+  "spot_savings_usd": 0.0,
+  "cache_hit_rate": 0.0,
+  "chaos_invocations": [],
+  "chaos_schedule": "per_sample",
+  "circuit_breaker_states": {
+    "cache:2026-06-10T14-30-00": "closed"
+  },
+  "alerts_fired": [
+    {
+      "rule_name": "sim_failure_rate",
+      "event_type": "campaign_summary",
+      "severity": "WARNING",
+      "message": "failure rate 20% exceeds threshold 5%",
+      "delivery_status": "delivered",
+      "timestamp": 1749565854.1
     }
   ]
 }
@@ -648,6 +898,9 @@ campaign with 1 failure, run locally with OpenStudio 3.11.0:
 | `exit_code: 1` on `GENERATE_LHS_SAMPLES` | Invalid `variables.yml`. | Check the YAML syntax and distribution parameters. |
 | `exit_code: 1` on `APPLY_PARAMETERS` | Pre-flight check failed. | Check for `UnmappedParameterError` or `AmbiguousParameterError` in the logs. |
 | Missing `per_sample` entries | Campaign failed before samples ran. | Check `steps[].exit_code` to find which step failed first. |
+| `circuit_breaker_states` has an `"open"` entry | Redis was unavailable. | The campaign ran on local fallbacks; cross-worker coordination was degraded. See `distributed-cache.md`. |
+| `alerts_fired[].delivery_status` is `"failed"` | Alert destinations were unreachable. | Check your `--alert-destinations` / webhook configuration. |
+| `chaos_invocations` entries with `injected: false` | Fault did not fire. | Verify the chaos scenario and `--chaos-schedule` — see `chaos-engine.md`. |
 
 ---
 
@@ -670,6 +923,10 @@ The canonical implementation lives in:
 |---|---|
 | `StepTrace` dataclass | `osimflow/monitoring.py` |
 | `SampleTrace` dataclass | `osimflow/monitoring.py` |
+| `GenerationTrace` dataclass | `osimflow/monitoring.py` |
 | `RunTrace` class and `to_dict()` | `osimflow/monitoring.py` |
 | Trace population (step hooks) | `osimflow/campaign.py` |
+| Chaos engine feeding `chaos_invocations` | `osimflow/chaos.py` |
+| Circuit breakers feeding `circuit_breaker_states` | `osimflow/circuit_breaker.py` |
+| `Alert` payloads feeding `alerts_fired` | `osimflow/alerting.py` |
 | `sample_log_paths()` helper | `osimflow/monitoring.py` |
