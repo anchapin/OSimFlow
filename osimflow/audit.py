@@ -70,6 +70,10 @@ SECRETS_ACCESSED = "secrets.accessed"
 JOB_SUBMITTED = "job.submitted"
 JOB_COMPLETED = "job.completed"
 JOB_FAILED = "job.failed"
+# BYOS provenance events (issue #1399): who loaded which user script and
+# which in-process attempts were rejected by the trust-level guard.
+BYOS_LOADED = "byos.loaded"
+BYOS_TRUST_LEVEL_REJECTED = "byos.trust_level_rejected"
 
 # ---------------------------------------------------------------------------
 # Sensitive field redaction
@@ -323,6 +327,62 @@ class AuditLogger:
                 actor=actor or cli_actor(),
                 action=CAMPAIGN_STOPPED,
                 resource=campaign_id,
+            )
+        )
+
+    def byos_loaded(
+        self,
+        script_path: str,
+        *,
+        trust_level: str,
+        require_trusted_scripts: bool | None,
+        contract_version: str,
+        actor: str | None = None,
+    ) -> None:
+        """Log a byos.loaded event (issue #1399).
+
+        Emitted on every successful BYOS user-script load so operators
+        can reconstruct who loaded which script through which trust
+        level — including the legacy in-process path.
+        """
+        self.log(
+            AuditEvent(
+                actor=actor or cli_actor(),
+                action=BYOS_LOADED,
+                resource=script_path,
+                details={
+                    "trust_level": trust_level,
+                    "require_trusted_scripts": require_trusted_scripts,
+                    "contract_version": contract_version,
+                },
+            )
+        )
+
+    def byos_trust_level_rejected(
+        self,
+        script_path: str | None,
+        *,
+        trust_level: str,
+        require_trusted_scripts: bool | None,
+        contract_version: str,
+        actor: str | None = None,
+    ) -> None:
+        """Log a byos.trust_level_rejected event (issue #1399).
+
+        Emitted when ``validate_trust_level`` rejects an in-process BYOS
+        request, so a production flip of ``--require-trusted-scripts``
+        is traceable even though the load never happens.
+        """
+        self.log(
+            AuditEvent(
+                actor=actor or cli_actor(),
+                action=BYOS_TRUST_LEVEL_REJECTED,
+                resource=script_path or "<unknown-script>",
+                details={
+                    "trust_level": trust_level,
+                    "require_trusted_scripts": require_trusted_scripts,
+                    "contract_version": contract_version,
+                },
             )
         )
 
