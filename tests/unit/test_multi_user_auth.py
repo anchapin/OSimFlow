@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from osimflow.api import (
     MultiUserAPIKeyStore,
     create_app,
 )
+from osimflow.errors import OSimFlowError, OSimFlowValueError
 
 
 @pytest.fixture
@@ -116,6 +118,87 @@ class TestMultiUserAPIKeyStore:
         assert user.role == _READONLY
 
 
+# Skip chmod-based tests on Windows where the POSIX mode bits the
+# validator checks are not portable and chmod behaves differently.
+# Mirrors the pattern used elsewhere in the test suite.
+_skip_windows = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file mode bits are not portable on Windows (issue #1480)",
+)
+
+
+class TestMultiUserAPIKeyStoreFilePermissions:
+    """Tests for api_keys_file permission validation (issue #1480)."""
+
+    @staticmethod
+    def _write_keys_file(path: Path) -> Path:
+        path.write_text(
+            json.dumps(
+                {
+                    "users": [
+                        {"key": "admin-key", "user_id": "alice", "role": _ADMIN},
+                        {"key": "readonly-key", "user_id": "bob", "role": _READONLY},
+                    ]
+                }
+            )
+        )
+        return path
+
+    @_skip_windows
+    def test_from_file_refuses_world_readable(self, tmp_path: Path) -> None:
+        """chmod 0644 (world-readable) must refuse by default (issue #1480)."""
+        keys_file = self._write_keys_file(tmp_path / "api_keys.json")
+        keys_file.chmod(0o644)
+        try:
+            with pytest.raises(OSimFlowValueError) as excinfo:
+                MultiUserAPIKeyStore.from_file(keys_file)
+            assert isinstance(excinfo.value, OSimFlowError)
+            # Inherits ValueError so legacy callers keep matching.
+            assert isinstance(excinfo.value, ValueError)
+            assert "issue #1480" in str(excinfo.value)
+        finally:
+            keys_file.chmod(0o600)
+
+    @_skip_windows
+    def test_from_file_refuses_group_readable(self, tmp_path: Path) -> None:
+        """chmod 0640 (group-readable) must refuse by default (issue #1480)."""
+        keys_file = self._write_keys_file(tmp_path / "api_keys.json")
+        keys_file.chmod(0o640)
+        try:
+            with pytest.raises(OSimFlowValueError) as excinfo:
+                MultiUserAPIKeyStore.from_file(keys_file)
+            assert "issue #1480" in str(excinfo.value)
+        finally:
+            keys_file.chmod(0o600)
+
+    @_skip_windows
+    def test_from_file_allows_with_opt_out_flag(self, tmp_path: Path) -> None:
+        """allow_insecure_perms=True accepts a permissive file (issue #1480)."""
+        keys_file = self._write_keys_file(tmp_path / "api_keys.json")
+        keys_file.chmod(0o644)
+        try:
+            store = MultiUserAPIKeyStore.from_file(keys_file, allow_insecure_perms=True)
+            assert len(store.users) == 2
+            assert store.validate("admin-key") is not None
+        finally:
+            keys_file.chmod(0o600)
+
+    @_skip_windows
+    def test_from_file_happy_path_0600(self, tmp_path: Path) -> None:
+        """0600 (owner read/write only) loads cleanly (issue #1480)."""
+        keys_file = self._write_keys_file(tmp_path / "api_keys.json")
+        keys_file.chmod(0o600)
+        store = MultiUserAPIKeyStore.from_file(keys_file)
+        assert len(store.users) == 2
+        admin = store.validate("admin-key")
+        assert admin is not None
+        assert admin.user_id == "alice"
+        assert admin.role == _ADMIN
+        readonly = store.validate("readonly-key")
+        assert readonly is not None
+        assert readonly.role == _READONLY
+
+
 class TestAPIKeyUser:
     """Tests for APIKeyUser."""
 
@@ -154,6 +237,8 @@ class TestMultiUserAuth:
                 }
             )
         )
+        # 0600 — issue #1480 fail-closed permission check.
+        keys_file.chmod(0o600)
         app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
         client = TestClient(app)
 
@@ -186,6 +271,7 @@ class TestMultiUserAuth:
         """Test that empty users list raises error."""
         keys_file = tmp_path / "empty_keys.json"
         keys_file.write_text(json.dumps({"users": []}))
+        keys_file.chmod(0o600)
         with pytest.raises(ValueError, match="No users found"):
             create_app(outdir=tmp_path, api_keys_file=keys_file)
 
@@ -193,6 +279,7 @@ class TestMultiUserAuth:
         """Test that invalid JSON raises error."""
         keys_file = tmp_path / "invalid_keys.json"
         keys_file.write_text("not valid json")
+        keys_file.chmod(0o600)
         with pytest.raises(ValueError, match="Invalid JSON in api_keys_file"):
             create_app(outdir=tmp_path, api_keys_file=keys_file)
 
@@ -226,6 +313,7 @@ class TestMultiUserAuth:
         keys_file.write_text(
             json.dumps({"users": [{"key": "key1", "user_id": "alice", "role": "admin"}]})
         )
+        keys_file.chmod(0o600)
         app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
         client = TestClient(app)
         resp = client.get("/api/v1/campaign", headers={"X-API-Key": "key1"})
@@ -266,9 +354,14 @@ class TestRBACWriteOperations:
     """Tests for RBAC enforcement on write operations (issue #442, #395)."""
 
     def _make_keys_file(self, tmp_path: Path, users: list[dict[str, str]]) -> Path:
-        """Create an API keys file with the given users."""
+        """Create an API keys file with the given users.
+
+        Writes the file with mode 0600 so it passes the fail-closed
+        permission check added in issue #1480.
+        """
         keys_file = tmp_path / "api_keys.json"
         keys_file.write_text(json.dumps({"users": users}))
+        keys_file.chmod(0o600)
         return keys_file
 
     def test_admin_can_create_variables(self, tmp_outdir: Path, tmp_path: Path) -> None:

@@ -256,9 +256,10 @@ appear in this document. Listed in run-subcommand groups (or
   `--resource-quota`, `--webhook-url`.
 
 - **Subcommand flags (non-`run`):** `serve` —
-  `--api-key`, `--api-redis-url`, `--cors-origins`, `--dashboard`,
-  `--editor`, `--enable-writes`, `--host`, `--port`, `--rate-limit`,
-  `--rate-limit-key`, `--read-only`,
+  `--allow-insecure-api-keys-file`,
+  `--api-key`, `--api-keys-file`, `--api-redis-url`, `--cors-origins`,
+  `--dashboard`, `--editor`, `--enable-writes`, `--host`, `--port`,
+  `--rate-limit`, `--rate-limit-key`, `--read-only`,
   `--read-write`, `--registry`, `--tls-cert`, `--tls-key`, `--ui`;
   `export` — `--algorithm`, `--format`, `--limit`, `--n_samples`,
   `--openstudio_version`, `--outdir`, `--target`;

@@ -748,6 +748,12 @@ openssl rand -base64 32
 - **Never commit `api_keys.json` to git.** Add it to `.gitignore`.
 - Store the keys file outside the `--outdir` campaign directory so it is not included in archived results.
 - For containerised deployments, mount the keys file as a read-only volume.
+- **Set restrictive file mode (`chmod 0600`).** The server refuses to
+  load a file that is group or world readable at startup (issue #1480,
+  mirrors the `--result-storage-endpoint` HTTPS rule from issue #1386).
+  On a shared HPC login node or multi-tenant host, a permissive mode
+  hands every local account every API key — including admin-role keys.
+  Override the check with `--allow-insecure-api-keys-file` (dev/test only).
 - Rotate keys regularly — remove a user's entry and restart the server to revoke access immediately.
 
 ---

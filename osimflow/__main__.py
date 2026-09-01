@@ -1716,7 +1716,25 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
             "Path to a JSON file containing multiple API keys with per-user "
             "roles (issue #395). When set, --api-key is ignored. "
             'File format: {"users": [{"key": "...", "user_id": "...", "role": "..."}]}. '
-            "Roles: readonly, readwrite, admin."
+            "Roles: readonly, readwrite, admin. "
+            "File mode must be 0600 (owner read/write only); group/world "
+            "readable files are refused at load time to avoid leaking "
+            "admin keys on shared hosts (issue #1480). Override with "
+            "--allow-insecure-api-keys-file (dev/test only)."
+        ),
+    )
+    serve.add_argument(
+        "--allow-insecure-api-keys-file",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt-in flag to allow --api-keys-file with group/world readable "
+            "permissions (issue #1480). Defaults to False (fail-closed) — "
+            "a permissive file is refused at load time because any local "
+            "account on the host can read every API key, including "
+            "admin-role keys. Mirrors --allow-insecure-storage-endpoint "
+            "(issue #1386). Dev/test only — fix with 'chmod 0600 <file>' "
+            "instead."
         ),
     )
     serve.add_argument(
@@ -2542,6 +2560,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:  # noqa: PLR0912
         read_only=read_only,
         api_key=api_key,
         api_keys_file=api_keys_file,
+        allow_insecure_api_keys_file=args.allow_insecure_api_keys_file,
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
         rate_limit_key=args.rate_limit_key,
