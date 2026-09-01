@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<measure>
+  <schema_version>3.1</schema_version>
+  <name>set_envelope_performance</name>
+  <uid>0543cb34-9e2a-473a-99fe-76eca4c70c6e</uid>
+  <version_id>273fe86e-0a8d-48fd-85ef-ed173c9c5172</version_id>
+  <version_modified>2026-09-01T20:16:19Z</version_modified>
+  <xml_checksum>2D42EA7A</xml_checksum>
+  <class_name>SetEnvelopePerformance</class_name>
+  <display_name>Set Envelope Performance</display_name>
+  <description>Sets the window-to-wall ratio and exterior-wall thermal resistance on every exterior wall of the model to user-supplied targets.</description>
+  <modeler_description>Iterates over all exterior walls; scales each subsurface window so its projected area equals wwr * gross wall area, and scales the wall insulation layer thickness so the assembly R-value matches wall_r_value (SI units, m^2*K/W).</modeler_description>
+  <arguments>
+    <argument>
+      <name>wwr</name>
+      <display_name>Window-to-Wall Ratio (fraction, 0.0-1.0)</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>0.4</default_value>
+    </argument>
+    <argument>
+      <name>wall_r_value</name>
+      <display_name>Exterior Wall R-value (m^2*K/W, SI)</display_name>
+      <type>Double</type>
+      <required>true</required>
+      <model_dependent>false</model_dependent>
+      <default_value>3.5</default_value>
+    </argument>
+  </arguments>
+  <outputs />
+  <provenances />
+  <tags>
+    <tag>Envelope.Opaque</tag>
+  </tags>
+  <attributes>
+    <attribute>
+      <name>Measure Type</name>
+      <value>ModelMeasure</value>
+      <datatype>string</datatype>
+    </attribute>
+    <attribute>
+      <name>Measure Language</name>
+      <value>Ruby</value>
+      <datatype>string</datatype>
+    </attribute>
+  </attributes>
+  <files>
+    <file>
+      <filename>LICENSE.md</filename>
+      <filetype>md</filetype>
+      <usage_type>license</usage_type>
+      <checksum>47EAD73D</checksum>
+    </file>
+    <file>
+      <filename>README.md</filename>
+      <filetype>md</filetype>
+      <usage_type>readme</usage_type>
+      <checksum>7CFCA4AE</checksum>
+    </file>
+    <file>
+      <filename>README.md.erb</filename>
+      <filetype>erb</filetype>
+      <usage_type>readmeerb</usage_type>
+      <checksum>F1C26127</checksum>
+    </file>
+    <file>
+      <version>
+        <software_program>OpenStudio</software_program>
+        <identifier>3.10.0</identifier>
+        <min_compatible>3.10.0</min_compatible>
+      </version>
+      <filename>measure.rb</filename>
+      <filetype>rb</filetype>
+      <usage_type>script</usage_type>
+      <checksum>2846EFC1</checksum>
+    </file>
+  </files>
+</measure>

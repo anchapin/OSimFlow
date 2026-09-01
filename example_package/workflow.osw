@@ -1,7 +1,7 @@
 {
   "seed_file": "model.osm",
   "weather_file": "",
-  "measure_paths": [],
+  "measure_paths": ["measures"],
   "steps": [
     {
       "measure_dir_name": "SetThermostatSchedule",
