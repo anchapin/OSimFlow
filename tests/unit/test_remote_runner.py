@@ -95,3 +95,36 @@ class TestNegotiateVersion:
         parsed = json.loads(result.stdout.strip())
         assert parsed["ok"] is True
         assert remote_runner.BYOS_CONTRACT_VERSION in parsed["supported_versions"]
+
+
+def test_upload_artifacts_retries_transient_storage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient 5xx during the runner-side upload is retried (#1398)."""
+    outdir = tmp_path / "run-1"
+    file_path = outdir / "aggregated_results.csv"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("sample_id\n0001\n", encoding="utf-8")
+
+    calls: list[int] = []
+
+    class _FlakyS3Client:
+        def upload_file(self, local: str, bucket: str, remote: str) -> None:
+            calls.append(1)
+            if len(calls) < 3:
+                raise ConnectionResetError("503 Service Unavailable")
+
+    from osimflow.storage import S3Storage
+
+    store = S3Storage(bucket="bucket")
+    monkeypatch.setattr(type(store), "client", property(lambda self: _FlakyS3Client()))
+    monkeypatch.setattr(remote_runner, "build_result_storage", lambda **_: store)
+    monkeypatch.setattr("osimflow.storage.time.sleep", lambda _s: None)
+    monkeypatch.setenv("OSIMFLOW_RESULT_TRANSPORT_MODE", "object_storage")
+    monkeypatch.setenv("OSIMFLOW_RESULT_STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("OSIMFLOW_RESULT_STORAGE_BUCKET", "bucket")
+    monkeypatch.setenv("OSIMFLOW_RESULT_STORAGE_PREFIX", "run-1")
+
+    # Must not raise: the transient 503 is retried inside S3Storage.upload_file.
+    remote_runner._upload_artifacts_for_object_storage([file_path])  # noqa: SLF001
+    assert len(calls) == 3
