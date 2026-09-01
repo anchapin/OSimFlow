@@ -651,3 +651,65 @@ def test_make_contract_aggregate_includes_openapi_sync() -> None:
         assert script in dry.stdout, (
             f"`make -n contract` did not invoke {script} (issue #1059). Got:\n{dry.stdout}"
         )
+
+
+def test_check_openapi_sync_runs_and_passes_on_clean_tree() -> None:
+    """Issue #1400: the openapi drift gate is *functionally* tested.
+
+    ``make test-fast`` (the pre-commit mirror) must catch a regression in
+    ``tools/check_openapi_sync.py`` — a syntax error, a broken
+    volatile-key strip, or a silently false-positive drift check —
+    without waiting for the CI ``agents-contract.yml`` job. This test
+    executes the script for real on the clean tree and asserts exit 0.
+    """
+    result = _run([sys.executable, "tools/check_openapi_sync.py"])
+    assert result.returncode == 0, (
+        f"tools/check_openapi_sync.py failed on a clean tree:\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+def test_check_openapi_sync_detects_intentional_drift() -> None:
+    """Issue #1400: the drift check must FAIL when the spec is mutated.
+
+    ``tools/check_openapi_sync.py`` hardcodes ``docs/openapi.json``
+    relative to the repo root, so the hermetic way to simulate drift is
+    to mutate the committed spec, run the real check, and restore the
+    original bytes in a ``finally`` block. The assertion is exit 1 with
+    a diagnostic that names the drift (diff output).
+
+    This is network-free and fastapi-boot-heavy only in the tool's own
+    regeneration step, which the clean-tree sibling test already pays.
+    """
+    tool = REPO_ROOT / "tools" / "check_openapi_sync.py"
+    spec = REPO_ROOT / "docs" / "openapi.json"
+    assert tool.exists(), f"missing {tool}"
+    assert spec.exists(), f"missing {spec}"
+
+    original = spec.read_bytes()
+    try:
+        text = original.decode("utf-8")
+        marker = '"description": "'
+        idx = text.find(marker)
+        assert idx != -1, "no description field found in openapi.json to mutate"
+        # Insert drift INTO the value (JSON stays valid; the regenerated
+        # spec will still carry the original description, so the check
+        # must report a diff).
+        head = text[: idx + len(marker)]
+        mutated = head + "DRIFTED BY TEST — " + text[idx + len(marker) :]
+        spec.write_bytes(mutated.encode("utf-8"))
+
+        result = _run([sys.executable, str(tool)])
+        assert result.returncode != 0, (
+            "tools/check_openapi_sync.py accepted a deliberately drifted spec — "
+            "its drift detection is broken (issue #1400)"
+        )
+        combined = (result.stdout + result.stderr).lower()
+        assert "drift" in combined or "diff" in combined or "fail" in combined, combined
+    finally:
+        spec.write_bytes(original)
+        # Restore-time sanity: the clean-tree check passes again.
+        post = _run([sys.executable, str(tool)])
+        assert post.returncode == 0, (
+            "docs/openapi.json was not restored correctly after the drift test"
+        )
