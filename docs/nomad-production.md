@@ -119,6 +119,11 @@ The `NomadExecutor` in `osimflow/executors/__init__.py` reads:
   post-processing container used by APPLY/KPI/AGGREGATE/PLOTS steps.
   Use this when GHCR access is restricted on Nomad clients (for example,
   point to a mirrored/private registry image or a preloaded local tag).
+- `OSIMFLOW_TASK_PAYLOAD_SECRET` — HMAC-SHA256 shared secret; `NomadExecutor`
+  signs `OSIMFLOW_TASK_PAYLOAD` (dispatch meta: `task_payload` /
+  `task_payload_sig` / `task_payload_secret`) at submission and
+  `osimflow.remote_runner` fails closed on unsigned/tampered payloads. See
+  [HMAC Task-Payload Signing](secret-management.md#hmac-task-payload-signing-remote-executors).
 
 Nomad result handling is **remote-first**. The default CLI behavior
 (`--nomad-remote-results-only`) keeps result resolution on remote artifacts
