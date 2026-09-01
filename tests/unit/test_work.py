@@ -178,6 +178,72 @@ class TestDefaultApplyParameters:
         )
         mock_model.save.assert_called_once_with(str(osm_path), overwrite=True)
 
+    def test_accepts_max_retries_kwarg(self, template_pkg: Path) -> None:
+        """Regression (#1487): the Campaign forwards max_retries on submit —
+        default_apply_parameters must accept the keyword-only kwarg like
+        run_openstudio_sim / extract_kpis do (issue #1394 fan-out)."""
+        osm_path = template_pkg / "model.osm"
+        osm_path.write_text('{"type": "OSM"}')
+        real_import = builtins.__import__
+        mock_openstudio = MagicMock()
+        mock_model = MagicMock()
+        mock_model_opt = MagicMock()
+        mock_model_opt.is_initialized.return_value = True
+        mock_model_opt.get.return_value = mock_model
+        mock_openstudio.openstudiomodelcore.Model.load.return_value = mock_model_opt
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "openstudio":
+                return mock_openstudio
+            return real_import(name, *args, **kwargs)
+
+        with (
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+            patch("osimflow.work._apply_osm_mutations"),
+        ):
+            result = default_apply_parameters(
+                template_pkg,
+                {"lighting_power_density": 10.0},
+                "0001",
+                template_pkg,
+                max_retries=0,
+            )
+
+        assert result == template_pkg
+        mock_model.save.assert_called_once()
+
+    def test_forwards_max_retries_to_run_with_retry(self, template_pkg: Path) -> None:
+        """The retry budget propagates to run_with_retry with step context."""
+        osm_path = template_pkg / "model.osm"
+        osm_path.write_text('{"type": "OSM"}')
+        real_import = builtins.__import__
+        mock_openstudio = MagicMock()
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "openstudio":
+                return mock_openstudio
+            return real_import(name, *args, **kwargs)
+
+        with (
+            patch("osimflow.work._is_stub_mode", return_value=False),
+            patch.object(builtins, "__import__", side_effect=fake_import),
+            patch("osimflow.work.run_with_retry") as mock_retry,
+        ):
+            default_apply_parameters(
+                template_pkg,
+                {"lighting_power_density": 10.0},
+                "0001",
+                template_pkg,
+                max_retries=7,
+            )
+
+        assert mock_retry.call_count == 1
+        call = mock_retry.call_args
+        assert call.kwargs["max_retries"] == 7
+        assert call.kwargs["sample_id"] == "0001"
+        assert call.kwargs["step_name"] == "APPLY_PARAMETERS"
+
     def test_raises_on_mutation_error(self, template_pkg: Path) -> None:
         """Re-raises OSMAttributeError from mutation failures."""
         from osimflow.apply_params import OSMAttributeError

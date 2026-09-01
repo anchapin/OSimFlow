@@ -405,6 +405,8 @@ def default_apply_parameters(
     parameters: dict[str, Any],
     sample_id: str,
     out: Path,
+    *,
+    max_retries: int = 3,
 ) -> Path:
     """Apply parameter values to an OpenStudio model using Python bindings.
 
@@ -443,6 +445,11 @@ def default_apply_parameters(
         out: Per-sample output directory containing ``model.osm``. The
             default writes the mutated model back to ``out / model.osm``
             and returns ``out``.
+        max_retries: maximum retry attempts for transient failures during
+            the load-mutate-save cycle (default 3). ``<=0`` disables retry.
+            Mirrors the keyword-only ``max_retries`` on
+            ``run_openstudio_sim`` / ``extract_kpis`` so the Campaign can
+            forward ``--max-sample-retries`` uniformly (issue #1394).
 
     Returns:
         The per-sample output directory ``out`` (matching the BYOS
@@ -474,16 +481,25 @@ def default_apply_parameters(
             "or set OSIMFLOW_STUB_SIM=1 to use stub mode for testing."
         ) from exc
 
-    model_opt = openstudio.openstudiomodelcore.Model.load(str(osm_path))
-    if not model_opt.is_initialized():
-        raise RuntimeError(f"OpenStudio failed to load model from {osm_path!r}")
-    model = model_opt.get()
+    def _apply_impl() -> Path:
+        model_opt = openstudio.openstudiomodelcore.Model.load(str(osm_path))
+        if not model_opt.is_initialized():
+            raise RuntimeError(f"OpenStudio failed to load model from {osm_path!r}")
+        model = model_opt.get()
 
-    _apply_osm_mutations(model, openstudio, parameters)
+        _apply_osm_mutations(model, openstudio, parameters)
 
-    model.save(str(osm_path), overwrite=True)
+        model.save(str(osm_path), overwrite=True)
+        return out
+
+    result = run_with_retry(
+        _apply_impl,
+        max_retries=max_retries,
+        sample_id=sample_id,
+        step_name="APPLY_PARAMETERS",
+    )
     log.info("default_apply_parameters: mutated .osm saved to %s", osm_path)
-    return out
+    return result
 
 
 def _apply_osm_mutations(
