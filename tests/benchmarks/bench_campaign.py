@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -176,6 +177,60 @@ def run_benchmark(
         executor.shutdown()
 
 
+PLOTS_STEP_MODULE = "osimflow._work_scripts.generate_plots"
+
+PLOTS_STARTUP_REPETITIONS = 5
+
+
+def bench_plots_step_startup(
+    *,
+    repetitions: int = PLOTS_STARTUP_REPETITIONS,
+    module: str = PLOTS_STEP_MODULE,
+) -> dict[str, Any]:
+    """Time the plots-step subprocess startup (issue #1485).
+
+    Spawns ``python -m osimflow._work_scripts.generate_plots --help``
+    ``repetitions`` times and records the wall-clock per invocation. This
+    is the cost multiplied by sample count on large campaigns, so it is
+    the metric that the deferred ``osimflow.algorithms`` import targets.
+
+    Returns a metrics dict with ``samples_s``, ``min_s``, ``mean_s`` and
+    ``max_s``. No threshold is enforced — the numbers are recorded so
+    before/after runs are comparable.
+    """
+    samples: list[float] = []
+    for _ in range(repetitions):
+        t0 = time.perf_counter()
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            [sys.executable, "-m", module, "--help"],
+            capture_output=True,
+            check=False,
+        )
+        samples.append(time.perf_counter() - t0)
+        if proc.returncode != 0:
+            log.warning(
+                "plots-step --help exited %d: %s",
+                proc.returncode,
+                proc.stderr.decode(errors="replace")[-500:],
+            )
+    metrics: dict[str, Any] = {
+        "module": module,
+        "repetitions": repetitions,
+        "samples_s": samples,
+        "min_s": min(samples),
+        "mean_s": sum(samples) / len(samples),
+        "max_s": max(samples),
+    }
+    log.info(
+        "plots-step startup: min=%.3fs mean=%.3fs max=%.3fs (n=%d)",
+        metrics["min_s"],
+        metrics["mean_s"],
+        metrics["max_s"],
+        repetitions,
+    )
+    return metrics
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="bench_campaign",
@@ -217,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     executor = LocalExecutor(max_workers=args.max_workers)
     metrics = run_benchmark(cfg, executor=executor, threshold_cold_s=args.threshold_cold_s)
+    plots_startup = bench_plots_step_startup()
     # Summary line for the CI job log.
     verdict = "PASS" if metrics["passed"] else "FAIL"
     print(
@@ -227,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         f"  n_samples:    {metrics['n_samples']}\n"
         f"  executor:     {metrics['executor']}\n"
         f"  artifact:     {cfg.outdir / BENCHMARK_ARTIFACT}\n"
+        f"  plots_step_startup_s: min={plots_startup['min_s']:.3f} "
+        f"mean={plots_startup['mean_s']:.3f} max={plots_startup['max_s']:.3f}\n"
     )
     return 0 if metrics["passed"] else 1
 
