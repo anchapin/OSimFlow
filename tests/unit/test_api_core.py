@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import warnings
 from pathlib import Path
@@ -10,9 +11,16 @@ import pytest
 
 pytest.importorskip("fastapi", reason="osimflow[api] extra required")
 pytest.importorskip("slowapi", reason="osimflow[api] extra required")
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from osimflow.api import create_app, generate_api_key, validate_api_key
+from osimflow.api.app import _get_api_key_from_request, _make_per_user_key_func
+from osimflow.api.auth import (
+    API_KEY_QUERY_PARAM_MIGRATION_HINT,
+    APIKeyQueryParameterError,
+    extract_api_key,
+)
 
 
 @pytest.fixture
@@ -411,11 +419,97 @@ class TestAPIKeyAuth:
         resp = client.get("/api/v1/campaign", headers={"X-API-Key": TEST_API_KEY})
         assert resp.status_code == 200
 
-    def test_protected_endpoint_with_correct_query_key(self, tmp_outdir: Path) -> None:
+    def test_query_param_key_rejected_with_migration_hint(self, tmp_outdir: Path) -> None:
+        """A valid key supplied ONLY via ?api_key= no longer authenticates (issue #1466)."""
         app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
         client = TestClient(app)
         resp = client.get(f"/api/v1/campaign?api_key={TEST_API_KEY}")
+        assert resp.status_code == 401
+        assert API_KEY_QUERY_PARAM_MIGRATION_HINT in resp.json()["detail"]
+
+    def test_query_param_key_rejected_in_multi_user_mode(self, tmp_outdir: Path) -> None:
+        """Query-param transport is dropped in multi-user mode too (issue #1466)."""
+        keys_file = tmp_outdir / "api_keys.json"
+        keys_file.write_text(
+            json.dumps(
+                {
+                    "users": [
+                        {"key": TEST_API_KEY, "user_id": "alice", "role": "admin"},
+                    ]
+                }
+            )
+        )
+        keys_file.chmod(0o600)
+        app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
+        client = TestClient(app)
+        resp = client.get(f"/api/v1/campaign?api_key={TEST_API_KEY}")
+        assert resp.status_code == 401
+        assert API_KEY_QUERY_PARAM_MIGRATION_HINT in resp.json()["detail"]
+
+    def test_header_takes_precedence_over_query_param(self, tmp_outdir: Path) -> None:
+        """When both are present the header wins (issue #1466).
+
+        Header-precedence keeps the rejection narrowly scoped to the
+        removed channel: a client that already sends the header is not
+        broken by a stale link that also carries ?api_key=.
+        """
+        app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)
+        client = TestClient(app)
+        resp = client.get(
+            f"/api/v1/campaign?api_key={TEST_API_KEY}",
+            headers={"X-API-Key": TEST_API_KEY},
+        )
         assert resp.status_code == 200
+
+    @staticmethod
+    def _make_request(headers: dict[str, str], query_string: str = "") -> Request:
+        """Build a minimal starlette Request for helper-level tests."""
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/v1/campaign",
+                "headers": [
+                    (name.lower().encode(), value.encode()) for name, value in headers.items()
+                ],
+                "query_string": query_string.encode(),
+            }
+        )
+
+    def test_extract_api_key_header_only(self) -> None:
+        """extract_api_key reads the header and ignores nothing else (issue #1466)."""
+        req = self._make_request({"X-API-Key": TEST_API_KEY})
+        assert extract_api_key(req) == TEST_API_KEY
+        req_no_key = self._make_request({})
+        assert extract_api_key(req_no_key) is None
+
+    def test_extract_api_key_raises_on_query_param(self) -> None:
+        """extract_api_key raises the migration-hint error for ?api_key= (issue #1466)."""
+        req = self._make_request({}, query_string=f"api_key={TEST_API_KEY}")
+        with pytest.raises(APIKeyQueryParameterError, match="X-API-Key header"):
+            extract_api_key(req)
+
+    def test_rate_limiter_key_func_ignores_query_param(self) -> None:
+        """The limiter key func no longer extracts keys from the query string."""
+        req = self._make_request({}, query_string=f"api_key={TEST_API_KEY}")
+        assert _get_api_key_from_request(req) is None
+
+    def test_rate_limiter_identity_is_hashed(self) -> None:
+        """Per-user limiter identity is a SHA-256 digest, not the raw key (issue #1466)."""
+        req = self._make_request({"X-API-Key": TEST_API_KEY})
+        identity = _make_per_user_key_func()(req)
+        expected = f"user:{hashlib.sha256(TEST_API_KEY.encode()).hexdigest()}"
+        assert identity == expected
+        # The raw bearer-equivalent credential must not appear in the
+        # identity string that lands in limiter state (dict keys / Redis).
+        assert TEST_API_KEY not in identity
+
+    def test_rate_limiter_identity_stable_across_identical_keys(self) -> None:
+        """Same key → same identity (stable across processes/instances)."""
+        key_func = _make_per_user_key_func()
+        first = key_func(self._make_request({"X-API-Key": TEST_API_KEY}))
+        second = key_func(self._make_request({"X-API-Key": TEST_API_KEY}))
+        assert first == second
 
     def test_ready_endpoint_requires_auth(self, tmp_outdir: Path) -> None:
         app = create_app(outdir=tmp_outdir, api_key=TEST_API_KEY)

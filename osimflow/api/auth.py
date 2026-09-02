@@ -58,18 +58,41 @@ def generate_api_key() -> str:
     return secrets.token_urlsafe(32)
 
 
-def extract_api_key(request: Request) -> str | None:
-    """Extract the API key from a request.
+class APIKeyQueryParameterError(RuntimeError):
+    """An API key was supplied via the ``api_key`` query parameter (issue #1466).
 
-    Checks the ``X-API-Key`` header first, then the ``api_key`` query
-    parameter.  Returns ``None`` if neither is present.
+    Query strings are recorded by reverse proxies, access logs, browser
+    history, and ``Referer`` headers, so the query channel turned
+    bearer-equivalent credentials into durable log artifacts on every
+    hop.  Key extraction is header-only (:func:`extract_api_key`); this
+    error carries the migration hint the API returns as a 401 so the
+    client knows to switch to the ``X-API-Key`` header.
+    """
+
+
+# Migration hint returned to clients still using the removed query channel.
+API_KEY_QUERY_PARAM_MIGRATION_HINT = (
+    "api_key query parameter is no longer accepted; pass the X-API-Key header instead"
+)
+
+
+def extract_api_key(request: Request) -> str | None:
+    """Extract the API key from a request — header-only (issue #268, #1466).
+
+    The ``X-API-Key`` header is the sole accepted transport.  When an
+    ``api_key`` query parameter is present but the header is absent,
+    raises :class:`APIKeyQueryParameterError` so callers reject the
+    request with a 401 and the migration hint — query strings leak into
+    proxy/access logs, browser history, and ``Referer`` headers.
+
+    Returns ``None`` when no key is supplied via the header.
     """
     header_key = request.headers.get("X-API-Key")
     if header_key:
         return str(header_key)
     query_key = request.query_params.get("api_key")
     if query_key:
-        return str(query_key)
+        raise APIKeyQueryParameterError(API_KEY_QUERY_PARAM_MIGRATION_HINT)
     return None
 
 

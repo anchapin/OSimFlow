@@ -1,16 +1,21 @@
 """FastAPI application for OSimFlow campaign monitoring.
 
 Security features (issue #268, #395):
-- API key authentication (``X-API-Key`` header or ``api_key`` query param)
+- API key authentication via the ``X-API-Key`` header only — the
+  ``api_key`` query parameter is rejected with a 401 migration hint
+  (issue #1466)
 - Multi-user support with per-user permission levels (issue #395)
 - CORS middleware with configurable origins
-- Rate limiting via a custom sliding-window middleware (default 60/minute)
+- Rate limiting via a custom sliding-window middleware (default 60/minute);
+  per-user limiting identifies users by a SHA-256 digest of their key,
+  never the raw credential (issue #1466)
 - Read-only mode by default; ``--enable-writes`` required for mutations
 - ``/health`` remains unauthenticated for load balancer probes
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -34,6 +39,7 @@ if TYPE_CHECKING:
     import redis.asyncio as redis_async
 
 from osimflow.api.auth import (
+    APIKeyQueryParameterError,
     MultiUserAPIKeyStore,
     extract_api_key,
     validate_api_key,
@@ -111,15 +117,15 @@ _CAMPAIGN_ID_RE: re.Pattern[str] = re.compile(r"^/api/v1/campaigns/([^/]+)")
 def _get_api_key_from_request(request: Request) -> str | None:
     """Extract the API key from a request for per-user rate limiting (issue #445).
 
-    Checks the ``X-API-Key`` header first, then the ``api_key`` query
-    parameter.  Returns ``None`` if neither is present.
+    Header-only (issue #1466): the ``X-API-Key`` header is the sole
+    accepted transport; the ``api_key`` query parameter is no longer
+    consulted (the auth middleware rejects query-param-authenticated
+    requests with a 401 migration hint).  Returns ``None`` when the
+    header is absent.
     """
     header_key = request.headers.get("X-API-Key")
     if header_key:
         return str(header_key)
-    query_key = request.query_params.get("api_key")
-    if query_key:
-        return str(query_key)
     return None
 
 
@@ -140,8 +146,11 @@ def _make_per_user_key_func(
 ) -> Callable[[Request], str]:
     """Create a key function that rate limits by authenticated user (issue #445).
 
-    Uses the API key to identify users.  Falls back to IP address when
-    no API key is provided or when per-user limiting is not applicable
+    Uses a SHA-256 digest of the API key to identify users (issue #1466) —
+    the raw key is never used as the identity string, so limiter state
+    (in-process or Redis) contains no bearer-equivalent credentials.
+    Falls back to IP address when no API key is provided via the
+    ``X-API-Key`` header or when per-user limiting is not applicable
     (e.g., in single-key mode where all users are treated as "default").
 
     The key store is read from ``request.app.state.{app_state_key_store_attr}``
@@ -151,9 +160,18 @@ def _make_per_user_key_func(
     def key_func(request: Request) -> str:
         api_key = _get_api_key_from_request(request)
         if api_key:
-            # Use the API key itself as the rate limit key.
-            # In multi-user mode, each key maps to a specific user.
-            return f"user:{api_key}"
+            # Identify the user by a SHA-256 digest of their key, never
+            # the raw credential (issue #1466): the limiter's identity
+            # string lands in the in-process ``_hits`` dict and in Redis
+            # key names (``ratelimit:user:<digest>:<window>``), both of
+            # which can end up in logs, ``KEYS`` dumps, or operator
+            # output.  The digest is deterministic (not HMAC-salted with
+            # a per-process secret) so Redis-backed limits stay shared
+            # across API instances behind a load balancer; recovering
+            # the preimage of a 256-bit ``token_urlsafe`` key from the
+            # digest is infeasible.
+            digest = hashlib.sha256(api_key.encode()).hexdigest()
+            return f"user:{digest}"
         # Fall back to IP address when no API key is provided.
         return _get_real_remote_address(request)
 
@@ -470,7 +488,17 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if key_store is None:
             return cast(Response, await call_next(request))
 
-        provided = extract_api_key(request)
+        try:
+            provided = extract_api_key(request)
+        except APIKeyQueryParameterError as exc:
+            # A key arrived via the removed query channel (issue #1466):
+            # reject with 401 and the migration hint.  Never treat the
+            # query parameter as a valid credential — query strings leak
+            # into proxy/access logs, browser history, and Referer headers.
+            return JSONResponse(
+                status_code=401,
+                content={"detail": str(exc)},
+            )
 
         if isinstance(key_store, MultiUserAPIKeyStore) and key_store.single_key is not None:
             if not validate_api_key(provided, key_store.single_key):
@@ -481,7 +509,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             # Single-key auth: defer to server's read_only setting via get_user_permission()
             # instead of hardcoding _ADMIN, so read_only=True correctly restricts writes (issue #644)
             request.state.api_user = None
-        elif isinstance(key_store, MultiUserAPIKeyStore):
+        else:
             user = key_store.validate(provided)
             if user is None:
                 return JSONResponse(
@@ -489,8 +517,6 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                     content={"detail": "Invalid or missing API key"},
                 )
             request.state.api_user = user
-        else:
-            return cast(Response, await call_next(request))
 
         return cast(Response, await call_next(request))
 
@@ -1361,8 +1387,10 @@ def create_app(
         Single API key for authentication (backward-compatible mode).
         When ``None`` and ``api_keys_file`` is not set, authentication
         is disabled.  When set, all non-public endpoints require the
-        ``X-API-Key`` header or ``api_key`` query parameter to match.
-        In single-key mode, all authenticated users get admin access.
+        ``X-API-Key`` header to match — header-only (issue #1466); a
+        key supplied via the ``api_key`` query parameter is rejected
+        with a 401 carrying a migration hint.  In single-key mode, all
+        authenticated users get admin access.
     api_keys_file
         Path to a JSON file containing multiple API keys with per-user
         roles (issue #395).  When set, ``api_key`` is ignored.
@@ -1391,8 +1419,9 @@ def create_app(
         Rate limit string, e.g. ``"60/minute"`` (default ``"60/minute"``).
     rate_limit_key
         Rate limit key type: ``"ip"`` (default, per-IP limiting),
-        ``"user"`` (per-API-key limiting, issue #445), or
-        ``"campaign"`` (per-campaign-ID limiting, issue #445).
+        ``"user"`` (per-API-key limiting via a SHA-256 digest of the
+        key, issues #445 and #1466), or ``"campaign"`` (per-campaign-ID
+        limiting, issue #445).
     ui_enabled
         Enable the web UI router (issue #337).
     variable_editor
