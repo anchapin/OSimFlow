@@ -15,6 +15,28 @@ osimflow serve --outdir ./results --read-write
 osimflow serve --outdir ./results --host 127.0.0.1 --port 9000
 ```
 
+## Authentication (SEC-001)
+
+Authentication is mandatory for non-local binds. API keys are
+transported via the **`X-API-Key` request header only** (issue #268):
+
+```bash
+curl -H "X-API-Key: <your-key>" http://localhost:8000/api/v1/campaign
+```
+
+> **Important (issue #1466):** the `?api_key=` query parameter is **no
+> longer accepted** as a key transport. Query strings are recorded by
+> reverse proxies, access logs, browser history, and `Referer` headers,
+> which turned bearer-equivalent credentials into durable log artifacts.
+> Requests carrying an `api_key` query parameter (with no header) are
+> rejected with `401` and a migration hint — pass the `X-API-Key`
+> header instead.
+
+Pass `--api-key <key>` for single-key mode, or `--api-keys-file
+<file.json>` for multi-user keys with per-user roles (`readonly`,
+`readwrite`, `admin`; issue #395). The Python client
+(`osimflow.client.OSimFlowClient`) already sends the header.
+
 ## TLS (SEC-004)
 
 **TLS is required for production deployments.** The API supports API key authentication (issue #268) but defaults to plain HTTP with no TLS enforcement. Without TLS, API keys are transmitted in clear text and are vulnerable to interception.
