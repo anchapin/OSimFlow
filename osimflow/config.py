@@ -976,7 +976,12 @@ class CampaignConfig:
     # --- Composed focused configs (issue #767, init=False for backward compat) ---
     dag: DAGConfig = dataclasses.field(init=False)
     storage: StorageConfig = dataclasses.field(init=False)
-    chaos: ChaosConfig = dataclasses.field(init=False)
+    # Issue #1474: ``chaos`` is the single source of truth. The legacy
+    # flat ``chaos_*`` shadow fields were removed; callers should
+    # construct via ``load_config`` (which builds a ``ChaosConfig`` from
+    # CLI args) or pass ``chaos=ChaosConfig(...)`` directly. The
+    # ``__getattr__`` shim keeps legacy flat reads working.
+    chaos: ChaosConfig = dataclasses.field(default_factory=ChaosConfig)
     _observability: ObservabilityConfig = dataclasses.field(init=False)
 
     # --- Objective and constraints (issue #282) ---
@@ -1117,17 +1122,12 @@ class CampaignConfig:
     cost_spot_price: float = 0.03
     flush_interval_seconds: float = 30.0
 
-    # --- Legacy flat chaos fields (issue #1013) ---
-    chaos_enabled: bool = False
-    chaos_scenarios: list[str] = dataclasses.field(default_factory=list)
-    chaos_schedule: str = "none"
-    chaos_probability: float = 1.0
-    chaos_delay_s: float = 0.1
-    chaos_jitter_s: float = 0.05
-    chaos_duration_s: float = 0.5
-    chaos_intensity: float = 0.5
-    chaos_size_mb: int = 64
-    chaos_fail_after: int = 2
+    # NOTE: the legacy flat ``chaos_*`` shadow fields were removed in
+    # issue #1474. ``ChaosConfig`` is the single source of truth — the
+    # ``chaos`` attribute below is composed via ``default_factory`` and
+    # built from CLI flags in ``load_config``. ``__getattr__`` still
+    # delegates legacy flat reads (e.g. ``cfg.chaos_enabled``) to the
+    # composed object so older callers keep working.
 
     def __post_init__(self) -> None:
         """Initialize composed configs and executor configs from flat fields."""
@@ -1253,30 +1253,6 @@ class CampaignConfig:
                 ca_cert=self.nomad_ca_cert,
                 allow_insecure_token=self.nomad_allow_insecure_token,
             )
-
-        # Chaos config (issue #1013). Built unconditionally so that
-        # ``self.chaos`` is always present on the CampaignConfig instance;
-        # the field is composed from the legacy flat ``chaos_*`` fields
-        # so ``Campaign(chaos_engine=...)`` can pick them up via
-        # ``cfg.chaos.*`` without any user code changes. When
-        # ``chaos_enabled`` is set without explicit scenarios, fall back
-        # to ``["kill_switch"]`` so the engine is enabled-but-empty
-        # never happens — kill_switch is the cheapest safe default.
-        scenarios_for_chaos = list(self.chaos_scenarios)
-        if self.chaos_enabled and not scenarios_for_chaos:
-            scenarios_for_chaos = ["kill_switch"]
-        self.chaos = ChaosConfig(
-            enabled=self.chaos_enabled,
-            scenarios=scenarios_for_chaos,
-            schedule=self.chaos_schedule,
-            probability=self.chaos_probability,
-            delay_s=self.chaos_delay_s,
-            jitter_s=self.chaos_jitter_s,
-            duration_s=self.chaos_duration_s,
-            intensity=self.chaos_intensity,
-            size_mb=self.chaos_size_mb,
-            fail_after=self.chaos_fail_after,
-        )
 
     def _get_legacy_field(self, name: str, default: Any) -> Any:
         """Get a legacy flat field value for composed config initialization."""
@@ -1741,6 +1717,29 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             field="chaos_jitter_s",
         )
 
+    # Chaos testing settings (issue #1013). All off by default; the
+    # single ``ChaosConfig`` object is built from the ``--chaos-*`` CLI
+    # flags and composed via the ``chaos=`` field (issue #1474 — the
+    # legacy flat ``chaos_*`` shadow fields were removed). When
+    # ``--chaos-enabled`` is set but no scenarios are listed,
+    # default to ``["kill_switch"]`` so a typo cannot leave the
+    # engine enabled-but-empty.
+    chaos_scenarios = _parse_chaos_scenarios(args.get("chaos_scenarios"))
+    if bool(args.get("chaos_enabled", False)) and not chaos_scenarios:
+        chaos_scenarios = ["kill_switch"]
+    chaos_cfg = ChaosConfig(
+        enabled=bool(args.get("chaos_enabled", False)),
+        scenarios=chaos_scenarios,
+        schedule=str(args.get("chaos_schedule", "none")),
+        probability=float(str(args.get("chaos_probability", 1.0))),
+        delay_s=_chaos_delay_s,
+        jitter_s=_chaos_jitter_s,
+        duration_s=float(str(args.get("chaos_duration_s", 0.5))),
+        intensity=_chaos_intensity,
+        size_mb=int(str(args.get("chaos_size_mb", 64))),
+        fail_after=int(str(args.get("chaos_fail_after", 2))),
+    )
+
     return CampaignConfig(
         input_variables=variables_yml,
         template_sim_package=template,
@@ -1950,22 +1949,5 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         # (issue #1386).  Mirrors the Redis ``rediss://`` enforcement from
         # issue #1321 — defaults to ``False`` (fail-closed).
         allow_insecure_storage_endpoint=bool(args.get("allow_insecure_storage_endpoint", False)),
-        # Chaos testing settings (issue #1013). All off by default; the
-        # ``chaos`` composed config is built from these flat fields in
-        # ``__post_init__``. ``chaos_scenarios`` is parsed from a
-        # comma-separated string so the CLI can stay close to the
-        # existing ``--algo-args foo,bar,baz`` convention. When
-        # ``--chaos-enabled`` is set but no scenarios are listed,
-        # default to ``["kill_switch"]`` so a typo cannot leave the
-        # engine enabled-but-empty.
-        chaos_enabled=bool(args.get("chaos_enabled", False)),
-        chaos_scenarios=_parse_chaos_scenarios(args.get("chaos_scenarios")),
-        chaos_schedule=str(args.get("chaos_schedule", "none")),
-        chaos_probability=float(str(args.get("chaos_probability", 1.0))),
-        chaos_delay_s=_chaos_delay_s,
-        chaos_jitter_s=_chaos_jitter_s,
-        chaos_duration_s=float(str(args.get("chaos_duration_s", 0.5))),
-        chaos_intensity=_chaos_intensity,
-        chaos_size_mb=int(str(args.get("chaos_size_mb", 64))),
-        chaos_fail_after=int(str(args.get("chaos_fail_after", 2))),
+        chaos=chaos_cfg,
     )

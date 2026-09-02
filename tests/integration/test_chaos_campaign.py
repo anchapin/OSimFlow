@@ -40,6 +40,7 @@ from osimflow import (
     NetworkDelayInjector,
 )
 from osimflow.chaos import FaultType
+from osimflow.config import ChaosConfig
 from osimflow.executors import LocalExecutor
 
 pytestmark = pytest.mark.chaos
@@ -91,6 +92,12 @@ def _make_cfg(
     chaos_probability: float = 1.0,
     chaos_fail_after: int = 2,
 ) -> CampaignConfig:
+    # Issue #1474: build the single ChaosConfig object instead of
+    # passing flat ``chaos_*`` kwargs (which were removed from
+    # CampaignConfig).
+    scenarios = list(chaos_scenarios) if chaos_scenarios else []
+    if chaos_enabled and not scenarios:
+        scenarios = ["kill_switch"]
     return CampaignConfig(
         input_variables=workdir / "variables.yml",
         template_sim_package=template_pkg,
@@ -99,13 +106,15 @@ def _make_cfg(
         openstudio_version="3.11.0",
         archive_intermediates=False,
         skip_preflight=True,
-        chaos_enabled=chaos_enabled,
-        chaos_scenarios=list(chaos_scenarios) if chaos_scenarios else [],
-        chaos_schedule=chaos_schedule,
-        chaos_delay_s=chaos_delay_s,
-        chaos_jitter_s=chaos_jitter_s,
-        chaos_probability=chaos_probability,
-        chaos_fail_after=chaos_fail_after,
+        chaos=ChaosConfig(
+            enabled=chaos_enabled,
+            scenarios=scenarios,
+            schedule=chaos_schedule,
+            delay_s=chaos_delay_s,
+            jitter_s=chaos_jitter_s,
+            probability=chaos_probability,
+            fail_after=chaos_fail_after,
+        ),
     )
 
 
