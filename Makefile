@@ -18,6 +18,15 @@ MYPY := $(VENV)/bin/mypy
 PYTEST := $(VENV)/bin/pytest
 PRECOMMIT := $(VENV)/bin/pre-commit
 
+# CI pytest flags (issue #1476) — single source of truth for the merge-gate
+# invocation. The CI `test` job (.github/workflows/ci.yml) runs
+# `make test-cov`, which composes PYTEST_CI_FLAGS + PYTEST_COV_FLAGS; the
+# local `test` target reuses the same PYTEST_CI_FLAGS with the coverage
+# gate off. Editing these variables changes CI and local targets together —
+# do not duplicate the flags inline in ci.yml.
+PYTEST_CI_FLAGS := -n 2 --dist loadgroup --timeout=120 --ignore=tests/contract -m "not nomad_e2e and not slow"
+PYTEST_COV_FLAGS := --cov=osimflow --cov-report=xml --cov-report=term-missing --cov-fail-under=82
+
 .PHONY: help install lint format typecheck test test-cov test-fast smoke contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
 
 help: ## Show this help.
@@ -41,11 +50,11 @@ format: ## ruff format (write)
 typecheck: ## mypy --strict (osimflow/)
 	$(MYPY) osimflow
 
-test: ## pytest (full suite, no coverage gate — use test-cov for the gate)
-	$(PYTEST) -o addopts=""
+test: ## pytest with CI flags, no coverage gate (same selection/timeouts as CI; use test-cov for the gate)
+	$(PYTEST) $(PYTEST_CI_FLAGS)
 
-test-cov: ## pytest --cov with 82% gate (mirrors CI test job; issue #1417)
-	$(PYTEST) --cov=osimflow --cov-report=xml --cov-report=term-missing --cov-fail-under=82 --ignore=tests/contract
+test-cov: ## pytest with CI flags + 82% gate (exact CI test-job invocation — ci.yml runs this; issues #1417, #1476)
+	$(PYTEST) $(PYTEST_CI_FLAGS) $(PYTEST_COV_FLAGS) -q
 
 test-fast: ## pytest contract only (pre-commit mirror)
 	$(PYTEST) -o addopts="" tests/contract -x -q
