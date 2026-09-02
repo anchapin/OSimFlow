@@ -19,7 +19,7 @@ import random
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from osimflow.executors.transport import encode_transport_value, validate_transport_mode
 
@@ -555,3 +555,21 @@ class BaseExecutor(abc.ABC):
             "result_hint": BaseExecutor._encode_payload_value(result_hint),
         }
         return json.dumps(payload)
+
+
+# ---------------------------------------------------------------------------
+# Executor registry state (issue #1463)
+# ---------------------------------------------------------------------------
+# Module-level dicts that back ``ExecutorRegistry``'s class attributes in
+# ``osimflow/executors/__init__.py``. They are anchored here — not declared
+# as class-level dict literals in the package init — because
+# ``importlib.reload(osimflow.executors)`` re-executes the package init and
+# would recreate class-level literals, silently dropping every executor
+# registration and every health check registered from ``osimflow.health``.
+# This module is imported once and cached by the import system, so aliasing
+# these dicts keeps registry state stable across reloads of the package.
+if TYPE_CHECKING:
+    from osimflow.health import CheckResult
+
+_EXECUTOR_REGISTRY: dict[str, type[BaseExecutor]] = {}
+_EXECUTOR_HEALTH_CHECKS: dict[str, Callable[[], CheckResult]] = {}

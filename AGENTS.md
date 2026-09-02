@@ -439,7 +439,9 @@ name in this section.
   `run_health_checks`). One `_check_<executor>()` per
   `ExecutorRegistry` executor (issue #1024); each returns
   `INFORMATIONAL` by default, promoted to `CRITICAL` when
-  `--executor <name>` is passed.
+  `--executor <name>` is passed. Since issue #1463 the health-check
+  registration lives on this module's side (`_register_executor_health_checks`
+  at import); `osimflow.executors` never imports this module.
 - `osimflow/alerting.py` — `AlertManager`
   (`on_alert` callback for `RunTrace.record_alert` wiring),
   `build_alert_manager`.
@@ -546,20 +548,33 @@ CLI scripts invoked by the work layer: `generate_lhs.py`,
 
 ### `osimflow/executors/` (contract-checked)
 
-`__init__.py` defines four executors inline — `LocalExecutor`,
-`SlurmExecutor`, `AWSBatchExecutor`, `NomadExecutor` — and hosts
+Since issue #1463 `__init__.py` holds only the shared surface —
 `ExecutorRegistry` (`register_health_check(name, fn)` attaches a
 per-executor health check, issue #1024; `iter_health_checks()`
 feeds `osimflow.health.run_health_checks`) plus `discover_plugins()`
-via entry point `osimflow.executors`. `base.py` defines
+via entry point `osimflow.executors`, the per-step resource defaults
+(`DEFAULT_STEP_RESOURCES` / `get_step_resources`), and the re-export
+of every executor (private helpers included) so
+`from osimflow.executors import X` keeps working. The registry's
+state dicts are anchored in `base.py`
+(`_EXECUTOR_REGISTRY` / `_EXECUTOR_HEALTH_CHECKS`) so they survive
+`importlib.reload`; health-check registration is bound from the
+`osimflow.health` side only (one-directional: health imports
+executors, never the reverse). `base.py` defines
 `BaseExecutor` + `Handle` + `SubmitRequest` + the shared
 `PollingHandle` poll-retry-fallback state machine with `PollOutcome`
 (issue #1464 — owns the terminal-poll loop, #1465 deadline, jittered
 backoff, retry accounting, and fallback-to-on-demand transition;
 `_AzureBatchHandle` and `_GoogleBatchHandle` subclass it, supplying
 substrate hooks); `transport.py` is the
-executor-agnostic result-reference contract. The remaining six
-executors each have their own file:
+executor-agnostic result-reference contract. All ten executors each
+have their own file:
+`local_executor.py` (`LocalExecutor` + `run_subprocess`),
+`slurm_executor.py` (`SlurmExecutor` + `_apply_slurm_params`),
+`aws_batch_executor.py` (`AWSBatchExecutor` + `_AWSBatchHandle` +
+`_TokenBucketRateLimiter` + `_SpotPriceCache`),
+`nomad_executor.py` (`NomadExecutor` + `_NomadClient` +
+`_NomadHandle` + `_retry_nomad_request`),
 `azure_batch_executor.py` (`AzureBatchExecutor`),
 `dask_jobqueue_executor.py` (`DaskJobQueueExecutor`; Dask
 JobQueue with Slurm/PBS/K8s schedulers — distinct from the
