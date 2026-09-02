@@ -112,8 +112,10 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
     # tests contribute unique coverage of the manifest-writing
     # code in campaign.py. They are kept in this fixture but excluded
     # from the *fast* CI gate (the `test` job runs
-    # ``-m "not nomad_e2e and not slow"``) and exercised in a dedicated
-    # `slow` CI job so they cannot rot (issue #623). ``--timeout`` bounds
+    # ``-m "not nomad_e2e and not slow and not chaos"`` — chaos is
+    # likewise deselected there and exercised by the dedicated,
+    # non-gating `chaos` CI job, issue #1468) so they cannot rot
+    # (issue #623). ``--timeout`` bounds
     # any individual test that regresses into hanging.
     return _run(
         [

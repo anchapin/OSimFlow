@@ -294,7 +294,7 @@ appear in this document. Listed in run-subcommand groups (or
 ## 4. Testing
 
 ```bash
-make test           # CI-flag suite (xdist, 120s timeout; no contract/slow/nomad_e2e), no coverage gate
+make test           # CI-flag suite (xdist, 120s timeout; no contract/slow/nomad_e2e/chaos), no coverage gate
 make test-fast      # contract only, no coverage gate (pre-commit mirror)
 .venv/bin/pytest tests/integration/test_cache_invalidation.py -v
 .venv/bin/pytest --cov=osimflow
@@ -308,7 +308,9 @@ target; pytest flags are single-sourced in the Makefile —
 `.github/workflows/ci.yml`: `lint` (ruff check + format --check),
 `typecheck` (mypy --strict), `test` (pytest + 82%), `contract`,
 `security` (pip-audit + gitleaks), `mlflow-real` (real MLflow
-smoke), `slow` (-m slow), per-PR Nomad E2E. Per-substrate E2E
+smoke), `slow` (-m slow), `chaos` (-m chaos, non-gating —
+deselected from the required `test` gate via PYTEST_CI_FLAGS,
+issue #1468), per-PR Nomad E2E. Per-substrate E2E
 (`aws-batch-e2e.yml`, `slurm-e2e.yml`, `kubernetes-e2e.yml`,
 `google-batch-e2e.yml`, `azure-batch-e2e.yml`,
 `nomad-e2e.yml`, `openstudio-cli-e2e.yml`) are nightly or
