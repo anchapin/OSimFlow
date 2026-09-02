@@ -13,7 +13,13 @@
 #   - security   : pip-audit dependency vulnerability check (parallel; ~30s)
 #
 # Install uses `uv` (~10x faster than pip) and the venv is cached on a hash
-# of `pyproject.toml` so unchanged PRs reuse the install.
+# of `pyproject.toml` so unchanged PRs reuse the install. The uv version is
+# pinned via setup-uv's `version:` input — keep the pin IDENTICAL in every
+# workflow that uses setup-uv (ci.yml, bench.yml, release.yml,
+# release-installers.yml, nomad-e2e.yml); issue #1477. Toolchain split:
+# CI installs with uv, local development uses pip via `make install`
+# (see docs/DEVELOPMENT.md §4) — CI is the authority for the merged
+# dependency set.
 #
 # Local pre-commit is the day-to-day mirror; CI is the merge gate.
 # =============================================================================
@@ -43,7 +49,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         run: uv python install 3.12
@@ -84,7 +90,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
@@ -119,7 +125,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         run: uv python install 3.12
@@ -171,19 +177,18 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
-        # Use the runner's system Python (provided by actions/setup-python,
-        # which uses the cpython.org-hosted builds) rather than
-        # `uv python install` because pip-audit internally creates a
-        # sub-venv to resolve dependencies, and that sub-venv's
-        # `ensurepip` step exits 127 against uv-managed Python
-        # interpreters (which do not ship `ensurepip`).
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
+        # Same uv-managed interpreter as every other job. The historical
+        # workaround (actions/setup-python because uv-managed Pythons
+        # lacked `ensurepip`, so pip-audit's dependency-resolution
+        # sub-venv exited 127) is no longer needed: python-build-standalone
+        # builds distributed by current uv ship `ensurepip` (verified by
+        # running `pip-audit -r ... --strict` green against a
+        # `uv venv --python 3.12` environment; issue #1477).
+        run: uv python install 3.12
 
       - name: Cache venv
         if: steps.changed.outputs.any_changed == 'true'
@@ -262,7 +267,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
@@ -351,7 +356,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
@@ -418,7 +423,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
@@ -491,7 +496,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
@@ -556,7 +561,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
@@ -617,7 +622,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "0.5.x"
+          version: "0.12.x"
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'

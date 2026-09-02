@@ -108,6 +108,15 @@ mypy,pytest,pre-commit}` and a bare `pytest` resolves to a different
 Python that lacks the `[dev,aws,slurm,api]` extras and fails with
 `ModuleNotFoundError`.
 
+**Toolchain split (issue #1477):** local development installs with
+**pip** via `make install` (authoritative locally — no `uv` needed);
+CI installs the same `pyproject.toml` with **uv** (pinned via
+`setup-uv`'s `version:` input, kept **identical** in every workflow
+that uses it: `ci.yml`, `bench.yml`, `release.yml`,
+`release-installers.yml`, `nomad-e2e.yml`). If the resolvers
+disagree, the CI-resolved set is the merge gate. Details in
+`docs/DEVELOPMENT.md` §4 "Toolchain: local pip vs CI uv".
+
 ```bash
 make help       # list all targets
 make install    # pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"   (creates .venv)
