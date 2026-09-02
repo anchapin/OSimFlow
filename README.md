@@ -7,14 +7,16 @@
 
 > **Status:** `v0.1.0` released (`2026-06-24`, see [CHANGELOG.md](CHANGELOG.md)). The orchestration foundation (`osimflow/` package) and per-step work-layer scripts (`osimflow/_work_scripts/`) are implemented; the `bin/*.py` entry points are stable shims over them. Active line: `v0.1.x` hardening + polish + ecosystem coverage.
 
-OSimFlow is a community-driven open-source **Python** framework that wraps the OpenStudio CLI to run large-scale, reproducible, parametric building-energy simulation campaigns. It targets OpenStudio users (energy modelers, researchers, design optimization practitioners) who need to launch hundreds or thousands of `openstudio.cli run` invocations across cloud (AWS Batch) or on-premise HPC (Slurm) without writing bespoke orchestration glue for each campaign.
+OSimFlow is a community-driven open-source **Python** framework that wraps the OpenStudio CLI to run large-scale, reproducible, parametric building-energy simulation campaigns. It targets OpenStudio users (energy modelers, researchers, design optimization practitioners) who need to launch hundreds or thousands of `openstudio.cli run` invocations across **ten executor backends** — Local, Slurm, AWS Batch, Azure Batch, Google Batch, Kubernetes, Nomad, PBS, Dask-JobQueue, and Docker Swarm — spanning laptops, on-premise HPC, cloud batch services, and container orchestrators, without writing bespoke orchestration glue for each campaign. The full per-substrate coverage matrix (real-E2E gates, CI workflows, skip-gate env vars) lives in [docs/substrate-coverage.md](docs/substrate-coverage.md).
 
-The framework foundation (a custom Python driver built on `submitit` for Slurm, Boto3 for AWS Batch, and a thin `concurrent.futures.ThreadPoolExecutor` for local development) was selected via an architecture decision spike — see [`.agents/results/decision-verdict.md`](.agents/results/decision-verdict.md) for the evidence.
+The framework foundation — a custom Python driver where every executor conforms to one `submit()` → `Handle` contract — was selected via an architecture decision spike, initially prototyped with `submitit` (Slurm), Boto3 (AWS Batch), and a `concurrent.futures.ThreadPoolExecutor` (local); see [`.agents/results/decision-verdict.md`](.agents/results/decision-verdict.md) for the evidence. That contract now carries all ten executors listed above.
 
 ## Quick links
 
 - [Product Requirements Document](docs/OSimFlow.md)
 - [AI assistant guide (AGENTS.md)](AGENTS.md)
+- [Substrate coverage matrix](docs/substrate-coverage.md) — all ten executors, their real-E2E gates and CI workflows
+- [Development guide](docs/DEVELOPMENT.md) — architecture, dev environment, tests, and contribution depth
 - [Architecture decision record](.agents/results/architecture/0001-workflow-framework.md)
 - [Decision verdict (spike results)](.agents/results/decision-verdict.md)
 - [Monitoring decision (BYO `run.json`)](.agents/results/monitoring-decision.md)
