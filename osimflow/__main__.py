@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 
 from osimflow import (
     AWSBatchExecutor,
@@ -58,6 +59,7 @@ from osimflow.handoff_record import (
     write_handoff_record,
 )
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
+from osimflow.validation import ValidationError
 
 log = logging.getLogger("osimflow.__main__")
 
@@ -3963,6 +3965,42 @@ def _cmd_export_results(args: argparse.Namespace) -> int:
     )
 
 
+def _friendly_run_input_error(exc: Exception) -> str:
+    """Translate a run-input loading failure into a one-line, flag-referencing
+    error message (issue #1461).
+
+    ``osimflow.config.load_config`` raises exceptions whose messages name the
+    internal snake_case parameters (``variables_yml``, ``template_sim_package``).
+    This maps them onto the user-facing CLI flags so the most common first-run
+    mistakes surface as one actionable line instead of a raw traceback.
+    Multi-line exception text (e.g. YAML parse errors carrying line/column
+    context) is flattened to a single line.
+    """
+    message = " ".join(str(exc).split())
+
+    if isinstance(exc, FileNotFoundError):
+        for prefix, prefix_flag in (
+            ("variables_yml not found: ", "--input_variables"),
+            ("template_sim_package not found: ", "--template_sim_package"),
+        ):
+            if message.startswith(prefix):
+                return f"{prefix_flag}: file not found: {message.removeprefix(prefix)}"
+        return f"file not found: {message}"
+
+    flag: str | None = None
+    if isinstance(exc, ValidationError):
+        field = exc.field
+        if field == "template_sim_package":
+            flag = "--template_sim_package"
+        elif field in ("variables", None) or "variables.yml" in message:
+            flag = "--input_variables"
+    elif isinstance(exc, yaml.YAMLError):
+        flag = "--input_variables"
+    if flag is not None:
+        return f"{flag}: {message}"
+    return f"invalid configuration: {message}"
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -4030,7 +4068,17 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     if args.detach:
         return _perform_detach_handoff(args)
 
-    cfg: CampaignConfig = load_config(vars(args))
+    # Issue #1461: config/input-loading failures (missing --input_variables
+    # file, missing --template_sim_package dir, malformed YAML) must surface
+    # as a one-line, flag-referencing error — never a raw traceback. The
+    # exception types raised by load_config stay untouched; they are
+    # translated here at the CLI boundary only.
+    try:
+        cfg: CampaignConfig = load_config(vars(args))
+    except (FileNotFoundError, ValidationError, ValueError, yaml.YAMLError) as exc:
+        print(f"error: {_friendly_run_input_error(exc)}", file=sys.stderr)
+        print("See 'osimflow run --help' for usage.", file=sys.stderr)
+        sys.exit(1)
     executor: BaseExecutor
     if cfg.dry_run:
         executor = LocalExecutor(max_workers=1)
