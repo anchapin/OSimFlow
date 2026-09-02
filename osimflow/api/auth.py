@@ -17,6 +17,8 @@ from typing import Any
 from fastapi import Request
 from starlette.responses import JSONResponse, Response
 
+from osimflow.errors import OSimFlowValueError
+
 log = logging.getLogger("osimflow.api.auth")
 
 # Permission levels for multi-user auth (issue #395)
@@ -82,6 +84,69 @@ def validate_api_key(provided: str | None, expected: str) -> bool:
     return secrets.compare_digest(provided, expected)
 
 
+def _validate_keys_file_permissions(file_path: Path, *, allow_insecure_perms: bool = False) -> None:
+    """Refuse to load an API keys file with group/world readable mode (issue #1480).
+
+    On a shared HPC login node or multi-tenant host, a world- or
+    group-readable keys file hands every local account every API key —
+    including ``admin``-role keys — and the server gave no signal at
+    startup.  This validator mirrors
+    :func:`osimflow.storage._validate_storage_endpoint` (issue #1386):
+    the project posture is to fail closed on misconfigured credential
+    material unless the operator has explicitly opted in with
+    ``allow_insecure_perms=True``.
+
+    Parameters
+    ----------
+    file_path
+        The resolved, existing file to inspect.  Must be a path whose
+        ``stat()`` we can call — typically the result of
+        ``Path(...).resolve()`` so symlinks are followed and we check
+        the actual file being read.
+    allow_insecure_perms
+        When ``True``, group/world readable files are accepted with a
+        loud ``WARNING``.  Defaults to ``False`` (fail-closed).
+
+    Raises
+    ------
+    OSimFlowValueError
+        When *file_path* is group or world readable and
+        ``allow_insecure_perms`` is ``False``.
+    """
+    # stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH == 0o077.
+    # On Windows those bits are always 0, so the check is a no-op there
+    # (chmod 0644 has no portable meaning) — the dedicated tests skip
+    # Windows with ``pytest.mark.skipif(sys.platform == "win32", ...)``.
+    try:
+        mode = file_path.stat().st_mode
+    except OSError as exc:
+        raise OSimFlowValueError(f"Cannot stat api_keys_file {file_path}: {exc}") from exc
+    insecure_bits = mode & 0o077
+    if insecure_bits == 0:
+        return
+    if allow_insecure_perms:
+        log.warning(
+            "INSECURE api_keys_file permissions (issue #1480): %s is %s, "
+            "which is group/world readable (bits=0o%03o). Any local account "
+            "on this host can read every API key — including admin-role "
+            "keys — from the file. Allowed because "
+            "--allow-insecure-api-keys-file was set. Fix with "
+            "'chmod 0600 <file>' (do not use in production).",
+            file_path,
+            oct(mode & 0o7777),
+            insecure_bits,
+        )
+        return
+    raise OSimFlowValueError(
+        f"Insecure api_keys_file permissions (issue #1480): {file_path} "
+        f"is {oct(mode & 0o7777)}, which is group/world readable "
+        f"(bits=0o{insecure_bits:03o}). On a shared host any local account "
+        f"can read every API key from this file. Fix with "
+        f"'chmod 0600 <file>' or pass --allow-insecure-api-keys-file to "
+        f"override (dev/test only)."
+    )
+
+
 class APIKeyUser:
     """Represents an authenticated API user with their permission level (issue #395)."""
 
@@ -132,8 +197,13 @@ class MultiUserAPIKeyStore:
         return cls(users=users)
 
     @classmethod
-    def from_file(cls, file_path: Path) -> MultiUserAPIKeyStore:
-        """Load API keys from a JSON file (issue #395).
+    def from_file(
+        cls,
+        file_path: Path,
+        *,
+        allow_insecure_perms: bool = False,
+    ) -> MultiUserAPIKeyStore:
+        """Load API keys from a JSON file (issue #395, #1480).
 
         File format::
 
@@ -144,31 +214,46 @@ class MultiUserAPIKeyStore:
                 ]
             }
 
+        Security (issue #1480): the file must have restrictive permissions
+        (mode ``0600`` recommended).  A file that is group or world
+        readable is **refused** with :class:`OSimFlowValueError` because
+        any local account on the host can read every API key — including
+        ``admin``-role keys — and the server would otherwise give no
+        signal at startup.  Pass ``allow_insecure_perms=True`` (or the
+        ``--allow-insecure-api-keys-file`` CLI flag, see ``serve``) to
+        accept a permissive file with a loud warning.  On Windows the
+        group/world bits are always 0, so the check is effectively a
+        no-op there — the dedicated tests cover the POSIX paths only.
+
         Raises
         ------
-        ValueError
+        OSimFlowValueError
             If the file does not have a ``.json`` or ``.keys`` extension,
             is not a regular file (e.g. a symlink to ``/dev/null`` or
-            ``/etc/passwd``), cannot be read, or contains invalid JSON.
+            ``/etc/passwd``), cannot be read, contains invalid JSON, or
+            has group/world readable mode while ``allow_insecure_perms``
+            is ``False``.  Inherits :class:`ValueError` so legacy
+            ``except ValueError:`` clauses keep matching.
         """
         resolved = file_path.resolve()
         if not resolved.is_file():
-            raise ValueError(f"api_keys_file must be a regular file, got {resolved}")
+            raise OSimFlowValueError(f"api_keys_file must be a regular file, got {resolved}")
         if resolved.suffix not in (".json", ".keys"):
-            raise ValueError(
+            raise OSimFlowValueError(
                 f"api_keys_file must have .json or .keys extension, got {resolved.suffix!r}"
             )
+        _validate_keys_file_permissions(resolved, allow_insecure_perms=allow_insecure_perms)
         try:
             keys_data = json.loads(resolved.read_text())
         except json.JSONDecodeError as exc:
             log.error("Failed to parse JSON from %s: %s", resolved, exc)
-            raise ValueError(f"Invalid JSON in api_keys_file: {exc}") from exc
+            raise OSimFlowValueError(f"Invalid JSON in api_keys_file: {exc}") from exc
         except OSError as exc:
             log.error("Failed to read %s: %s", resolved, exc)
-            raise ValueError(f"Cannot read api_keys_file: {exc}") from exc
+            raise OSimFlowValueError(f"Cannot read api_keys_file: {exc}") from exc
         users = keys_data.get("users", [])
         if not users:
-            raise ValueError("No users found in api_keys_file")
+            raise OSimFlowValueError("No users found in api_keys_file")
         return cls.from_users(users)
 
     def validate(self, provided_key: str | None) -> APIKeyUser | None:

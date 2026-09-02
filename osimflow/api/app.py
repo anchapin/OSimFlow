@@ -1329,6 +1329,7 @@ def create_app(
     read_only: bool = True,
     api_key: str | None = None,
     api_keys_file: Path | None = None,
+    allow_insecure_api_keys_file: bool = False,
     cors_origins: list[str] | None = None,
     rate_limit: str = "60/minute",
     rate_limit_key: str = "ip",
@@ -1375,6 +1376,12 @@ def create_app(
 
         Roles: ``readonly`` (GET only), ``readwrite`` (GET + POST for
         stop/cancel), ``admin`` (full access including campaign creation).
+    allow_insecure_api_keys_file
+        When ``True``, allow ``api_keys_file`` with group/world readable
+        permissions (issue #1480).  Defaults to ``False`` (fail-closed):
+        a permissive file is rejected at load time because every local
+        account on the host could otherwise read every API key —
+        including admin-role keys.  Recommended file mode is ``0600``.
     cors_origins
         List of allowed CORS origins.  When ``None`` or empty, CORS is
         not configured (same-origin only).  Use ``["*"]`` for all
@@ -1409,10 +1416,12 @@ def create_app(
         description="REST API for monitoring OSimFlow campaigns",
     )
 
-    # --- Build API key store (issue #395, #1328) ---
+    # --- Build API key store (issue #395, #1328, #1480) ---
     key_store: MultiUserAPIKeyStore | None = None
     if api_keys_file is not None:
-        key_store = MultiUserAPIKeyStore.from_file(api_keys_file)
+        key_store = MultiUserAPIKeyStore.from_file(
+            api_keys_file, allow_insecure_perms=allow_insecure_api_keys_file
+        )
         log.info("Loaded API keys from %s", api_keys_file)
     elif api_key is not None:
         key_store = MultiUserAPIKeyStore.from_single_key(api_key)
