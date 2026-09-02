@@ -45,6 +45,13 @@ class CircuitBreaker:
         on_transition: Optional callback ``(name, from_state, to_state) -> None``
             invoked on every state change. Intended to forward events to an
             :class:`~osimflow.observability.ObservabilityBackend`.
+        clock: Monotonic clock used for cooldown math. Inject a controllable
+            callable in tests to age the breaker past ``cooldown_s``
+            deterministically without real ``time.sleep`` (issue #1481).
+            When ``None`` (the default) the breaker calls
+            :func:`time.monotonic` on every invocation so callers that
+            ``monkeypatch.setattr("osimflow.circuit_breaker.time.monotonic",
+            ...)`` keep working.
     """
 
     def __init__(
@@ -54,6 +61,7 @@ class CircuitBreaker:
         cooldown_s: float = 30.0,
         *,
         on_transition: Callable[[str, str, str], None] | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.name = name
         self.failure_threshold = max(int(failure_threshold), 1)
@@ -63,6 +71,21 @@ class CircuitBreaker:
         self._state = "closed"
         self._opened_at = 0.0
         self._on_transition = on_transition
+        self._clock = clock
+
+    def _now(self) -> float:
+        """Return the current monotonic time, honoring an injected clock.
+
+        The injected ``clock`` callable is invoked as-is; when no clock was
+        supplied the breaker falls back to :func:`time.monotonic` on every
+        call so tests that monkeypatch the module attribute still see the
+        patched value (the previous direct ``time.monotonic()`` call in
+        this method broke that contract once we started storing the clock
+        on the instance).
+        """
+        if self._clock is None:
+            return time.monotonic()
+        return self._clock()
 
     # ------------------------------------------------------------------
     # Introspection
@@ -81,7 +104,7 @@ class CircuitBreaker:
 
     def _effective_state(self) -> str:
         """Return the state after applying cooldown transitions (lock held)."""
-        if self._state == "open" and (time.monotonic() - self._opened_at) >= self.cooldown_s:
+        if self._state == "open" and (self._now() - self._opened_at) >= self.cooldown_s:
             self._state = "half_open"
         return self._state
 
@@ -139,7 +162,7 @@ class CircuitBreaker:
             if self._consecutive_failures >= self.failure_threshold or was_half_open:
                 prev_state = self._state
                 self._state = "open"
-                self._opened_at = time.monotonic()
+                self._opened_at = self._now()
                 if was_half_open:
                     self._consecutive_failures = 0
                 if self._on_transition is not None:
