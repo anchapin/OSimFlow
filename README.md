@@ -29,7 +29,6 @@ The framework foundation (a custom Python driver built on `submitit` for Slurm, 
 
 ```bash
 make install    # creates .venv + pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
-source .venv/bin/activate
 ```
 
 `make install` bootstraps `.venv` and installs the full development
@@ -42,7 +41,18 @@ dev environment.
 ### 2. Run a sample campaign
 
 ```bash
-osimflow run \
+make smoke   # 3-sample stub-mode local campaign into ./results_smoke
+```
+
+`make smoke` runs the end-to-end DAG on the bundled `example_package/`
+in stub mode (no real OpenStudio CLI required, no `.venv` activation
+needed) and is the recommended way to validate a fresh install — see
+[AGENTS.md §2](AGENTS.md) for the full set of `make` targets. If you
+have the venv activated and want to run a longer campaign by hand,
+`make` just wraps `.venv/bin/osimflow run ...`:
+
+```bash
+.venv/bin/osimflow run \
   --executor local \
   --input_variables example_package/variables.yml \
   --template_sim_package ./example_package \
@@ -56,7 +66,7 @@ osimflow run \
 
 ### 3. Verify your installation
 
-After the command completes, check that these outputs exist under `./results`:
+After the command completes, check that these outputs exist under `./results_smoke`:
 
 | Artifact | Description |
 |---|---|
@@ -65,7 +75,7 @@ After the command completes, check that these outputs exist under `./results`:
 | `plots/` | Directory containing summary visualizations |
 
 ```bash
-ls results/aggregated_results.csv results/run.json results/plots/
+ls results_smoke/aggregated_results.csv results_smoke/run.json results_smoke/plots/
 ```
 
 If all three are present, your installation is working correctly. See [AGENTS.md §2](AGENTS.md) for the full set of build/run commands and the [User Guide](docs/user-guide.md) for detailed configuration.
