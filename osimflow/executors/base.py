@@ -17,7 +17,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
-from osimflow.executors.transport import encode_transport_value
+from osimflow.executors.transport import encode_transport_value, validate_transport_mode
 
 
 @dataclasses.dataclass
@@ -188,7 +188,14 @@ class BaseExecutor(abc.ABC):
         Raises:
             TypeError: If called with any kwargs (enforced by the
                 ``submit_request`` overload signature).
+            ValueError: If ``request.result_transport_mode`` is not a
+                mode this executor supports per the transport capability
+                matrix (issue #1473).
         """
+        # Issue #1473: validate the declared per-executor transport
+        # capability matrix instead of letting executors silently
+        # discard an unsupported ``result_transport_mode``.
+        validate_transport_mode(self.name, request.result_transport_mode)
         return self.submit(
             request.fn,
             *request.args,

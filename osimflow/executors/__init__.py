@@ -45,6 +45,7 @@ from osimflow.executors.transport import (
     coerce_transport_mode,
     materialize_object_storage_result,
     resolve_result_for_callback,
+    validate_transport_mode,
 )
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.task_payload_hmac import (
@@ -217,11 +218,13 @@ class LocalExecutor(BaseExecutor):
         import socket
 
         self._container_digest = container_digest
+        # Issue #1473: validate the transport capability matrix instead
+        # of silently discarding an unsupported mode.
+        validate_transport_mode(self.name, result_transport_mode)
         _unused = [
             ("openstudio_version", openstudio_version),
             ("result_hint", result_hint),
             ("remote_command", remote_command),
-            ("result_transport_mode", result_transport_mode),
             ("result_storage_backend", result_storage_backend),
             ("result_storage_bucket", result_storage_bucket),
             ("result_storage_prefix", result_storage_prefix),
@@ -470,9 +473,12 @@ class SlurmExecutor(BaseExecutor):
         # per-sample resources (different memory ceilings for a heavy
         # sample, etc.) are honored in the resulting sbatch header, not
         # just logged.
-        # Unused fields: result_hint, remote_command, result_transport_mode,
-        # result_storage_*, variables_json, env, stdout/stderr_path, max_retries,
-        # worker_id — accepted for API compatibility but not consumed locally.
+        # Unused fields: result_hint, remote_command, result_storage_*,
+        # variables_json, env, stdout/stderr_path, max_retries,
+        # worker_id — accepted for API compatibility but not consumed
+        # locally.  result_transport_mode is validated against the
+        # capability matrix (issue #1473) — slurm is in-band only.
+        validate_transport_mode(self.name, result_transport_mode)
         if container:
             log.info(
                 "slurm submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",

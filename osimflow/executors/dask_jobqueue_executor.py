@@ -18,6 +18,7 @@ from concurrent.futures import Future
 from typing import Any
 
 from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.transport import validate_transport_mode
 
 log = logging.getLogger("osimflow.executors")
 
@@ -212,6 +213,10 @@ class DaskJobQueueExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         self._container_digest = container_digest
+        # Issue #1473: validate the transport capability matrix instead
+        # of silently discarding an unsupported mode (dask_jobqueue is
+        # in-band only — futures carry the result directly).
+        validate_transport_mode(self.name, result_transport_mode)
         del result_hint, remote_command, result_transport_mode  # noqa: F841
         del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
         del result_storage_endpoint, variables_json, env  # noqa: F841
