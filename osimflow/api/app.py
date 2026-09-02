@@ -53,6 +53,7 @@ from osimflow.api.results_viewer import results_viewer_router
 from osimflow.api.timeseries import timeseries_router
 from osimflow.api.variable_designer import variable_designer_router
 from osimflow.api.variables import variables_router
+from osimflow.distributed_cache import _validate_redis_url
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import (
     sanitize_filename,
@@ -1409,6 +1410,13 @@ def create_app(
         which is per-process only and can be bypassed in multi-worker
         deployments.  For production deployments, always set this to a
         Redis URL.  Example: ``redis://localhost:6379/0``.
+
+        Security baseline (issue #1467): non-localhost URLs must use
+        ``rediss://`` (TLS) and embed credentials
+        (``rediss://user:pass@redis.example.com:6379``), mirroring
+        ``build_cache`` / ``build_document_store``.  Loopback hosts
+        (``localhost``, ``127.0.0.1``, ``::1``, ``0.0.0.0``) are exempt.
+        Violations raise ``ValueError`` at app creation (fail closed).
     """
     app = FastAPI(
         title="OSimFlow API",
@@ -1463,6 +1471,15 @@ def create_app(
     # Custom in-process middleware replaces slowapi's SlowAPIMiddleware,
     # which did not reliably maintain its counter between sequential
     # TestClient requests under pytest-xdist in CI.
+    #
+    # Security baseline (issue #1467): fail closed at app creation.
+    # The rate-limit store is shared security state (per-key abuse
+    # counters); a MITM on a plaintext connection could read and reset
+    # it.  Enforce the same non-localhost rediss:// TLS baseline (and
+    # require_auth parity) as build_cache / build_document_store via
+    # osimflow.distributed_cache._validate_redis_url.
+    if redis_url is not None:
+        _validate_redis_url(redis_url)
     #
     # Middleware ordering (add_middleware inserts at front → last added
     # is outermost):
