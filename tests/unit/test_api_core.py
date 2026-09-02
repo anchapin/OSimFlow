@@ -722,6 +722,88 @@ class TestRateLimiting:
         )
 
 
+class TestApiRedisUrlValidation:
+    """create_app enforces the rediss:// TLS baseline on redis_url (issue #1467).
+
+    The distributed rate-limiter store is shared security state (per-key
+    abuse counters); a MITM on a plaintext connection could read and reset
+    it.  ``create_app`` must therefore reject insecure URLs at app
+    creation (fail closed), with the same semantics as
+    ``osimflow.distributed_cache._validate_redis_url`` used by
+    ``build_cache`` (``require_auth=False`` parity).
+    """
+
+    def test_nonlocalhost_redis_rejected_at_app_creation(self, tmp_path: Path) -> None:
+        """A plaintext redis:// URL to a remote host must raise at create_app."""
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        with pytest.raises(ValueError, match="issue #1321"):
+            create_app(
+                outdir=tmp_path,
+                rate_limit="60/minute",
+                redis_url="redis://redis.example.com:6379/0",
+            )
+
+    def test_nonlocalhost_redis_with_creds_still_rejected(self, tmp_path: Path) -> None:
+        """TLS is mandatory for non-localhost even when credentials are embedded."""
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        with pytest.raises(ValueError, match="issue #1321"):
+            create_app(
+                outdir=tmp_path,
+                rate_limit="60/minute",
+                redis_url="redis://user:pass@redis.example.com:6379/0",
+            )
+
+    def test_nonlocalhost_rediss_without_creds_rejected(self, tmp_path: Path) -> None:
+        """rediss:// without credentials is rejected (require_auth parity with build_cache)."""
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        with pytest.raises(ValueError, match="issue #1277"):
+            create_app(
+                outdir=tmp_path,
+                rate_limit="60/minute",
+                redis_url="rediss://redis.example.com:6379/0",
+            )
+
+    def test_nonlocalhost_rediss_with_creds_accepted(self, tmp_path: Path) -> None:
+        """rediss:// with embedded credentials passes validation and app creation.
+
+        The async Redis client is constructed lazily on first request, so
+        creating the app must not touch the network — asserted by patching
+        ``_get_redis_asyncio`` to fail if called.
+        """
+        from unittest.mock import patch
+
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+
+        def _fail_if_called() -> None:
+            raise AssertionError("Redis client must not be constructed at create_app time")
+
+        with patch("osimflow.api.app._get_redis_asyncio", side_effect=_fail_if_called):
+            app = create_app(
+                outdir=tmp_path,
+                rate_limit="60/minute",
+                redis_url="rediss://user:pass@redis.example.com:6379/0",
+            )
+        assert app.title == "OSimFlow API"
+
+    def test_localhost_redis_accepted(self, tmp_path: Path) -> None:
+        """Loopback redis:// URLs are exempt from the TLS baseline (cache parity)."""
+        from unittest.mock import patch
+
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+
+        def _fail_if_called() -> None:
+            raise AssertionError("Redis client must not be constructed at create_app time")
+
+        for loopback_url in (
+            "redis://localhost:6379/0",
+            "redis://127.0.0.1:6379/0",
+            "redis://[::1]:6379/0",
+        ):
+            with patch("osimflow.api.app._get_redis_asyncio", side_effect=_fail_if_called):
+                app = create_app(outdir=tmp_path, rate_limit="60/minute", redis_url=loopback_url)
+                assert app.title == "OSimFlow API"
+
+
 class TestRateLimitKeyValidation:
     """Tests for rate_limit_key validation (issue #1329)."""
 
