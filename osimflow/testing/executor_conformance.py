@@ -712,8 +712,12 @@ class ExecutorConformanceSuite:
             assert result.status == CheckStatus.PASS
             assert result.message == sentinel_msg
         finally:
-            # Restore (or remove) so we don't leak state across test runs.
-            ExecutorRegistry.clear_health_checks()
+            # Restore (or remove) only the entry this test modified; do NOT
+            # call ``clear_health_checks()`` — that would wipe every other
+            # executor's health check and break sibling tests (e.g.
+            # test_health_check.TestExecutorHealthChecks) when pytest
+            # happens to schedule them after this one in the same process.
+            ExecutorRegistry._health_checks.pop(name, None)
             if original is not None:
                 ExecutorRegistry.register_health_check(name, original)
 

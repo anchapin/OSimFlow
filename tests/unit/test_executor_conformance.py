@@ -157,7 +157,11 @@ def test_health_check_registration_round_trip() -> None:
         assert isinstance(result, CheckResult)
         assert result.status == CheckStatus.PASS
     finally:
-        ExecutorRegistry.clear_health_checks()
+        # Restore only the ``local`` entry this test modified; do NOT call
+        # ``clear_health_checks()`` — that would wipe the other 9 executors'
+        # checks and break test_health_check.TestExecutorHealthChecks when
+        # pytest happens to schedule it after this one in the same process.
+        ExecutorRegistry._health_checks.pop("local", None)
         if original is not None:
             ExecutorRegistry.register_health_check("local", original)
 
