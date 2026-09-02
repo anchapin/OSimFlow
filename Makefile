@@ -18,7 +18,7 @@ MYPY := $(VENV)/bin/mypy
 PYTEST := $(VENV)/bin/pytest
 PRECOMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: help install lint format typecheck test test-cov test-fast contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
+.PHONY: help install lint format typecheck test test-cov test-fast smoke contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -49,6 +49,16 @@ test-cov: ## pytest --cov with 82% gate (mirrors CI test job; issue #1417)
 
 test-fast: ## pytest contract only (pre-commit mirror)
 	$(PYTEST) -o addopts="" tests/contract -x -q
+
+smoke: ## 3-sample stub-mode local campaign into ./results_smoke (validates the install; no real OpenStudio needed; issue #1479)
+	OSIMFLOW_STUB_SIM=1 $(PY) -m osimflow run \
+	  --executor local \
+	  --input_variables example_package/variables.yml \
+	  --template_sim_package ./example_package \
+	  --n_samples 3 --outdir ./results_smoke \
+	  --openstudio_version 3.11.0 \
+	  --log_level WARNING
+	@echo "Smoke run complete. Artifacts: ./results_smoke"
 
 byos-generate: ## regenerate the inline BYOS subprocess runner from osimflow.byos_contract
 	$(PY) tools/_generate_byos_runner.py

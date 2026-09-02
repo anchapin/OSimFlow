@@ -44,13 +44,7 @@ make test-fast   # unit + contract tests, ~10s
 make test        # full suite
 
 # Run a smoke-test campaign (stub mode — no real OpenStudio needed)
-osimflow run \
-  --executor local \
-  --input_variables example_package/variables.yml \
-  --template_sim_package ./example_package \
-  --n_samples 3 \
-  --outdir ./smoke_results \
-  --openstudio_version 3.11.0
+make smoke       # 3-sample stub-mode local campaign into ./results_smoke (issue #1479)
 ```
 
 > **Why `make install`?** The Makefile hard-codes `.venv/bin/python`,
@@ -587,6 +581,7 @@ All executors live in `osimflow/executors/__init__.py` and subclass
 ```python
 # osimflow/executors/__init__.py
 
+
 class MyNewExecutor(BaseExecutor):
     """My new executor."""
 
@@ -694,7 +689,7 @@ def step_my_new_step(self, inputs: SomeType) -> SomeOutputType:
     inputs_hash = sha256_of_dict({"inputs": str(inputs)})
     key = CacheKey(
         step="MY_NEW_STEP",
-        sample_id="ALL",       # or per-sample: sid
+        sample_id="ALL",  # or per-sample: sid
         openstudio_version="N/A",
         inputs_sha256=inputs_hash,
         code_sha256=self.code_hashes["bin"],
@@ -705,31 +700,40 @@ def step_my_new_step(self, inputs: SomeType) -> SomeOutputType:
     cached = self.cache.lookup(key)
     if cached:
         self.trace.step_finished(
-            "MY_NEW_STEP", cache="HIT",
-            elapsed_s=time.time() - t0, exit_code=0,
+            "MY_NEW_STEP",
+            cache="HIT",
+            elapsed_s=time.time() - t0,
+            exit_code=0,
         )
         return cached
 
     # Submit work
     handle = self.executor.submit(
-        my_work_function, inputs,
+        my_work_function,
+        inputs,
         name="my_new_step",
-        cpus=1, memory_mb=1024, time_min=5,
+        cpus=1,
+        memory_mb=1024,
+        time_min=5,
         container=CONTAINER_PY,
     )
     try:
         result = handle.result(timeout=120)
         self.cache.store(key, Path(result), exit_code=0)
         self.trace.step_finished(
-            "MY_NEW_STEP", cache="MISS",
-            elapsed_s=time.time() - t0, exit_code=0,
+            "MY_NEW_STEP",
+            cache="MISS",
+            elapsed_s=time.time() - t0,
+            exit_code=0,
         )
         return result
     except Exception as e:
         log.error("MY_NEW_STEP failed: %s", e)
         self.trace.step_finished(
-            "MY_NEW_STEP", cache="MISS",
-            elapsed_s=time.time() - t0, exit_code=1,
+            "MY_NEW_STEP",
+            cache="MISS",
+            elapsed_s=time.time() - t0,
+            exit_code=1,
         )
         raise
 ```
@@ -845,6 +849,7 @@ file.
 from pathlib import Path
 import json
 
+
 def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     """Custom KPI extractor."""
     kpi = {"sample_id": sample_id, "kpis": {"eui": 123.4}}
@@ -884,6 +889,7 @@ def apply_parameters(
 ) -> Path:
     """Return the path to the modified simulation package."""
     ...
+
 
 def extract_kpis(
     simulation_dir: Path,
@@ -939,10 +945,10 @@ Each `step_*` method in `osimflow/campaign.py` constructs a `CacheKey`:
 
 ```python
 key = CacheKey(
-    step="APPLY_PARAMETERS",       # step name
-    sample_id=sid,                  # per-sample or "ALL"
-    openstudio_version="N/A",       # or real version for sim step
-    inputs_sha256=inputs_hash,      # SHA-256 of input data
+    step="APPLY_PARAMETERS",  # step name
+    sample_id=sid,  # per-sample or "ALL"
+    openstudio_version="N/A",  # or real version for sim step
+    inputs_sha256=inputs_hash,  # SHA-256 of input data
     code_sha256=self.code_hashes["bin"],  # SHA-256 of bin/*.py files
     container_digest=CONTAINER_PY,  # container image tag
 )
@@ -1280,7 +1286,7 @@ need:
 
 ```python
 from osimflow import Campaign, CampaignConfig  # fast
-from osimflow.executors import LocalExecutor    # triggers submitit import
+from osimflow.executors import LocalExecutor  # triggers submitit import
 ```
 
 ### "SlurmExecutor runs locally"

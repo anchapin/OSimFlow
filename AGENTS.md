@@ -117,6 +117,7 @@ make typecheck  # mypy --strict on osimflow/
 make test       # pytest (full suite, no coverage gate)
 make test-cov   # pytest --cov with 82% gate           (CI default; issue #1417)
 make test-fast  # pytest tests/contract -x -q          (pre-commit mirror)
+make smoke      # 3-sample stub-mode local campaign into ./results_smoke (no OpenStudio needed; issue #1479)
 make contract   # regenerate BYOS runner + agents-contract + docs-sync + openapi-sync
 make byos-generate  # regenerate osimflow/_byos_runner_generated.py only
 make precommit  # pre-commit run --all-files          (pre-push safety net)
@@ -130,21 +131,23 @@ Extras are independent: `[mlflow]`, `[sensitivity]` (SALib),
 ### Run a campaign
 
 ```bash
-# Local smoke run (stub mode — no real OpenStudio needed)
-osimflow run \
+# Local smoke run (stub mode — no real OpenStudio needed; issue #1479)
+make smoke                    # preferred — uses $(PY) -m osimflow, no venv activation required
+# or, equivalently, if you have the venv activated:
+.venv/bin/osimflow run \
   --executor local \
-  --input_variables variables.yml \
+  --input_variables example_package/variables.yml \
   --template_sim_package ./example_package \
-  --n_samples 5 --outdir ./results \
+  --n_samples 3 --outdir ./results_smoke \
   --openstudio_version 3.11.0
 
 # Slurm (real cluster — debug=False)
-osimflow run --executor slurm --slurm-real --slurm-partition short \
+.venv/bin/osimflow run --executor slurm --slurm-real --slurm-partition short \
   --input_variables variables.yml --n_samples 500 \
   --openstudio_version 3.11.0
 
 # AWS Batch — IAM role on the Batch compute env, no long-lived keys.
-osimflow run --executor aws_batch \
+.venv/bin/osimflow run --executor aws_batch \
   --aws-batch-queue osimflow-batch-queue \
   --aws-batch-job-definition osimflow-openstudio-job-def \
   --input_variables variables.yml --template_sim_package ./example_package \
