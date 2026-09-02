@@ -183,11 +183,27 @@ class _AzureBatchHandle(Handle):
         self.cost_usd: float | None = None
         self.billed_duration_seconds: float | None = None
 
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
+    def result(self, timeout: float | None = None) -> Any:
+        # Timeout tracking (issue #1465): elapsed time is shared across
+        # spot-retry iterations so the caller-supplied deadline is honoured
+        # regardless of how many times the job is resubmitted — mirrors
+        # ``_AWSBatchHandle``. The pool-level task timeout remains the
+        # substrate-side kill (defense in depth).
+        start = time.monotonic()
+        remaining: float | None = None  # None means "no timeout"
         effective_max_retries = max(0, self._executor.max_retries)
         for attempt in range(effective_max_retries + 1):
+            # Compute remaining time for this poll iteration.
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for job {self.job_id!r}"
+                    )
+
             try:
-                job = self._executor._wait_for_terminal(self.job_id)
+                job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)
             except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                 self._future.set_exception(exc)
                 raise
@@ -237,7 +253,7 @@ class _AzureBatchHandle(Handle):
                     self.job_id = self._executor._submit_job(**self._submit_params, use_spot=False)
                     self.worker_id = self.job_id
                     try:
-                        job = self._executor._wait_for_terminal(self.job_id)
+                        job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)
                     except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
                         self._future.set_exception(exc)
                         raise

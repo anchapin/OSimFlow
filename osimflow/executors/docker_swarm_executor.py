@@ -81,13 +81,13 @@ class _DockerSwarmHandle(Handle):
         self.cost_usd: float | None = None
         self.billed_duration_seconds: float | None = None
 
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
-        # The polling itself doesn't take a `timeout` parameter; the
-        # service-level update timeout (when set) is the substrate-level
-        # kill. `timeout` here is accepted for the base-class signature
-        # but not enforced.
+    def result(self, timeout: float | None = None) -> Any:
+        # Issue #1465: ``timeout`` is the deadline for the whole call —
+        # enforced by ``_wait_for_terminal``. The service-level update
+        # timeout (when set) remains the substrate-level kill (defense
+        # in depth).
         try:
-            task_result = self._executor._wait_for_terminal(self._service_name)
+            task_result = self._executor._wait_for_terminal(self._service_name, timeout=timeout)
         except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
             self._future.set_exception(exc)
             raise

@@ -95,14 +95,13 @@ class _PBSHandle(Handle):
         self.worker_ip: str | None = None
         self.worker_region: str | None = None
 
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
-        # The polling itself doesn't take a `timeout` parameter; the
-        # PBS ``walltime`` resource (when set) is the substrate-level
-        # kill. `timeout` here is accepted for the base-class signature
-        # but not enforced — the existing executors take the same
-        # approach.
+    def result(self, timeout: float | None = None) -> Any:
+        # Issue #1465: ``timeout`` is the deadline for the whole call —
+        # enforced by ``_wait_for_terminal``. The PBS ``walltime``
+        # resource (when set) remains the substrate-level kill (defense
+        # in depth).
         try:
-            job_state, exit_code = self._executor._wait_for_terminal(self.job_id)
+            job_state, exit_code = self._executor._wait_for_terminal(self.job_id, timeout=timeout)
         except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
             self._future.set_exception(exc)
             raise
