@@ -60,7 +60,7 @@ jobs:
 
       - name: Install (editable + dev extras)
         run: |
-          uv venv .venv --python ${{ matrix.python-version }}
+          uv venv .venv --clear --python ${{ matrix.python-version }}
           uv pip install --python .venv/bin/python -e ".[dev,aws,slurm]"
 
       - name: Run benchmark
