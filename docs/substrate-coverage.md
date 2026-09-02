@@ -22,18 +22,21 @@ Docker Swarm, OpenStudio CLI).
 1. Add a test under `tests/integration/` with one of the canonical
    naming patterns:
    - **`test_real_<substrate>_campaign.py`** — the default for new
-     executor substrate campaigns (matches `test_real_nomad_ha_campaign.py`,
-     `test_real_pbs_campaign.py`, `test_real_dask_campaign.py`,
-     `test_real_docker_swarm_campaign.py`,
-     `test_real_openstudio_campaign.py`).
+     executor substrate campaigns. Examples are listed in the matrix
+     below (rows 8 Nomad HA, 9 PBS, 10 Dask-JobQueue, 11 Docker Swarm,
+     12 OpenStudio CLI).
    - **`test_<substrate>_<descriptor>.py`** — legacy / per-aspect
-     executor tests (matches `test_slurm_real_cluster.py`,
-     `test_kubernetes_executor_real.py`, `test_aws_batch_real.py`,
-     `test_aws_batch_cache_resume.py`, `test_azure_batch_real.py`,
-     `test_google_batch_real.py`, `test_aws_batch_real_openstudio.py`).
+     executor tests. Examples: `tests/integration/test_slurm_real_cluster.py`,
+     `tests/integration/test_kubernetes_executor_real.py`,
+     `tests/integration/test_aws_batch_real.py`,
+     `tests/integration/test_aws_batch_cache_resume.py`,
+     `tests/integration/test_azure_batch_real.py`,
+     `tests/integration/test_google_batch_real.py`,
+     `tests/integration/test_aws_batch_real_openstudio.py`.
    - **`test_<system>_real_<aspect>.py`** — non-executor real-infra
-     tests against external systems (matches
-     `test_mlflow_real_tracking.py`, `test_observability_real_sinks.py`).
+     tests against external systems. Examples:
+     `tests/integration/test_mlflow_real_tracking.py`,
+     `tests/integration/test_observability_real_sinks.py`.
 
    The 3-sample mini-campaign pattern is the canonical executor shape
    (see `tests/integration/test_aws_batch_real.py`). Every test MUST
@@ -87,11 +90,12 @@ Legend:
 
 ## Observability real sinks (separate row group)
 
-The `observability.py` pluggable backends (`CloudWatchBackend`,
-`PrometheusBackend`, `OpenTelemetryBackend`) each have a
-real-sink round-trip test gated on the same umbrella env var plus
-per-sink readiness vars. The CI workflow provisions the sinks only
-when explicitly enabled (see `aws-actions`-style OIDC).
+The `osimflow/observability.py` pluggable backends
+(`CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`)
+each have a real-sink round-trip test gated on the same umbrella
+env var plus per-sink readiness vars. The CI workflow provisions
+the sinks only when explicitly enabled (see `aws-actions`-style
+OIDC).
 
 | # | Backend | Real-E2E test | Gate | Per-sink readiness | Trigger | CI workflow | Contract |
 |---|---------|---------------|------|--------------------|---------|-------------|----------|
