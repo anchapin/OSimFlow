@@ -552,7 +552,12 @@ CLI scripts invoked by the work layer: `generate_lhs.py`,
 per-executor health check, issue #1024; `iter_health_checks()`
 feeds `osimflow.health.run_health_checks`) plus `discover_plugins()`
 via entry point `osimflow.executors`. `base.py` defines
-`BaseExecutor` + `Handle` + `SubmitRequest`; `transport.py` is the
+`BaseExecutor` + `Handle` + `SubmitRequest` + the shared
+`PollingHandle` poll-retry-fallback state machine with `PollOutcome`
+(issue #1464 — owns the terminal-poll loop, #1465 deadline, jittered
+backoff, retry accounting, and fallback-to-on-demand transition;
+`_AzureBatchHandle` and `_GoogleBatchHandle` subclass it, supplying
+substrate hooks); `transport.py` is the
 executor-agnostic result-reference contract. The remaining six
 executors each have their own file:
 `azure_batch_executor.py` (`AzureBatchExecutor`),

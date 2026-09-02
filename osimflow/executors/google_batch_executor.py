@@ -36,14 +36,14 @@ from __future__ import annotations
 
 import logging
 import os
-import random
+import random  # noqa: F401 — patch seam: tests patch google_batch_executor.random.uniform
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
-from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.base import BaseExecutor, PollingHandle, PollOutcome
 from osimflow.executors.transport import (
     coerce_transport_mode,
     materialize_object_storage_result,
@@ -62,14 +62,14 @@ def _google_error_code(exc: Exception) -> int:
         return 0
 
 
-class _GoogleBatchHandle(Handle):
+class _GoogleBatchHandle(PollingHandle):
     """Handle that polls Google Cloud Batch on `.result()`.
 
-    Spot/preemptible retry logic (issue #352) lives here so that
-    `submit()` can return immediately. When `result()` detects a
-    preemptible VM interruption, it resubmits using the stored
-    `_submit_params` and retries up to ``executor.max_retries`` times
-    before falling back to on-demand or failing.
+    The poll-retry-fallback state machine — deadline enforcement
+    (issue #1465), jittered exponential backoff, retry accounting, and
+    the fallback-to-on-demand transition (issue #352) — lives in the
+    shared ``PollingHandle`` base (issue #1464); this class supplies
+    the Google-specific hooks below.
     """
 
     def __init__(
@@ -105,121 +105,62 @@ class _GoogleBatchHandle(Handle):
         self.cost_usd: float | None = None
         self.billed_duration_seconds: float | None = None
 
-    def result(self, timeout: float | None = None) -> Any:
-        # Timeout tracking (issue #1465): elapsed time is shared across
-        # spot-retry iterations so the caller-supplied deadline is honoured
-        # regardless of how many times the job is resubmitted — mirrors
-        # ``_AWSBatchHandle``. The Batch job-level allocation timeout
-        # remains the substrate-side kill (defense in depth).
-        start = time.monotonic()
-        remaining: float | None = None  # None means "no timeout"
-        effective_max_retries = max(0, self._executor.max_retries)
-        for attempt in range(effective_max_retries + 1):
-            # Compute remaining time for this poll iteration.
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timed out after {elapsed:.1f}s waiting for job {self.job_name!r}"
-                    )
+    # ------------------------------------------------------------------
+    # PollingHandle hooks (issue #1464) — the shared state machine in
+    # ``osimflow.executors.base.PollingHandle`` owns ``result()``.
+    # ------------------------------------------------------------------
 
-            try:
-                job = self._executor._wait_for_terminal(self.job_name, timeout=remaining)
-            except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-                self._future.set_exception(exc)
-                raise
+    def _poll_job_id(self) -> str:
+        return self.job_name
 
-            status = job.status.state
-            if status == self._executor._batch_v1.JobStatus.State.SUCCEEDED:
-                resolved = resolve_result_for_callback(
-                    self._result_hint,
-                    default=None,
-                    transport_mode=self._result_transport_mode,
-                )
-                resolved = materialize_object_storage_result(
-                    resolved,
-                    transport_mode=self._result_transport_mode,
-                    result_storage_backend=self._result_storage_backend,
-                    result_storage_bucket=self._result_storage_bucket,
-                    result_storage_prefix=self._result_storage_prefix,
-                    result_storage_endpoint=self._result_storage_endpoint,
-                )
-                self._future.set_result(resolved)
-                return resolved
+    def _wait_for_terminal(self, timeout: float | None) -> Any:
+        return self._executor._wait_for_terminal(self.job_name, timeout=timeout)
 
-            if status == self._executor._batch_v1.JobStatus.State.FAILED:
-                status_details = str(job.status.status_details or "")
-                is_spot = self._executor._is_spot_interruption(status_details)
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        status = job.status.state
+        if status == self._executor._batch_v1.JobStatus.State.SUCCEEDED:
+            return PollOutcome.SUCCEEDED, None
+        if status == self._executor._batch_v1.JobStatus.State.FAILED:
+            return PollOutcome.FAILED, str(job.status.status_details or "")
+        return PollOutcome.INDETERMINATE, None
 
-                if is_spot and attempt < effective_max_retries:
-                    backoff = min(5.0 * (2**attempt), 60.0)
-                    jittered_backoff = random.uniform(0, backoff)
-                    log.warning(
-                        "Spot/preemptible interrupted (attempt %d/%d), retrying in %.1fs: %s",
-                        attempt + 1,
-                        effective_max_retries,
-                        jittered_backoff,
-                        status_details,
-                    )
-                    time.sleep(jittered_backoff)
-                    self.job_name = self._executor._submit_job(**self._submit_params)
-                    self.worker_id = self.job_name
-                    continue
+    def _resolve_success_result(self) -> Any:
+        resolved = resolve_result_for_callback(
+            self._result_hint,
+            default=None,
+            transport_mode=self._result_transport_mode,
+        )
+        return materialize_object_storage_result(
+            resolved,
+            transport_mode=self._result_transport_mode,
+            result_storage_backend=self._result_storage_backend,
+            result_storage_bucket=self._result_storage_bucket,
+            result_storage_prefix=self._result_storage_prefix,
+            result_storage_endpoint=self._result_storage_endpoint,
+        )
 
-                if is_spot and attempt >= effective_max_retries:
-                    if self._executor.fallback_to_on_demand:
-                        log.warning(
-                            "Spot retries exhausted (%d), falling back to on-demand",
-                            effective_max_retries,
-                        )
-                        self.job_name = self._executor._submit_job(
-                            **self._submit_params, use_spot=False
-                        )
-                        self.worker_id = self.job_name
-                        try:
-                            job = self._executor._wait_for_terminal(
-                                self.job_name, timeout=remaining
-                            )
-                        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-                            self._future.set_exception(exc)
-                            raise
-                        status = job.status.state
-                        if status == self._executor._batch_v1.JobStatus.State.SUCCEEDED:
-                            resolved = resolve_result_for_callback(
-                                self._result_hint,
-                                default=None,
-                                transport_mode=self._result_transport_mode,
-                            )
-                            resolved = materialize_object_storage_result(
-                                resolved,
-                                transport_mode=self._result_transport_mode,
-                                result_storage_backend=self._result_storage_backend,
-                                result_storage_bucket=self._result_storage_bucket,
-                                result_storage_prefix=self._result_storage_prefix,
-                                result_storage_endpoint=self._result_storage_endpoint,
-                            )
-                            self._future.set_result(resolved)
-                            return resolved
-                        status_details = str(job.status.status_details or "unknown reason")
-                        msg = (
-                            f"Google Batch job {self.job_name!r} failed after fallback: "
-                            f"status={status}, details: {status_details}"
-                        )
-                        self._future.set_exception(RuntimeError(msg))
-                        raise RuntimeError(msg)
-                    raise RuntimeError(
-                        f"Spot retries exhausted ({effective_max_retries}): {status_details}"
-                    )
+    def _is_spot_interruption(self, reason: str | None) -> bool:
+        return bool(self._executor._is_spot_interruption(reason))
 
-                reason = f"job {self.job_name} failed: {status_details}"
-                self._future.set_exception(RuntimeError(reason))
-                raise RuntimeError(reason)
+    def _resubmit(self) -> None:
+        self.job_name = self._executor._submit_job(**self._submit_params)
+        self.worker_id = self.job_name
 
-            self._future.set_result(None)
-            return None
+    def _submit_on_demand(self) -> None:
+        self.job_name = self._executor._submit_job(**self._submit_params, use_spot=False)
+        self.worker_id = self.job_name
 
-        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
+    def _failure_error(self, job: Any) -> RuntimeError:
+        status_details = str(job.status.status_details or "")
+        return RuntimeError(f"job {self.job_name} failed: {status_details}")
+
+    def _fallback_failure_error(self, job: Any) -> RuntimeError:
+        status = job.status.state
+        status_details = str(job.status.status_details or "unknown reason")
+        return RuntimeError(
+            f"Google Batch job {self.job_name!r} failed after fallback: "
+            f"status={status}, details: {status_details}"
+        )
 
     def done(self) -> bool:
         if self._future.done():
@@ -546,7 +487,7 @@ class GoogleBatchExecutor(BaseExecutor):
         max_retries: int | None = None,
         worker_id: str | None = None,
         **kwargs: Any,
-    ) -> Handle:
+    ) -> PollingHandle:
         self._container_digest = container_digest
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
 
