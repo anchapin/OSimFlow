@@ -1028,8 +1028,10 @@ def _check_task_payload_signing(configured_executor: str | None) -> CheckResult:
 
 # Built-in executor ↔ health-check dispatch table. The orchestrator iterates
 # ``ExecutorRegistry.iter_health_checks()`` (registered below at module
-# import time) — keep these names in sync with the registrations in
-# ``_register_executor_health_checks`` at the bottom of the file.
+# import; the registry state is anchored in ``executors/base.py`` so it
+# survives reloads — issue #1463) — keep these names in sync with the
+# registrations in ``_register_executor_health_checks`` at the bottom of
+# the file.
 _BUILTIN_EXECUTOR_HEALTH_CHECKS: dict[str, Callable[[], CheckResult]] = {
     "local": _check_local,
     "slurm": _check_slurm,
