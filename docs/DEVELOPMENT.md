@@ -207,6 +207,33 @@ make install                    # pip install -e ".[dev,aws,slurm,kubernetes,api
 .venv/bin/pre-commit install    # Install git hooks
 ```
 
+### Toolchain: local pip vs CI uv (issue #1477)
+
+Two installers deliberately coexist:
+
+| Context | Installer | Why |
+|---|---|---|
+| **Local dev (authoritative)** | **pip** via `make install` | Zero extra tooling for contributors; the Makefile and every doc example hard-code `.venv/bin/`. |
+| **CI** | **uv** via `astral-sh/setup-uv` | ~10x faster installs + runner venv caching keyed on `pyproject.toml`. |
+
+Both resolve the *same* `pyproject.toml` constraint set (CI uses
+`uv pip install`, the pip-compatible interface — neither consumes
+`uv.lock`). Because uv and pip are different resolvers, the installed
+versions of transitive dependencies can occasionally differ; when they
+do, **the CI-resolved set is the merge gate**. If CI fails locally
+green code, re-run `make install` to re-resolve with pip, or compare
+`.venv/bin/pip freeze` against the CI `uv pip freeze` output.
+
+The uv version in CI is pinned through setup-uv's `version:` input and
+must stay **identical in every workflow that uses setup-uv**
+(`ci.yml`, `bench.yml`, `release.yml`, `release-installers.yml`,
+`nomad-e2e.yml`). Bump all of them together to a current stable
+release (latest: <https://github.com/astral-sh/uv/releases>) — a stale
+pin silently diverges CI's resolver behavior from what current uv
+users see. Modern uv-managed CPython builds ship `ensurepip`, so CI
+jobs (including the `pip-audit` security job) uniformly use
+`uv python install 3.12`.
+
 ### IDE recommendations
 
 - **VS Code**: Install the Python, Ruff, and mypy extensions. The
@@ -1239,6 +1266,14 @@ jobs:
 | `test` | `pytest --cov=osimflow --cov-fail-under=82` | ~2-5 min |
 
 A green check on every required job is the gate to merge.
+
+CI installs dependencies with **uv** (pinned via `setup-uv`; see
+§4 "Toolchain: local pip vs CI uv" for why local dev is pip-based and
+what to do when the resolvers disagree). The security job's
+`pip-audit` used to need an `actions/setup-python` interpreter because
+uv-managed Pythons lacked `ensurepip`; current uv-managed builds ship
+it, so the job now uses the same `uv python install 3.12` as every
+other job (issue #1477).
 
 ### Running CI locally
 

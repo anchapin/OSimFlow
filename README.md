@@ -38,6 +38,14 @@ footprint? Inside a virtualenv, `pip install -e ".[api]"` is a minimal
 local-executor-only subset, but `make install` is the supported full
 dev environment.
 
+**Toolchain note (issue #1477):** locally, **pip via `make install` is
+the authoritative toolchain** — you never need `uv` to contribute.
+CI installs the same `pyproject.toml` with **uv** (pinned to a current
+stable release, identical `version:` input in every workflow that uses
+`setup-uv`) because it is ~10x faster and caches well on runners. If
+the two resolvers ever disagree, the CI-resolved set is what gates the
+merge — see `docs/DEVELOPMENT.md` §4 for details.
+
 ### 2. Run a sample campaign
 
 ```bash
