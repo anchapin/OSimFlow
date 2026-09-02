@@ -12,21 +12,37 @@ every remote executor: the handle resolves the result hint through
 :func:`materialize_object_storage_result` so Campaign callbacks receive
 **local paths**, never object-storage keys.
 
-======================  ======================================================
-Executor                Transport behaviour
-======================  ======================================================
-``kubernetes``          resolve + materialize (reference implementation)
-``nomad``               resolve + materialize
-``aws_batch``           resolve + materialize
-``azure_batch``         resolve + materialize
-``google_batch``        resolve + materialize
-``pbs``                 resolve + materialize
-``slurm``               exempt — submitit future returns the work result
-                        directly; the handle never consumes a result hint
-``docker_swarm``        exempt — same submitit-style future semantics
-``dask_jobqueue``       exempt — same future semantics
-``local``               exempt — in-process, no transport layer
-======================  ======================================================
+Transport capability matrix (issue #1473)
+-----------------------------------------
+
+:data:`TRANSPORT_CAPABILITIES` is the single source of truth for which
+executors support which result-transport modes.  ``"auto"`` and
+``"shared_fs"`` are universally supported (results return in-band via
+the handle's future — trivially true for in-process, submitit, and
+shared-filesystem executors alike).  ``"object_storage"`` requires a
+handle-side resolve + materialize implementation.
+
+======================  ==================================================
+Executor                Declared transport modes
+======================  ==================================================
+``local``               ``auto``, ``shared_fs``
+``slurm``               ``auto``, ``shared_fs``
+``dask_jobqueue``       ``auto``, ``shared_fs``
+``aws_batch``           ``auto``, ``shared_fs``, ``object_storage``
+``azure_batch``         ``auto``, ``shared_fs``, ``object_storage``
+``google_batch``        ``auto``, ``shared_fs``, ``object_storage``
+``kubernetes``          ``auto``, ``shared_fs``, ``object_storage``
+``nomad``               ``auto``, ``shared_fs``, ``object_storage``
+``pbs``                 ``auto``, ``shared_fs``, ``object_storage``
+``docker_swarm``        ``auto``, ``shared_fs``, ``object_storage``
+(other / plugins)       ``auto``, ``shared_fs`` (in-band default)
+======================  ==================================================
+
+:func:`validate_transport_mode` enforces the matrix at submit time
+(``BaseExecutor.submit_request`` plus the in-band executors' ``submit``
+paths) so an unsupported ``object_storage`` configuration raises a
+clear :class:`ValueError` instead of being silently discarded
+(issue #1473).
 """
 
 from __future__ import annotations
@@ -38,6 +54,52 @@ from typing import Any, Literal
 from osimflow.storage import build_result_storage
 
 type ResultTransportMode = Literal["auto", "shared_fs", "object_storage"]
+
+#: Modes available to every executor (issue #1473).  ``"auto"`` is the
+#: executor default; ``"shared_fs"`` means results come back in-band via
+#: the handle's future, which every executor satisfies by construction.
+IN_BAND_TRANSPORT_MODES: frozenset[ResultTransportMode] = frozenset({"auto", "shared_fs"})
+
+#: Modes that additionally ship results through object storage and
+#: materialize them back to local paths in the handle (resolve +
+#: materialize, issue #1333).
+OBJECT_STORAGE_TRANSPORT_MODES: frozenset[ResultTransportMode] = IN_BAND_TRANSPORT_MODES | {
+    "object_storage"
+}
+
+#: Per-executor transport capability matrix (issue #1473).  Executors
+#: not listed here (including third-party plugin executors) default to
+#: :data:`IN_BAND_TRANSPORT_MODES`.
+TRANSPORT_CAPABILITIES: dict[str, frozenset[ResultTransportMode]] = {
+    "local": IN_BAND_TRANSPORT_MODES,
+    "slurm": IN_BAND_TRANSPORT_MODES,
+    "dask_jobqueue": IN_BAND_TRANSPORT_MODES,
+    "aws_batch": OBJECT_STORAGE_TRANSPORT_MODES,
+    "azure_batch": OBJECT_STORAGE_TRANSPORT_MODES,
+    "google_batch": OBJECT_STORAGE_TRANSPORT_MODES,
+    "kubernetes": OBJECT_STORAGE_TRANSPORT_MODES,
+    "nomad": OBJECT_STORAGE_TRANSPORT_MODES,
+    "pbs": OBJECT_STORAGE_TRANSPORT_MODES,
+    "docker_swarm": OBJECT_STORAGE_TRANSPORT_MODES,
+}
+
+#: Capability set applied to any executor name missing from
+#: :data:`TRANSPORT_CAPABILITIES`.
+DEFAULT_TRANSPORT_CAPABILITIES: frozenset[ResultTransportMode] = IN_BAND_TRANSPORT_MODES
+
+#: Raw strings that :func:`coerce_transport_mode` recognizes.
+_RECOGNIZED_MODE_STRINGS: frozenset[str] = frozenset(
+    {
+        "",
+        "auto",
+        "shared_fs",
+        "shared-fs",
+        "sharedfs",
+        "object_storage",
+        "object-storage",
+        "objectstorage",
+    }
+)
 
 _PATH_MARKER_KEY = "__osimflow_type__"
 _PATH_MARKER_VALUE = "path"
@@ -56,6 +118,37 @@ def coerce_transport_mode(raw: str | None) -> ResultTransportMode:
     if normalized in {"object_storage", "object-storage", "objectstorage"}:
         return "object_storage"
     return "auto"
+
+
+def validate_transport_mode(executor_name: str, mode: str | None) -> ResultTransportMode:
+    """Validate *mode* against the executor's declared capability set.
+
+    Raises
+    ------
+    ValueError
+        If *mode* is not a recognized transport mode string, or if the
+        coerced mode is not in the executor's capability set from
+        :data:`TRANSPORT_CAPABILITIES`.  This replaces the historic
+        silent-discard behaviour where e.g. LocalExecutor accepted
+        ``object_storage`` and then ignored it (issue #1473).
+    """
+    if mode is not None and mode.strip().lower() not in _RECOGNIZED_MODE_STRINGS:
+        raise ValueError(
+            f"unknown result_transport_mode={mode!r} for executor {executor_name!r}; "
+            f"expected one of 'auto', 'shared_fs', 'object_storage'"
+        )
+    normalized = coerce_transport_mode(mode)
+    capabilities = TRANSPORT_CAPABILITIES.get(executor_name, DEFAULT_TRANSPORT_CAPABILITIES)
+    if normalized not in capabilities:
+        raise ValueError(
+            f"executor {executor_name!r} does not support result_transport_mode="
+            f"{normalized!r}; supported modes: "
+            f"{sorted(capabilities)}. Use one of the object-storage-capable "
+            "executors (aws_batch, azure_batch, google_batch, kubernetes, "
+            "nomad, pbs, docker_swarm) or an in-band mode ('auto', "
+            "'shared_fs')."
+        )
+    return normalized
 
 
 def encode_transport_value(value: Any) -> Any:  # noqa: ANN401
