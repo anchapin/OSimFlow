@@ -669,6 +669,80 @@ Add the new executor to:
 
 The contract check (`make contract`) will fail if you forget.
 
+### Third-party executors
+
+If you ship your executor in a separate package via the
+`osimflow.executors` entry point, you do **not** get any of the
+in-repo test infrastructure for free — there is no
+`tests/integration/test_<executor>.py` you can copy. Instead,
+subclass :class:`osimflow.testing.ExecutorConformanceSuite` and point
+its `executor_factory` class attribute at your executor:
+
+```python
+# tests/test_my_executor.py
+from osimflow.testing import ExecutorConformanceSuite
+from my_pkg.executors import MyExecutor
+
+
+class TestMyExecutorConformance(ExecutorConformanceSuite):
+    executor_factory = staticmethod(lambda: MyExecutor(endpoint="http://localhost:8080"))
+
+    # Opt-in: run a full 3-sample stub campaign through your executor.
+    # Skip this for genuinely remote-only substrates that already
+    # have their own end-to-end test against a live cluster.
+    run_stub_campaign: bool = True
+```
+
+Every `test_*` method on the mixin runs against the executor your
+factory yields:
+
+- `test_submit_returns_handle` — `submit()` must return a `Handle`.
+- `test_handle_job_id_is_non_empty_string` — `Handle.job_id` shape.
+- `test_handle_done_returns_bool` — `Handle.done()` returns `bool`;
+  `Handle.result()` returns the callable's value.
+- `test_handle_result_returns_value` — basic round-trip.
+- `test_handle_result_respects_timeout` — `TimeoutError` on `t=0.1s`.
+- `test_handle_error_propagates` — callable exceptions re-raise.
+- `test_resource_directives_accepted` — `cpus` / `memory_mb` /
+  `time_min` are accepted on `submit()`.
+- `test_transport_path_round_trip` — `encode_transport_value` /
+  `decode_transport_value` preserve `Path` payloads.
+- `test_transport_result_hint_default_returns_default` — `None`
+  hint returns the provided default.
+- `test_transport_result_hint_path_payload_decodes` —
+  `resolve_result_for_callback` decodes tagged payloads.
+- `test_fanout_chunk_size_returns_positive_int` — bounded chunk size
+  (issue #1342).
+- `test_register_health_check_returns_callable` — your executor must
+  register itself via `ExecutorRegistry.register()` first.
+- `test_three_sample_stub_campaign_produces_all_artifacts` (slow) —
+  full 3-sample Campaign run in stub mode (mirrors
+  `tests/integration/test_local_executor.py`).
+
+The suite is intentionally a *mixin*: pytest discovers `test_*`
+methods on the subclass, so you can override individual checks or
+add substrate-specific assertions without copying the whole suite.
+
+For non-pytest usage (pre-commit scripts, `python -c` invocations)
+use the programmatic runner:
+
+```bash
+python -c "from osimflow.testing import run_executor_conformance; \\
+           from my_pkg.executors import MyExecutor; \\
+           r = run_executor_conformance(MyExecutor()); \\
+           print(r.to_dict())"
+```
+
+`run_executor_conformance` returns a :class:`ConformanceReport` with
+one :class:`ConformanceCheck` per contract area; `report.passed`
+is `True` only when every check passed. `report.to_dict()` is
+JSON-serialisable so it can be ingested by CI tooling directly.
+
+Before publishing your plug-in, run the full suite (with stub
+campaign enabled) on a clean checkout — the campaign check is the
+only way to verify your executor's per-sample fan-out works end to
+end through the `Campaign` orchestrator.
+
 ---
 
 ## 8. Adding a New DAG Step

@@ -576,6 +576,18 @@ plus `automountServiceAccountToken: false`),
 `osa_to_variables_yml`); `osimflow/exporters/osa.py` (`OSAExporter`,
 `pack_osa` — PAT `.osa` archive).
 
+### `osimflow/testing/`
+
+Reusable test harness for third-party executor plug-in authors
+(issue #1478). `ExecutorConformanceSuite` is a pytest-friendly
+mixin class; `run_executor_conformance` is the non-pytest runner
+that returns a `ConformanceReport`. Covers the `submit()` → `Handle`
+lifecycle, result-reference handling via `transport.py`,
+resource-directive propagation, and health-check registration;
+the opt-in `three_sample_stub_campaign` check runs the full
+Campaign via a stub-mode 3-sample mini-campaign. Importable as
+`from osimflow.testing import ExecutorConformanceSuite`.
+
 ### Top-level
 
 - `bin/` — backward-compatible shims over `_work_scripts/`:
@@ -815,6 +827,7 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 | Add a new KPI | `osimflow/_work_scripts/extract_kpis.py` (or `bin/extract_kpis.py` shim) **and** `osimflow/monitoring.py:StepTrace` schema |
 | Add a new sampling algorithm | new module in `osimflow/algorithms/`, subclass `BaseAlgorithm`, register via `AlgorithmRegistry.register` in `osimflow/algorithms/__init__.py`; or declare an entry point under `[project.entry-points."osimflow.algorithms"]` in a third-party `pyproject.toml` (auto-discovered) |
 | Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/__main__.py:_build_executor`; or declare an entry point under `[project.entry-points."osimflow.executors"]` |
+| Verify a third-party executor plug-in against the contract (issue #1478) | subclass `osimflow.testing.ExecutorConformanceSuite` in the plug-in's test module and point its `executor_factory` at the plug-in; for non-pytest use `osimflow.testing.run_executor_conformance`. Suite covers submit/Handle lifecycle, transport.py result-reference handling, resource directives, fanout chunk size, and health-check registration. |
 | Add a new step to the DAG | new method on `Campaign` in `osimflow/campaign.py`, call it from `Campaign.run`, emit `StepTrace` hooks, declare inputs/outputs in `_STEP_DEPENDENCIES`; update §2 of this file |
 | Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py` |
 | Add a user-facing CLI flag | `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser |
