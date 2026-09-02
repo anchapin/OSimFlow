@@ -108,9 +108,13 @@ class _KubernetesHandle(Handle):
         self.cost_usd: float | None = None
         self.billed_duration_seconds: float | None = None
 
-    def result(self, timeout: float | None = None) -> Any:  # noqa: ARG002
+    def result(self, timeout: float | None = None) -> Any:
+        # Issue #1465: ``timeout`` is the deadline for the whole call —
+        # enforced by ``_wait_for_terminal``. The Job's
+        # ``activeDeadlineSeconds`` (when set) remains the
+        # substrate-level kill (defense in depth).
         try:
-            pod_status = self._executor._wait_for_terminal(self._job_name)
+            pod_status = self._executor._wait_for_terminal(self._job_name, timeout=timeout)
         except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
             self.error = exc
             self._future.set_exception(exc)

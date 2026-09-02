@@ -81,7 +81,7 @@ def _azure_handle() -> Any:
         properties=SimpleNamespace(execution_info=SimpleNamespace(exit_code=0))
     )
     executor = SimpleNamespace(max_retries=0, fallback_to_on_demand=False, location="eastus")
-    executor._wait_for_terminal = lambda job_id: succeeded_job  # noqa: SLF001
+    executor._wait_for_terminal = lambda job_id, timeout=None: succeeded_job  # noqa: SLF001
     return _AzureBatchHandle(
         job_id="job-azure",
         executor=executor,
@@ -101,7 +101,7 @@ def _google_handle() -> Any:
     succeeded_job = SimpleNamespace(status=SimpleNamespace(state="SUCCEEDED"))
     executor = SimpleNamespace(max_retries=0, fallback_to_on_demand=False, region="us-central1")
     executor._batch_v1 = state  # noqa: SLF001
-    executor._wait_for_terminal = lambda job_name: succeeded_job  # noqa: SLF001
+    executor._wait_for_terminal = lambda job_name, timeout=None: succeeded_job  # noqa: SLF001
     return _GoogleBatchHandle(
         job_name="job-google",
         executor=executor,
@@ -115,7 +115,7 @@ def _pbs_handle() -> Any:
     from osimflow.executors.pbs_executor import _PBSHandle
 
     executor = SimpleNamespace(max_retries=0)
-    executor._wait_for_terminal = lambda job_id: ("R", 0)  # noqa: SLF001
+    executor._wait_for_terminal = lambda job_id, timeout=None: ("R", 0)  # noqa: SLF001
     return _PBSHandle(
         job_id="1[hostname]",
         executor=executor,
@@ -251,7 +251,7 @@ def test_azure_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPa
         _submit_job=_fake_submit,
         _is_spot_interruption=lambda reason: reason == "SpotInterruption",
     )
-    executor._wait_for_terminal = lambda job_id: next(polls)  # noqa: SLF001
+    executor._wait_for_terminal = lambda job_id, timeout=None: next(polls)  # noqa: SLF001
     handle = _AzureBatchHandle(
         job_id="job-azure",
         executor=executor,
@@ -299,7 +299,7 @@ def test_google_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyP
         _is_spot_interruption=lambda details: True,
     )
     executor._batch_v1 = state  # noqa: SLF001
-    executor._wait_for_terminal = lambda job_name: next(polls)  # noqa: SLF001
+    executor._wait_for_terminal = lambda job_name, timeout=None: next(polls)  # noqa: SLF001
     handle = _GoogleBatchHandle(
         job_name="job-google",
         executor=executor,
@@ -321,7 +321,7 @@ def test_handles_default_to_auto_transport_without_storage_config() -> None:
     from osimflow.executors.pbs_executor import _PBSHandle
 
     executor = SimpleNamespace(max_retries=0)
-    executor._wait_for_terminal = lambda job_id: ("R", 0)  # noqa: SLF001
+    executor._wait_for_terminal = lambda job_id, timeout=None: ("R", 0)  # noqa: SLF001
     hint: dict[str, str] = {"__osimflow_type__": "path", "value": "/tmp/work/out.json"}
     handle = _PBSHandle(job_id="1[hostname]", executor=executor, result_hint=hint)
 
