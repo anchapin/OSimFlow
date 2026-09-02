@@ -24,7 +24,13 @@ PRECOMMIT := $(VENV)/bin/pre-commit
 # local `test` target reuses the same PYTEST_CI_FLAGS with the coverage
 # gate off. Editing these variables changes CI and local targets together —
 # do not duplicate the flags inline in ci.yml.
-PYTEST_CI_FLAGS := -n 2 --dist loadgroup --timeout=120 --ignore=tests/contract -m "not nomad_e2e and not slow"
+#
+# `chaos` is deselected in the merge gate on purpose (issue #1468): chaos
+# tests may use probabilistic fault injection and are exercised by the
+# dedicated, NON-gating `chaos` CI job (`pytest -m chaos`), so a flake
+# there cannot block PRs. tests/contract/test_ci_marker_policy.py pins
+# this policy to the marker docs in pyproject.toml.
+PYTEST_CI_FLAGS := -n 2 --dist loadgroup --timeout=120 --ignore=tests/contract -m "not nomad_e2e and not slow and not chaos"
 PYTEST_COV_FLAGS := --cov=osimflow --cov-report=xml --cov-report=term-missing --cov-fail-under=82
 
 .PHONY: help install lint format typecheck test test-cov test-fast smoke contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
