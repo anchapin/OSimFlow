@@ -39,6 +39,7 @@
   - [7.5 Cache and Resume Behavior](#75-cache-and-resume-behavior)
   - [7.6 OpenStudio Version Selection](#76-openstudio-version-selection)
   - [7.7 Importing from OpenStudio Analysis Spreadsheet (.osa)](#77-importing-from-openstudio-analysis-spreadsheet-osa)
+  - [7.8 Chaos Fault Injection (Resilience Testing)](#78-chaos-fault-injection-resilience-testing)
 - [8. Health Checks](#8-health-checks)
 - [9. Troubleshooting](#9-troubleshooting)
 - [10. Reference](#10-reference)
@@ -1057,6 +1058,28 @@ python -m osimflow import-osa path/to/analysis.osa --output variables.yml
 This converts the `.osa` parameter definitions into a `variables.yml` file
 compatible with OSimFlow's LHS sampler.
 
+### 7.8 Chaos Fault Injection (Resilience Testing)
+
+OSimFlow can inject controlled faults — process kills, network delay,
+CPU spikes, memory pressure — into a running campaign to validate that
+retries, caching, and executor failover behave under stress (issue #1013).
+Chaos is **off by default**: it only fires when you explicitly pass
+`--chaos-enabled`. Every injection is recorded under
+`chaos_invocations` in [`run.json`](runjson-guide.md), so you can compare
+chaos vs. baseline campaigns after the fact. A minimal smoke test:
+
+```bash
+osimflow run --executor slurm \
+  --chaos-enabled --chaos-scenarios network_delay \
+  --chaos-schedule before_step --chaos-probability 0.05 \
+  --input_variables variables.yml --template_sim_package ./pkg \
+  --n_samples 50 --outdir ./results-chaos-smoke
+```
+
+Never enable chaos against a production campaign you cannot afford to
+interrupt. The full ten-flag reference, scenario catalog, and schedule
+semantics live in [chaos-engine.md](chaos-engine.md).
+
 ---
 
 ## 8. Health Checks
@@ -1410,6 +1433,29 @@ See [§7.1 BYOS Custom Scripts](#71-byos-custom-scripts) for the contract.
 | `--offline` | Skip Docker Hub pulls, PyPI checks, and online weather downloads (issue #261). |
 | `--log_level {DEBUG,INFO,WARNING,ERROR}` | Logging level (default: `INFO`). |
 
+#### Chaos fault injection (resilience testing)
+
+Opt-in fault injection for validating campaign resilience (issue #1013).
+**Off by default** — no scenario fires unless `--chaos-enabled` is passed.
+Every invocation is recorded in `run.json` → `chaos_invocations`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--chaos-enabled` | off | Enable chaos injection (required for any scenario to fire). |
+| `--chaos-scenarios LIST` | none | Scenarios to activate: `kill_switch`, `network_delay`, `cpu_spike`, `memory_pressure`. |
+| `--chaos-schedule {none,before_step,after_step,per_sample}` | `none` | When injection fires relative to DAG steps / samples. |
+| `--chaos-probability FLOAT` | `1.0` | Probability (0.0–1.0) that a given call triggers the injector. |
+| `--chaos-delay-s FLOAT` / `--chaos-jitter-s FLOAT` | `0.1` / `0.05` | Base delay ± random jitter in seconds (`network_delay`). |
+| `--chaos-duration-s FLOAT` | `0.5` | Fault duration in seconds (`cpu_spike` / `memory_pressure`). |
+| `--chaos-intensity FLOAT` | `0.5` | Fault intensity fraction 0.0–1.0 (`cpu_spike` / `memory_pressure`). |
+| `--chaos-size-mb INT` | `64` | Memory allocation size in MB (`memory_pressure`). |
+| `--chaos-fail-after INT` | `2` | Calls before the kill switch activates (`kill_switch`). |
+
+See [chaos-engine.md](chaos-engine.md) for the scenario catalog, schedule
+semantics, and production examples, or
+[§7.8 Chaos Fault Injection](#78-chaos-fault-injection-resilience-testing)
+for the introductory walkthrough.
+
 #### `osimflow serve` subcommand
 
 The optional REST API server (requires `pip install osimflow[api]`):
@@ -1466,6 +1512,7 @@ for the endpoint reference and `osimflow serve --help` for the full list.
 | [Resource Allocation](resource-allocation.md) | CPU, memory, and time sizing |
 | [Time-Series Management](time-series-management.md) | Controlling output data volume |
 | [Cost Estimation](cost-estimation.md) | AWS Batch and Slurm cost modeling |
+| [Chaos Engine](chaos-engine.md) | Resilience testing via fault injection |
 | [OpenStudio Images](openstudio-image-distribution.md) | Container image versions and availability |
 | [Deployment: Slurm](deployment/slurm.md) | Full Slurm/HPC setup guide |
 | [Deployment: AWS Batch](deployment/aws-batch.md) | Full cloud deployment guide |
