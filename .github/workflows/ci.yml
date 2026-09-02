@@ -1,7 +1,8 @@
 # =============================================================================
 # .github/workflows/ci.yml — split CI: lint + typecheck + test (parallel)
 # =============================================================================
-# Mirrors the local `make test-cov` + `make contract` + `make typecheck`.
+# Runs the local `make test-cov` + `make contract` + `make typecheck`
+# (pytest flags are single-sourced in the Makefile; issue #1476).
 # Triggered on push to main and on PRs.
 #
 # This workflow was split from a single monolithic job (issue #76) into
@@ -291,18 +292,10 @@ jobs:
 
       - name: pytest with coverage gate
         if: steps.changed.outputs.any_changed == 'true'
-        run: |
-          .venv/bin/pytest \
-            --cov=osimflow \
-            --cov-report=xml \
-            --cov-report=term \
-            --cov-fail-under=82 \
-            -n 2 \
-            --dist loadgroup \
-            --timeout=120 \
-            --ignore=tests/contract \
-            -m "not nomad_e2e and not slow" \
-            -q
+        # Flags live in the Makefile (PYTEST_CI_FLAGS / PYTEST_COV_FLAGS,
+        # issue #1476) — the single source of truth shared with the local
+        # `make test` / `make test-cov` targets. Do not inline them here.
+        run: make test-cov
 
       - name: Upload coverage
         if: steps.changed.outputs.any_changed == 'true' && success()

@@ -6,11 +6,14 @@ AGENTS.md is the source of truth the contract checker gates on, but
 (issue #1454: §4 said ``pytest + 83%`` after the gate had been lowered to
 82% by #1417 / commit 7885f4c).
 
-The authoritative gate value lives in ``.github/workflows/ci.yml``
-(``--cov-fail-under=N``, mirrored by the ``make test-cov`` target in the
-``Makefile``). These tests parse it from CI and assert AGENTS.md describes
-exactly that number, so a future gate change fails here until AGENTS.md is
-updated. Pure file reads — hermetic and fast.
+The authoritative gate value lives in the ``Makefile``
+(``PYTEST_COV_FLAGS`` / ``--cov-fail-under=N``), which the CI ``test``
+job consumes via ``make test-cov`` — single-sourced by issue #1476 so
+local targets and the merge gate cannot drift apart. These tests parse
+the gate from the Makefile and assert (a) AGENTS.md describes exactly
+that number and (b) ci.yml does not re-declare a competing inline gate,
+so a future gate change fails here until every mirror is updated.
+Pure file reads — hermetic and fast.
 
 Issue #1455 extends the same guard to prose that the substring-only
 checker cannot verify: the ``circuit_breaker.py`` §5 entry claimed
@@ -42,22 +45,24 @@ _COV_FAIL_UNDER_RE = re.compile(r"--cov-fail-under=(\d+)")
 _HALF_OPEN_RESET_RE = re.compile(r"was_half_open[^0-9]*_consecutive_failures\s*=\s*(\d+)")
 
 
-def _parse_ci_gate_pct() -> int:
-    """Extract the coverage gate percentage from the CI workflow.
+def _parse_gate_pct() -> int:
+    """Extract the coverage gate percentage from the Makefile.
 
     Returns the single distinct ``--cov-fail-under`` value declared in
-    ``.github/workflows/ci.yml``. Fails loudly if the directive moves or
-    becomes ambiguous — a silent fallback would defeat the drift guard.
+    the ``Makefile`` (``PYTEST_COV_FLAGS`` — the single source of truth
+    since issue #1476; the CI ``test`` job runs ``make test-cov``).
+    Fails loudly if the directive moves or becomes ambiguous — a silent
+    fallback would defeat the drift guard.
     """
-    matches = _COV_FAIL_UNDER_RE.findall(_CI_WORKFLOW.read_text(encoding="utf-8"))
+    matches = _COV_FAIL_UNDER_RE.findall(_MAKEFILE.read_text(encoding="utf-8"))
     assert matches, (
-        "No --cov-fail-under directive found in .github/workflows/ci.yml. "
+        "No --cov-fail-under directive found in the Makefile. "
         "The coverage gate moved; update this test to parse the new location."
     )
     values = {int(v) for v in matches}
     assert len(values) == 1, (
-        f"Ambiguous coverage gate in .github/workflows/ci.yml: {sorted(values)}. "
-        "CI must declare exactly one --cov-fail-under value."
+        f"Ambiguous coverage gate in the Makefile: {sorted(values)}. "
+        "The Makefile must declare exactly one --cov-fail-under value."
     )
     return values.pop()
 
@@ -65,18 +70,28 @@ def _parse_ci_gate_pct() -> int:
 def test_agents_md_states_ci_coverage_gate() -> None:
     """AGENTS.md must mention exactly the gate percentage CI enforces.
 
-    A future bump of ``--cov-fail-under`` in ci.yml fails this test until
-    AGENTS.md is updated — the drift #1454 fixed cannot reintroduce.
+    A future bump of ``--cov-fail-under`` in the Makefile fails this test
+    until AGENTS.md is updated — the drift #1454 fixed cannot reintroduce.
     """
-    gate = _parse_ci_gate_pct()
+    gate = _parse_gate_pct()
     assert f"{gate}%" in _AGENTS_MD.read_text(encoding="utf-8"), (
         f"AGENTS.md does not mention the CI coverage gate ({gate}%). "
         "Update AGENTS.md §4 (and any other gate references) to match "
-        ".github/workflows/ci.yml."
+        "the Makefile PYTEST_COV_FLAGS."
     )
-    makefile_gate = _COV_FAIL_UNDER_RE.findall(_MAKEFILE.read_text(encoding="utf-8"))
-    assert {int(v) for v in makefile_gate} == {gate}, (
-        f"Makefile test-cov gate {sorted(makefile_gate)} disagrees with ci.yml gate {gate}."
+    ci_workflow = _CI_WORKFLOW.read_text(encoding="utf-8")
+    assert "make test-cov" in ci_workflow, (
+        ".github/workflows/ci.yml no longer runs `make test-cov`. "
+        "The CI pytest invocation must stay single-sourced in the "
+        "Makefile (issue #1476) — re-inline flags only by also updating "
+        "this test."
+    )
+    inline_gates = _COV_FAIL_UNDER_RE.findall(ci_workflow)
+    assert not inline_gates, (
+        f".github/workflows/ci.yml declares an inline --cov-fail-under "
+        f"({sorted(inline_gates)}) instead of consuming the Makefile's "
+        "PYTEST_COV_FLAGS — that is the dual-source drift issue #1476 "
+        "closed. Move the gate back to the Makefile."
     )
 
 
@@ -87,13 +102,13 @@ def test_agents_md_has_no_stale_83_percent() -> None:
     (then ``83%`` in AGENTS.md would be correct, and the positive test
     above is the binding check).
     """
-    gate = _parse_ci_gate_pct()
+    gate = _parse_gate_pct()
     if gate == 83:
         pytest.skip("gate is legitimately 83 now; the positive-gate test covers it")
     assert "83%" not in _AGENTS_MD.read_text(encoding="utf-8"), (
         "AGENTS.md contains a stale '83%' coverage-gate reference "
         f"(issue #1454 regression). The CI gate is {gate}% — see "
-        ".github/workflows/ci.yml."
+        "the Makefile PYTEST_COV_FLAGS."
     )
 
 

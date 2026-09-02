@@ -40,8 +40,8 @@ make install
 .venv/bin/pre-commit install
 
 # Verify everything works
-make test-fast   # unit + contract tests, ~10s
-make test        # full suite
+make test-fast   # contract tests only, ~10s
+make test        # full suite with CI flags (no coverage gate)
 
 # Run a smoke-test campaign (stub mode — no real OpenStudio needed)
 make smoke       # 3-sample stub-mode local campaign into ./results_smoke (issue #1479)
@@ -407,9 +407,9 @@ invoke `.venv/bin/pytest` directly.
 
 | Command | What it does |
 |---|---|
-| `make test` | Full pytest suite |
-| `make test-fast` | Contract + unit only (~10s, pre-commit mirror) |
-| `make test-cov` | Full suite + 82% coverage gate |
+| `make test` | Full suite with CI flags (xdist, 120s timeout, no contract/slow/nomad_e2e; no coverage gate) |
+| `make test-fast` | Contract tests only (~10s, pre-commit mirror) |
+| `make test-cov` | `make test` + 82% coverage gate (exact CI test-job invocation; issue #1476) |
 | `make lint` | ruff check (read-only; the pre-commit ruff hook auto-fixes instead — see §Tooling) |
 | `make format` | ruff format (writes) |
 | `make typecheck` | mypy --strict on osimflow/ |
@@ -425,9 +425,13 @@ invoke `.venv/bin/pytest` directly.
 
 ```bash
 make test-cov
-# Or manually:
-.venv/bin/pytest --cov=osimflow --cov-report=term-missing --cov-fail-under=82
 ```
+
+This is the exact invocation the CI `test` job runs (it calls
+`make test-cov`); the flag set is single-sourced in the Makefile
+(`PYTEST_CI_FLAGS` / `PYTEST_COV_FLAGS`, issue #1476) — don't
+hand-roll a parallel pytest command or you'll drift from the merge
+gate.
 
 The coverage gate is 82% (lowered from 83%; issue #1417). If it fails, the output shows which lines
 are uncovered. Add tests for the missing public-API paths.

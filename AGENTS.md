@@ -123,8 +123,8 @@ make install    # pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,opt
 make lint       # ruff check
 make format     # ruff format (write)
 make typecheck  # mypy --strict on osimflow/
-make test       # pytest (full suite, no coverage gate)
-make test-cov   # pytest --cov with 82% gate           (CI default; issue #1417)
+make test       # pytest with CI flags, no coverage gate (issue #1476)
+make test-cov   # exact CI test-job invocation, 82% gate  (ci.yml runs this; issues #1417, #1476)
 make test-fast  # pytest tests/contract -x -q          (pre-commit mirror)
 make smoke      # 3-sample stub-mode local campaign into ./results_smoke (no OpenStudio needed; issue #1479)
 make contract   # regenerate BYOS runner + agents-contract + docs-sync + openapi-sync
@@ -294,13 +294,16 @@ appear in this document. Listed in run-subcommand groups (or
 ## 4. Testing
 
 ```bash
-make test           # full suite
+make test           # CI-flag suite (xdist, 120s timeout; no contract/slow/nomad_e2e), no coverage gate
 make test-fast      # contract only, no coverage gate (pre-commit mirror)
 .venv/bin/pytest tests/integration/test_cache_invalidation.py -v
 .venv/bin/pytest --cov=osimflow
 ```
 
-CI (`make test-cov`) requires 82% coverage — gated by
+CI runs `make test-cov` (the CI `test` job calls the Makefile
+target; pytest flags are single-sourced in the Makefile —
+`PYTEST_CI_FLAGS` / `PYTEST_COV_FLAGS`, issue #1476) and requires
+82% coverage — gated by
 `pyproject.toml [tool.pytest.ini_options]`. CI jobs in
 `.github/workflows/ci.yml`: `lint` (ruff check + format --check),
 `typecheck` (mypy --strict), `test` (pytest + 82%), `contract`,
