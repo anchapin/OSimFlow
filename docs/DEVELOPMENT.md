@@ -587,6 +587,7 @@ All executors live in `osimflow/executors/__init__.py` and subclass
 ```python
 # osimflow/executors/__init__.py
 
+
 class MyNewExecutor(BaseExecutor):
     """My new executor."""
 
@@ -674,6 +675,80 @@ Add the new executor to:
 
 The contract check (`make contract`) will fail if you forget.
 
+### Third-party executors
+
+If you ship your executor in a separate package via the
+`osimflow.executors` entry point, you do **not** get any of the
+in-repo test infrastructure for free — there is no
+`tests/integration/test_<executor>.py` you can copy. Instead,
+subclass :class:`osimflow.testing.ExecutorConformanceSuite` and point
+its `executor_factory` class attribute at your executor:
+
+```python
+# tests/test_my_executor.py
+from osimflow.testing import ExecutorConformanceSuite
+from my_pkg.executors import MyExecutor
+
+
+class TestMyExecutorConformance(ExecutorConformanceSuite):
+    executor_factory = staticmethod(lambda: MyExecutor(endpoint="http://localhost:8080"))
+
+    # Opt-in: run a full 3-sample stub campaign through your executor.
+    # Skip this for genuinely remote-only substrates that already
+    # have their own end-to-end test against a live cluster.
+    run_stub_campaign: bool = True
+```
+
+Every `test_*` method on the mixin runs against the executor your
+factory yields:
+
+- `test_submit_returns_handle` — `submit()` must return a `Handle`.
+- `test_handle_job_id_is_non_empty_string` — `Handle.job_id` shape.
+- `test_handle_done_returns_bool` — `Handle.done()` returns `bool`;
+  `Handle.result()` returns the callable's value.
+- `test_handle_result_returns_value` — basic round-trip.
+- `test_handle_result_respects_timeout` — `TimeoutError` on `t=0.1s`.
+- `test_handle_error_propagates` — callable exceptions re-raise.
+- `test_resource_directives_accepted` — `cpus` / `memory_mb` /
+  `time_min` are accepted on `submit()`.
+- `test_transport_path_round_trip` — `encode_transport_value` /
+  `decode_transport_value` preserve `Path` payloads.
+- `test_transport_result_hint_default_returns_default` — `None`
+  hint returns the provided default.
+- `test_transport_result_hint_path_payload_decodes` —
+  `resolve_result_for_callback` decodes tagged payloads.
+- `test_fanout_chunk_size_returns_positive_int` — bounded chunk size
+  (issue #1342).
+- `test_register_health_check_returns_callable` — your executor must
+  register itself via `ExecutorRegistry.register()` first.
+- `test_three_sample_stub_campaign_produces_all_artifacts` (slow) —
+  full 3-sample Campaign run in stub mode (mirrors
+  `tests/integration/test_local_executor.py`).
+
+The suite is intentionally a *mixin*: pytest discovers `test_*`
+methods on the subclass, so you can override individual checks or
+add substrate-specific assertions without copying the whole suite.
+
+For non-pytest usage (pre-commit scripts, `python -c` invocations)
+use the programmatic runner:
+
+```bash
+python -c "from osimflow.testing import run_executor_conformance; \\
+           from my_pkg.executors import MyExecutor; \\
+           r = run_executor_conformance(MyExecutor()); \\
+           print(r.to_dict())"
+```
+
+`run_executor_conformance` returns a :class:`ConformanceReport` with
+one :class:`ConformanceCheck` per contract area; `report.passed`
+is `True` only when every check passed. `report.to_dict()` is
+JSON-serialisable so it can be ingested by CI tooling directly.
+
+Before publishing your plug-in, run the full suite (with stub
+campaign enabled) on a clean checkout — the campaign check is the
+only way to verify your executor's per-sample fan-out works end to
+end through the `Campaign` orchestrator.
+
 ---
 
 ## 8. Adding a New DAG Step
@@ -694,7 +769,7 @@ def step_my_new_step(self, inputs: SomeType) -> SomeOutputType:
     inputs_hash = sha256_of_dict({"inputs": str(inputs)})
     key = CacheKey(
         step="MY_NEW_STEP",
-        sample_id="ALL",       # or per-sample: sid
+        sample_id="ALL",  # or per-sample: sid
         openstudio_version="N/A",
         inputs_sha256=inputs_hash,
         code_sha256=self.code_hashes["bin"],
@@ -705,31 +780,40 @@ def step_my_new_step(self, inputs: SomeType) -> SomeOutputType:
     cached = self.cache.lookup(key)
     if cached:
         self.trace.step_finished(
-            "MY_NEW_STEP", cache="HIT",
-            elapsed_s=time.time() - t0, exit_code=0,
+            "MY_NEW_STEP",
+            cache="HIT",
+            elapsed_s=time.time() - t0,
+            exit_code=0,
         )
         return cached
 
     # Submit work
     handle = self.executor.submit(
-        my_work_function, inputs,
+        my_work_function,
+        inputs,
         name="my_new_step",
-        cpus=1, memory_mb=1024, time_min=5,
+        cpus=1,
+        memory_mb=1024,
+        time_min=5,
         container=CONTAINER_PY,
     )
     try:
         result = handle.result(timeout=120)
         self.cache.store(key, Path(result), exit_code=0)
         self.trace.step_finished(
-            "MY_NEW_STEP", cache="MISS",
-            elapsed_s=time.time() - t0, exit_code=0,
+            "MY_NEW_STEP",
+            cache="MISS",
+            elapsed_s=time.time() - t0,
+            exit_code=0,
         )
         return result
     except Exception as e:
         log.error("MY_NEW_STEP failed: %s", e)
         self.trace.step_finished(
-            "MY_NEW_STEP", cache="MISS",
-            elapsed_s=time.time() - t0, exit_code=1,
+            "MY_NEW_STEP",
+            cache="MISS",
+            elapsed_s=time.time() - t0,
+            exit_code=1,
         )
         raise
 ```
@@ -845,6 +929,7 @@ file.
 from pathlib import Path
 import json
 
+
 def extract_kpis(simulation_dir: Path, sample_id: str, out: Path) -> Path:
     """Custom KPI extractor."""
     kpi = {"sample_id": sample_id, "kpis": {"eui": 123.4}}
@@ -884,6 +969,7 @@ def apply_parameters(
 ) -> Path:
     """Return the path to the modified simulation package."""
     ...
+
 
 def extract_kpis(
     simulation_dir: Path,
@@ -939,10 +1025,10 @@ Each `step_*` method in `osimflow/campaign.py` constructs a `CacheKey`:
 
 ```python
 key = CacheKey(
-    step="APPLY_PARAMETERS",       # step name
-    sample_id=sid,                  # per-sample or "ALL"
-    openstudio_version="N/A",       # or real version for sim step
-    inputs_sha256=inputs_hash,      # SHA-256 of input data
+    step="APPLY_PARAMETERS",  # step name
+    sample_id=sid,  # per-sample or "ALL"
+    openstudio_version="N/A",  # or real version for sim step
+    inputs_sha256=inputs_hash,  # SHA-256 of input data
     code_sha256=self.code_hashes["bin"],  # SHA-256 of bin/*.py files
     container_digest=CONTAINER_PY,  # container image tag
 )
@@ -1280,7 +1366,7 @@ need:
 
 ```python
 from osimflow import Campaign, CampaignConfig  # fast
-from osimflow.executors import LocalExecutor    # triggers submitit import
+from osimflow.executors import LocalExecutor  # triggers submitit import
 ```
 
 ### "SlurmExecutor runs locally"
