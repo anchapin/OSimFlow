@@ -7,17 +7,23 @@ from them before the full __init__.py is initialized.
 
 from __future__ import annotations
 
-__all__ = ["BaseExecutor", "Handle", "SubmitRequest"]
+__all__ = ["BaseExecutor", "Handle", "PollingHandle", "PollOutcome", "SubmitRequest"]
 
 import abc
 import dataclasses
+import enum
 import json
+import logging
 import os
+import random
+import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
 from osimflow.executors.transport import encode_transport_value, validate_transport_mode
+
+log = logging.getLogger("osimflow.executors.base")
 
 
 @dataclasses.dataclass
@@ -63,6 +69,206 @@ class Handle:
     def is_failed(self) -> bool:
         """Return True if a polling error has been captured."""
         return self.error is not None
+
+
+class PollOutcome(enum.Enum):
+    """Terminal classification of a polled job (issue #1464).
+
+    ``PollingHandle._classify`` returns this plus the substrate's raw
+    spot-classification input, so the shared state machine can dispatch
+    without knowing the substrate's job schema.
+    """
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    #: Terminal but neither succeeded nor failed (e.g. a Google Batch
+    #: state outside SUCCEEDED/FAILED): treated as success with a
+    #: ``None`` result, matching the pre-refactor Google behaviour.
+    INDETERMINATE = "indeterminate"
+
+
+class PollingHandle(Handle):
+    """Shared poll-retry-fallback state machine for polling handles (issue #1464).
+
+    ``result()`` used to be duplicated nearly verbatim across
+    ``_AzureBatchHandle`` and ``_GoogleBatchHandle`` (with a simpler
+    poll-until-terminal-plus-``set_exception`` skeleton repeated in the
+    Kubernetes / Nomad / Docker Swarm / PBS handles), so a fix to the
+    backoff curve, retry accounting, deadline, or exception-raising
+    path had to be applied and verified five-plus times.
+
+    This template-method base owns the cross-substrate state machine:
+
+    * the caller-supplied ``timeout`` deadline (issue #1465) — the
+      start time is shared across spot-retry iterations, remaining
+      time is recomputed every attempt, and expiry raises
+      ``TimeoutError``;
+    * retry accounting — ``max(0, executor.max_retries) + 1`` attempts;
+    * jittered exponential backoff between spot retries
+      (``min(5s * 2**attempt, 60s)`` with full jitter);
+    * spot-interruption classification dispatch;
+    * the fallback-to-on-demand transition when retries are exhausted
+      and ``executor.fallback_to_on_demand`` is set.
+
+    Substrate handles shrink to hooks:
+
+    * ``_wait_for_terminal(timeout)`` — poll until terminal (raises
+      ``TimeoutError`` on its own poll deadline);
+    * ``_classify(job)`` — map a terminal job to a ``PollOutcome``
+      plus the raw spot-classification reason;
+    * ``_resolve_success_result()`` — resolve + materialize the
+      callback-facing success value (kept substrate-local so tests can
+      monkeypatch ``materialize_object_storage_result`` per module);
+    * ``_is_spot_interruption(reason)`` — spot classifier (default
+      ``False`` — no spot support);
+    * ``_resubmit()`` — spot retry: submit a replacement job and
+      update the handle's job id / ``worker_id``;
+    * ``_submit_on_demand()`` — the fallback submission (same updates);
+    * ``_failure_error(job)`` / ``_fallback_failure_error(job)`` —
+      substrate-worded ``RuntimeError`` factories;
+    * ``_poll_job_id()`` — identifier used in timeout messages
+      (default ``self.job_id``);
+    * ``_retry_limit()`` / ``_has_on_demand_fallback()`` — read from
+      ``executor.max_retries`` / ``executor.fallback_to_on_demand``
+      with getattr defaults, so executors without spot support get a
+      single-attempt, no-fallback machine.
+    """
+
+    _executor: Any
+    _result_hint: Any = None
+    _result_transport_mode: str = "auto"
+    _result_storage_backend: str | None = None
+    _result_storage_bucket: str | None = None
+    _result_storage_prefix: str | None = None
+    _result_storage_endpoint: str | None = None
+
+    # ------------------------------------------------------------------
+    # Substrate hooks
+    # ------------------------------------------------------------------
+
+    def _wait_for_terminal(self, timeout: float | None) -> Any:
+        """Poll the substrate until the job reaches a terminal state."""
+        raise NotImplementedError
+
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        """Classify a terminal job as (outcome, raw spot-classification reason)."""
+        raise NotImplementedError
+
+    def _resolve_success_result(self) -> Any:
+        """Resolve and materialize the callback-facing success result."""
+        raise NotImplementedError
+
+    def _poll_job_id(self) -> str:
+        """Job identifier used in deadline-exceeded messages."""
+        return self.job_id
+
+    def _is_spot_interruption(self, reason: str | None) -> bool:
+        """Whether a failure reason indicates a spot/preemptible interruption."""
+        return False
+
+    def _resubmit(self) -> None:
+        """Spot retry: resubmit and update the handle's job identity."""
+        raise NotImplementedError
+
+    def _submit_on_demand(self) -> None:
+        """Fallback: submit the on-demand replacement job."""
+        raise NotImplementedError
+
+    def _retry_limit(self) -> int:
+        return max(0, getattr(self._executor, "max_retries", 0))
+
+    def _has_on_demand_fallback(self) -> bool:
+        return bool(getattr(self._executor, "fallback_to_on_demand", False))
+
+    def _failure_error(self, job: Any) -> RuntimeError:
+        """Substrate-worded error for a non-spot terminal failure."""
+        raise NotImplementedError
+
+    def _fallback_failure_error(self, job: Any) -> RuntimeError:
+        """Substrate-worded error for a failure after the on-demand fallback."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Shared state machine
+    # ------------------------------------------------------------------
+
+    def result(self, timeout: float | None = None) -> Any:
+        # Timeout tracking (issue #1465): elapsed time is shared across
+        # spot-retry iterations so the caller-supplied deadline is honoured
+        # regardless of how many times the job is resubmitted. The
+        # substrate-side kill (pool task timeout / allocation timeout /
+        # activeDeadlineSeconds / walltime) remains defense in depth.
+        start = time.monotonic()
+        remaining: float | None = None  # None means "no timeout"
+        effective_max_retries = self._retry_limit()
+        for attempt in range(effective_max_retries + 1):
+            # Compute remaining time for this poll iteration.
+            if timeout is not None:
+                elapsed = time.monotonic() - start
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timed out after {elapsed:.1f}s waiting for job {self._poll_job_id()!r}"
+                    )
+
+            try:
+                job = self._wait_for_terminal(remaining)
+            except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
+                self._future.set_exception(exc)
+                raise
+
+            outcome, spot_reason = self._classify(job)
+            if outcome is PollOutcome.SUCCEEDED:
+                resolved = self._resolve_success_result()
+                self._future.set_result(resolved)
+                return resolved
+            if outcome is PollOutcome.INDETERMINATE:
+                self._future.set_result(None)
+                return None
+
+            if self._is_spot_interruption(spot_reason):
+                if attempt < effective_max_retries:
+                    backoff = min(5.0 * (2**attempt), 60.0)
+                    jittered_backoff = random.uniform(0, backoff)
+                    log.warning(
+                        "Spot/preemptible interrupted (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1,
+                        effective_max_retries,
+                        jittered_backoff,
+                        spot_reason,
+                    )
+                    time.sleep(jittered_backoff)
+                    self._resubmit()
+                    continue
+
+                if self._has_on_demand_fallback():
+                    log.warning(
+                        "Spot retries exhausted (%d), falling back to on-demand",
+                        effective_max_retries,
+                    )
+                    self._submit_on_demand()
+                    try:
+                        job = self._wait_for_terminal(remaining)
+                    except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
+                        self._future.set_exception(exc)
+                        raise
+                    outcome, _ = self._classify(job)
+                    if outcome is PollOutcome.SUCCEEDED:
+                        resolved = self._resolve_success_result()
+                        self._future.set_result(resolved)
+                        return resolved
+                    error = self._fallback_failure_error(job)
+                    self._future.set_exception(error)
+                    raise error
+                raise RuntimeError(
+                    f"Spot retries exhausted ({effective_max_retries}): {spot_reason}"
+                )
+
+            error = self._failure_error(job)
+            self._future.set_exception(error)
+            raise error
+
+        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
 
 
 @dataclasses.dataclass
