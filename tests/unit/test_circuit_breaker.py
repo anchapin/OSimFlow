@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +10,27 @@ import pytest
 from osimflow.circuit_breaker import CircuitBreaker, CircuitOpenError
 from osimflow.distributed_cache import DistributedCache
 from osimflow.document_store import DocumentStoreError, RedisDocumentStore
+
+
+class FakeClock:
+    """Controllable monotonic clock for deterministic :class:`CircuitBreaker` tests (issue #1481).
+
+    Mimics :func:`time.monotonic`: callable returning a float seconds value.
+    :meth:`advance` moves the clock forward by ``seconds`` so the test can
+    age the breaker past ``cooldown_s`` without any real ``time.sleep`` —
+    removing the wall-clock flake surface under loaded CI runners.
+    """
+
+    __slots__ = ("_now",)
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self._now = float(start)
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += float(seconds)
 
 
 class TestCircuitBreakerStates:
@@ -38,46 +58,42 @@ class TestCircuitBreakerStates:
         assert breaker.state == "closed"
 
     def test_cooldown_elapses_into_half_open_probe(self) -> None:
-        breaker = CircuitBreaker(failure_threshold=1, cooldown_s=0.05)
+        clock = FakeClock()
+        breaker = CircuitBreaker(failure_threshold=1, cooldown_s=0.05, clock=clock)
         breaker.record_failure()
         assert breaker.allow() is False
-        import time
-
-        time.sleep(0.06)
+        clock.advance(0.06)
         assert breaker.state == "half_open"
         assert breaker.allow() is True
 
     def test_half_open_success_closes_circuit(self) -> None:
-        breaker = CircuitBreaker(failure_threshold=1, cooldown_s=0.01)
+        clock = FakeClock()
+        breaker = CircuitBreaker(failure_threshold=1, cooldown_s=0.01, clock=clock)
         breaker.record_failure()
-        import time
-
-        time.sleep(0.02)
+        clock.advance(0.02)
         assert breaker.allow() is True  # probe admitted
         breaker.record_success()
         assert breaker.state == "closed"
 
     def test_half_open_failure_reopens_circuit(self) -> None:
-        breaker = CircuitBreaker(failure_threshold=5, cooldown_s=0.01)
+        clock = FakeClock()
+        breaker = CircuitBreaker(failure_threshold=5, cooldown_s=0.01, clock=clock)
         for _ in range(5):
             breaker.record_failure()
-        import time
-
-        time.sleep(0.02)
+        clock.advance(0.02)
         assert breaker.allow() is True  # probe admitted
         breaker.record_failure()  # probe fails -> straight back to open
         assert breaker.state == "open"
 
     def test_half_open_failure_counter_is_0_immediately_after(self) -> None:
         """Assert _consecutive_failures == 0 immediately after a half_open failure (issue #1330)."""
-        import time
-
-        breaker = CircuitBreaker(failure_threshold=3, cooldown_s=0.01)
+        clock = FakeClock()
+        breaker = CircuitBreaker(failure_threshold=3, cooldown_s=0.01, clock=clock)
         for _ in range(3):
             breaker.record_failure()
         assert breaker.state == "open"
 
-        time.sleep(0.02)
+        clock.advance(0.02)
         assert breaker.allow() is True  # half-open probe admitted
         assert breaker.consecutive_failures == 3  # still 3 in half_open
 
@@ -86,15 +102,14 @@ class TestCircuitBreakerStates:
 
     def test_half_open_failure_resets_counter_to_0(self) -> None:
         """Failure in half_open should reset _consecutive_failures to 0 (issue #1330)."""
-        import time
-
-        breaker = CircuitBreaker(failure_threshold=3, cooldown_s=0.01)
+        clock = FakeClock()
+        breaker = CircuitBreaker(failure_threshold=3, cooldown_s=0.01, clock=clock)
         for _ in range(3):
             breaker.record_failure()
         assert breaker.consecutive_failures == 3
         assert breaker.state == "open"
 
-        time.sleep(0.02)
+        clock.advance(0.02)
         assert breaker.allow() is True  # half-open probe admitted
         assert breaker.consecutive_failures == 3  # not yet incremented
 
@@ -103,7 +118,7 @@ class TestCircuitBreakerStates:
         assert breaker.consecutive_failures == 0  # reset to 0 per issue #1330
 
         # Second half-open failure: counter was 0, now 1 before re-open
-        time.sleep(0.02)
+        clock.advance(0.02)
         breaker.record_failure()
         assert breaker.consecutive_failures == 1
 
@@ -176,16 +191,17 @@ class TestDistributedCacheBreakerIntegration:
             redis_url="redis://localhost:6379/0",
             campaign_id="cb-recover",
         )
-        cache._breaker = CircuitBreaker(name="test", failure_threshold=2, cooldown_s=0.01)
+        clock = FakeClock()
+        cache._breaker = CircuitBreaker(
+            name="test", failure_threshold=2, cooldown_s=0.01, clock=clock
+        )
         failing = _failing_sync_module()
         with patch("osimflow.distributed_cache._get_redis_sync", return_value=failing):
             key = _make_key("x")
             for _ in range(2):
                 assert cache.lookup(key) is None
             assert cache._breaker.state == "open"
-            import time
-
-            time.sleep(0.02)
+            clock.advance(0.02)
             # Half-open probe goes through (and fails again), re-opening.
             assert cache.lookup(key) is None
             assert cache._breaker.state == "open"
@@ -239,11 +255,13 @@ class TestRedisDocumentStoreBreakerIntegration:
 class TestCircuitBreakerObservability:
     def test_on_transition_callback_fired_on_state_change(self) -> None:
         events: list[tuple[str, str, str]] = []
+        clock = FakeClock()
         breaker = CircuitBreaker(
             name="test_cb",
             failure_threshold=2,
             cooldown_s=0.001,
             on_transition=lambda n, f, t: events.append((n, f, t)),
+            clock=clock,
         )
         assert breaker.state == "closed"
         # closed → open (2 consecutive failures)
@@ -251,7 +269,7 @@ class TestCircuitBreakerObservability:
         breaker.record_failure()
         assert events == [("test_cb", "closed", "open")]
         # open → half_open (cooldown elapses on allow())
-        time.sleep(0.002)
+        clock.advance(0.002)
         assert breaker.allow() is True
         assert events == [
             ("test_cb", "closed", "open"),
@@ -265,7 +283,7 @@ class TestCircuitBreakerObservability:
             ("test_cb", "half_open", "open"),
         ]
         # open → half_open again
-        time.sleep(0.002)
+        clock.advance(0.002)
         breaker.allow()
         # half_open → closed (probe succeeds)
         breaker.record_success()
