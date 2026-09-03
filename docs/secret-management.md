@@ -610,15 +610,25 @@ export OSIMFLOW_TASK_PAYLOAD_SECRET="$(openssl rand -hex 32)"
 osimflow run --executor nomad ...
 ```
 
-Currently the secret is provisioned as a **plain environment variable** on both
-sides. The hardening direction (issue #1449) is per-substrate secret stores:
-inject `OSIMFLOW_TASK_PAYLOAD_SECRET` into worker pods via a Kubernetes Secret
-(and the orchestrator via IRSA/External Secrets — see
-[Kubernetes Secrets](#kubernetes-secrets) above), and via a Nomad Vault
-template stanza on Nomad, rather than a literal orchestrator environment
-variable. Note that because the secret travels in the same job env as the
-payload today, anything that can read the full job env (for example
-`kubectl get pod -o yaml` or `nomad alloc status` output on an insecure
+Since issue #1449, two substrates deliver the worker-side secret through their
+**native secret stores** instead of the literal job env:
+
+- **Kubernetes**: `KubernetesExecutor(payload_secret_ref="<secret-name>")`
+  emits the `OSIMFLOW_TASK_PAYLOAD_SECRET` env entry as a `secretKeyRef`; the
+  kubelet resolves it at pod admission and the raw value never appears in the
+  Job spec. See
+  [Kubernetes Deployment Guide — Task-Payload Secret via `secretKeyRef`](kubernetes-deployment.md#task-payload-secret-via-secretkeyref-issue-1449).
+- **Nomad**: `NomadExecutor(vault_secret_path="secret/data/osimflow/hmac")`
+  renders the secret from Vault via a `template { env = true }` stanza and
+  omits both the task-env literal and the `task_payload_secret` dispatch-meta
+  key. See
+  [Nomad Production Guide — Vault-template secret injection](nomad-production.md#vault-template-secret-injection-issue-1449).
+
+AWS Batch, Azure Batch, Google Batch, and Docker Swarm still ship the secret
+as a **plain task env value** (documented residual — see the per-substrate
+residual threat model in the Nomad Production Guide). Even with native secret
+stores, note that anything that can read the full resolved env of a *running*
+job (for example `kubectl exec` or `nomad alloc status` on a hardened
 cluster) also sees it — mTLS + ACL hardening of the substrate (see the
 [Nomad Production Guide](nomad-production.md)) is part of the same defense.
 

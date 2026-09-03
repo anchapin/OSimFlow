@@ -31,7 +31,9 @@ import pytest
 
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SECRET_META_KEY,
     TASK_PAYLOAD_SIG_ENV,
+    TASK_PAYLOAD_SIG_META_KEY,
     sign_task_payload,
 )
 
@@ -200,6 +202,7 @@ def _kubernetes_executor_factory() -> Any:
     ex.backoff_limit = 0
     ex.ttl_seconds_after_finished = None
     ex.queue_name = None
+    ex.security_context_strict = True
     return ex
 
 
@@ -342,3 +345,167 @@ def test_remote_runner_executor_registry_complete() -> None:
     # ``ENV_BUILDERS`` must cover every executor in the registry-derived list.
     assert set(ENV_BUILDERS.keys()) == set(REMOTE_RUNNER_EXECUTORS)
     assert set(EXECUTOR_FACTORIES.keys()) == set(REMOTE_RUNNER_EXECUTORS)
+
+
+# --- Issue #1449: native secret-store delivery -------------------------
+#
+# The literal-secret modes asserted above remain the default for
+# backward compat. The tests below opt into the per-substrate native
+# secret-reference mechanisms and assert the acceptance criterion for
+# issue #1449: the secret is NOT embedded verbatim in the job spec
+# where a native secret-reference mechanism is used.
+
+
+def _nomad_vault_executor_factory(**kwargs: Any) -> Any:
+    """Build a NomadExecutor with Vault-template delivery enabled."""
+    from osimflow.executors import NomadExecutor
+
+    kwargs.setdefault("vault_secret_path", "secret/data/osimflow/hmac")
+    with patch("urllib.request.urlopen"):
+        return NomadExecutor(address="http://127.0.0.1:4646", **kwargs)
+
+
+def test_kubernetes_secret_key_ref_replaces_literal_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1449: with ``payload_secret_ref`` the secret ships as a secretKeyRef."""
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+    ex = _kubernetes_executor_factory()
+    ex.payload_secret_ref = "osimflow-payload-secret"
+    env_list = ex._build_environment(  # noqa: SLF001
+        container="nrel/openstudio:3.11.0",
+        openstudio_version="3.11.0",
+        task_payload=TASK_PAYLOAD,
+    )
+    # The raw secret must not appear anywhere in the serialized env.
+    assert SECRET not in json.dumps(env_list)
+    secret_entry = next(e for e in env_list if e["name"] == TASK_PAYLOAD_SECRET_ENV)
+    assert secret_entry["valueFrom"]["secretKeyRef"] == {
+        "name": "osimflow-payload-secret",
+        "key": TASK_PAYLOAD_SECRET_ENV,
+    }
+    # The signature is public by design and still ships as a literal.
+    sig_entry = next(e for e in env_list if e["name"] == TASK_PAYLOAD_SIG_ENV)
+    assert sig_entry["value"] == sign_task_payload(TASK_PAYLOAD, SECRET)
+
+
+def test_kubernetes_submit_job_emits_secret_key_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1449: the submitted V1Job carries a secretKeyRef source, not a literal."""
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+    ex = _kubernetes_executor_factory()
+    ex.payload_secret_ref = "osimflow-payload-secret"
+    environment = ex._build_environment(  # noqa: SLF001
+        container="nrel/openstudio:3.11.0",
+        openstudio_version="3.11.0",
+        task_payload=TASK_PAYLOAD,
+    )
+    ex._submit_job(  # noqa: SLF001
+        name="sim_0001",
+        cpus=1,
+        memory_mb=1024,
+        time_min=60,
+        environment=environment,
+    )
+    body = ex._client.create_namespaced_job.call_args.kwargs["body"]  # type: ignore[union-attr]  # noqa: E501
+    body_dict = body.to_dict()
+    assert SECRET not in json.dumps(body_dict, default=str)
+    env_vars = body.spec.template.spec.containers[0].env
+    secret_var = next(v for v in env_vars if v.name == TASK_PAYLOAD_SECRET_ENV)
+    assert secret_var.value is None
+    assert secret_var.value_from.secret_key_ref.name == "osimflow-payload-secret"
+    assert secret_var.value_from.secret_key_ref.key == TASK_PAYLOAD_SECRET_ENV
+    literal_env_names = {v.name for v in env_vars if v.name != TASK_PAYLOAD_SECRET_ENV}
+    assert TASK_PAYLOAD_SIG_ENV in literal_env_names
+
+
+def test_kubernetes_secret_key_ref_warns_when_unsigned(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issue #1449: a configured ref without an orchestrator secret warns loudly."""
+    monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+    ex = _kubernetes_executor_factory()
+    ex.payload_secret_ref = "osimflow-payload-secret"
+    with caplog.at_level("WARNING", logger="osimflow.executors.kubernetes"):
+        env_list = ex._build_environment(  # noqa: SLF001
+            container="nrel/openstudio:3.11.0",
+            openstudio_version="3.11.0",
+            task_payload=TASK_PAYLOAD,
+        )
+    names = {e["name"] for e in env_list}
+    assert TASK_PAYLOAD_SECRET_ENV not in names
+    assert TASK_PAYLOAD_SIG_ENV not in names
+    assert any("cannot be signed" in record.message for record in caplog.records)
+
+
+def test_nomad_vault_template_replaces_literal_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1449: Vault mode renders the secret from a template stanza, not env."""
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+    ex = _nomad_vault_executor_factory()
+    spec = ex._build_job_spec(  # noqa: SLF001
+        name="sim_0001",
+        cpus=1,
+        memory_mb=1024,
+        container="nrel/openstudio:3.11.0",
+        openstudio_version="3.11.0",
+        task_payload=TASK_PAYLOAD,
+    )
+    # The raw secret must not appear anywhere in the serialized job spec.
+    assert SECRET not in json.dumps(spec)
+    task = spec["Job"]["TaskGroups"][0]["Tasks"][0]
+    assert TASK_PAYLOAD_SECRET_ENV not in task["Env"]
+    # The signature is public by design and still ships as a literal.
+    assert task["Env"][TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, SECRET)
+    templates = task["Templates"]
+    assert len(templates) == 1
+    assert templates[0]["Env"] is True
+    assert templates[0]["EmbeddedTmpl"] == (
+        f"{TASK_PAYLOAD_SECRET_ENV}="
+        '{{ with secret "secret/data/osimflow/hmac" }}'
+        "{{ .Data.data.payload_secret }}{{ end }}"
+    )
+
+
+def test_nomad_vault_template_kv_v1_field() -> None:
+    """Issue #1449: non-``/data/`` paths read the KV v1 field layout."""
+    ex = _nomad_vault_executor_factory(vault_secret_path="kv/osimflow")
+    assert ex._vault_secret_template() == (  # noqa: SLF001
+        f"{TASK_PAYLOAD_SECRET_ENV}="
+        '{{ with secret "kv/osimflow" }}{{ .Data.payload_secret }}{{ end }}'
+    )
+
+
+def test_nomad_dispatch_meta_omits_secret_in_vault_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1449: dispatch meta carries the signature but not the secret."""
+    monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+    ex = _nomad_vault_executor_factory(
+        use_dispatch=True,
+        dispatch_job_id="osimflow-worker-hmac-test",
+    )
+    ex._client = MagicMock()
+    ex._client.register_job.return_value = {}
+    ex._client.dispatch_job.return_value = {"JobID": "child-1", "EvalID": "eval-1"}
+    ex.submit(
+        lambda: None,
+        name="sim_0001",
+        container="nrel/openstudio:3.11.0",
+        openstudio_version="3.11.0",
+    )
+    # The registered parameterized job renders the secret from Vault.
+    registered_spec = ex._client.register_job.call_args.args[0]
+    assert SECRET not in json.dumps(registered_spec)
+    dispatch_task = registered_spec["Job"]["TaskGroups"][0]["Tasks"][0]
+    assert dispatch_task["Templates"][0]["Env"] is True
+    assert "{{ with secret " in dispatch_task["Templates"][0]["EmbeddedTmpl"]
+    # The per-dispatch meta (visible via nomad job inspect / alloc status)
+    # carries the signature but never the raw secret.
+    meta = ex._client.dispatch_job.call_args.kwargs["meta"]
+    assert SECRET not in json.dumps(meta)
+    assert TASK_PAYLOAD_SECRET_META_KEY not in meta
+    assert meta[TASK_PAYLOAD_SIG_META_KEY] == sign_task_payload(meta["task_payload"], SECRET)

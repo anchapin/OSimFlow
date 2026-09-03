@@ -164,6 +164,69 @@ This profile satisfies the Pod Security Standards **`restricted`** level, so cam
 
 Set `security_context_strict=False` to fall back to the legacy permissive manifest — only for clusters whose admission controllers reject the strict profile (e.g. older admission controllers without PodSecurity support).
 
+### Task-Payload Secret via `secretKeyRef` (issue #1449)
+
+By default the task-payload HMAC shared secret (`OSIMFLOW_TASK_PAYLOAD_SECRET`)
+ships as a **literal env value** in every Job — readable via
+`kubectl get pod -o yaml`, etcd snapshots, and the API-server audit trail.
+The `KubernetesExecutor` supports delivering it from a pre-created
+**Secret** instead, so the raw value never appears in the Job spec; the
+kubelet resolves it at pod admission:
+
+```bash
+# 1. Create the Secret (any 256-bit value; must match the orchestrator's
+#    OSIMFLOW_TASK_PAYLOAD_SECRET so signatures verify):
+kubectl create secret generic osimflow-payload-secret \
+  --from-literal=OSIMFLOW_TASK_PAYLOAD_SECRET="$(openssl rand -hex 32)"
+```
+
+```python
+# 2. Point the executor at it (constructor parameter — no CLI flag,
+#    mirroring security_context_strict from issue #1383):
+from osimflow.executors import KubernetesExecutor
+
+executor = KubernetesExecutor(
+    namespace="osimflow",
+    payload_secret_ref="osimflow-payload-secret",
+)
+```
+
+The emitted Job env entry becomes:
+
+```yaml
+env:
+  - name: OSIMFLOW_TASK_PAYLOAD_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: osimflow-payload-secret
+        key: OSIMFLOW_TASK_PAYLOAD_SECRET
+```
+
+Notes:
+
+- The orchestrator still needs the **same secret value** in its own
+  environment to compute signatures (fetch it from your secret store when
+  launching the campaign — see
+  [Secret Management — Kubernetes Secrets](secret-management.md#kubernetes-secrets)).
+- The signature (`OSIMFLOW_TASK_PAYLOAD_SIG`) still ships as a literal env
+  value — it is public by design.
+- Without `payload_secret_ref` (default) the secret ships as a literal env
+  value exactly as before (backward compat).
+- RBAC: worker pods only need to *consume* the Secret via `secretKeyRef`
+  (no `secrets` API permissions required); restrict `get`/`list` on Secrets
+  in the namespace to operators.
+
+#### Residual threat model
+
+`secretKeyRef` removes the secret from the Job spec, but these actors can
+still read it: anyone with `get`/`list`/`watch` RBAC on Secrets in the
+namespace, anyone with `exec`/`logs-env` access to a running pod, etcd
+snapshot readers **unless** encryption at rest (KMS provider) is enabled,
+and audit-log consumers if Secret reads are audited. The other signing
+executors (AWS/Azure/Google Batch, Docker Swarm) still ship the secret as
+plaintext task env — a documented residual; see the per-substrate table in
+[Nomad Production Guide — Residual threat model](nomad-production.md#residual-threat-model-per-substrate).
+
 ## Resource Allocation
 
 The executor sets both requests and limits to the same values, ensuring the scheduler knows the guaranteed resources while also enforcing an upper bound:
