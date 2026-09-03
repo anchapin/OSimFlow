@@ -247,6 +247,10 @@ All flags are passed to the `osimflow run` subcommand.
 |---|---|---|---|
 | `--aws-batch-queue` | string | `osimflow-batch-queue` | AWS Batch job queue name. |
 | `--aws-batch-job-definition` | string | none | AWS Batch job definition ARN or name. |
+| `--aws-batch-instance-type` | string | none | EC2 instance type scoping the Spot price-ceiling check; when omitted the check uses the minimum price across all instance types with a warning (issue #792). See [cost-estimation.md](cost-estimation.md). |
+| `--aws-batch-submit-rps` | float | `800` | Token-bucket submit rate limit (submissions/second), below AWS Batch's 1000 TPS account limit; lower it on smaller accounts to avoid `ThrottlingException` (issue #1010). |
+| `--aws-batch-spot-price` | float | `$0.0036`/vCPU·hr | Spot rate (USD per vCPU-hour) for cost tracking with `--track-costs` (issue #447). |
+| `--aws-batch-on-demand-price` | float | `$0.0132`/vCPU·hr | On-demand rate (USD per vCPU-hour) for cost tracking (issue #447). See [cost-estimation.md](cost-estimation.md). |
 
 #### Nomad-specific
 
@@ -263,6 +267,12 @@ All flags are passed to the `osimflow run` subcommand.
 | `--shard-count` / `--shard-index` | int | none | Partition sharding controls for multi-coordinator runs. |
 | `--shard-start` / `--shard-end` | int | none | Explicit sample index range sharding controls. |
 | `--nomad-remote-results-only` / `--no-nomad-remote-results-only` | bool | `true` | **Deprecated compatibility toggle.** Default `true` keeps remote-first behavior. `--no-nomad-remote-results-only` temporarily enables legacy local-callable compatibility and is planned for removal after one minor release. |
+| `--nomad-tls` | flag | off | Enable TLS for the Nomad HTTP API; pair with the mTLS flags below (SEC-009). |
+| `--nomad-cert` / `--nomad-key` | path | none | Client certificate / private key (PEM) for mTLS; required when `--nomad-tls` is enabled. |
+| `--nomad-ca-cert` | path | system default | CA bundle (PEM) used to verify the Nomad server certificate. |
+| `--nomad-tls-verify` | bool | `true` | Verify the Nomad TLS certificate; disable only for development with self-signed certificates (`--nomad-tls-verify=false`). |
+| `--nomad-allow-insecure-token` | flag | off | Allow `NOMAD_TOKEN` over non-TLS to a non-local address — fails closed without this flag (SEC-009, issue #1450); dev/test only. |
+| `--nomad-dispatch-job-id` | string | derived from outdir hash | Override the Nomad dispatch job ID in dispatch mode, e.g. to reuse a pre-registered job spec (issue #1316). |
 
 Nomad runtime environment variables:
 
@@ -271,12 +281,41 @@ Nomad runtime environment variables:
   image used by APPLY/KPI/AGGREGATE/PLOTS jobs when worker nodes cannot
   pull the default GHCR image.
 
+TLS/mTLS configuration for production clusters (including the full
+`--nomad-tls` flag walkthrough) is covered in
+[nomad-production.md](nomad-production.md).
+
+#### Kubernetes-specific
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--kubernetes-queue-name` | string | none | Kueue `ClusterQueue` name applied as the `kueue.x-k8s.io/queue-name` label on Jobs; enables Kueue suspend/resume, fair-sharing, and preemption. Inert on clusters without Kueue installed (issue #997). |
+| `--kubernetes-ttl-seconds-after-finished` | int | unset | Native Job `ttlSecondsAfterFinished` — the API server garbage-collects completed/failed Jobs after this many seconds, releasing etcd and pod resources across large sweeps (issue #997). |
+
+See [kubernetes-deployment.md](kubernetes-deployment.md#cli-flags) for the
+full Kubernetes flag table (including `--kubernetes-backoff-limit` and its
+interaction with `--max-sample-retries`).
+
+#### Supply-chain security
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--require-cosign-identity` | string | none | Verify the OpenStudio image signature at campaign init via keyless `cosign verify` (sigstore); the campaign refuses to run when verification fails or the `cosign` binary is unavailable (issue #1385). |
+| `--cosign-oidc-issuer` | string | `https://token.actions.githubusercontent.com` | Expected OIDC issuer for `--require-cosign-identity` keyless verification. |
+| `--container-digest` | string | none | Pin container images by SHA256 digest (`sha256:abc...` or `repo@sha256:abc...`); overrides the mutable tag for all executors (issue #1081). |
+| `--ecr-repository` | string | none | ECR repository URI for the OpenStudio image — pull from your ECR mirror instead of Docker Hub. |
+
+See [container-image-strategy.md](container-image-strategy.md) for the
+signature-verification workflow and
+[air-gapped-deployment.md](air-gapped-deployment.md) for ECR mirroring.
+
 #### BYOS (Bring Your Own Script)
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--custom_apply_script` | path | none | Path to a custom parameter-application script. |
 | `--custom_kpi_extractor` | path | none | Path to a custom KPI extraction script. |
+| `--byos-timeout-s` | float | none (unbounded) | Wall-clock timeout in seconds for the BYOS subprocess and the real OpenStudio CLI simulation subprocess; a timeout kill is non-transient and is not retried (issues #1109, #1534). Default unbounded — bound long runs via the executor's walltime, or set this explicitly. |
 
 #### Advanced
 
@@ -290,6 +329,22 @@ Nomad runtime environment variables:
 | `--bcl-api-key` | string | none | NREL BCL API key. Required when `--validate-measures` is set. Can also be set via `BCL_API_KEY` env var. |
 | `--validate-measures` | flag | off | Validate measure arguments against the BCL taxonomy when discovering BCL measures. Logs warnings for argument name/type deviations. |
 | `--uq-failure-threshold` | string list | none | Failure threshold for probability-of-failure analysis (`--algorithm uq`). Format: `kpi_name=threshold_value` (e.g. `eui=150`). Repeatable for multiple KPIs. |
+| `--redis-url` | string | none | Redis URL for distributed campaign state and cache coordination; each process then uses a pid-private local SQLite file instead of contending on one database (issue #993). See [distributed-cache.md](distributed-cache.md). |
+| `--resource-quota` | JSON | none | Campaign quota limits, e.g. `'{"max_samples": 100, "max_cost_usd": 5000.0, "max_wall_time_min": 240, "max_concurrent_samples": 10}'` — fail-fast at start when a quota is already exceeded; further sample submissions skipped once exhausted (issue #446). |
+| `--alert-rules` | path | none | YAML file of alert rules (`event_type`, `severity`, `message_template`, `condition`) added alongside the built-in rules (issue #438). |
+| `--alert-destinations` | path | none | YAML file of alert destinations (`webhook`, `email`, or `log`); without it alerts are only logged (issue #438). See [runjson-guide.md](runjson-guide.md). |
+| `--observability-flush-interval` | float | `30.0` | Periodic metrics flush interval in seconds for observability backends; `0` disables periodic flush (flush only at campaign end) (issue #1186). See [observability.md](observability.md). |
+| `--offline-bundle` | path | none | Offline bundle directory created by `scripts/bundle_offline.py` (contains `pip/`, `docker/`, and `weather/` subdirectories); required when `--offline` is set. See [air-gapped-deployment.md](air-gapped-deployment.md). |
+| `--no-tui` | flag | off | Disable the `rich` TUI (auto-active when rich ≥ 13 is installed and stdout is a TTY); pass when piping output or in CI (issue #1221). |
+
+#### Sampling & algorithms
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--uq-method` | choice | `latin_hypercube` | Uncertainty-Quantification sampling method — `latin_hypercube` or `monte_carlo` — used when `--algorithm uq` is set (issue #530). |
+| `--uq-n-samples` | int | `--n_samples` | Number of Monte Carlo samples for UQ analysis, when a different sample count than `--n_samples` is wanted; used when `--algorithm uq` is set (issue #530). |
+| `--nsga2-reference-points` | string | none | Reference (aspiration) points for R-NSGA-II as comma-separated fractions on the Pareto front, e.g. `0.25,0.5,0.75` for 2 objectives; only used when `--algorithm nsga2` (issue #529). |
+| `--nsga2-reference-directions` | choice | none | R-NSGA-II reference-direction strategy: `das-dennis` (structured points), `energy` (Riesz s-Energy well-spaced), `wedge`, or `incremental`; only used when `--algorithm nsga2` (issue #529). |
 
 ### 4.2 variables.yml Schema
 
@@ -1290,13 +1345,13 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 
 ### CLI Reference
 
-> **`osimflow run --help` is authoritative.** AGENTS.md §4 ("Build & run
-> commands" → "CLI flags") documents the **complete 100+ flag surface**;
-> this section summarises the most-used flags by group. For any flag not
-> shown here — including the full `--azure-*`, `--google-*`,
-> `--kubernetes-*`, `--docker-swarm-*`, `--pbs-*`, `--dask-*`,
-> `--nomad-*`, `--shard-*`, `--s3-artifact-*`, and advanced Slurm /
-> AWS-Batch flags — run `osimflow run --help` or consult AGENTS.md §4.
+> **`osimflow run --help` is authoritative.** [§4.1 CLI Flags](#41-cli-flags)
+> documents the complete run-flag surface by group — including the
+> Kubernetes, supply-chain-security, and sampling & algorithm tables;
+> this section summarises the most-used flags, documents
+> subcommand-specific flags, and enumerates every subcommand. For any
+> flag not shown inline, consult [§4.1](#41-cli-flags) or the linked
+> specialist guide.
 
 #### Executor selection
 
@@ -1346,6 +1401,11 @@ The remaining four DAG steps do **not** consume `--max-sample-retries`:
 | `--algorithm NAME` | Sampling strategy selector dispatched through `AlgorithmRegistry`. Built-ins: `lhs` (default), `sobol`, `halton`, `random_sampling`, `repeat_all`, `full_factorial`, `grid`, `morris`, `fast99`, `diag`, `calibration`, `de`, `da`, `ga`, `nsga2`, `spea2`, `pso`, `rgenoud`, `gaisl`, `sequential_search`, `uq`, `custom`. Add new strategies via the plug-in framework (issue #121). |
 | `--max-generations INT` | Max DAG generations (default: 1 for single-shot LHS; raise for iterative algorithms — issue #122). |
 
+UQ (`--uq-method`, `--uq-n-samples`, `--uq-failure-threshold`) and
+R-NSGA-II (`--nsga2-reference-points`, `--nsga2-reference-directions`)
+flags are documented in
+[§4.1 Sampling & algorithms](#41-cli-flags).
+
 #### Common Slurm flags
 
 | Flag | Description |
@@ -1369,10 +1429,14 @@ See [deployment/slurm.md](deployment/slurm.md) for the full Slurm guide.
 | `--aws-batch-max-retries INT` | Max Spot-interruption retries (default: 3). |
 
 See [deployment/aws-batch.md](deployment/aws-batch.md) and
-[aws-batch-terraform.md](aws-batch-terraform.md) for full setup. Other
+[aws-batch-terraform.md](aws-batch-terraform.md) for full setup. The
+remaining AWS Batch flags (`--aws-batch-instance-type`,
+`--aws-batch-submit-rps`, and the `--track-costs` rates
+`--aws-batch-spot-price` / `--aws-batch-on-demand-price`) and the other
 executors' flag groups (`--azure-*`, `--google-*`, `--kubernetes-*`,
 `--docker-swarm-*`, `--pbs-*`, `--dask-*`, `--nomad-*`) are documented in
-AGENTS.md §4; per-executor quick-starts are in [§5](#5-running-campaigns).
+[§4.1 CLI Flags](#41-cli-flags); per-executor quick-starts are in
+[§5](#5-running-campaigns).
 
 #### Observability & integration
 
@@ -1384,6 +1448,10 @@ AGENTS.md §4; per-executor quick-starts are in [§5](#5-running-campaigns).
 | `--otel-endpoint URL` | OpenTelemetry OTLP endpoint (when `--observability opentelemetry`). |
 | `--mlflow_tracking_uri URL` | Optional MLflow tracking URI (requires `pip install osimflow[mlflow]`). |
 | `--log-aggregation-url URL` | CloudWatch Logs aggregation URL for distributed log collection (issue #340). |
+
+Alerting (`--alert-rules`, `--alert-destinations`) and the flush interval
+(`--observability-flush-interval`) are documented in
+[§4.1 Advanced](#41-cli-flags).
 
 See [observability.md](observability.md) for backend configuration.
 
@@ -1398,6 +1466,9 @@ See [observability.md](observability.md) for backend configuration.
 | `--cost-on-demand-price USD` / `--cost-spot-price USD` | Price per vCPU-hour for cost estimation. |
 | `--s3-artifact-bucket NAME` | Centralised S3 artifact bucket with optional presigned URLs (issue #601). |
 | `--s3-artifact-endpoint URL` | Custom S3-compatible endpoint for the artifact bucket; same `https://` rule as `--result-storage-endpoint`. |
+| `--s3-artifact-prefix PREFIX` | Prefix within the artifact bucket for this campaign (e.g. `campaign-123`); required when `--s3-artifact-bucket` is set (issue #601). |
+| `--s3-artifact-region REGION` | AWS region for the artifact bucket; omitted → region from the IAM role or default credential chain (issue #601). |
+| `--s3-artifact-presigned-url-expiration INT` | Presigned-URL expiration in seconds (default 3600; min 60, max 43200) — remote executor nodes must download artifacts within this window (issue #601). |
 
 **HTTPS-only storage endpoints:** `--result-storage-endpoint` and
 `--s3-artifact-endpoint` must use `https://` for any non-loopback host
@@ -1480,6 +1551,8 @@ for the endpoint reference and `osimflow serve --help` for the full list.
 | `--host` | Bind address (default: `127.0.0.1`). |
 | `--port` | Port number (default: `8000`). |
 | `--read-write` | Enable campaign start/stop and SSE event streaming (issue #143). |
+| `--enable-writes` | Enable write endpoints (POST/PUT/DELETE); default: read-only. |
+| `--registry PATH` | Campaign registry database path (default: `~/.osimflow/registry.db`). |
 | `--ui` | Serve the Streamlit dashboard UI. |
 | `--editor` | Enable the interactive variable designer. |
 | `--dashboard` | Enable the campaign comparison dashboard. |
@@ -1493,17 +1566,68 @@ for the endpoint reference and `osimflow serve --help` for the full list.
 | `--tls-cert` | Path to PEM-encoded TLS certificate (SEC-004; requires `--tls-key`). |
 | `--tls-key` | Path to PEM-encoded TLS private key (SEC-004; requires `--tls-cert`). |
 
-#### Other subcommands
+#### Subcommand reference
+
+OSimFlow registers 23 subcommands. One-line descriptions below; follow the
+cross-links for depth.
 
 | Subcommand | Purpose |
 |---|---|
-| `osimflow health` | System health checks (Python, SQLite, OpenStudio/Docker, disk, network). Issue #411. |
-| `osimflow import-osa` / `osimflow export` | OSA analysis.json ↔ campaign config conversion. |
-| `osimflow list` / `show` / `compare` / `status` / `download` | Multi-campaign registry and status operations. Issue #266. |
-| `osimflow backup` / `restore` | Registry backup / restore / import. Issue #440. |
-| `osimflow mark-for-reanalysis` / `merge` | Data-point lifecycle operations. Issues #418, #419, #420. |
-| `osimflow measure` / `list-measures` | Measure discovery and BCL browsing. Issues #532, #580. |
-| `osimflow query-results` / `export-results` / `aggregate-runs` | Result querying, export, and cross-campaign aggregation. Issues #585, #588. |
+| `osimflow run` | Run a parametric campaign — the main command. See [§3 Quick Start](#3-quick-start) and [§5 Running Campaigns](#5-running-campaigns). |
+| `osimflow warm-cache` | Pre-populate the simulation cache with `--n_warm` pilot samples (default 10) before a campaign; accepts the full `run` flag surface. See [§7.5 Cache and Resume Behavior](#75-cache-and-resume-behavior). |
+| `osimflow import-osa` | Import a PAT/OpenStudio Analysis `.osa` or `analysis.json` into campaign config. See [§7.7](#77-importing-from-openstudio-analysis-spreadsheet-osa) and [pat-migration.md](pat-migration.md). |
+| `osimflow export` | Export campaign state to an external format (`--target pat`) with `--variables` / `--n_samples` / `--algorithm`. |
+| `osimflow serve` | Start the REST API server (flags above; requires `pip install osimflow[api]`). See [api.md](api.md). |
+| `osimflow dashboard` | Launch a local ephemeral dashboard for campaign results (`--port`, default 8000). |
+| `osimflow list` | List registered campaigns (`--status`, `--limit`, `--format`, `--project`, `--registry`). Issue #266. |
+| `osimflow show` | Show detailed info for one campaign. Issue #266. |
+| `osimflow compare` | Compare campaigns side by side — from the registry or arbitrary `--outdirs` with optional `--labels`; `--export` writes a combined CSV. |
+| `osimflow aggregate-runs` | Aggregate KPI results from two or more campaign runs into a combined dataset (issue #588). |
+| `osimflow status` | Show detailed status of a campaign (reads `run.json`). Issue #266. |
+| `osimflow download` | Download results from a completed campaign (`--output-dir`, `--include-intermediates`). Issue #266. |
+| `osimflow cancel` | Request graceful cancellation of a running campaign — the final `run.json` records `"cancelled"`. See [runjson-guide.md](runjson-guide.md) §2.6 for the lifecycle status fields. |
+| `osimflow pause` | Request graceful pause of a running campaign (issue #444) — `run.json` records `paused_at`. |
+| `osimflow resume` | Resume a paused campaign (issue #444). |
+| `osimflow mark-for-reanalysis` | Mark a completed/failed sample for re-running (`--priority`, issue #420). |
+| `osimflow merge` | Merge multiple data points into a single target (`--source-ids`, `--target-id`, `--target-work-dir`; issue #418). |
+| `osimflow backup` | Create a backup of the campaign registry (`--output`, `--registry`; issue #440). |
+| `osimflow restore` | Restore/import the campaign registry from a backup (`--merge` merges into the existing registry instead of replacing; issue #440). |
+| `osimflow health` | Verify system health before starting a campaign (see [§8 Health Checks](#8-health-checks)). Issue #411. |
+| `osimflow measure` | Discover and inspect measures in a template package: `osimflow measure list --template <pkg>` (issues #532, #580). See [packaging-measures.md](packaging-measures.md). |
+| `osimflow query-results` | Query aggregated results across campaigns (`--campaign-ids` or `--outdirs`, `--filter`, `--page` / `--per-page`; issue #585). |
+| `osimflow export-results` | Export aggregated results to CSV or JSON (`--include-failed` / `--no-include-failed`; issue #585). |
+
+#### Subcommand-specific flags
+
+Flags that only exist on non-`run` subcommands (the `run`-flag surface is
+in [§4.1](#41-cli-flags); shared flags like `--outdir`, `--log_level`, or
+`--openstudio_version` are not repeated here):
+
+| Flag | Subcommand(s) | Description |
+|---|---|---|
+| `--registry PATH` | `list`, `show`, `compare`, `backup`, `restore`, `serve` | Campaign registry database path (default `~/.osimflow/registry.db`). |
+| `--status STATUS` | `list` | Filter listed campaigns by status (`running`, `success`, `failure`). |
+| `--limit INT` | `list` | Maximum number of campaigns to show (default 50). |
+| `--format FMT` | `list`, `measure`, `query-results`, `export-results` | Output format (default `table`; JSON where supported). |
+| `--outdirs PATH ...` | `compare`, `query-results` | Two or more campaign output directories to operate on, bypassing the registry. |
+| `--labels LIST` | `compare`, `aggregate-runs` | Optional display labels for each path/campaign (must match the count). |
+| `--export PATH` | `compare` | Export combined results to a CSV path. |
+| `--campaign-ids IDS` | `query-results`, `export-results` | Comma-separated campaign IDs to query (default: all campaigns in the current directory). |
+| `--filter EXPR` | `query-results`, `export-results` | Filter expression in `column op value` form, e.g. `eui > 100; status == ok`; supports `>`, `<`, `>=`, `<=`, `==`, `!=`. |
+| `--page INT` / `--per-page INT` | `query-results` | Pagination (default 1 / 100; per-page max 1000). |
+| `--include-failed` / `--no-include-failed` | `export-results` | Include (default) or exclude failed simulations in the export. |
+| `--output PATH` | `import-osa`, `aggregate-runs`, `backup`, `export-results` | Output file path for the produced artifact. |
+| `--output-dir PATH` | `download` | Destination directory (default `<outdir>-downloads/<campaign_id>`). |
+| `--include-intermediates` | `download` | Also download per-sample `.osw`/`.osm` and `eplusout.sql` files. |
+| `--priority INT` | `mark-for-reanalysis` | Priority of the new reanalysis sample (default 0). |
+| `--source-ids IDS` | `merge` | Source sample IDs to merge (at least one required). |
+| `--target-id ID` | `merge` | Target sample ID for the merged result. |
+| `--target-work-dir PATH` | `merge` | Path to the target sample's work directory. |
+| `--merge` | `restore` | Merge backup records into the existing registry instead of replacing all records (issue #440). |
+| `--target FMT` | `export` | Export format (currently only `pat` for PAT-compatible `analysis.json`). |
+| `--variables PATH` | `export` | Path to `variables.yml` to export. |
+| `--n_warm INT` | `warm-cache` | Number of pilot samples to run for cache warming (default 10). |
+| `--enable-writes` | `serve` | Enable write endpoints (POST/PUT/DELETE); default: read-only. |
 
 ### Documentation Index
 

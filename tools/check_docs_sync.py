@@ -12,6 +12,13 @@ repo's argparse surfaces (``osimflow/__main__.py`` first and foremost),
 or be explicitly exempted in ``FOREIGN_CLI_FLAGS`` below (flags of other
 tools shown in examples — sbatch, docker, git, repo shell scripts …).
 
+Issue #1547: the reverse direction is also checked. Every ``--flag``
+registered in ``osimflow/__main__.py`` must have user-guide coverage
+(documented inline in docs/user-guide.md §4.1/§10 or pointer-linked to
+the specialist guide that covers it), and every registered subcommand
+must be mentioned in the user guide — mirroring how the AGENTS.md
+contract checker keeps AGENTS.md complete.
+
 A file can opt out with a `<!-- docs-skip -->` HTML comment.
 
 Run locally:
@@ -184,6 +191,87 @@ def _collect_known_cli_flags() -> set[str]:
 # bare filenames like `OSimFlow.md`. External URLs (http/https) are excluded.
 MARKDOWN_LINK_RE = re.compile(r"\[(?:[^\]]*)\]\(([^)#]+\.md(?:#[^\)]*)?)\)")
 
+# ---------------------------------------------------------------------------
+# User-guide CLI coverage (issue #1547)
+# ---------------------------------------------------------------------------
+
+# Every --flag / subcommand registered in osimflow/__main__.py must appear
+# in docs/user-guide.md (inline documentation, or on a line that pointer-
+# links the specialist guide covering it — both count as "mentioned").
+# Explicit exemption lists for justified exceptions; every entry needs a
+# reason string. Keep these empty if at all possible.
+USER_GUIDE_FLAG_EXEMPTIONS: dict[str, str] = {}
+USER_GUIDE_SUBCOMMAND_EXEMPTIONS: dict[str, str] = {}
+
+USER_GUIDE_REL_PATH = Path("docs") / "user-guide.md"
+MAIN_MODULE_REL_PATH = Path("osimflow") / "__main__.py"
+
+# Matches the subcommand name at the start of an add_parser( chunk.
+_ADD_PARSER_NAME_AT_START_RE = re.compile(r'\s*"([a-z][a-z0-9-]*)"')
+
+
+def _collect_main_cli_flags(main_src: str) -> set[str]:
+    """Explicitly-declared ``--flags`` in ``osimflow/__main__.py`` source
+    text (the argparse surface built by ``_build_parser``). Synthesized
+    ``--no-*`` negatives of ``BooleanOptionalAction`` are not required —
+    covering the positive spelling in the user guide is sufficient.
+    """
+    flags: set[str] = set()
+    for chunk in main_src.split("add_argument(")[1:]:
+        m = _ADD_ARGUMENT_FLAG_AT_START_RE.match(chunk)
+        if m:
+            flags.add(m.group(1))
+    return flags
+
+
+def _collect_main_subcommands(main_src: str) -> set[str]:
+    """Subcommand names from every ``add_parser("name", ...)`` call."""
+    names: set[str] = set()
+    for chunk in main_src.split("add_parser(")[1:]:
+        m = _ADD_PARSER_NAME_AT_START_RE.match(chunk)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def _check_user_guide_flag_coverage(main_flags: set[str], guide_text: str) -> list[str]:
+    """Issue #1547: every ``__main__.py`` flag must be mentioned in the
+    user guide — documented inline (§4.1/§10) or pointer-linked to the
+    specialist guide that covers it. Both are a textual mention, which
+    keeps the rule simple and predictable."""
+    errors: list[str] = []
+    for flag in sorted(main_flags):
+        if flag in USER_GUIDE_FLAG_EXEMPTIONS:
+            continue
+        if flag not in guide_text:
+            errors.append(
+                f"flag `{flag}` is registered in osimflow/__main__.py but has "
+                f"no user-guide coverage — document it in user-guide.md §4.1 "
+                f"or §10, or pointer-link the specialist guide that covers "
+                f"it (or add a justified USER_GUIDE_FLAG_EXEMPTIONS entry in "
+                f"tools/check_docs_sync.py)."
+            )
+    return errors
+
+
+def _check_user_guide_subcommand_coverage(subcommands: set[str], guide_text: str) -> list[str]:
+    """Issue #1547: every registered subcommand must be mentioned in the
+    user guide as an ``osimflow <name>`` invocation (the §10 subcommand
+    reference table satisfies this by construction)."""
+    errors: list[str] = []
+    for name in sorted(subcommands):
+        if name in USER_GUIDE_SUBCOMMAND_EXEMPTIONS:
+            continue
+        if not re.search(r"osimflow\s+" + re.escape(name) + r"(?![\w-])", guide_text):
+            errors.append(
+                f"subcommand `{name}` is registered in osimflow/__main__.py "
+                f"but is not mentioned in the user guide — add it to the §10 "
+                f"subcommand reference (or add a justified "
+                f"USER_GUIDE_SUBCOMMAND_EXEMPTIONS entry in "
+                f"tools/check_docs_sync.py)."
+            )
+    return errors
+
 
 def _is_documented_pattern(token: str) -> bool:
     """True if `token` is a documented file type we cannot resolve on disk
@@ -349,6 +437,25 @@ def main() -> int:
             files_checked += 1
         errors.extend(file_errors)
 
+    # User-guide CLI coverage (issue #1547): every __main__.py flag and
+    # subcommand must be covered by docs/user-guide.md.
+    user_guide = REPO_ROOT / USER_GUIDE_REL_PATH
+    main_module = REPO_ROOT / MAIN_MODULE_REL_PATH
+    coverage_summary = ""
+    if user_guide.is_file() and main_module.is_file():
+        main_src = main_module.read_text()
+        guide_text = user_guide.read_text()
+        main_flags = _collect_main_cli_flags(main_src)
+        subcommands = _collect_main_subcommands(main_src)
+        rel_guide = user_guide.relative_to(REPO_ROOT)
+        for err in _check_user_guide_flag_coverage(main_flags, guide_text):
+            errors.append((rel_guide, err))
+        for err in _check_user_guide_subcommand_coverage(subcommands, guide_text):
+            errors.append((rel_guide, err))
+        coverage_summary = (
+            f"; user-guide CLI coverage: {len(main_flags)} flags, {len(subcommands)} subcommands"
+        )
+
     if errors:
         print(f"docs/ sync check FAILED ({len(errors)} drift):", file=sys.stderr)
         for path, err in errors:
@@ -360,7 +467,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"docs/ sync check OK ({files_checked} files checked)")
+    print(f"docs/ sync check OK ({files_checked} files checked{coverage_summary})")
     return 0
 
 
