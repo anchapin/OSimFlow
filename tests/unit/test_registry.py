@@ -4,14 +4,31 @@ Covers: CampaignRegistry CRUD, CampaignRecord serialization, CLI
 subcommands, and auto-registration in Campaign.run().
 """
 
-import time
-
 import pytest
 
 from osimflow.campaign import Campaign
 from osimflow.config import CampaignConfig
 from osimflow.executors import LocalExecutor
 from osimflow.registry import CampaignRecord, CampaignRegistry
+
+
+class _StepClock:
+    """Deterministic ``time``-module stand-in (issue #1544, #1481 clock pattern).
+
+    Rebinds the ``time`` name inside :mod:`osimflow.registry` so each
+    ``register()`` gets a strictly increasing ``created_at`` — the
+    newest-first listing order is then guaranteed without a wall-clock
+    sleep between registrations (no sub-second resolution assumed).
+    """
+
+    def __init__(self, start: float = 1000.0, step: float = 1.0) -> None:
+        self._now = float(start)
+        self._step = float(step)
+
+    def time(self) -> float:
+        current = self._now
+        self._now += self._step
+        return current
 
 
 @pytest.fixture
@@ -55,9 +72,12 @@ class TestCampaignRegistry:
         campaigns = registry.list_campaigns()
         assert campaigns == []
 
-    def test_list_campaigns_ordered_newest_first(self, registry: CampaignRegistry) -> None:
+    def test_list_campaigns_ordered_newest_first(
+        self, registry: CampaignRegistry, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _StepClock()
+        monkeypatch.setattr("osimflow.registry.time", clock)
         registry.register("campaign-old", outdir="/tmp/old")
-        time.sleep(0.01)
         registry.register("campaign-new", outdir="/tmp/new")
         campaigns = registry.list_campaigns()
         assert len(campaigns) == 2

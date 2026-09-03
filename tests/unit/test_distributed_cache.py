@@ -728,9 +728,12 @@ class TestDistributedCacheAutoRecovery:
         mock_client_instance.aclose = AsyncMock()
 
         sleep_delays: list[float] = []
+        two_sleeps = threading.Event()
 
         async def mock_sleep(delay: float) -> None:
             sleep_delays.append(delay)
+            if len(sleep_delays) >= 2:
+                two_sleeps.set()
 
         mock_ra = MagicMock()
         mock_ra.from_url.return_value = mock_client_instance
@@ -738,9 +741,13 @@ class TestDistributedCacheAutoRecovery:
         with patch("osimflow.distributed_cache._get_redis_asyncio", return_value=mock_ra):
             with patch("asyncio.sleep", mock_sleep):
                 dist_cache.invalidate_step("STEP_A")
-                import time
-
-                time.sleep(0.3)
+                # Deterministic per issue #1544: synchronize on the mocked
+                # asyncio.sleep calls instead of racing the subscriber thread
+                # with a wall-clock sleep. The timeout is a failure bound,
+                # not a timing assumption.
+                assert two_sleeps.wait(timeout=10.0), (
+                    "subscriber never reached the second reconnect backoff"
+                )
                 dist_cache.close()
 
         assert len(sleep_delays) >= 2

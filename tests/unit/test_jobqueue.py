@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from osimflow.jobqueue import JobQueue
+
+
+class _StepClock:
+    """Deterministic ``time``-module stand-in (issue #1544, #1481 clock pattern).
+
+    Rebinds the ``time`` name inside :mod:`osimflow.jobqueue` (via
+    ``monkeypatch.setattr("osimflow.jobqueue.time", ...)``) so every
+    ``time.time()`` call returns a strictly increasing value. FIFO
+    ordering by ``created_at`` then needs no wall-clock sleep between
+    enqueues — sub-second timestamp resolution is never assumed.
+    """
+
+    def __init__(self, start: float = 1000.0, step: float = 1.0) -> None:
+        self._now = float(start)
+        self._step = float(step)
+
+    def time(self) -> float:
+        current = self._now
+        self._now += self._step
+        return current
 
 
 @pytest.fixture
@@ -93,10 +111,9 @@ class TestDequeue:
         in_progress = q.jobs_by_state("in_progress")
         assert len(in_progress) == 1
 
-    def test_fifo_ordering(self, q):
+    def test_fifo_ordering(self, q, monkeypatch):
+        monkeypatch.setattr("osimflow.jobqueue.time", _StepClock())
         q.enqueue("job_a", {"i": 0})
-        # Ensure different timestamps (sub-second).
-        time.sleep(0.01)
         q.enqueue("job_b", {"i": 1})
         rec = q.dequeue()
         assert rec["id"] == "job_a"
@@ -311,20 +328,22 @@ class TestPriority:
         assert rec["priority"] == 0
 
     def test_higher_priority_dequeued_first(self, q):
-        """Jobs with higher priority values are dequeued first."""
+        """Jobs with higher priority values are dequeued first.
+
+        Priorities are distinct, so ordering is fully determined by the
+        sort key — no ``created_at`` separation (and no sleep) needed.
+        """
         q.enqueue("low", {"step": "SIM"}, priority=1)
-        time.sleep(0.01)
         q.enqueue("high", {"step": "SIM"}, priority=10)
-        time.sleep(0.01)
         q.enqueue("medium", {"step": "SIM"}, priority=5)
         rec = q.dequeue()
         assert rec is not None
         assert rec["id"] == "high"
 
-    def test_equal_priority_fifo(self, q):
+    def test_equal_priority_fifo(self, q, monkeypatch):
         """Jobs with equal priority follow FIFO ordering by created_at."""
+        monkeypatch.setattr("osimflow.jobqueue.time", _StepClock())
         q.enqueue("first", {"step": "SIM"}, priority=5)
-        time.sleep(0.01)
         q.enqueue("second", {"step": "SIM"}, priority=5)
         rec = q.dequeue()
         assert rec is not None

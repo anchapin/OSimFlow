@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import threading
 from pathlib import Path
 
 import pytest
@@ -313,13 +313,30 @@ class TestResultStorageUploader:
             uploader.close()
 
     def test_upload_queue_applies_backpressure_when_full(self, tmp_path: Path) -> None:
+        """A full queue blocks the producer until the worker drains (issue #1544).
+
+        Deterministic redesign: instead of a storage backend that really
+        sleeps 0.2s per upload and an elapsed-time assertion (``>= 0.15s``),
+        the backend blocks on a ``threading.Event`` and the test proves
+        ordering — the third ``upload_file`` call cannot complete while
+        the worker is pinned and the queue is full, and completes promptly
+        once space is released. Event waits carry failure-bound timeouts,
+        not timing assumptions.
+        """
         from osimflow.storage import ResultStorage, ResultStorageUploader
 
-        class SlowStorage(ResultStorage):
-            name = "slow"
+        first_upload_started = threading.Event()
+        release_first_upload = threading.Event()
+
+        class BlockingStorage(ResultStorage):
+            name = "blocking"
 
             def upload_file(self, local_path: Path, remote_path: str) -> None:
-                time.sleep(0.2)
+                if not first_upload_started.is_set():
+                    first_upload_started.set()
+                    assert release_first_upload.wait(timeout=10.0), (
+                        "first upload was never released"
+                    )
 
             def download_file(self, remote_path: str, local_path: Path) -> None:
                 return None
@@ -341,20 +358,38 @@ class TestResultStorageUploader:
             file_path.write_text("x")
 
         uploader = ResultStorageUploader(
-            SlowStorage(),
+            BlockingStorage(),
             max_queue_size=1,
             worker_count=1,
             max_retries=0,
             retry_backoff_s=0.0,
         )
-        t0 = time.monotonic()
+        # File 0: taken by the worker, which blocks inside upload_file.
         uploader.upload_file(files[0], "remote/0.txt")
+        assert first_upload_started.wait(timeout=10.0)
+        # File 1: fills the queue to max_queue_size=1 (worker still busy).
         uploader.upload_file(files[1], "remote/1.txt")
-        uploader.upload_file(files[2], "remote/2.txt")
-        enqueue_elapsed = time.monotonic() - t0
-        uploader.close()
 
-        assert enqueue_elapsed >= 0.15
+        # File 2: producer must block on queue.put — it cannot finish while
+        # the worker is pinned on file 0 and the queue holds file 1.
+        third_enqueued = threading.Event()
+
+        def _enqueue_third() -> None:
+            uploader.upload_file(files[2], "remote/2.txt")
+            third_enqueued.set()
+
+        producer = threading.Thread(target=_enqueue_third, daemon=True)
+        producer.start()
+        assert not third_enqueued.is_set(), (
+            "producer must not complete enqueue while the queue is full"
+        )
+
+        # Releasing the worker frees a queue slot; the producer unblocks.
+        release_first_upload.set()
+        assert third_enqueued.wait(timeout=10.0), "producer never completed after the queue drained"
+        uploader.close()
+        producer.join(timeout=10.0)
+        assert not producer.is_alive()
 
 
 class TestCampaignConfigStorageFields:

@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -103,21 +104,35 @@ class TestCheckContainerHealth:
 
 class TestHeartbeatWriterThread:
     def test_writes_on_start_and_exit(self, sim_out: Path) -> None:
+        """First beat is awaited via a hook event, not a timed wait (issue #1544)."""
         import osimflow.work as w
 
-        original = w.HEARTBEAT_INTERVAL_S
+        original_interval = w.HEARTBEAT_INTERVAL_S
+        original_write = w._write_heartbeat
         w.HEARTBEAT_INTERVAL_S = 0.05  # 50ms — write immediately on start
+        first_beat = threading.Event()
+
+        def _event_write(out: Path, pid: int, sample_id: str, version: str) -> None:
+            original_write(out, pid, sample_id, version)
+            first_beat.set()
+
         stop = threading.Event()
-        t = threading.Thread(
-            target=_heartbeat_writer,
-            args=(sim_out, "s", "v", stop),
-            daemon=True,
-        )
-        t.start()
-        stop.wait(timeout=1.0)  # Wait long enough for one beat
-        stop.set()
-        t.join(timeout=1.0)
-        w.HEARTBEAT_INTERVAL_S = original
+        try:
+            with patch.object(w, "_write_heartbeat", _event_write):
+                t = threading.Thread(
+                    target=_heartbeat_writer,
+                    args=(sim_out, "s", "v", stop),
+                    daemon=True,
+                )
+                t.start()
+                assert first_beat.wait(timeout=10.0), (
+                    "heartbeat writer never produced its first beat"
+                )
+                stop.set()
+                t.join(timeout=10.0)
+                assert not t.is_alive()
+        finally:
+            w.HEARTBEAT_INTERVAL_S = original_interval
         hb = sim_out / HEARTBEAT_FILENAME
         assert hb.is_file()
         data = json.loads(hb.read_text(encoding="utf-8"))
@@ -125,23 +140,46 @@ class TestHeartbeatWriterThread:
         assert data["version"] == "v"
 
     def test_writes_multiple_beats(self, sim_out: Path) -> None:
+        """The writer thread produces >=3 beats — counted, not timed (issue #1544).
+
+        Deterministic synchronization: wrap ``_write_heartbeat`` with a
+        counting hook and wait on an event set at the 3rd beat, with the
+        interval at 0 so the loop beats as fast as it can write. No
+        wall-clock sleep and no "~N beats in M seconds" timing assumption.
+        """
         import osimflow.work as w
 
-        original = w.HEARTBEAT_INTERVAL_S
-        w.HEARTBEAT_INTERVAL_S = 0.05  # 50ms
+        original_interval = w.HEARTBEAT_INTERVAL_S
+        original_write = w._write_heartbeat
+        w.HEARTBEAT_INTERVAL_S = 0
+        writes = 0
+        third_beat = threading.Event()
+
+        def _counting_write(out: Path, pid: int, sample_id: str, version: str) -> None:
+            nonlocal writes
+            writes += 1
+            original_write(out, pid, sample_id, version)
+            if writes >= 3:
+                third_beat.set()
+
         stop = threading.Event()
-        t = threading.Thread(
-            target=_heartbeat_writer,
-            args=(sim_out, "s", "v", stop),
-            daemon=True,
-        )
-        t.start()
-        time.sleep(0.18)  # ~3 beats
-        stop.set()
-        t.join(timeout=1.0)
-        w.HEARTBEAT_INTERVAL_S = original
+        try:
+            with patch.object(w, "_write_heartbeat", _counting_write):
+                t = threading.Thread(
+                    target=_heartbeat_writer,
+                    args=(sim_out, "s", "v", stop),
+                    daemon=True,
+                )
+                t.start()
+                assert third_beat.wait(timeout=10.0), "heartbeat writer never produced a 3rd beat"
+                stop.set()
+                t.join(timeout=10.0)
+                assert not t.is_alive()
+        finally:
+            w.HEARTBEAT_INTERVAL_S = original_interval
         data = json.loads((sim_out / HEARTBEAT_FILENAME).read_text(encoding="utf-8"))
         assert data["sample_id"] == "s"
+        assert writes >= 3
 
 
 class TestSimulationHealthDataclass:

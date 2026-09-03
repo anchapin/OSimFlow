@@ -385,12 +385,13 @@ class TestPendingAlertRetryQueue:
         manager.notify("campaign.completed", {"i": 1})
         first_failed_at = manager._alert_history[0].failed_at
 
-        time.sleep(0.01)
         manager.notify("campaign.completed", {"i": 2})
 
         # Both the original and the new failure remain queued.
         assert len(manager._alert_history) == 2
         retained = [e for e in manager._alert_history if e.alert.message == "alert 1"][0]
+        # No wall-clock sleep needed (issue #1544): ``failed_at`` is only
+        # ever refreshed forward, so ``>=`` holds for equal-or-later stamps.
         assert retained.failed_at >= first_failed_at
         assert "destination down" in retained.error
 
