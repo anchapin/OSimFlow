@@ -303,8 +303,10 @@ make test-fast      # contract only, no coverage gate (pre-commit mirror)
 CI runs `make test-cov` (the CI `test` job calls the Makefile
 target; pytest flags are single-sourced in the Makefile —
 `PYTEST_CI_FLAGS` / `PYTEST_COV_FLAGS`, issue #1476) and requires
-82% coverage — gated by
-`pyproject.toml [tool.pytest.ini_options]`. CI jobs in
+82% coverage — gated by the Makefile's
+`PYTEST_COV_FLAGS` (`--cov-fail-under=82`, composed only into
+`make test-cov`); `pyproject.toml [tool.pytest.ini_options]`
+holds only non-coverage pytest options. CI jobs in
 `.github/workflows/ci.yml`: `lint` (ruff check + format --check),
 `typecheck` (mypy --strict), `test` (pytest + 82%), `contract`,
 `security` (pip-audit + gitleaks), `mlflow-real` (real MLflow
