@@ -7,7 +7,15 @@ from them before the full __init__.py is initialized.
 
 from __future__ import annotations
 
-__all__ = ["BaseExecutor", "Handle", "PollingHandle", "PollOutcome", "SubmitRequest"]
+__all__ = [
+    "BaseExecutor",
+    "Handle",
+    "PollingHandle",
+    "PollOutcome",
+    "SubmitRequest",
+    "poll_until_terminal",
+    "retry_with_backoff",
+]
 
 import abc
 import dataclasses
@@ -87,6 +95,173 @@ class PollOutcome(enum.Enum):
     INDETERMINATE = "indeterminate"
 
 
+def poll_until_terminal[T](  # noqa: PLR0912 — one branch per substrate seam (probe error / terminal / transient / deadline / grow order)
+    probe: Callable[[], T],
+    *,
+    is_terminal: Callable[[T], bool],
+    timeout: float | None,
+    timeout_message: Callable[[float], str],
+    poll_interval_s: float,
+    max_poll_interval_s: float,
+    on_pending: Callable[[T, float, float], None] | None = None,
+    tolerate_probe_errors: bool = False,
+    on_probe_error: Callable[[Exception, float], None] | None = None,
+    is_transient: Callable[[T], bool] | None = None,
+    on_transient: Callable[[T, float], None] | None = None,
+    sleep_for: Callable[[float, float | None], float] | None = None,
+    next_delay: Callable[[float], float] | None = None,
+    grow_before_sleep: bool = False,
+) -> T:
+    """Shared terminal-poll loop for every polling executor (issue #1540).
+
+    This is the single owner of the poll skeleton that used to be
+    hand-rolled (with per-substrate drift) inside the AWS Batch, Azure
+    Batch, Google Batch, Kubernetes, Docker Swarm, Nomad, and PBS
+    executors' ``_wait_for_terminal`` methods:
+
+    * ``time.monotonic`` deadline tracking — remaining time is
+      recomputed every iteration and expiry raises ``TimeoutError``
+      built from ``timeout_message(elapsed)``;
+    * ``min(delay, remaining)`` clamping so a single sleep never
+      overshoots the caller-supplied deadline (a custom ``sleep_for``
+      takes over the clamping duty entirely);
+    * capped exponential backoff — ``min(delay * 2,
+      max_poll_interval_s)`` by default, with two extension seams for
+      Nomad's adaptive curve (``next_delay``) and phased sleep
+      (``sleep_for``);
+    * ``grow_before_sleep`` selects the two historic orderings: the
+      Azure / Google / Kubernetes / Docker Swarm / PBS loops double
+      the delay *before* sleeping (first sleep is
+      ``2 * poll_interval_s``), while the AWS and Nomad loops sleep
+      the current delay first and grow afterwards.
+
+    Substrate-specific behaviour arrives purely via callables, so this
+    function never logs and never knows the job schema:
+
+    * ``probe()`` — one non-blocking substrate status call. May raise;
+      when ``tolerate_probe_errors`` is set (Kubernetes / Docker
+      Swarm), the exception is passed to ``on_probe_error`` and the
+      loop keeps polling; otherwise it propagates immediately.
+    * ``is_terminal(status)`` — terminal check; the terminal probe
+      result is returned to the caller.
+    * ``is_transient(status)`` / ``on_transient(status, delay)`` —
+      PBS transient-qstat handling (#1405): a transient probe result
+      (e.g. ``PBS_STATE_TRANSIENT``) retries at the *current* delay
+      without growing the backoff and without clamping to the
+      remaining deadline.
+    * ``on_pending(status, delay, sleep_amount)`` — per-iteration
+      info-log hook; ``delay`` is the pre-growth backoff state and
+      ``sleep_amount`` is what will actually be slept, so each
+      substrate can log exactly the value it historically logged.
+
+    The AWS / Azure / Google / Nomad request-retry helpers use the
+    bounded-attempt sibling :func:`retry_with_backoff` instead of this
+    loop.
+    """
+    delay = float(poll_interval_s)
+
+    def _grow(current: float) -> float:
+        if next_delay is not None:
+            return next_delay(current)
+        return min(current * 2.0, max_poll_interval_s)
+
+    def _sleep_amount(current: float, remaining: float | None) -> float:
+        if sleep_for is not None:
+            return sleep_for(current, remaining)
+        if remaining is None:
+            return current
+        return min(current, remaining)
+
+    start = time.monotonic()
+    while True:
+        probe_error = False
+        try:
+            status = probe()
+        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
+            if not tolerate_probe_errors:
+                raise
+            probe_error = True
+            if on_probe_error is not None:
+                on_probe_error(exc, delay)
+        else:
+            if is_terminal(status):
+                return status
+            if is_transient is not None and is_transient(status):
+                if on_transient is not None:
+                    on_transient(status, delay)
+                if timeout is not None:
+                    elapsed = time.monotonic() - start
+                    if elapsed >= timeout:
+                        raise TimeoutError(timeout_message(elapsed))
+                time.sleep(delay)
+                continue
+
+        if timeout is not None:
+            elapsed = time.monotonic() - start
+            remaining = timeout - elapsed
+            if remaining <= 0:
+                raise TimeoutError(timeout_message(elapsed))
+        else:
+            remaining = None
+
+        pre_sleep_delay = delay
+        if grow_before_sleep:
+            delay = _grow(delay)
+        amount = _sleep_amount(delay, remaining)
+        if not probe_error and on_pending is not None:
+            on_pending(status, pre_sleep_delay, amount)
+        time.sleep(amount)
+        if not grow_before_sleep:
+            delay = _grow(delay)
+
+
+def retry_with_backoff[T](
+    call_fn: Callable[[], T],
+    *,
+    retry_on: Callable[[BaseException], bool],
+    max_attempts: int,
+    initial_delay_s: float = 0.5,
+    max_delay_s: float = 30.0,
+    jitter: bool = True,
+    on_retry: Callable[[BaseException, int, float], None] | None = None,
+) -> T:
+    """Shared bounded-attempt retry-with-backoff for substrate requests (issue #1540).
+
+    This is the single owner of the exponential schedule that used to
+    be hand-rolled in ``_submit_job_with_retry`` (AWS Batch),
+    ``_retry_azure_submit`` (Azure Batch), ``_retry_nomad_request``
+    (Nomad), and ``_retry_pbs_call`` (PBS):
+
+    * ``max_attempts`` bounded loop — an exception classified
+      non-retryable by ``retry_on``, or raised on the final attempt,
+      propagates immediately;
+    * full-jitter exponential backoff — the sleep window is
+      ``min(delay, max_delay_s)`` and each retry sleeps
+      ``random.uniform(0, window)`` (``jitter=False`` for the PBS
+      variant, which sleeps the window deterministically);
+    * the window doubles per attempt, capped at ``max_delay_s``.
+
+    The helper itself never logs: each substrate passes an
+    ``on_retry(exc, attempt, sleep_window)`` callback that emits its
+    historic warning line through its own module logger.
+    """
+    delay = float(initial_delay_s)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return call_fn()
+        except BaseException as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
+            if not retry_on(exc) or attempt >= max_attempts:
+                raise
+            window = min(delay, max_delay_s)
+            if on_retry is not None:
+                on_retry(exc, attempt, window)
+            time.sleep(random.uniform(0, window) if jitter else window)
+            delay = min(delay * 2.0, max_delay_s)
+    raise RuntimeError(  # pragma: no cover — loop always returns or raises
+        f"retry_with_backoff loop exited unexpectedly after {max_attempts} attempts"
+    )
+
+
 class PollingHandle(Handle):
     """Shared poll-retry-fallback state machine for polling handles (issue #1464).
 
@@ -113,12 +288,17 @@ class PollingHandle(Handle):
     Substrate handles shrink to hooks:
 
     * ``_wait_for_terminal(timeout)`` — poll until terminal (raises
-      ``TimeoutError`` on its own poll deadline);
+      ``TimeoutError`` on its own poll deadline); executors implement
+      this on top of :func:`poll_until_terminal` so the poll skeleton
+      lives here too (issue #1540);
     * ``_classify(job)`` — map a terminal job to a ``PollOutcome``
       plus the raw spot-classification reason;
-    * ``_resolve_success_result()`` — resolve + materialize the
+    * ``_resolve_success_result(timeout)`` — resolve + materialize the
       callback-facing success value (kept substrate-local so tests can
       monkeypatch ``materialize_object_storage_result`` per module);
+      ``timeout`` is the caller-supplied deadline, forwarded so
+      handles backed by a local mirror future (Nomad's
+      non-remote-results mode) can honour it;
     * ``_is_spot_interruption(reason)`` — spot classifier (default
       ``False`` — no spot support);
     * ``_resubmit()`` — spot retry: submit a replacement job and
@@ -154,8 +334,12 @@ class PollingHandle(Handle):
         """Classify a terminal job as (outcome, raw spot-classification reason)."""
         raise NotImplementedError
 
-    def _resolve_success_result(self) -> Any:
-        """Resolve and materialize the callback-facing success result."""
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
+        """Resolve and materialize the callback-facing success result.
+
+        ``timeout`` is the caller-supplied ``result()`` deadline;
+        handles backed by a local mirror future (Nomad) forward it.
+        """
         raise NotImplementedError
 
     def _poll_job_id(self) -> str:
@@ -175,10 +359,19 @@ class PollingHandle(Handle):
         raise NotImplementedError
 
     def _retry_limit(self) -> int:
-        return max(0, getattr(self._executor, "max_retries", 0))
+        # int-coerced defensively: tests drive handles against bare
+        # MagicMock executors whose auto-generated ``max_retries``
+        # attribute would otherwise blow up ``max()`` (treated as 0).
+        try:
+            return max(0, int(getattr(self._executor, "max_retries", 0)))
+        except (TypeError, ValueError):
+            return 0
 
     def _has_on_demand_fallback(self) -> bool:
-        return bool(getattr(self._executor, "fallback_to_on_demand", False))
+        # ``is True`` (not ``bool()``) so mock executors with an
+        # auto-generated attribute don't accidentally enable the
+        # fallback transition.
+        return getattr(self._executor, "fallback_to_on_demand", False) is True
 
     def _failure_error(self, job: Any) -> RuntimeError:
         """Substrate-worded error for a non-spot terminal failure."""
@@ -219,7 +412,7 @@ class PollingHandle(Handle):
 
             outcome, spot_reason = self._classify(job)
             if outcome is PollOutcome.SUCCEEDED:
-                resolved = self._resolve_success_result()
+                resolved = self._resolve_success_result(timeout)
                 self._future.set_result(resolved)
                 return resolved
             if outcome is PollOutcome.INDETERMINATE:
@@ -254,7 +447,7 @@ class PollingHandle(Handle):
                         raise
                     outcome, _ = self._classify(job)
                     if outcome is PollOutcome.SUCCEEDED:
-                        resolved = self._resolve_success_result()
+                        resolved = self._resolve_success_result(timeout)
                         self._future.set_result(resolved)
                         return resolved
                     error = self._fallback_failure_error(job)

@@ -18,21 +18,27 @@ from __future__ import annotations
 
 import logging
 import os
-import random
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, ClassVar, cast
 
-from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.base import (
+    BaseExecutor,
+    Handle,
+    PollingHandle,
+    PollOutcome,
+    poll_until_terminal,
+    retry_with_backoff,
+)
 from osimflow.executors.transport import coerce_transport_mode, resolve_result_for_callback
 from osimflow.task_payload_hmac import build_signature_env
 
 log = logging.getLogger("osimflow.executors")
 
 
-def _aws_error_code(exc: Exception) -> str:
+def _aws_error_code(exc: BaseException) -> str:
     """Extract AWS/boto error code from an exception, or empty string if not applicable."""
     try:
         return exc.response.get("Error", {}).get("Code", "") if hasattr(exc, "response") else ""
@@ -40,7 +46,7 @@ def _aws_error_code(exc: Exception) -> str:
         return ""
 
 
-class _AWSBatchHandle(Handle):
+class _AWSBatchHandle(PollingHandle):
     """Handle that polls Batch on `.result()`.
 
     We can't use a vanilla `concurrent.futures.Future` (which would let
@@ -50,11 +56,12 @@ class _AWSBatchHandle(Handle):
     and the Batch `jobId`; `result()` blocks on `_wait_for_terminal`
     and `done()` does a single non-blocking `describe_jobs` call.
 
-    Spot retry logic (issue #131) lives here so that `submit()` can
-    return immediately (issue #262).  When `result()` detects a Spot
-    interruption, it resubmits using the stored `_submit_params` and
-    retries up to ``executor.max_retries`` times before falling back
-    to on-demand or failing.
+    The poll-retry-fallback state machine — deadline enforcement
+    (issue #1465), jittered exponential backoff, retry accounting, the
+    fallback-to-on-demand transition (issue #131), and AWS's ghost-job
+    retry semantics in ``done()`` — lives in the shared
+    ``PollingHandle`` base (issues #1464 / #1540); this class supplies
+    only the AWS-specific hooks below.
 
     Not a dataclass — the parent `Handle` is, and dataclass inheritance
     fights with the new `_executor` field (default-vs-required ordering
@@ -112,124 +119,67 @@ class _AWSBatchHandle(Handle):
         if cost_usd > 0:
             self.cost_usd = cost_usd
 
-    def result(self, timeout: float | None = None) -> Any:
+    # ------------------------------------------------------------------
+    # PollingHandle hooks (issues #1464 / #1540) — the shared state
+    # machine in ``osimflow.executors.base.PollingHandle`` owns
+    # ``result()``; ``AWSBatchExecutor._wait_for_terminal`` owns the
+    # poll skeleton via ``base.poll_until_terminal``.
+    # ------------------------------------------------------------------
 
+    def _wait_for_terminal(self, timeout: float | None) -> Any:
+        job = self._executor._wait_for_terminal(self.job_id, timeout=timeout)  # noqa: SLF001
+        self._apply_cost(job)
+        return job
+
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        status = job.get("status")
+        if status == "SUCCEEDED":
+            return PollOutcome.SUCCEEDED, None
+        return PollOutcome.FAILED, job.get("statusReason", "")
+
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
         # Issue #1463: resolved through the package namespace at call time
         # so tests that monkeypatch ``osimflow.executors.
         # materialize_object_storage_result`` keep intercepting this call
         # site after the executor moved out of the package __init__.
         from osimflow.executors import materialize_object_storage_result
 
-        # Timeout tracking: elapsed time is shared across spot-retry
-        # iterations so the caller-supplied deadline is honoured
-        # regardless of how many times the job is resubmitted.
-        start = time.monotonic()
-        remaining: float | None = None  # None means "no timeout"
+        resolved = resolve_result_for_callback(
+            self._result_hint,
+            default=None,
+            transport_mode=self._result_transport_mode,
+        )
+        return materialize_object_storage_result(
+            resolved,
+            transport_mode=self._result_transport_mode,
+            result_storage_backend=self._result_storage_backend,
+            result_storage_bucket=self._result_storage_bucket,
+            result_storage_prefix=self._result_storage_prefix,
+            result_storage_endpoint=self._result_storage_endpoint,
+        )
 
-        # Spot retry loop (issue #131): on Spot interruption, resubmit
-        # up to max_retries times, then fall back to on-demand or fail.
-        effective_max_retries = max(0, self._executor.max_retries)
-        for attempt in range(effective_max_retries + 1):
-            # Compute remaining time for this poll iteration.
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timed out after {elapsed:.1f}s waiting for job {self.job_id!r}"
-                    )
+    def _is_spot_interruption(self, reason: str | None) -> bool:
+        return bool(self._executor._is_spot_interruption(reason))  # noqa: SLF001
 
-            try:
-                job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)  # noqa: SLF001
-            except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-                self._future.set_exception(exc)
-                raise
+    def _resubmit(self) -> None:
+        self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
+        self.worker_id = self.job_id
 
-            self._apply_cost(job)
-            status = job.get("status")
-            if status == "SUCCEEDED":
-                resolved = resolve_result_for_callback(
-                    self._result_hint,
-                    default=None,
-                    transport_mode=self._result_transport_mode,
-                )
-                resolved = materialize_object_storage_result(
-                    resolved,
-                    transport_mode=self._result_transport_mode,
-                    result_storage_backend=self._result_storage_backend,
-                    result_storage_bucket=self._result_storage_bucket,
-                    result_storage_prefix=self._result_storage_prefix,
-                    result_storage_endpoint=self._result_storage_endpoint,
-                )
-                self._future.set_result(resolved)
-                return resolved
+    def _submit_on_demand(self) -> None:
+        # AWS falls back by resubmitting with the same submit params —
+        # the queue/spot selection is implicit in the job queue.
+        self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
+        self.worker_id = self.job_id
 
-            # Job FAILED — check if it was a Spot interruption.
-            reason = job.get("statusReason", "")
-            is_spot = self._executor._is_spot_interruption(reason)  # noqa: SLF001
+    def _failure_error(self, job: Any) -> RuntimeError:
+        status = job.get("status")
+        reason = job.get("statusReason", "")
+        return RuntimeError(f"AWS Batch job {self.job_id!r} {status}: {reason}")
 
-            if is_spot and attempt < effective_max_retries:
-                backoff = min(5.0 * (2**attempt), 60.0)
-                jittered_backoff = random.uniform(0, backoff)
-                log.warning(
-                    "Spot interrupted (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt + 1,
-                    effective_max_retries,
-                    jittered_backoff,
-                    reason,
-                )
-                time.sleep(jittered_backoff)
-                # Resubmit and update the tracked job_id.
-                self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
-                self.worker_id = self.job_id
-                continue
-
-            if is_spot and attempt >= effective_max_retries:
-                # Exhausted retries — fall back or fail.
-                if self._executor.fallback_to_on_demand:
-                    log.warning(
-                        "Spot retries exhausted (%d), falling back to on-demand",
-                        effective_max_retries,
-                    )
-                    self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
-                    self.worker_id = self.job_id
-                    # Poll the on-demand job (no more retries).
-                    try:
-                        job = self._executor._wait_for_terminal(self.job_id, timeout=remaining)  # noqa: SLF001
-                    except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-                        self._future.set_exception(exc)
-                        raise
-                    self._apply_cost(job)
-                    status = job.get("status")
-                    if status == "SUCCEEDED":
-                        resolved = resolve_result_for_callback(
-                            self._result_hint,
-                            default=None,
-                            transport_mode=self._result_transport_mode,
-                        )
-                        resolved = materialize_object_storage_result(
-                            resolved,
-                            transport_mode=self._result_transport_mode,
-                            result_storage_backend=self._result_storage_backend,
-                            result_storage_bucket=self._result_storage_bucket,
-                            result_storage_prefix=self._result_storage_prefix,
-                            result_storage_endpoint=self._result_storage_endpoint,
-                        )
-                        self._future.set_result(resolved)
-                        return resolved
-                    reason = job.get("statusReason", "unknown reason")
-                    msg = f"AWS Batch job {self.job_id!r} {status}: {reason}"
-                    self._future.set_exception(RuntimeError(msg))
-                    raise RuntimeError(msg)
-                raise RuntimeError(f"Spot retries exhausted ({effective_max_retries}): {reason}")
-
-            # Non-spot failure — don't retry, raise immediately.
-            msg = f"AWS Batch job {self.job_id!r} {status}: {reason}"
-            self._future.set_exception(RuntimeError(msg))
-            raise RuntimeError(msg)
-
-        # Unreachable, but satisfies the type checker.
-        raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
+    def _fallback_failure_error(self, job: Any) -> RuntimeError:
+        status = job.get("status")
+        reason = job.get("statusReason", "unknown reason")
+        return RuntimeError(f"AWS Batch job {self.job_id!r} {status}: {reason}")
 
     def done(self) -> bool:
         # A single non-blocking `describe_jobs` is the cheapest probe.
@@ -829,39 +779,41 @@ class AWSBatchExecutor(BaseExecutor):
         """Poll `describe_jobs` with exponential backoff until the task
         reaches a terminal state. Returns the final job dict.
 
+        The poll skeleton (deadline, deadline clamping (sleep capped at the remaining budget),
+        capped exponential growth) lives in
+        ``osimflow.executors.base.poll_until_terminal`` (issue #1540);
+        AWS sleeps the current delay first and grows afterwards.
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
-        delay = self.poll_interval_s
-        start = time.monotonic()
-        while True:
+
+        def _probe() -> dict[str, Any]:
             # boto3's describe_jobs returns a TypedDict at runtime, but
             # the type is too granular to be useful here — we treat the
             # response as a plain dict and access .get() on each level.
-            # `cast` to `Any` keeps mypy strict mode happy without
-            # polluting the rest of the function.
             response: dict[str, Any] = self._get_client().describe_jobs(jobs=[job_id])
             jobs = response.get("jobs", [])
             if not jobs:
                 raise RuntimeError(f"describe_jobs returned no job for jobId={job_id!r}")
-            job = jobs[0]
-            status = job.get("status", "UNKNOWN")
-            if status in ("SUCCEEDED", "FAILED"):
-                return cast(dict[str, Any], job)
+            return cast(dict[str, Any], jobs[0])
 
-            # Enforce timeout before sleeping.
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}")
-                # Cap the sleep so we don't overshoot the timeout.
-                delay = min(delay, remaining)
-
-            log.info("aws_batch poll jobId=%s status=%s (sleeping %.1fs)", job_id, status, delay)
-            time.sleep(delay)
-            # Exponential backoff, capped.
-            delay = min(delay * 2, self.max_poll_interval_s)
+        return poll_until_terminal(
+            _probe,
+            is_terminal=lambda job: job.get("status", "UNKNOWN") in ("SUCCEEDED", "FAILED"),
+            timeout=timeout,
+            timeout_message=lambda elapsed: (
+                f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
+            ),
+            poll_interval_s=self.poll_interval_s,
+            max_poll_interval_s=self.max_poll_interval_s,
+            on_pending=lambda job, _delay, sleep_amount: log.info(
+                "aws_batch poll jobId=%s status=%s (sleeping %.1fs)",
+                job_id,
+                job.get("status", "UNKNOWN"),
+                sleep_amount,
+            ),
+        )
 
     def _submit_job(
         self,
@@ -913,31 +865,41 @@ class AWSBatchExecutor(BaseExecutor):
 
         boto3's adaptive retry config (``retry_mode='adaptive'``) handles
         transport-level retries.  This wrapper provides defense-in-depth
-        for ``ThrottlingException`` that propagates to our code, applying
-        exponential backoff with up to 5 attempts.
+        for ``ThrottlingException`` that propagates to our code; the
+        bounded-attempt exponential schedule lives in
+        ``osimflow.executors.base.retry_with_backoff`` (issue #1540).
         """
         import botocore.exceptions  # noqa: PLC0415
 
         max_attempts = 5
-        delay = 0.5
-        for attempt in range(max_attempts):
-            try:
-                return self._get_client().submit_job(**submit_kwargs)  # type: ignore[no-any-return]
-            except botocore.exceptions.ClientError as exc:
-                code = _aws_error_code(exc)
-                if code in self._THROTTLE_ERRORS and attempt < max_attempts - 1:
-                    log.warning(
-                        "submit_job throttled (attempt %d/%d), retrying in %.1fs: %s",
-                        attempt + 1,
-                        max_attempts,
-                        delay,
-                        code,
-                    )
-                    time.sleep(random.uniform(0, delay))
-                    delay = min(delay * 2, 30.0)
-                    continue
-                raise
-        raise RuntimeError("submit_job throttle retry exhausted")  # pragma: no cover
+
+        def _call() -> dict[str, Any]:
+            return self._get_client().submit_job(**submit_kwargs)  # type: ignore[no-any-return]
+
+        def _retry_on(exc: BaseException) -> bool:
+            return (
+                isinstance(exc, botocore.exceptions.ClientError)
+                and _aws_error_code(exc) in self._THROTTLE_ERRORS
+            )
+
+        def _on_retry(exc: BaseException, attempt: int, window: float) -> None:
+            log.warning(
+                "submit_job throttled (attempt %d/%d), retrying in %.1fs: %s",
+                attempt,
+                max_attempts,
+                window,
+                _aws_error_code(exc),
+            )
+
+        return retry_with_backoff(
+            _call,
+            retry_on=_retry_on,
+            max_attempts=max_attempts,
+            initial_delay_s=0.5,
+            max_delay_s=30.0,
+            jitter=True,
+            on_retry=_on_retry,
+        )
 
     def submit(
         self,

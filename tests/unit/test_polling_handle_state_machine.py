@@ -100,7 +100,7 @@ class _ScriptedPollingHandle(PollingHandle):
             return PollOutcome.INDETERMINATE, None
         return PollOutcome.FAILED, str(job)
 
-    def _resolve_success_result(self) -> Any:
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
         return "resolved"
 
     def _is_spot_interruption(self, reason: str | None) -> bool:

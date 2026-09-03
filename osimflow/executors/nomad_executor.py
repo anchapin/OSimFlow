@@ -15,7 +15,7 @@ import json
 import logging
 import math
 import os
-import random
+import random  # noqa: F401 — patch seam: tests patch osimflow.executors.random.uniform
 import re
 import threading
 import time
@@ -25,7 +25,14 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, ClassVar, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
-from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.base import (
+    BaseExecutor,
+    Handle,
+    PollingHandle,
+    PollOutcome,
+    poll_until_terminal,
+    retry_with_backoff,
+)
 from osimflow.executors.transport import coerce_transport_mode, resolve_result_for_callback
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
@@ -75,7 +82,8 @@ def _retry_nomad_request(
     network hiccup. Mirrors the AWS Batch ``_submit_job_with_retry``
     pattern: exponential backoff with up to *max_attempts* attempts and a
     per-retry sleep cap of *total_cap_seconds* (defaults to 5 attempts /
-    30 s).
+    30 s). The bounded-attempt schedule lives in
+    ``osimflow.executors.base.retry_with_backoff`` (issue #1540).
 
     Only HTTPError codes in {500, 502, 503, 504} and URLError are
     retried; every other exception (HTTPError 4xx, RuntimeError, etc.)
@@ -83,46 +91,38 @@ def _retry_nomad_request(
     """
     import urllib.error  # noqa: PLC0415
 
-    delay = _NOMAD_RETRY_INITIAL_DELAY_S
-    last_exc: BaseException | None = None
-    for attempt in range(max_attempts):
-        try:
-            return call_fn()
-        except urllib.error.HTTPError as exc:
-            last_exc = exc
-            if exc.code not in _NOMAD_RETRYABLE_HTTP_CODES:
-                raise
-            if attempt >= max_attempts - 1:
-                raise
-            sleep_for = min(delay, total_cap_seconds)
+    def _retry_on(exc: BaseException) -> bool:
+        if isinstance(exc, urllib.error.HTTPError):
+            return exc.code in _NOMAD_RETRYABLE_HTTP_CODES
+        return isinstance(exc, urllib.error.URLError)
+
+    def _on_retry(exc: BaseException, attempt: int, window: float) -> None:
+        if isinstance(exc, urllib.error.HTTPError):
             log.warning(
                 "Nomad HTTP %s (attempt %d/%d), retrying in %.1fs",
                 exc.code,
-                attempt + 1,
+                attempt,
                 max_attempts,
-                sleep_for,
+                window,
             )
-            time.sleep(random.uniform(0, sleep_for))
-            delay = min(delay * 2, total_cap_seconds)
-        except urllib.error.URLError as exc:
-            last_exc = exc
-            if attempt >= max_attempts - 1:
-                raise
-            sleep_for = min(delay, total_cap_seconds)
+        else:
             log.warning(
                 "Nomad URLError (attempt %d/%d), retrying in %.1fs: %s",
-                attempt + 1,
+                attempt,
                 max_attempts,
-                sleep_for,
+                window,
                 exc,
             )
-            time.sleep(random.uniform(0, sleep_for))
-            delay = min(delay * 2, total_cap_seconds)
-    # Unreachable — the loop either returns or raises — but keep the
-    # type checker happy.
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("Nomad retry loop exited unexpectedly")  # pragma: no cover
+
+    return retry_with_backoff(
+        call_fn,
+        retry_on=_retry_on,
+        max_attempts=max_attempts,
+        initial_delay_s=_NOMAD_RETRY_INITIAL_DELAY_S,
+        max_delay_s=total_cap_seconds,
+        jitter=True,
+        on_retry=_on_retry,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +395,7 @@ class _NomadClient:
         )
 
 
-class _NomadHandle(Handle):
+class _NomadHandle(PollingHandle):
     """Handle that polls Nomad on ``.result()``.
 
     Mirrors ``_AWSBatchHandle``: the work runs on a remote Nomad client
@@ -405,10 +405,12 @@ class _NomadHandle(Handle):
     ``_wait_for_terminal`` and ``done()`` does a single non-blocking
     allocation lookup.
 
-    The handle's ``_future`` is set when ``result()`` reaches a terminal
-    state so concurrent callers don't re-poll. The base-class
-    ``.result(timeout=...)`` / ``.done()`` paths remain reachable
-    through the cached Future.
+    The poll-deadline state machine lives in the shared
+    ``PollingHandle`` base (issues #1464 / #1540); this class supplies
+    only the Nomad-specific hooks below. The handle's ``_future`` is
+    set when ``result()`` reaches a terminal state so concurrent
+    callers don't re-poll. The base-class ``.result(timeout=...)`` /
+    ``.done()`` paths remain reachable through the cached Future.
     """
 
     _GHOST_RETRIES = 3
@@ -477,57 +479,65 @@ class _NomadHandle(Handle):
                 )
         return self._allocation_id
 
-    def result(self, timeout: float | None = None) -> Any:
+    # ------------------------------------------------------------------
+    # PollingHandle hooks (issues #1464 / #1540) — the shared state
+    # machine in ``osimflow.executors.base.PollingHandle`` owns
+    # ``result()``; ``NomadExecutor._wait_for_terminal`` owns the poll
+    # skeleton via ``base.poll_until_terminal``.
+    # ------------------------------------------------------------------
 
+    def _poll_job_id(self) -> str:
+        # Deadline messages name the allocation once resolved.
+        return self._allocation_id or self.job_id
+
+    def _wait_for_terminal(self, timeout: float | None) -> Any:
+        alloc_id = self._ensure_allocation_id()
+        return self._executor._wait_for_terminal(alloc_id, timeout=timeout)  # noqa: SLF001
+
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        status = job.get("ClientStatus", "unknown")
+        if status == "complete":
+            return PollOutcome.SUCCEEDED, None
+        # FAILED (or any non-complete terminal state — ``failed``,
+        # ``lost``): the shared machine routes to ``_failure_error``.
+        return PollOutcome.FAILED, None
+
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
         # Issue #1463: resolved through the package namespace at call time
         # so tests that monkeypatch ``osimflow.executors.
         # materialize_object_storage_result`` keep intercepting this call
         # site after the executor moved out of the package __init__.
         from osimflow.executors import materialize_object_storage_result
 
-        start = time.monotonic()
-        remaining: float | None = None
-        alloc_id = self._ensure_allocation_id()
-        try:
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timed out after {elapsed:.1f}s waiting for allocation {alloc_id!r}"
-                    )
-            alloc = self._executor._wait_for_terminal(alloc_id, timeout=remaining)  # noqa: SLF001
-        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-            self._future.set_exception(exc)
-            raise
-        status = alloc.get("ClientStatus", "unknown")
-        task_states = alloc.get("TaskStates", {}) or {}
-        if status == "complete":
-            local_result: Any = resolve_result_for_callback(
-                self._result_hint,
-                default=None,
-                transport_mode=self._result_transport_mode,
-            )
-            local_result = materialize_object_storage_result(
-                local_result,
-                transport_mode=self._result_transport_mode,
-                result_storage_backend=self._result_storage_backend,
-                result_storage_bucket=self._result_storage_bucket,
-                result_storage_prefix=self._result_storage_prefix,
-                result_storage_endpoint=self._result_storage_endpoint,
-            )
-            if self._local_future is not None:
-                local_result = self._local_future.result(timeout=timeout)
-            self._future.set_result(local_result)
-            return local_result
-        # FAILED (or any non-complete terminal state — ``failed``,
-        # ``lost``): re-raise with the most useful status description
-        # we can extract from the task events. The Campaign's
-        # `except Exception` path needs a string it can log.
+        local_result: Any = resolve_result_for_callback(
+            self._result_hint,
+            default=None,
+            transport_mode=self._result_transport_mode,
+        )
+        local_result = materialize_object_storage_result(
+            local_result,
+            transport_mode=self._result_transport_mode,
+            result_storage_backend=self._result_storage_backend,
+            result_storage_bucket=self._result_storage_bucket,
+            result_storage_prefix=self._result_storage_prefix,
+            result_storage_endpoint=self._result_storage_endpoint,
+        )
+        if self._local_future is not None:
+            # Non-remote-results mode: the local mirror future ran the
+            # work function locally; its result is authoritative and
+            # honours the caller-supplied deadline.
+            local_result = self._local_future.result(timeout=timeout)
+        return local_result
+
+    def _failure_error(self, job: Any) -> RuntimeError:
+        # Re-raise with the most useful status description we can
+        # extract from the task events. The Campaign's `except
+        # Exception` path needs a string it can log.
+        alloc_id = self._allocation_id or self.job_id
+        status = job.get("ClientStatus", "unknown")
+        task_states = job.get("TaskStates", {}) or {}
         description = self._extract_failure_description(task_states)
-        msg = f"Nomad allocation {alloc_id!r} {status}: {description}"
-        self._future.set_exception(RuntimeError(msg))
-        raise RuntimeError(msg)
+        return RuntimeError(f"Nomad allocation {alloc_id!r} {status}: {description}")
 
     def done(self) -> bool:  # noqa: PLR0911
         # If the future is already finished (terminal status observed
@@ -1265,50 +1275,75 @@ class NomadExecutor(BaseExecutor):
         until the allocation reaches a terminal state (``complete`` /
         ``failed`` / ``lost``). Returns the final allocation dict.
 
+        The poll skeleton (deadline, remaining clamp, capped growth)
+        lives in ``osimflow.executors.base.poll_until_terminal``
+        (issue #1540). Nomad keeps two substrate-specific extensions
+        via the documented hooks: ``sleep_for`` phases concurrent
+        waiters apart (issue #1378 anti-thundering-herd offset) and
+        ``next_delay`` grows the delay with an adaptive factor
+        (``1.6 + min(pressure, 0.4)``) instead of the plain doubling.
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
-        delay = self.poll_interval_s
-        phase_offset = 0.0
-        start = time.monotonic()
         with self._waiters_lock:
             self._active_waiters += 1
             active_waiters = self._active_waiters
+        phase_offset = 0.0
+        if active_waiters > 1:
+            phase_offset = (sum(ord(ch) for ch in allocation_id) % 10) / 100.0
+
+        def _phased_sleep(delay: float, remaining: float | None) -> float:
+            # Nomad's phased sleep: add the per-allocation anti-herd
+            # offset, then clamp to the poll cap and the remaining
+            # deadline (the clamp duty the ``sleep_for`` hook takes
+            # over from the shared loop).
+            bounds = [delay + phase_offset, self.max_poll_interval_s]
+            if remaining is not None:
+                bounds.append(remaining)
+            return min(bounds)
+
         try:
-            if active_waiters > 1:
-                phase_offset = (sum(ord(ch) for ch in allocation_id) % 10) / 100.0
-            while True:
-                alloc = self._client.get_allocation(allocation_id)
-                status = alloc.get("ClientStatus", "UNKNOWN")
-                if status in ("complete", "failed", "lost"):
-                    return alloc
-                if timeout is not None:
-                    elapsed = time.monotonic() - start
-                    remaining = timeout - elapsed
-                    if remaining <= 0:
-                        raise TimeoutError(
-                            f"Timed out after {elapsed:.1f}s waiting for allocation {allocation_id!r}"
-                        )
-                    sleep_for = min(delay + phase_offset, remaining, self.max_poll_interval_s)
-                else:
-                    sleep_for = min(delay + phase_offset, self.max_poll_interval_s)
-                log.info(
+            return poll_until_terminal(
+                lambda: self._client.get_allocation(allocation_id),
+                is_terminal=lambda alloc: (
+                    alloc.get("ClientStatus", "UNKNOWN") in ("complete", "failed", "lost")
+                ),
+                timeout=timeout,
+                timeout_message=lambda elapsed: (
+                    f"Timed out after {elapsed:.1f}s waiting for allocation {allocation_id!r}"
+                ),
+                poll_interval_s=self.poll_interval_s,
+                max_poll_interval_s=self.max_poll_interval_s,
+                on_pending=lambda alloc, _delay, sleep_amount: log.info(
                     "nomad poll alloc=%s status=%s (sleeping %.2fs, active_waiters=%d)",
                     allocation_id,
-                    status,
-                    sleep_for,
+                    alloc.get("ClientStatus", "UNKNOWN"),
+                    sleep_amount,
                     active_waiters,
-                )
-                time.sleep(sleep_for)
-                concurrency_pressure = max(active_waiters - 8, 0) * 0.05
-                rate_pressure = 0.0
-                if self._fanout_submit_rate_per_sec is not None:
-                    rate_pressure = max(self._fanout_submit_rate_per_sec - 10.0, 0.0) * 0.01
-                backoff_factor = 1.6 + min(concurrency_pressure + rate_pressure, 0.4)
-                delay = min(delay * backoff_factor, self.max_poll_interval_s)
+                ),
+                sleep_for=_phased_sleep,
+                next_delay=lambda delay: min(
+                    delay * self._poll_backoff_factor(active_waiters),
+                    self.max_poll_interval_s,
+                ),
+            )
         finally:
             with self._waiters_lock:
                 self._active_waiters = max(self._active_waiters - 1, 0)
+
+    def _poll_backoff_factor(self, active_waiters: int) -> float:
+        """Adaptive poll-backoff factor (issue #1378 anti-herd pressure).
+
+        Grows from the 1.6 base towards 2.0 as concurrent waiters or a
+        high fan-out submit rate signal Nomad API pressure, so many
+        concurrent ``result()`` callers stagger their polls.
+        """
+        concurrency_pressure = max(active_waiters - 8, 0) * 0.05
+        rate_pressure = 0.0
+        if self._fanout_submit_rate_per_sec is not None:
+            rate_pressure = max(self._fanout_submit_rate_per_sec - 10.0, 0.0) * 0.01
+        return 1.6 + min(concurrency_pressure + rate_pressure, 0.4)
 
     def submit(
         self,

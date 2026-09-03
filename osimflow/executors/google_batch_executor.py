@@ -37,13 +37,18 @@ from __future__ import annotations
 import logging
 import os
 import random  # noqa: F401 — patch seam: tests patch google_batch_executor.random.uniform
-import time
+import time  # noqa: F401 — patch seam: tests patch google_batch_executor.time.sleep
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
-from osimflow.executors.base import BaseExecutor, PollingHandle, PollOutcome
+from osimflow.executors.base import (
+    BaseExecutor,
+    PollingHandle,
+    PollOutcome,
+    poll_until_terminal,
+)
 from osimflow.executors.transport import (
     coerce_transport_mode,
     materialize_object_storage_result,
@@ -124,7 +129,7 @@ class _GoogleBatchHandle(PollingHandle):
             return PollOutcome.FAILED, str(job.status.status_details or "")
         return PollOutcome.INDETERMINATE, None
 
-    def _resolve_success_result(self) -> Any:
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
         resolved = resolve_result_for_callback(
             self._result_hint,
             default=None,
@@ -355,30 +360,33 @@ class GoogleBatchExecutor(BaseExecutor):
     def _wait_for_terminal(self, job_name: str, timeout: float | None = None) -> Any:
         """Poll Google Cloud Batch with exponential backoff until terminal state.
 
+        The poll skeleton (deadline, deadline clamping (sleep capped at the remaining budget),
+        capped exponential growth) lives in
+        ``osimflow.executors.base.poll_until_terminal`` (issue #1540);
+        the Google loop grows the delay before sleeping.
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
-        delay = self.poll_interval_s
-        start = time.monotonic()
-        while True:
-            job = self._get_job(job_name)
-            state = job.status.state
-            state_str = str(state.name)
-            if "SUCCEEDED" in state_str or "FAILED" in state_str:
-                return job
-            log.info(
-                "google_batch poll job=%s state=%s (sleeping %.1fs)", job_name, state_str, delay
-            )
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
-                    )
-                delay = min(delay, remaining)
-            delay = min(delay * 2, self.max_poll_interval_s)
-            time.sleep(delay)
+        return poll_until_terminal(
+            lambda: self._get_job(job_name),
+            is_terminal=lambda job: (
+                "SUCCEEDED" in str(job.status.state.name) or "FAILED" in str(job.status.state.name)
+            ),
+            timeout=timeout,
+            timeout_message=lambda elapsed: (
+                f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
+            ),
+            poll_interval_s=self.poll_interval_s,
+            max_poll_interval_s=self.max_poll_interval_s,
+            on_pending=lambda job, delay, _sleep_amount: log.info(
+                "google_batch poll job=%s state=%s (sleeping %.1fs)",
+                job_name,
+                str(job.status.state.name),
+                delay,
+            ),
+            grow_before_sleep=True,
+        )
 
     def _submit_job(
         self,
