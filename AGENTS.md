@@ -71,10 +71,16 @@ Orchestrator → Executor → Work function
 (`make contract` / `.github/workflows/agents-contract.yml`). It
 verifies that every public symbol in `osimflow/__init__.py`, every
 `bin/*.py`, every executor file under `osimflow/executors/`, every
-DAG step name, and every `--flag` in `osimflow/__main__.py` is
-**mentioned somewhere in this file**. Substring match — so any
-mention counts. When you add any of those, update this document in
-the same change or `make contract` will fail.
+config module under `osimflow/executor_configs/` (issue #1575), every
+DAG step name, and every `--flag` registered on the CLI is
+**mentioned somewhere in this file**. The flag list is *derived*:
+since issue #1575 the checker builds the real parser (which calls the
+per-executor `add_arguments` hooks from `osimflow/executor_configs/`)
+and walks its actions, falling back to a textual
+`add_argument("--…")` scan of `osimflow/__main__.py` +
+`osimflow/executor_configs/*.py` when the package is not importable.
+Substring match — so any mention counts. When you add any of those,
+update this document in the same change or `make contract` will fail.
 
 ---
 
@@ -191,9 +197,17 @@ that one to CRITICAL — issue #1024),
 
 ## 3. CLI flags (compact, alphabetical, grouped)
 
-Contract requires every `--flag` from `osimflow/__main__.py` to
-appear in this document. Listed in run-subcommand groups (or
-"global" if used outside `run`):
+The contract checker *derives* the flag list from the code (issue
+#1575): it builds the CLI parser — which calls every per-executor
+`add_arguments(parser_group)` hook registered from
+`osimflow/executor_configs/` — walks its actions, and requires each
+registered `--flag` to appear somewhere in this document (textual
+`add_argument` scan of `osimflow/__main__.py` +
+`osimflow/executor_configs/*.py` as fallback). Executor-specific flags
+physically live in their executor's config module, not in
+`osimflow/__main__.py`; everything else is registered in
+`osimflow/__main__.py:_build_parser`. Listed in run-subcommand groups
+(or "global" if used outside `run`):
 
 - **Executor + parallelism:** `--algorithm`,
   `--aws-batch-instance-type`, `--aws-batch-job-definition`,
@@ -347,11 +361,15 @@ name in this section.
 - `osimflow/__main__.py` — `argparse` CLI entry point (`osimflow run ...`).
 - `osimflow/campaign.py` — `Campaign` orchestrator + `CampaignError` +
   `CampaignAbortError` + `QuotaExceededError` + the 7-step DAG.
-- `osimflow/config.py` — `CampaignConfig` + per-executor config
-  dataclasses (`LocalConfig`, `SlurmConfig`, `AWSBatchConfig`,
-  `AzureBatchConfig`, `GoogleBatchConfig`, `NomadConfig`,
-  `ObservabilityConfig`, `DAGConfig`, `StorageConfig`) +
-  `ResourceQuota` + `coerce_variable_type` + `load_config`.
+- `osimflow/config.py` — the campaign-config composer: `CampaignConfig`
+  + the focused subsystem dataclasses it composes (`ObservabilityConfig`,
+  `DAGConfig`, `StorageConfig`) + `ResourceQuota` +
+  `coerce_variable_type` + `load_config`. Since issue #1575 the
+  per-executor dataclasses (`LocalConfig`, `SlurmConfig`,
+  `AWSBatchConfig`, `AzureBatchConfig`, `GoogleBatchConfig`,
+  `NomadConfig`) are *defined* in `osimflow/executor_configs/` and
+  re-exported here, so `from osimflow.config import SlurmConfig` (and
+  the `osimflow` top-level re-export) keep working.
 - `osimflow/work.py` — per-step work functions + `BYOS` contract
   (`default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`,
   `aggregate_results`, `generate_plots`,
@@ -598,6 +616,45 @@ CLI scripts invoked by the work layer: `generate_lhs.py`,
   interactions, ANOVA).
 - `uq.py` — Monte Carlo uncertainty propagation + failure
   probability.
+
+### `osimflow/executor_configs/` (contract-checked)
+
+Per-executor configuration home (issue #1575). One module per
+`ExecutorRegistry` key, each owning that executor's `XConfig`
+dataclass (where one exists) plus an
+`add_arguments(parser_group)` hook that registers the executor's
+`--flags` on the `run` / `warm-cache` subparser — the exact flags,
+defaults, and help that used to live in `osimflow/__main__.py`.
+`osimflow.config` imports/re-exports every `XConfig`;
+`osimflow.__main__._add_run_args` calls `add_executor_arguments`
+instead of hand-coding the executor argparse tree. The package is a
+leaf (stdlib-only imports) so `osimflow.config` never pulls executor
+SDKs into its import graph.
+
+- `__init__.py` — re-exports the `XConfig` classes and the registry
+  functions; registers all ten built-in hooks.
+- `base.py` — `ExecutorArgumentHook` type + the reload-stable
+  `_EXECUTOR_ARGUMENT_HOOKS` registry (issue #1463 anchoring pattern)
+  + `register_executor_arguments` + `iter_executor_argument_hooks` +
+  `add_executor_arguments`. `ExecutorRegistry.register_arguments` /
+  `iter_argument_hooks` (in `osimflow/executors/__init__.py`)
+  delegate here; `ExecutorRegistry.discover_plugins` auto-registers a
+  plug-in class's `add_arguments` staticmethod under its entry-point
+  name, so third-party executors get first-class CLI configuration.
+- `aws_batch.py` — `AWSBatchConfig` + the `--aws-batch-*` and
+  `--ecr-repository` flags.
+- `azure_batch.py` — `AzureBatchConfig` + the `--azure-*` flags.
+- `dask_jobqueue.py` — the `--dask-*` cluster flags (`--task-queue`
+  and `--dask-scheduler-address` stay in `__main__.py`: they configure
+  the campaign-level task queue, not the executor).
+- `docker_swarm.py` — the `--docker-swarm-*` flags.
+- `google_batch.py` — `GoogleBatchConfig` + the `--google-*` flags.
+- `kubernetes.py` — the `--kubernetes-*` flags (native Job controls
+  stay flat on `CampaignConfig`, issue #997).
+- `local.py` — `LocalConfig` + `--max-workers`.
+- `nomad.py` — `NomadConfig` + the `--nomad-*` flags.
+- `pbs.py` — the `--pbs-*` flags.
+- `slurm.py` — `SlurmConfig` + the `--slurm-*` flags.
 
 ### `osimflow/executors/` (contract-checked)
 
@@ -913,11 +970,11 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 |---|---|
 | Add a new KPI | `osimflow/_work_scripts/extract_kpis.py` (or `bin/extract_kpis.py` shim) **and** `osimflow/monitoring.py:StepTrace` schema |
 | Add a new sampling algorithm | new module in `osimflow/algorithms/`, subclass `BaseAlgorithm`, register via `AlgorithmRegistry.register` in `osimflow/algorithms/__init__.py`; or declare an entry point under `[project.entry-points."osimflow.algorithms"]` in a third-party `pyproject.toml` (auto-discovered) |
-| Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/__main__.py:_build_executor`; or declare an entry point under `[project.entry-points."osimflow.executors"]` |
+| Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/__main__.py:_build_executor`; own the platform's `XConfig` + `add_arguments` hook in a new `osimflow/executor_configs/<name>.py` module (issue #1575); or declare an entry point under `[project.entry-points."osimflow.executors"]` |
 | Verify a third-party executor plug-in against the contract (issue #1478) | subclass `osimflow.testing.ExecutorConformanceSuite` in the plug-in's test module and point its `executor_factory` at the plug-in; for non-pytest use `osimflow.testing.run_executor_conformance`. Suite covers submit/Handle lifecycle, transport.py result-reference handling, resource directives, fanout chunk size, and health-check registration. |
 | Add a new step to the DAG | new method on `Campaign` in `osimflow/campaign.py`, call it from `Campaign.run`, emit `StepTrace` hooks, declare inputs/outputs in `_STEP_DEPENDENCIES`; update §2 of this file |
 | Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py` |
-| Add a user-facing CLI flag | `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser |
+| Add a user-facing CLI flag | executor-specific: the `add_arguments` hook in `osimflow/executor_configs/<name>.py` **and** (if it maps to a config field) the matching `CampaignConfig`/`XConfig` field + `load_config` parser. Campaign-wide: `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser. Either way AGENTS.md §3 must mention the new flag (`make contract` enforces it — the list is derived from the hooks/parser, issue #1575) |
 | Change KPI output schema | `osimflow/_work_scripts/extract_kpis.py` (dict shape) **and** `osimflow/_work_scripts/aggregate_results.py` (column ordering); update §3 / §8 of this file if it affects the contract |
 | Fix a bug in parameter application | `osimflow/work.py:default_apply_parameters` first; only touch `osimflow/campaign.py:step_apply_parameters` if you also need different `Campaign` semantics (retry, cache, monitoring) |
 | Work with safe expression evaluation | `osimflow/_eval_safe.py` (`safe_eval`, `ExpressionError`); used by chaos engine for variable expansion |

@@ -1,0 +1,2324 @@
+{
+ "--alert-destinations": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "alert_destinations",
+  "help": "Path to a YAML file defining alert destinations (issue #438). Supported destination types: webhook (url), email (smtp_host, recipients), and log (level). When not set, alerts are only logged.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--alert-destinations"
+  ],
+  "required": false,
+  "type": "Path"
+ },
+ "--alert-rules": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "alert_rules",
+  "help": "Path to a YAML file defining alert rules (issue #438). Each rule specifies an event_type, severity, message_template, and condition. Built-in rules are always included; custom rules from this file are added alongside them.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--alert-rules"
+  ],
+  "required": false,
+  "type": "Path"
+ },
+ "--algorithm": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "lhs",
+  "dest": "algorithm",
+  "help": "Sampling algorithm to use (default: lhs). Available algorithms are registered in AlgorithmRegistry.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--algorithm"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--allow-insecure-storage-endpoint": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "allow_insecure_storage_endpoint",
+  "help": "Opt-in flag to allow plaintext 'http://' --result-storage-endpoint and --s3-artifact-endpoint URLs (issue #1386). Defaults to False (fail-closed) \u2014 non-HTTPS endpoints are rejected by the storage backend to prevent AWS SigV4 signing material from leaking in cleartext. Use only for dev/test against a local MinIO; loopback hosts are exempt without this flag. Mirrors the Redis 'rediss://' enforcement from issue #1321.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--allow-insecure-storage-endpoint"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--archive_intermediates": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "archive_intermediates",
+  "help": null,
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--archive_intermediates"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--aws-batch-fallback-to-on-demand": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "aws_batch_fallback_to_on_demand",
+  "help": "When the Spot price exceeds the ceiling or max retries are exhausted, fall back to the on-demand job queue instead of failing. Requires --aws-batch-max-spot-price-usd or spot interruption retries.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--aws-batch-fallback-to-on-demand"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--aws-batch-instance-type": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "aws_batch_instance_type",
+  "help": "AWS EC2 instance type used for the Spot price ceiling check (e.g. 'm5.large'). When set, ``describe_spot_price_history`` is scoped to this instance type so the ceiling check is reliable. When omitted, the check uses the minimum price across all instance types and a warning is logged (issue #792).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-instance-type"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--aws-batch-job-definition": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "aws_batch_job_definition",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-job-definition"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--aws-batch-max-retries": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "3",
+  "dest": "aws_batch_max_retries",
+  "help": "Maximum number of retries on Spot interruption (default: 3). Each retry uses exponential backoff. After exhausting retries, the job fails unless --aws-batch-fallback-to-on-demand is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-max-retries"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--aws-batch-max-spot-price-usd": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "aws_batch_max_spot_price_usd",
+  "help": "Maximum Spot price ceiling in USD per vCPU-hour. When set, the executor checks the current Spot price before submitting and rejects jobs that would exceed the ceiling (unless --aws-batch-fallback-to-on-demand is also set).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-max-spot-price-usd"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--aws-batch-on-demand-price": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "aws_batch_on_demand_price",
+  "help": "AWS Batch on-demand price in USD per vCPU-hour for cost tracking (issue #447). When set alongside --track-costs, this rate is used instead of the default $0.0132/vCPU\u00b7hr to estimate job costs.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-on-demand-price"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--aws-batch-queue": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "osimflow-batch-queue",
+  "dest": "aws_batch_queue",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-queue"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--aws-batch-spot-price": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "aws_batch_spot_price",
+  "help": "AWS Batch Spot price in USD per vCPU-hour for cost tracking (issue #447). When set alongside --track-costs, this rate is used instead of the default $0.0036/vCPU\u00b7hr to estimate Spot savings. The on-demand rate is set via --aws-batch-on-demand-price.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-spot-price"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--aws-batch-submit-rps": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "aws_batch_submit_rps",
+  "help": "Submit rate limit in submissions per second, enforced via a shared token-bucket limiter (issue #1010). Default 800 RPS, below AWS Batch's 1000 TPS account limit. Set to a lower value to avoid ThrottlingException on smaller accounts.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--aws-batch-submit-rps"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--azure-batch-account-name": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "azure_batch_account_name",
+  "help": "Azure Batch account name (e.g. osimflowbatch).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--azure-batch-account-name"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--azure-batch-account-url": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "azure_batch_account_url",
+  "help": "Azure Batch account URL (e.g. https://osimflowbatch.eastus.batch.azure.com).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--azure-batch-account-url"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--azure-batch-location": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "eastus",
+  "dest": "azure_batch_location",
+  "help": "Azure region/location for the Batch account (default: eastus).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--azure-batch-location"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--azure-batch-pool-id": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "osimflow-pool",
+  "dest": "azure_batch_pool_id",
+  "help": "Azure Batch pool ID (default: osimflow-pool).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--azure-batch-pool-id"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--azure-fallback-to-on-demand": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "azure_fallback_to_on_demand",
+  "help": "When Azure Spot retries are exhausted, fall back to on-demand VMs instead of failing (issue #352). Requires --azure-use-spot.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--azure-fallback-to-on-demand"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--azure-max-retries": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "3",
+  "dest": "azure_max_retries",
+  "help": "Maximum number of retries on Azure Spot VM interruption (default: 3). Each retry uses exponential backoff. After exhausting retries, the job fails unless --azure-fallback-to-on-demand is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--azure-max-retries"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--azure-use-spot": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "azure_use_spot",
+  "help": "Use Azure Spot VMs (low-priority) for Batch tasks (issue #352). When a Spot interruption occurs, the executor retries up to --azure-max-retries times before falling back to on-demand (if --azure-fallback-to-on-demand is set) or failing.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--azure-use-spot"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--bcl-api-key": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "bcl_api_key",
+  "help": "API key for the NREL Building Component Library (BCL). Required for accessing BCL measures when --validate-measures is set. Can also be set via the BCL_API_KEY environment variable (issue #580).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--bcl-api-key"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--byos-resource-limits": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "byos_resource_limits",
+  "help": "JSON dict of rlimit names to values applied to the BYOS subprocess (issue #343). Example: '{\"RLIMIT_CPU\": 300, \"RLIMIT_AS\": 4294967296}'. resource.error from impossible limits is caught and logged as a warning (non-fatal).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--byos-resource-limits"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--byos-timeout-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "byos_timeout_s",
+  "help": "Wall-clock timeout in seconds for the BYOS subprocess and the real OpenStudio CLI simulation subprocess (issue #1109). When set, a wedged subprocess is killed and the sample fails instead of hanging the campaign forever; a timeout kill is non-transient and is not retried (issue #1534). Default: no timeout (effectively unbounded) because annual EnergyPlus simulations routinely exceed 10 minutes \u2014 bound long runs via the executor's walltime instead, or set this explicitly.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--byos-timeout-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--byos-trust-level": {
+  "action": "_StoreAction",
+  "choices": [
+   "subprocess",
+   "inprocess"
+  ],
+  "const": null,
+  "default": "subprocess",
+  "dest": "byos_trust_level",
+  "help": "BYOS script execution mode (default: subprocess). 'subprocess' runs user scripts in an isolated child process (recommended). 'inprocess' loads scripts directly into the orchestrator process (legacy, less secure).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--byos-trust-level"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--chaos-delay-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "0.1",
+  "dest": "chaos_delay_s",
+  "help": "Delay in seconds applied by ``network_delay`` (issue #1013). Default: 0.1s.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-delay-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--chaos-duration-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "0.5",
+  "dest": "chaos_duration_s",
+  "help": "Duration in seconds for ``cpu_spike`` and ``memory_pressure`` scenarios (issue #1013). Default: 0.5s.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-duration-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--chaos-enabled": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "chaos_enabled",
+  "help": "Enable chaos fault injection during the campaign (issue #1013). Off by default. When set, ``--chaos-scenarios`` lists the injectors (kill_switch, network_delay, cpu_spike, memory_pressure) and ``--chaos-schedule`` controls when they fire (before_step, after_step, per_sample, or none). All chaos faults are non-destructive in this wiring \u2014 the orchestrator is never killed and a fault never aborts the campaign.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--chaos-enabled"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--chaos-fail-after": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "2",
+  "dest": "chaos_fail_after",
+  "help": "Number of inject calls before ``kill_switch`` activates (issue #1013). Default: 2.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-fail-after"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--chaos-intensity": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "0.5",
+  "dest": "chaos_intensity",
+  "help": "CPU intensity fraction (0.0-1.0) for ``cpu_spike`` (issue #1013). Default: 0.5.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-intensity"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--chaos-jitter-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "0.05",
+  "dest": "chaos_jitter_s",
+  "help": "Random jitter in seconds applied by ``network_delay`` (issue #1013). Default: 0.05s.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-jitter-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--chaos-probability": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "1.0",
+  "dest": "chaos_probability",
+  "help": "Per-injector base probability forwarded to ``network_delay``, ``cpu_spike``, and ``memory_pressure`` (issue #1013). 1.0 = always inject. Default: 1.0.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-probability"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--chaos-scenarios": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "chaos_scenarios",
+  "help": "Comma-separated list of chaos scenarios to enable (issue #1013). Used together with ``--chaos-enabled``. Built-in scenarios: ``kill_switch``, ``network_delay``, ``cpu_spike``, ``memory_pressure``. Default: ``kill_switch`` when ``--chaos-enabled`` is set without this flag.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-scenarios"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--chaos-schedule": {
+  "action": "_StoreAction",
+  "choices": [
+   "none",
+   "before_step",
+   "after_step",
+   "per_sample"
+  ],
+  "const": null,
+  "default": "none",
+  "dest": "chaos_schedule",
+  "help": "When to inject chaos faults during the campaign (issue #1013). ``before_step``/``after_step`` fire once per DAG step; ``per_sample`` fires once per sample submission inside the RUN_OPENSTUDIO_SIM and EXTRACT_KPIS fan-outs. ``none`` (default) disables injection even when ``--chaos-enabled`` is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-schedule"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--chaos-size-mb": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "64",
+  "dest": "chaos_size_mb",
+  "help": "Size in MB for the ``memory_pressure`` injector (issue #1013). Default: 64 MB.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--chaos-size-mb"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--cloudwatch-log-group": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "cloudwatch_log_group",
+  "help": "CloudWatch log group name (optional).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--cloudwatch-log-group"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--cloudwatch-namespace": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "OSimFlow",
+  "dest": "cloudwatch_namespace",
+  "help": "CloudWatch namespace for metrics (default: OSimFlow).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--cloudwatch-namespace"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--container-digest": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "container_digest",
+  "help": "Pin container images by SHA256 digest (e.g. 'sha256:abc...' or 'repo@sha256:abc...'). When set, overrides the mutable tag for ALL executors (issue #1081).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--container-digest"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--coordinator-url": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "coordinator_url",
+  "help": "Base URL of the Coordinator service (e.g., https://coordinator.example.com). Required when --detach is set. The CLI will POST to <coordinator-url>/api/v1/coordinator/handoff.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--coordinator-url"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--cosign-oidc-issuer": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "cosign_oidc_issuer",
+  "help": "Expected OIDC issuer for --require-cosign-identity keyless verification (default: https://token.actions.githubusercontent.com).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--cosign-oidc-issuer"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--cost-on-demand-price": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "cost_on_demand_price",
+  "help": "On-demand price per vCPU-hour for cost estimation (USD). Used when cloud provider APIs are unavailable. Default: 0.05 (i.e., $0.05/vCPU\u00b7hour).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--cost-on-demand-price"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--cost-spot-price": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "cost_spot_price",
+  "help": "Spot price per vCPU-hour for cost estimation (USD). Used to estimate potential savings vs on-demand. Default: 0.03 (i.e., $0.03/vCPU\u00b7hour, ~40%% savings).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--cost-spot-price"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--custom_apply_script": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "custom_apply_script",
+  "help": "Path to a .py file defining apply_parameters(...) (BYOS)",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--custom_apply_script"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--custom_kpi_extractor": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "custom_kpi_extractor",
+  "help": "Path to a .py file defining extract_kpis(...) (BYOS)",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--custom_kpi_extractor"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--dask-cluster-type": {
+  "action": "_StoreAction",
+  "choices": [
+   "slurm",
+   "pbs",
+   "kubernetes"
+  ],
+  "const": null,
+  "default": "slurm",
+  "dest": "dask_cluster_type",
+  "help": "Dask-JobQueue cluster backend (default: slurm).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-cluster-type"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--dask-cpus-per-worker": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "2",
+  "dest": "dask_cpus_per_worker",
+  "help": "CPUs per Dask worker (default: 2).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-cpus-per-worker"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--dask-max-workers": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "10",
+  "dest": "dask_max_workers",
+  "help": "Maximum number of Dask workers to scale up to (default: 10).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-max-workers"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--dask-memory-per-worker": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "4GiB",
+  "dest": "dask_memory_per_worker",
+  "help": "Memory per Dask worker (default: 4GiB).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-memory-per-worker"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--dask-min-workers": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "1",
+  "dest": "dask_min_workers",
+  "help": "Minimum number of Dask workers to keep alive (default: 1).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-min-workers"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--dask-project": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "dask_project",
+  "help": "HPC project/account for Dask workers.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-project"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--dask-queue": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "dask_queue",
+  "help": " HPC queue/partition for Dask workers (e.g. short, gpu).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-queue"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--dask-scheduler-address": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "dask_scheduler_address",
+  "help": "Dask scheduler address (e.g. tcp://scheduler:8786). When omitted and --task-queue is 'dask', an embedded single-process LocalCluster is started automatically.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-scheduler-address"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--dask-walltime": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "02:00:00",
+  "dest": "dask_walltime",
+  "help": "Walltime for Dask cluster jobs (default: 02:00:00).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--dask-walltime"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--detach": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "detach",
+  "help": "Hand off the campaign to a remote Coordinator service and exit immediately (Phase 2 fire-and-forget mode). Requires --coordinator-url. The campaign runs on the Coordinator; poll its status via GET <coordinator-url>/api/v1/coordinator/campaigns/<id>.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--detach"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--docker-swarm-image": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "nrel/openstudio:3.11.0",
+  "dest": "docker_swarm_image",
+  "help": "Docker image for Swarm services (default: nrel/openstudio:3.11.0). WARNING: Using 'latest' is not recommended for production due to supply-chain risk \u2014 the image digest can change over time.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--docker-swarm-image"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--docker-swarm-max-poll-interval-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "60.0",
+  "dest": "docker_swarm_max_poll_interval_s",
+  "help": "Docker Swarm max polling interval in seconds (default: 60.0).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--docker-swarm-max-poll-interval-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--docker-swarm-network": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "docker_swarm_network",
+  "help": "Docker network to attach Swarm services to.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--docker-swarm-network"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--docker-swarm-poll-interval-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "5.0",
+  "dest": "docker_swarm_poll_interval_s",
+  "help": "Docker Swarm polling interval in seconds (default: 5.0).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--docker-swarm-poll-interval-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--dry-run": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "dry_run",
+  "help": "Run a single sample in local mode to validate setup before full campaign. Forces n_samples=1, local executor, steps 1-4 only.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--dry-run"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--ecr-repository": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "ecr_repository",
+  "help": "ECR repository URI for OpenStudio container images (e.g. 123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio). When set, the Batch executor pulls from ECR instead of Docker Hub.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--ecr-repository"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--enable-cost-tracking": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "enable_cost_tracking",
+  "help": "Enable campaign cost tracking for cloud/HPC resources (issue #447). When set, estimated and actual costs are recorded per-sample and a cost summary is written to run.json at campaign completion.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--enable-cost-tracking"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--executor": {
+  "action": "_StoreAction",
+  "choices": [
+   "local",
+   "slurm",
+   "aws_batch",
+   "nomad",
+   "azure_batch",
+   "google_batch",
+   "kubernetes",
+   "pbs",
+   "dask_jobqueue",
+   "docker_swarm"
+  ],
+  "const": null,
+  "default": "local",
+  "dest": "executor",
+  "help": "Executor backend (default: local). See --preset for quick-start bundles.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--executor"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--finalize-script": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "finalize_script",
+  "help": "Path to a shell script to run after the campaign completes. Best-effort: a non-zero exit is logged but does NOT fail the campaign. Receives the same env vars as --init-script plus OSIMFLOW_STATUS (success/failure) and OSIMFLOW_DURATION_S.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--finalize-script"
+  ],
+  "required": false,
+  "type": "Path"
+ },
+ "--google-batch-project-id": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "google_batch_project_id",
+  "help": "Google Cloud project ID (e.g. my-project).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--google-batch-project-id"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--google-batch-region": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "us-central1",
+  "dest": "google_batch_region",
+  "help": "Google Cloud region for Batch jobs (default: us-central1).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--google-batch-region"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--google-batch-service-account": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "google_batch_service_account",
+  "help": "Google Cloud service account email for Batch jobs.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--google-batch-service-account"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--google-fallback-to-on-demand": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "google_fallback_to_on_demand",
+  "help": "When Google Spot/preemptible retries are exhausted, fall back to on-demand VMs instead of failing (issue #352). Requires --google-use-spot.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--google-fallback-to-on-demand"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--google-max-retries": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "3",
+  "dest": "google_max_retries",
+  "help": "Maximum number of retries on Google preemptible VM interruption (default: 3). Each retry uses exponential backoff. After exhausting retries, the job fails unless --google-fallback-to-on-demand is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--google-max-retries"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--google-use-spot": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "google_use_spot",
+  "help": "Use Google Spot VMs (preemptible) for Batch jobs (issue #352). When a preemptible VM is interrupted, the executor retries up to --google-max-retries times before falling back to on-demand (if --google-fallback-to-on-demand is set) or failing.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--google-use-spot"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--init-script": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "init_script",
+  "help": "Path to a shell script to run before the campaign starts. Must exit 0 or the campaign aborts. Environment variables OSIMFLOW_OUTDIR, OSIMFLOW_N_SAMPLES, OSIMFLOW_EXECUTOR, and OSIMFLOW_ALGORITHM are set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--init-script"
+  ],
+  "required": false,
+  "type": "Path"
+ },
+ "--input_variables": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "input_variables",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--input_variables"
+  ],
+  "required": true,
+  "type": null
+ },
+ "--kpis": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "kpis",
+  "help": "Restrict KPI extraction to these names (all KPIs if omitted).",
+  "metavar": "KPI",
+  "nargs": "*",
+  "option_strings": [
+   "--kpis"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--kubernetes-backoff-limit": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "0",
+  "dest": "kubernetes_backoff_limit",
+  "help": "Native Job ``backoffLimit`` (default: 0 \u2014 preserves the orchestrator-side retry semantics from ``--max-sample-retries``). Set to >0 to enable K8s-native pod retry as an alternative: the kubelet restarts the failed pod up to this many times without a resubmit round-trip through the orchestrator. Pick one mechanism, not both \u2014 running K8s-native retry and ``--max-sample-retries`` together will double-count failures. (issue #997)",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--kubernetes-backoff-limit"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--kubernetes-max-poll-interval-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "60.0",
+  "dest": "kubernetes_max_poll_interval_s",
+  "help": "Max poll interval for Job status (seconds, default: 60.0).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--kubernetes-max-poll-interval-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--kubernetes-namespace": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "default",
+  "dest": "kubernetes_namespace",
+  "help": "Kubernetes namespace for jobs (default: default).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--kubernetes-namespace"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--kubernetes-poll-interval-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "5.0",
+  "dest": "kubernetes_poll_interval_s",
+  "help": "Poll interval for Job status (seconds, default: 5.0).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--kubernetes-poll-interval-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--kubernetes-queue-name": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "kubernetes_queue_name",
+  "help": "Kueue ClusterQueue name applied as the ``kueue.x-k8s.io/queue-name`` label on Job metadata (issue #997). When set, Kueue manages the Job through suspend/resume and honors fair-sharing, priority, and preemption across the cluster. Inert on clusters without Kueue installed. Example: --kubernetes-queue-name team-a-cpu.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--kubernetes-queue-name"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--kubernetes-ttl-seconds-after-finished": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "kubernetes_ttl_seconds_after_finished",
+  "help": "Native Job ``ttlSecondsAfterFinished`` (default: unset \u2014 Jobs are retained in the API server until manually deleted). Set to a positive integer (seconds) to have the API server garbage-collect completed/failed Jobs after this delay, releasing the etcd footprint and pod resources across a large sweep. (issue #997)",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--kubernetes-ttl-seconds-after-finished"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--log_level": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "INFO",
+  "dest": "log_level",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--log_level"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--max-generations": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "1",
+  "dest": "max_generations",
+  "help": "Maximum number of DAG generations to run (default: 1). Iterative algorithms (NSGA-II, DE) loop the fan-out steps for multiple generations. LHS is single-generation.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--max-generations"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--max-sample-retries": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "3",
+  "dest": "max_sample_retries",
+  "help": "Maximum retry attempts for transient per-sample failures (network timeout, resource contention, etc.). Default: 3. Set to 0 to disable retries. Each retry uses exponential backoff starting at 1s, doubling each attempt up to 60s cap.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--max-sample-retries"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--max-workers": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "4",
+  "dest": "max_workers",
+  "help": "Local executor parallelism",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--max-workers"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--mlflow_tracking_uri": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "mlflow_tracking_uri",
+  "help": "MLflow tracking server URI (e.g. http://localhost:5000). When set, the campaign logs params/metrics/artifacts to MLflow. Requires `pip install osimflow[mlflow]`.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--mlflow_tracking_uri"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--n_samples": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "n_samples",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--n_samples"
+  ],
+  "required": true,
+  "type": "int"
+ },
+ "--no-tui": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "no_tui",
+  "help": "The rich TUI activates automatically when all three conditions are met: (a) rich >= 13.0 is installed, (b) stdout is a TTY (not piped/CI), and (c) --no-tui is not passed. Pass this flag to disable the TUI when piping output or in environments where the TUI causes display issues (issue #1221).",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--no-tui"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-address": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nomad_address",
+  "help": "Nomad cluster HTTP address (e.g. http://nomad.local:4646). Defaults to the NOMAD_ADDR env var or http://127.0.0.1:4646.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-address"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-allocation-resolution-timeout-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "30.0",
+  "dest": "nomad_allocation_resolution_timeout_s",
+  "help": "Timeout in seconds to resolve Nomad EvalID to Allocation ID (default: 30.0).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-allocation-resolution-timeout-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--nomad-allow-insecure-token": {
+  "action": "BooleanOptionalAction",
+  "choices": null,
+  "const": null,
+  "default": "False",
+  "dest": "nomad_allow_insecure_token",
+  "help": "Allow NOMAD_TOKEN to be transmitted without TLS to a non-local Nomad address. Fails closed by default (SEC-009, issue #1450): without this flag, osimflow run --executor nomad raises when a token is configured for a non-local address without TLS. Dev/test only \u2014 mirrors --allow-insecure-storage-endpoint (issue #1386).",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--nomad-allow-insecure-token",
+   "--no-nomad-allow-insecure-token"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-ca-cert": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nomad_ca_cert",
+  "help": "Path to the CA certificate file (PEM) to verify the Nomad server's certificate when --nomad-tls is enabled. If not specified, the system default CA certificates are used.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-ca-cert"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-cert": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nomad_cert",
+  "help": "Path to the client certificate file (PEM) for mTLS authentication with the Nomad cluster. Required when --nomad-tls is enabled.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-cert"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-datacentre": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "dc1",
+  "dest": "nomad_datacentre",
+  "help": "Nomad datacentre to target (default: dc1).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-datacentre"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-dispatch-job-id": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nomad_dispatch_job_id",
+  "help": "Override the Nomad dispatch job ID in dispatch mode (issue #1316). When not set, the executor derives a unique ID from the campaign outdir hash. Setting this is only needed when multiple campaigns must share the same job ID (e.g., to leverage a pre-registered job spec).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-dispatch-job-id"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-dispatch-policy": {
+  "action": "_StoreAction",
+  "choices": [
+   "keep_manual",
+   "force_dispatch",
+   "auto_prefer_dispatch",
+   "direct",
+   "dispatch",
+   "auto"
+  ],
+  "const": null,
+  "default": "keep_manual",
+  "dest": "nomad_dispatch_policy",
+  "help": "Nomad submission policy. Preferred values: 'keep_manual' (default, no auto-switching), 'force_dispatch' (always dispatch), 'auto_prefer_dispatch' (auto-switch to dispatch for large runs). Legacy aliases are accepted for compatibility: 'direct'->'keep_manual', 'dispatch'->'force_dispatch', 'auto'->'auto_prefer_dispatch'.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-dispatch-policy"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-fanout-submit-chunk-size": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "0",
+  "dest": "nomad_fanout_submit_chunk_size",
+  "help": "Optional fan-out submit chunk size for Nomad (0 disables chunking). When >0, fan-out submits at most this many tasks per chunk.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-fanout-submit-chunk-size"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--nomad-fanout-submit-rate-per-sec": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nomad_fanout_submit_rate_per_sec",
+  "help": "Optional fan-out submit rate limit for Nomad (submissions/sec). Used by fan-out steps to pace submission and reduce coordinator pressure.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-fanout-submit-rate-per-sec"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--nomad-key": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nomad_key",
+  "help": "Path to the client private key file (PEM) for mTLS authentication with the Nomad cluster. Required when --nomad-tls is enabled.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-key"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-max-poll-interval-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "60.0",
+  "dest": "nomad_max_poll_interval_s",
+  "help": "Maximum Nomad allocation polling interval in seconds (default: 60.0).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-max-poll-interval-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--nomad-poll-interval-s": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "5.0",
+  "dest": "nomad_poll_interval_s",
+  "help": "Initial Nomad allocation polling interval in seconds (default: 5.0).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nomad-poll-interval-s"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--nomad-remote-results-only": {
+  "action": "BooleanOptionalAction",
+  "choices": null,
+  "const": null,
+  "default": "True",
+  "dest": "nomad_remote_results_only",
+  "help": "DEPRECATED compatibility toggle. True (default) keeps Nomad in remote-results mode. Set --no-nomad-remote-results-only only for temporary migration compatibility; the legacy local-callable mode is scheduled for removal after one minor release.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--nomad-remote-results-only",
+   "--no-nomad-remote-results-only"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-tls": {
+  "action": "BooleanOptionalAction",
+  "choices": null,
+  "const": null,
+  "default": "False",
+  "dest": "nomad_tls",
+  "help": "Enable TLS for the Nomad HTTP API connection. When enabled, use --nomad-cert, --nomad-key, and --nomad-ca-cert to specify client certificate files for mTLS authentication.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--nomad-tls",
+   "--no-nomad-tls"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nomad-tls-verify": {
+  "action": "BooleanOptionalAction",
+  "choices": null,
+  "const": null,
+  "default": "True",
+  "dest": "nomad_tls_verify",
+  "help": "Enable (default) or disable TLS certificate verification for the Nomad HTTP API. Disable with --nomad-tls-verify=false for development with self-signed certificates. SEC-009: protects NOMAD_TOKEN from interception.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--nomad-tls-verify",
+   "--no-nomad-tls-verify"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nsga2-reference-directions": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nsga2_reference_directions",
+  "help": "Reference direction strategy for R-NSGA-II (issue #529). Supported values: 'das-dennis' (Das-Dennis structured points), 'energy' (Riesz s-Energy well-spaced points), 'wedge' (wedge/decomposition-based), 'incremental' (incremental method). Only used when --algorithm is 'nsga2'.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nsga2-reference-directions"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--nsga2-reference-points": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "nsga2_reference_points",
+  "help": "Reference points for R-NSGA-II (issue #529). Comma-separated fractions representing aspiration points on the Pareto front, e.g., '0.25,0.5,0.75' for 2 objectives. Only used when --algorithm is 'nsga2'.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--nsga2-reference-points"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--observability": {
+  "action": "_StoreAction",
+  "choices": [
+   "none",
+   "cloudwatch",
+   "prometheus",
+   "opentelemetry"
+  ],
+  "const": null,
+  "default": "none",
+  "dest": "observability",
+  "help": "Observability backend for campaign metrics (default: none). none = no metrics emitted (zero overhead). cloudwatch = AWS CloudWatch (requires osimflow[aws]). prometheus = Prometheus pushgateway. opentelemetry = OTLP gRPC exporter.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--observability"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--observability-flush-interval": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "30.0",
+  "dest": "observability_flush_interval",
+  "help": "Periodic flush interval in seconds for observability backends (issue #1186). Metrics are flushed at this interval to prevent loss on early crash. Set to 0 to disable periodic flush (flush only at campaign end). Default: 30.0 seconds.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--observability-flush-interval"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--offline": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "offline",
+  "help": "Enable air-gapped / offline mode (issue #261). Skips Docker Hub pulls, PyPI version checks, and online weather downloads. Requires --offline-bundle to be set pointing to a pre-bundled offline asset directory.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--offline"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--offline-bundle": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "offline_bundle",
+  "help": "Path to the offline bundle directory created by scripts/bundle_offline.py. Contains pip/, docker/, and weather/ subdirectories. Required when --offline is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--offline-bundle"
+  ],
+  "required": false,
+  "type": "Path"
+ },
+ "--openstudio_version": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "3.11.0",
+  "dest": "openstudio_version",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--openstudio_version"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--otel-endpoint": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "otel_endpoint",
+  "help": "OpenTelemetry OTLP gRPC endpoint (e.g. \"http://localhost:4317\").",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--otel-endpoint"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--outdir": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "outdir",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--outdir"
+  ],
+  "required": true,
+  "type": null
+ },
+ "--pbs-queue": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "pbs_queue",
+  "help": "PBS queue to submit jobs to (e.g. batch).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--pbs-queue"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--pbs-real": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "pbs_real",
+  "help": "Submit to real PBS (default: debug mode runs locally).",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--pbs-real"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--pbs-server": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "pbs_server",
+  "help": "PBS server/cluster address (e.g. pbsserver). Defaults to the PBS_DEFAULT env var or system default.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--pbs-server"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--preset": {
+  "action": "_StoreAction",
+  "choices": [
+   "local-quick",
+   "local-large",
+   "slurm-hpc",
+   "slurm-gpu",
+   "aws-batch-cloud",
+   "sensitivity-morris",
+   "sensitivity-fast99",
+   "optimization-de",
+   "optimization-nsga2"
+  ],
+  "const": null,
+  "default": null,
+  "dest": "preset",
+  "help": "Apply a named preset of recommended flags for a specific use case. Individual CLI flags override preset values. Presets: local-quick, local-large, slurm-hpc, slurm-gpu, aws-batch-cloud, sensitivity-morris, sensitivity-fast99, optimization-de, optimization-nsga2. Use 'local-quick' for a fast 2-sample local test. Use 'slurm-hpc' for a real Slurm cluster. Use 'aws-batch-cloud' for AWS Batch. Use 'optimization-de' or 'optimization-nsga2' for optimization. (issue #384)",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--preset"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--project": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "",
+  "dest": "project",
+  "help": "Project name to group this campaign under (issue #390). Used for organizing campaigns in the registry. Example: --project 'Building Energy Analysis Q1 2026'.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--project"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--prometheus-port": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "9090",
+  "dest": "prometheus_port",
+  "help": "Prometheus pushgateway port (default: 9090).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--prometheus-port"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--redis-url": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "redis_url",
+  "help": "Redis URL for distributed campaign state (issue #993, T8.2). When set, cache entries shared across nodes/processes are coordinated through Redis and each process uses a private local SQLite file, so concurrent campaigns against the same outdir no longer contend on one SQLite database. Example: redis://localhost:6379/0. Default: single-node SQLite cache (unchanged behaviour).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--redis-url"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--registry": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "registry",
+  "help": "Path to the campaign registry database (default: ~/.osimflow/registry.db). Override the default location for multi-campaign management.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--registry"
+  ],
+  "required": false,
+  "type": "Path"
+ },
+ "--require-cosign-identity": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "require_cosign_identity",
+  "help": "Verify the OpenStudio image signature at campaign init via `cosign verify --certificate-identity <ID>` (keyless, sigstore). The campaign refuses to run when verification fails or the cosign binary is unavailable (issue #1385).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--require-cosign-identity"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--require-trusted-scripts": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": null,
+  "dest": "require_trusted_scripts",
+  "help": "Reject --byos-trust-level inprocess for production hardening (issues #908, #1207). When set, the CLI exits with an error if --byos-trust-level inprocess is also passed. When not set (default), inprocess is blocked by default and this flag must be passed to explicitly allow it in trusted development environments.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--require-trusted-scripts"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--resource-quota": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "resource_quota",
+  "help": "JSON dict of resource quota limits for the campaign (issue #446). Example: '{\"max_samples\": 100, \"max_cost_usd\": 5000.0, \"max_wall_time_min\": 240, \"max_concurrent_samples\": 10}'. All fields are optional. The campaign fails fast at start if a quota is already exceeded, and skips further sample submissions when the quota is exhausted during fan-out steps.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--resource-quota"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--result-storage-backend": {
+  "action": "_StoreAction",
+  "choices": [
+   "local",
+   "s3",
+   "gs",
+   "azure"
+  ],
+  "const": null,
+  "default": "local",
+  "dest": "result_storage_backend",
+  "help": "Result storage backend for multi-node campaigns (issue #339). local = no remote upload (default). s3 = Amazon S3 (or S3-compatible like MinIO/R2). gs = Google Cloud Storage. azure = Azure Blob Storage.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--result-storage-backend"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--result-storage-bucket": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "result_storage_bucket",
+  "help": "Bucket/container name for result storage (issue #339). For S3/gs this is the bucket name; for Azure it is the container name. Required when --result-storage-backend is not 'local'.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--result-storage-bucket"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--result-storage-endpoint": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "result_storage_endpoint",
+  "help": "Custom S3-compatible endpoint URL for result storage (issue #339). Use for MinIO, Cloudflare R2, or other S3-compatible stores. Only valid when --result-storage-backend is 's3'.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--result-storage-endpoint"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--s3-artifact-bucket": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "s3_artifact_bucket",
+  "help": "S3 bucket name for centralized artifact storage (issue #601). When set, base simulation assets (.osm, .epw) are uploaded to S3 once at campaign creation. Remote executor nodes download them directly via pre-signed URLs, eliminating the local-machine bottleneck for large fan-out campaigns.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--s3-artifact-bucket"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--s3-artifact-endpoint": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "s3_artifact_endpoint",
+  "help": "Custom S3-compatible endpoint URL for artifact storage (issue #601). Use for MinIO, Cloudflare R2, or other S3-compatible stores. Only valid when --s3-artifact-bucket is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--s3-artifact-endpoint"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--s3-artifact-prefix": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "s3_artifact_prefix",
+  "help": "S3 prefix within the artifact bucket for this campaign (issue #601). Example: 'campaign-123' or 'project Q1/run-456'. Required when --s3-artifact-bucket is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--s3-artifact-prefix"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--s3-artifact-presigned-url-expiration": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "3600",
+  "dest": "s3_artifact_presigned_url_expiration",
+  "help": "Expiration time in seconds for pre-signed URLs (issue #601). Remote executor nodes must download artifacts within this window. Default: 3600 (1 hour). Min: 60, Max: 43200 (12 hours).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--s3-artifact-presigned-url-expiration"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--s3-artifact-region": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "s3_artifact_region",
+  "help": "AWS region for the S3 artifact bucket (issue #601). When omitted, uses the region from the IAM role or default credential chain. Required for pre-signed URL generation with some bucket configurations.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--s3-artifact-region"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--sample": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "sample",
+  "help": "Run only sample N (0-indexed) through steps 2-4. Skips GENERATE_LHS_SAMPLES; reuses existing samples.json. Useful for debugging a specific failed sample.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--sample"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--shard-count": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "shard_count",
+  "help": "Total number of coordinator shards (partition mode). Requires --shard-index. Samples are assigned by global index modulo shard-count.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--shard-count"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--shard-end": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "shard_end",
+  "help": "Exclusive sample index end for explicit range shard mode. Requires --shard-start.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--shard-end"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--shard-index": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "shard_index",
+  "help": "Zero-based shard index for partition mode. Requires --shard-count.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--shard-index"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--shard-start": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "shard_start",
+  "help": "Inclusive sample index start for explicit range shard mode. Requires --shard-end.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--shard-start"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--skip-preflight": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "skip_preflight",
+  "help": "Skip the PREFLIGHT_RUN_MODEL step that validates the seed model before the full campaign. Useful when the model is known-good or when iterating on downstream steps.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--skip-preflight"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--slurm-account": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "slurm_account",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--slurm-account"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--slurm-constraint": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "slurm_constraint",
+  "help": "Slurm constraint feature (e.g. 'gpu'). Requires submitit >= 1.5.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--slurm-constraint"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--slurm-cost-per-node-hour": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "slurm_cost_per_node_hour",
+  "help": "Slurm cost in USD per node-hour for cost tracking (issue #447). When set alongside --track-costs, this rate is used instead of the default $0.10/node\u00b7hr to estimate job costs.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--slurm-cost-per-node-hour"
+  ],
+  "required": false,
+  "type": "float"
+ },
+ "--slurm-gres": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "slurm_gres",
+  "help": "Slurm generic resources (e.g. 'gpu:1'). Requires submitit >= 1.5.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--slurm-gres"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--slurm-partition": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "short",
+  "dest": "slurm_partition",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--slurm-partition"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--slurm-qos": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "slurm_qos",
+  "help": "Slurm QoS (e.g. 'high'). Requires submitit >= 1.5.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--slurm-qos"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--slurm-real": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "slurm_real",
+  "help": "Submit to real Slurm (default: submitit DebugExecutor)",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--slurm-real"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--task-queue": {
+  "action": "_StoreAction",
+  "choices": [
+   "none",
+   "dask"
+  ],
+  "const": null,
+  "default": "none",
+  "dest": "task_queue",
+  "help": "Distributed task queue backend for fan-out steps (APPLY_PARAMETERS, RUN_OPENSTUDIO_SIM, EXTRACT_KPIS). When 'none' (default), work is submitted directly to the configured --executor. When 'dask', work is submitted to a Dask scheduler (requires --dask-scheduler-address unless a local embedded cluster is acceptable).",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--task-queue"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--template_sim_package": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "template_sim_package",
+  "help": null,
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--template_sim_package"
+  ],
+  "required": true,
+  "type": null
+ },
+ "--track-costs": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "track_costs",
+  "help": "Enable campaign cost tracking (issue #447). Estimates cloud/HPC resource costs and writes a cost summary JSON alongside campaign outputs. Supports AWS Batch (on-demand/Spot), Slurm (per-node-hour), and Local (no cost) executors.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--track-costs"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--uq-failure-threshold": {
+  "action": "_AppendAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "uq_failure_thresholds",
+  "help": "Failure threshold for probability of failure (POF) analysis (issue #530). Format: 'kpi_name=threshold_value' (e.g., 'eui=150'). Can be specified multiple times for multiple KPIs. Used when --algorithm uq is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--uq-failure-threshold"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--uq-method": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "latin_hypercube",
+  "dest": "uq_method",
+  "help": "Uncertainty Quantification (UQ) sampling method (issue #530). Options: 'latin_hypercube' (default) or 'monte_carlo'. Used when --algorithm uq is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--uq-method"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--uq-n-samples": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "uq_n_samples",
+  "help": "Number of Monte Carlo samples for UQ analysis (issue #530). When omitted, defaults to --n_samples. Used when --algorithm uq is set.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--uq-n-samples"
+  ],
+  "required": false,
+  "type": "int"
+ },
+ "--validate-measures": {
+  "action": "_StoreTrueAction",
+  "choices": null,
+  "const": "True",
+  "default": "False",
+  "dest": "validate_measures",
+  "help": "Validate measure arguments against the BCL taxonomy when discovering BCL measures (issue #580). Logs warnings for argument name/type deviations from the expected taxonomy.",
+  "metavar": null,
+  "nargs": "0",
+  "option_strings": [
+   "--validate-measures"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--weather_dir": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": "weather",
+  "dest": "weather_dir",
+  "help": "Name of the weather subdirectory inside template_sim_package that holds .epw files. Default: weather.",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--weather_dir"
+  ],
+  "required": false,
+  "type": null
+ },
+ "--webhook-url": {
+  "action": "_StoreAction",
+  "choices": null,
+  "const": null,
+  "default": null,
+  "dest": "webhook_url",
+  "help": "URL to POST a campaign completion summary to. The POST contains a JSON payload with campaign_id, status, elapsed_s, n_samples, n_succeeded, n_failed, total_cost_usd, and outdir. Best-effort: delivery failures are logged but do not affect campaign status. (issue #283)",
+  "metavar": null,
+  "nargs": null,
+  "option_strings": [
+   "--webhook-url"
+  ],
+  "required": false,
+  "type": null
+ }
+}
