@@ -14,7 +14,6 @@ Tests cover:
 
 from __future__ import annotations
 
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -97,11 +96,17 @@ class TestSpotPriceCache:
         assert cache.get(("us-east-1", "m5.large", "Linux/UNIX")) is None
 
     def test_ttl_expiry(self) -> None:
-        """After TTL, a cached value should miss."""
-        cache = _SpotPriceCache(ttl_s=0.01)
-        cache.set(("us-east-1", "c5.large", "Linux/UNIX"), 0.03)
-        time.sleep(0.02)
-        assert cache.get(("us-east-1", "c5.large", "Linux/UNIX")) is None
+        """After TTL, a cached value should miss (controllable clock, issue #1544)."""
+        clock = {"now": 100.0}
+        with patch(
+            "osimflow.executors.aws_batch_executor.time.monotonic",
+            side_effect=lambda: clock["now"],
+        ):
+            cache = _SpotPriceCache(ttl_s=0.01)
+            cache.set(("us-east-1", "c5.large", "Linux/UNIX"), 0.03)
+            assert cache.get(("us-east-1", "c5.large", "Linux/UNIX")) == 0.03
+            clock["now"] = 200.0  # age the entry past the TTL — no sleep
+            assert cache.get(("us-east-1", "c5.large", "Linux/UNIX")) is None
 
     def test_different_keys_independent(self) -> None:
         cache = _SpotPriceCache(ttl_s=60.0)
@@ -333,14 +338,15 @@ class TestGetSpotPriceCache:
         ec2_mock.describe_spot_price_history.assert_called_once()
 
     def test_cache_miss_after_ttl(self) -> None:
-        """After the cache TTL expires, a new EC2 call should be made."""
+        """After the cache TTL expires, a new EC2 call should be made (controllable clock, issue #1544)."""
         executor = AWSBatchExecutor(
             job_queue="q",
             job_definition="d",
             region_name="us-east-1",
             instance_type="m5.large",
         )
-        # Override the cache with a tiny TTL for testing.
+        # Override the cache with a short TTL — expiry is driven by the
+        # controllable monotonic clock, not wall-clock elapsed time.
         executor._spot_price_cache = _SpotPriceCache(ttl_s=0.01)  # noqa: SLF001
 
         ec2_mock = MagicMock()
@@ -349,9 +355,14 @@ class TestGetSpotPriceCache:
         }
         executor._ec2_client = ec2_mock  # noqa: SLF001
 
-        price1 = executor._get_spot_price()
-        time.sleep(0.02)
-        price2 = executor._get_spot_price()
+        clock = {"now": 1000.0}
+        with patch(
+            "osimflow.executors.aws_batch_executor.time.monotonic",
+            side_effect=lambda: clock["now"],
+        ):
+            price1 = executor._get_spot_price()
+            clock["now"] = 2000.0  # age the cache past the TTL — no sleep
+            price2 = executor._get_spot_price()
 
         assert price1 == pytest.approx(0.05)
         assert price2 == pytest.approx(0.05)

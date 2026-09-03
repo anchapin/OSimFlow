@@ -11,6 +11,7 @@ Tests cover:
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
+from osimflow import tui as tui_mod
 from osimflow.tui import (
     RichTUI,
     _build_display,
@@ -221,21 +223,79 @@ class TestRichTUILifecycle:
             tui.stop()
 
     def test_polling_reads_run_json(self, tmp_path: Path, run_json_file: Path) -> None:
-        """Verify the polling thread reads run.json without crashing."""
-        # Point TUI at the tmp_path where run.json exists
-        tui = RichTUI(tmp_path)
-        tui.start()
-        # Let the poll loop run at least once
-        time.sleep(0.6)
-        tui.stop()
-        # If we got here without exception, the poll loop handled the file.
+        """Verify the polling thread reads run.json and completes a render.
+
+        Deterministic per issue #1544: instead of sleeping past the poll
+        interval and hoping a tick happened, shrink the interval and wait
+        on an event set by a wrapper around ``_render_once`` — so the test
+        only proceeds once a full read→render cycle has completed inside
+        the poll-loop thread.
+        """
+        rendered = threading.Event()
+        reads: list[tuple[Path, dict[str, Any] | None]] = []
+        original_render = tui_mod.RichTUI._render_once
+        original_read = tui_mod._read_run_json
+
+        def _recording_read(path: Path) -> dict[str, Any] | None:
+            result = original_read(path)
+            reads.append((path, result))
+            return result
+
+        def _counting_render(tui: tui_mod.RichTUI) -> None:
+            original_render(tui)
+            rendered.set()
+
+        with (
+            patch.object(tui_mod.RichTUI, "_render_once", _counting_render),
+            patch.object(tui_mod, "_read_run_json", _recording_read),
+            patch.object(tui_mod, "_POLL_INTERVAL", 0.001),
+        ):
+            tui = tui_mod.RichTUI(tmp_path)
+            tui.start()
+            assert rendered.wait(timeout=10.0), (
+                "poll loop never completed a render within the failure bound"
+            )
+            tui.stop()
+        assert tui._thread is None  # stop() joined the thread
+        assert any(path == tmp_path / "run.json" and data is not None for path, data in reads), (
+            f"poll loop must read and parse run.json; observed reads: {reads}"
+        )
 
     def test_polling_handles_missing_run_json(self, tmp_path: Path) -> None:
-        """The polling thread should not crash when run.json doesn't exist."""
-        tui = RichTUI(tmp_path)
-        tui.start()
-        time.sleep(0.6)
-        tui.stop()
+        """The polling thread completes renders when run.json doesn't exist.
+
+        Deterministic per issue #1544: wait on a render-completion event
+        rather than sleeping past the poll interval, then assert every
+        read returned ``None`` (missing file handled, not crashed).
+        """
+        rendered = threading.Event()
+        reads: list[tuple[Path, dict[str, Any] | None]] = []
+        original_render = tui_mod.RichTUI._render_once
+        original_read = tui_mod._read_run_json
+
+        def _recording_read(path: Path) -> dict[str, Any] | None:
+            result = original_read(path)
+            reads.append((path, result))
+            return result
+
+        def _counting_render(tui: tui_mod.RichTUI) -> None:
+            original_render(tui)
+            rendered.set()
+
+        with (
+            patch.object(tui_mod.RichTUI, "_render_once", _counting_render),
+            patch.object(tui_mod, "_read_run_json", _recording_read),
+            patch.object(tui_mod, "_POLL_INTERVAL", 0.001),
+        ):
+            tui = tui_mod.RichTUI(tmp_path)
+            tui.start()
+            assert rendered.wait(timeout=10.0), (
+                "poll loop never completed a render within the failure bound"
+            )
+            tui.stop()
+        assert tui._thread is None  # stop() joined the thread
+        assert reads, "poll loop must have attempted at least one read"
+        assert all(data is None for _, data in reads)
 
 
 # ---------------------------------------------------------------------------

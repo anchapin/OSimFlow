@@ -11,6 +11,7 @@ Verifies:
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -660,18 +661,36 @@ class TestPeriodicFlush:
             mgr.stop_periodic_flush()
 
     def test_periodic_flush_loop_calls_flush_periodically(self) -> None:
-        """The background thread should call flush at the configured interval."""
+        """The background thread calls flush repeatedly (issue #1544).
+
+        Deterministic: count completed flushes via a wrapper and wait on
+        an event set at the 3rd flush, instead of sleeping past ~3
+        intervals and asserting a call count. The timeout is a failure
+        bound, not a timing assumption.
+        """
         cfg = _make_cfg(
             observability="cloudwatch",
             cloudwatch_namespace="TestNS",
-            flush_interval_seconds=0.05,
+            flush_interval_seconds=0.001,
         )
         mgr = ObservabilityManager(cfg)
-        with patch.object(mgr.backend, "flush") as mock_flush:
+        flushes = 0
+        third_flush = threading.Event()
+        original_flush = mgr.flush
+
+        def _counting_flush() -> None:
+            nonlocal flushes
+            flushes += 1
+            if flushes >= 3:
+                third_flush.set()
+            original_flush()
+
+        with patch.object(mgr, "flush", _counting_flush):
             mgr.start_periodic_flush()
-            time.sleep(0.18)
+            assert third_flush.wait(timeout=10.0), "periodic flush loop never completed a 3rd flush"
             mgr.stop_periodic_flush()
-            assert mock_flush.call_count >= 3
+
+        assert flushes >= 3
 
     def test_observability_config_flush_interval(self) -> None:
         """ObservabilityConfig should accept flush_interval_seconds."""
