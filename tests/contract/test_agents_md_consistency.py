@@ -26,8 +26,10 @@ counter to **0**. The tests below parse the reset value straight from
   2. AGENTS.md carries no stale 83% reference     -> test_agents_md_has_no_stale_83_percent
   3. AGENTS.md states the half_open reset value   -> test_agents_md_states_half_open_reset_value
   4. AGENTS.md carries no stale reset-to-1 claim  -> test_agents_md_has_no_stale_half_open_reset
+  5. CLI-flag derivations agree                   -> test_contract_flag_derivations_agree
 """
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -43,6 +45,41 @@ _CIRCUIT_BREAKER = REPO_ROOT / "osimflow" / "circuit_breaker.py"
 
 _COV_FAIL_UNDER_RE = re.compile(r"--cov-fail-under=(\d+)")
 _HALF_OPEN_RESET_RE = re.compile(r"was_half_open[^0-9]*_consecutive_failures\s*=\s*(\d+)")
+
+
+def _load_agents_contract_module() -> object:
+    """Import tools/check_agents_contract.py (tools/ is not a package)."""
+    spec = importlib.util.spec_from_file_location(
+        "check_agents_contract_under_test",
+        REPO_ROOT / "tools" / "check_agents_contract.py",
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_contract_flag_derivations_agree() -> None:
+    """Issue #1575: the contract checker derives the CLI-flag list twice —
+    by building the real parser (which calls the per-executor
+    ``add_arguments`` hooks) and, as a fallback for bare-python
+    environments, by textually scanning ``add_argument("--…')`` literals
+    in ``__main__.py`` + ``executor_configs/*.py``. The two derivations
+    must produce the same set, otherwise CI (fallback) and pre-commit
+    (introspection) enforce different contracts.
+    """
+    mod = _load_agents_contract_module()
+    parsed = mod._cli_flags_from_parser()
+    assert parsed is not None, (
+        "osimflow must be importable in the test venv for the parser-walk "
+        "derivation; if this fails, the textual fallback and this test both "
+        "need revisiting"
+    )
+    textual = mod._cli_flags_from_sources()
+    assert parsed == textual, (
+        f"parser-walk flags missing from textual scan: {sorted(parsed - textual)}; "
+        f"textual-scan flags missing from parser walk: {sorted(textual - parsed)}"
+    )
 
 
 def _parse_gate_pct() -> int:

@@ -34,6 +34,14 @@ from typing import Any, cast
 import yaml
 
 from .byos import ByosTrustLevel
+from .executor_configs import (  # noqa: F401 — re-exported via __all__
+    AWSBatchConfig,
+    AzureBatchConfig,
+    GoogleBatchConfig,
+    LocalConfig,
+    NomadConfig,
+    SlurmConfig,
+)
 from .validation import (
     ValidationError,
     validate_path_within,
@@ -406,180 +414,20 @@ def _coerce_variables_yml_file(path: Path) -> bool:  # noqa: PLR0912
 
 
 # ======================================================================
-# Executor-specific configuration dataclasses (issue #724)
+# Executor-specific configuration dataclasses (issues #724, #1575)
 #
 # These dataclasses group executor-specific fields into dedicated config
 # objects, reducing coupling in CampaignConfig. Each executor config is
 # a frozen dataclass with sensible defaults. CampaignConfig maintains
 # backward compatibility via __getattr__ delegation.
+#
+# Since issue #1575 the definitions live in the per-executor config
+# modules under ``osimflow/executor_configs/`` (each executor owns its
+# ``XConfig`` + its ``add_arguments`` CLI hook there) and are
+# re-exported here — via the top-of-module import — so
+# ``from osimflow.config import SlurmConfig`` (and the ``osimflow``
+# top-level re-export) keep working unchanged.
 # ======================================================================
-
-
-@dataclasses.dataclass(frozen=True)
-class SlurmConfig:
-    """Slurm executor configuration.
-
-    Attributes
-    ----------
-    qos
-        Quality of Service for the Slurm job.
-    constraint
-        Constraint for the Slurm job (e.g., "gpu").
-    gres
-        Generic resource specification (e.g., "gpu:1").
-    cost_per_node_hour
-        Cost per node-hour in USD for cost tracking.
-    """
-
-    qos: str | None = None
-    constraint: str | None = None
-    gres: str | None = None
-    cost_per_node_hour: float = 0.0
-
-
-@dataclasses.dataclass(frozen=True)
-class AWSBatchConfig:
-    """AWS Batch executor configuration.
-
-    Attributes
-    ----------
-    max_spot_price_usd
-        Maximum Spot price in USD per vCPU-hour. When set, the executor
-        queries the current Spot price before submitting and rejects jobs
-        that would exceed the ceiling.
-    fallback_to_on_demand
-        Whether to fall back to on-demand instances when Spot price
-        exceeds the ceiling or max retries are exhausted.
-    max_retries
-        Maximum number of times a spot-interrupted job is retried before
-        falling back or failing.
-    submit_rps
-        Submit rate-limit in requests per second applied via a shared
-        token-bucket limiter (default 800, below AWS Batch's 1000 TPS
-        account limit — issue #1010).
-    """
-
-    max_spot_price_usd: float | None = None
-    fallback_to_on_demand: bool = False
-    max_retries: int = 3
-    submit_rps: float | None = None
-
-
-@dataclasses.dataclass(frozen=True)
-class AzureBatchConfig:
-    """Azure Batch executor configuration.
-
-    Attributes
-    ----------
-    account_name
-        Azure Batch account name.
-    account_url
-        Azure Batch account URL.
-    pool_id
-        Azure Batch pool ID.
-    location
-        Azure region location.
-    use_spot
-        Whether to use Spot/Low-priority instances.
-    fallback_to_on_demand
-        Whether to fall back to on-demand instances when Spot is unavailable.
-    max_retries
-        Maximum number of retries for failed jobs.
-    """
-
-    account_name: str | None = None
-    account_url: str | None = None
-    pool_id: str = "osimflow-pool"
-    location: str = "eastus"
-    use_spot: bool = False
-    fallback_to_on_demand: bool = False
-    max_retries: int = 3
-
-
-@dataclasses.dataclass(frozen=True)
-class GoogleBatchConfig:
-    """Google Cloud Batch executor configuration.
-
-    Attributes
-    ----------
-    project_id
-        Google Cloud project ID.
-    region
-        Google Cloud region.
-    service_account
-        Service account email for the job.
-    use_spot
-        Whether to use Spot/Preemptible instances.
-    fallback_to_on_demand
-        Whether to fall back to on-demand instances when Spot is unavailable.
-    max_retries
-        Maximum number of retries for failed jobs.
-    """
-
-    project_id: str | None = None
-    region: str = "us-central1"
-    service_account: str | None = None
-    use_spot: bool = False
-    fallback_to_on_demand: bool = False
-    max_retries: int = 3
-
-
-@dataclasses.dataclass(frozen=True)
-class NomadConfig:
-    """Nomad executor configuration.
-
-    Attributes
-    ----------
-    dispatch_policy
-        Dispatch policy for job submission.
-    allocation_resolution_timeout_s
-        Timeout for allocation ID resolution.
-    poll_interval_s
-        Polling interval for allocation status.
-    max_poll_interval_s
-        Maximum polling interval (exponential backoff cap).
-    fanout_submit_rate_per_sec
-        Rate limit for fan-out submissions (jobs per second).
-    fanout_submit_chunk_size
-        Chunk size for fan-out submissions.
-    tls
-        Whether to use TLS for Nomad connection.
-    cert
-        Path to client certificate file.
-    key
-        Path to client key file.
-    ca_cert
-        Path to CA certificate file.
-    allow_insecure_token
-        Explicit opt-out allowing the Nomad ACL token to transit without
-        TLS to a non-local address (issue #1450; dev/test only).
-    """
-
-    dispatch_policy: str = "keep_manual"
-    allocation_resolution_timeout_s: float = 30.0
-    poll_interval_s: float = 5.0
-    max_poll_interval_s: float = 60.0
-    fanout_submit_rate_per_sec: float | None = None
-    fanout_submit_chunk_size: int = 0
-    tls: bool = False
-    cert: Path | None = None
-    key: Path | None = None
-    ca_cert: Path | None = None
-    allow_insecure_token: bool = False
-
-
-@dataclasses.dataclass(frozen=True)
-class LocalConfig:
-    """Local executor configuration.
-
-    Attributes
-    ----------
-    max_workers
-        Maximum number of parallel workers (stored separately, accessed
-        via CLI --max-workers, not this config).
-    """
-
-    max_workers: int = 1
 
 
 # ======================================================================

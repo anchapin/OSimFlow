@@ -124,9 +124,11 @@ SKIP_DIRS = {".agents", ".github", "__pycache__", ".venv", "node_modules", ".git
 
 # argparse surfaces that define OSimFlow's own `--flags`. Parsed from
 # source at check time, so flag renames keep the check in sync without
-# touching this file.
+# touching this file. Since issue #1575 the per-executor flags live in
+# the add_arguments hook modules under osimflow/executor_configs/.
 CLI_FLAG_SOURCE_FILES: list[Path] = [
     REPO_ROOT / "osimflow" / "__main__.py",
+    *sorted((REPO_ROOT / "osimflow" / "executor_configs").glob("*.py")),
     *sorted((REPO_ROOT / "osimflow" / "_work_scripts").glob("*.py")),
     *sorted((REPO_ROOT / "bin").glob("*.py")),
     *sorted((REPO_ROOT / "scripts").glob("*.py")),
@@ -205,6 +207,7 @@ USER_GUIDE_SUBCOMMAND_EXEMPTIONS: dict[str, str] = {}
 
 USER_GUIDE_REL_PATH = Path("docs") / "user-guide.md"
 MAIN_MODULE_REL_PATH = Path("osimflow") / "__main__.py"
+EXECUTOR_CONFIGS_REL_DIR = Path("osimflow") / "executor_configs"
 
 # Matches the subcommand name at the start of an add_parser( chunk.
 _ADD_PARSER_NAME_AT_START_RE = re.compile(r'\s*"([a-z][a-z0-9-]*)"')
@@ -221,6 +224,23 @@ def _collect_main_cli_flags(main_src: str) -> set[str]:
         m = _ADD_ARGUMENT_FLAG_AT_START_RE.match(chunk)
         if m:
             flags.add(m.group(1))
+    return flags
+
+
+def _collect_executor_hook_cli_flags() -> set[str]:
+    """``--flags`` declared by the per-executor ``add_arguments`` hook
+    modules under ``osimflow/executor_configs/`` (issue #1575). These
+    moved out of ``__main__.py``; user-guide coverage must still find
+    them, so the coverage check unions this set with the
+    ``__main__.py`` flags.
+    """
+    flags: set[str] = set()
+    hook_dir = REPO_ROOT / EXECUTOR_CONFIGS_REL_DIR
+    for path in sorted(hook_dir.glob("*.py")):
+        for chunk in path.read_text().split("add_argument(")[1:]:
+            m = _ADD_ARGUMENT_FLAG_AT_START_RE.match(chunk)
+            if m:
+                flags.add(m.group(1))
     return flags
 
 
@@ -445,7 +465,10 @@ def main() -> int:
     if user_guide.is_file() and main_module.is_file():
         main_src = main_module.read_text()
         guide_text = user_guide.read_text()
-        main_flags = _collect_main_cli_flags(main_src)
+        # Issue #1575: executor flags moved from __main__.py into the
+        # per-executor add_arguments hooks — union both surfaces so
+        # user-guide coverage keeps requiring every CLI flag.
+        main_flags = _collect_main_cli_flags(main_src) | _collect_executor_hook_cli_flags()
         subcommands = _collect_main_subcommands(main_src)
         rel_guide = user_guide.relative_to(REPO_ROOT)
         for err in _check_user_guide_flag_coverage(main_flags, guide_text):

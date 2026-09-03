@@ -37,8 +37,9 @@ import random  # noqa: F401 — patch seam: tests patch osimflow.executors.rando
 import time  # noqa: F401 — patch seam: tests patch osimflow.executors.time.sleep / time.monotonic
 from collections.abc import Callable
 from importlib.metadata import entry_points
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from osimflow.executor_configs.base import ExecutorArgumentHook
 from osimflow.executors.aws_batch_executor import (
     _AWSBatchHandle,
     _SpotPriceCache,
@@ -175,6 +176,11 @@ class ExecutorRegistry:
 
     Plugin executors that need CLI configuration should accept ``**kwargs``
     in their ``__init__`` and receive forwarded CLI arguments (issue #1275).
+    Since issue #1575 they can also declare their own ``--flags``: define
+    an ``add_arguments(parser_group)`` staticmethod on the class (it is
+    auto-registered by :meth:`discover_plugins`) or call
+    ``ExecutorRegistry.register_arguments`` /
+    ``osimflow.executor_configs.register_executor_arguments`` directly.
     """
 
     # Anchored in ``base.py`` (issue #1463): class-level dict literals
@@ -267,6 +273,42 @@ class ExecutorRegistry:
         cls._health_checks.clear()
 
     @classmethod
+    def register_arguments(cls, name: str, hook: ExecutorArgumentHook) -> None:
+        """Register a per-executor CLI argument hook (issue #1575).
+
+        *hook* is an ``add_arguments(parser_group)`` callable that
+        registers the executor's ``--flags`` on the ``run`` /
+        ``warm-cache`` subparser.
+        ``osimflow.__main__._add_run_args`` invokes every registered
+        hook (via ``osimflow.executor_configs.add_executor_arguments``)
+        instead of hand-coding the executor argparse tree, so a
+        third-party executor's configuration finally has the same home
+        as a built-in's. Mirrors :meth:`register` semantics —
+        re-registering the same name overwrites the previous hook.
+
+        The hook registry itself is anchored in
+        ``osimflow/executor_configs/base.py`` (issue #1463 pattern) so it
+        survives ``importlib.reload`` of either package ``__init__``.
+        """
+        from osimflow.executor_configs.base import (  # noqa: PLC0415
+            register_executor_arguments,
+        )
+
+        register_executor_arguments(name, hook)
+
+    @classmethod
+    def iter_argument_hooks(cls) -> list[tuple[str, ExecutorArgumentHook]]:
+        """Return ``[(name, hook), ...]`` sorted by executor name (issue #1575).
+
+        Delegates to ``osimflow.executor_configs.iter_executor_argument_hooks``.
+        """
+        from osimflow.executor_configs.base import (  # noqa: PLC0415
+            iter_executor_argument_hooks,
+        )
+
+        return iter_executor_argument_hooks()
+
+    @classmethod
     def discover_plugins(cls) -> int:
         """Discover and auto-register executors from installed entry points.
 
@@ -314,6 +356,15 @@ class ExecutorRegistry:
                 continue
 
             cls.register(ep.name, obj)
+
+            # Auto-register the plug-in's CLI argument hook when it
+            # follows the ``add_arguments(parser_group)`` staticmethod
+            # convention (issue #1575) — the same hook contract the
+            # built-in executors use in ``osimflow/executor_configs/``.
+            hook = getattr(obj, "add_arguments", None)
+            if callable(hook):
+                cls.register_arguments(ep.name, cast("ExecutorArgumentHook", hook))
+
             log.info("discovered executor plug-in '%s' -> %s", ep.name, ep.value)
             count += 1
 
