@@ -4,10 +4,14 @@ Covers:
 - ResourceQuota dataclass: all fields, defaults, parsing
 - _parse_resource_quota: JSON string → ResourceQuota | None
 - _enforce_start_quota: fail-fast at campaign start
-- _check_quota_exceeded: mid-campaign quota checks
+- _check_quota_exceeded: mid-campaign quota checks (including
+  per-sample cost accrual and the once-per-campaign quota.exceeded
+  alert — issue #1533)
 - _effective_max_workers: max_concurrent_samples bounding
 - QuotaExceededError: attributes and message
-- Integration: _submit_and_await_all stops on quota exceeded
+
+End-to-end wiring (run() start check + fan-out chunk checks) is
+covered by tests/integration/test_quota_enforcement.py (issue #1533).
 """
 
 from concurrent.futures import Future
@@ -320,6 +324,55 @@ class TestCheckQuotaExceeded:
         campaign.trace.total_cost_usd = 15.0
         assert campaign._check_quota_exceeded() is True
 
+    def test_max_cost_accrued_from_sample_state_trips_mid_campaign(self, tmp_path: Path) -> None:
+        """Mid-campaign cost check sums per-sample cost_usd (issue #1533).
+
+        ``trace.total_cost_usd`` is only refreshed at finalize time, so
+        the mid-campaign check must see the per-sample costs recorded by
+        the RUN_OPENSTUDIO_SIM fan-out.
+        """
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "workflow.osw").write_text("{}")
+        var_file = tmp_path / "variables.yml"
+        var_file.write_text("variables: []")
+        out = tmp_path / "out"
+        out.mkdir()
+
+        cfg = _cfg(
+            var_file,
+            pkg,
+            out,
+            resource_quota=ResourceQuota(max_cost_usd=12.0),
+        )
+        campaign = Campaign(cfg, executor=_NoOpExecutor())
+        # trace.total_cost_usd is still 0.0 (finalize not run yet) but
+        # three sim handles already reported $5 each.
+        campaign._sample_state["s0"] = {"sim_exit_code": 0, "cost_usd": 5.0}
+        campaign._sample_state["s1"] = {"sim_exit_code": 0, "cost_usd": 5.0}
+        campaign._sample_state["s2"] = {"sim_exit_code": 0, "cost_usd": 5.0}
+        assert campaign._check_quota_exceeded() is True
+
+    def test_max_cost_below_accrued_returns_false(self, tmp_path: Path) -> None:
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "workflow.osw").write_text("{}")
+        var_file = tmp_path / "variables.yml"
+        var_file.write_text("variables: []")
+        out = tmp_path / "out"
+        out.mkdir()
+
+        cfg = _cfg(
+            var_file,
+            pkg,
+            out,
+            resource_quota=ResourceQuota(max_cost_usd=12.0),
+        )
+        campaign = Campaign(cfg, executor=_NoOpExecutor())
+        campaign._sample_state["s0"] = {"sim_exit_code": 0, "cost_usd": 5.0}
+        campaign._sample_state["s1"] = {"sim_exit_code": 0, "cost_usd": 5.0}
+        assert campaign._check_quota_exceeded() is False
+
     def test_max_wall_time_exceeded_returns_true(self, tmp_path: Path) -> None:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
@@ -339,6 +392,100 @@ class TestCheckQuotaExceeded:
         # Campaign started 2 minutes ago
         campaign.trace.started_at = campaign.trace.started_at - 120.0
         assert campaign._check_quota_exceeded() is True
+
+
+# ---------------------------------------------------------------------------
+# Campaign._check_quota_exceeded — quota.exceeded alert (issue #1533)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingAlertManager:
+    """Minimal AlertManager stand-in: records notify() calls."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def notify(self, event_type: str, context: dict[str, Any]) -> None:
+        self.events.append((event_type, context))
+
+
+class TestQuotaExceededAlert:
+    def test_mid_campaign_trip_fires_quota_exceeded_alert(self, tmp_path: Path) -> None:
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "workflow.osw").write_text("{}")
+        var_file = tmp_path / "variables.yml"
+        var_file.write_text("variables: []")
+        out = tmp_path / "out"
+        out.mkdir()
+
+        cfg = _cfg(
+            var_file,
+            pkg,
+            out,
+            resource_quota=ResourceQuota(max_cost_usd=10.0),
+        )
+        campaign = Campaign(cfg, executor=_NoOpExecutor())
+        alerts = _RecordingAlertManager()
+        campaign._alert_manager = alerts
+        campaign.trace.total_cost_usd = 15.0
+
+        assert campaign._check_quota_exceeded() is True
+        assert len(alerts.events) == 1
+        event_type, context = alerts.events[0]
+        assert event_type == "quota.exceeded"
+        assert context["quota_type"] == "max_cost_usd"
+        assert context["limit"] == 10.0
+        assert context["current"] == 15.0
+
+    def test_alert_fires_once_per_campaign_across_repeated_checks(self, tmp_path: Path) -> None:
+        """Chunk boundaries re-check the quota; the alert must not storm."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "workflow.osw").write_text("{}")
+        var_file = tmp_path / "variables.yml"
+        var_file.write_text("variables: []")
+        out = tmp_path / "out"
+        out.mkdir()
+
+        cfg = _cfg(
+            var_file,
+            pkg,
+            out,
+            resource_quota=ResourceQuota(max_samples=2),
+        )
+        campaign = Campaign(cfg, executor=_NoOpExecutor())
+        alerts = _RecordingAlertManager()
+        campaign._alert_manager = alerts
+        campaign._sample_state["s0"] = {"apply_exit_code": 0}
+        campaign._sample_state["s1"] = {"apply_exit_code": 0}
+
+        # Simulate the three fan-out loops each checking per chunk.
+        for _ in range(3):
+            assert campaign._check_quota_exceeded() is True
+        assert len(alerts.events) == 1
+
+    def test_no_alert_when_quota_not_tripped(self, tmp_path: Path) -> None:
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "workflow.osw").write_text("{}")
+        var_file = tmp_path / "variables.yml"
+        var_file.write_text("variables: []")
+        out = tmp_path / "out"
+        out.mkdir()
+
+        cfg = _cfg(
+            var_file,
+            pkg,
+            out,
+            resource_quota=ResourceQuota(max_cost_usd=100.0),
+        )
+        campaign = Campaign(cfg, executor=_NoOpExecutor())
+        alerts = _RecordingAlertManager()
+        campaign._alert_manager = alerts
+
+        assert campaign._check_quota_exceeded() is False
+        assert alerts.events == []
 
 
 # ---------------------------------------------------------------------------

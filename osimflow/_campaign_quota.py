@@ -8,6 +8,13 @@ class (issue #446 originally introduced the quota guards):
   ``max_wall_time_min``),
 - fan-out parallelism bounding (``max_concurrent_samples``).
 
+Since issue #1533 the guard is wired into ``Campaign.run()``: the
+start check runs before the init hook, and every fan-out submission
+loop (APPLY_PARAMETERS / RUN_OPENSTUDIO_SIM / EXTRACT_KPIS) calls
+``check_quota_exceeded()`` at each chunk boundary, stopping new
+submissions (and firing the once-per-campaign ``quota.exceeded``
+alert) when a hard limit trips.
+
 The ``CampaignQuotaGuard`` is constructed with the campaign config,
 the live :class:`~osimflow.monitoring.RunTrace`, the shared
 per-sample state dict, the configured ``max_workers``, and an alert
@@ -67,6 +74,10 @@ class CampaignQuotaGuard:
         self._sample_state = sample_state
         self._max_workers = max_workers
         self._maybe_alert = maybe_alert
+        # Mid-campaign stop alerts fire once per campaign (issue #1533):
+        # every fan-out chunk boundary re-checks the quota, but the
+        # ``quota.exceeded`` alert must not storm on each check.
+        self._quota_stop_alerted = False
 
     def enforce_start_quota(self) -> None:
         """Fail fast if the campaign's resource quota is already exceeded at start.
@@ -117,6 +128,10 @@ class CampaignQuotaGuard:
 
         Does NOT check ``max_concurrent_samples`` — that is enforced
         by bounding ``max_workers`` at construction time.
+
+        When a hard limit trips, the ``quota.exceeded`` alert fires
+        (once per campaign — issue #1533) so the documented alert
+        surface matches runtime behaviour.
         """
         quota = self._cfg.resource_quota
         if quota is None:
@@ -134,15 +149,19 @@ class CampaignQuotaGuard:
                     submitted,
                     quota.max_samples,
                 )
+                self._alert_quota_stop("max_samples", quota.max_samples, submitted)
                 return True
 
-        if quota.max_cost_usd is not None and self._trace.total_cost_usd >= quota.max_cost_usd:
-            log.warning(
-                "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
-                self._trace.total_cost_usd,
-                quota.max_cost_usd,
-            )
-            return True
+        if quota.max_cost_usd is not None:
+            accrued = self._accrued_cost_usd()
+            if accrued >= quota.max_cost_usd:
+                log.warning(
+                    "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
+                    accrued,
+                    quota.max_cost_usd,
+                )
+                self._alert_quota_stop("max_cost_usd", quota.max_cost_usd, accrued)
+                return True
 
         elapsed_min = (time.time() - self._trace.started_at) / 60.0
         if quota.max_wall_time_min is not None and elapsed_min >= quota.max_wall_time_min:
@@ -151,9 +170,63 @@ class CampaignQuotaGuard:
                 elapsed_min,
                 quota.max_wall_time_min,
             )
+            self._alert_quota_stop("max_wall_time_min", quota.max_wall_time_min, elapsed_min)
             return True
 
         return False
+
+    def _accrued_cost_usd(self) -> float:
+        """Return the campaign cost accrued so far (issue #1533).
+
+        Mid-campaign, per-sample costs live in the shared
+        ``_sample_state`` dict (populated by the RUN_OPENSTUDIO_SIM
+        fan-out as handles report ``cost_usd``); ``trace.total_cost_usd``
+        is only refreshed from those per-sample values at finalize time.
+        Sum the per-sample costs and take the max with the trace total
+        so the check works at any point without double counting (the
+        trace total and the sample-state sum are the same figure once
+        both are populated).
+        """
+        accrued = 0.0
+        for state in self._sample_state.values():
+            cost_obj = state.get("cost_usd")
+            if cost_obj is None:
+                continue
+            try:
+                accrued += float(str(cost_obj))
+            except (TypeError, ValueError):
+                continue
+        return max(accrued, self._trace.total_cost_usd)
+
+    def _alert_quota_stop(
+        self,
+        quota_type: str,
+        limit: int | float,
+        current: int | float,
+    ) -> None:
+        """Fire the ``quota.exceeded`` alert once per campaign (issue #1533).
+
+        The fan-out loops call :meth:`check_quota_exceeded` at every
+        chunk boundary; this dedup guard keeps the alert surface at
+        one notification per campaign regardless of how many checks
+        trip.
+        """
+        if self._quota_stop_alerted:
+            return
+        self._quota_stop_alerted = True
+        self._maybe_alert(
+            "quota.exceeded",
+            {
+                "campaign_id": self._trace.campaign_id,
+                "quota_type": quota_type,
+                "limit": limit,
+                "current": current,
+                "message": (
+                    f"{quota_type} quota reached ({current} >= {limit}) — "
+                    "stopping further sample submissions"
+                ),
+            },
+        )
 
     def effective_max_workers(self) -> int:
         """Return the effective max_workers bounded by max_concurrent_samples quota.
