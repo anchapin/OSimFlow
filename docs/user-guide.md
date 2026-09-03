@@ -926,15 +926,22 @@ additional defence-in-depth layer on top of that isolation.
 ### 7.2 Time-Series Management
 
 By default, OSimFlow aggregates time-series data to **monthly** resolution
-in `aggregated_results.csv` to keep file sizes manageable. Raw hourly data
-stays in per-sample `eplusout.sql` files.
+in `timeseries_aggregated.csv`/`.parquet` to keep file sizes manageable —
+there is no `osimflow run` flag that changes this. Raw hourly data stays
+in per-sample `eplusout.sql` files.
 
-Control the resolution with `--ts_resolution`:
+To re-aggregate a completed campaign at another resolution, re-run the
+`bin/aggregate_results.py` work script directly with its
+`--ts_resolution` flag:
 
 ```bash
-osimflow run \
-  --ts_resolution daily \
-  ...
+python bin/aggregate_results.py \
+  --kpis results/work/kpis/kpi_*.json \
+  --simulation_dirs results/work/sim/* \
+  --out_csv results/aggregated_results.csv \
+  --out_parquet results/aggregated_results.parquet \
+  --out_failed results/failed_simulations.csv \
+  --ts_resolution daily
 ```
 
 Options: `hourly`, `daily`, `monthly` (default), `annual`.
@@ -1326,9 +1333,9 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 
 The remaining four DAG steps do **not** consume `--max-sample-retries`:
 
-- `GENERATE_LHS_SAMPLES`, `PREFLIGHT_RUN_MODEL`, `AGGREGATE_RESULTS`, `GENERATE_BASIC_PLOTS` — all run **once per generation** (no per-sample fan-out). They have no transient-retry failure mode that the orchestrator-level retry knob is designed to address; tune resilience for those steps via the underlying executor (e.g. `--kubernetes-backoffLimit`, see below).
+- `GENERATE_LHS_SAMPLES`, `PREFLIGHT_RUN_MODEL`, `AGGREGATE_RESULTS`, `GENERATE_BASIC_PLOTS` — all run **once per generation** (no per-sample fan-out). They have no transient-retry failure mode that the orchestrator-level retry knob is designed to address; tune resilience for those steps via the underlying executor (e.g. `--kubernetes-backoff-limit`, see below).
 
-**Interaction with Kubernetes `backoffLimit`** — `--max-sample-retries` and `--kubernetes-backoffLimit` are **alternatives, not complements**. The kubelet-side `backoffLimit` restarts a failed pod inside the same Job without a resubmit round-trip through the orchestrator; `--max-sample-retries` resubmits the entire Job with the same parameter sample. Running both will **double-count failures** (a K8s pod restart counts as one failure to the orchestrator, which may then resubmit again). Pick one. See [`docs/kubernetes-deployment.md`](kubernetes-deployment.md#cli-flags) for the full `--kubernetes-backoffLimit` table and the "Kueue Interplay" section for the trade-off analysis.
+**Interaction with Kubernetes `backoffLimit`** — `--max-sample-retries` and `--kubernetes-backoff-limit` are **alternatives, not complements**. The kubelet-side `backoffLimit` restarts a failed pod inside the same Job without a resubmit round-trip through the orchestrator; `--max-sample-retries` resubmits the entire Job with the same parameter sample. Running both will **double-count failures** (a K8s pod restart counts as one failure to the orchestrator, which may then resubmit again). Pick one. See [`docs/kubernetes-deployment.md`](kubernetes-deployment.md#cli-flags) for the full `--kubernetes-backoff-limit` table and the "Kueue Interplay" section for the trade-off analysis.
 
 **Per-sample cost impact** — the retry knob is a primary lever on campaign cost and result completeness. With `--max-sample-retries 3` and a transient-failure rate of `p`, the expected number of orchestrator-side submissions per sample is roughly `1 / (1 - p)` for `p < 1`, so a 5% transient-failure rate on a 1000-sample campaign adds ~50 expected resubmits. Set to `0` for hard-fail-fast (debug) workflows.
 

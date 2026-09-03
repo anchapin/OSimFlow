@@ -63,45 +63,52 @@ files. These files are only copied to the output directory when
 
 ---
 
-## Using `--ts_resolution`
+## Controlling aggregation resolution
 
-The `--ts_resolution` flag controls the aggregation level in the
-`timeseries_aggregated.csv` output:
+There is **no `--ts_resolution` flag on `osimflow run`**. The campaign DAG's
+`AGGREGATE_RESULTS` step always aggregates at **monthly** resolution — that
+is the work-layer default in `osimflow/work.py:aggregate_results`
+(`ts_resolution="monthly"`), and no campaign-level override is exposed.
+
+`--ts_resolution` **is** a real flag of the underlying
+[`bin/aggregate_results.py`](../bin/aggregate_results.py) work script. To
+get a different resolution, re-run the aggregator directly on a completed
+campaign's per-sample outputs:
 
 ```bash
-# Default: monthly aggregation (recommended for campaigns > 100 samples)
-osimflow run \
-  --executor local \
-  --ts_resolution monthly \
-  --input_variables variables.yml \
-  --n_samples 500 \
-  --outdir ./results
-
-# Daily aggregation for peak-day analysis
-osimflow run \
-  --executor local \
-  --ts_resolution daily \
-  --input_variables variables.yml \
-  --n_samples 100 \
-  --outdir ./results
+# Daily aggregation for peak-day analysis (re-aggregate existing outputs):
+python bin/aggregate_results.py \
+  --kpis results/work/kpis/kpi_*.json \
+  --simulation_dirs results/work/sim/* \
+  --out_csv results/aggregated_results.csv \
+  --out_parquet results/aggregated_results.parquet \
+  --out_failed results/failed_simulations.csv \
+  --ts_resolution daily
 
 # Annual — summary only
-osimflow run \
-  --executor local \
-  --ts_resolution annual \
-  --input_variables variables.yml \
-  --n_samples 1000 \
-  --outdir ./results
+python bin/aggregate_results.py \
+  --kpis results/work/kpis/kpi_*.json \
+  --simulation_dirs results/work/sim/* \
+  --out_csv results/aggregated_results.csv \
+  --out_parquet results/aggregated_results.parquet \
+  --out_failed results/failed_simulations.csv \
+  --ts_resolution annual
 
-# Hourly — only with --archive_intermediates to keep .sql files
-osimflow run \
-  --executor local \
-  --ts_resolution hourly \
-  --archive_intermediates \
-  --input_variables variables.yml \
-  --n_samples 10 \
-  --outdir ./results
+# Hourly — only sensible when --archive_intermediates kept the .sql files
+python bin/aggregate_results.py \
+  --kpis results/work/kpis/kpi_*.json \
+  --simulation_dirs results/work/sim/* \
+  --out_csv results/aggregated_results.csv \
+  --out_parquet results/aggregated_results.parquet \
+  --out_failed results/failed_simulations.csv \
+  --ts_resolution hourly
 ```
+
+Choices: `hourly`, `daily`, `monthly` (default), `annual`. The aggregator
+also accepts `--ts_outdir` to place `timeseries_aggregated.csv`/`.parquet`
+somewhere other than the `--out_csv` directory, and `--baseline_sample_id`
+/ `--samples_json` to reproduce the campaign's baseline-comparison and
+parameter-merge columns.
 
 > **Warning:** Using `hourly` resolution for large campaigns (>100 samples)
 > produces very large CSV files. Prefer `monthly` or `daily` and query the
@@ -164,14 +171,15 @@ Output:Variable, *, !- Key Value
 
 ### 2. Use monthly aggregation for campaigns > 100 samples
 
-```bash
-osimflow run --ts_resolution monthly --n_samples 1000 ...
-```
+Monthly is the campaign default — no flag needed. To re-aggregate
+existing outputs at another resolution, re-run `bin/aggregate_results.py`
+with `--ts_resolution` (see "Controlling aggregation resolution" above).
 
 ### 3. Use Parquet for downstream analysis
 
-The `--out_parquet` flag writes columnar Parquet files that are ~50-70%
-smaller than CSV and much faster to read with pandas/DuckDB:
+The aggregator always writes **both** `aggregated_results.csv` and
+`aggregated_results.parquet`. The Parquet files are ~50-70% smaller than
+CSV and much faster to read with pandas/DuckDB:
 
 ```python
 import pandas as pd

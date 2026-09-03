@@ -271,12 +271,74 @@ def test_docs_sync() -> None:
 
     The check walks docs/**/*.md, extracts path-like references (in
     backticks) and `bin/*.py` script names, and asserts each one exists
-    in the working tree. `<!-- docs-skip -->` opts a file out.
+    in the working tree. Since issue #1548 it also asserts every
+    backticked `--flag` resolves to a real `add_argument` on an OSimFlow
+    argparse surface (or an explicit FOREIGN_CLI_FLAGS exemption).
+    `<!-- docs-skip -->` opts a file out.
     """
     res = _run([sys.executable, "tools/check_docs_sync.py"])
     assert res.returncode == 0, (
         f"docs sync check failed:\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
+
+
+def _load_docs_sync_module() -> object:
+    """Import tools/check_docs_sync.py as a module (tools/ is not a package)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_docs_sync_under_test",
+        REPO_ROOT / "tools" / "check_docs_sync.py",
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_docs_sync_flag_check_catches_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1548: the strict flag check must reject backticked `--flag`
+    names that argparse would reject — fabricated flags, camelCase
+    misspellings (`--kubernetes-backoffLimit`), and underscore
+    misspellings (`--enable_cost_tracking`)."""
+    mod = _load_docs_sync_module()
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path, raising=False)
+    known = mod._collect_known_cli_flags()
+    assert "--kubernetes-backoff-limit" in known  # real flag (dash form)
+    assert "--no-nomad-remote-results-only" in known  # BooleanOptionalAction
+
+    doc = tmp_path / "flag_drift.md"
+    doc.write_text(
+        "Bad flags: `--totally-fabricated`, `--kubernetes-backoffLimit`, "
+        "`--enable_cost_tracking`.\n"
+    )
+    errors, checked = mod._check_file(doc, known)
+    assert checked
+    flagged = [err for _, err in errors]
+    assert any("--totally-fabricated" in e for e in flagged)
+    assert any("--kubernetes-backoffLimit" in e for e in flagged)
+    assert any("--enable_cost_tracking" in e for e in flagged)
+
+
+def test_docs_sync_flag_check_accepts_known_and_foreign(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1548: real flags, work-script flags, and exempted foreign
+    flags must all pass the strict check."""
+    mod = _load_docs_sync_module()
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path, raising=False)
+    known = mod._collect_known_cli_flags()
+    doc = tmp_path / "flag_ok.md"
+    doc.write_text(
+        "OK flags: `--executor`, `--ts_resolution` (aggregator work "
+        "script), `--rm` (docker, exempted), "
+        "`--no-nomad-remote-results-only`.\n"
+    )
+    errors, checked = mod._check_file(doc, known)
+    assert checked
+    assert not errors
 
 
 def test_agents_md_testing_section_mentions_ci_workflow() -> None:

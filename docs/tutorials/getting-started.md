@@ -336,4 +336,7 @@ Your template_sim_package is missing required files. Ensure it contains `model.o
 
 ### "Cache is stale" warnings
 
-This is normal after editing variables.yml or changing algorithm parameters. Use `--force` to bypass cache if needed.
+This is normal after editing variables.yml or changing algorithm parameters —
+cache keys hash the campaign inputs and the per-step code, so the next run
+re-generates the affected steps automatically. To force a full re-run, point
+`--outdir` at a fresh directory (or delete the old one).

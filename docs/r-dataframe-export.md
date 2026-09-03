@@ -55,7 +55,7 @@ results <- read_parquet("results/aggregated_results.parquet")
 # Read failed simulations
 failures <- read_parquet("results/failed_simulations.parquet")
 
-# Read time-series (if --ts_resolution was used during aggregation)
+# Read the monthly time-series aggregation (always written)
 ts <- read_parquet("results/timeseries_aggregated.parquet")
 ```
 

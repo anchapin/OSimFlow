@@ -1404,10 +1404,10 @@ from osimflow.executors import LocalExecutor  # triggers submitit import
 
 ### "SlurmExecutor runs locally"
 
-Without `--slurm_real`, the `SlurmExecutor` uses `submitit`'s
+Without `--slurm-real`, the `SlurmExecutor` uses `submitit`'s
 `DebugExecutor`, which runs jobs as local subprocesses. This is the
 documented `submitit` pattern for development. Always pass
-`--slurm_real` in production.
+`--slurm-real` in production.
 
 ### "Real OpenStudio CLI fails — no workflow.osw"
 
