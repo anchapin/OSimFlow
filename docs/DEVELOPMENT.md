@@ -787,6 +787,74 @@ from osimflow.executors.my_new_executor import MyNewExecutor
 ExecutorRegistry.register("my_new", MyNewExecutor)
 ```
 
+#### Step 1b: Declare the executor's result-transport capabilities (issue #1473)
+
+`BaseExecutor.submit_request()` calls
+`validate_transport_mode(self.name, request.result_transport_mode)`
+(`osimflow/executors/base.py:597`) before delegating to `submit()`,
+and every in-band executor (`local`, `slurm`, `dask_jobqueue`,
+`docker_swarm`) repeats that call inside its own `submit()` body.
+The validator reads a single per-executor capability dict,
+`TRANSPORT_CAPABILITIES`, defined in
+`osimflow/executors/transport.py`, and raises `ValueError` on the
+first submit with an undeclared mode — fail-closed by design
+(issue #1473). This replaces the historic silent-discard behaviour
+where `LocalExecutor` accepted `object_storage` and then ignored
+it.
+
+**If your executor name is not in `TRANSPORT_CAPABILITIES`, it
+defaults to `IN_BAND_TRANSPORT_MODES` = `{"auto", "shared_fs"}`.**
+That covers in-process, submitit, and shared-filesystem executors.
+Object-storage-capable executors must opt in by adding an entry to
+`TRANSPORT_CAPABILITIES` mapping their `name` to
+`OBJECT_STORAGE_TRANSPORT_MODES` (which extends
+`IN_BAND_TRANSPORT_MODES` with `"object_storage"`). Open
+`osimflow/executors/transport.py` and append one line:
+
+```python
+# osimflow/executors/transport.py
+
+from osimflow.executors.transport import (
+    IN_BAND_TRANSPORT_MODES,
+    OBJECT_STORAGE_TRANSPORT_MODES,
+    TRANSPORT_CAPABILITIES,
+)
+
+TRANSPORT_CAPABILITIES["my_new"] = (
+    OBJECT_STORAGE_TRANSPORT_MODES  # if you implement resolve + materialize
+    # or: IN_BAND_TRANSPORT_MODES  # if results return in-band via the handle's future
+)
+```
+
+Then call `validate_transport_mode(self.name, result_transport_mode)`
+at the top of your `submit()` body (mirroring
+`osimflow/executors/slurm_executor.py:190`,
+`local_executor.py:134`, `dask_jobqueue_executor.py:219`,
+`docker_swarm_executor.py:674`) so a third-party plug-in that
+bypasses `submit_request()` still goes through the gate. The
+`BaseExecutor.submit()` overload does *not* call the validator
+itself — only `submit_request()` does — so the per-executor call is
+the safety net.
+
+The plug-in author hazard this section closes: an executor that
+passes every `osimflow.testing.ExecutorConformanceSuite` check
+locally with the default `"auto"` mode, but dies the first time a
+real campaign is launched with
+`--result-transport-mode object_storage` because the executor was
+never registered in `TRANSPORT_CAPABILITIES`. The conformance
+suite's fast transport checks (`test_transport_path_round_trip`,
+`test_transport_result_hint_default_returns_default`,
+`test_transport_result_hint_path_payload_decodes`) exercise
+`encode_transport_value` / `decode_transport_value` /
+`resolve_result_for_callback` but do *not* assert your executor's
+name is in `TRANSPORT_CAPABILITIES`. The opt-in slow check
+`test_three_sample_stub_campaign_produces_all_artifacts` does
+exercise it, but only when the campaign is configured with a
+non-`"auto"` mode — so the registration step above is what protects
+you on real substrates. For non-pytest usage
+(`run_executor_conformance` from `osimflow.testing`) the same gap
+applies; the explicit registration is the contract.
+
 ### Step 2: Wire into the CLI
 
 Edit `osimflow/__main__.py`:
