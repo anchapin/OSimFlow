@@ -95,7 +95,7 @@ osimflow run \
 | Symptom | Resolution |
 |---|---|
 | `BatchDomainNotFound` | Ensure Batch account is linked to the correct Active Directory tenant |
-| Pool allocation timeout | Increase `--azure-batch-max-retries` or check VM quota |
+| Pool allocation timeout | Increase `--azure-max-retries` or check VM quota |
 | Container image pull failure | Verify ACR image exists and Batch nodes can reach `*.azurecr.io` |
 
 ---
@@ -233,7 +233,7 @@ osimflow run \
 | Symptom | Resolution |
 |---|---|
 | `qsub: Bad UID for job execution` | Check your `qsub` ACLs with `qmgr` |
-| Job walltime exceeded | Increase `--time_min` or reduce `--max-workers` |
+| Job walltime exceeded | Reduce `--max-workers`, or split the campaign with `--shard-count` / `--shard-index` |
 
 ---
 

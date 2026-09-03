@@ -32,7 +32,7 @@ is the primary observability artifact (per
 | `finalize_script_duration_s` | `float` | Wall-clock seconds spent in the post-campaign `--finalize-script` (issue #108). |
 | `total_cost_usd` | `float` | Estimated total campaign cost (issue #126). Always present; `0.0` when cost tracking is off. |
 | `spot_savings_usd` | `float` | Estimated savings from spot/preemptible capacity (issue #126). Always present; `0.0` default. |
-| `cost_summary` | `object` | Campaign-level cost breakdown from `CostTracker.finalize()` (issue #447). Present when `--enable_cost_tracking` is set. |
+| `cost_summary` | `object` | Campaign-level cost breakdown from `CostTracker.finalize()` (issue #447). Present when `--enable-cost-tracking` is set. |
 | `cache_hit_rate` | `float` | Fraction of per-sample work served from cache, `0.0`–`1.0` (issue #426). |
 | `chaos_invocations` | `array` | Chaos fault-injection records (issue #1013). Always present as a list; `[]` when chaos never fired. |
 | `chaos_schedule` | `str` | Which chaos schedule was active (`"before_step"`, `"after_step"`, or `"per_sample"`) (issue #1191). |
@@ -194,7 +194,7 @@ more than one generation (issue #270).
 |---|---|---|---|
 | `total_cost_usd` | `float` | Yes (`0.0` default) | Estimated total campaign cost (issue #126). |
 | `spot_savings_usd` | `float` | Yes (`0.0` default) | Estimated savings from spot/preemptible capacity (issue #126). |
-| `cost_summary` | `object` | No | Campaign-level cost breakdown produced by `CostTracker.finalize()`; present when `--enable_cost_tracking` is set (issue #447). |
+| `cost_summary` | `object` | No | Campaign-level cost breakdown produced by `CostTracker.finalize()`; present when `--enable-cost-tracking` is set (issue #447). |
 | `cache_hit_rate` | `float` | No | Fraction of per-sample work served from cache, `0.0`–`1.0`. Set after `AGGREGATE_RESULTS` (issue #426). |
 
 Per-sample counterparts (`cost_usd`, `billed_duration_seconds`) live in

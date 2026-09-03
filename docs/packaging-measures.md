@@ -822,7 +822,7 @@ reports a warning about missing weather data.
 
 **Fix:** Either include the `.epw` file in the package and reference it in
 `workflow.osw`, or leave `"weather_file": ""` and use OSimFlow's weather
-discovery (`--epw_dir`) or download features.
+discovery (`--weather_dir`) or download features.
 
 ---
 

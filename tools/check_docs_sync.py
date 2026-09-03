@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""check_docs_sync.py — verify docs/ references resolve to real paths.
+"""check_docs_sync.py — verify docs/ references resolve to real paths and flags.
 
 Issue #15: PRs that rename a `bin/*.py` script, a CLI flag, or any path
 referenced from `docs/**/*.md` must update the docs in the same PR. This
 script greps docs for path-like and flag-like references and asserts each
 one still exists in the working tree.
+
+Issue #1548: the flag check is strict. Every backticked ``--flag`` in
+``docs/**/*.md`` must resolve to a real ``add_argument`` in one of the
+repo's argparse surfaces (``osimflow/__main__.py`` first and foremost),
+or be explicitly exempted in ``FOREIGN_CLI_FLAGS`` below (flags of other
+tools shown in examples — sbatch, docker, git, repo shell scripts …).
 
 A file can opt out with a `<!-- docs-skip -->` HTML comment.
 
@@ -27,7 +33,11 @@ DOCS_DIR = REPO_ROOT / "docs"
 # Reference kinds we check. Each entry: (regex, validator).
 # Validators return None on "ok, skip" or an error string.
 BACKTICKED_RE = re.compile(r"`([\w./\-]+\.[a-z]{1,5})`")
-CLI_FLAG_RE = re.compile(r"`--([a-z][a-z0-9-]+)`")
+# NB: includes camelCase and underscore forms on purpose — those are
+# exactly the drift classes the strict check exists to catch (e.g. a
+# documented `--kubernetes-backoffLimit` or `--enable_cost_tracking`
+# that argparse would reject).
+CLI_FLAG_RE = re.compile(r"`(--[a-zA-Z][a-zA-Z0-9_-]+)`")
 BIN_SCRIPT_RE = re.compile(
     r"\b(apply_params_to_model|extract_kpis|aggregate_results|"
     r"generate_lhs|generate_plots)\.py\b"
@@ -100,6 +110,73 @@ DOCUMENTED_PATTERNS = {
     "html",
 }
 SKIP_DIRS = {".agents", ".github", "__pycache__", ".venv", "node_modules", ".git"}
+
+# ---------------------------------------------------------------------------
+# Strict CLI-flag resolution (issue #1548)
+# ---------------------------------------------------------------------------
+
+# argparse surfaces that define OSimFlow's own `--flags`. Parsed from
+# source at check time, so flag renames keep the check in sync without
+# touching this file.
+CLI_FLAG_SOURCE_FILES: list[Path] = [
+    REPO_ROOT / "osimflow" / "__main__.py",
+    *sorted((REPO_ROOT / "osimflow" / "_work_scripts").glob("*.py")),
+    *sorted((REPO_ROOT / "bin").glob("*.py")),
+    *sorted((REPO_ROOT / "scripts").glob("*.py")),
+    *sorted((REPO_ROOT / "tools").glob("*.py")),
+]
+
+# Explicit exemption mechanism for legitimately-foreign flags: `--flags`
+# of *other* tools that appear in doc examples. Every entry needs a
+# justification string naming the tool it belongs to. Do not add
+# OSimFlow flags here — fix the doc (or add the flag) instead.
+FOREIGN_CLI_FLAGS: dict[str, str] = {
+    "--admin": "`gh pr merge --admin` (GitHub CLI)",
+    "--apply": "scripts/sweep-stale-branches.sh (shell script, no argparse)",
+    "--cpus-per-task": "sbatch directive (Slurm mapping table)",
+    "--find-links": "pip (air-gapped wheel bundling)",
+    "--fix": "ruff / pre-commit autofix mode",
+    "--include-orphaned": "scripts/sweep-stale-branches.sh (shell script, no argparse)",
+    "--mem": "sbatch directive (Slurm mapping table)",
+    "--min-age-days": "scripts/sweep-stale-branches.sh (shell script, no argparse)",
+    "--no-verify": "git commit/push hook bypass",
+    "--nv": "apptainer/singularity run --nv (host GPU libraries)",
+    "--onefile": "PyInstaller build mode",
+    "--protect-glob": "scripts/apply_branch_protection.sh (shell script, no argparse)",
+    "--rm": "docker run --rm",
+    "--skip-cache": "documented *future* OSimFlow flag (docs/distributed-cache.md)",
+    "--time": "sbatch directive (Slurm mapping table)",
+    "--worktree": "scripts/sweep-stale-branches.sh (shell script, no argparse)",
+}
+
+# Matches the flag name at the start of an add_argument( chunk.
+_ADD_ARGUMENT_FLAG_AT_START_RE = re.compile(r'\s*"(--[a-zA-Z][a-zA-Z0-9_-]*)"')
+
+
+def _collect_known_cli_flags() -> set[str]:
+    """Parse every ``add_argument("--flag", ...)`` from the repo's argparse
+    surfaces. Flags declared with ``action=argparse.BooleanOptionalAction``
+    additionally accept a ``--no-<flag>`` spelling at runtime, so the
+    negative form is synthesized for them.
+    """
+    known: set[str] = set()
+    for path in CLI_FLAG_SOURCE_FILES:
+        try:
+            src = path.read_text()
+        except FileNotFoundError:
+            continue
+        # Chunk per add_argument( call: everything up to the next call.
+        # kwargs of the *next* call therefore cannot leak into this chunk.
+        for chunk in src.split("add_argument(")[1:]:
+            m = _ADD_ARGUMENT_FLAG_AT_START_RE.match(chunk)
+            if not m:
+                continue
+            flag = m.group(1)
+            known.add(flag)
+            if "BooleanOptionalAction" in chunk:
+                known.add(f"--no-{flag[2:]}")
+    return known
+
 
 # Regex for markdown cross-references: [text](target.md) or [text](target#anchor)
 # Captures the link target (before any #anchor). We deliberately keep this
@@ -205,7 +282,7 @@ def _check_markdown_links(md: Path, text: str) -> list[str]:
     return errors
 
 
-def _check_file(md: Path) -> tuple[list[tuple[Path, str]], bool]:
+def _check_file(md: Path, known_flags: set[str]) -> tuple[list[tuple[Path, str]], bool]:
     """Check a single markdown file for broken references.
 
     Returns ``(errors, was_checked)`` where *was_checked* is ``False``
@@ -225,15 +302,23 @@ def _check_file(md: Path) -> tuple[list[tuple[Path, str]], bool]:
         if err:
             errors.append((rel, err))
 
+    # Strict flag resolution (issue #1548): every backticked `--flag`
+    # must be a real add_argument on an OSimFlow argparse surface, or an
+    # explicitly-exempted foreign flag.
     for m in CLI_FLAG_RE.finditer(text):
         flag = m.group(1)
-        # Confirm the flag exists in __main__.py.
-        main_py = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
-        if f"--{flag}" not in main_py and f'"{flag}"' not in main_py:
-            # Only flag if the flag is the *only* token; lines with
-            # prose mentioning "--foo" without it being a real flag
-            # are common.
-            pass  # soft: don't fail CI on prose mentions
+        if flag in known_flags or flag in FOREIGN_CLI_FLAGS:
+            continue
+        errors.append(
+            (
+                rel,
+                f"references unknown CLI flag `{flag}` — not an "
+                f"`add_argument` in osimflow/__main__.py (or the "
+                f"bin/, scripts/, tools/ argparse surfaces). Fix the "
+                f"flag name, or add it to FOREIGN_CLI_FLAGS in "
+                f"tools/check_docs_sync.py if it belongs to another tool.",
+            )
+        )
 
     # bin script names (e.g. plain "extract_kpis.py" without backticks).
     for m in BIN_SCRIPT_RE.finditer(text):
@@ -256,9 +341,10 @@ def main() -> int:
 
     errors: list[tuple[Path, str]] = []
     files_checked = 0
+    known_flags = _collect_known_cli_flags()
 
     for md in sorted(DOCS_DIR.rglob("*.md")):
-        file_errors, checked = _check_file(md)
+        file_errors, checked = _check_file(md, known_flags)
         if checked:
             files_checked += 1
         errors.extend(file_errors)

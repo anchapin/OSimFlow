@@ -68,12 +68,12 @@ Below is a practitioner-oriented walk-through of every field.
 | `steps` | `array` | Per-step timing rows (one per DAG step). |
 | `per_sample` | `array` | Per-sample status rows (one per LHS sample). |
 | `generations` | `array` | Per-generation summaries — present only for iterative/multi-generation campaigns (§2.10). |
-| `baseline_comparison` | `object` | Present only when `--baseline` is configured (issue #64). |
+| `baseline_comparison` | `object` | Present only when a `baseline:` block is configured in `variables.yml` (issue #64). |
 | `init_script_duration_s` | `float` | Wall-clock seconds in the pre-campaign `--init-script` (issue #108). |
 | `finalize_script_duration_s` | `float` | Wall-clock seconds in the post-campaign `--finalize-script` (issue #108). |
 | `total_cost_usd` | `float` | Estimated total campaign cost — always present, `0.0` default (issue #126; §2.8). |
 | `spot_savings_usd` | `float` | Estimated spot/preemptible savings — always present, `0.0` default (issue #126; §2.8). |
-| `cost_summary` | `object` | Cost breakdown; present when `--enable_cost_tracking` is set (issue #447; §2.8). |
+| `cost_summary` | `object` | Cost breakdown; present when `--enable-cost-tracking` is set (issue #447; §2.8). |
 | `cache_hit_rate` | `float` | Fraction of work served from cache, `0.0`–`1.0` (issue #426; §2.9). |
 | `chaos_invocations` | `array` | Chaos fault-injection records — always present, `[]` when chaos never fired (issue #1013; §2.11). |
 | `chaos_schedule` | `str` | Active chaos schedule (issue #1191; §2.11). |
@@ -109,7 +109,7 @@ Captured at construction time so you can reproduce the run:
 | `archive_intermediates` | Whether `--archive_intermediates` was set. |
 | `custom_apply_script` | Path to a BYOS apply script, or `null`. |
 | `custom_kpi_extractor` | Path to a BYOS KPI extractor, or `null`. |
-| `baseline_sample_id` | Baseline sample ID if `--baseline` was set, or `null`. |
+| `baseline_sample_id` | Baseline sample ID if a `baseline:` block was set in `variables.yml`, or `null`. |
 
 > **Tip:** If a campaign produces unexpected results, check `config` first.
 > A wrong `openstudio_version` or an unintended `custom_kpi_extractor` is a
@@ -204,7 +204,8 @@ exit code makes the sample `"failed"`.
 
 ### 2.5 `baseline_comparison` — baseline metrics (optional)
 
-Present only when `--baseline` is configured. Contains improvement
+Present only when a `baseline:` block is configured in `variables.yml`.
+Contains improvement
 percentages relative to the baseline sample:
 
 ```json
@@ -261,7 +262,7 @@ like failures when computing KPIs. Per-sample detail lives in
 `0.0` when cost tracking is off or everything ran locally. Per-sample
 breakdown lives in `per_sample[].cost_usd` and
 `per_sample[].billed_duration_seconds`. With
-`--enable_cost_tracking`, `CostTracker.finalize()` adds a richer
+`--enable-cost-tracking`, `CostTracker.finalize()` adds a richer
 `cost_summary` object (issue #447):
 
 ```json
