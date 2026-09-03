@@ -430,7 +430,6 @@ def _coerce_variables_yml_file(path: Path) -> bool:  # noqa: PLR0912
 # ======================================================================
 
 
-
 # ======================================================================
 # Focused configuration dataclasses (issue #767)
 #
