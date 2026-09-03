@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .errors import OSimFlowError
 from .executors import BaseExecutor
 from .json_utils import safe_json_dumps
 from .monitoring import RunTrace
@@ -39,6 +40,23 @@ if TYPE_CHECKING:
     from .campaign import Campaign
 
 log = logging.getLogger("osimflow.campaign")
+
+
+class CampaignPauseRequested(OSimFlowError):
+    """Internal control-flow signal: a soft pause was requested (issue #1537).
+
+    Raised by ``Campaign`` step fan-outs / pre-step checks when the
+    ``.pause`` flag file is detected (issue #553).  It is deliberately
+    NOT a :class:`KeyboardInterrupt`: ``Campaign.run()`` maps
+    ``KeyboardInterrupt`` to *cancellation* (cancel active jobs, set
+    ``finished_at``, status ``"cancelled"``), while this signal keeps
+    the documented pause semantics — ``run.json`` status stays
+    ``"paused"``, ``finished_at`` is not set, and running jobs are left
+    to complete so ``osimflow resume`` can continue the campaign from
+    cache replay.
+
+    Only ``Campaign.run()`` catches this; it never escapes ``run()``.
+    """
 
 
 class CancelRegistry:
