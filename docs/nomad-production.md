@@ -132,6 +132,110 @@ Nomad result handling is **remote-first**. The default CLI behavior
 mode remains available via `--no-nomad-remote-results-only` but is deprecated
 and retained for only one minor release to support migration.
 
+### Vault-template secret injection (issue #1449)
+
+By default the task-payload HMAC shared secret travels as a literal task env
+value (direct mode) or dispatch meta key (`task_payload_secret`) alongside the
+payload it protects — readable by anyone who can inspect the job spec
+(`nomad job inspect`), an allocation (`nomad alloc status`), or Nomad server
+state. The `NomadExecutor` supports delivering the secret from **Vault**
+instead, so the raw value never appears in the job spec or dispatch payload:
+
+```python
+from osimflow.executors import NomadExecutor
+
+executor = NomadExecutor(
+    address="https://nomad.example:4646",
+    use_dispatch=True,
+    vault_secret_path="secret/data/osimflow/hmac",  # KV v2 mount
+    vault_secret_key="payload_secret",              # field inside the secret
+)
+```
+
+`vault_secret_path` is a **constructor parameter** (no CLI flag, mirroring the
+`security_context_strict` pattern from issue #1383). When set:
+
+- the task env / dispatch-meta copy of `OSIMFLOW_TASK_PAYLOAD_SECRET` is
+  **omitted** from the job spec, and
+- the job carries a `template { env = true }` stanza that the Nomad client
+  renders from Vault at allocation time:
+
+```hcl
+job "osimflow-worker" {
+  parameterized {
+    meta_optional = [
+      "sample_id",
+      "task_payload",
+      "task_payload_sig",
+      # note: no "task_payload_secret" in dispatch meta
+    ]
+  }
+
+  group "osimflow" {
+    task "simulate" {
+      driver = "docker"
+
+      # Issue #1449: the secret is rendered by the Nomad client from
+      # Vault — never present in the job spec itself.
+      template {
+        env           = true
+        change_mode   = "restart"
+        data          = <<EOF
+OSIMFLOW_TASK_PAYLOAD_SECRET={{ with secret "secret/data/osimflow/hmac" }}{{ .Data.data.payload_secret }}{{ end }}
+EOF
+      }
+    }
+  }
+}
+```
+
+KV mount handling: a path containing `/data/` (the conventional KV v2 API
+path, e.g. `secret/data/osimflow/hmac`) reads the field from
+`.Data.data.<key>`; any other path is treated as KV v1 and reads
+`.Data.<key>`.
+
+Requirements:
+
+1. The orchestrator still needs the **same secret value** in its own
+   environment (`OSIMFLOW_TASK_PAYLOAD_SECRET`) to compute signatures —
+   fetch it from Vault in the shell/profile that launches the campaign
+   (see [Secret Management — HashiCorp Vault Integration](secret-management.md#hashicorp-vault-integration)).
+2. The Nomad **cluster** needs the Vault integration enabled (servers +
+   clients) and a Vault policy granting `read` on the secret path to the
+   job's Vault role, e.g.:
+
+   ```hcl
+   path "secret/data/osimflow/hmac" {
+     capabilities = ["read"]
+   }
+   ```
+
+3. Store the secret once:
+
+   ```bash
+   vault kv put secret/osimflow/hmac payload_secret="$(openssl rand -hex 32)"
+   ```
+
+Only the signature (`task_payload_sig` / `OSIMFLOW_TASK_PAYLOAD_SIG`) keeps
+travelling inline — it is public by design.
+
+#### Residual threat model (per substrate)
+
+Native secret-reference mechanisms shrink — but do not eliminate — who can
+read the HMAC secret:
+
+| Substrate | Mechanism | Residual readers |
+|---|---|---|
+| **Nomad** (Vault mode) | `template { env = true }` stanza | Anyone holding a Vault token whose policy grants `read` on the secret path; anyone with `exec`/`inspect` access to a running allocation (the rendered env is visible in `nomad alloc status`); Nomad clients with access to the rendered task directory (`secrets/`) |
+| **Kubernetes** (`secretKeyRef`) | Secret resolved by kubelet at admission | Anyone with `get`/`list`/`watch` RBAC on Secrets in the namespace; anyone with `exec` into the running pod; etcd snapshot readers **unless** encryption at rest (KMS provider) is enabled; audit-log readers if Secret reads are audited |
+| **AWS / Azure / Google Batch** | none yet (issue #1449 scope: K8s + Nomad) | Secret still ships as plaintext task env — readable via `az batch task show`-class APIs, cloud control-plane audit trails, and job-spec dumps. Documented residual; mitigate by restricting who can read job specs |
+| **Docker Swarm** | none yet (issue #1449 scope) | Secret still ships in the service spec env — readable via `docker service inspect`. Documented residual |
+
+In all modes the signature defends against payload **writers**; the secret
+stores defend against payload-env **readers** forging future jobs. Both
+matter: a leaked secret lets an attacker mint validly signed payloads from
+anywhere they can submit jobs.
+
 ### OpenStack preload path (local-tag strategy)
 
 If your Nomad workers cannot pull GHCR images directly, preload the Python

@@ -55,7 +55,7 @@ from osimflow.executors.transport import (
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
-from osimflow.task_payload_hmac import build_signature_env
+from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV, build_signature_env
 
 log = logging.getLogger("osimflow.executors.kubernetes")
 
@@ -237,6 +237,21 @@ class KubernetesExecutor(BaseExecutor):
     (e.g. older admission controllers without the required PodSecurity
     policy admission plugin).
 
+    Secret delivery (issue #1449): the constructor accepts a
+    ``payload_secret_ref: str | None = None`` naming a pre-created
+    Kubernetes Secret that holds the task-payload HMAC shared secret
+    under the key ``OSIMFLOW_TASK_PAYLOAD_SECRET``. When set (and a
+    secret is configured on the orchestrator for signing), the Job's
+    env entry for ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is emitted as a
+    ``secretKeyRef`` instead of a literal value, so the raw secret
+    never appears in the Job spec — the kubelet resolves it at pod
+    admission. Readers of ``kubectl get pod -o yaml``, etcd snapshots,
+    and the API-server audit trail see only the Secret *name*. When
+    unset (default), the secret ships as a literal env value exactly
+    as before (backward compat). The signature
+    (``OSIMFLOW_TASK_PAYLOAD_SIG``) always ships as a literal — it is
+    public by design.
+
     The Kubernetes Python client is lazy-imported inside `__init__` so
     the local-executor / slurm-executor paths do not pay the import cost.
     """
@@ -258,6 +273,7 @@ class KubernetesExecutor(BaseExecutor):
         ttl_seconds_after_finished: int | None = None,
         queue_name: str | None = None,
         security_context_strict: bool = True,
+        payload_secret_ref: str | None = None,
     ):
         self.namespace = namespace
         self.poll_interval_s = poll_interval_s
@@ -288,6 +304,14 @@ class KubernetesExecutor(BaseExecutor):
         # legacy permissive manifest for clusters that reject the
         # strict profile (e.g. older admission controllers).
         self.security_context_strict = bool(security_context_strict)
+        # Issue #1449: native secret delivery. When set, the env entry
+        # for ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is emitted as a
+        # ``secretKeyRef`` against this user-provided Secret name
+        # instead of a literal value, so the raw secret never appears
+        # in the Job spec (readable via ``kubectl get pod -o yaml``,
+        # etcd snapshots, and the API-server audit trail). ``None``
+        # (default) preserves the pre-#1449 literal-env behaviour.
+        self.payload_secret_ref = payload_secret_ref
         # Issue #1081: digest pinning. Initialized in the constructor so
         # ``_resolve_container_image`` is callable without going through
         # ``submit()`` (e.g. unit tests); overridden by ``submit()``.
@@ -352,6 +376,48 @@ class KubernetesExecutor(BaseExecutor):
             safe_name = "osimflow-task"
         return f"osimflow-{safe_name}"
 
+    def _signature_env_entries(self, task_payload: str) -> list[dict[str, Any]]:
+        """Return env entries for the task-payload signature pair (issues #1177, #1449).
+
+        When a shared secret is configured, sign the exact payload bytes
+        and propagate secret + signature so the remote_runner verifies
+        before decoding/executing. No-op (empty list) in legacy unsigned
+        mode. When a ``payload_secret_ref`` is configured, the secret
+        entry is emitted as a ``secretKeyRef`` instead of a literal env
+        value so the raw secret never appears in the Job spec; the
+        signature still ships as a literal (public by design).
+        """
+        signature_env = build_signature_env(task_payload)
+        payload_secret_ref = getattr(self, "payload_secret_ref", None)
+        if payload_secret_ref and not signature_env:
+            log.warning(
+                "payload_secret_ref=%r is configured but no %s is set "
+                "on the orchestrator, so the payload cannot be signed; "
+                "submitting unsigned (legacy mode). Set %s on the "
+                "orchestrator — and the same value in the referenced "
+                "Secret — to enable HMAC verification (issue #1449).",
+                payload_secret_ref,
+                TASK_PAYLOAD_SECRET_ENV,
+                TASK_PAYLOAD_SECRET_ENV,
+            )
+        entries: list[dict[str, Any]] = []
+        for key, value in signature_env.items():
+            if key == TASK_PAYLOAD_SECRET_ENV and payload_secret_ref:
+                entries.append(
+                    {
+                        "name": key,
+                        "valueFrom": {
+                            "secretKeyRef": {
+                                "name": payload_secret_ref,
+                                "key": TASK_PAYLOAD_SECRET_ENV,
+                            }
+                        },
+                    }
+                )
+            else:
+                entries.append({"name": key, "value": value})
+        return entries
+
     def _build_environment(
         self,
         *,
@@ -363,7 +429,7 @@ class KubernetesExecutor(BaseExecutor):
         result_storage_bucket: str | None = None,
         result_storage_prefix: str | None = None,
         result_storage_endpoint: str | None = None,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """Build environment variables for the container.
 
         Mirrors the ``NomadExecutor._build_job_spec`` env block: the
@@ -373,8 +439,14 @@ class KubernetesExecutor(BaseExecutor):
         results to object storage (issue #996). ``OSIMFLOW_STUB_SIM``
         is propagated from the orchestrator environment when set so
         remote pods honour the orchestrator's stub-vs-real CLI choice.
+
+        Entries are ``{"name": ..., "value": ...}`` dicts; in
+        ``secretKeyRef`` mode (issue #1449) the
+        ``OSIMFLOW_TASK_PAYLOAD_SECRET`` entry instead carries
+        ``{"name": ..., "valueFrom": {"secretKeyRef": {...}}}`` so the
+        kubelet resolves the secret at pod admission.
         """
-        env: list[dict[str, str]] = []
+        env: list[dict[str, Any]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
         # Issue #1081: a pinned SHA256 digest overrides the mutable tag
@@ -390,14 +462,10 @@ class KubernetesExecutor(BaseExecutor):
             # Issue #1281: verify BYOS contract version compatibility between
             # orchestrator and remote runner.
             env.append({"name": "OSIMFLOW_CONTRACT_VERSION", "value": BYOS_CONTRACT_VERSION})
-            # Issue #1177: when a shared secret is configured, sign the
-            # exact payload bytes and propagate secret + signature so the
-            # remote_runner verifies before decoding/executing. No-op in
-            # legacy unsigned mode.
-            env.extend(
-                {"name": key, "value": value}
-                for key, value in build_signature_env(task_payload).items()
-            )
+            # Issues #1177 / #1449: signature pair (see
+            # ``_signature_env_entries`` — the secret entry becomes a
+            # ``secretKeyRef`` when ``payload_secret_ref`` is set).
+            env.extend(self._signature_env_entries(task_payload))
         if result_transport_mode is not None:
             env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": result_transport_mode})
         if result_storage_backend is not None:
@@ -485,7 +553,7 @@ class KubernetesExecutor(BaseExecutor):
         cpus: int,
         memory_mb: int,
         time_min: int,
-        environment: list[dict[str, str]],
+        environment: list[dict[str, Any]],
         command: list[str] | None = None,
     ) -> str:
         """Submit a Kubernetes Job and return the job name.
@@ -501,11 +569,31 @@ class KubernetesExecutor(BaseExecutor):
         job_name = self._build_job_name(name)
         container_image = "nrel/openstudio:latest"
         for e in environment:
-            if e["name"] == "OSIMFLOW_CONTAINER":
+            if e.get("name") == "OSIMFLOW_CONTAINER" and e.get("value") is not None:
                 container_image = e["value"]
                 break
 
-        env_vars = [client.V1EnvVar(name=e["name"], value=e["value"]) for e in environment]
+        # Issue #1449: entries carrying ``valueFrom`` become native
+        # ``secretKeyRef`` sources so the kubelet resolves the secret at
+        # pod admission — the raw value is never serialized into the Job
+        # spec. Literal entries map to plain values as before.
+        env_vars: list[Any] = []
+        for e in environment:
+            if "valueFrom" in e:
+                ref = e["valueFrom"]["secretKeyRef"]
+                env_vars.append(
+                    client.V1EnvVar(
+                        name=e["name"],
+                        value_from=client.V1EnvVarSource(
+                            secret_key_ref=client.V1SecretKeySelector(
+                                name=ref["name"],
+                                key=ref["key"],
+                            ),
+                        ),
+                    )
+                )
+            else:
+                env_vars.append(client.V1EnvVar(name=e["name"], value=e["value"]))
 
         resources = client.V1ResourceRequirements(
             requests={"cpu": str(cpus), "memory": f"{memory_mb}Mi"},

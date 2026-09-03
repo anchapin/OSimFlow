@@ -662,6 +662,22 @@ class NomadExecutor(BaseExecutor):
     Batch executor enforces. Similarly, no address is pinned — the
     ``NOMAD_ADDR`` env var (or constructor kwarg) decides.
 
+    Secret delivery (issue #1449): the constructor accepts an opt-in
+    ``vault_secret_path: str | None = None`` (plus
+    ``vault_secret_key: str = "payload_secret"``). When set, the
+    task-payload HMAC shared secret is rendered into the task
+    environment by the Nomad client from Vault via a ``template``
+    stanza with ``env = true`` — the env entry for
+    ``OSIMFLOW_TASK_PAYLOAD_SECRET`` and the dispatch-meta copy are
+    omitted, so the raw secret never appears in the job spec
+    (``nomad job inspect``), dispatch payload, or Nomad server state.
+    Only the signature (``task_payload_sig`` /
+    ``OSIMFLOW_TASK_PAYLOAD_SIG``) keeps travelling inline — it is
+    public by design. When unset (default), the secret ships as a
+    literal env value / dispatch meta exactly as before (backward
+    compat). See ``docs/nomad-production.md`` for the Vault policy and
+    example job snippet.
+
     The HTTP transport is stdlib ``urllib.request``, lazy-imported
     inside ``_NomadClient`` so the local-executor / slurm-executor /
     aws-batch paths do not pay the import cost. Tests patch
@@ -709,6 +725,8 @@ class NomadExecutor(BaseExecutor):
         ca_cert: str | None = None,
         dispatch_job_id: str | None = None,
         allow_insecure_token: bool = False,
+        vault_secret_path: str | None = None,
+        vault_secret_key: str = "payload_secret",
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -778,6 +796,16 @@ class NomadExecutor(BaseExecutor):
         # never leaves the host. Without a token the plaintext path
         # carries no secret, so the loud warning is retained.
         self.allow_insecure_token = allow_insecure_token
+        # Issue #1449: opt-in Vault-template delivery of the
+        # task-payload HMAC secret. When ``vault_secret_path`` is set,
+        # the secret is rendered from Vault by the Nomad client via a
+        # ``template { env = true }`` stanza instead of travelling as a
+        # literal task env value / dispatch meta, so the raw secret
+        # never appears in the job spec, dispatch payload, or Nomad
+        # server state. ``None`` (default) preserves the pre-#1449
+        # literal behaviour.
+        self.vault_secret_path = vault_secret_path
+        self.vault_secret_key = vault_secret_key or "payload_secret"
         if not tls and not self._is_local_address(self.address):
             if os.environ.get("NOMAD_TOKEN") and not allow_insecure_token:
                 raise ValueError(
@@ -922,6 +950,38 @@ class NomadExecutor(BaseExecutor):
         tag = openstudio_version or "latest"
         return f"nrel/openstudio:{tag}"
 
+    def _vault_secret_template(self) -> str | None:
+        """Return the Vault env-template line for the payload secret (issue #1449).
+
+        The template is rendered by the Nomad client (consul-template
+        engine) when the allocation is placed, via the ``template``
+        stanza with ``Env = true`` this executor emits alongside it.
+        Rendered output is a single ``KEY=VALUE`` line, so the value
+        lands in the task environment as
+        ``OSIMFLOW_TASK_PAYLOAD_SECRET`` without ever appearing in the
+        job spec itself.
+
+        KV mount handling: a path containing ``/data/`` (the
+        conventional KV v2 API path, e.g. ``secret/data/osimflow``)
+        reads the field from ``.Data.data.<key>``; anything else is
+        treated as KV v1 and reads ``.Data.<key>``.
+
+        Returns ``None`` when Vault mode is not configured.
+        """
+        path: str | None = getattr(self, "vault_secret_path", None)
+        if not path:
+            return None
+        key = str(getattr(self, "vault_secret_key", "payload_secret") or "payload_secret")
+        field = f".Data.data.{key}" if "/data/" in path else f".Data.{key}"
+        return (
+            TASK_PAYLOAD_SECRET_ENV
+            + '={{ with secret "'
+            + path
+            + '" }}{{ '
+            + field
+            + " }}{{ end }}"
+        )
+
     def _build_job_spec(
         self,
         *,
@@ -957,6 +1017,10 @@ class NomadExecutor(BaseExecutor):
             env["OSIMFLOW_OS_VERSION"] = str(openstudio_version)
         if container is not None:
             env["OSIMFLOW_CONTAINER"] = container
+        # Issue #1449: in Vault mode the secret is rendered by the
+        # Nomad client from a ``template { env = true }`` stanza, so it
+        # must be kept out of the literal Env block.
+        vault_template = self._vault_secret_template()
         if task_payload is not None:
             env["OSIMFLOW_TASK_PAYLOAD"] = task_payload
             # Issue #1281: verify BYOS contract version compatibility.
@@ -965,7 +1029,21 @@ class NomadExecutor(BaseExecutor):
             # exact payload bytes and propagate secret + signature so the
             # remote_runner verifies before decoding/executing. No-op in
             # legacy unsigned mode.
-            env.update(build_signature_env(task_payload))
+            signature_env = build_signature_env(task_payload)
+            if vault_template is not None and not signature_env:
+                log.warning(
+                    "vault_secret_path=%r is configured but no %s is set "
+                    "on the orchestrator, so the payload cannot be signed; "
+                    "submitting unsigned (legacy mode). Set %s on the "
+                    "orchestrator — and the same value in Vault — to "
+                    "enable HMAC verification (issue #1449).",
+                    self.vault_secret_path,
+                    TASK_PAYLOAD_SECRET_ENV,
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
+            env.update(signature_env)
+            if vault_template is not None:
+                env.pop(TASK_PAYLOAD_SECRET_ENV, None)
         if result_transport_mode is not None:
             env["OSIMFLOW_RESULT_TRANSPORT_MODE"] = result_transport_mode
         if result_storage_backend is not None:
@@ -986,6 +1064,40 @@ class NomadExecutor(BaseExecutor):
 
         job_id = _slugify_job_name(f"osimflow-{name}-{uuid.uuid4().hex[:8]}")
 
+        task: dict[str, Any] = {
+            "Name": "osimflow",
+            "Driver": "docker",
+            "Config": {
+                "image": image,
+                "entrypoint": [
+                    "/bin/sh",
+                    "-c",
+                    task_command,
+                ],
+            },
+            "Resources": {
+                "CPU": int(cpus) * 1000,
+                "MemoryMB": int(memory_mb),
+            },
+            "Restart": {
+                "Attempts": 0,
+            },
+            "Env": env,
+        }
+        if vault_template is not None:
+            # Issue #1449: Nomad renders the embedded template through
+            # the Vault integration and injects each ``KEY=VALUE`` line
+            # as a task env var (``env = true``). The literal secret is
+            # absent from the spec; only the template reference to the
+            # Vault path travels with the job.
+            task["Templates"] = [
+                {
+                    "Env": True,
+                    "ChangeMode": "restart",
+                    "EmbeddedTmpl": vault_template,
+                }
+            ]
+
         return {
             "Job": {
                 "ID": job_id,
@@ -999,28 +1111,7 @@ class NomadExecutor(BaseExecutor):
                 "TaskGroups": [
                     {
                         "Name": "osimflow",
-                        "Tasks": [
-                            {
-                                "Name": "osimflow",
-                                "Driver": "docker",
-                                "Config": {
-                                    "image": image,
-                                    "entrypoint": [
-                                        "/bin/sh",
-                                        "-c",
-                                        task_command,
-                                    ],
-                                },
-                                "Resources": {
-                                    "CPU": int(cpus) * 1000,
-                                    "MemoryMB": int(memory_mb),
-                                },
-                                "Restart": {
-                                    "Attempts": 0,
-                                },
-                                "Env": env,
-                            }
-                        ],
+                        "Tasks": [task],
                     }
                 ],
             }
@@ -1077,6 +1168,41 @@ class NomadExecutor(BaseExecutor):
                 "tmpfs_options": {"size": tmpfs_size},
             },
         ]
+        dispatch_task: dict[str, Any] = {
+            "Name": "simulate",
+            "Driver": "docker",
+            "Config": {
+                "image": default_image,
+                "command": "/bin/sh",
+                "args": ["-c", "python -m osimflow.remote_runner"],
+                "privileged": False,
+                "cap_drop": ["ALL"],
+                "read_only": True,
+                "mount": dispatch_mounts,
+            },
+            "Resources": {
+                "CPU": 2000,
+                "MemoryMB": 4096,
+            },
+            "Restart": {
+                "Attempts": 0,
+            },
+            "Env": {},
+        }
+        # Issue #1449: in Vault mode the parameterized job renders
+        # ``OSIMFLOW_TASK_PAYLOAD_SECRET`` from Vault via an env
+        # template stanza, so per-dispatch meta never carries the raw
+        # secret (dispatch meta is visible via ``nomad job inspect``
+        # and ``nomad alloc status``).
+        vault_template = self._vault_secret_template()
+        if vault_template is not None:
+            dispatch_task["Templates"] = [
+                {
+                    "Env": True,
+                    "ChangeMode": "restart",
+                    "EmbeddedTmpl": vault_template,
+                }
+            ]
         return {
             "Job": {
                 "ID": self._dispatch_job_id,
@@ -1113,29 +1239,7 @@ class NomadExecutor(BaseExecutor):
                 "TaskGroups": [
                     {
                         "Name": "osimflow",
-                        "Tasks": [
-                            {
-                                "Name": "simulate",
-                                "Driver": "docker",
-                                "Config": {
-                                    "image": default_image,
-                                    "command": "/bin/sh",
-                                    "args": ["-c", "python -m osimflow.remote_runner"],
-                                    "privileged": False,
-                                    "cap_drop": ["ALL"],
-                                    "read_only": True,
-                                    "mount": dispatch_mounts,
-                                },
-                                "Resources": {
-                                    "CPU": 2000,
-                                    "MemoryMB": 4096,
-                                },
-                                "Restart": {
-                                    "Attempts": 0,
-                                },
-                                "Env": {},
-                            }
-                        ],
+                        "Tasks": [dispatch_task],
                     }
                 ],
             }
@@ -1294,10 +1398,16 @@ class NomadExecutor(BaseExecutor):
             # Issue #1177: sign the dispatch payload when a shared secret
             # is configured; the runner reads these back as
             # NOMAD_META_task_payload_sig / NOMAD_META_task_payload_secret.
+            # Issue #1449: in Vault mode the secret itself is rendered
+            # by the Nomad client from the parameterized job's env
+            # template stanza, so it is kept out of the dispatch meta
+            # (visible via ``nomad job inspect`` / ``nomad alloc
+            # status``); only the signature travels inline.
             signature_env = build_signature_env(task_payload)
             if signature_env:
                 meta[TASK_PAYLOAD_SIG_META_KEY] = signature_env[TASK_PAYLOAD_SIG_ENV]
-                meta[TASK_PAYLOAD_SECRET_META_KEY] = signature_env[TASK_PAYLOAD_SECRET_ENV]
+                if self._vault_secret_template() is None:
+                    meta[TASK_PAYLOAD_SECRET_META_KEY] = signature_env[TASK_PAYLOAD_SECRET_ENV]
             meta["result_transport_mode"] = (
                 str(result_transport_mode) if result_transport_mode is not None else "auto"
             )
