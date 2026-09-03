@@ -1658,6 +1658,12 @@ class Campaign:
             if self._check_cancel_requested():
                 raise KeyboardInterrupt("cancellation requested before campaign start")
 
+            # Start-quota fail-fast (issues #446 → #1533): enforce
+            # resource_quota limits before any campaign work — including
+            # the init hook — is dispatched.  Raises QuotaExceededError
+            # when the configuration already violates a quota.
+            self._enforce_start_quota()
+
             # Init hook (issue #108): runs before the first campaign step.
             # Must succeed (exit 0) or the campaign aborts.
             self._run_init_script()
@@ -2926,6 +2932,13 @@ class Campaign:
         for chunk_start in range(0, len(pending_items), chunk_size):
             if self._check_pause_requested():
                 break
+            # Quota enforcement (issue #1533): stop submitting new
+            # chunks once a hard resource-quota limit trips.  Samples
+            # already submitted run to completion; the skipped pending
+            # samples fall through to the failure recording below
+            # (mirroring the pause-break path).
+            if self._check_quota_exceeded():
+                break
             submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
             chunk = pending_items[chunk_start : chunk_start + chunk_size]
             for sid, ctx in chunk:
@@ -3214,6 +3227,15 @@ class Campaign:
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
             if self._check_pause_requested():
+                break
+            # Quota enforcement (issue #1533): stop submitting new
+            # chunks once a hard resource-quota limit trips (cost /
+            # wall-time limits usually bite here — this is the
+            # expensive step).  Samples already submitted run to
+            # completion; the skipped pending samples fall through to
+            # the failure recording below (mirroring the pause-break
+            # path).
+            if self._check_quota_exceeded():
                 break
             submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
             chunk = pending_items[chunk_start : chunk_start + chunk_size]
@@ -3522,6 +3544,13 @@ class Campaign:
         next_submit_at = 0.0
         for chunk_start in range(0, len(pending_items), chunk_size):
             if self._check_pause_requested():
+                break
+            # Quota enforcement (issue #1533): stop submitting new
+            # chunks once a hard resource-quota limit trips.  Samples
+            # already submitted run to completion; the skipped pending
+            # samples fall through to the failure recording below
+            # (mirroring the pause-break path).
+            if self._check_quota_exceeded():
                 break
             submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
             chunk = pending_items[chunk_start : chunk_start + chunk_size]
