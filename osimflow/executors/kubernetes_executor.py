@@ -49,7 +49,13 @@ from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
-from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.base import (
+    BaseExecutor,
+    Handle,
+    PollingHandle,
+    PollOutcome,
+    poll_until_terminal,
+)
 from osimflow.executors.transport import (
     coerce_transport_mode,
     materialize_object_storage_result,
@@ -60,7 +66,7 @@ from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV, build_signature_
 log = logging.getLogger("osimflow.executors.kubernetes")
 
 
-class _KubernetesHandle(Handle):
+class _KubernetesHandle(PollingHandle):
     """Handle that polls Kubernetes on `.result()`.
 
     The work runs in a remote Kubernetes Job (not a thread or submitit
@@ -68,6 +74,10 @@ class _KubernetesHandle(Handle):
     Instead, the handle carries a reference to its executor and the
     job name; `result()` blocks on `_wait_for_terminal` and `done()`
     does a single non-blocking status check.
+
+    The poll-deadline state machine lives in the shared
+    ``PollingHandle`` base (issues #1464 / #1540); this class supplies
+    only the Kubernetes-specific hooks below.
 
     Result transport (issue #996): when ``result_transport_mode`` is
     ``"object_storage"``, the job-side runner uploaded its artifacts to
@@ -108,40 +118,45 @@ class _KubernetesHandle(Handle):
         self.cost_usd: float | None = None
         self.billed_duration_seconds: float | None = None
 
-    def result(self, timeout: float | None = None) -> Any:
+    # ------------------------------------------------------------------
+    # PollingHandle hooks (issues #1464 / #1540) — the shared state
+    # machine in ``osimflow.executors.base.PollingHandle`` owns
+    # ``result()``; ``KubernetesExecutor._wait_for_terminal`` owns the
+    # poll skeleton via ``base.poll_until_terminal``.
+    # ------------------------------------------------------------------
+
+    def _wait_for_terminal(self, timeout: float | None) -> Any:
         # Issue #1465: ``timeout`` is the deadline for the whole call —
-        # enforced by ``_wait_for_terminal``. The Job's
+        # enforced by the executor poll loop. The Job's
         # ``activeDeadlineSeconds`` (when set) remains the
         # substrate-level kill (defense in depth).
-        try:
-            pod_status = self._executor._wait_for_terminal(self._job_name, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-            self.error = exc
-            self._future.set_exception(exc)
-            raise
+        return self._executor._wait_for_terminal(self._job_name, timeout=timeout)  # noqa: SLF001
 
-        phase = pod_status.get("status", {}).get("phase", "")
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        phase = job.get("status", {}).get("phase", "")
         if phase == "Succeeded":
-            resolved = resolve_result_for_callback(
-                self._result_hint,
-                default=None,
-                transport_mode=self._result_transport_mode,
-            )
-            resolved = materialize_object_storage_result(
-                resolved,
-                transport_mode=self._result_transport_mode,
-                result_storage_backend=self._result_storage_backend,
-                result_storage_bucket=self._result_storage_bucket,
-                result_storage_prefix=self._result_storage_prefix,
-                result_storage_endpoint=self._result_storage_endpoint,
-            )
-            self._future.set_result(resolved)
-            return resolved
+            return PollOutcome.SUCCEEDED, None
+        return PollOutcome.FAILED, None
 
-        reason = self._extract_failure_reason(pod_status)
-        msg = f"Kubernetes job {self._job_name!r} {phase}: {reason}"
-        self._future.set_exception(RuntimeError(msg))
-        raise RuntimeError(msg)
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
+        resolved = resolve_result_for_callback(
+            self._result_hint,
+            default=None,
+            transport_mode=self._result_transport_mode,
+        )
+        return materialize_object_storage_result(
+            resolved,
+            transport_mode=self._result_transport_mode,
+            result_storage_backend=self._result_storage_backend,
+            result_storage_bucket=self._result_storage_bucket,
+            result_storage_prefix=self._result_storage_prefix,
+            result_storage_endpoint=self._result_storage_endpoint,
+        )
+
+    def _failure_error(self, job: Any) -> RuntimeError:
+        phase = job.get("status", {}).get("phase", "")
+        reason = self._extract_failure_reason(job)
+        return RuntimeError(f"Kubernetes job {self._job_name!r} {phase}: {reason}")
 
     def done(self) -> bool:
         if self._future.done():
@@ -488,48 +503,41 @@ class KubernetesExecutor(BaseExecutor):
 
         Returns the pod status dict for the job's pod.
 
+        The poll skeleton (deadline, deadline clamping (sleep capped at the remaining budget),
+        capped exponential growth) lives in
+        ``osimflow.executors.base.poll_until_terminal`` (issue #1540);
+        the Kubernetes loop grows the delay before sleeping and
+        tolerates transient pod-status probe errors.
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
-        delay = self.poll_interval_s
-        start = time.monotonic()
-        while True:
-            try:
-                pod_status = self._get_pod_status(job_name)
-            except Exception as exc:
-                log.warning("error getting pod status for %s: %s", job_name, exc)
-                if timeout is not None:
-                    elapsed = time.monotonic() - start
-                    remaining = timeout - elapsed
-                    if remaining <= 0:
-                        raise TimeoutError(
-                            f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
-                        ) from None
-                    delay = min(delay, remaining)
-                delay = min(delay * 2, self.max_poll_interval_s)
-                time.sleep(delay)
-                continue
-
-            phase = pod_status.get("status", {}).get("phase", "")
-            if phase in ("Succeeded", "Failed"):
-                return pod_status
-
-            log.info(
+        return poll_until_terminal(
+            lambda: self._get_pod_status(job_name),
+            is_terminal=lambda pod_status: (
+                pod_status.get("status", {}).get("phase", "") in ("Succeeded", "Failed")
+            ),
+            timeout=timeout,
+            timeout_message=lambda elapsed: (
+                f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
+            ),
+            poll_interval_s=self.poll_interval_s,
+            max_poll_interval_s=self.max_poll_interval_s,
+            on_pending=lambda pod_status, delay, _sleep_amount: log.info(
                 "kubernetes poll job=%s phase=%s (sleeping %.1fs)",
                 job_name,
-                phase,
+                pod_status.get("status", {}).get("phase", ""),
                 delay,
-            )
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timed out after {elapsed:.1f}s waiting for job {job_name!r}"
-                    )
-                delay = min(delay, remaining)
-            delay = min(delay * 2, self.max_poll_interval_s)
-            time.sleep(delay)
+            ),
+            tolerate_probe_errors=True,
+            on_probe_error=lambda exc, delay: log.warning(
+                "error getting pod status for %s: %s (sleeping %.1fs)",
+                job_name,
+                exc,
+                delay,
+            ),
+            grow_before_sleep=True,
+        )
 
     def _get_pod_status(self, job_name: str) -> dict[str, Any]:
         """Get the pod status for a job's pod.

@@ -25,13 +25,19 @@ from __future__ import annotations
 
 import logging
 import os
-import time
+import time  # noqa: F401 — patch seam: tests patch docker_swarm_executor.time.sleep
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
-from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.base import (
+    BaseExecutor,
+    Handle,
+    PollingHandle,
+    PollOutcome,
+    poll_until_terminal,
+)
 from osimflow.executors.transport import (
     materialize_object_storage_result,
     resolve_result_for_callback,
@@ -53,7 +59,7 @@ def _docker_error_code(exc: Exception) -> int:
         return 0
 
 
-class _DockerSwarmHandle(Handle):
+class _DockerSwarmHandle(PollingHandle):
     """Handle that polls Docker Swarm service tasks on `.result()`.
 
     The work runs in a remote Swarm service (not a thread or submitit
@@ -61,6 +67,10 @@ class _DockerSwarmHandle(Handle):
     Instead, the handle carries a reference to its executor and the
     service name; `result()` blocks on `_wait_for_terminal` and
     `done()` does a single non-blocking status check.
+
+    The poll-deadline state machine lives in the shared
+    ``PollingHandle`` base (issues #1464 / #1540); this class supplies
+    only the Docker-Swarm-specific hooks below.
     """
 
     def __init__(
@@ -81,47 +91,51 @@ class _DockerSwarmHandle(Handle):
         self.cost_usd: float | None = None
         self.billed_duration_seconds: float | None = None
 
-    def result(self, timeout: float | None = None) -> Any:
+    # ------------------------------------------------------------------
+    # PollingHandle hooks (issues #1464 / #1540) — the shared state
+    # machine in ``osimflow.executors.base.PollingHandle`` owns
+    # ``result()``; ``DockerSwarmExecutor._wait_for_terminal`` owns the
+    # poll skeleton via ``base.poll_until_terminal``.
+    # ------------------------------------------------------------------
+
+    def _wait_for_terminal(self, timeout: float | None) -> Any:
         # Issue #1465: ``timeout`` is the deadline for the whole call —
-        # enforced by ``_wait_for_terminal``. The service-level update
+        # enforced by the executor poll loop. The service-level update
         # timeout (when set) remains the substrate-level kill (defense
         # in depth).
-        try:
-            task_result = self._executor._wait_for_terminal(self._service_name, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-            self._future.set_exception(exc)
-            raise
+        return self._executor._wait_for_terminal(  # noqa: SLF001
+            self._service_name, timeout=timeout
+        )
 
-        status = task_result.get("status", {})
-        state = status.get("State", "")
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        state = job.get("status", {}).get("State", "")
         if state == "complete":
-            # Result-transport contract (issues #1333 / #1473): resolve
-            # the result hint and materialize object-storage artifacts
-            # so Campaign callbacks receive local paths — identical to
-            # the Nomad / Kubernetes / PBS handles.  This completes the
-            # previously half-wired path (the submit side always
-            # forwarded ``OSIMFLOW_RESULT_*`` env into the service).
-            resolved = resolve_result_for_callback(
-                self._submit_params.get("result_hint"),
-                default=None,
-                transport_mode=str(self._submit_params.get("result_transport_mode") or "auto"),
-            )
-            resolved = materialize_object_storage_result(
-                resolved,
-                transport_mode=str(self._submit_params.get("result_transport_mode") or "auto"),
-                result_storage_backend=self._submit_params.get("result_storage_backend"),
-                result_storage_bucket=self._submit_params.get("result_storage_bucket"),
-                result_storage_prefix=self._submit_params.get("result_storage_prefix"),
-                result_storage_endpoint=self._submit_params.get("result_storage_endpoint"),
-            )
-            self._future.set_result(resolved)
-            return resolved
+            return PollOutcome.SUCCEEDED, None
+        return PollOutcome.FAILED, None
 
-        # Extract the most useful error message from the task.
-        err_msg = self._extract_error_message(task_result)
-        msg = f"Docker Swarm service {self._service_name!r} task {state}: {err_msg}"
-        self._future.set_exception(RuntimeError(msg))
-        raise RuntimeError(msg)
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
+        # Result-transport contract (issues #1333 / #1473): resolve
+        # the result hint and materialize object-storage artifacts
+        # so Campaign callbacks receive local paths — identical to
+        # the Nomad / Kubernetes / PBS handles.
+        resolved = resolve_result_for_callback(
+            self._submit_params.get("result_hint"),
+            default=None,
+            transport_mode=str(self._submit_params.get("result_transport_mode") or "auto"),
+        )
+        return materialize_object_storage_result(
+            resolved,
+            transport_mode=str(self._submit_params.get("result_transport_mode") or "auto"),
+            result_storage_backend=self._submit_params.get("result_storage_backend"),
+            result_storage_bucket=self._submit_params.get("result_storage_bucket"),
+            result_storage_prefix=self._submit_params.get("result_storage_prefix"),
+            result_storage_endpoint=self._submit_params.get("result_storage_endpoint"),
+        )
+
+    def _failure_error(self, job: Any) -> RuntimeError:
+        state = job.get("status", {}).get("State", "")
+        err_msg = self._extract_error_message(job)
+        return RuntimeError(f"Docker Swarm service {self._service_name!r} task {state}: {err_msg}")
 
     def done(self) -> bool:
         if self._future.done():
@@ -332,33 +346,24 @@ class DockerSwarmExecutor(BaseExecutor):
 
         Returns the first non-running task dict.
 
+        The poll skeleton (deadline, deadline clamping (sleep capped at the remaining budget),
+        capped exponential growth) lives in
+        ``osimflow.executors.base.poll_until_terminal`` (issue #1540);
+        the Swarm loop grows the delay before sleeping and tolerates
+        transient service-status probe errors.
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
-        delay = self.poll_interval_s
-        start = time.monotonic()
-        while True:
-            try:
-                service_status = self._get_service_status(service_name)
-            except Exception as exc:
-                log.warning(
-                    "error getting service status for %s: %s (sleeping %.1fs)",
-                    service_name,
-                    exc,
-                    delay,
-                )
-                if timeout is not None:
-                    elapsed = time.monotonic() - start
-                    remaining = timeout - elapsed
-                    if remaining <= 0:
-                        raise TimeoutError(
-                            f"Timed out after {elapsed:.1f}s waiting for service {service_name!r}"
-                        ) from None
-                    delay = min(delay, remaining)
-                delay = min(delay * 2, self.max_poll_interval_s)
-                time.sleep(delay)
-                continue
+        terminal_states = {"complete", "failed", "shutdown", "rejected"}
 
+        def _is_terminal(service_status: dict[str, Any]) -> bool:
+            tasks = service_status.get("tasks", []) or []
+            return bool(tasks) and all(
+                task.get("status", {}).get("State", "") in terminal_states for task in tasks
+            )
+
+        def _on_pending(service_status: dict[str, Any], delay: float, _sleep: float) -> None:
             tasks = service_status.get("tasks", []) or []
             if not tasks:
                 # No tasks yet — still starting up.
@@ -367,27 +372,7 @@ class DockerSwarmExecutor(BaseExecutor):
                     service_name,
                     delay,
                 )
-                if timeout is not None:
-                    elapsed = time.monotonic() - start
-                    remaining = timeout - elapsed
-                    if remaining <= 0:
-                        raise TimeoutError(
-                            f"Timed out after {elapsed:.1f}s waiting for service {service_name!r}"
-                        )
-                    delay = min(delay, remaining)
-                delay = min(delay * 2, self.max_poll_interval_s)
-                time.sleep(delay)
-                continue
-
-            # Check if all tasks are in terminal states.
-            terminal_states = {"complete", "failed", "shutdown", "rejected"}
-            all_terminal = all(
-                task.get("status", {}).get("State", "") in terminal_states for task in tasks
-            )
-            if all_terminal:
-                # Return the first task for error extraction.
-                return cast(dict[str, Any], tasks[0])
-
+                return
             # Find the first running task for logging.
             running_task = next(
                 (t for t in tasks if t.get("status", {}).get("State", "") == "running"),
@@ -400,16 +385,30 @@ class DockerSwarmExecutor(BaseExecutor):
                 current_state,
                 delay,
             )
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timed out after {elapsed:.1f}s waiting for service {service_name!r}"
-                    ) from None
-                delay = min(delay, remaining)
-            delay = min(delay * 2, self.max_poll_interval_s)
-            time.sleep(delay)
+
+        service_status = poll_until_terminal(
+            lambda: self._get_service_status(service_name),
+            is_terminal=_is_terminal,
+            timeout=timeout,
+            timeout_message=lambda elapsed: (
+                f"Timed out after {elapsed:.1f}s waiting for service {service_name!r}"
+            ),
+            poll_interval_s=self.poll_interval_s,
+            max_poll_interval_s=self.max_poll_interval_s,
+            on_pending=_on_pending,
+            tolerate_probe_errors=True,
+            on_probe_error=lambda exc, delay: log.warning(
+                "error getting service status for %s: %s (sleeping %.1fs)",
+                service_name,
+                exc,
+                delay,
+            ),
+            grow_before_sleep=True,
+        )
+        # ``_is_terminal`` guarantees at least one task; return the
+        # first for error extraction (historic contract).
+        tasks = service_status.get("tasks", []) or []
+        return cast(dict[str, Any], tasks[0])
 
     def _submit_service(
         self,

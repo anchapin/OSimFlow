@@ -41,14 +41,20 @@ from __future__ import annotations
 
 import logging
 import os
-import random
-import time
+import random  # noqa: F401 — patch seam: tests patch <this module>.random.uniform
+import time  # noqa: F401 — patch seam: tests patch <this module>.time.sleep
 from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
-from osimflow.executors.base import BaseExecutor, PollingHandle, PollOutcome
+from osimflow.executors.base import (
+    BaseExecutor,
+    PollingHandle,
+    PollOutcome,
+    poll_until_terminal,
+    retry_with_backoff,
+)
 from osimflow.executors.transport import (
     coerce_transport_mode,
     materialize_object_storage_result,
@@ -68,7 +74,7 @@ _THROTTLE_ERROR_CODES: frozenset[str] = frozenset(
 )
 
 
-def _azure_throttle_code(exc: Exception) -> str | None:
+def _azure_throttle_code(exc: BaseException) -> str | None:
     """Return the Azure Batch error code on a throttle error, else ``None``.
 
     Accepts ``BatchErrorException`` (legacy ``azure-batch-sdk``) and any
@@ -94,30 +100,32 @@ def _retry_azure_submit(
     ``_THROTTLE_ERROR_CODES`` and retries with full-jitter exponential
     backoff capped at ``total_cap_seconds``. Other exceptions propagate
     immediately so we don't mask permanent failures.
+
+    The bounded-attempt exponential schedule lives in
+    ``osimflow.executors.base.retry_with_backoff`` (issue #1540).
     """
-    delay = 0.5
-    last_exc: Exception | None = None
-    for attempt in range(max_attempts):
-        try:
-            return call_fn()
-        except Exception as exc:  # noqa: BLE001 — propagate non-throttle as-is
-            code = _azure_throttle_code(exc)
-            if code is None or attempt >= max_attempts - 1:
-                raise
-            sleep_for = min(random.uniform(0, delay), total_cap_seconds)
-            log.warning(
-                "azure_batch submit throttled (attempt %d/%d, code=%s), retrying in %.1fs",
-                attempt + 1,
-                max_attempts,
-                code,
-                sleep_for,
-            )
-            time.sleep(sleep_for)
-            delay = min(delay * 2, total_cap_seconds)
-            last_exc = exc
-    raise RuntimeError(
-        f"azure_batch submit throttle retry exhausted after {max_attempts} attempts"
-    ) from last_exc
+
+    def _retry_on(exc: BaseException) -> bool:
+        return _azure_throttle_code(exc) is not None
+
+    def _on_retry(exc: BaseException, attempt: int, window: float) -> None:
+        log.warning(
+            "azure_batch submit throttled (attempt %d/%d, code=%s), retrying in %.1fs",
+            attempt,
+            max_attempts,
+            _azure_throttle_code(exc),
+            window,
+        )
+
+    return retry_with_backoff(
+        call_fn,
+        retry_on=_retry_on,
+        max_attempts=max_attempts,
+        initial_delay_s=0.5,
+        max_delay_s=total_cap_seconds,
+        jitter=True,
+        on_retry=_on_retry,
+    )
 
 
 class _AzureErrorInfo:
@@ -198,7 +206,7 @@ class _AzureBatchHandle(PollingHandle):
         failure_reason = getattr(job.properties.execution_info, "failure_reason", None)
         return PollOutcome.FAILED, failure_reason
 
-    def _resolve_success_result(self) -> Any:
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
         resolved = resolve_result_for_callback(
             self._result_hint,
             default=None,
@@ -368,24 +376,28 @@ class AzureBatchExecutor(BaseExecutor):
     def _wait_for_terminal(self, job_id: str, timeout: float | None = None) -> Any:
         """Poll Azure Batch with exponential backoff until terminal state.
 
+        The poll skeleton (deadline, deadline clamping (sleep capped at the remaining budget),
+        capped exponential growth) lives in
+        ``osimflow.executors.base.poll_until_terminal`` (issue #1540);
+        the Azure loop grows the delay before sleeping.
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
-        delay = self.poll_interval_s
-        start = time.monotonic()
-        while True:
-            job = self._get_job(job_id)
-            if job.properties.execution_info.end_time is not None:
-                return job
-            log.info("azure_batch poll jobId=%s (sleeping %.1fs)", job_id, delay)
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}")
-                delay = min(delay, remaining)
-            delay = min(delay * 2, self.max_poll_interval_s)
-            time.sleep(delay)
+        return poll_until_terminal(
+            lambda: self._get_job(job_id),
+            is_terminal=lambda job: job.properties.execution_info.end_time is not None,
+            timeout=timeout,
+            timeout_message=lambda elapsed: (
+                f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
+            ),
+            poll_interval_s=self.poll_interval_s,
+            max_poll_interval_s=self.max_poll_interval_s,
+            on_pending=lambda _job, delay, _sleep_amount: log.info(
+                "azure_batch poll jobId=%s (sleeping %.1fs)", job_id, delay
+            ),
+            grow_before_sleep=True,
+        )
 
     @property
     def requires_remote_runner_payload(self) -> bool:

@@ -21,12 +21,19 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-import time
+import time  # noqa: F401 — patch seam: tests patch pbs_executor.time.sleep
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
-from typing import Any
+from typing import Any, cast
 
-from osimflow.executors.base import BaseExecutor, Handle
+from osimflow.executors.base import (
+    BaseExecutor,
+    Handle,
+    PollingHandle,
+    PollOutcome,
+    poll_until_terminal,
+    retry_with_backoff,
+)
 from osimflow.executors.transport import (
     coerce_transport_mode,
     materialize_object_storage_result,
@@ -52,18 +59,21 @@ PBS_STATE_TRANSIENT: str | None = None
 # ---------------------------------------------------------------------------
 
 
-class _PBSHandle(Handle):
-    """Handle that polls PBS ``qstat`` on ``.result()``.
+class _PBSHandle(PollingHandle):
+    """Handle that polls PBS ``qstat`` on `.result()`.
 
     Mirrors ``_AWSBatchHandle`` and ``_NomadHandle``: the work runs on a
     remote PBS job (not a thread or submitit job), so we cannot back the
     Future with a local completion. The handle carries a reference to
-    its executor and the PBS job ID; ``result()`` blocks on
-    ``_wait_for_terminal`` and ``done()`` does a single non-blocking
+    its executor and the PBS job ID; `result()` blocks on
+    `_wait_for_terminal` and `done()` does a single non-blocking
     ``qstat`` call.
 
-    The handle's ``_future`` is set when ``result()`` reaches a terminal
-    state so concurrent callers don't re-poll.
+    The poll-deadline state machine lives in the shared
+    ``PollingHandle`` base (issues #1464 / #1540); this class supplies
+    only the PBS-specific hooks below. The handle's ``_future`` is set
+    when ``result()`` reaches a terminal state so concurrent callers
+    don't re-poll.
     """
 
     def __init__(
@@ -95,38 +105,50 @@ class _PBSHandle(Handle):
         self.worker_ip: str | None = None
         self.worker_region: str | None = None
 
-    def result(self, timeout: float | None = None) -> Any:
+    # ------------------------------------------------------------------
+    # PollingHandle hooks (issues #1464 / #1540) — the shared state
+    # machine in ``osimflow.executors.base.PollingHandle`` owns
+    # ``result()``; ``PBSExecutor._wait_for_terminal`` owns the poll
+    # skeleton via ``base.poll_until_terminal`` (including the
+    # transient-qstat handling of issue #1405).
+    # ------------------------------------------------------------------
+
+    def _wait_for_terminal(self, timeout: float | None) -> tuple[str, int]:
         # Issue #1465: ``timeout`` is the deadline for the whole call —
-        # enforced by ``_wait_for_terminal``. The PBS ``walltime``
+        # enforced by the executor poll loop. The PBS ``walltime``
         # resource (when set) remains the substrate-level kill (defense
         # in depth).
-        try:
-            job_state, exit_code = self._executor._wait_for_terminal(self.job_id, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 — let KeyboardInterrupt/SystemExit propagate
-            self._future.set_exception(exc)
-            raise
+        return cast(
+            "tuple[str, int]",
+            self._executor._wait_for_terminal(self.job_id, timeout=timeout),  # noqa: SLF001
+        )
 
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        _state, exit_code = job
         if exit_code == 0:
-            resolved = resolve_result_for_callback(
-                self._result_hint,
-                default=None,
-                transport_mode=self._result_transport_mode,
-            )
-            resolved = materialize_object_storage_result(
-                resolved,
-                transport_mode=self._result_transport_mode,
-                result_storage_backend=self._result_storage_backend,
-                result_storage_bucket=self._result_storage_bucket,
-                result_storage_prefix=self._result_storage_prefix,
-                result_storage_endpoint=self._result_storage_endpoint,
-            )
-            self._future.set_result(resolved)
-            return resolved
+            return PollOutcome.SUCCEEDED, None
+        return PollOutcome.FAILED, None
 
-        # Non-zero exit: surface the failure with the exit code.
-        msg = f"PBS job {self.job_id!r} exited with code {exit_code} (state={job_state})"
-        self._future.set_exception(RuntimeError(msg))
-        raise RuntimeError(msg)
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
+        resolved = resolve_result_for_callback(
+            self._result_hint,
+            default=None,
+            transport_mode=self._result_transport_mode,
+        )
+        return materialize_object_storage_result(
+            resolved,
+            transport_mode=self._result_transport_mode,
+            result_storage_backend=self._result_storage_backend,
+            result_storage_bucket=self._result_storage_bucket,
+            result_storage_prefix=self._result_storage_prefix,
+            result_storage_endpoint=self._result_storage_endpoint,
+        )
+
+    def _failure_error(self, job: Any) -> RuntimeError:
+        job_state, exit_code = job
+        return RuntimeError(
+            f"PBS job {self.job_id!r} exited with code {exit_code} (state={job_state})"
+        )
 
     def done(self) -> bool:
         # If the future is already finished (terminal status observed
@@ -385,41 +407,42 @@ class PBSExecutor(BaseExecutor):
 
         Returns ``(state, exit_code)``.
 
+        The poll skeleton (deadline, deadline clamping (sleep capped at the remaining budget),
+        capped exponential growth) lives in
+        ``osimflow.executors.base.poll_until_terminal`` (issue #1540);
+        the PBS loop grows the delay before sleeping. The
+        transient-qstat handling of issue #1405 rides the shared
+        ``is_transient`` hook: ``PBS_STATE_TRANSIENT`` retries at the
+        current delay without growing the backoff (a transient qstat
+        failure says nothing about the job, so there is no reason to
+        back off further).
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
-        delay = self.poll_interval_s
-        start = time.monotonic()
-        while True:
-            state = self._query_job_state(job_id)
-            # Issue #1405: ``PBS_STATE_TRANSIENT`` means qstat itself
-            # failed transiently (PBS hiccup). Don't declare terminal;
-            # keep polling. Don't grow the delay (we don't want to
-            # back off further just because of a transient query
-            # failure — the job may still be running fine).
-            if state == PBS_STATE_TRANSIENT:
-                log.info("pbs poll jobId=%s state=TRANSIENT (retrying in %.1fs)", job_id, delay)
-                if timeout is not None:
-                    elapsed = time.monotonic() - start
-                    if elapsed >= timeout:
-                        raise TimeoutError(
-                            f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
-                        )
-                time.sleep(delay)
-                continue
-            if state in ("F", "E", "C"):
-                exit_code = self._parse_exit_status(job_id)
-                return state, exit_code
-            log.info("pbs poll jobId=%s state=%s (sleeping %.1fs)", job_id, state, delay)
-            if timeout is not None:
-                elapsed = time.monotonic() - start
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise TimeoutError(f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}")
-                delay = min(delay, remaining)
-            # Exponential backoff, capped.
-            delay = min(delay * 2, self.max_poll_interval_s)
-            time.sleep(delay)
+        state: str | None = poll_until_terminal(
+            lambda: self._query_job_state(job_id),
+            is_terminal=lambda s: s in ("F", "E", "C"),
+            timeout=timeout,
+            timeout_message=lambda elapsed: (
+                f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
+            ),
+            poll_interval_s=self.poll_interval_s,
+            max_poll_interval_s=self.max_poll_interval_s,
+            on_pending=lambda s, delay, _sleep_amount: log.info(
+                "pbs poll jobId=%s state=%s (sleeping %.1fs)", job_id, s, delay
+            ),
+            is_transient=lambda s: s is PBS_STATE_TRANSIENT,
+            on_transient=lambda _s, delay: log.info(
+                "pbs poll jobId=%s state=TRANSIENT (retrying in %.1fs)", job_id, delay
+            ),
+            grow_before_sleep=True,
+        )
+        # ``is_terminal`` only accepts the concrete PBS state codes —
+        # a transient (``None``) probe result never terminates the loop.
+        assert state is not None
+        exit_code = self._parse_exit_status(job_id)
+        return state, exit_code
 
     # -----------------------------------------------------------------------
     # submit / shutdown
@@ -587,31 +610,35 @@ def _retry_pbs_call[T](
     The exponential schedule is ``1s, 2s, 4s, ...`` capped at
     ``total_cap_seconds`` total wall time across all retries. After
     ``max_attempts`` transient failures the last exception is re-raised.
+    The bounded-attempt schedule lives in
+    ``osimflow.executors.base.retry_with_backoff`` (issue #1540); the
+    PBS variant is deterministic (no jitter).
     """
-    delay = 1.0
-    last_exc: subprocess.CalledProcessError | None = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return call_fn()
-        except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr or ""
-            if not _TRANSIENT_STDERR_RE.search(stderr):
-                raise
-            last_exc = exc
-            if attempt >= max_attempts:
-                break
-            capped = min(delay, total_cap_seconds)
-            log.warning(
-                "pbs transient failure (attempt %d/%d), retrying in %.1fs: %s",
-                attempt,
-                max_attempts,
-                capped,
-                stderr.strip(),
-            )
-            time.sleep(capped)
-            delay = min(delay * 2, total_cap_seconds)
-    assert last_exc is not None  # loop body above always sets this on raise
-    raise last_exc
+
+    def _retry_on(exc: BaseException) -> bool:
+        return isinstance(exc, subprocess.CalledProcessError) and bool(
+            _TRANSIENT_STDERR_RE.search(exc.stderr or "")
+        )
+
+    def _on_retry(exc: BaseException, attempt: int, window: float) -> None:
+        assert isinstance(exc, subprocess.CalledProcessError)
+        log.warning(
+            "pbs transient failure (attempt %d/%d), retrying in %.1fs: %s",
+            attempt,
+            max_attempts,
+            window,
+            (exc.stderr or "").strip(),
+        )
+
+    return retry_with_backoff(
+        call_fn,
+        retry_on=_retry_on,
+        max_attempts=max_attempts,
+        initial_delay_s=1.0,
+        max_delay_s=total_cap_seconds,
+        jitter=False,
+        on_retry=_on_retry,
+    )
 
 
 def _default_pbs_server() -> str | None:
