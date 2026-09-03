@@ -49,7 +49,7 @@ def test_real_azure_batch_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPa
          ``azure-batch`` SDK.
       2. Each task runs inside a container on the Batch pool (the work
          function is the OSimFlow stub that ships in the container image).
-      3. The executor polls ``job.get`` until the task reaches a terminal
+      3. The executor polls ``get_task`` until the task reaches a terminal
          state.
       4. The Campaign collects per-sample results from shared storage.
 
@@ -145,7 +145,9 @@ def test_real_azure_batch_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     )
     batch_client = executor._client  # noqa: SLF001 — populated during campaign.run()
     for job_id in sim_job_ids_hmac:
-        task = batch_client.task.get(account_name, job_id, job_id)
+        # azure-batch 15.x track-2 SDK (issue #1582): one job carries one
+        # task sharing the job's id; get_task(job_id, task_id).
+        task = batch_client.get_task(job_id, job_id)
         env = {e.name: e.value for e in (task.environment_settings or [])}
         assert env.get("OSIMFLOW_TASK_PAYLOAD"), (
             f"Azure Batch task {job_id} missing OSIMFLOW_TASK_PAYLOAD env var"

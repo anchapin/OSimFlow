@@ -47,15 +47,15 @@ class TestHandleResultTimeout:
     """Issue #1465: polling handles enforce the ``timeout`` deadline."""
 
     def test_azure_batch_handle_result_timeout_raises(self) -> None:
-        """_AzureBatchHandle: never-terminal job -> TimeoutError, promptly."""
+        """_AzureBatchHandle: never-terminal task -> TimeoutError, promptly."""
         ex = AzureBatchExecutor.__new__(AzureBatchExecutor)
         ex.poll_interval_s = 0.05
         ex.max_poll_interval_s = 0.1
         ex.max_retries = 0
         ex.location = "eastus"
-        job = MagicMock()
-        job.properties.execution_info.end_time = None  # never terminal
-        ex._get_job = MagicMock(return_value=job)
+        task = MagicMock()
+        task.execution_info.end_time = None  # never terminal
+        ex._get_task = MagicMock(return_value=task)
 
         handle = _AzureBatchHandle(job_id="job-1", executor=ex, submit_params={})
         _assert_times_out(lambda: handle.result(timeout=_TIMEOUT_S))

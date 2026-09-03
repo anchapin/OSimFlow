@@ -45,16 +45,16 @@ class TestBackoffCapAppliedBeforeSleep:
         ex.fallback_to_on_demand = False
         ex.max_retries = 3
 
-        mock_job_running = MagicMock()
-        mock_job_running.properties.execution_info.end_time = None
-        mock_job_done = MagicMock()
-        mock_job_done.properties.execution_info.end_time = "2024-01-01T00:01:00Z"
-        ex._client.job.get.side_effect = [
-            mock_job_running,
-            mock_job_running,
-            mock_job_running,
-            mock_job_running,
-            mock_job_done,
+        mock_task_running = MagicMock()
+        mock_task_running.execution_info.end_time = None
+        mock_task_done = MagicMock()
+        mock_task_done.execution_info.end_time = "2024-01-01T00:01:00Z"
+        ex._client.get_task.side_effect = [
+            mock_task_running,
+            mock_task_running,
+            mock_task_running,
+            mock_task_running,
+            mock_task_done,
         ]
 
         sleep_durations: list[float] = []
@@ -63,9 +63,9 @@ class TestBackoffCapAppliedBeforeSleep:
             sleep_durations.append(duration)
 
         with patch("osimflow.executors.azure_batch_executor.time.sleep", side_effect=capture_sleep):
-            job = ex._wait_for_terminal("test-job")
+            task = ex._wait_for_terminal("test-job")
 
-        assert job.properties.execution_info.end_time is not None
+        assert task.execution_info.end_time is not None
 
         for sleep_duration in sleep_durations:
             assert sleep_duration <= ex.max_poll_interval_s, (
@@ -224,9 +224,9 @@ class TestWaitForTerminalTimeout:
         ex.fallback_to_on_demand = False
         ex.max_retries = 3
 
-        mock_job_running = MagicMock()
-        mock_job_running.properties.execution_info.end_time = None
-        ex._client.job.get.return_value = mock_job_running
+        mock_task_running = MagicMock()
+        mock_task_running.execution_info.end_time = None
+        ex._client.get_task.return_value = mock_task_running
 
         with patch("osimflow.executors.azure_batch_executor.time.sleep"):
             with pytest.raises(TimeoutError, match="Timed out"):

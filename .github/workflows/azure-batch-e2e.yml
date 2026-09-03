@@ -41,10 +41,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install OSimFlow with dev extra + azure SDKs
+      - name: Install OSimFlow with dev + azure extras
         run: |
-          pip install -e ".[dev]"
-          pip install azure-batch azure-identity
+          pip install -e ".[dev,azure]"
 
       - name: Authenticate to Azure (OIDC)
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3

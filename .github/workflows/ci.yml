@@ -110,7 +110,10 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
+          # azure extra included so mypy --strict resolves azure.batch and
+          # actually type-checks osimflow/executors/azure_batch_executor.py
+          # (issue #1582).
+          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes]"
 
       - name: mypy osimflow/
         if: steps.changed.outputs.any_changed == 'true'
@@ -287,7 +290,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
           uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
 
       - name: pytest with coverage gate
@@ -435,7 +438,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
           uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
 
       - name: pytest -m slow
@@ -508,7 +511,7 @@ jobs:
         if: steps.changed.outputs.any_changed == 'true'
         run: |
           uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
 
       - name: pytest -m chaos
         if: steps.changed.outputs.any_changed == 'true'
