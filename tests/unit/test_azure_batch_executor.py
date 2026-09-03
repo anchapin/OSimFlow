@@ -63,11 +63,11 @@ class TestAzureBatchExecutor:
 
     def test_submit_succeeds(self) -> None:
         ex = self._make_executor()
-        mock_job = MagicMock()
-        mock_job.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
-        ex._client.job.get.return_value = mock_job
-        ex._client.job.add.return_value = None
-        ex._client.task.add.return_value = None
+        mock_task = MagicMock()
+        mock_task.execution_info.end_time = "2024-01-01T00:00:00Z"
+        ex._client.get_task.return_value = mock_task
+        ex._client.create_job.return_value = None
+        ex._client.create_task.return_value = None
 
         handle = ex.submit(lambda: None, name="test")
         assert handle.job_id == "osimflow-test"
@@ -75,12 +75,12 @@ class TestAzureBatchExecutor:
 
     def test_submit_failed_raises_runtime_error(self) -> None:
         ex = self._make_executor()
-        mock_job = MagicMock()
-        mock_job.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
-        mock_job.properties.execution_info.exit_code = 137
-        ex._client.job.get.return_value = mock_job
-        ex._client.job.add.return_value = None
-        ex._client.task.add.return_value = None
+        mock_task = MagicMock()
+        mock_task.execution_info.end_time = "2024-01-01T00:00:00Z"
+        mock_task.execution_info.exit_code = 137
+        ex._client.get_task.return_value = mock_task
+        ex._client.create_job.return_value = None
+        ex._client.create_task.return_value = None
 
         handle = ex.submit(lambda: None, name="fail")
         with pytest.raises(RuntimeError, match="exit code 137"):
@@ -88,15 +88,15 @@ class TestAzureBatchExecutor:
 
     def test_wait_for_terminal_polls(self) -> None:
         ex = self._make_executor()
-        mock_job_running = MagicMock()
-        mock_job_running.properties.execution_info.end_time = None
-        mock_job_succeeded = MagicMock()
-        mock_job_succeeded.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
-        ex._client.job.get.side_effect = [mock_job_running, mock_job_succeeded]
+        mock_task_running = MagicMock()
+        mock_task_running.execution_info.end_time = None
+        mock_task_succeeded = MagicMock()
+        mock_task_succeeded.execution_info.end_time = "2024-01-01T00:00:00Z"
+        ex._client.get_task.side_effect = [mock_task_running, mock_task_succeeded]
 
         with patch("osimflow.executors.azure_batch_executor.time.sleep"):
-            job = ex._wait_for_terminal("test-job")
-        assert job.properties.execution_info.end_time is not None
+            task = ex._wait_for_terminal("test-job")
+        assert task.execution_info.end_time is not None
 
     def test_build_environment(self) -> None:
         ex = self._make_executor()
@@ -181,13 +181,13 @@ class TestAzureBatchHandle:
         ex.max_retries = 3
         ex.pool_id = "test-pool"
 
-        mock_job = MagicMock()
-        mock_job.properties.execution_info.end_time = kw.get("end_time", "2024-01-01T00:00:00Z")
-        mock_job.properties.execution_info.exit_code = kw.get("exit_code", None)
-        mock_job.properties.execution_info.failure_reason = kw.get("failure_reason", None)
-        ex._client.job.get.return_value = mock_job
-        ex._client.job.add.return_value = None
-        ex._client.task.add.return_value = None
+        mock_task = MagicMock()
+        mock_task.execution_info.end_time = kw.get("end_time", "2024-01-01T00:00:00Z")
+        mock_task.execution_info.exit_code = kw.get("exit_code", None)
+        mock_task.execution_info.failure_info.message = kw.get("failure_reason", None)
+        ex._client.get_task.return_value = mock_task
+        ex._client.create_job.return_value = None
+        ex._client.create_task.return_value = None
 
         submit_params = {
             "name": "test",
@@ -230,7 +230,7 @@ class TestAzureBatchHandle:
 
     def test_done_api_error_returns_false(self) -> None:
         handle, mock_client = self._make_handle(end_time=None)
-        mock_client.job.get.side_effect = Exception("network")
+        mock_client.get_task.side_effect = Exception("network")
         assert handle.done() is False
 
     def test_spot_interruption_retries_and_succeeds(self) -> None:
@@ -257,18 +257,18 @@ class TestAzureBatchHandle:
         }
 
         # First call: spot interruption, second call: success
-        mock_job_spot = MagicMock()
-        mock_job_spot.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
-        mock_job_spot.properties.execution_info.exit_code = 137
-        mock_job_spot.properties.execution_info.failure_reason = "SpotNodeTermination"
+        mock_task_spot = MagicMock()
+        mock_task_spot.execution_info.end_time = "2024-01-01T00:00:00Z"
+        mock_task_spot.execution_info.exit_code = 137
+        mock_task_spot.execution_info.failure_info.message = "SpotNodeTermination"
 
-        mock_job_success = MagicMock()
-        mock_job_success.properties.execution_info.end_time = "2024-01-01T00:00:01Z"
-        mock_job_success.properties.execution_info.exit_code = 0
+        mock_task_success = MagicMock()
+        mock_task_success.execution_info.end_time = "2024-01-01T00:00:01Z"
+        mock_task_success.execution_info.exit_code = 0
 
-        ex._client.job.get.side_effect = [mock_job_spot, mock_job_success]
-        ex._client.job.add.return_value = None
-        ex._client.task.add.return_value = None
+        ex._client.get_task.side_effect = [mock_task_spot, mock_task_success]
+        ex._client.create_job.return_value = None
+        ex._client.create_task.return_value = None
 
         handle = _AzureBatchHandle(
             job_id="test-job",
@@ -303,18 +303,18 @@ class TestAzureBatchHandle:
             "environment": [],
         }
 
-        mock_job_spot = MagicMock()
-        mock_job_spot.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
-        mock_job_spot.properties.execution_info.exit_code = 137
-        mock_job_spot.properties.execution_info.failure_reason = "SpotNodeTermination"
+        mock_task_spot = MagicMock()
+        mock_task_spot.execution_info.end_time = "2024-01-01T00:00:00Z"
+        mock_task_spot.execution_info.exit_code = 137
+        mock_task_spot.execution_info.failure_info.message = "SpotNodeTermination"
 
-        mock_job_success = MagicMock()
-        mock_job_success.properties.execution_info.end_time = "2024-01-01T00:00:01Z"
-        mock_job_success.properties.execution_info.exit_code = 0
+        mock_task_success = MagicMock()
+        mock_task_success.execution_info.end_time = "2024-01-01T00:00:01Z"
+        mock_task_success.execution_info.exit_code = 0
 
-        ex._client.job.get.side_effect = [mock_job_spot, mock_job_success]
-        ex._client.job.add.return_value = None
-        ex._client.task.add.return_value = None
+        ex._client.get_task.side_effect = [mock_task_spot, mock_task_success]
+        ex._client.create_job.return_value = None
+        ex._client.create_task.return_value = None
 
         handle = _AzureBatchHandle(
             job_id="test-job",
@@ -363,14 +363,14 @@ class TestAzureBatchHandle:
         }
 
         # All calls: spot interruption
-        mock_job_spot = MagicMock()
-        mock_job_spot.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
-        mock_job_spot.properties.execution_info.exit_code = 137
-        mock_job_spot.properties.execution_info.failure_reason = "SpotNodeTermination"
+        mock_task_spot = MagicMock()
+        mock_task_spot.execution_info.end_time = "2024-01-01T00:00:00Z"
+        mock_task_spot.execution_info.exit_code = 137
+        mock_task_spot.execution_info.failure_info.message = "SpotNodeTermination"
 
-        ex._client.job.get.return_value = mock_job_spot
-        ex._client.job.add.return_value = None
-        ex._client.task.add.return_value = None
+        ex._client.get_task.return_value = mock_task_spot
+        ex._client.create_job.return_value = None
+        ex._client.create_task.return_value = None
 
         handle = _AzureBatchHandle(
             job_id="test-job",
@@ -406,18 +406,18 @@ class TestAzureBatchHandle:
         }
 
         # First: spot interruption, second: on-demand success
-        mock_job_spot = MagicMock()
-        mock_job_spot.properties.execution_info.end_time = "2024-01-01T00:00:00Z"
-        mock_job_spot.properties.execution_info.exit_code = 137
-        mock_job_spot.properties.execution_info.failure_reason = "SpotNodeTermination"
+        mock_task_spot = MagicMock()
+        mock_task_spot.execution_info.end_time = "2024-01-01T00:00:00Z"
+        mock_task_spot.execution_info.exit_code = 137
+        mock_task_spot.execution_info.failure_info.message = "SpotNodeTermination"
 
-        mock_job_on_demand = MagicMock()
-        mock_job_on_demand.properties.execution_info.end_time = "2024-01-01T00:00:01Z"
-        mock_job_on_demand.properties.execution_info.exit_code = 0
+        mock_task_on_demand = MagicMock()
+        mock_task_on_demand.execution_info.end_time = "2024-01-01T00:00:01Z"
+        mock_task_on_demand.execution_info.exit_code = 0
 
-        ex._client.job.get.side_effect = [mock_job_spot, mock_job_on_demand]
-        ex._client.job.add.return_value = None
-        ex._client.task.add.return_value = None
+        ex._client.get_task.side_effect = [mock_task_spot, mock_task_on_demand]
+        ex._client.create_job.return_value = None
+        ex._client.create_task.return_value = None
 
         handle = _AzureBatchHandle(
             job_id="test-job",
@@ -431,7 +431,7 @@ class TestAzureBatchHandle:
 
 
 class TestAzureBatchThrottleRetry:
-    """Throttle / network retry on client.job.add and client.task.add (issue #1396)."""
+    """Throttle / network retry on client.create_job / client.create_task (issue #1396)."""
 
     def test_throttle_error_codes_contains_expected_codes(self) -> None:
         """The documented Azure Batch throttle set is locked in (issue #1396)."""
@@ -557,7 +557,7 @@ class TestAzureBatchThrottleRetry:
         assert len(warning_codes) == 2
 
     def test_submit_retries_on_throttled_job_add(self) -> None:
-        """Regression: AzureBatchExecutor._submit_job retries a throttled client.job.add (issue #1396)."""
+        """Regression: AzureBatchExecutor._submit_job retries a throttled client.create_job (issue #1396)."""
         ex = self._executor_with_throttle([_FakeBatchError("TooManyRequests"), None])
 
         with patch("osimflow.executors.azure_batch_executor.time.sleep"):
@@ -570,8 +570,8 @@ class TestAzureBatchThrottleRetry:
             )
 
         assert job_id == "osimflow-throttled-job"
-        assert ex._client.job.add.call_count == 2
-        assert ex._client.task.add.call_count == 1
+        assert ex._client.create_job.call_count == 2
+        assert ex._client.create_task.call_count == 1
 
     def test_submit_propagates_after_throttle_exhaustion(self) -> None:
         """If every retry is throttled, the throttle exception propagates (issue #1396)."""
@@ -589,7 +589,7 @@ class TestAzureBatchThrottleRetry:
                 environment=[],
             )
 
-        assert ex._client.job.add.call_count == 5
+        assert ex._client.create_job.call_count == 5
 
     def _executor_with_throttle(
         self, exc: Exception | list[Exception | None]
@@ -607,6 +607,65 @@ class TestAzureBatchThrottleRetry:
         ex.fallback_to_on_demand = False
         ex.max_retries = 3
         ex._client = MagicMock()
-        ex._client.job.add.side_effect = exc
-        ex._client.task.add.return_value = None
+        ex._client.create_job.side_effect = exc
+        ex._client.create_task.return_value = None
         return ex
+
+
+try:
+    import azure.batch  # noqa: F401
+
+    _HAS_AZURE_BATCH = True
+except ModuleNotFoundError:  # pragma: no cover - exercised only without the extra
+    _HAS_AZURE_BATCH = False
+
+
+class TestPinnedAzureBatchSdkSurface:
+    """Issue #1582: the executor codes against the azure-batch 15.x surface.
+
+    The strict mypy gate only checks ``azure_batch_executor.py`` when the
+    SDK is installed (the ``[azure]`` extra is part of the dev/typecheck
+    install sets). This test pins the exact SDK attributes the executor
+    touches so an SDK rename (or an accidental revert to the legacy
+    ``BatchServiceClient`` API) fails loudly in every environment that
+    has the extra installed, instead of silently regressing the gate.
+    """
+
+    @pytest.mark.skipif(not _HAS_AZURE_BATCH, reason="azure-batch extra not installed")
+    def test_executor_sdk_surface_exists_on_pinned_version(self) -> None:
+        """Every azure.batch attribute the executor touches must exist (15.x)."""
+        import inspect
+
+        import azure.batch
+        from azure.batch import models
+
+        # Client construction (azure_batch_executor._get_client).
+        assert hasattr(azure.batch, "BatchClient")
+        init_params = list(inspect.signature(azure.batch.BatchClient.__init__).parameters)
+        assert "endpoint" in init_params
+        assert "credential" in init_params
+
+        # _submit_job model touchpoints.
+        for attr in (
+            "BatchJobCreateOptions",
+            "BatchPoolInfo",
+            "BatchAllTasksCompleteMode",
+            "BatchTaskFailureMode",
+            "BatchTaskCreateOptions",
+            "BatchTaskContainerSettings",
+            "BatchTaskConstraints",
+            "EnvironmentSetting",
+        ):
+            assert hasattr(models, attr), f"azure.batch.models.{attr} missing"
+
+        # Polling + constraints field names the executor relies on.
+        assert hasattr(azure.batch.BatchClient, "get_task")
+        assert hasattr(azure.batch.BatchClient, "create_job")
+        assert hasattr(azure.batch.BatchClient, "create_task")
+        assert "execution_info" in models.BatchTask.__annotations__
+        assert "max_task_retry_count" in models.BatchTaskConstraints.__annotations__
+        assert "image_name" in models.BatchTaskContainerSettings.__annotations__
+
+        # Legacy track-1 surface the executor migrated away from (#1582).
+        assert not hasattr(azure.batch, "BatchServiceClient")
+        assert not hasattr(models, "TaskAddParameter")

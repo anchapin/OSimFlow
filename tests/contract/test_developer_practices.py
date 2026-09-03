@@ -19,6 +19,7 @@ Each test corresponds to one acceptance criterion in issue #15:
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -817,4 +818,36 @@ def test_check_openapi_sync_detects_intentional_drift() -> None:
         post = _run([sys.executable, str(tool)])
         assert post.returncode == 0, (
             "docs/openapi.json was not restored correctly after the drift test"
+        )
+
+
+def test_azure_extra_declared_and_locked() -> None:
+    """Issue #1582: the azure SDK closure must be a declared extra *and* locked.
+
+    Historical failure mode: ``azure-batch`` sat in local dev venvs but in
+    no pyproject extra and no CI install list, so ``uv.lock`` had no entry.
+    mypy --strict then resolved ``azure.batch`` locally (4 attr-defined
+    errors in ``osimflow/executors/azure_batch_executor.py``) while CI
+    silently skipped the module via ``ignore_missing_imports`` — the
+    strict gate never actually checked the Azure executor. This test
+    keeps the declaration and the lock from drifting apart again.
+    """
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = pyproject["project"]["optional-dependencies"]
+    assert "azure" in extras, (
+        "pyproject.toml is missing the [azure] extra — the Azure Batch "
+        "executor's SDK must be installable as a proper optional extra "
+        "(issue #1582)"
+    )
+    azure_reqs = " ".join(extras["azure"])
+    assert "azure-batch" in azure_reqs, "[azure] extra must declare azure-batch"
+    assert "azure-identity" in azure_reqs, "[azure] extra must declare azure-identity"
+
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked_names = {p.get("name") for p in lock.get("package", [])}
+    for distribution in ("azure-batch", "azure-identity"):
+        assert distribution in locked_names, (
+            f"uv.lock has no entry for {distribution!r} — run `uv lock` after "
+            "changing pyproject extras so local pip and CI uv environments "
+            "agree on the typing-relevant SDK closure (issue #1582)"
         )

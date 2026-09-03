@@ -38,8 +38,8 @@ PYTEST_COV_FLAGS := --cov=osimflow --cov-report=xml --cov-report=term-missing --
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: | $(VENV) ## pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
-	$(PY) -m pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+install: | $(VENV) ## pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
+	$(PY) -m pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
 
 # Bootstrap the virtualenv on fresh clones (issue #1447): created only
 # when absent (order-only prerequisite — never rebuilt once it exists).

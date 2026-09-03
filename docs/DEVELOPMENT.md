@@ -288,7 +288,7 @@ OSimFlow/
 ### Setup
 
 ```bash
-make install                    # pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+make install                    # pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
 .venv/bin/pre-commit install    # Install git hooks
 ```
 
@@ -318,6 +318,38 @@ pin silently diverges CI's resolver behavior from what current uv
 users see. Modern uv-managed CPython builds ship `ensurepip`, so CI
 jobs (including the `pip-audit` security job) uniformly use
 `uv python install 3.12`.
+
+#### Optional-SDK typing divergence (issue #1582)
+
+A subtle failure mode of the split above: **an optional SDK installed
+in one environment but not the other silently changes what
+`mypy --strict` checks.** The azure-batch SDK was historically present
+in local `make install` venvs (as a transitive leftover) but in no
+pyproject extra, so no CI install list, and no `uv.lock` entry.
+Result: locally mypy resolved the azure SDK imports and failed with 4
+`attr-defined` errors in `osimflow/executors/azure_batch_executor.py`,
+while CI never resolved the module (`ignore_missing_imports = true`)
+and skipped the file entirely — the strict gate wasn't checking the
+Azure executor at all in CI.
+
+The fix pattern, applied in #1582 and enforced by
+`tests/contract/test_developer_practices.py::test_azure_extra_declared_and_locked`:
+
+1. Declare the SDK as a real extra (`[azure]` = `azure-batch>=15.1,<16`
+   + `azure-identity`) in `pyproject.toml`.
+2. Add the extra to **both** install worlds so the gate is deterministic:
+   `make install` (local pip) *and* the CI `typecheck` job's
+   `uv pip install -e ".[dev,aws,azure,slurm,kubernetes]"`.
+3. Re-run `uv lock` so `uv.lock` carries the closure (and `uv lock
+   --check` passes), keeping the advisory lock from drifting.
+4. Fix the executor against the pinned SDK's real API surface
+   (azure-batch 15.x track-2: `BatchClient`, `BatchTaskCreateOptions`,
+   `timedelta` wall-clock constraints — no legacy `BatchServiceClient`).
+
+If a future optional substrate SDK shows the same symptom (strict gate
+red locally, green-but-unchecked in CI), follow the same four steps
+instead of adding `type: ignore` comments or excluding the module from
+the gate.
 
 ### IDE recommendations
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -187,7 +188,10 @@ def _check_aws_batch(ex: Any, mock_client: Any) -> None:
 
 
 def _build_azure_batch() -> tuple[Any, Any]:
-    """AzureBatchExecutor: TaskConstraints(max_wall_clock_time="PT{N}M" ISO 8601).
+    """AzureBatchExecutor: BatchTaskConstraints(max_wall_clock_time=timedelta(minutes=N)).
+
+    azure-batch 15.x track-2 SDK (issue #1582): the wall-clock limit is a
+    ``datetime.timedelta``, not the legacy ISO-8601 ``"PT{N}M"`` string.
 
     NOTE: Azure does not map cpus/memory_mb to the task (pool-level only);
     this contract documents that current behavior and asserts time_min only.
@@ -211,21 +215,21 @@ def _build_azure_batch() -> tuple[Any, Any]:
 
 
 def _check_azure_batch(ex: Any, azure_batch: Any) -> None:
-    # Edge: Azure timeout is ISO 8601 "PT{N}M".
-    azure_batch.models.TaskConstraints.assert_called_once_with(
-        max_wall_clock_time=f"PT{TIME_MIN}M",  # "PT240M"
-        max_retry_count=0,
+    # Edge: Azure timeout is a timedelta (azure-batch 15.x, issue #1582).
+    azure_batch.models.BatchTaskConstraints.assert_called_once_with(
+        max_wall_clock_time=timedelta(minutes=TIME_MIN),
+        max_task_retry_count=0,
     )
     # The executor sets ``task_params.constraints`` AFTER constructing the
-    # TaskAddParameter (attribute assignment on the mock return value).
+    # BatchTaskCreateOptions (attribute assignment on the mock return value).
     # Assert the constraints object actually landed on the submitted task.
-    task_params = azure_batch.models.TaskAddParameter.return_value
-    assert task_params.constraints is azure_batch.models.TaskConstraints.return_value
+    task_params = azure_batch.models.BatchTaskCreateOptions.return_value
+    assert task_params.constraints is azure_batch.models.BatchTaskConstraints.return_value
     # Documented current behavior (issue #943): cpus/memory_mb are NOT mapped
     # to the Azure task — resource sizing happens at the pool level only. The
-    # TaskAddParameter was constructed with NO cpu/memory keyword; assert the
+    # BatchTaskCreateOptions was constructed with NO cpu/memory keyword; assert the
     # only resource-derived field is resource_files (an empty list).
-    task_kwargs = azure_batch.models.TaskAddParameter.call_args.kwargs
+    task_kwargs = azure_batch.models.BatchTaskCreateOptions.call_args.kwargs
     assert task_kwargs.get("resource_files") == []
     for absent in ("cpus", "cpu", "memory_mb", "memory"):
         assert absent not in task_kwargs, (
@@ -584,11 +588,16 @@ def _build_azure_retry_executor() -> Any:
     real = AzureBatchExecutor.__new__(AzureBatchExecutor)
     real._SPOT_INTERRUPTION_MARKERS = AzureBatchExecutor._SPOT_INTERRUPTION_MARKERS
     ex._is_spot_interruption = real._is_spot_interruption
-    job = MagicMock()
-    job.properties.execution_info.end_time = "2024-01-01T00:01:00Z"
-    job.properties.execution_info.exit_code = 1  # non-zero => failure
-    job.properties.execution_info.failure_reason = "SpotNodeTermination"
-    ex._wait_for_terminal = MagicMock(return_value=job)
+    # Real None-safe accessor (issue #1582): the MagicMock executor would
+    # otherwise fabricate a fresh execution_info mock per call.
+    ex._execution_info = AzureBatchExecutor._execution_info
+    # azure-batch 15.x shape (issue #1582): execution_info lives directly on
+    # the task; failure text comes from failure_info.message.
+    task = MagicMock()
+    task.execution_info.end_time = "2024-01-01T00:01:00Z"
+    task.execution_info.exit_code = 1  # non-zero => failure
+    task.execution_info.failure_info.message = "SpotNodeTermination"
+    ex._wait_for_terminal = MagicMock(return_value=task)
     return ex
 
 

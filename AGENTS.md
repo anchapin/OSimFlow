@@ -125,7 +125,7 @@ disagree, the CI-resolved set is the merge gate. Details in
 
 ```bash
 make help       # list all targets
-make install    # pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"   (creates .venv)
+make install    # pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"   (creates .venv)
 make lint       # ruff check
 make format     # ruff format (write)
 make typecheck  # mypy --strict on osimflow/
@@ -141,7 +141,10 @@ make act        # local CI mirror via nektos/act
 
 Extras are independent: `[mlflow]`, `[sensitivity]` (SALib),
 `[optimization]` (pymoo), `[ga]` (DEAP), `[api]` (FastAPI),
-`[kubernetes]`, `[aws]`, `[viz]` (streamlit/plotly), `[tui]` (rich).
+`[kubernetes]`, `[aws]`, `[azure]` (azure-batch 15.x + azure-identity —
+part of the dev/typecheck install sets so the strict mypy gate actually
+resolves `azure.batch`; issue #1582), `[viz]` (streamlit/plotly),
+`[tui]` (rich).
 
 ### Run a campaign
 

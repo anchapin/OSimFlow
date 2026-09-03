@@ -19,7 +19,7 @@ AZURE_CLIENT_SECRET). The constructor does **not** accept long-lived
 access keys; passing them would violate the security policy.
 
 Throttle / network retry (issue #1396):
-``client.job.add`` and ``client.task.add`` are wrapped in
+``client.create_job`` and ``client.create_task`` are wrapped in
 ``_retry_azure_submit`` which retries ``BatchErrorException`` whose
 ``error.code`` is in ``_THROTTLE_ERROR_CODES``
 (``TooManyRequests``, ``ServerBusy``, ``RequestTimeout``) with full-jitter
@@ -45,6 +45,7 @@ import random  # noqa: F401 — patch seam: tests patch <this module>.random.uni
 import time  # noqa: F401 — patch seam: tests patch <this module>.time.sleep
 from collections.abc import Callable
 from concurrent.futures import Future
+from datetime import timedelta
 from typing import Any
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
@@ -199,12 +200,14 @@ class _AzureBatchHandle(PollingHandle):
     def _wait_for_terminal(self, timeout: float | None) -> Any:
         return self._executor._wait_for_terminal(self.job_id, timeout=timeout)
 
-    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
-        exit_code = job.properties.execution_info.exit_code
+    def _classify(self, task: Any) -> tuple[PollOutcome, str | None]:
+        info = self._executor._execution_info(task)
+        exit_code = getattr(info, "exit_code", None)
         if exit_code is None or exit_code == 0:
             return PollOutcome.SUCCEEDED, None
-        failure_reason = getattr(job.properties.execution_info, "failure_reason", None)
-        return PollOutcome.FAILED, failure_reason
+        failure_info = getattr(info, "failure_info", None)
+        reason = getattr(failure_info, "message", None) or getattr(failure_info, "code", None)
+        return PollOutcome.FAILED, reason
 
     def _resolve_success_result(self, timeout: float | None = None) -> Any:
         resolved = resolve_result_for_callback(
@@ -232,13 +235,15 @@ class _AzureBatchHandle(PollingHandle):
         self.job_id = self._executor._submit_job(**self._submit_params, use_spot=False)
         self.worker_id = self.job_id
 
-    def _failure_error(self, job: Any) -> RuntimeError:
-        exit_code = job.properties.execution_info.exit_code
+    def _failure_error(self, task: Any) -> RuntimeError:
+        exit_code = getattr(self._executor._execution_info(task), "exit_code", None)
         return RuntimeError(f"Azure Batch job {self.job_id!r} failed: exit code {exit_code}")
 
-    def _fallback_failure_error(self, job: Any) -> RuntimeError:
-        exit_code = job.properties.execution_info.exit_code
-        failure_reason = getattr(job.properties.execution_info, "failure_reason", "unknown reason")
+    def _fallback_failure_error(self, task: Any) -> RuntimeError:
+        info = self._executor._execution_info(task)
+        exit_code = getattr(info, "exit_code", None)
+        failure_info = getattr(info, "failure_info", None)
+        failure_reason = getattr(failure_info, "message", None) or "unknown reason"
         return RuntimeError(
             f"Azure Batch job {self.job_id!r} failed after fallback: "
             f"exit code {exit_code}, reason: {failure_reason}"
@@ -248,8 +253,8 @@ class _AzureBatchHandle(PollingHandle):
         if self._future.done():
             return True
         try:
-            job = self._executor._get_job(self.job_id)
-            if job.properties.execution_info.end_time is not None:
+            task = self._executor._get_task(self.job_id)
+            if getattr(self._executor._execution_info(task), "end_time", None) is not None:
                 return True
         except TimeoutError as exc:
             log.debug("Azure Batch done() timeout for job %s: %s", self.job_id, exc)
@@ -352,19 +357,39 @@ class AzureBatchExecutor(BaseExecutor):
         self._client: Any = None
 
     def _get_client(self) -> Any:
-        """Lazy Azure Batch client construction using DefaultAzureCredential."""
+        """Lazy Azure Batch client construction using DefaultAzureCredential.
+
+        azure-batch 15.x track-2 SDK (issue #1582): ``BatchClient`` takes
+        the account endpoint + token credential directly — there is no
+        ``BatchServiceClient`` and no account-name argument.
+        """
         if self._client is None:
             credential = self._azure_identity.DefaultAzureCredential()
-            self._client = self._azure_batch.BatchServiceClient(
+            self._client = self._azure_batch.BatchClient(
+                endpoint=self.account_url,
                 credential=credential,
-                batch_url=self.account_url,
             )
             assert self._client is not None
         return self._client
 
-    def _get_job(self, job_id: str) -> Any:
-        """Get a job from Azure Batch."""
-        return self._get_client().job.get(self.account_name, job_id)
+    def _get_task(self, job_id: str) -> Any:
+        """Fetch the single task backing ``job_id``.
+
+        ``_submit_job`` creates one job carrying exactly one task that
+        shares the job's id. Exit codes and failure info live on the
+        *task* (``BatchTaskExecutionInfo``), not on the job, so polling
+        targets ``client.get_task(job_id, task_id)`` (issue #1582).
+        """
+        return self._get_client().get_task(job_id, job_id)
+
+    @staticmethod
+    def _execution_info(task: Any) -> Any:
+        """Return ``task.execution_info`` (None-safe).
+
+        azure-batch 15.x models expose ``execution_info`` directly on the
+        task (no ``.properties`` wrapper) and it is ``Optional``.
+        """
+        return getattr(task, "execution_info", None)
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
         """Return True if the failure reason indicates a Spot interruption."""
@@ -385,8 +410,10 @@ class AzureBatchExecutor(BaseExecutor):
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
         return poll_until_terminal(
-            lambda: self._get_job(job_id),
-            is_terminal=lambda job: job.properties.execution_info.end_time is not None,
+            lambda: self._get_task(job_id),
+            is_terminal=lambda task: (
+                getattr(self._execution_info(task), "end_time", None) is not None
+            ),
             timeout=timeout,
             timeout_message=lambda elapsed: (
                 f"Timed out after {elapsed:.1f}s waiting for job {job_id!r}"
@@ -487,15 +514,15 @@ class AzureBatchExecutor(BaseExecutor):
         environment_settings = [{"name": e["name"], "value": e["value"]} for e in environment]
 
         client = self._get_client()
+        models = self._azure_batch.models
 
         _retry_azure_submit(
-            lambda: client.job.add(
-                self.account_name,
-                self._azure_batch.models.JobAddParameter(
+            lambda: client.create_job(
+                models.BatchJobCreateOptions(
                     id=job_id,
-                    pool_info=self._azure_batch.models.PoolInformation(pool_id=self.pool_id),
-                    on_all_tasks_complete="terminate",
-                    on_task_failure="terminate",
+                    pool_info=models.BatchPoolInfo(pool_id=self.pool_id),
+                    all_tasks_complete_mode=models.BatchAllTasksCompleteMode.TERMINATE_JOB,
+                    task_failure_mode=models.BatchTaskFailureMode.PERFORM_EXIT_OPTIONS_JOB_ACTION,
                     priority=0 if use_spot_final else 1000,
                 ),
             )
@@ -509,27 +536,26 @@ class AzureBatchExecutor(BaseExecutor):
 
         # Use the provided command or default to remote_runner
         command_line = command or "python -m osimflow.remote_runner"
-        task_params = self._azure_batch.models.TaskAddParameter(
+        task_params = models.BatchTaskCreateOptions(
             id=job_id,
             command_line=f"/bin/sh -c {command_line!r}",
-            container_settings=self._azure_batch.models.ContainerConfiguration(
+            container_settings=models.BatchTaskContainerSettings(
                 container_run_options="--rm",
-                image_names=[resolved_container],
+                image_name=resolved_container,
             ),
             environment_settings=[
-                self._azure_batch.models.EnvironmentSetting(name=e["name"], value=e["value"])
-                for e in environment
+                models.EnvironmentSetting(name=e["name"], value=e["value"]) for e in environment
             ],
             resource_files=[],
         )
 
         if time_min > 0:
-            task_params.constraints = self._azure_batch.models.TaskConstraints(
-                max_wall_clock_time=f"PT{time_min}M",
-                max_retry_count=0,
+            task_params.constraints = models.BatchTaskConstraints(
+                max_wall_clock_time=timedelta(minutes=time_min),
+                max_task_retry_count=0,
             )
 
-        _retry_azure_submit(lambda: client.task.add(self.account_name, job_id, task_params))
+        _retry_azure_submit(lambda: client.create_task(job_id, task_params))
 
         log.info(
             "azure_batch submit_job -> jobId=%s use_spot=%s",

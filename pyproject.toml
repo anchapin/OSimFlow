@@ -67,6 +67,15 @@ dev = [
 aws = [
     "boto3>=1.28",
 ]
+azure = [
+    # Track-2 SDK (issue #1582): AzureBatchExecutor codes against the
+    # azure-batch 15.x API surface (BatchClient, models.BatchTaskCreateOptions,
+    # ...). <16 keeps the executor's typed call sites stable; the extra is
+    # installed by the dev/CI typecheck envs so mypy --strict resolves — and
+    # actually checks — osimflow/executors/azure_batch_executor.py.
+    "azure-batch>=15.1,<16",
+    "azure-identity>=1.12",
+]
 nomad = []  # stdlib-only HTTP; empty marker for requirements.txt documentation
 slurm = [
     "submitit>=1.5",

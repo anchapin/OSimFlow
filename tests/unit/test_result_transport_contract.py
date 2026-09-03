@@ -75,13 +75,15 @@ def _aws_handle() -> Any:
 
 
 def _azure_handle() -> Any:
-    from osimflow.executors.azure_batch_executor import _AzureBatchHandle
+    from osimflow.executors.azure_batch_executor import AzureBatchExecutor, _AzureBatchHandle
 
-    succeeded_job = SimpleNamespace(
-        properties=SimpleNamespace(execution_info=SimpleNamespace(exit_code=0))
-    )
+    # azure-batch 15.x shape (issue #1582): execution_info lives directly
+    # on the task; the real None-safe accessor (``AzureBatchExecutor``)
+    # bridges the mock executor onto the new model.
+    succeeded_task = SimpleNamespace(execution_info=SimpleNamespace(exit_code=0))
     executor = SimpleNamespace(max_retries=0, fallback_to_on_demand=False, location="eastus")
-    executor._wait_for_terminal = lambda job_id, timeout=None: succeeded_job  # noqa: SLF001
+    executor._wait_for_terminal = lambda job_id, timeout=None: succeeded_task  # noqa: SLF001
+    executor._execution_info = AzureBatchExecutor._execution_info  # noqa: SLF001
     return _AzureBatchHandle(
         job_id="job-azure",
         executor=executor,
@@ -227,14 +229,17 @@ def test_aws_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatc
 
 def test_azure_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Azure on-demand fallback success path also materializes."""
-    from osimflow.executors.azure_batch_executor import _AzureBatchHandle
+    from osimflow.executors.azure_batch_executor import AzureBatchExecutor, _AzureBatchHandle
 
     calls: list[dict[str, Any]] = []
     _patch_transport(monkeypatch, "osimflow.executors.azure_batch_executor", calls)
 
+    # azure-batch 15.x shape (issue #1582): failure text lives on
+    # ``execution_info.failure_info.message`` (not ``.failure_reason``).
     ok = lambda exit_code, reason=None: SimpleNamespace(  # noqa: E731
-        properties=SimpleNamespace(
-            execution_info=SimpleNamespace(exit_code=exit_code, failure_reason=reason)
+        execution_info=SimpleNamespace(
+            exit_code=exit_code,
+            failure_info=SimpleNamespace(message=reason) if reason else None,
         )
     )
     polls = iter([ok(1, "SpotInterruption"), ok(0)])  # spot-failure exit code, then success
@@ -252,6 +257,7 @@ def test_azure_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPa
         _is_spot_interruption=lambda reason: reason == "SpotInterruption",
     )
     executor._wait_for_terminal = lambda job_id, timeout=None: next(polls)  # noqa: SLF001
+    executor._execution_info = AzureBatchExecutor._execution_info  # noqa: SLF001
     handle = _AzureBatchHandle(
         job_id="job-azure",
         executor=executor,
