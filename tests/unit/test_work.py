@@ -484,6 +484,31 @@ class TestRunOpenstudioSimRealCli:
             )
         assert mock_run.call_args[1]["timeout"] == 123.5
 
+    def test_real_cli_default_timeout_is_unbounded(
+        self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
+    ) -> None:
+        """Default timeout_s is None so long EnergyPlus runs are not killed (#1534)."""
+        stdout_path, stderr_path = log_paths
+        with (
+            patch.dict(os.environ, _env_without_stub(), clear=True),
+            patch("osimflow.work._is_openstudio_available", return_value=True),
+            patch("osimflow.work._get_openstudio_cmd", return_value="openstudio.cli"),
+            patch("osimflow.work.run_subprocess") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            run_openstudio_sim(
+                modified_sim_package=sim_package,
+                sample_id="0001",
+                openstudio_version="3.11.0",
+                out=out_dir,
+                simulate_work_s=0.0,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        assert mock_run.call_args[1]["timeout"] is None
+
     def test_skips_when_eplusout_sql_exists(
         self, sim_package: Path, out_dir: Path, log_paths: tuple[Path, Path]
     ) -> None:

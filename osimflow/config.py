@@ -651,6 +651,8 @@ class DAGConfig:
         BYOS subprocess resource limits (issue #343).
     byos_timeout_s
         BYOS / OpenStudio subprocess timeout in seconds (issue #1109).
+        ``None`` (default) means effectively unbounded (issue #1534) —
+        annual EnergyPlus simulations routinely exceed any stock bound.
     ecr_repository
         ECR repository URI for OpenStudio images (issue #144).
     resource_quota
@@ -687,7 +689,7 @@ class DAGConfig:
     offline_bundle: Path | None = None
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
     byos_resource_limits: dict[str, int] | None = None
-    byos_timeout_s: float = 600.0
+    byos_timeout_s: float | None = None
     ecr_repository: str | None = None
     resource_quota: ResourceQuota | None = None
     redis_url: str | None = None
@@ -1039,7 +1041,7 @@ class CampaignConfig:
     offline_bundle: Path | None = None
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
     byos_resource_limits: dict[str, int] | None = None
-    byos_timeout_s: float = 600.0
+    byos_timeout_s: float | None = None
     require_trusted_scripts: bool | None = None
     ecr_repository: str | None = None
     resource_quota: ResourceQuota | None = None
@@ -1883,7 +1885,11 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         byos_resource_limits=(
             args["byos_resource_limits"] if args.get("byos_resource_limits") else None  # type: ignore[arg-type]
         ),
-        byos_timeout_s=float(str(args.get("byos_timeout_s", 600.0))),
+        # ``None`` (default) = effectively unbounded (issue #1534);
+        # annual EnergyPlus runs routinely exceed the old 600 s stock bound.
+        byos_timeout_s=(
+            float(str(args["byos_timeout_s"])) if args.get("byos_timeout_s") is not None else None
+        ),
         result_storage_backend=str(args.get("result_storage_backend", "local")),
         result_storage_bucket=str(args.get("result_storage_bucket", "")),
         result_storage_endpoint=(

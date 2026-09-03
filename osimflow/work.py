@@ -61,7 +61,16 @@ def _is_transient_error(exc: BaseException) -> bool:
 
     Checks for exit codes and error messages that indicate a retryable
     condition (network timeout, resource busy, etc.).
+
+    A subprocess wall-clock timeout (``subprocess.TimeoutExpired``) is
+    deliberately NON-transient (issue #1534): the configured bound was
+    hit, so re-running the identical sample burns the same wall-clock
+    budget again and still fails. A legitimate slow simulation must fail
+    once (and be diagnosed via ``--byos-timeout-s``), not be re-executed
+    ``max_retries`` times.
     """
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return False
     msg = str(exc).lower()
     transient_markers = (
         "timeout",
@@ -1073,12 +1082,16 @@ def _run_openstudio_sim_impl(
     max_retries: int = 3,
     worker_id: str = "local",
     health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
-    timeout_s: float = 600.0,
+    timeout_s: float | None = None,
 ) -> Path:
     """Internal implementation — wrapped with retry by ``run_openstudio_sim``.
 
-    ``timeout_s`` bounds the real-CLI subprocess (issue #1109): without it
-    a wedged EnergyPlus run hangs the sample forever.
+    ``timeout_s`` bounds the real-CLI subprocess (issue #1109): when set,
+    a wedged EnergyPlus run is killed instead of hanging the sample
+    forever. The default is ``None`` (effectively unbounded, issue
+    #1534) because annual EnergyPlus simulations routinely exceed any
+    stock bound — bound a run explicitly via ``--byos-timeout-s`` or the
+    executor's ``time_min`` instead.
     """
     sim_out = out / sample_id
     sim_out.mkdir(parents=True, exist_ok=True)
@@ -1213,7 +1226,7 @@ def run_openstudio_sim(
     max_retries: int = 3,
     worker_id: str = "local",
     health_check_interval: float = HEALTH_CHECK_INTERVAL_S,
-    timeout_s: float = 600.0,
+    timeout_s: float | None = None,
 ) -> Path:
     """Run the OpenStudio simulation with exponential-backoff retry.
 
@@ -1268,9 +1281,14 @@ def run_openstudio_sim(
             STALE heartbeat on failure triggers a retry as a potentially
             transient error (issue #415).
         timeout_s: wall-clock bound for the real-CLI subprocess in seconds
-            (issue #1109). A wedged EnergyPlus run is killed and the sample
-            fails instead of hanging the campaign forever. Default 600s;
-            configurable via ``--byos-timeout-s``.
+            (issue #1109). When set, a wedged EnergyPlus run is killed and
+            the sample fails instead of hanging the campaign forever.
+            Default ``None`` = effectively unbounded (issue #1534): annual
+            EnergyPlus runs routinely exceed 10 minutes, so a stock bound
+            kills the flagship workload. Bound a run explicitly via
+            ``--byos-timeout-s`` or rely on the executor's ``time_min``.
+            A timeout kill is non-transient: the sample fails once and is
+            not re-executed ``max_retries`` times.
 
     Returns:
         Path to the simulation output directory (eplusout.sql inside).
@@ -1356,7 +1374,7 @@ def _run_real_openstudio(
     sim_out: Path,
     stdout_path: Path,
     stderr_path: Path,
-    timeout_s: float = 600.0,
+    timeout_s: float | None = None,
 ) -> Path:
     """Invoke ``openstudio.cli run -w <workflow.osw>`` (issue #31).
 
@@ -1374,6 +1392,9 @@ def _run_real_openstudio(
     Raises:
         RuntimeError: when no ``workflow.osw`` is found in the package.
         subprocess.CalledProcessError: when the CLI exits non-zero.
+        subprocess.TimeoutExpired: when the run exceeds ``timeout_s``
+            (classified non-transient — issue #1534 — so it fails once
+            instead of being retried).
     """
     workflow_path = _find_workflow_osw(modified_sim_package)
     if workflow_path is None:

@@ -31,6 +31,16 @@ def _transient_subprocess(returncode: int) -> subprocess.CalledProcessError:
     return subprocess.CalledProcessError(returncode=returncode, cmd=["x"])
 
 
+def _timeout_expired(timeout: float = 600.0) -> subprocess.TimeoutExpired:
+    """A subprocess wall-clock timeout kill (issue #1534).
+
+    ``str()`` of this exception contains "timed out", which historically
+    tripped the message-marker list in ``_is_transient_error`` and caused
+    legitimate slow simulations to be re-executed ``max_retries`` times.
+    """
+    return subprocess.TimeoutExpired(cmd=["openstudio.cli", "run"], timeout=timeout)
+
+
 def _flaky(n_failures: int, return_value: Path):
     """Return a callable that fails ``n_failures`` times then succeeds."""
     state = {"calls": 0}
@@ -136,6 +146,54 @@ class TestRunWithRetry:
 
         assert attempts["n"] == 1
         assert sleep_calls == []
+
+    # ------------------------------------------------------------------
+    # Subprocess timeout kills — NON-transient (issue #1534)
+    # ------------------------------------------------------------------
+    def test_timeout_expired_is_not_transient(self) -> None:
+        """``subprocess.TimeoutExpired`` must classify as non-transient.
+
+        Its message contains "timed out" which historically matched the
+        transient marker list — burning ~4x the timeout budget per slow
+        sample before failing permanently (issue #1534).
+        """
+        from osimflow.work import _is_transient_error  # noqa: PLC0415
+
+        assert _is_transient_error(_timeout_expired(timeout=600.0)) is False
+
+    def test_timeout_expired_fails_once_without_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A wall-clock timeout kill fails exactly once — no re-execution.
+
+        Even with ``max_retries=3`` configured, a sample killed by the
+        subprocess timeout must not be re-run: the identical sample would
+        burn the same wall-clock budget again and still fail (issue #1534).
+        """
+        sleep_calls: list[float] = []
+        monkeypatch.setattr("osimflow.work.time.sleep", sleep_calls.append)
+        attempts = {"n": 0}
+
+        def _times_out() -> Path:
+            attempts["n"] += 1
+            raise _timeout_expired(timeout=600.0)
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_with_retry(_times_out, max_retries=3, base_delay=0.0)
+
+        assert attempts["n"] == 1
+        assert sleep_calls == []
+
+    def test_message_level_network_timeout_still_transient(self) -> None:
+        """Non-subprocess timeouts (network, I/O) remain transient.
+
+        The issue #1534 fix must be scoped to ``subprocess.TimeoutExpired``
+        only — a connection timeout raised by a client library is still a
+        legitimately retryable condition.
+        """
+        from osimflow.work import _is_transient_error  # noqa: PLC0415
+
+        assert _is_transient_error(_transient("connection timed out")) is True
 
     # ------------------------------------------------------------------
     # Exponential backoff — durations follow base_delay * 2**attempt
