@@ -62,36 +62,53 @@ OSimFlow uses a three-layer architecture:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Orchestrator (osimflow/campaign.py)                            │
+│  Orchestrator (osimflow/campaign.py + _campaign_*.py)           │
 │                                                                 │
 │  Campaign.run() drives the 7-step DAG:                          │
-
-│    1. GENERATE_LHS_SAMPLES  ──→  samples.json                  │
-│    2. PREFLIGHT_RUN_MODEL    ──→  validated seed model         │
-│    3. APPLY_PARAMETERS      ──→  N modified sim packages       │
-│    4. RUN_OPENSTUDIO_SIM    ──→  N simulation outputs          │
-│    5. EXTRACT_KPIS          ──→  N KPI JSON files              │
-│    6. AGGREGATE_RESULTS     ──→  aggregated_results.csv        │
-│    7. GENERATE_BASIC_PLOTS  ──→  *.png plots                   │
+│                                                                 │
+│    1. GENERATE_LHS_SAMPLES  ──→  samples.json                   │
+│    2. PREFLIGHT_RUN_MODEL   ──→  validated seed model           │
+│    3. APPLY_PARAMETERS      ──→  N modified sim packages        │
+│    4. RUN_OPENSTUDIO_SIM    ──→  N simulation outputs           │
+│    5. EXTRACT_KPIS          ──→  N KPI JSON files               │
+│    6. AGGREGATE_RESULTS     ──→  aggregated_results.csv         │
+│    7. GENERATE_BASIC_PLOTS  ──→  *.png plots                    │
 │                                                                 │
 │  Steps 3-5 fan out over N samples.                              │
-│  Each step is cached (SQLiteCache).                             │
+│  Each step is cached (SQLiteCache, or DistributedCache          │
+│  over Redis). Cross-cutting concerns live in extracted          │
+│  _campaign_*.py collaborators (issue #1462): lifecycle/         │
+│  cancellation, quota, sharding, chaos wiring, code hashes,      │
+│  artifacts, EPW resolution, hooks, per-sample trace, and        │
+│  baseline comparison — see §3 for the full list.                │
 ├─────────────────────────────────────────────────────────────────┤
-│  Executor (osimflow/executors/__init__.py)                      │
+│  Executor (osimflow/executors/ — one file per executor)         │
 │                                                                 │
-│  BaseExecutor                                                   │
-│   ├── LocalExecutor   — ThreadPoolExecutor (dev/CI)             │
-│   ├── SlurmExecutor   — submitit.AutoExecutor (HPC)             │
-│   ├── AWSBatchExecutor — boto3 Batch (cloud)                    │
-│   └── NomadExecutor   — HTTP API (on-prem)                     │
+│  base.py        BaseExecutor, Handle, SubmitRequest, and        │
+│                 PollingHandle (shared poll/retry/fallback)      │
+│  transport.py   executor-agnostic result-reference contract     │
+│  __init__.py    ExecutorRegistry + per-step resource defaults   │
+│                                                                 │
+│   ├── local_executor.py         LocalExecutor (dev/CI)          │
+│   ├── slurm_executor.py         SlurmExecutor (submitit, HPC)   │
+│   ├── aws_batch_executor.py     AWSBatchExecutor (boto3, cloud) │
+│   ├── azure_batch_executor.py   AzureBatchExecutor              │
+│   ├── google_batch_executor.py  GoogleBatchExecutor             │
+│   ├── kubernetes_executor.py    KubernetesExecutor              │
+│   ├── nomad_executor.py         NomadExecutor (HTTP API, prem)  │
+│   ├── pbs_executor.py           PBSExecutor (submitit)          │
+│   ├── dask_jobqueue_executor.py DaskJobQueueExecutor            │
+│   └── docker_swarm_executor.py  DockerSwarmExecutor             │
 │                                                                 │
 │  All expose: submit(fn, *args, ...) → Handle                    │
 │  Handle exposes: .result(timeout), .done(), .job_id             │
 ├─────────────────────────────────────────────────────────────────┤
-│  Work Functions (osimflow/work.py + bin/*.py)                   │
+│  Work Functions (osimflow/work.py + osimflow/_work_scripts/)    │
 │                                                                 │
-│  The actual per-step logic. Work functions call bin/*.py        │
-│  scripts via subprocess. Users can override via BYOS.           │
+│  The actual per-step logic. Work functions call the CLI         │
+│  scripts in osimflow/_work_scripts/ via subprocess;             │
+│  bin/*.py are thin backward-compat shims over them.             │
+│  Users can override via BYOS.                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -138,27 +155,94 @@ variables.yml ──→ step_generate_lhs ──→ samples.json
 ```
 OSimFlow/
 ├── osimflow/                    # The main Python package
-│   ├── __init__.py              # Public API: Campaign, executors, etc.
+│   ├── __init__.py              # Public API surface (__all__)
 │   ├── __main__.py              # CLI entry point (osimflow run ...)
-│   ├── campaign.py              # Campaign orchestrator (~1100 LoC)
-│   ├── cache.py                 # SQLiteCache + CacheKey
-│   ├── config.py                # CampaignConfig dataclass
-│   ├── monitoring.py            # RunTrace, StepTrace, SampleTrace
-│   ├── work.py                  # Per-step work functions
+│   ├── campaign.py              # Campaign orchestrator — the 7-step DAG (~4200 LoC)
+│   │
+│   ├── _campaign_lifecycle.py   # CampaignLifecycle: cancel/pause/resume + signal handlers
+│   ├── _campaign_quota.py       # CampaignQuotaGuard: quota fail-fast + fan-out bounding
+│   ├── _campaign_sharding.py    # CampaignSharding: shard selection + shard labels
+│   ├── _campaign_chaos.py       # Chaos-engine wiring + schedule-aware injection hook
+│   ├── _campaign_code_hashes.py # Cache-key code hashing (AST import closure)
+│   ├── _campaign_artifacts.py   # campaign_meta / provenance / manifest writers + archiving
+│   ├── _campaign_epw.py         # variables.yml loading + EPW resolution/validation
+│   ├── _campaign_hooks.py       # init/finalize shell hooks + completion webhook
+│   ├── _campaign_sample_trace.py # Per-sample SampleTrace + checkpointing/abort
+│   ├── _campaign_baseline.py    # Baseline KPI comparison
+│   ├── _campaign_observability.py # ObservabilityManager: backend lifecycle
+│   ├── _campaign_cost_tracker.py  # Cost-tracking wiring
+│   │
+│   ├── work.py                  # Per-step work functions + BYOS contract
 │   ├── byos.py                  # BYOS script loader
+│   ├── byos_contract.py         # Single source of truth: BYOS signatures
+│   ├── config.py                # CampaignConfig + per-executor config dataclasses
+│   ├── cache.py                 # SQLiteCache + CacheKey
+│   ├── distributed_cache.py     # DistributedCache (Redis) + build_cache
+│   ├── document_store.py        # SQLite/Redis document stores + build_document_store
+│   ├── storage.py               # ResultStorage backends (local/S3/GCS/Azure)
+│   ├── taskqueue.py             # Producer/ConsumerQueue ABCs + Dask/NoOp queues
+│   ├── jobqueue.py              # Filesystem JobQueue (crash recovery)
+│   ├── distributed_jobqueue.py  # Redis pub/sub job-state queue
+│   ├── circuit_breaker.py       # CircuitBreaker guarding the Redis data planes
+│   ├── monitoring.py            # RunTrace, StepTrace, SampleTrace → run.json
+│   ├── observability.py         # CloudWatch/Prometheus/OpenTelemetry backends
+│   ├── health.py                # "osimflow health" — one check per executor
+│   ├── chaos.py                 # ChaosEngine + fault injectors
+│   ├── cost_tracking.py         # CostTracker + cost estimates
+│   ├── cosign.py                # Container image signature verification
+│   ├── registry.py              # CampaignRegistry (list/show/compare/backup)
+│   ├── data_point_manager.py    # DataPoint lifecycle (mark-for-reanalysis, merge)
+│   ├── cross_run_aggregator.py  # Cross-campaign aggregation
+│   ├── remote_runner.py         # Stdlib worker for Nomad/K8s (task payload)
+│   ├── task_payload_hmac.py     # HMAC signing/verification of task payloads
+│   ├── alerting.py              # AlertManager + alert rules
+│   ├── notify.py                # Email/SNS/Webhook notify backends
+│   ├── errors.py                # OSimFlowError root + runtime/value mixins
+│   ├── measures.py              # MeasureRegistry (+ measure_resolver, measure_versioning)
+│   ├── weather.py               # EPW discovery/download/validation
+│   ├── version_detection.py     # OpenStudio version detection/compatibility
 │   ├── apply_params.py          # Parameter pre-flight + application
-│   ├── weather.py               # EPW file discovery and validation
+│   ├── pareto.py                # ParetoFront + ParetoSolution
 │   ├── mlflow_hook.py           # Optional MLflow integration
-│   ├── importers/               # .osa import support
-│   │   └── osa.py
-│   └── executors/
-│       └── __init__.py          # BaseExecutor + 9 implementations
-├── bin/                         # CLI scripts called by work.py
-│   ├── generate_lhs.py          # LHS sampler (scipy.stats)
-│   ├── apply_params_to_model.py # Default parameter application
-│   ├── extract_kpis.py          # Default KPI extractor
-│   ├── aggregate_results.py     # Result aggregation
-│   └── generate_plots.py        # Matplotlib/seaborn plots
+│   ├── tui.py                   # Optional rich-based terminal UI
+│   ├── client.py                # Typed Python client for the REST API
+│   │
+│   ├── _work_scripts/           # The REAL per-step CLI scripts (called by work.py)
+│   │   ├── generate_lhs.py      # Sampling (LHS + registered algorithms)
+│   │   ├── apply_params_to_model.py  # Default parameter application
+│   │   ├── extract_kpis.py      # Default KPI extractor
+│   │   ├── aggregate_results.py # Result aggregation
+│   │   ├── generate_plots.py    # Matplotlib/seaborn plots
+│   │   └── excel_to_variables.py
+│   ├── algorithms/              # ~25 sampling/optimization/sensitivity algorithms
+│   │   ├── __init__.py          # BaseAlgorithm + AlgorithmRegistry + LHS + plugins
+│   │   ├── sobol.py / halton.py / random_sampling.py / factorial.py
+│   │   ├── de.py / da.py / pso.py / ga.py / gaisl.py / rgenoud.py
+│   │   ├── nsga2.py / spea2.py  # pymoo multi-objective ([optimization] extra)
+│   │   ├── morris.py / fast99.py / doe_analysis.py / uq.py
+│   │   └── calibration.py / custom.py / sequential_search.py / qdiscrete.py / ...
+│   ├── executors/               # One file per executor (since issue #1463)
+│   │   ├── base.py              # BaseExecutor, Handle, SubmitRequest, PollingHandle
+│   │   ├── transport.py         # Executor-agnostic result-reference contract
+│   │   ├── __init__.py          # ExecutorRegistry + re-exports + step resources
+│   │   ├── local_executor.py    # LocalExecutor (ThreadPool, dev/CI)
+│   │   ├── slurm_executor.py    # SlurmExecutor (submitit)
+│   │   ├── aws_batch_executor.py    # AWSBatchExecutor (boto3)
+│   │   ├── azure_batch_executor.py  # AzureBatchExecutor
+│   │   ├── google_batch_executor.py # GoogleBatchExecutor
+│   │   ├── kubernetes_executor.py   # KubernetesExecutor
+│   │   ├── nomad_executor.py        # NomadExecutor (HTTP API)
+│   │   ├── pbs_executor.py          # PBSExecutor (submitit)
+│   │   ├── dask_jobqueue_executor.py    # DaskJobQueueExecutor
+│   │   └── docker_swarm_executor.py     # DockerSwarmExecutor
+│   ├── api/                     # Optional FastAPI REST surface ([api] extra)
+│   ├── testing/                 # ExecutorConformanceSuite for plug-in authors
+│   ├── importers/               # .osa import (PAT compatibility)
+│   ├── exporters/               # .osa export
+│   └── viz/                     # Streamlit dashboard ([viz] extra)
+├── bin/                         # Thin backward-compat shims over _work_scripts/
+│   ├── generate_lhs.py          # ~25 lines, re-exports from _work_scripts/
+│   └── ...                      # (one shim per work script — no logic here)
 ├── user_scripts/                # BYOS override scripts (user-supplied)
 ├── tests/
 │   ├── unit/                    # Unit tests
@@ -174,7 +258,8 @@ OSimFlow/
 │   └── benchmarks/              # Performance benchmarks
 ├── tools/
 │   ├── check_agents_contract.py # AGENTS.md / code drift checker
-│   └── check_docs_sync.py       # Docs path resolution checker
+│   └── check_docs_sync.py       # Docs path/flag resolution checker
+├── infra/                       # Terraform (AWS Batch) + Nomad recipes
 ├── docs/
 │   ├── DEVELOPMENT.md           # This file
 │   ├── CONTRIBUTING.md          # Contributor guide
@@ -604,13 +689,25 @@ mutating the working tree.
 
 ## 7. Adding a New Executor
 
-All executors live in `osimflow/executors/__init__.py` and subclass
-`BaseExecutor`. Here is the step-by-step guide.
+Each executor lives in its **own module** under `osimflow/executors/`
+(one file per executor, since issue #1463) and subclasses
+`BaseExecutor` from `osimflow/executors/base.py`. The package's
+`osimflow/executors/__init__.py` holds only the shared surface — the
+`ExecutorRegistry`, entry-point plug-in discovery, and per-step
+resource defaults — and re-exports every executor. Register your
+executor there via `ExecutorRegistry.register`. (PollingHandle
+authoring guide: see #1546; transport capability declaration: #1561.)
 
-### Step 1: Subclass BaseExecutor
+Here is the step-by-step guide.
+
+### Step 1: Subclass BaseExecutor in a new per-executor module
+
+Create osimflow/executors/my_new_executor.py:
 
 ```python
-# osimflow/executors/__init__.py
+# osimflow/executors/my_new_executor.py
+
+from osimflow.executors.base import BaseExecutor, Handle
 
 
 class MyNewExecutor(BaseExecutor):
@@ -642,6 +739,20 @@ class MyNewExecutor(BaseExecutor):
     def shutdown(self) -> None:
         # Clean up resources (connections, pools, etc.)
         ...
+```
+
+Then wire it into the shared surface in
+`osimflow/executors/__init__.py` — import it alongside the other
+executor modules and register it with the other built-in
+registrations at the bottom of the file:
+
+```python
+# osimflow/executors/__init__.py
+
+from osimflow.executors.my_new_executor import MyNewExecutor
+
+# ...at the bottom, next to the other built-in registrations:
+ExecutorRegistry.register("my_new", MyNewExecutor)
 ```
 
 ### Step 2: Wire into the CLI
@@ -689,7 +800,15 @@ Add a file like `tests/integration/test_<executor_name>.py`. Follow the pattern
 from the existing stub tests — mock the external service
 and verify the Handle contract.
 
-### Step 6: Update AGENTS.md
+### Step 6: Add a health check
+
+Since issue #1463 the per-executor health checks live in
+`osimflow/health.py` (one `_check_my_new()` function per registered
+executor) and are registered from the health module's side —
+`osimflow/executors/` never imports `osimflow/health`. Add a test in
+`tests/unit/test_health_check.py` (see AGENTS.md §9).
+
+### Step 7: Update AGENTS.md
 
 Add the new executor to:
 - §2 (Stack at a glance)
@@ -779,7 +898,24 @@ end through the `Campaign` orchestrator.
 ## 8. Adding a New DAG Step
 
 Each step is a method on the `Campaign` class in
-`osimflow/campaign.py`. Here is the step-by-step guide.
+`osimflow/campaign.py`. The `Campaign` remains the DAG driver, but
+since issue #1462 the cross-cutting concerns are extracted into
+`_campaign_*.py` collaborators — before touching `Campaign`, check
+whether your change belongs in one of them:
+
+- Lifecycle (cancel/pause/resume, SIGINT/SIGTERM handling) →
+  `osimflow/_campaign_lifecycle.py` (`CampaignLifecycle`)
+- Quota enforcement (start fail-fast, mid-campaign hard limits,
+  `max_concurrent_samples` fan-out bounding) →
+  `osimflow/_campaign_quota.py` (`CampaignQuotaGuard`)
+- Sharding (shard partition/range selection, shard labels) →
+  `osimflow/_campaign_sharding.py` (`CampaignSharding`)
+- Per-sample trace assembly, trace-ID minting, incremental
+  checkpointing, consecutive-failure abort →
+  `osimflow/_campaign_sample_trace.py`
+  (`CampaignSampleTraceRecorder`)
+
+Here is the step-by-step guide.
 
 ### Step 1: Add the method
 
@@ -843,7 +979,7 @@ def step_my_new_step(self, inputs: SomeType) -> SomeOutputType:
         raise
 ```
 
-### Step 2: Call it from Campaign.run()
+### Step 2: Call it from Campaign.run() and declare its inputs
 
 Edit the `run()` method to call your step in the right order:
 
@@ -859,11 +995,20 @@ def run(self) -> dict[str, object]:
     ...
 ```
 
+Cross-step file dependencies are declared in `_STEP_DEPENDENCIES`
+near the top of `osimflow/campaign.py`; add your step's inputs there
+so `_verify_step_inputs` fails fast when an upstream artifact is
+missing. Do not bypass that verification.
+
 ### Step 3: Add the work function
 
 If the step does real work, add a function in `osimflow/work.py` and
-a corresponding `bin/*.py` script. The work function calls the bin
-script via `subprocess.run`.
+the CLI script it invokes in `osimflow/_work_scripts/` (`bin/*.py`
+are thin backward-compat shims that re-export from
+`osimflow/_work_scripts/` — add one only for parity). The work
+function calls the work script via `subprocess.run`. Editing either
+the shim or the real script invalidates the affected step's cache
+via `code_hashes["bin"]`.
 
 ### Step 4: Emit trace hooks
 
@@ -879,7 +1024,9 @@ self.trace.step_item_done("MY_NEW_STEP", status="ok")
 
 If the step is per-sample, update `self._sample_state[sid]` with the
 exit code so `_finalize_samples()` can compute the sample's overall
-status.
+status. The per-sample `SampleTrace` assembly and incremental
+checkpointing live in `osimflow/_campaign_sample_trace.py`
+(`CampaignSampleTraceRecorder`).
 
 ### Step 6: Update AGENTS.md and docs
 
