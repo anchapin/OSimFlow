@@ -416,6 +416,52 @@ name in this section.
   wrapping backend lifecycle from `Campaign`.
 - `osimflow/_campaign_cost_tracker.py` — internal cost wiring
   used by `Campaign`.
+- `osimflow/_campaign_quota.py` — `CampaignQuotaGuard` +
+  `QuotaExceededError` (defined here, re-exported from
+  `osimflow.campaign`): quota enforcement extracted from `Campaign`
+  (issue #1462) — start-quota fail-fast, mid-campaign hard-limit
+  checks, `max_concurrent_samples` fan-out bounding.
+- `osimflow/_campaign_chaos.py` — `CampaignChaosWiring` +
+  `build_default_chaos_engine`: chaos-engine selection/wiring and the
+  schedule-aware `maybe_inject` hook extracted from `Campaign`
+  (issue #1462; engine wiring originally issue #1013).
+- `osimflow/_campaign_sharding.py` — `CampaignSharding`: shard
+  selection (`shard_count`/`shard_index` partition + `shard_start`/
+  `shard_end` range) and shard labels, extracted from `Campaign`
+  (issue #1462).
+- `osimflow/_campaign_code_hashes.py` — `compute_code_hashes` +
+  `code_hash_with_byos` + the AST-based transitive import-closure
+  machinery (issues #1021/#1011/#1446) extracted from `Campaign`
+  (issue #1462). `Campaign._compute_code_hashes` delegates here and
+  still works unbound (`Campaign._compute_code_hashes(stub)` test
+  path); `_byos_file_hash` / `_combine_code_hash` /
+  `_transitive_import_closure` are re-exported from
+  `osimflow.campaign`.
+- `osimflow/_campaign_lifecycle.py` — `CampaignLifecycle` +
+  `CancelRegistry` / `cancel_registry` singleton + `handle_signal`:
+  cancellation (sticky flag + flock-protected `.stop` polling),
+  soft pause/resume, SIGINT/SIGTERM handler bookkeeping extracted
+  from `Campaign` (issue #1462). `_CancelRegistry` /
+  `_cancel_registry` are re-exported from `osimflow.campaign`.
+- `osimflow/_campaign_artifacts.py` — `CampaignArtifactWriter`:
+  `campaign_meta.json` / `provenance.json` /
+  `artifact_manifest.json` writers (issue #277) and intermediate/
+  input archiving, extracted from `Campaign` (issue #1462).
+- `osimflow/_campaign_epw.py` — `CampaignEpwResolver`:
+  variables.yml loading, `epw_file` target resolution (issue #55),
+  and pre-flight EPW existence/format validation (issue #63),
+  extracted from `Campaign` (issue #1462).
+- `osimflow/_campaign_hooks.py` — init/finalize shell-hook execution
+  (issue #108), hook env construction, and the completion webhook
+  (issue #283), extracted from `Campaign` (issue #1462).
+- `osimflow/_campaign_baseline.py` — baseline KPI comparison
+  (issue #64) extracted from `Campaign` (issue #1462).
+- `osimflow/_campaign_sample_trace.py` —
+  `CampaignSampleTraceRecorder`: per-sample `SampleTrace` assembly,
+  per-sample trace-ID minting (issue #436), campaign cost-total
+  accumulation (issue #126), and incremental checkpointing with the
+  consecutive-failure abort (issue #739), extracted from `Campaign`
+  (issue #1462).
 - `osimflow/logging.py` — `JSONFormatter` + `RotatingFileHandler`
   + `get_logger`, `setup_logging`, `LogAggregator`.
 - `osimflow/registry.py` — `CampaignRegistry` + `CampaignRecord`

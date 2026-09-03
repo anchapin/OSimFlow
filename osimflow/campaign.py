@@ -36,22 +36,13 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 
 __all__ = ["Campaign", "CampaignError", "QuotaExceededError", "SimResult"]
 
-import ast
 import concurrent.futures
 import contextlib
 import dataclasses
-import fcntl
-import hashlib
-import inspect
 import json
 import logging
 import os
-import platform
 import shutil
-import signal
-import subprocess
-import sys
-import threading
 import time
 import warnings
 from collections.abc import Callable, Iterator
@@ -61,33 +52,61 @@ from typing import Any, TypedDict
 
 import yaml
 
+from ._campaign_artifacts import CampaignArtifactWriter
+from ._campaign_baseline import (
+    baseline_sample_id as _baseline_sid_from_cfg,
+)
+from ._campaign_baseline import (
+    compute_baseline_comparison,
+    compute_improvement_range,
+    read_all_kpis,
+)
+from ._campaign_chaos import CampaignChaosWiring
+from ._campaign_code_hashes import (
+    _byos_file_hash,  # noqa: F401  — re-exported test seam
+    _combine_code_hash,  # noqa: F401  — re-exported test seam
+    _transitive_import_closure,  # noqa: F401  — re-exported test seam
+    code_hash_with_byos,
+    compute_code_hashes,
+)
 from ._campaign_cost_tracker import CampaignCostTracker
+from ._campaign_epw import CampaignEpwResolver
+from ._campaign_hooks import (
+    hook_env as _build_hook_env,
+)
+from ._campaign_hooks import (
+    maybe_fire_webhook,
+    run_finalize_script,
+    run_init_script,
+)
+from ._campaign_lifecycle import (
+    CampaignLifecycle,
+    handle_signal,
+)
+from ._campaign_lifecycle import (
+    CancelRegistry as _CancelRegistry,  # noqa: F401  — re-exported test seam
+)
+from ._campaign_lifecycle import (
+    cancel_registry as _cancel_registry,
+)
 from ._campaign_observability import ObservabilityManager
+from ._campaign_quota import CampaignQuotaGuard, QuotaExceededError
+from ._campaign_sample_trace import CampaignSampleTraceRecorder
+from ._campaign_sharding import CampaignSharding
 from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
-    EPW_FILE_KEY,
     _build_mappings,
     preflight_check,
 )
 from .cache import CacheKey, _container_digest_for, sha256_of_dict, sha256_of_files
-from .chaos import (
-    ChaosEngine,
-    CPUSpikeInjector,
-    KillSwitchSimulator,
-    MemoryPressureInjector,
-    NetworkDelayInjector,
-)
+from .chaos import ChaosEngine
 from .config import CampaignConfig
 from .cosign import (
     DEFAULT_COSIGN_OIDC_ISSUER,
     CosignVerificationError,
     build_cosign_image_ref,
     verify_image_signature,
-)
-from .cost_tracking import (
-    DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
-    DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
 )
 from .data_point_manager import DataPointManager
 from .distributed_cache import build_cache, campaign_state_namespace
@@ -106,18 +125,14 @@ from .mlflow_hook import (
 from .monitoring import (
     GenerationTrace,
     RunTrace,
-    SampleTrace,
     WorkerRecoveryManager,
     sample_log_paths,
 )
-from .observability import new_trace_id
 from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import ConsumerQueue
 from .taskqueue import TaskHandle as TQHandle
-from .weather import EPWValidationError, validate_all_epw_files, validate_epw
-from .webhook import WebhookClient
 from .work import (
     SevereEnergyPlusError,
     aggregate_results,
@@ -150,20 +165,11 @@ CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 
 
-class QuotaExceededError(OSimFlowRuntimeError):
-    """Raised when a campaign resource quota is exceeded (issue #446)."""
-
-    def __init__(
-        self,
-        message: str,
-        quota_type: str,
-        limit: int | float,
-        current: int | float,
-    ) -> None:
-        super().__init__(message)
-        self.quota_type = quota_type
-        self.limit = limit
-        self.current = current
+# NOTE (issue #1462): ``QuotaExceededError`` is defined in
+# ``osimflow._campaign_quota`` and re-exported here (it stays in
+# ``__all__``) so the public import paths
+# ``osimflow.campaign.QuotaExceededError`` /
+# ``osimflow.QuotaExceededError`` are unchanged.
 
 
 class CampaignError(OSimFlowRuntimeError):
@@ -420,34 +426,9 @@ _STEP_DEPENDENCIES: dict[str, DAGStep] = {
 }
 
 
-class _CancelRegistry:
-    """Global registry holding the currently-running Campaign for signal handling.
-
-    When a SIGINT/SIGTERM is received, the signal handler calls
-    ``request_cancel()`` on whatever Campaign is registered here.
-    Only one Campaign can run at a time per process — the registry
-    is updated at ``run()`` entry and cleared on exit.
-    """
-
-    def __init__(self) -> None:
-        self._campaign: Campaign | None = None
-        self._lock = threading.Lock()
-
-    def register(self, campaign: "Campaign") -> None:
-        with self._lock:
-            self._campaign = campaign
-
-    def request_cancel(self) -> None:
-        with self._lock:
-            if self._campaign is not None:
-                self._campaign.request_cancel()
-
-    def clear(self) -> None:
-        with self._lock:
-            self._campaign = None
-
-
-_cancel_registry = _CancelRegistry()
+# NOTE (issue #1462): ``_CancelRegistry`` and the ``_cancel_registry``
+# singleton now live in ``osimflow._campaign_lifecycle`` and are
+# re-exported above — tests import both names from this module.
 
 
 @contextlib.contextmanager
@@ -474,265 +455,83 @@ def _scoped_dry_run_env() -> Iterator[None]:
             os.environ["OSIMFLOW_DOCKER_SWARM_DRY_RUN"] = prev
 
 
-_IMPORT_CLOSURE_CACHE: dict[Path, frozenset[Path]] = {}
+# NOTE (issue #1462): the code-hash machinery (import-closure walking,
+# ``_byos_file_hash``, ``_combine_code_hash``, ``compute_code_hashes``,
+# ``code_hash_with_byos``) and the default chaos-engine builder now
+# live in ``osimflow._campaign_code_hashes`` and
+# ``osimflow._campaign_chaos`` respectively.
 
 
-def _osimflow_prefixes(dotted: str) -> Iterator[str]:
-    """Yield the dotted prefixes of ``dotted`` restricted to ``osimflow.*``.
+def _resolve_work_fn(
+    explicit_fn: Callable[..., Any] | None,
+    script_path: Path | None,
+    default_fn: Callable[..., Any],
+    cfg: CampaignConfig,
+    label: str,
+) -> Callable[..., Any]:
+    """Resolve a BYOS-overridable work function.
 
-    The bare ``osimflow`` package is deliberately excluded: its
-    ``__init__.py`` imports the entire public API surface, so hashing it
-    would collapse the per-module closure into a de-facto whole-package
-    hash (issue #1446). Subpackage ``__init__.py`` files (depth >= 1) are
-    included because Python executes them when their submodules are
-    imported.
+    Precedence (issue #1462 extracted from ``Campaign.__init__`` to keep
+    ``__init__`` under the too-many-branches budget): explicit
+    constructor parameter > ``cfg`` BYOS script path (loaded via the
+    canonical ``osimflow.byos`` loader) > package default.
     """
-    parts = dotted.split(".")
-    if parts[0] != "osimflow":
+    if explicit_fn is not None:
+        return explicit_fn
+    if script_path is not None:
+        from .byos import load_user_function  # noqa: PLC0415
+
+        log.info("loading BYOS %s from %s", label, script_path)
+        return load_user_function(
+            script_path,
+            trust_level=cfg.byos_trust_level,
+            timeout_s=cfg.byos_timeout_s,
+        )
+    return default_fn
+
+
+def _verify_cosign_or_raise(cfg: CampaignConfig) -> None:
+    """Verify the OpenStudio image signature when opted in (issue #1385).
+
+    Extracted from ``Campaign.__init__`` (issue #1462).  When the
+    operator sets ``--require-cosign-identity``, verify the OpenStudio
+    image signature (keyless sigstore) BEFORE anything runs.  A cache
+    hit must never silently consume a substituted image — on
+    verification failure the campaign refuses to start, which is
+    strictly stronger than forcing a cache miss (nothing is written to
+    the cache from an untrusted image).
+    """
+    if not cfg.require_cosign_identity:
         return
-    for depth in range(2, len(parts) + 1):
-        yield ".".join(parts[:depth])
-
-
-def _module_file_for(package_root: Path, dotted: str) -> Path | None:
-    """Resolve a dotted ``osimflow.*`` module name to a file on disk.
-
-    Purely path-based — no modules are imported and site-packages is
-    never consulted. Returns ``None`` for third-party / stdlib names and
-    for ``osimflow.*`` names without a ``.py`` file or ``__init__.py``
-    under ``package_root``.
-    """
-    parts = dotted.split(".")
-    if parts[0] != "osimflow" or len(parts) < 2:
-        return None
-    base = package_root.joinpath(*parts[1:])
-    module_file = base.with_suffix(".py")
-    if module_file.is_file():
-        return module_file
-    package_init = base / "__init__.py"
-    if package_init.is_file():
-        return package_init
-    return None
-
-
-def _module_name_for_file(package_root: Path, module_file: Path) -> str:
-    """Dotted ``osimflow.*`` module name for a file inside ``package_root``."""
+    os_image_ref = build_cosign_image_ref(
+        container="docker.io/nrel/openstudio",
+        container_digest=cfg.container_digest,
+        openstudio_version=cfg.openstudio_version,
+    )
+    issuer = cfg.cosign_oidc_issuer or DEFAULT_COSIGN_OIDC_ISSUER
     try:
-        rel = module_file.resolve().relative_to(package_root.resolve())
-    except ValueError:
-        return ""
-    parts = list(rel.with_suffix("").parts)
-    if parts and parts[-1] == "__init__":
-        parts.pop()
-    return ".".join(["osimflow", *parts])
-
-
-def _importfrom_targets(
-    node: ast.ImportFrom,
-    package_parts: list[str],
-) -> list[str]:
-    """``osimflow.*`` module names referenced by one ``from ... import``.
-
-    ``package_parts`` is the dotted package path the import is relative
-    to (empty parts or a non-``osimflow`` base yield no targets, which
-    is how the stdlib and site-packages stay out of the closure).
-    """
-    if node.level > 0:
-        if node.level > 1:
-            base_parts = package_parts[: -(node.level - 1)]
-        else:
-            base_parts = list(package_parts)
-        if node.module:
-            base_parts = [*base_parts, *node.module.split(".")]
-    elif node.module:
-        base_parts = node.module.split(".")
-    else:
-        return []
-    if not base_parts or base_parts[0] != "osimflow":
-        return []
-    base = ".".join(base_parts)
-    targets = list(_osimflow_prefixes(base))
-    for alias in node.names:
-        targets.extend(_osimflow_prefixes(f"{base}.{alias.name}"))
-    return targets
-
-
-def _iter_import_targets(
-    tree: ast.Module,
-    package_root: Path,
-    module_file: Path,
-) -> Iterator[str]:
-    """Yield every ``osimflow.*`` module name imported anywhere in ``tree``.
-
-    Handles ``import a.b.c``, ``from a.b import c``, and relative imports
-    (``from . import x`` / ``from .x import y``). Imports are syntactically
-    statements, so the walk descends only through statement-bearing fields
-    (``body`` / ``orelse`` / ``finalbody`` / exception handlers / match
-    cases) and skips expression subtrees entirely — this keeps the walk
-    cheap while still covering conditional and function-level imports.
-    Over-approximating is safe for cache invalidation.
-    """
-    targets: list[str] = []
-    module_name = _module_name_for_file(package_root, module_file)
-    if module_file.name == "__init__.py":
-        package_parts = module_name.split(".")
-    else:
-        package_parts = module_name.split(".")[:-1]
-    stack: list[ast.AST] = [tree]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                targets.extend(_osimflow_prefixes(alias.name))
-            continue
-        if isinstance(node, ast.ImportFrom):
-            targets.extend(_importfrom_targets(node, package_parts))
-            continue
-        for field in ("body", "orelse", "finalbody", "handlers", "cases"):
-            children = getattr(node, field, None)
-            if children:
-                stack.extend(children)
-    yield from targets
-
-
-def _transitive_import_closure(package_root: Path) -> frozenset[Path]:
-    """Transitive ``osimflow``-internal import closure of the work layer.
-
-    Roots: ``osimflow.work``, ``osimflow.apply_params``, and every
-    ``osimflow._work_scripts`` module. Walks ``import`` / ``from ...
-    import`` statements (AST-based — deterministic, fast, no import side
-    effects) and keeps only files under ``package_root``; stdlib and
-    third-party imports are excluded (issue #1446).
-
-    Cached per ``package_root`` at module level: the closure is a
-    property of the source tree, and the *contents* of the listed files
-    are re-read on every ``_compute_code_hashes`` call, so the one-time
-    walk adds no measurable cost to ``Campaign`` construction.
-    """
-    cached = _IMPORT_CLOSURE_CACHE.get(package_root)
-    if cached is not None:
-        return cached
-    roots = ["osimflow.work", "osimflow.apply_params"]
-    scripts_dir = package_root / "_work_scripts"
-    if scripts_dir.is_dir():
-        roots.append("osimflow._work_scripts")
-        for script in sorted(scripts_dir.glob("*.py")):
-            if script.name != "__init__.py":
-                roots.append(f"osimflow._work_scripts.{script.stem}")
-    seen: set[Path] = set()
-    visited: set[str] = set()
-    pending = list(roots)
-    while pending:
-        name = pending.pop()
-        if name in visited:
-            continue
-        visited.add(name)
-        module_file = _module_file_for(package_root, name)
-        if module_file is None:
-            continue
-        seen.add(module_file)
-        try:
-            tree = ast.parse(module_file.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
-            continue
-        pending.extend(_iter_import_targets(tree, package_root, module_file))
-    closure = frozenset(seen)
-    _IMPORT_CLOSURE_CACHE[package_root] = closure
-    return closure
-
-
-def _byos_file_hash(path: Path | None) -> str:
-    """SHA-256 of a BYOS user script, or a sentinel when unset/missing.
-
-    Issue #1011. The returned string is mixed into the cache key for
-    ``APPLY_PARAMETERS`` and ``EXTRACT_KPIS`` so that editing the
-    user-supplied script invalidates the cached results. Three outcomes:
-
-    * ``path is None`` → ``"byos-unset"``. No BYOS script configured;
-      the cache key falls back to ``code_hashes["bin"]`` unchanged.
-    * ``path.resolve().is_file() is False`` → ``"byos-missing"``. The
-      configured script is unreadable; do not raise — return a stable
-      sentinel so the cache key remains deterministic (issue #1011
-      stop condition).
-    * otherwise → ``sha256_of_files([path.resolve()])`` of the file
-      bytes, using the same hashing primitive as ``_compute_code_hashes``
-      so the rest of the cache key is consistent.
-    """
-    if path is None:
-        return "byos-unset"
-    try:
-        resolved = path.resolve()
-    except OSError:
-        return "byos-missing"
-    if not resolved.is_file():
-        return "byos-missing"
-    return sha256_of_files([resolved])
-
-
-def _combine_code_hash(*hashes: str) -> str:
-    """SHA-256 of the concatenation of multiple code-hash strings.
-
-    Used by ``Campaign._code_hash_with_byos`` (issue #1011) to fold
-    the BYOS user-script hash into the existing ``code_hashes["bin"]``
-    without changing the schema of :class:`CacheKey.code_sha256`. Any
-    change in any input produces a different output, so editing the
-    user script invalidates the cache key.
-    """
-    h = hashlib.sha256()
-    for part in hashes:
-        h.update(part.encode("utf-8"))
-        h.update(b"|")
-    return h.hexdigest()
-
-
-def _build_default_chaos_engine(cfg: Any) -> ChaosEngine:
-    """Build a :class:`ChaosEngine` from :class:`ChaosConfig` settings.
-
-    Issue #1013 wires the chaos module into :class:`Campaign`; this
-    helper turns the user-facing config knobs into the matching
-    fault injectors and registers them on a fresh ``ChaosEngine``.
-    The schedule is *not* enforced here — it lives in
-    :meth:`Campaign._maybe_inject_chaos` so the engine itself stays
-    neutral.
-
-    All scenario names are validated at config parse time in
-    :func:`osimflow.config._parse_chaos_scenarios` (issue #1209), so
-    no further unknown-name handling is needed here.
-    """
-    engine = ChaosEngine(enabled=True)
-    scenarios = list(cfg.scenarios)
-    for name in scenarios:
-        if name in ("kill_switch", "kill_switch_simulator"):
-            engine.register(KillSwitchSimulator(fail_after=cfg.fail_after))
-        elif name == "network_delay":
-            engine.register(
-                NetworkDelayInjector(
-                    delay_s=cfg.delay_s,
-                    jitter_s=cfg.jitter_s,
-                    probability=cfg.probability,
-                )
-            )
-        elif name == "cpu_spike":
-            engine.register(
-                CPUSpikeInjector(
-                    duration_s=cfg.duration_s,
-                    intensity=cfg.intensity,
-                    probability=cfg.probability,
-                )
-            )
-        elif name == "memory_pressure":
-            engine.register(
-                MemoryPressureInjector(
-                    size_mb=cfg.size_mb,
-                    duration_s=cfg.duration_s,
-                    probability=cfg.probability,
-                )
-            )
-    return engine
+        verify_image_signature(
+            os_image_ref,
+            cfg.require_cosign_identity,
+            issuer,
+        )
+    except CosignVerificationError:
+        log.error(
+            "cosign verification failed for %s — refusing to run the campaign "
+            "(issue #1385). The image may have been substituted by a registry "
+            "compromise; investigate before re-running.",
+            os_image_ref,
+        )
+        raise
+    log.info(
+        "cosign verification passed for %s (identity=%s)",
+        os_image_ref,
+        cfg.require_cosign_identity,
+    )
 
 
 class Campaign:
-    def __init__(  # noqa: PLR0912
+    def __init__(
         self,
         cfg: CampaignConfig,
         executor: BaseExecutor,
@@ -755,33 +554,21 @@ class Campaign:
         # are injected into SampleSpec before processing.
         self._dp_manager = data_point_manager
         # Resolve apply_fn: explicit param > cfg.custom_apply_script > default.
-        if apply_fn is not None:
-            self.apply_fn = apply_fn
-        elif cfg.custom_apply_script is not None:
-            from .byos import load_user_function  # noqa: PLC0415
-
-            log.info("loading BYOS apply_fn from %s", cfg.custom_apply_script)
-            self.apply_fn = load_user_function(
-                cfg.custom_apply_script,
-                trust_level=cfg.byos_trust_level,
-                timeout_s=cfg.byos_timeout_s,
-            )
-        else:
-            self.apply_fn = default_apply_parameters
+        self.apply_fn = _resolve_work_fn(
+            apply_fn,
+            cfg.custom_apply_script,
+            default_apply_parameters,
+            cfg,
+            "apply_fn",
+        )
         # Resolve extract_fn: explicit param > cfg.custom_kpi_extractor > default.
-        if extract_fn is not None:
-            self.extract_fn = extract_fn
-        elif cfg.custom_kpi_extractor is not None:
-            from .byos import load_user_function  # noqa: PLC0415
-
-            log.info("loading BYOS extract_fn from %s", cfg.custom_kpi_extractor)
-            self.extract_fn = load_user_function(
-                cfg.custom_kpi_extractor,
-                trust_level=cfg.byos_trust_level,
-                timeout_s=cfg.byos_timeout_s,
-            )
-        else:
-            self.extract_fn = extract_kpis
+        self.extract_fn = _resolve_work_fn(
+            extract_fn,
+            cfg.custom_kpi_extractor,
+            extract_kpis,
+            cfg,
+            "extract_fn",
+        )
         # Campaign state backend (issue #993 / T8.2). When --redis-url is
         # configured, build_cache returns a DistributedCache: shared cache
         # entries live in a Redis hash under a namespace derived from the
@@ -826,37 +613,8 @@ class Campaign:
             log.info("container images pinned by digest: %s", cfg.container_digest)
         # Issue #1385: when the operator opts in via
         # ``--require-cosign-identity``, verify the OpenStudio image
-        # signature (keyless sigstore) BEFORE anything runs. A cache hit
-        # must never silently consume a substituted image — on
-        # verification failure the campaign refuses to start, which is
-        # strictly stronger than forcing a cache miss (nothing is
-        # written to the cache from an untrusted image).
-        if cfg.require_cosign_identity:
-            os_image_ref = build_cosign_image_ref(
-                container="docker.io/nrel/openstudio",
-                container_digest=cfg.container_digest,
-                openstudio_version=cfg.openstudio_version,
-            )
-            issuer = cfg.cosign_oidc_issuer or DEFAULT_COSIGN_OIDC_ISSUER
-            try:
-                verify_image_signature(
-                    os_image_ref,
-                    cfg.require_cosign_identity,
-                    issuer,
-                )
-            except CosignVerificationError:
-                log.error(
-                    "cosign verification failed for %s — refusing to run the campaign "
-                    "(issue #1385). The image may have been substituted by a registry "
-                    "compromise; investigate before re-running.",
-                    os_image_ref,
-                )
-                raise
-            log.info(
-                "cosign verification passed for %s (identity=%s)",
-                os_image_ref,
-                cfg.require_cosign_identity,
-            )
+        # signature (keyless sigstore) BEFORE anything runs.
+        _verify_cosign_or_raise(cfg)
         # Hash the code that affects per-step behavior so a `bin/*.py` edit
         # invalidates cached results. This is the fix for the
         # "Python glue invisible to cache hash" gotcha in
@@ -915,10 +673,19 @@ class Campaign:
             campaign_id=self.trace.campaign_id,
         )
         # Observability backend (issue #132). Built from cfg so the
-        # Observability backend (issue #132). Built from cfg so the
         # correct backend is always used — NullBackend when "none" (zero
         # overhead) or a real backend when configured.
         self._obs = ObservabilityManager(cfg)
+
+        # Per-sample trace assembly / incremental checkpointing
+        # (issue #1462): SampleTrace rows, per-sample trace IDs (issue
+        # #436), cost totals (issue #126), and the consecutive-
+        # checkpoint-failure abort counter (issue #739).
+        self._sample_traces = CampaignSampleTraceRecorder(
+            trace=self.trace,
+            sample_state=self._sample_state,
+            obs=self._obs,
+        )
 
         # Wire CircuitBreaker state transitions to observability (issue #1310).
         # _breaker callbacks are set here after _obs is available; the breakers
@@ -999,6 +766,25 @@ class Campaign:
                 "result_storage_endpoint": cfg.result_storage_endpoint,
             }
 
+        # Quota enforcement (issue #446 → #1462): the guard reads the
+        # live trace / sample-state by reference so mid-campaign quota
+        # checks see current totals.
+        self._quota = CampaignQuotaGuard(
+            cfg=cfg,
+            trace=self.trace,
+            sample_state=self._sample_state,
+            max_workers=max_workers,
+            maybe_alert=self._maybe_alert,
+        )
+        # Sharding (issue #1462): owns shard selection + labels.
+        self._sharding = CampaignSharding(cfg)
+
+        # EPW resolution / pre-flight validation (issue #55 → #1462).
+        self._epw = CampaignEpwResolver(cfg)
+
+        # Artifact / provenance / manifest writing (issue #277 → #1462).
+        self._artifacts = CampaignArtifactWriter(cfg, self.trace)
+
         # Cost tracking (issue #447). Built here so the correct backend is
         # always used.  None when enable_cost_tracking is False (zero overhead).
         self._cost_tracker = CampaignCostTracker(
@@ -1007,56 +793,22 @@ class Campaign:
             executor=executor,
         )
 
-        # Chaos engine (issue #1013). When the user passes an explicit
-        # ``chaos_engine`` we use it directly; otherwise we build one
-        # from ``cfg.chaos`` if ``enabled=True`` and at least one
-        # scenario is listed. The engine stays None for every campaign
-        # that does not opt in, so ``_maybe_inject_chaos`` is a no-op
-        # unless explicitly requested — the wiring is invisible to
-        # non-chaos campaigns.
-        chaos_cfg = getattr(cfg, "chaos", None)
-        if chaos_engine is not None:
-            self._chaos_engine: ChaosEngine | None = chaos_engine
-        elif chaos_cfg is not None and chaos_cfg.enabled and chaos_cfg.scenarios:
-            self._chaos_engine = _build_default_chaos_engine(chaos_cfg)
-        else:
-            self._chaos_engine = None
-        if self._chaos_engine is not None:
-            scenarios_repr: object
-            schedule_repr: object
-            if chaos_cfg is not None and chaos_cfg.scenarios:
-                scenarios_repr = list(chaos_cfg.scenarios)
-                schedule_repr = chaos_cfg.schedule
-            else:
-                # User supplied a custom engine; describe what is
-                # actually registered so the log line is not a lie.
-                scenarios_repr = [
-                    getattr(inj, "fault_type", None)
-                    and getattr(inj.fault_type, "value", None)
-                    or type(inj).__name__
-                    for inj in self._chaos_engine._injectors
-                ]
-                schedule_repr = "custom"
-            log.info(
-                "chaos engine enabled: scenarios=%s schedule=%s",
-                scenarios_repr,
-                schedule_repr,
-            )
+        # Chaos engine (issue #1013 → #1462): engine selection (explicit
+        # ``chaos_engine`` > ``cfg.chaos`` when enabled with scenarios >
+        # disabled) and the schedule-aware injection hook live in the
+        # CampaignChaosWiring collaborator.  ``self._chaos_engine`` is
+        # kept as a read-only mirror for backwards compatibility.
+        self._chaos = CampaignChaosWiring(cfg, chaos_engine)
+        self._chaos_engine: ChaosEngine | None = self._chaos.engine
 
-        # Graceful shutdown (issue #255): cancellation flag and lock.
-        self._cancel_requested = False
-        self._cancel_lock = threading.Lock()
-        # Soft pause (issue #553): pause flag and lock.
-        self._pause_requested = False
-        self._pause_lock = threading.Lock()
-        # Original signal handlers — restored on exit.
-        self._prev_sigint: Any = None
-        self._prev_sigterm: Any = None
+        # Graceful shutdown / soft pause / signal handling (issues #255,
+        # #553 → #1462): flags, locks, and handler bookkeeping live in
+        # the CampaignLifecycle collaborator; thin delegating methods
+        # below keep the instance API unchanged.
+        self._lifecycle = CampaignLifecycle()
 
-        # Consecutive checkpoint failure counter (issue #739). After N
-        # consecutive failures in _checkpoint_sample we abort instead of
-        # silently continuing.
-        self._consecutive_checkpoint_failures = 0
+        # Consecutive checkpoint failure counter (issue #739) now lives
+        # on CampaignSampleTraceRecorder (see self._sample_traces).
 
     def _maybe_alert(self, event_type: str, context: dict[str, Any]) -> None:
         """Send an alert if AlertManager is configured (issue #1180).
@@ -1092,103 +844,28 @@ class Campaign:
             doc_store._breaker.set_on_transition_callback(_record)
 
     def _enforce_start_quota(self) -> None:
-        """Fail fast if the campaign's resource quota is already exceeded at start.
+        """Fail fast at ``run()`` start if the resource quota is violated.
 
-        Called at the beginning of ``run()`` before any work is dispatched.
-        Raises ``QuotaExceededError`` with a descriptive message if any quota
-        is already violated.
+        Delegates to :class:`~osimflow._campaign_quota.CampaignQuotaGuard`
+        (issue #1462); raises ``QuotaExceededError`` on violation.
         """
-        quota = self.cfg.resource_quota
-        if quota is None:
-            return
-
-        if quota.max_samples is not None and self.cfg.n_samples > quota.max_samples:
-            self._maybe_alert(
-                "quota.exceeded",
-                {
-                    "campaign_id": self.trace.campaign_id,
-                    "quota_type": "max_samples",
-                    "limit": quota.max_samples,
-                    "current": self.cfg.n_samples,
-                    "message": f"n_samples={self.cfg.n_samples} exceeds max_samples={quota.max_samples}",
-                },
-            )
-            raise QuotaExceededError(
-                f"n_samples={self.cfg.n_samples} exceeds resource_quota.max_samples="
-                f"{quota.max_samples}",
-                quota_type="max_samples",
-                limit=quota.max_samples,
-                current=self.cfg.n_samples,
-            )
-
-        log.info(
-            "resource quota active: max_samples=%s, max_cost_usd=%s, "
-            "max_wall_time_min=%s, max_concurrent_samples=%s",
-            quota.max_samples,
-            quota.max_cost_usd,
-            quota.max_wall_time_min,
-            quota.max_concurrent_samples,
-        )
+        self._quota.enforce_start_quota()
 
     def _check_quota_exceeded(self) -> bool:
         """Return True if any hard quota limit has been reached.
 
-        Checks:
-        - ``max_samples``: total samples submitted so far vs. the limit.
-        - ``max_cost_usd``: accumulated campaign cost vs. the limit.
-        - ``max_wall_time_min``: elapsed campaign time vs. the limit.
-
-        Does NOT check ``max_concurrent_samples`` — that is enforced
-        by bounding ``max_workers`` at construction time.
+        Delegates to the quota guard; see
+        :meth:`CampaignQuotaGuard.check_quota_exceeded`.
         """
-        quota = self.cfg.resource_quota
-        if quota is None:
-            return False
-
-        if quota.max_samples is not None:
-            submitted = sum(
-                1
-                for state in self._sample_state.values()
-                if any(k.endswith("_exit_code") or k.endswith("_status") for k in state)
-            )
-            if submitted >= quota.max_samples:
-                log.warning(
-                    "max_samples quota reached (%d >= %d) — skipping further submissions",
-                    submitted,
-                    quota.max_samples,
-                )
-                return True
-
-        if quota.max_cost_usd is not None and self.trace.total_cost_usd >= quota.max_cost_usd:
-            log.warning(
-                "max_cost_usd quota reached (%.2f >= %.2f) — skipping further submissions",
-                self.trace.total_cost_usd,
-                quota.max_cost_usd,
-            )
-            return True
-
-        elapsed_min = (time.time() - self.trace.started_at) / 60.0
-        if quota.max_wall_time_min is not None and elapsed_min >= quota.max_wall_time_min:
-            log.warning(
-                "max_wall_time_min quota reached (%.1f >= %.1f min) — skipping further submissions",
-                elapsed_min,
-                quota.max_wall_time_min,
-            )
-            return True
-
-        return False
+        return self._quota.check_quota_exceeded()
 
     def _effective_max_workers(self) -> int:
         """Return the effective max_workers bounded by max_concurrent_samples quota.
 
-        If a ``max_concurrent_samples`` quota is set, the fan-out parallelism
-        is capped to that value. Otherwise, ``self.max_workers`` is returned
-        unchanged.
+        Delegates to the quota guard; see
+        :meth:`CampaignQuotaGuard.effective_max_workers`.
         """
-        quota = self.cfg.resource_quota
-        if quota is not None and quota.max_concurrent_samples is not None:
-            return min(self.max_workers, quota.max_concurrent_samples)
-        return self.max_workers
+        return self._quota.effective_max_workers()
 
     def _verify_step_inputs(self, step_name: str) -> None:
         """Verify all required inputs for *step_name* are present before running.
@@ -1299,103 +976,29 @@ class Campaign:
     def _compute_code_hashes(self, cfg: CampaignConfig | None = None) -> dict[str, str]:
         """SHA-256 of every work script, plus the work.py module.
 
-        The work scripts live in ``osimflow._work_scripts`` (shipped with
-        the wheel). A development checkout (``pip install -e .``) also has
-        copies in ``bin/`` (backward-compatible shims). We hash the UNION
-        of both directories whenever either exists — sorted, deduped —
-        so dev checkouts and wheel installs agree on the cache key.
-        Fixes issue #1021.
+        Delegates to :func:`osimflow._campaign_code_hashes.compute_code_hashes`
+        (issue #1462).  The delegation preserves the historical unbound
+        call shape ``Campaign._compute_code_hashes(stub)`` — the
+        underlying function reads no real instance state and falls back
+        to ``getattr(self, "cfg", None)`` when ``cfg`` is omitted.
 
-        The union is extended with the transitive osimflow-internal
-        import closure of ``osimflow.work``, ``osimflow.apply_params``,
-        and every ``osimflow._work_scripts`` module (issue #1446), so
-        edits to indirectly imported modules (e.g.
-        ``algorithms.doe_analysis``, ``version_detection``) invalidate
-        the affected cache keys instead of silently serving stale
-        results.
-
-        The work.py module is included because it is the work layer that
-        the Campaign itself depends on; if a contributor edits it, we
-        must re-run downstream steps.
-
-        When ``cfg`` is provided, also include the resolved file-content
-        hashes of ``cfg.custom_apply_script`` and ``cfg.custom_kpi_extractor``
-        under the ``byos_apply`` and ``byos_kpi`` keys (issue #1011).
-        These are mixed into the per-sample cache key for ``APPLY_PARAMETERS``
-        and ``EXTRACT_KPIS`` respectively, so editing a BYOS user script
-        invalidates the cached results. When ``cfg`` is omitted (the
-        legacy ``Campaign._compute_code_hashes(_Stub())`` test path),
-        the byos entries fall back to the ``"byos-unset"`` sentinel and
-        ``self.code_hashes["bin"]`` continues to be the cache-key hash.
+        Returns a dict with keys ``bin`` (work scripts + bin shims +
+        transitive work-layer import closure, issues #1021 / #1446),
+        ``work`` (``osimflow.work``), and ``byos_apply`` / ``byos_kpi``
+        (BYOS user-script content hashes, issue #1011).
         """
-        from . import work  # noqa: PLC0415
-
-        # Resolve both work-script directories and take the union
-        # (sorted, deduped) whenever either exists.
-        package_root = Path(__file__).resolve().parent
-        repo_root = package_root.parent
-        candidates: list[Path] = []
-        for d in (package_root / "_work_scripts", repo_root / "bin"):
-            if d.is_dir():
-                candidates.extend(d.glob("*.py"))
-        work_file = Path(inspect.getfile(work))
-        # Also fold in the work-layer modules so editing them invalidates
-        # per-sample cache entries (issue #1022). Without this addition,
-        # the per-sample steps used ``bin = _work_scripts/*.py + bin/*.py``
-        # only, and editing ``osimflow.work`` or ``osimflow.apply_params``
-        # silently kept cached results warm — wrong. The ``work`` hash
-        # below still covers ``work.py`` separately for ``AGGREGATE_RESULTS``
-        # because aggregate re-runs don't depend on the per-sample work
-        # scripts (the docstring after #1036 spells out the two-hash scheme).
-        try:
-            apply_params_file = Path(inspect.getfile(sys.modules["osimflow"].apply_params))
-        except (AttributeError, KeyError):
-            apply_params_file = None
-        for f in (work_file, apply_params_file):
-            if f is not None and f.is_file():
-                candidates.append(f)
-        # Transitive osimflow-internal import closure of the work layer
-        # (issue #1446): the hashed modules import further osimflow
-        # modules (e.g. generate_plots.py → algorithms.doe_analysis,
-        # work.py → version_detection / weather / storage / ...) whose
-        # edits change per-step behaviour without touching any explicitly
-        # listed file. Deriving the file set from the import closure
-        # removes the hand-maintained-list drift permanently.
-        candidates.extend(_transitive_import_closure(package_root))
-        files = sorted(set(candidates), key=str)
-        # Pick the effective cfg. When ``__init__`` calls this with its
-        # cfg we get the BYOS entries; when tests call it with no cfg
-        # (e.g. ``Campaign._compute_code_hashes(_Stub())``) we fall back
-        # to ``self.cfg`` if a stub happens to carry one, then to None.
-        effective_cfg = cfg if cfg is not None else getattr(self, "cfg", None)
-        byos_apply_path = effective_cfg.custom_apply_script if effective_cfg is not None else None
-        byos_kpi_path = effective_cfg.custom_kpi_extractor if effective_cfg is not None else None
-        return {
-            "bin": sha256_of_files(files),
-            "work": sha256_of_files([work_file]),
-            "byos_apply": _byos_file_hash(byos_apply_path),
-            "byos_kpi": _byos_file_hash(byos_kpi_path),
-        }
+        return compute_code_hashes(self, cfg)
 
     def _code_hash_with_byos(self, byos_key: str) -> str:
         """Cache-key ``code_sha256`` optionally mixed with a BYOS hash.
 
-        When ``code_hashes[byos_key]`` is the ``"byos-unset"`` sentinel
-        (no user script configured), returns ``code_hashes["bin"]``
-        unchanged so existing cached entries continue to hit after
-        upgrading — no impact when BYOS is not configured (issue #1011
-        acceptance criterion).
-
-        When the user script is configured, returns the SHA-256 of the
-        concatenation ``bin|byos`` so any edit to the user script
-        produces a distinct cache key and forces the affected per-sample
-        step to re-run.
+        Delegates to
+        :func:`osimflow._campaign_code_hashes.code_hash_with_byos`
+        (issue #1462).  Returns ``code_hashes["bin"]`` unchanged when the
+        BYOS entry is the ``"byos-unset"`` sentinel so existing cached
+        entries keep hitting; otherwise the SHA-256 of ``bin|byos``.
         """
-        base = self.code_hashes["bin"]
-        byos_hash = self.code_hashes.get(byos_key, "byos-unset")
-        if byos_hash == "byos-unset":
-            return base
-        return _combine_code_hash(base, byos_hash)
+        return code_hash_with_byos(self.code_hashes, byos_key)
 
     def _inject_dp_overrides(self, samples: list[SampleSpec]) -> list[SampleSpec]:
         """Inject per-sample overrides from DataPointManager into SampleSpec list.
@@ -1423,221 +1026,30 @@ class Campaign:
         return result
 
     def _trace_id_for(self, sample_id: str) -> str:
-        """Return the per-sample trace ID, minting one on first access.
-
-        The trace ID is stored in ``_sample_state[sample_id]["trace_id"]``
-        so every observability call for this sample (cost, status,
-        per-step fan-out events) shares the same correlation key.  Minted
-        lazily via :func:`osimflow.observability.new_trace_id` — short
-        (8 hex chars) and stable across cache hits, retries, and
-        incremental checkpoints (issue #436).
-        """
-        state = self._sample_state.setdefault(sample_id, {})
-        tid_obj = state.get("trace_id")
-        if isinstance(tid_obj, str):
-            return tid_obj
-        tid = new_trace_id()
-        state["trace_id"] = tid
-        return tid
+        """Return the per-sample trace ID, minting one on first access (issue #436)."""
+        return self._sample_traces.trace_id_for(sample_id)
 
     def _finalize_samples(self) -> None:
         """Emit one SampleTrace per sample based on accumulated per-step state.
 
-        Also records per-sample observability metrics (duration, status)
-        via the configured backend (issue #132).
-
-        Deduplicates against incremental checkpoints: if a sample was
-        already written to run.json by _checkpoint_sample (via SSE live
-        updates), the existing entry is replaced rather than appended,
-        so the per_sample list never grows faster than the sample count.
+        Delegates to :class:`CampaignSampleTraceRecorder` (issue #1462);
+        also records per-sample observability metrics and accumulates
+        campaign-level cost totals, and deduplicates against incremental
+        checkpoints.
         """
-        existing_ids: set[str] = {s.sample_id for s in self.trace.per_sample}
-        for sid, state in self._sample_state.items():
-            apply_ok = state.get("apply_exit_code") == 0
-            sim_ok = state.get("sim_exit_code") == 0
-            extract_ok = state.get("extract_exit_code") == 0
-            # A sample is "ok" if every step that ran succeeded.
-            status = "ok" if apply_ok and sim_ok and extract_ok else "failed"
-            # Coerce optional stringy fields via str() rather than dropping
-            # non-None values: previous code accepted any truthy value, and
-            # JSON-serializing Path/str objects in run.json requires str().
-            eplusout_sql_obj = state.get("eplusout_sql")
-            eplusout_sql = None if eplusout_sql_obj is None else str(eplusout_sql_obj)
-            error_summary_obj = state.get("error_summary")
-            error_summary = None if error_summary_obj is None else str(error_summary_obj)
-            # Per-sample log paths (issue #6). Optional because the
-            # fields are only populated by RUN_OPENSTUDIO_SIM; samples
-            # that errored out in APPLY_PARAMETERS never reach that
-            # step and have no associated log files.
-            stdout_log_obj = state.get("stdout_log")
-            stdout_log = None if stdout_log_obj is None else str(stdout_log_obj)
-            stderr_log_obj = state.get("stderr_log")
-            stderr_log = None if stderr_log_obj is None else str(stderr_log_obj)
-            # Worker tracking (issue #105): extract from per-sample state.
-            worker_id_obj = state.get("worker_id")
-            worker_id = None if worker_id_obj is None else str(worker_id_obj)
-            worker_ip_obj = state.get("worker_ip")
-            worker_ip = None if worker_ip_obj is None else str(worker_ip_obj)
-            worker_region_obj = state.get("worker_region")
-            worker_region = None if worker_region_obj is None else str(worker_region_obj)
-            # Cost tracking (issue #126): extract from per-sample state.
-            cost_usd_obj = state.get("cost_usd")
-            cost_usd: float | None = None if cost_usd_obj is None else float(str(cost_usd_obj))
-            billed_duration_obj = state.get("billed_duration_seconds")
-            billed_duration_seconds: float | None = (
-                None if billed_duration_obj is None else float(str(billed_duration_obj))
-            )
-            # Observability: record per-sample cost metric (issue #132).
-            # Forward the per-sample trace_id so the metric can be joined
-            # to a distributed trace (issue #436).
-            trace_id = self._trace_id_for(sid)
-            self._obs.record_sample_cost(sid, cost_usd, trace_id=trace_id)
-            trace = SampleTrace(
-                sample_id=sid,
-                status=status,
-                elapsed_s=0.0,  # per-sample total wall-clock — not yet tracked
-                apply_exit_code=int(str(state.get("apply_exit_code", 0))),
-                sim_exit_code=int(str(state.get("sim_exit_code", 0))),
-                extract_exit_code=int(str(state.get("extract_exit_code", 0))),
-                eplusout_sql=eplusout_sql,
-                error_summary=error_summary,
-                stdout_log=stdout_log,
-                stderr_log=stderr_log,
-                worker_id=worker_id,
-                worker_ip=worker_ip,
-                worker_region=worker_region,
-                cost_usd=cost_usd,
-                billed_duration_seconds=billed_duration_seconds,
-                trace_id=trace_id,
-            )
-            # Deduplicate: replace existing entry from incremental checkpoint.
-            if sid in existing_ids:
-                for i, existing in enumerate(self.trace.per_sample):
-                    if existing.sample_id == sid:
-                        self.trace.per_sample[i] = trace
-                        break
-            else:
-                self.trace.per_sample.append(trace)
-                existing_ids.add(sid)
-            # Observability: record per-sample status metric (issue #132).
-            # status="ok" → 1.0, status="failed" → 0.0.  Forward the
-            # trace_id so the status metric joins the cost metric under
-            # the same per-sample trace (issue #436).
-            self._obs.record_sample_metric(
-                sid,
-                "status",
-                1.0 if status == "ok" else 0.0,
-                trace_id=trace_id,
-            )
-
-        # Accumulate campaign-level cost totals (issue #126).
-        self._accumulate_cost_summary()
+        self._sample_traces.finalize_samples()
 
     def _accumulate_cost_summary(self) -> None:
-        """Sum per-sample costs into campaign-level totals (issue #126).
-
-        Populates ``self.trace.total_cost_usd`` and
-        ``self.trace.spot_savings_usd`` from the individual
-        ``SampleTrace.cost_usd`` values.  Non-cloud executors produce
-        ``None`` costs, so both totals remain at 0.0 for local runs.
-        """
-        total = 0.0
-        for sample in self.trace.per_sample:
-            if sample.cost_usd is not None:
-                total += sample.cost_usd
-        self.trace.total_cost_usd = round(total, 6)
-        # Spot savings is the difference between on-demand and spot.
-        # The executor already uses on-demand pricing in cost_usd;
-        # spot_savings is the theoretical savings if the job ran on Spot
-        # instead. For simplicity, we estimate this as a fixed fraction
-        # (~40%) of total on-demand cost, matching the default pricing
-        # ratio ($0.05 on-demand vs $0.03 spot).
-        if total > 0:
-            savings_ratio = (
-                DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR - DEFAULT_SPOT_PRICE_PER_VCPU_HOUR
-            ) / DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR
-            self.trace.spot_savings_usd = round(total * savings_ratio, 6)
-        else:
-            self.trace.spot_savings_usd = 0.0
+        """Sum per-sample costs into campaign-level totals (issue #126)."""
+        self._sample_traces.accumulate_cost_summary()
 
     def _checkpoint_sample(self, sid: str) -> None:
-        """Write an incremental run.json checkpoint for a single sample.
+        """Write an incremental run.json checkpoint for a single sample (issue #275).
 
-        Called after each sample completes (success or failure) inside
-        the fan-out loop so SSE clients see live progress without waiting
-        for campaign end (issue #275).
-
-        The checkpoint updates only the per-sample entry for *sid* using
-        atomic write (temp file + rename).  If run.json does not exist yet
-        (campaign not started), this is a no-op.
+        Aborts the campaign after 3 consecutive checkpoint failures
+        (issue #739).
         """
-        state = self._sample_state.get(sid)
-        if state is None:
-            return
-
-        apply_ok = state.get("apply_exit_code") == 0
-        sim_ok = state.get("sim_exit_code") == 0
-        extract_ok = state.get("extract_exit_code") == 0
-        status = "ok" if apply_ok and sim_ok and extract_ok else "failed"
-
-        eplusout_sql_obj = state.get("eplusout_sql")
-        eplusout_sql = None if eplusout_sql_obj is None else str(eplusout_sql_obj)
-        error_summary_obj = state.get("error_summary")
-        error_summary = None if error_summary_obj is None else str(error_summary_obj)
-        stdout_log_obj = state.get("stdout_log")
-        stdout_log = None if stdout_log_obj is None else str(stdout_log_obj)
-        stderr_log_obj = state.get("stderr_log")
-        stderr_log = None if stderr_log_obj is None else str(stderr_log_obj)
-        worker_id_obj = state.get("worker_id")
-        worker_id = None if worker_id_obj is None else str(worker_id_obj)
-        worker_ip_obj = state.get("worker_ip")
-        worker_ip = None if worker_ip_obj is None else str(worker_ip_obj)
-        worker_region_obj = state.get("worker_region")
-        worker_region = None if worker_region_obj is None else str(worker_region_obj)
-        cost_usd_obj = state.get("cost_usd")
-        cost_usd: float | None = None if cost_usd_obj is None else float(str(cost_usd_obj))
-        billed_duration_obj = state.get("billed_duration_seconds")
-        billed_duration_seconds: float | None = (
-            None if billed_duration_obj is None else float(str(billed_duration_obj))
-        )
-
-        trace = SampleTrace(
-            sample_id=sid,
-            status=status,
-            elapsed_s=0.0,
-            apply_exit_code=int(str(state.get("apply_exit_code", 0))),
-            sim_exit_code=int(str(state.get("sim_exit_code", 0))),
-            extract_exit_code=int(str(state.get("extract_exit_code", 0))),
-            eplusout_sql=eplusout_sql,
-            error_summary=error_summary,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
-            worker_id=worker_id,
-            worker_ip=worker_ip,
-            worker_region=worker_region,
-            cost_usd=cost_usd,
-            billed_duration_seconds=billed_duration_seconds,
-            trace_id=self._trace_id_for(sid),
-        )
-        try:
-            self.trace.update_sample(trace)
-        except Exception as exc:
-            self._consecutive_checkpoint_failures += 1
-            log.warning(
-                "checkpoint failed for sample %s (consecutive failures: %d): %s",
-                sid,
-                self._consecutive_checkpoint_failures,
-                exc,
-                exc_info=True,
-            )
-            if self._consecutive_checkpoint_failures >= 3:
-                log.error(
-                    "too many consecutive checkpoint failures (%d) — aborting campaign",
-                    self._consecutive_checkpoint_failures,
-                )
-                raise
-            return
-        self._consecutive_checkpoint_failures = 0
+        self._sample_traces.checkpoint_sample(sid)
 
     def _submit_and_await_all(
         self,
@@ -1877,49 +1289,16 @@ class Campaign:
     def _compute_baseline_comparison(self, kpi_files: list[Path]) -> None:
         """Compute baseline comparison metrics and store on the run trace.
 
-        Reads the baseline sample's KPIs and computes improvement statistics
-        across all parametric samples. Populates ``self.trace.baseline_comparison``
-        (issue #64).
-
-        When no baseline is configured, this is a no-op.
+        Delegates to
+        :mod:`osimflow._campaign_baseline` (issue #1462).  No-op when
+        no baseline is configured.
         """
-        baseline_sid = self._baseline_sample_id()
-        if baseline_sid is None:
-            return
-
-        all_kpis = self._read_all_kpis(kpi_files)
-        if baseline_sid not in all_kpis:
-            log.warning(
-                "baseline sample_id=%s not found in KPI files; skipping baseline comparison",
-                baseline_sid,
-            )
-            return
-
-        baseline_kpis = all_kpis[baseline_sid]
-        comparison = self._compute_improvement_range(baseline_sid, baseline_kpis, all_kpis)
-        if comparison:
-            self.trace.baseline_comparison = comparison
-            log.info("baseline comparison: %s", comparison)
+        compute_baseline_comparison(self.cfg, self.trace, kpi_files)
 
     @staticmethod
     def _read_all_kpis(kpi_files: list[Path]) -> dict[str, dict[str, float]]:
         """Read KPI files into a {sample_id: {kpi_name: value}} mapping."""
-        all_kpis: dict[str, dict[str, float]] = {}
-        for kpi_path in kpi_files:
-            try:
-                data = json.loads(kpi_path.read_text())
-                sid = str(data.get("sample_id", kpi_path.stem.replace("kpi_", "")))
-                kpis = data.get("kpis", {})
-                numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
-                all_kpis[sid] = numeric_kpis
-            except Exception as exc:
-                log.warning(
-                    "could not read KPI file %s for baseline comparison: %s",
-                    kpi_path,
-                    exc,
-                    exc_info=True,
-                )
-        return all_kpis
+        return read_all_kpis(kpi_files)
 
     @staticmethod
     def _compute_improvement_range(
@@ -1928,132 +1307,52 @@ class Campaign:
         all_kpis: dict[str, dict[str, float]],
     ) -> dict[str, object]:
         """Compute pct improvement range for each KPI relative to baseline."""
-        comparison: dict[str, object] = {}
-        for kpi_name, baseline_val in baseline_kpis.items():
-            if baseline_val == 0:
-                continue
-            parametric_values = [
-                kpis[kpi_name]
-                for sid, kpis in all_kpis.items()
-                if sid != baseline_sid and kpi_name in kpis
-            ]
-            if not parametric_values:
-                continue
-            improvements = [(baseline_val - v) / baseline_val * 100.0 for v in parametric_values]
-            comparison[f"baseline_{kpi_name}"] = round(baseline_val, 2)
-            comparison[f"min_{kpi_name}_improvement_pct"] = round(min(improvements), 2)
-            comparison[f"max_{kpi_name}_improvement_pct"] = round(max(improvements), 2)
-        return comparison
+        return compute_improvement_range(baseline_sid, baseline_kpis, all_kpis)
 
     def _archive_sample_artifacts(self, src: Path, dst: Path, patterns: list[str]) -> None:
-        """Copy files matching *patterns* from *src* into *dst*.
+        """Copy files matching *patterns* from *src* into *dst* (delegated).
 
-        Creates *dst* (with parents) and copies each file whose name
-        matches one of the glob *patterns*.  Uses ``shutil.copy2`` so
-        timestamps are preserved (cross-substrate robustness: works on
-        local, NFS, and any substrate that exposes a POSIX filesystem).
-
-        This is a private DRY helper called from the archive-aware step
-        methods when ``cfg.archive_intermediates`` is ``True``.
+        Uses ``shutil.copy2`` so timestamps are preserved; called from
+        the archive-aware step methods when ``cfg.archive_intermediates``
+        is ``True``.
         """
-        dst.mkdir(parents=True, exist_ok=True)
-        for pattern in patterns:
-            for f in src.glob(pattern):
-                if f.is_file():
-                    shutil.copy2(f, dst / f.name)
-                    log.debug("archived %s -> %s", f, dst / f.name)
+        CampaignArtifactWriter.archive_sample_artifacts(src, dst, patterns)
 
     def _baseline_sample_id(self) -> str | None:
         """Return the baseline sample_id from config, or None."""
-        if self.cfg.baseline is None:
-            return None
-        return str(self.cfg.baseline.get("sample_id", "baseline"))
+        return _baseline_sid_from_cfg(self.cfg)
 
     # ------------------------------------------------------------------
-    # EPW file helpers (issue #55)
+    # EPW file helpers (issue #55 → #1462: logic lives in
+    # CampaignEpwResolver; thin delegators below).
     # ------------------------------------------------------------------
     def _load_variable_defs(self) -> list[dict[str, Any]]:
-        """Load variable definitions from ``cfg.input_variables`` (variables.yml).
-
-        Returns the raw ``variables`` list so the Campaign can inspect
-        ``target`` and ``mapping`` metadata that the LHS generator does
-        not propagate to the sample dicts.
-        """
-        try:
-            raw: Any = yaml.safe_load(self.cfg.input_variables.read_text())
-        except Exception as exc:
-            log.error("Failed to load variables.yml: %s", exc)
-            raise
-        if not isinstance(raw, dict):
-            return []
-        variables: Any = raw.get("variables", [])
-        if not isinstance(variables, list):
-            return []
-        return variables
+        """Load variable definitions from ``cfg.input_variables`` (variables.yml)."""
+        return self._epw.load_variable_defs()
 
     @staticmethod
     def _collect_epw_mappings(
         variable_defs: list[dict[str, Any]],
     ) -> list[tuple[str, dict[str, Any]]]:
         """Collect (variable_name, mapping_dict) for all epw_file targets."""
-        result: list[tuple[str, dict[str, Any]]] = []
-        for var in variable_defs:
-            if var.get("target") != "epw_file":
-                continue
-            mapping = var.get("mapping")
-            if mapping and isinstance(mapping, dict):
-                result.append((var["name"], mapping))
-        return result
+        return CampaignEpwResolver.collect_epw_mappings(variable_defs)
 
     def _preflight_validate_epw_files(self, variable_defs: list[dict[str, Any]]) -> None:
         """Pre-flight check: verify all mapped .epw files exist and are valid.
-
-        For every variable with ``target: epw_file`` and a ``mapping``
-        dict, verify each mapped value is a file that exists inside
-        the ``template_sim_package`` directory.  Fail fast with a
-        clear error message listing every missing file.
-
-        Additionally, validates the EPW format of each referenced file
-        (header line starts with ``LOCATION``) so that malformed weather
-        files are caught before any simulations start (issue #63).
-
-        After validating the explicitly-referenced files, also validates
-        all ``.epw`` files found in the ``weather/`` subdirectory of the
-        template package (configurable via ``cfg.weather_dir``).
 
         Raises:
             FileNotFoundError: one or more mapped .epw files are missing.
             EPWValidationError: one or more .epw files fail format validation.
         """
-        template_dir = self.cfg.template_sim_package
-        epw_mappings = self._collect_epw_mappings(variable_defs)
+        self._epw.preflight_validate_epw_files(variable_defs)
 
-        # Phase 1: check existence of all mapped .epw files.
-        self._check_epw_existence(epw_mappings, template_dir)
-
-        # Phase 2: validate EPW format for all referenced + discovered files.
-        self._check_epw_format(epw_mappings, template_dir)
-
-    @staticmethod
     def _check_epw_existence(
+        self,
         epw_mappings: list[tuple[str, dict[str, Any]]],
         template_dir: Path,
     ) -> None:
         """Raise FileNotFoundError if any mapped .epw file is missing."""
-        missing: list[str] = []
-        for var_name, mapping in epw_mappings:
-            for cat_value, epw_rel_path in mapping.items():
-                epw_abs = template_dir / str(epw_rel_path)
-                if not epw_abs.is_file():
-                    missing.append(
-                        f"  variable={var_name!r} value={cat_value!r} -> {epw_abs} (missing)"
-                    )
-        if missing:
-            raise FileNotFoundError(
-                "PRE-FLIGHT EPW VALIDATION FAILED: the following mapped "
-                ".epw files were not found in template_sim_package="
-                f"{template_dir}:\n" + "\n".join(missing)
-            )
+        CampaignEpwResolver._check_epw_existence(epw_mappings, template_dir)
 
     def _check_epw_format(
         self,
@@ -2061,26 +1360,7 @@ class Campaign:
         template_dir: Path,
     ) -> None:
         """Raise EPWValidationError if any .epw file has invalid format."""
-        format_errors: list[str] = []
-        for _var_name, mapping in epw_mappings:
-            for _cat_value, epw_rel_path in mapping.items():
-                epw_abs = template_dir / str(epw_rel_path)
-                try:
-                    validate_epw(epw_abs)
-                except EPWValidationError as exc:
-                    format_errors.append(f"  {exc}")
-
-        # Also validate all EPW files in the weather subdirectory (issue #63).
-        try:
-            validate_all_epw_files(template_dir, self.cfg.weather_dir)
-        except EPWValidationError as exc:
-            format_errors.append(f"  {exc}")
-
-        if format_errors:
-            raise EPWValidationError(
-                "PRE-FLIGHT EPW FORMAT VALIDATION FAILED: the following "
-                ".epw files have invalid format:\n" + "\n".join(format_errors)
-            )
+        self._epw._check_epw_format(epw_mappings, template_dir)
 
     def _resolve_epw_targets(
         self,
@@ -2092,62 +1372,20 @@ class Campaign:
 
         For each variable with ``target: epw_file``, look up the
         parameter value in the variable's ``mapping`` dict and inject
-        the resolved .epw path under :data:`EPW_FILE_KEY`
-        (``"__epw_file__"``) into a copy of *params*.
-
-        Categorical variables produce structured dicts (``{"label": ...,
-        "index": ...}``); this method extracts the ``label`` for
-        mapping lookups so the downstream resolution works transparently.
-
-        If no ``epw_file`` targets exist, returns *params* unchanged.
+        the resolved .epw path under ``__epw_file__`` into a copy of
+        *params*.  A per-sample ``weather_file`` override (GAP-009)
+        takes precedence.
 
         Raises:
             ValueError: a parameter value is not in the variable's mapping.
         """
-        # GAP-009: per-sample weather_file override takes precedence over
-        # campaign-level epw_file target resolution.
-        if weather_file_override:
-            resolved = dict(params)
-            resolved[EPW_FILE_KEY] = str(weather_file_override)
-            log.debug(
-                "resolved epw_file (GAP-009 override): %s",
-                weather_file_override,
-            )
-            return resolved
-
-        epw_vars = [v for v in variable_defs if v.get("target") == "epw_file"]
-        if not epw_vars:
-            return params
-        resolved = dict(params)
-        for var in epw_vars:
-            name = var["name"]
-            mapping = var.get("mapping", {})
-            raw_value = params.get(name)
-            if raw_value is None:
-                continue
-            # Categorical variables produce structured dicts; extract the label.
-            if isinstance(raw_value, dict) and "label" in raw_value:
-                value = raw_value["label"]
-            else:
-                value = raw_value
-            epw_path = mapping.get(value)
-            if epw_path is None:
-                raise ValueError(
-                    f"Parameter {name!r} has value {value!r} which is "
-                    f"not in the epw_file mapping. Available keys: "
-                    f"{sorted(mapping.keys())}"
-                )
-            resolved[EPW_FILE_KEY] = str(epw_path)
-            log.debug(
-                "resolved epw_file: %s=%s -> %s",
-                name,
-                value,
-                epw_path,
-            )
-        return resolved
+        return self._epw.resolve_epw_targets(
+            params, variable_defs, weather_file_override=weather_file_override
+        )
 
     # ------------------------------------------------------------------
-    # Shell hooks (issue #108)
+    # Shell hooks (issue #108 → #1462: logic lives in
+    # osimflow._campaign_hooks; thin delegators below).
     # ------------------------------------------------------------------
     def _run_init_script(self) -> None:
         """Run the init script before the first campaign step.
@@ -2155,102 +1393,26 @@ class Campaign:
         Raises ``subprocess.CalledProcessError`` if the script exits
         non-zero, which aborts the campaign.
         """
-        script = self.cfg.init_script
-        if script is None:
-            return
-        if not script.is_file():
-            raise FileNotFoundError(f"Init script not found: {script!r}")
-        env = self._hook_env()
-        log.info("running init script: %s", script)
-        t0 = time.time()
-        result = subprocess.run(  # noqa: S603
-            [str(script)],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        elapsed = time.time() - t0
-        self.trace.init_script_duration_s = elapsed
-        if result.stdout:
-            for line in result.stdout.splitlines():
-                log.info("init-script stdout: %s", line)
-        if result.stderr:
-            for line in result.stderr.splitlines():
-                log.info("init-script stderr: %s", line)
-        log.info("init script completed in %.2fs", elapsed)
+        run_init_script(self.cfg, self.trace, self.executor.name)
 
     def _run_finalize_script(self, status: str, duration_s: float) -> None:
         """Run the finalize script after the last campaign step.
 
         Best-effort: a non-zero exit code is logged but does NOT raise.
         """
-        script = self.cfg.finalize_script
-        if script is None:
-            return
-        if not script.is_file():
-            log.warning("finalize script not found: %s — skipping", script)
-            return
-        env = self._hook_env()
-        env["OSIMFLOW_STATUS"] = status
-        env["OSIMFLOW_DURATION_S"] = f"{duration_s:.2f}"
-        log.info("running finalize script: %s", script)
-        t0 = time.time()
-        try:
-            result = subprocess.run(  # noqa: S603
-                [str(script)],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            elapsed = time.time() - t0
-            self.trace.finalize_script_duration_s = elapsed
-            if result.stdout:
-                for line in result.stdout.splitlines():
-                    log.info("finalize-script stdout: %s", line)
-            if result.stderr:
-                for line in result.stderr.splitlines():
-                    log.info("finalize-script stderr: %s", line)
-            if result.returncode != 0:
-                log.warning(
-                    "finalize script exited %d (best-effort — continuing)",
-                    result.returncode,
-                )
-            else:
-                log.info("finalize script completed in %.2fs", elapsed)
-        except Exception as exc:
-            elapsed = time.time() - t0
-            self.trace.finalize_script_duration_s = elapsed
-            log.warning("finalize script error: %s (best-effort — continuing)", exc, exc_info=True)
+        run_finalize_script(self.cfg, self.trace, self.executor.name, status, duration_s)
 
     def _hook_env(self) -> dict[str, str]:
         """Build the environment dict for hook scripts."""
-        base = dict(os.environ)
-        base["OSIMFLOW_OUTDIR"] = str(self.cfg.outdir)
-        base["OSIMFLOW_N_SAMPLES"] = str(self.cfg.n_samples)
-        base["OSIMFLOW_EXECUTOR"] = self.executor.name
-        base["OSIMFLOW_ALGORITHM"] = self.cfg.algorithm
-        if self.cfg.shard_count is not None and self.cfg.shard_index is not None:
-            base["OSIMFLOW_SHARD_COUNT"] = str(self.cfg.shard_count)
-            base["OSIMFLOW_SHARD_INDEX"] = str(self.cfg.shard_index)
-        if self.cfg.shard_start is not None and self.cfg.shard_end is not None:
-            base["OSIMFLOW_SHARD_START"] = str(self.cfg.shard_start)
-            base["OSIMFLOW_SHARD_END"] = str(self.cfg.shard_end)
-        return base
+        return _build_hook_env(self.cfg, self.executor.name)
 
     def _shard_label(self) -> str | None:
-        if self.cfg.shard_count is not None and self.cfg.shard_index is not None:
-            return f"part-{self.cfg.shard_index}-of-{self.cfg.shard_count}"
-        if self.cfg.shard_start is not None and self.cfg.shard_end is not None:
-            return f"range-{self.cfg.shard_start}-{self.cfg.shard_end}"
-        return None
+        """Return the shard label for this campaign (delegates to CampaignSharding)."""
+        return self._sharding.label()
 
     def _samples_manifest_path(self) -> Path:
-        label = self._shard_label()
-        if label is None:
-            return self.cfg.samples_file
-        return self.cfg.work_dir / f"samples.{label}.json"
+        """Return the shard-aware samples-manifest path (delegates to CampaignSharding)."""
+        return self._sharding.samples_manifest_path()
 
     def _apply_sharding(
         self,
@@ -2258,34 +1420,8 @@ class Campaign:
         *,
         generation: int,
     ) -> list[SampleSpec]:
-        """Return only samples assigned to this shard (if sharding configured)."""
-        if self.cfg.shard_count is not None and self.cfg.shard_index is not None:
-            shard_count = self.cfg.shard_count
-            shard_index = self.cfg.shard_index
-            selected = [s for idx, s in enumerate(samples) if idx % shard_count == shard_index]
-            log.info(
-                "sharding(partition): generation=%d selected %d/%d samples (index=%d count=%d)",
-                generation,
-                len(selected),
-                len(samples),
-                shard_index,
-                shard_count,
-            )
-            return selected
-        if self.cfg.shard_start is not None and self.cfg.shard_end is not None:
-            start = self.cfg.shard_start
-            end = self.cfg.shard_end
-            selected = samples[start:end]
-            log.info(
-                "sharding(range): generation=%d selected %d/%d samples (start=%d end=%d)",
-                generation,
-                len(selected),
-                len(samples),
-                start,
-                end,
-            )
-            return selected
-        return samples
+        """Return only samples assigned to this shard (delegates to CampaignSharding)."""
+        return self._sharding.apply_sharding(samples, generation=generation)
 
     def _fanout_submit_chunk_size(self, total: int) -> int:
         """Compute bounded chunk size for fan-out submission.
@@ -2304,191 +1440,25 @@ class Campaign:
         return self.executor.fanout_submit_interval_s()
 
     # ------------------------------------------------------------------
-    # Manifest writers (issue #277)
+    # Manifest writers (issue #277 → #1462: logic lives in
+    # CampaignArtifactWriter; thin delegators below).
     # ------------------------------------------------------------------
     def _write_campaign_meta(self) -> None:
-        """Write ``campaign_meta.json`` to outdir at campaign start.
-
-        Captures the campaign configuration in a queryable JSON form so
-        downstream tools (dashboards, comparators, auditors) can inspect
-        a campaign without parsing CLI args or run.json.
-
-        The file is overwritten on each run so re-runs produce the
-        latest configuration snapshot.
-        """
-        # Build input_variables summary from variables.yml.
-        variable_summary: list[dict[str, object]] = []
-        try:
-            raw: Any = yaml.safe_load(self.cfg.input_variables.read_text())
-            if isinstance(raw, dict):
-                for var in raw.get("variables", []):
-                    if isinstance(var, dict) and "name" in var:
-                        entry: dict[str, object] = {
-                            "name": var["name"],
-                            "distribution": var.get("distribution", "unknown"),
-                        }
-                        for key in ("min", "max", "mean", "sigma", "mode", "steps"):
-                            if key in var:
-                                entry[key] = var[key]
-                        variable_summary.append(entry)
-        except Exception as exc:
-            log.warning("could not parse variables.yml for campaign_meta: %s", exc, exc_info=True)
-
-        meta: dict[str, object] = {
-            "campaign_id": self.trace.campaign_id,
-            "algorithm": self.cfg.algorithm,
-            "n_samples": self.cfg.n_samples,
-            "shard": {
-                "count": self.cfg.shard_count,
-                "index": self.cfg.shard_index,
-                "start": self.cfg.shard_start,
-                "end": self.cfg.shard_end,
-                "label": self._shard_label(),
-            },
-            "openstudio_version": self.cfg.openstudio_version,
-            "executor_type": self.executor.name,
-            "input_variables": {
-                "path": str(self.cfg.input_variables),
-                "variables": variable_summary,
-            },
-            "template_sim_package": str(self.cfg.template_sim_package),
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "osimflow_version": _osimflow_version(),
-        }
-        out_path = self.cfg.outdir / "campaign_meta.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(meta, indent=2, default=str))
-        log.info("wrote campaign metadata to %s", out_path)
+        """Write ``campaign_meta.json`` to outdir at campaign start."""
+        self._artifacts.write_campaign_meta(self.executor.name, self._shard_label())
 
     def _write_provenance(self) -> None:
-        """Write ``provenance.json`` to outdir at campaign completion.
-
-        Captures the full sampling details, code hashes used for cache
-        invalidation, and runtime environment information for
-        reproducibility auditing.
-        """
-        # Read samples.json if it exists for seed/algorithm details.
-        sampling_details: dict[str, object] = {
-            "algorithm": self.cfg.algorithm,
-            "n_samples": self.cfg.n_samples,
-            "max_generations": self.cfg.max_generations,
-        }
-        samples_file = self._latest_samples_file
-        if samples_file.exists():
-            try:
-                samples_data = json.loads(samples_file.read_text())
-                # Capture the sample IDs so provenance is self-describing.
-                sampling_details["sample_ids"] = [
-                    s.get("sample_id", f"unknown_{i}")
-                    for i, s in enumerate(samples_data.get("samples", []))
-                ]
-                sampling_details["n_actual_samples"] = len(samples_data.get("samples", []))
-            except Exception as exc:
-                log.warning("could not read samples.json for provenance: %s", exc, exc_info=True)
-
-        provenance: dict[str, object] = {
-            "campaign_id": self.trace.campaign_id,
-            "sampling": sampling_details,
-            "shard": {
-                "count": self.cfg.shard_count,
-                "index": self.cfg.shard_index,
-                "start": self.cfg.shard_start,
-                "end": self.cfg.shard_end,
-                "label": self._shard_label(),
-                "samples_file": str(samples_file),
-            },
-            "code_hashes": self.code_hashes,
-            "environment": {
-                "osimflow_version": _osimflow_version(),
-                "python_version": platform.python_version(),
-                "platform": platform.platform(),
-                "python_implementation": platform.python_implementation(),
-            },
-            "cache_stats": self.cache.stats(),
-            "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        }
-        out_path = self.cfg.outdir / "provenance.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        safe_json_dumps(provenance, out_path, default=str, indent=2)
-        log.info("wrote provenance to %s", out_path)
+        """Write ``provenance.json`` to outdir at campaign completion."""
+        self._artifacts.write_provenance(
+            code_hashes=self.code_hashes,
+            cache_stats=self.cache.stats(),
+            latest_samples_file=self._latest_samples_file,
+            shard_label=self._shard_label(),
+        )
 
     def _write_artifact_manifest(self) -> None:
-        """Write ``artifact_manifest.json`` to outdir after aggregation.
-
-        Scans the outdir for all output files and records their paths,
-        sizes, and SHA-256 checksums grouped by category (results, plots,
-        logs, intermediates).
-        """
-        artifacts: list[dict[str, object]] = []
-
-        # Maps (path_prefix, is_prefix_match) -> category for common cases.
-        prefix_map = {
-            "plots": "plots",
-            "work/sim": "intermediates",
-            "work/apply": "intermediates",
-        }
-        ext_map = {
-            ".png": "plots",
-            ".pdf": "plots",
-            ".svg": "plots",
-            ".csv": "results",
-            ".parquet": "results",
-            ".log": "logs",
-            ".sqlite": "cache",
-        }
-
-        def _categorise(path: Path) -> str:
-            """Assign a category based on file location/extension."""
-            rel = str(path.relative_to(self.cfg.outdir))
-            # Check prefix-based categories first.
-            for prefix, cat in prefix_map.items():
-                if rel.startswith(prefix):
-                    return cat
-            # Check extension-based categories.
-            suffix = path.suffix
-            if suffix in ext_map:
-                return ext_map[suffix]
-            # JSON files: distinguish by name.
-            if suffix == ".json":
-                if "run.json" in rel:
-                    return "logs"
-                if any(x in rel for x in ("campaign_meta", "provenance", "artifact_manifest")):
-                    return "metadata"
-                return "results"
-            return "other"
-
-        for f in sorted(self.cfg.outdir.rglob("*")):
-            if not f.is_file():
-                continue
-            try:
-                rel_path = str(f.relative_to(self.cfg.outdir))
-            except ValueError:
-                continue  # skip files outside outdir
-            category = _categorise(f)
-            # Compute checksum for files that are not the manifest itself.
-            sha256 = (
-                hashlib.sha256(f.read_bytes()).hexdigest()
-                if "artifact_manifest" not in rel_path
-                else ""
-            )
-            artifacts.append(
-                {
-                    "path": rel_path,
-                    "size_bytes": f.stat().st_size,
-                    "checksum_sha256": sha256,
-                    "category": category,
-                }
-            )
-
-        manifest: dict[str, object] = {
-            "campaign_id": self.trace.campaign_id,
-            "artifacts": artifacts,
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        }
-        out_path = self.cfg.outdir / "artifact_manifest.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        safe_json_dumps(manifest, out_path, default=str, indent=2)
-        log.info("wrote artifact manifest to %s (%d files)", out_path, len(artifacts))
+        """Write ``artifact_manifest.json`` to outdir after aggregation."""
+        self._artifacts.write_artifact_manifest()
 
     # ------------------------------------------------------------------
     # Registry helpers (issue #266)
@@ -2527,155 +1497,64 @@ class Campaign:
             log.warning("failed to update campaign status in registry: %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------
-    # Graceful shutdown (issue #255)
+    # Graceful shutdown (issue #255 → #1462: logic lives in
+    # CampaignLifecycle; these are thin delegating wrappers so the
+    # instance API — including test seams that patch
+    # ``_check_cancel_requested`` — is unchanged).
     # ------------------------------------------------------------------
+    @property
+    def _cancel_requested(self) -> bool:
+        """Sticky cancellation flag (owned by CampaignLifecycle)."""
+        return self._lifecycle.cancel_requested
+
     def request_cancel(self) -> None:
         """Request campaign cancellation.
 
         Called by the signal handler or by external code that wants to
         stop a running campaign. Thread-safe. Idempotent.
         """
-        with self._cancel_lock:
-            self._cancel_requested = True
-        log.warning("campaign cancellation requested")
+        self._lifecycle.request_cancel()
 
     def _check_cancel_requested(self) -> bool:
         """Check if cancellation has been requested.
 
         Checks both the in-memory flag and the ``.stop`` file in the
-        outdir. The ``.stop`` file is written by the REST API's
-        ``POST /api/v1/campaign/stop`` endpoint (issue #143) and by
-        external tooling that wants to interrupt a running campaign.
-
-        Returns:
-            ``True`` if cancellation is requested, ``False`` otherwise.
+        outdir (written by the REST API's stop endpoint or external
+        tooling); the ``.stop`` poll is flock-protected (issue #649).
         """
-        # Fast path: check the in-memory flag first (no file I/O).
-        with self._cancel_lock:
-            if self._cancel_requested:
-                return True
-
-        # Check the .stop file with cross-process file locking to close the
-        # TOCTOU race window (issue #649). Using fcntl.flock() ensures that
-        # between checking "does .stop file exist" and acting on that check,
-        # no other process can interfere (on POSIX systems).
-        stop_file = self.cfg.outdir / ".stop"
-        try:
-            # Open existing file (fail if it doesn't exist; we don't create it).
-            # O_NOFOLLOW prevents symlink attacks.
-            fd = os.open(str(stop_file), os.O_RDWR | os.O_NOFOLLOW)
-        except OSError:
-            # File does not exist or is not accessible — no cancel requested.
-            return False
-
-        try:
-            if sys.platform == "win32":
-                # On Windows, msvcrt.locking does not support exclusive locks.
-                # Fall back to a simple existence check inside the open fd.
-                # The advisory locking on Windows is less robust than POSIX
-                # flock, so we rely on the atomic rename from the API server
-                # for safety.
-                file_exists = True
-            else:
-                try:
-                    # Acquire exclusive lock (non-blocking). If we get it, we're
-                    # the sole accessor and can safely check the file state.
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    file_exists = stop_file.is_file()
-                except BlockingIOError:
-                    # Another process holds a conflicting lock — we cannot
-                    # safely read the file state. Treat as cancel requested
-                    # (conservative: better to cancel when we shouldn't than
-                    # to miss a cancel request).
-                    file_exists = True
-            try:
-                if file_exists:
-                    log.warning(".stop file detected — requesting cancellation")
-                    with self._cancel_lock:
-                        self._cancel_requested = True
-                    return True
-            finally:
-                if sys.platform != "win32":
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-        return False
+        return self._lifecycle.check_cancel_requested(self.cfg.outdir)
 
     def _check_pause_requested(self) -> bool:
         """Check if pause has been requested via the ``.pause`` file.
 
-        The ``.pause`` file is written by the REST API's
-        ``POST /api/v1/campaign/pause`` endpoint (issue #553) or by the
-        CLI ``osimflow pause`` command.
-
-        Unlike the cancelled flag, the pause flag is NOT latched — we
-        check the file existence on every call so that deleting the
-        ``.pause`` file immediately unblocks new submissions (issue #798).
-
-        Returns:
-            ``True`` if pause is requested, ``False`` otherwise.
+        The pause flag is NOT latched — deleting the ``.pause`` file
+        immediately unblocks new submissions (issue #798).
         """
-        pause_file = self.cfg.outdir / ".pause"
-        if pause_file.is_file():
-            log.warning(".pause file detected — pausing new submissions")
-            return True
-        return False
+        return self._lifecycle.check_pause_requested(self.cfg.outdir)
 
     def _setup_signal_handlers(self) -> None:
-        """Register SIGINT/SIGTERM handlers to request graceful shutdown.
-
-        Saves the previous handlers so they can be restored on exit.
-        When a signal is received, ``request_cancel()`` is called.
-        """
-        self._prev_sigint = signal.signal(signal.SIGINT, self._handle_signal)
-        self._prev_sigterm = signal.signal(signal.SIGTERM, self._handle_signal)
-        log.debug("signal handlers registered (SIGINT/SIGTERM)")
+        """Register SIGINT/SIGTERM handlers to request graceful shutdown."""
+        self._lifecycle.setup_signal_handlers()
 
     @staticmethod
     def _handle_signal(signum: int, _frame: object) -> None:
-        """Signal handler that requests cancellation on the Campaign instance.
-
-        Uses a global registry so the signal can reach the running Campaign
-        even though the signal callback only receives (signum, frame).
-        """
-        sig_name = signal.Signals(signum).name
-        log.warning("received %s — requesting cancellation", sig_name)
-        _cancel_registry.request_cancel()
+        """Signal handler that requests cancellation on the registered Campaign."""
+        handle_signal(signum, _frame)
 
     def _restore_signal_handlers(self) -> None:
         """Restore the previous signal handlers."""
-        if self._prev_sigint is not None:
-            signal.signal(signal.SIGINT, self._prev_sigint)
-        if self._prev_sigterm is not None:
-            signal.signal(signal.SIGTERM, self._prev_sigterm)
-        log.debug("signal handlers restored")
+        self._lifecycle.restore_signal_handlers()
 
     def _cancel_active_jobs(self) -> None:
-        """Cancel all active futures submitted to the executor.
-
-        Called during graceful shutdown to stop in-flight work as quickly
-        as possible. The executor's ``cancel()`` method is called on
-        each active handle; handles that were already completing are
-        given a short grace period to finish.
-        """
-        log.info("canceling active executor jobs")
-        self.executor.cancel()
-        log.info("executor cancel requested")
+        """Cancel all active futures submitted to the executor."""
+        self._lifecycle.cancel_active_jobs(self.executor)
 
     def _write_shutdown_trace(self, status: str = "cancelled") -> None:
-        """Write run.json with cancellation status before exit.
-
-        Marks the campaign as cancelled so a re-run can resume correctly.
-        """
-        try:
-            self.trace.status = status
-            self.trace.write(self.cfg.outdir / "run.json")
-            log.info("wrote cancellation trace to run.json")
-        except Exception as exc:
-            log.warning("could not write cancellation trace: %s", exc, exc_info=True)
+        """Write run.json with cancellation status before exit."""
+        self._lifecycle.write_shutdown_trace(self.trace, self.cfg.outdir, status)
 
     # ------------------------------------------------------------------
-    # Soft pause / resume (issue #553)
+    # Soft pause / resume (issue #553 → #1462: delegated)
     # ------------------------------------------------------------------
 
     def pause(self) -> None:
@@ -2688,12 +1567,7 @@ class Campaign:
 
         Thread-safe and idempotent.
         """
-        pause_file = self.cfg.outdir / ".pause"
-        safe_json_dumps({"requested_at": time.time()}, pause_file)
-        self.trace.status = "paused"
-        self.trace.paused_at = time.time()
-        self.trace.write(self.cfg.outdir / "run.json")
-        log.warning("campaign pause requested (paused_at=%.0f)", self.trace.paused_at)
+        self._lifecycle.pause(self.cfg.outdir, self.trace)
 
     def resume(self) -> None:
         """Resume a paused campaign.
@@ -2705,31 +1579,11 @@ class Campaign:
 
         Thread-safe and idempotent.
         """
-        pause_file = self.cfg.outdir / ".pause"
-        if pause_file.is_file():
-            pause_file.unlink()
-        with self._pause_lock:
-            self._pause_requested = False
-        self.trace.status = "running"
-        self.trace.paused_at = None
-        self.trace.write(self.cfg.outdir / "run.json")
-        log.warning("campaign resume requested")
+        self._lifecycle.resume(self.cfg.outdir, self.trace)
 
     def _write_paused_trace(self) -> None:
-        """Write run.json with paused status when a soft-pause is triggered.
-
-        Sets ``trace.status = "paused"`` and records the ``paused_at``
-        timestamp so a subsequent resume can continue from where the
-        campaign left off.
-        """
-        try:
-            self.trace.status = "paused"
-            self.trace.paused_at = time.time()
-            self.cfg.outdir.mkdir(parents=True, exist_ok=True)
-            self.trace.write(self.cfg.outdir / "run.json")
-            log.info("wrote paused trace to run.json (paused_at=%.0f)", self.trace.paused_at)
-        except Exception as exc:
-            log.warning("could not write paused trace: %s", exc, exc_info=True)
+        """Write run.json with paused status when a soft-pause is triggered."""
+        self._lifecycle.write_paused_trace(self.trace, self.cfg.outdir)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -2771,8 +1625,7 @@ class Campaign:
 
         # Reset pause flag so a paused campaign can be re-run without
         # restarting (issue #798).
-        with self._pause_lock:
-            self._pause_requested = False
+        self._lifecycle.reset_pause()
 
         # Wire chaos_schedule to RunTrace (issue #1309).
         chaos_cfg_obj = getattr(self.cfg, "chaos", None)
@@ -3627,118 +2480,27 @@ class Campaign:
     ) -> None:
         """Opt-in chaos fault injection (issue #1013).
 
-        Called from ``_run_one_generation`` before/after each DAG step
-        and from the per-sample fan-out loops. No-op unless the
-        campaign has an active ``ChaosEngine`` and the configured
-        ``cfg.chaos.schedule`` matches *when*. The schedule string
-        is intentionally single-valued so a campaign either fires
-        on step boundaries, on per-sample boundaries, or never —
-        combining schedules is not supported in this iteration.
-
-        Failures inside the engine never propagate: every injector
-        is wrapped in its own try/except in
-        :meth:`ChaosEngine.inject`, and we wrap the call here for
-        defence in depth so a buggy user-supplied ``chaos_engine``
-        cannot break the campaign.
-
-        Parameters
-        ----------
-        step_name
-            The DAG step the fault is being attached to. Used both
-            for logging and for the ``step`` field of the recorded
-            invocation.
-        when
-            One of ``"before_step"``, ``"after_step"``, or
-            ``"per_sample"``. Other values are silently ignored.
-        target_id
-            Identifier of the injection target — typically the
-            sample ID for ``per_sample`` injections and the step
-            name for step-boundary injections. Defaults to
-            ``step_name`` so callers don't have to invent an ID.
+        Delegates to :meth:`CampaignChaosWiring.maybe_inject`
+        (issue #1462).  No-op unless the campaign has an active
+        ``ChaosEngine`` and the configured ``cfg.chaos.schedule``
+        matches *when* (``"before_step"`` / ``"after_step"`` /
+        ``"per_sample"``); engine failures never propagate.  Invocations
+        are recorded under ``run.json.chaos_invocations``.
         """
-        engine = self._chaos_engine
-        if engine is None or not engine.enabled:
-            return
-        chaos_cfg = getattr(self.cfg, "chaos", None)
-        schedule = getattr(chaos_cfg, "schedule", "none")
-        if schedule == "none" or schedule != when:
-            return
-        tid = target_id if target_id is not None else step_name
-        try:
-            results = engine.inject(tid)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "chaos inject failed for %s/%s: %s (continuing)",
-                step_name,
-                tid,
-                exc,
-                exc_info=True,
-            )
-            return
-        if results:
-            self.trace.record_chaos_invocation(
-                step=step_name,
-                when=when,
-                target_id=tid,
-                results=results,
-            )
-            log.info(
-                "chaos: %s @ %s target=%s injected=%d",
-                step_name,
-                when,
-                tid,
-                sum(1 for r in results if r.injected),
-            )
+        self._chaos.maybe_inject(step_name, when, self.trace, target_id=target_id)
 
     def _maybe_archive_inputs(self) -> None:
         """Archive campaign inputs when ``cfg.archive_intermediates`` is set."""
-        if not self.cfg.archive_intermediates:
-            return
-        inputs_archive = self.cfg.outdir / "archive" / "inputs"
-        inputs_archive.mkdir(parents=True, exist_ok=True)
-        pkg_dst = inputs_archive / self.cfg.template_sim_package.name
-        if pkg_dst.exists():
-            shutil.rmtree(pkg_dst)
-        shutil.copytree(self.cfg.template_sim_package, pkg_dst)
-        log.info("archived template_sim_package -> %s", pkg_dst)
-        shutil.copy2(self.cfg.input_variables, inputs_archive / self.cfg.input_variables.name)
-        log.info("archived input_variables -> %s", inputs_archive / self.cfg.input_variables.name)
+        self._artifacts.maybe_archive_inputs()
 
     def _maybe_fire_webhook(self, campaign_status: str, elapsed_s: float) -> None:
         """Fire a webhook callback if ``cfg.webhook_url`` is configured (issue #283).
 
         Best-effort: delivery failures are logged but do not propagate.
-        The webhook is sent after the GENERATE_BASIC_PLOTS step, in the
-        ``finally`` block of ``run()``, so it fires regardless of success
-        or failure — ``campaign_status`` will be ``"success"``,
-        ``"failure"``, or ``"cancelled"``.
+        Fired from the ``finally`` block of ``run()`` regardless of the
+        campaign outcome.
         """
-        if not self.cfg.webhook_url:
-            return
-
-        n_succeeded = sum(1 for s in self.trace.per_sample if s.status == "ok")
-        n_failed = sum(1 for s in self.trace.per_sample if s.status == "failed")
-
-        client = WebhookClient(url=self.cfg.webhook_url)
-        payload = client.build_payload(
-            campaign_id=self.trace.campaign_id,
-            status=campaign_status,
-            elapsed_s=elapsed_s,
-            n_samples=self.cfg.n_samples,
-            n_succeeded=n_succeeded,
-            n_failed=n_failed,
-            total_cost_usd=self.trace.total_cost_usd if self.trace.total_cost_usd > 0 else None,
-            outdir=str(self.cfg.outdir),
-        )
-
-        log.info("firing webhook to %s (status=%s)", self.cfg.webhook_url, campaign_status)
-        ok = client.deliver(payload)
-        if not ok:
-            log.warning(
-                "webhook delivery to %s failed (campaign_status=%s)",
-                self.cfg.webhook_url,
-                campaign_status,
-            )
+        maybe_fire_webhook(self.cfg, self.trace, campaign_status, elapsed_s)
 
     # ------------------------------------------------------------------
     # Steps
