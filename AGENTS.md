@@ -344,7 +344,7 @@ name in this section.
 - `osimflow/__init__.py` — public API surface (`__all__`).
 - `osimflow/__main__.py` — `argparse` CLI entry point (`osimflow run ...`).
 - `osimflow/campaign.py` — `Campaign` orchestrator + `CampaignError` +
-  `QuotaExceededError` + the 7-step DAG.
+  `CampaignAbortError` + `QuotaExceededError` + the 7-step DAG.
 - `osimflow/config.py` — `CampaignConfig` + per-executor config
   dataclasses (`LocalConfig`, `SlurmConfig`, `AWSBatchConfig`,
   `AzureBatchConfig`, `GoogleBatchConfig`, `NomadConfig`,
@@ -457,11 +457,12 @@ name in this section.
 - `osimflow/_campaign_baseline.py` — baseline KPI comparison
   (issue #64) extracted from `Campaign` (issue #1462).
 - `osimflow/_campaign_sample_trace.py` —
-  `CampaignSampleTraceRecorder`: per-sample `SampleTrace` assembly,
-  per-sample trace-ID minting (issue #436), campaign cost-total
-  accumulation (issue #126), and incremental checkpointing with the
-  consecutive-failure abort (issue #739), extracted from `Campaign`
-  (issue #1462).
+  `CampaignSampleTraceRecorder` + `CampaignAbortError`: per-sample
+  `SampleTrace` assembly, per-sample trace-ID minting (issue #436),
+  campaign cost-total accumulation (issue #126), and incremental
+  checkpointing with the consecutive-failure abort (issue #739;
+  `CampaignAbortError` crosses the concurrent fan-out thread
+  boundary — issue #1539), extracted from `Campaign` (issue #1462).
 - `osimflow/logging.py` — `JSONFormatter` + `RotatingFileHandler`
   + `get_logger`, `setup_logging`, `LogAggregator`.
 - `osimflow/registry.py` — `CampaignRegistry` + `CampaignRecord`

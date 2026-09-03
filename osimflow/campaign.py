@@ -34,7 +34,7 @@ single `run.json` trace to `${outdir}/run.json` at completion. The trace
 includes per-step timing, per-sample status, and cache hit/miss counts.
 """
 
-__all__ = ["Campaign", "CampaignError", "QuotaExceededError", "SimResult"]
+__all__ = ["Campaign", "CampaignAbortError", "CampaignError", "QuotaExceededError", "SimResult"]
 
 import concurrent.futures
 import contextlib
@@ -91,7 +91,7 @@ from ._campaign_lifecycle import (
 )
 from ._campaign_observability import ObservabilityManager
 from ._campaign_quota import CampaignQuotaGuard, QuotaExceededError
-from ._campaign_sample_trace import CampaignSampleTraceRecorder
+from ._campaign_sample_trace import CampaignAbortError, CampaignSampleTraceRecorder
 from ._campaign_sharding import CampaignSharding
 from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
@@ -170,6 +170,12 @@ CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 # ``__all__``) so the public import paths
 # ``osimflow.campaign.QuotaExceededError`` /
 # ``osimflow.QuotaExceededError`` are unchanged.
+#
+# NOTE (issue #1539): ``CampaignAbortError`` is defined in
+# ``osimflow._campaign_sample_trace`` (raised by the 3-strike
+# checkpoint-failure abort, issue #739) and re-exported here the same
+# way, so ``osimflow.campaign.CampaignAbortError`` /
+# ``osimflow.CampaignAbortError`` are public import paths.
 
 
 class CampaignError(OSimFlowRuntimeError):
@@ -1046,8 +1052,9 @@ class Campaign:
     def _checkpoint_sample(self, sid: str) -> None:
         """Write an incremental run.json checkpoint for a single sample (issue #275).
 
-        Aborts the campaign after 3 consecutive checkpoint failures
-        (issue #739).
+        Aborts the campaign after 3 consecutive checkpoint failures by
+        raising :class:`CampaignAbortError` (issue #739; propagation
+        through the concurrent fan-out fixed in issue #1539).
         """
         self._sample_traces.checkpoint_sample(sid)
 
@@ -1089,7 +1096,11 @@ class Campaign:
         are collected in parallel (bounded by
         ``resource_quota.max_concurrent_samples`` when set — issue #1009).
         Each per-sample error is caught, logged with ``exc_info=True``,
-        and recorded — it is never swallowed.
+        and recorded — it is never swallowed. The one exception is
+        :class:`CampaignAbortError` (3-strike checkpoint-failure abort,
+        issue #739/#1539): it is re-raised from the ``as_completed``
+        loop so the abort crosses the worker-thread boundary in
+        concurrent mode instead of being silently swallowed.
 
         For ``max_workers=1`` the behaviour is identical to the old
         sequential loop.
@@ -1235,6 +1246,32 @@ class Campaign:
         # concurrently.  Each _await_one call blocks on handle.result(),
         # so the pool parallelism effectively controls how many samples
         # we wait for at the same time.
+        def _drain_future(future: concurrent.futures.Future[str]) -> None:
+            """Collect one completed fan-out future (issue #1539).
+
+            A CampaignAbortError raised inside an _await_one worker
+            thread (3-strike checkpoint-failure abort, issue #739 /
+            #1539) must cross the thread boundary: re-raise it so the
+            campaign aborts instead of silently completing while its
+            monitoring plane cannot persist run.json. Cancel
+            not-yet-started futures so no new samples are awaited.
+            """
+            try:
+                future.result()
+            except CampaignAbortError:
+                log.error(
+                    "%s fan-out aborted after consecutive checkpoint failures",
+                    step_name,
+                )
+                for f in futures:
+                    f.cancel()
+                raise
+            # CancelledError is a BaseException (not Exception), so we must
+            # suppress it explicitly here — it is raised when a future was
+            # cancelled via f.cancel() during a cancellation sweep.
+            except (Exception, concurrent.futures.CancelledError):
+                pass
+
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._effective_max_workers(),
             thread_name_prefix="osimflow-fanout",
@@ -1255,11 +1292,7 @@ class Campaign:
                     self._write_paused_trace()
                     log.warning("pause requested during %s — breaking fan-out", step_name)
                     break
-                # CancelledError is a BaseException (not Exception), so we must
-                # suppress it explicitly here — it is raised when a future was
-                # cancelled via f.cancel() during a cancellation sweep.
-                with contextlib.suppress(Exception, concurrent.futures.CancelledError):
-                    future.result()
+                _drain_future(future)
 
     def _record_costs(self, step_name: str, cost_usd: float, spot_savings_usd: float) -> None:
         """Record per-step aggregated costs from the completed fan-out.

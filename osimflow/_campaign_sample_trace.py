@@ -11,16 +11,34 @@ etc. are direct test seams).
 """
 
 import logging
+import threading
 
 from ._campaign_observability import ObservabilityManager
 from .cost_tracking import (
     DEFAULT_ON_DEMAND_PRICE_PER_VCPU_HOUR,
     DEFAULT_SPOT_PRICE_PER_VCPU_HOUR,
 )
+from .errors import OSimFlowRuntimeError
 from .monitoring import RunTrace, SampleTrace
 from .observability import new_trace_id
 
 log = logging.getLogger("osimflow.campaign")
+
+
+class CampaignAbortError(OSimFlowRuntimeError):
+    """Raised when the campaign must abort for a non-step-level reason.
+
+    Currently raised by :meth:`CampaignSampleTraceRecorder.checkpoint_sample`
+    after 3 consecutive ``run.json`` checkpoint failures (issue #739). Unlike
+    per-sample errors (caught and recorded), this error must abort the whole
+    campaign: the monitoring plane is failing to persist state, so continuing
+    would silently lose results — the exact scenario #739 was filed against.
+
+    The dedicated type (issue #1539) lets the concurrent fan-out loop in
+    ``Campaign._submit_and_await_all`` distinguish the abort from ordinary
+    per-sample failures and re-raise it across the worker-thread boundary
+    instead of swallowing it.
+    """
 
 
 class CampaignSampleTraceRecorder:
@@ -37,7 +55,11 @@ class CampaignSampleTraceRecorder:
         self._obs = obs
         # Consecutive checkpoint failure counter (issue #739). After N
         # consecutive failures in checkpoint_sample we abort instead of
-        # silently continuing.
+        # silently continuing. Guarded by a lock: in concurrent fan-out
+        # mode (max_workers > 1) several worker threads checkpoint at
+        # once, and a lost increment would delay the abort past 3
+        # failures (issue #1539).
+        self._checkpoint_lock = threading.Lock()
         self.consecutive_checkpoint_failures = 0
 
     def trace_id_for(self, sample_id: str) -> str:
@@ -133,6 +155,10 @@ class CampaignSampleTraceRecorder:
         The checkpoint updates only the per-sample entry for *sid* using
         atomic write (temp file + rename).  If run.json does not exist yet
         (campaign not started), this is a no-op.
+
+        Raises :class:`CampaignAbortError` after 3 consecutive checkpoint
+        failures (issue #739); the counter resets to 0 on any successful
+        checkpoint (issue #1539 tests).
         """
         state = self._sample_state.get(sid)
         if state is None:
@@ -145,22 +171,32 @@ class CampaignSampleTraceRecorder:
         try:
             self._trace.update_sample(trace)
         except Exception as exc:
-            self.consecutive_checkpoint_failures += 1
+            with self._checkpoint_lock:
+                self.consecutive_checkpoint_failures += 1
+                failures = self.consecutive_checkpoint_failures
             log.warning(
                 "checkpoint failed for sample %s (consecutive failures: %d): %s",
                 sid,
-                self.consecutive_checkpoint_failures,
+                failures,
                 exc,
                 exc_info=True,
             )
-            if self.consecutive_checkpoint_failures >= 3:
+            if failures >= 3:
                 log.error(
                     "too many consecutive checkpoint failures (%d) — aborting campaign",
-                    self.consecutive_checkpoint_failures,
+                    failures,
                 )
-                raise
+                # Wrap in CampaignAbortError (issue #1539) so the
+                # concurrent fan-out loop can distinguish this abort
+                # from ordinary per-sample failures and re-raise it
+                # across the worker-thread boundary. The original
+                # write failure stays chained as __cause__.
+                raise CampaignAbortError(
+                    f"aborting after {failures} consecutive checkpoint failures (last error: {exc})"
+                ) from exc
             return
-        self.consecutive_checkpoint_failures = 0
+        with self._checkpoint_lock:
+            self.consecutive_checkpoint_failures = 0
 
     def _build_sample_trace(
         self,
