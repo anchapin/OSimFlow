@@ -1201,12 +1201,16 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--byos-timeout-s",
         type=float,
-        default=600.0,
+        default=None,
         help=(
             "Wall-clock timeout in seconds for the BYOS subprocess and the "
-            "real OpenStudio CLI simulation subprocess (issue #1109). A wedged "
-            "subprocess is killed and the sample fails instead of hanging the "
-            "campaign forever. Raise this for large models on slow hardware."
+            "real OpenStudio CLI simulation subprocess (issue #1109). When "
+            "set, a wedged subprocess is killed and the sample fails "
+            "instead of hanging the campaign forever; a timeout kill is "
+            "non-transient and is not retried (issue #1534). Default: no "
+            "timeout (effectively unbounded) because annual EnergyPlus "
+            "simulations routinely exceed 10 minutes — bound long runs via "
+            "the executor's walltime instead, or set this explicitly."
         ),
     )
     run.add_argument(

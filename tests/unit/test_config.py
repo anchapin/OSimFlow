@@ -219,8 +219,9 @@ class TestLoadConfig:
         assert cfg.n_samples == 10
         assert cfg.outdir == outdir.resolve()
         assert cfg.openstudio_version == "3.11.0"
-        # Issue #1109: default BYOS/sim subprocess timeout is 600s.
-        assert cfg.byos_timeout_s == 600.0
+        # Issue #1534: default BYOS/sim subprocess timeout is effectively
+        # unbounded — annual EnergyPlus runs routinely exceed 600 s.
+        assert cfg.byos_timeout_s is None
 
     def test_byos_timeout_s_configurable(
         self, variables_yml: Path, template_pkg: Path, outdir: Path

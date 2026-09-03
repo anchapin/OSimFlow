@@ -598,7 +598,7 @@ def _run_byos_subprocess(
     args: tuple[object, ...],
     kwargs: dict[str, object] | None = None,
     resource_limits: dict[str, int] | None = None,
-    timeout_s: float = 600.0,
+    timeout_s: float | None = None,
 ) -> Path:
     """Run a BYOS function in an isolated subprocess.
 
@@ -678,8 +678,11 @@ def _run_byos_subprocess(
         except subprocess.TimeoutExpired as exc:
             proc.kill()
             proc.communicate()
+            # Unreachable when timeout_s is None (communicate blocks
+            # indefinitely); the branch only fires for an explicit bound.
+            timeout_desc = f"{timeout_s:g}s" if timeout_s is not None else "the bound"
             raise RuntimeError(
-                f"BYOS subprocess timed out after {timeout_s:g}s: script={script_path} "
+                f"BYOS subprocess timed out after {timeout_desc}: script={script_path} "
                 f"function={function_name}"
             ) from exc
     finally:
@@ -701,7 +704,7 @@ def load_user_function(
     *,
     trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS,
     resource_limits: dict[str, int] | None = None,
-    timeout_s: float = 600.0,
+    timeout_s: float | None = None,
     audit_logger: AuditLogger | None = None,
 ) -> Callable[..., Any]:
     """Import a user ``.py`` file and return a callable that respects the trust level.

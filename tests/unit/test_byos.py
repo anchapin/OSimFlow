@@ -317,8 +317,12 @@ class TestSubprocessIsolation:
         with pytest.raises(RuntimeError, match=r"timed out after 0\.5s"):
             func(str(user_scripts), {}, "0001", str(user_scripts / "out"))
 
-    def test_subprocess_default_timeout_is_600(self, user_scripts: Path) -> None:
-        """Default timeout_s is 600s (backwards compatible with the old hardcode)."""
+    def test_subprocess_default_timeout_is_unbounded(self, user_scripts: Path) -> None:
+        """Default timeout_s is None (effectively unbounded, issue #1534).
+
+        The old 600 s stock default killed legitimate long simulations;
+        callers who want a bound must pass ``timeout_s`` explicitly.
+        """
         path = _write_script(
             user_scripts,
             "sub_fast.py",
@@ -328,7 +332,7 @@ class TestSubprocessIsolation:
         )
         func = load_user_function(path, trust_level=ByosTrustLevel.SUBPROCESS)
         wrapper_attrs = getattr(func, "_byos_timeout_s", None)
-        assert wrapper_attrs == 600.0
+        assert wrapper_attrs is None
 
     def test_warning_logged_on_load(
         self, user_scripts: Path, caplog: pytest.LogCaptureFixture
