@@ -81,6 +81,7 @@ from ._campaign_hooks import (
 )
 from ._campaign_lifecycle import (
     CampaignLifecycle,
+    CampaignPauseRequested,
     handle_signal,
 )
 from ._campaign_lifecycle import (
@@ -1236,7 +1237,11 @@ class Campaign:
                 # Soft pause (issue #553): running samples complete, new ones are skipped.
                 if self._check_pause_requested():
                     self._write_paused_trace()
-                    raise KeyboardInterrupt("pause requested during fan-out")
+                    # Dedicated pause signal (issue #1537): run()'s
+                    # KeyboardInterrupt handler maps to *cancellation*;
+                    # pause must keep status "paused" so `osimflow
+                    # resume` can continue the campaign.
+                    raise CampaignPauseRequested("pause requested during fan-out")
                 _await_one(item)
             if self._cancel_requested:
                 raise KeyboardInterrupt("cancellation requested during fan-out")
@@ -1732,9 +1737,43 @@ class Campaign:
             # If cancellation was detected in _finalize_full_campaign,
             # self.trace.status will be "cancelled" — propagate that to
             # campaign_status so the caller sees the correct final state.
-            campaign_status = "cancelled" if self.trace.status == "cancelled" else "success"
+            # A "paused" trace (pause raced in after the last pause check)
+            # is likewise preserved, never flipped to "success" (issue #1537).
+            if self.trace.status == "cancelled":
+                campaign_status = "cancelled"
+            elif self.trace.status == "paused":
+                campaign_status = "paused"
+            else:
+                campaign_status = "success"
             self.trace.status = campaign_status
             return result
+        except CampaignPauseRequested:
+            # Soft pause (issue #553 / #1537): NOT a cancellation.
+            # - trace.status stays "paused" (set by _write_paused_trace at
+            #   the raise site; re-written here defensively so the on-disk
+            #   run.json reflects the paused state even if an in-flight
+            #   checkpoint raced the unwind).
+            # - finished_at is NOT set: pause is non-terminal and the
+            #   campaign may be resumed.
+            # - active jobs are NOT cancelled: running samples complete
+            #   normally per the documented pause semantics.
+            # - registry / webhook / finalize hook receive "paused" via
+            #   campaign_status in the finally block.
+            campaign_status = "paused"
+            log.warning("campaign paused — resume with 'osimflow resume'")
+            self._write_paused_trace()
+            # Do NOT re-raise — pause has been handled; the finally block
+            # will run and the campaign exits in the paused state.
+            return {
+                "samples": [],
+                "kpis": [],
+                "aggregated": {"csv": None, "failed": None},
+                "plots": [],
+                "elapsed_s": time.time() - t0,
+                "run_json": self.cfg.outdir / "run.json",
+                "status": "paused",
+                "trace": self.trace,
+            }
         except KeyboardInterrupt:
             campaign_status = "cancelled"
             log.warning("campaign cancelled by user or signal")
@@ -2465,6 +2504,14 @@ class Campaign:
                 "elapsed_s": time.time() - t0,
                 "run_json": self.cfg.outdir / "run.json",
             }
+        # Soft pause (issue #1537): if pause was detected during the last
+        # fan-out (the concurrent path breaks without raising) or lands
+        # between the fan-out and aggregation, finalize as paused — NOT as
+        # success — so `osimflow resume` can continue from cache replay.
+        if self._check_pause_requested():
+            log.warning("pause requested before aggregation — writing paused trace")
+            self._write_paused_trace()
+            raise CampaignPauseRequested("pause requested before AGGREGATE_RESULTS")
         aggregated: dict[str, Path] = self.step_aggregate_results(
             all_kpi_files, last_simulated, baseline_sample_id=self._baseline_sample_id()
         )
@@ -2868,7 +2915,7 @@ class Campaign:
         # Soft pause (issue #553): skip this step entirely if pause was requested.
         if self._check_pause_requested():
             self._write_paused_trace()
-            raise KeyboardInterrupt("pause requested before APPLY_PARAMETERS")
+            raise CampaignPauseRequested("pause requested before APPLY_PARAMETERS")
 
         # Load variable definitions from variables.yml for epw_file
         # target resolution and pre-flight validation (issue #55).
@@ -3128,7 +3175,7 @@ class Campaign:
         # Soft pause (issue #553): skip this step entirely if pause was requested.
         if self._check_pause_requested():
             self._write_paused_trace()
-            raise KeyboardInterrupt("pause requested before RUN_OPENSTUDIO_SIM")
+            raise CampaignPauseRequested("pause requested before RUN_OPENSTUDIO_SIM")
 
         out: SampleDict = {}
         os_version = self.cfg.openstudio_version
@@ -3518,7 +3565,7 @@ class Campaign:
         # Soft pause (issue #553): skip this step entirely if pause was requested.
         if self._check_pause_requested():
             self._write_paused_trace()
-            raise KeyboardInterrupt("pause requested before EXTRACT_KPIS")
+            raise CampaignPauseRequested("pause requested before EXTRACT_KPIS")
 
         out: list[Path] = []
         n = len(simulated)

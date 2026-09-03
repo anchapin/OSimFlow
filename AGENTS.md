@@ -438,10 +438,14 @@ name in this section.
   `_transitive_import_closure` are re-exported from
   `osimflow.campaign`.
 - `osimflow/_campaign_lifecycle.py` — `CampaignLifecycle` +
-  `CancelRegistry` / `cancel_registry` singleton + `handle_signal`:
-  cancellation (sticky flag + flock-protected `.stop` polling),
-  soft pause/resume, SIGINT/SIGTERM handler bookkeeping extracted
-  from `Campaign` (issue #1462). `_CancelRegistry` /
+  `CancelRegistry` / `cancel_registry` singleton + `handle_signal` +
+  `CampaignPauseRequested` (issue #1537 — the dedicated soft-pause
+  control-flow signal, distinct from `KeyboardInterrupt`-driven
+  cancellation; keeps `run.json` status `paused` with no
+  `finished_at` and no job cancellation so `osimflow resume`
+  works): cancellation (sticky flag + flock-protected `.stop`
+  polling), soft pause/resume, SIGINT/SIGTERM handler bookkeeping
+  extracted from `Campaign` (issue #1462). `_CancelRegistry` /
   `_cancel_registry` are re-exported from `osimflow.campaign`.
 - `osimflow/_campaign_artifacts.py` — `CampaignArtifactWriter`:
   `campaign_meta.json` / `provenance.json` /
