@@ -341,6 +341,47 @@ def test_docs_sync_flag_check_accepts_known_and_foreign(
     assert not errors
 
 
+def test_docs_sync_user_guide_flag_coverage() -> None:
+    """Issue #1547: the user-guide coverage check must flag every --flag
+    registered in osimflow/__main__.py that docs/user-guide.md does not
+    mention (inline doc or pointer-link), while passing flags the guide
+    covers. Exemptions must suppress the error."""
+    mod = _load_docs_sync_module()
+    main_src = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
+    flags = mod._collect_main_cli_flags(main_src)
+    assert "--uq-method" in flags
+    assert "--redis-url" in flags
+
+    guide = "Use `--uq-method`; `--redis-url` → distributed-cache.md.\n"
+    errors = mod._check_user_guide_flag_coverage(flags, guide)
+    assert any("--nsga2-reference-points" in e for e in errors)
+    assert not any("--uq-method" in e for e in errors)
+    assert not any("--redis-url" in e for e in errors)
+
+    mod.USER_GUIDE_FLAG_EXEMPTIONS["--nsga2-reference-points"] = "test exemption"
+    try:
+        errors = mod._check_user_guide_flag_coverage(flags, guide)
+        assert not any("--nsga2-reference-points" in e for e in errors)
+    finally:
+        del mod.USER_GUIDE_FLAG_EXEMPTIONS["--nsga2-reference-points"]
+
+
+def test_docs_sync_user_guide_subcommand_coverage() -> None:
+    """Issue #1547: every add_parser subcommand must be mentioned in the
+    user guide as an `osimflow <name>` invocation; missing ones fail."""
+    mod = _load_docs_sync_module()
+    main_src = (REPO_ROOT / "osimflow" / "__main__.py").read_text()
+    subs = mod._collect_main_subcommands(main_src)
+    assert {"run", "cancel", "pause", "resume", "warm-cache"} <= subs
+
+    guide = "`osimflow run` and `osimflow warm-cache` are documented.\n"
+    errors = mod._check_user_guide_subcommand_coverage(subs, guide)
+    assert any("`cancel`" in e for e in errors)
+    assert any("`pause`" in e for e in errors)
+    assert not any("`run`" in e for e in errors)
+    assert not any("`warm-cache`" in e for e in errors)
+
+
 def test_agents_md_testing_section_mentions_ci_workflow() -> None:
     """Issue #8 acceptance criterion: AGENTS.md Testing section must mention
     the CI workflow file so contributors know where the green/red signal
