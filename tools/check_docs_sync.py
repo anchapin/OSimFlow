@@ -19,6 +19,14 @@ the specialist guide that covers it), and every registered subcommand
 must be mentioned in the user guide — mirroring how the AGENTS.md
 contract checker keeps AGENTS.md complete.
 
+Issue #1560: every user-facing markdown page under ``docs/`` (relative
+to ``docs/``) must be discoverable from the user guide's Documentation
+Index (currently §11.1) — either via a markdown link in that section or
+by being explicitly listed in ``INDEX_EXEMPT_DOCS`` below (gap-analysis,
+internal traces, the user guide itself, …). The check extracts the
+``### Documentation Index`` section from ``docs/user-guide.md`` and
+errors when it sees a ``docs/<x>.md`` that isn't reachable from there.
+
 A file can opt out with a `<!-- docs-skip -->` HTML comment.
 
 Run locally:
@@ -208,6 +216,34 @@ USER_GUIDE_SUBCOMMAND_EXEMPTIONS: dict[str, str] = {}
 USER_GUIDE_REL_PATH = Path("docs") / "user-guide.md"
 MAIN_MODULE_REL_PATH = Path("osimflow") / "__main__.py"
 EXECUTOR_CONFIGS_REL_DIR = Path("osimflow") / "executor_configs"
+
+# ---------------------------------------------------------------------------
+# Documentation-Index coverage (issue #1560)
+# ---------------------------------------------------------------------------
+
+# Every user-facing ``docs/**/*.md`` page must be discoverable from
+# ``docs/user-guide.md`` §11.1 (Documentation Index) — i.e. referenced
+# via a markdown link from that section. Internal project artefacts
+# (gap analyses against competitor projects, internal traces,
+# settings-as-code notes, the user guide itself, …) are listed here as
+# the explicit exempt set; every entry needs a ``reason`` string. To
+# add a new file under ``docs/``, either link it from the index or
+# justify an addition here.
+INDEX_EXEMPT_DOCS: dict[str, str] = {
+    "user-guide.md": "the user guide itself — the index is a subsection of this file",
+    "gap-analysis-summary.md": (
+        "internal gap analysis vs. openstudio-server — synthesized report, not a "
+        "user-facing runbook; superseded by docs/migration-openstudio-server.md"
+    ),
+    "gap-analysis-oss-replacement.md": (
+        "internal gap analysis vs. openstudio-server — multi-agent audit report, "
+        "project-internal artefact, not a user-facing runbook"
+    ),
+    "trace-openstudio-server-helm-chart-lhs-1000-samples.md": (
+        "internal execution trace of a competitor's helm chart — informational, "
+        "not a user-facing guide"
+    ),
+}
 
 # Matches the subcommand name at the start of an add_parser( chunk.
 _ADD_PARSER_NAME_AT_START_RE = re.compile(r'\s*"([a-z][a-z0-9-]*)"')
@@ -442,6 +478,98 @@ def _check_file(md: Path, known_flags: set[str]) -> tuple[list[tuple[Path, str]]
     return errors, True
 
 
+def _extract_user_guide_index_section(guide_text: str) -> str:
+    """Return the body of the ``### Documentation Index`` subsection of
+    ``docs/user-guide.md``. The section ends at the next same-or-higher
+    level markdown heading (``##`` / ``#``) or at EOF, whichever comes
+    first. We deliberately use a string-based slice here so the rule is
+    independent of the existing CLI-coverage regex set above.
+    """
+    lines = guide_text.splitlines(keepends=False)
+    in_section = False
+    start = end = None
+    for i, line in enumerate(lines):
+        if not in_section:
+            if line.strip() == "### Documentation Index":
+                in_section = True
+                start = i + 1
+            continue
+        # End at any same-or-higher heading (## or #) — `###` sub-subsections
+        # are part of the index itself.
+        if line.startswith("## "):
+            end = i
+            break
+        if line.startswith("# ") and not line.startswith("## "):
+            end = i
+            break
+    if in_section and end is None:
+        end = len(lines)
+    if start is None or end is None:
+        return ""
+    return "\n".join(lines[start:end])
+
+
+def _collect_index_targets(section_text: str) -> set[str]:
+    """Normalize ``[label](target.md)`` and ``[label](target.md#anchor)``
+    link targets found inside the Documentation Index section into a set
+    of paths relative to ``docs/``. ``./foo.md``, ``foo.md``, and
+    ``subdir/foo.md`` all normalize to ``foo.md`` / ``subdir/foo.md``;
+    empty targets and HTTP(S) URLs are skipped. ``../foo.md`` from
+    inside ``docs/user-guide.md`` resolves to repo-root files and is
+    reported as such for cross-checking (currently only
+    ``user_scripts/README.md``).
+    """
+    if not section_text:
+        return set()
+    targets: set[str] = set()
+    for m in MARKDOWN_LINK_RE.finditer(section_text):
+        target = m.group(1).split("#", 1)[0]
+        if not target:
+            continue
+        if target.startswith(("http://", "https://", "mailto:", "ftp://")):
+            continue
+        # Normalize leading "./"; user-guide is `docs/user-guide.md` so
+        # bare `foo.md` and `subdir/foo.md` are already `docs/`-relative.
+        clean = target.lstrip("./")
+        targets.add(clean)
+    return targets
+
+
+def _check_user_guide_index_coverage(all_docs: list[Path], section_text: str) -> list[str]:
+    """Issue #1560: every ``docs/**/*.md`` page must be discoverable from
+    the user guide's Documentation Index section, either as a markdown
+    link target (``[label](file.md)``) or as a member of
+    ``INDEX_EXEMPT_DOCS`` (internal artefacts: gap analyses,
+    traces, etc.). The check walks ``all_docs`` (relative to
+    ``docs/``) and reports anything missing from both sets.
+    """
+    errors: list[str] = []
+    if not section_text:
+        return [
+            "Documentation Index section not found in user-guide.md — "
+            "add a `### Documentation Index` heading (issue #1560)."
+        ]
+    referenced = _collect_index_targets(section_text)
+    missing: list[str] = []
+    for md in all_docs:
+        rel = md.relative_to(DOCS_DIR).as_posix()
+        if rel in INDEX_EXEMPT_DOCS:
+            continue
+        if rel in referenced:
+            continue
+        missing.append(rel)
+    if not missing:
+        return errors
+    errors.append(
+        f"{len(missing)} docs/* page(s) are not linked from user-guide.md's "
+        f"Documentation Index section (issue #1560). Add a markdown link "
+        f"for each (e.g. `[Tutorial: Getting Started](tutorials/getting-started.md)`), "
+        f"or justify an addition to INDEX_EXEMPT_DOCS in tools/check_docs_sync.py:\n  - "
+        + "\n  - ".join(sorted(missing))
+    )
+    return errors
+
+
 def main() -> int:
     if not DOCS_DIR.is_dir():
         print(f"ERROR: {DOCS_DIR} not found", file=sys.stderr)
@@ -451,7 +579,9 @@ def main() -> int:
     files_checked = 0
     known_flags = _collect_known_cli_flags()
 
-    for md in sorted(DOCS_DIR.rglob("*.md")):
+    all_docs: list[Path] = sorted(DOCS_DIR.rglob("*.md"))
+
+    for md in all_docs:
         file_errors, checked = _check_file(md, known_flags)
         if checked:
             files_checked += 1
@@ -461,16 +591,29 @@ def main() -> int:
     # subcommand must be covered by docs/user-guide.md.
     user_guide = REPO_ROOT / USER_GUIDE_REL_PATH
     main_module = REPO_ROOT / MAIN_MODULE_REL_PATH
+    index_summary = ""
     coverage_summary = ""
+    if user_guide.is_file():
+        guide_text = user_guide.read_text()
+        index_section = _extract_user_guide_index_section(guide_text)
+        rel_guide = user_guide.relative_to(REPO_ROOT)
+        # Documentation-Index coverage (issue #1560): every docs/*.md
+        # page must be linkable from §11.1 or listed in INDEX_EXEMPT_DOCS.
+        for err in _check_user_guide_index_coverage(all_docs, index_section):
+            errors.append((rel_guide, err))
+        if index_section:
+            index_summary = (
+                f"; doc-index coverage: "
+                f"{len(_collect_index_targets(index_section))} linked, "
+                f"{len(INDEX_EXEMPT_DOCS)} exempt"
+            )
     if user_guide.is_file() and main_module.is_file():
         main_src = main_module.read_text()
-        guide_text = user_guide.read_text()
         # Issue #1575: executor flags moved from __main__.py into the
         # per-executor add_arguments hooks — union both surfaces so
         # user-guide coverage keeps requiring every CLI flag.
         main_flags = _collect_main_cli_flags(main_src) | _collect_executor_hook_cli_flags()
         subcommands = _collect_main_subcommands(main_src)
-        rel_guide = user_guide.relative_to(REPO_ROOT)
         for err in _check_user_guide_flag_coverage(main_flags, guide_text):
             errors.append((rel_guide, err))
         for err in _check_user_guide_subcommand_coverage(subcommands, guide_text):
@@ -490,7 +633,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"docs/ sync check OK ({files_checked} files checked{coverage_summary})")
+    print(f"docs/ sync check OK ({files_checked} files checked{coverage_summary}{index_summary})")
     return 0
 
 
