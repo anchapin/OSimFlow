@@ -9,7 +9,6 @@ organised into four categories.
 tests/
 ├── README.md                  (this file)
 ├── __init__.py
-├── test_preflight.py          # pre-flight validation smoke test
 ├── unit/                     # unit tests — isolated components
 │   ├── fixtures/             # minimal .osm + .osw + variables for unit tests
 │   ├── conftest.py
@@ -29,6 +28,10 @@ tests/
 The `example_package/` directory at the project root (sibling to `tests/`)
 holds the canonical tiny template (`.osm`, `.osw`, `variables.yml`) used by
 integration and benchmark tests.
+
+`tests/unit/test_preflight_step.py` covers the `PREFLIGHT_RUN_MODEL` step,
+`--skip-preflight`, `SevereEnergyPlusError`, the preflight cache-key, and the
+`_extract_severe_error` helper (issue #1572).
 
 ## Conventions
 
