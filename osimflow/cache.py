@@ -37,6 +37,7 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
+from ._sqlite_store import connect as _store_connect
 from .errors import OSimFlowError
 
 __all__ = [
@@ -387,25 +388,15 @@ class SQLiteCache:
         conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
-        # WAL + this PRAGMA combination is the SQLite-recommended set
-        # for a database shared across multiple processes (issue #620):
-        #   * journal_mode=WAL    — readers never block the writer and
-        #                           the writer never blocks readers.
-        #   * synchronous=NORMAL  — safe with WAL (much faster than FULL)
-        #                           and durable across OS crashes.
-        #   * busy_timeout=5000   — writers wait up to 5s for a lock
-        #                           held by a peer process instead of
-        #                           raising ``database is locked``.
-        #   * locking_mode=NORMAL — the default, stated explicitly so a
-        #                           future edit can never silently flip
-        #                           to EXCLUSIVE and starve peer workers.
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA busy_timeout=5000")
-        c.execute("PRAGMA locking_mode=NORMAL")
-        #   * cache_size=-65536    — 64 MiB negative-paged cache working set
-        #                           for multi-GB caches (issue #1016).
+        # Issue #1564: shared SQLite access primitive — WAL, busy_timeout,
+        # synchronous=NORMAL, locking_mode=NORMAL, check_same_thread=False,
+        # timeout=10.0, and row_factory=sqlite3.Row now live in
+        # osimflow._sqlite_store. The cache-specific PRAGMAs below (issue
+        # #1016) stay here because they are tuned for the multi-GB cache
+        # workload, not a generic connection.
+        c = _store_connect(self.db_path)
+        # Cache-specific PRAGMAs (issue #1016):
+        #   * cache_size=-65536    — 64 MiB negative-paged cache working set.
         #   * mmap_size=268435456 — 256 MiB memory-mapped I/O window so
         #                           reads beyond the page cache skip the
         #                           read() syscall path.
@@ -414,7 +405,6 @@ class SQLiteCache:
         c.execute("PRAGMA cache_size=-65536")
         c.execute("PRAGMA mmap_size=268435456")
         c.execute("PRAGMA temp_store=MEMORY")
-        c.row_factory = sqlite3.Row
         return c
 
     def _ensure_conn(self) -> sqlite3.Connection:

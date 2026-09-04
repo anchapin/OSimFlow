@@ -17,13 +17,16 @@ from __future__ import annotations
 __all__ = ["CampaignRecord", "CampaignRegistry"]
 
 import dataclasses
-import json
 import logging
 import os
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+from ._sqlite_store import connect as _store_connect
+from ._sqlite_store import decode_value as _decode_value
+from ._sqlite_store import encode_value as _encode_value
 
 log = logging.getLogger("osimflow.registry")
 
@@ -73,13 +76,8 @@ class CampaignRecord:
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> CampaignRecord:
-        metadata: dict[str, Any] = {}
-        raw_meta = row["metadata"]
-        if raw_meta:
-            try:
-                metadata = json.loads(raw_meta)
-            except (json.JSONDecodeError, TypeError):
-                metadata = {}
+        # Issue #1564: shared JSON decode helper with safe fallback.
+        metadata = _decode_value(row["metadata"], default={})
         return cls(
             id=row["id"],
             name=row["name"],
@@ -129,9 +127,14 @@ class CampaignRegistry:
         log.debug("registry opened at %s", self.db_path)
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path)
-        c.row_factory = sqlite3.Row
-        return c
+        # Issue #1564: shared SQLite access primitive — WAL, busy_timeout,
+        # synchronous=NORMAL, locking_mode=NORMAL, check_same_thread=False,
+        # timeout=10.0, and row_factory=sqlite3.Row now live in
+        # osimflow._sqlite_store. Previously this opened a bare
+        # ``sqlite3.connect`` without any PRAGMA; that left the registry
+        # vulnerable to the same "database is locked" race that issue #620
+        # fixed for the cache.
+        return _store_connect(self.db_path)
 
     def register(
         self,
@@ -153,7 +156,7 @@ class CampaignRegistry:
         If a campaign with the same id already exists, it is replaced
         (``INSERT OR REPLACE``).
         """
-        meta_json = json.dumps(metadata or {}, sort_keys=True, default=str)
+        meta_json = _encode_value(metadata or {})
         with self._conn() as c:
             c.execute(
                 """INSERT OR REPLACE INTO campaigns

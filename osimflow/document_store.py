@@ -92,6 +92,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 from urllib.parse import urlparse
 
+from ._sqlite_store import connect as _store_connect
+from ._sqlite_store import encode_value as _encode_value
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
 from .errors import OSimFlowError
 
@@ -630,18 +632,26 @@ class SQLiteDocumentStore(DocumentStore):
         log.info("document store opened at %s", db_path)
 
     def _init_db(self) -> None:
-        """Initialize the database schema."""
+        """Initialize the database schema.
+
+        Issue #1564: connection setup (WAL + busy_timeout + row_factory +
+        timeout + check_same_thread=False) now lives in
+        :func:`osimflow._sqlite_store.connect`.  ``_connect`` below is
+        kept for the subclass public ``connection`` property; it is a
+        thin alias around the shared primitive.
+        """
         conn = self._connect()
-        # Enable JSON1 extension (built into SQLite 3.38+)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
         conn.close()
 
     def _connect(self) -> sqlite3.Connection:
-        """Create a new database connection."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+        """Create a new database connection.
+
+        Issue #1564: shared SQLite access primitive — WAL, busy_timeout,
+        synchronous=NORMAL, locking_mode=NORMAL, check_same_thread=False,
+        timeout=10.0, and row_factory=sqlite3.Row now live in
+        :mod:`osimflow._sqlite_store`.
+        """
+        return _store_connect(self.db_path)
 
     def _ensure_conn(self) -> sqlite3.Connection:
         """Return the persistent connection, creating it if needed."""
@@ -726,7 +736,9 @@ class SQLiteDocumentStore(DocumentStore):
                 next_id = (row["max_id"] if row["max_id"] is not None else 0) + 1
             doc["_id"] = f"doc_{next_id}"
 
-        doc_json = json.dumps(doc, sort_keys=True, default=str)
+        # Issue #1564: shared JSON encode helper — sort_keys=True +
+        # default=str is the canonical OSimFlow encoding for documents.
+        doc_json = _encode_value(doc)
 
         with self._lock:
             c = self.connection
@@ -891,8 +903,9 @@ class SQLiteDocumentStore(DocumentStore):
         # Apply update operators
         apply_update_operators(doc, update)
 
-        # Write the updated document back
-        doc_json = json.dumps(doc, sort_keys=True, default=str)
+        # Write the updated document back.  Issue #1564: shared JSON
+        # encode helper — sort_keys=True + default=str is canonical.
+        doc_json = _encode_value(doc)
         with self._lock:
             c = self.connection
             c.execute(
@@ -1471,7 +1484,8 @@ class RedisDocumentStore(DocumentStore):
                     f"in collection {collection!r}"
                 )
 
-        doc_json = json.dumps(doc, sort_keys=True, default=str)
+        # Issue #1564: shared JSON encode helper.
+        doc_json = _encode_value(doc)
         try:
             client.hset(self._coll_key(collection), str(doc["_id"]), doc_json)
         except Exception as exc:
@@ -1664,7 +1678,8 @@ class RedisDocumentStore(DocumentStore):
                 self._claim_unique_index_slot(collection, field, value, doc_id)
             raise
 
-        doc_json = json.dumps(doc, sort_keys=True, default=str)
+        # Issue #1564: shared JSON encode helper.
+        doc_json = _encode_value(doc)
         try:
             client.hset(coll_key, target_id, doc_json)
         except Exception as exc:

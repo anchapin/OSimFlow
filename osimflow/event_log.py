@@ -31,13 +31,15 @@ CAMPAIGN_FAILED     — campaign.run() exiting with status="failed" or "cancelle
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
+from ._sqlite_store import decode_value as _decode_value
+from ._sqlite_store import encode_value as _encode_value
 
 log = logging.getLogger("osimflow.event_log")
 
@@ -86,7 +88,11 @@ class CampaignEventLog:
             "data": data,
             "trace_id": trace_id,
         }
-        line = json.dumps(entry, default=str)
+        # Issue #1564: shared JSON encode helper.  Event-log lines are
+        # append-only audit records where insertion order in ``data``
+        # carries semantic meaning, so we keep ``sort_keys=False`` (the
+        # helper's default).
+        line = _encode_value(entry, sort_keys=False)
         with self._lock:
             with open(self._path, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
@@ -283,9 +289,13 @@ def read_event_log(path: Path) -> list[dict[str, Any]]:
             stripped = raw_line.strip()
             if not stripped:
                 continue
-            try:
-                events.append(json.loads(stripped))
-            except json.JSONDecodeError:
+            # Issue #1564: shared JSON decode helper with safe fallback.
+            # Returns ``None`` on corrupt / empty lines (previously the
+            # ``json.JSONDecodeError`` was caught inline and the line was
+            # skipped — same behaviour, single helper).
+            parsed = _decode_value(stripped)
+            if parsed is None:
                 log.warning("skipped unparseable line in %s", path)
                 continue
+            events.append(parsed)
     return events
