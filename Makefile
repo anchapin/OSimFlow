@@ -59,8 +59,9 @@ typecheck: ## mypy --strict (osimflow/)
 test: ## pytest with CI flags, no coverage gate (same selection/timeouts as CI; use test-cov for the gate)
 	$(PYTEST) $(PYTEST_CI_FLAGS)
 
-test-cov: ## pytest with CI flags + 82% gate (exact CI test-job invocation — ci.yml runs this; issues #1417, #1476)
+test-cov: ## pytest with CI flags + 82% aggregate + per-module floor (exact CI test-job invocation — ci.yml runs this; issues #1417, #1476, #1571)
 	$(PYTEST) $(PYTEST_CI_FLAGS) $(PYTEST_COV_FLAGS) -q
+	$(PY) tools/check_module_coverage.py
 
 test-fast: ## pytest contract only (pre-commit mirror)
 	$(PYTEST) -o addopts="" tests/contract -x -q
