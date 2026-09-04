@@ -50,7 +50,6 @@ from osimflow.executors import (
     LocalExecutor,
     NomadExecutor,
     SlurmExecutor,
-    _AWSBatchHandle,
 )
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor, _AzureBatchHandle
 from osimflow.executors.dask_jobqueue_executor import DaskJobQueueExecutor
@@ -58,6 +57,7 @@ from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor, _GoogleBatchHandle
 from osimflow.executors.kubernetes_executor import KubernetesExecutor
 from osimflow.executors.pbs_executor import PBSExecutor
+from osimflow.testing.patch_targets import _AWSBatchHandle
 
 # The kubernetes SDK provides real ``V1ResourceRequirements`` objects, which
 # makes the resource-translation assertion strongest. Detect it up front so
@@ -633,17 +633,19 @@ _RETRY_BUILDERS: dict[str, Callable[[], Any]] = {
 @pytest.mark.parametrize(
     "executor_name,handle_cls,sleep_module",
     [
-        pytest.param("aws_batch", _AWSBatchHandle, "osimflow.executors", id="aws_batch"),
+        pytest.param(
+            "aws_batch", _AWSBatchHandle, "osimflow.testing.patch_targets", id="aws_batch"
+        ),
         pytest.param(
             "azure_batch",
             _AzureBatchHandle,
-            "osimflow.executors.azure_batch_executor",
+            "osimflow.testing.patch_targets",
             id="azure_batch",
         ),
         pytest.param(
             "google_batch",
             _GoogleBatchHandle,
-            "osimflow.executors.google_batch_executor",
+            "osimflow.testing.patch_targets",
             id="google_batch",
         ),
     ],

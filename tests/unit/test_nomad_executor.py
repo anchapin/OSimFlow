@@ -27,12 +27,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors import (
+from osimflow.executors import NomadExecutor
+from osimflow.testing.patch_targets import (
     _NOMAD_RETRY_CAP_S,
     _NOMAD_RETRY_INITIAL_DELAY_S,
     _NOMAD_RETRY_MAX_ATTEMPTS,
     _NOMAD_RETRYABLE_HTTP_CODES,
-    NomadExecutor,
     _retry_nomad_request,
 )
 
@@ -91,7 +91,7 @@ class TestRetryNomadRequest:
             call_count += 1
             return "ok"
 
-        with patch("osimflow.executors.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             result = _retry_nomad_request(_ok)
 
         assert result == "ok"
@@ -110,7 +110,7 @@ class TestRetryNomadRequest:
                 raise _make_http_error(503)
             return "blip-survived"
 
-        with patch("osimflow.executors.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             result = _retry_nomad_request(_two_blips_then_ok)
 
         assert result == "blip-survived"
@@ -130,7 +130,7 @@ class TestRetryNomadRequest:
                 raise urllib.error.URLError("[Errno -2] Name or service not known")
             return "url-survived"
 
-        with patch("osimflow.executors.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             result = _retry_nomad_request(_dns_blip_then_ok)
 
         assert result == "url-survived"
@@ -152,7 +152,7 @@ class TestRetryNomadRequest:
             return _call
 
         for code in sorted(_NOMAD_RETRYABLE_HTTP_CODES):
-            with patch("osimflow.executors.time.sleep"):
+            with patch("osimflow.testing.patch_targets.time.sleep"):
                 result = _retry_nomad_request(_first_blip_then_ok(code))
             assert result == f"survived-{code}"
 
@@ -166,7 +166,7 @@ class TestRetryNomadRequest:
             call_count += 1
             raise _make_http_error(502)
 
-        with patch("osimflow.executors.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             with pytest.raises(urllib.error.HTTPError) as exc_info:
                 _retry_nomad_request(_always_502)
 
@@ -184,7 +184,7 @@ class TestRetryNomadRequest:
             call_count += 1
             raise urllib.error.URLError("connection refused")
 
-        with patch("osimflow.executors.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             with pytest.raises(urllib.error.URLError, match="connection refused"):
                 _retry_nomad_request(_always_urlerr)
 
@@ -205,7 +205,7 @@ class TestRetryNomadRequest:
 
                 return _inner()
 
-            with patch("osimflow.executors.time.sleep") as sleep_mock:
+            with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
                 with pytest.raises(urllib.error.HTTPError) as exc_info:
                     _retry_nomad_request(_call())
             assert exc_info.value.code == code
@@ -221,7 +221,7 @@ class TestRetryNomadRequest:
             call_count += 1
             raise ValueError("not a network error")
 
-        with patch("osimflow.executors.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             with pytest.raises(ValueError, match="not a network error"):
                 _retry_nomad_request(_boom)
 
@@ -239,9 +239,9 @@ class TestRetryNomadRequest:
         def _always_502() -> str:
             raise _make_http_error(502)
 
-        with patch("osimflow.executors.time.sleep", side_effect=_capture_sleep):
+        with patch("osimflow.testing.patch_targets.time.sleep", side_effect=_capture_sleep):
             with patch(
-                "osimflow.executors.random.uniform",
+                "osimflow.testing.patch_targets.random.uniform",
                 side_effect=lambda lo, hi: hi,
             ):
                 with pytest.raises(urllib.error.HTTPError):
@@ -260,7 +260,7 @@ class TestRetryNomadRequest:
             call_count += 1
             raise _make_http_error(502)
 
-        with patch("osimflow.executors.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             with pytest.raises(urllib.error.HTTPError):
                 _retry_nomad_request(
                     _always_502,

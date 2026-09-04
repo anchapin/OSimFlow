@@ -13,7 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors import AWSBatchExecutor, _SpotPriceCache
+from osimflow.executors import AWSBatchExecutor
+from osimflow.testing.patch_targets import _SpotPriceCache
 
 
 def _make_executor(
@@ -95,7 +96,7 @@ class TestSpotInterruptionRetry:
         ex._get_client().submit_job.side_effect = submit_responses  # noqa: SLF001
         ex._get_client().describe_jobs.side_effect = describe_responses  # noqa: SLF001
 
-        with patch("osimflow.executors.time.sleep") as mock_sleep:
+        with patch("osimflow.testing.patch_targets.time.sleep") as mock_sleep:
             handle = ex.submit(lambda: None, name="test")
             handle.result()
 
@@ -124,7 +125,7 @@ class TestSpotInterruptionRetry:
         ex._get_client().submit_job.side_effect = submit_responses  # noqa: SLF001
         ex._get_client().describe_jobs.side_effect = describe_responses  # noqa: SLF001
 
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             handle = ex.submit(lambda: None, name="test")
             handle.result()
 
@@ -201,7 +202,7 @@ class TestFallbackToOnDemand:
         ex._get_client().submit_job.side_effect = submit_responses  # noqa: SLF001
         ex._get_client().describe_jobs.side_effect = describe_responses  # noqa: SLF001
 
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             handle = ex.submit(lambda: None, name="test")
             handle.result()
 
@@ -229,7 +230,7 @@ class TestMaxRetriesExhaustion:
         ex._get_client().describe_jobs.side_effect = describe_responses  # noqa: SLF001
 
         with (
-            patch("osimflow.executors.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             pytest.raises(RuntimeError, match="Spot retries exhausted"),
         ):
             handle = ex.submit(lambda: None, name="test")
@@ -300,7 +301,7 @@ class TestNoRetryWhenMaxRetriesZero:
         ex._get_client().submit_job.side_effect = submit_responses  # noqa: SLF001
         ex._get_client().describe_jobs.side_effect = describe_responses  # noqa: SLF001
 
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             handle = ex.submit(lambda: None, name="test")
             handle.result()
 

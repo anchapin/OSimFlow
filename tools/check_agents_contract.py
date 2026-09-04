@@ -13,6 +13,12 @@ walking its actions when osimflow is importable, falling back to a
 textual scan of the hook modules + osimflow/__main__.py otherwise
 (e.g. the bare-python CI contract step).
 
+Issue #1574: private (``_``-prefixed) top-level symbols in executor
+files are no longer required to be mentioned in AGENTS.md — the
+testing patch surface moved to ``osimflow.testing.patch_targets`` so
+those names are implementation details again, not load-bearing public
+API. ``_executor_public_symbols()`` below enforces the new rule.
+
 Run locally:
     python tools/check_agents_contract.py
 
@@ -25,6 +31,7 @@ Exit code 0 on success, 1 if AGENTS.md is out of sync.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -55,6 +62,55 @@ def _bin_scripts() -> list[str]:
 
 def _executor_files() -> list[str]:
     return sorted(p.name for p in (REPO_ROOT / "osimflow" / "executors").glob("*.py"))
+
+
+def _executor_public_symbols() -> list[str]:
+    """Top-level public (non-underscore-prefixed) names defined in the
+    executor files (issue #1574).
+
+    ``osimflow.executors`` deliberately used to re-export private helpers
+    (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``, ...) and even
+    ``time`` / ``random`` so tests could patch through the package
+    namespace. That made every underscore-prefixed helper load-bearing
+    public API: renaming one broke tests and required an AGENTS.md
+    mention. Issue #1574 moved the testing surface to
+    :mod:`osimflow.testing.patch_targets`; this check enforces the new
+    rule by extracting only *non-private* top-level names (``class`` /
+    ``def``) and requiring each to appear in AGENTS.md. Underscore-
+    prefixed names are skipped because they are implementation
+    details — they may be renamed freely without touching AGENTS.md.
+
+    Module-level ``log = logging.getLogger(...)`` assignments are not
+    public API and are skipped.
+    """
+    symbols: list[str] = []
+    for path in sorted((REPO_ROOT / "osimflow" / "executors").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            name: str | None = None
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = node.name
+            elif isinstance(node, ast.Assign):
+                # ``import`` / ``ImportFrom`` aliases are deliberately
+                # skipped — they re-export names already covered by the
+                # executor-files check, not new public surface.
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        cand = target.id
+                        # Standard module-logger assignment is not public API.
+                        if cand == "log":
+                            continue
+                        name = cand
+                        break
+            if name is None or name.startswith("_"):
+                continue
+            symbols.append(name)
+    return sorted(set(symbols))
 
 
 def _executor_config_files() -> list[str]:
@@ -157,6 +213,11 @@ def main() -> int:
         errors.append(f"bin script `{script}` missing from AGENTS.md")
     for ef in _check(agents_md, _executor_files(), "executor"):
         errors.append(f"executor `{ef}` missing from AGENTS.md")
+    for sym in _check(agents_md, _executor_public_symbols(), "executor public symbol"):
+        errors.append(
+            f"executor public symbol `{sym}` (top-level class/def/assign in osimflow/executors/) "
+            f"missing from AGENTS.md — private (``_``-prefixed) names are intentionally skipped (issue #1574)"
+        )
     for ecf in _check(agents_md, _executor_config_files(), "executor config module"):
         errors.append(
             f"executor config module `{ecf}` (osimflow/executor_configs/) missing from AGENTS.md"
@@ -179,12 +240,14 @@ def main() -> int:
     n_syms = len(_public_symbols())
     n_bin = len(_bin_scripts())
     n_exec = len(_executor_files())
+    n_exec_pub = len(_executor_public_symbols())
     n_exec_cfg = len(_executor_config_files())
     n_steps = len(_step_names_from_campaign())
     n_flags = len(_cli_flags())
     print(
         f"AGENTS.md contract OK ({n_syms} symbols, {n_bin} bin scripts, "
-        f"{n_exec} executors, {n_exec_cfg} executor config modules, "
+        f"{n_exec} executors, {n_exec_pub} executor public symbols, "
+        f"{n_exec_cfg} executor config modules, "
         f"{n_steps} steps, {n_flags} CLI flags)"
     )
     return 0

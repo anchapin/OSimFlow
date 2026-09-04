@@ -27,7 +27,8 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from osimflow.executors import AWSBatchExecutor, _AWSBatchHandle
+from osimflow.executors import AWSBatchExecutor
+from osimflow.testing.patch_targets import _AWSBatchHandle
 
 # ---------------------------------------------------------------------------
 # Helpers: set up the Batch mock infrastructure (VPC, compute env, job queue,

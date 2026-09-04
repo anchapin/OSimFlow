@@ -62,7 +62,7 @@ class TestBackoffCapAppliedBeforeSleep:
         def capture_sleep(duration: float) -> None:
             sleep_durations.append(duration)
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep", side_effect=capture_sleep):
+        with patch("osimflow.testing.patch_targets.time.sleep", side_effect=capture_sleep):
             task = ex._wait_for_terminal("test-job")
 
         assert task.execution_info.end_time is not None
@@ -114,9 +114,7 @@ class TestBackoffCapAppliedBeforeSleep:
         def capture_sleep(duration: float) -> None:
             sleep_durations.append(duration)
 
-        with patch(
-            "osimflow.executors.google_batch_executor.time.sleep", side_effect=capture_sleep
-        ):
+        with patch("osimflow.testing.patch_targets.time.sleep", side_effect=capture_sleep):
             job = ex._wait_for_terminal("test-job")
 
         assert job.status.state == ex._batch_v1.JobStatus.State.SUCCEEDED
@@ -151,7 +149,7 @@ class TestBackoffCapAppliedBeforeSleep:
         def capture_sleep(duration: float) -> None:
             sleep_durations.append(duration)
 
-        with patch("osimflow.executors.pbs_executor.time.sleep", side_effect=capture_sleep):
+        with patch("osimflow.testing.patch_targets.time.sleep", side_effect=capture_sleep):
             state, exit_code = ex._wait_for_terminal("12345")
 
         assert state == "F"
@@ -192,7 +190,7 @@ class TestBackoffCapAppliedBeforeSleep:
         def capture_sleep(duration: float) -> None:
             sleep_durations.append(duration)
 
-        with patch("osimflow.executors.kubernetes_executor.time.sleep", side_effect=capture_sleep):
+        with patch("osimflow.testing.patch_targets.time.sleep", side_effect=capture_sleep):
             pod = ex._wait_for_terminal("test-job")
 
         assert pod["status"]["phase"] == "Succeeded"
@@ -228,7 +226,7 @@ class TestWaitForTerminalTimeout:
         mock_task_running.execution_info.end_time = None
         ex._client.get_task.return_value = mock_task_running
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(TimeoutError, match="Timed out"):
                 ex._wait_for_terminal("test-job", timeout=0.05)
 
@@ -250,7 +248,7 @@ class TestWaitForTerminalTimeout:
         mock_job_running.status.state = ex._batch_v1.JobStatus.State.RUNNING
         ex._client.get_job.return_value = mock_job_running
 
-        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(TimeoutError, match="Timed out"):
                 ex._wait_for_terminal("test-job", timeout=0.05)
 
@@ -261,7 +259,7 @@ class TestWaitForTerminalTimeout:
         ex._query_job_state = MagicMock(return_value="R")
         ex._parse_exit_status = MagicMock(return_value=0)
 
-        with patch("osimflow.executors.pbs_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(TimeoutError, match="Timed out"):
                 ex._wait_for_terminal("12345", timeout=0.05)
 
@@ -276,7 +274,7 @@ class TestWaitForTerminalTimeout:
         pending_pod.to_dict.return_value = {"status": {"phase": "Pending"}}
         ex._client.list_namespaced_pod.return_value = MagicMock(items=[pending_pod])
 
-        with patch("osimflow.executors.kubernetes_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(TimeoutError, match="Timed out"):
                 ex._wait_for_terminal("test-job", timeout=0.05)
 
@@ -291,7 +289,7 @@ class TestWaitForTerminalTimeout:
 
         ex._get_service_status = mock_status
 
-        with patch("osimflow.executors.docker_swarm_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(TimeoutError, match="Timed out"):
                 ex._wait_for_terminal("test-service", timeout=0.05)
 
@@ -324,9 +322,7 @@ class TestWaitForTerminalTimeout:
         def capture_sleep(duration: float) -> None:
             sleep_durations.append(duration)
 
-        with patch(
-            "osimflow.executors.docker_swarm_executor.time.sleep", side_effect=capture_sleep
-        ):
+        with patch("osimflow.testing.patch_targets.time.sleep", side_effect=capture_sleep):
             task = ex._wait_for_terminal("test-service")
 
         assert task["status"]["State"] == "complete"

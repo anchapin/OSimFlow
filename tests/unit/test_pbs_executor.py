@@ -293,7 +293,7 @@ class TestPBSExecutorWaitForTerminal:
 
         with patch.object(ex, "_query_job_state", side_effect=_state):
             with patch.object(ex, "_parse_exit_status", return_value=0):
-                with patch("osimflow.executors.pbs_executor.time.sleep"):
+                with patch("osimflow.testing.patch_targets.time.sleep"):
                     state, code = ex._wait_for_terminal("123.pbs")
         assert state == "F"
         assert call_count == 2
@@ -369,7 +369,7 @@ class TestPBSHandle:
 
     def test_result_success(self) -> None:
         handle, mock_ex = self._make_handle(state="F", exit_code=0)
-        with patch("osimflow.executors.pbs_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             assert handle.result() is None
         assert handle._future.done()
 
@@ -378,20 +378,20 @@ class TestPBSHandle:
         mock_ex._wait_for_terminal.return_value = ("F", 0)
         hint = Path("/tmp/osimflow/work/apply/0001")
         handle = _PBSHandle(job_id="123.pbs", executor=mock_ex, result_hint=hint)
-        with patch("osimflow.executors.pbs_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             assert handle.result() == hint
 
     def test_result_failure_raises(self) -> None:
         handle, mock_ex = self._make_handle(state="F", exit_code=137)
         with (
-            patch("osimflow.executors.pbs_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             pytest.raises(RuntimeError, match="137"),
         ):
             handle.result()
 
     def test_done_true_when_future_done(self) -> None:
         handle, _ = self._make_handle(state="F", exit_code=0)
-        with patch("osimflow.executors.pbs_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             handle.result()
         assert handle.done() is True
 
@@ -426,7 +426,7 @@ class TestRetryPBSCall:
 
     def test_returns_first_success(self) -> None:
         sentinel = MagicMock(stdout="123.pbs")
-        with patch("osimflow.executors.pbs_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = _retry_pbs_call(lambda: sentinel)
         assert result is sentinel
 
@@ -441,7 +441,7 @@ class TestRetryPBSCall:
                 raise _cpe(255, "qsub: connection refused by pbsserver")
             return success
 
-        with patch("osimflow.executors.pbs_executor.time.sleep") as mock_sleep:
+        with patch("osimflow.testing.patch_targets.time.sleep") as mock_sleep:
             result = _retry_pbs_call(_call)
         assert result is success
         assert attempts["n"] == 3
@@ -457,7 +457,7 @@ class TestRetryPBSCall:
             raise _cpe(255, "qsub: server unavailable, retry later")
 
         with (
-            patch("osimflow.executors.pbs_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             pytest.raises(subprocess.CalledProcessError) as excinfo,
         ):
             _retry_pbs_call(_call, max_attempts=3)
@@ -474,7 +474,7 @@ class TestRetryPBSCall:
             raise _cpe(2, "qsub: invalid request, syntax error")
 
         with (
-            patch("osimflow.executors.pbs_executor.time.sleep") as mock_sleep,
+            patch("osimflow.testing.patch_targets.time.sleep") as mock_sleep,
             pytest.raises(subprocess.CalledProcessError) as excinfo,
         ):
             _retry_pbs_call(_call)
@@ -492,7 +492,7 @@ class TestRetryPBSCall:
                 raise _cpe(255, "qsub: operation timed out after 30s")
             return MagicMock(stdout="789.pbs")
 
-        with patch("osimflow.executors.pbs_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = _retry_pbs_call(_call)
         assert result.stdout == "789.pbs"
         assert attempts["n"] == 2
@@ -506,7 +506,7 @@ class TestRetryPBSCall:
                 raise _cpe(255, "qsub: connection reset by peer")
             return MagicMock(stdout="111.pbs")
 
-        with patch("osimflow.executors.pbs_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = _retry_pbs_call(_call)
         assert result.stdout == "111.pbs"
 
@@ -517,7 +517,7 @@ class TestRetryPBSCall:
             raise _cpe(255, "qsub: connection refused")
 
         with (
-            patch("osimflow.executors.pbs_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             caplog.at_level(logging.WARNING, logger="osimflow.executors"),
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -546,7 +546,7 @@ class TestSubmitJobRetriesTransient:
 
         with (
             patch("subprocess.run", side_effect=_fake_run),
-            patch("osimflow.executors.pbs_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
         ):
             job_id = ex._submit_job(
                 name="t",
@@ -568,7 +568,7 @@ class TestSubmitJobRetriesTransient:
 
         with (
             patch("subprocess.run", side_effect=_fake_run),
-            patch("osimflow.executors.pbs_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             pytest.raises(subprocess.CalledProcessError) as excinfo,
         ):
             ex._submit_job(
@@ -650,7 +650,7 @@ class TestWaitForTerminalTransient:
         with (
             patch.object(ex, "_query_job_state", side_effect=_state),
             patch.object(ex, "_parse_exit_status", return_value=0),
-            patch("osimflow.executors.pbs_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
         ):
             state, code = ex._wait_for_terminal("123.pbs")
         assert state == "F"
