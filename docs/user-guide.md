@@ -1631,28 +1631,99 @@ in [§4.1](#41-cli-flags); shared flags like `--outdir`, `--log_level`, or
 
 ### Documentation Index
 
+Every user-facing page under `docs/` is reachable from this index
+(internal artefacts like `gap-analysis-*` and the user guide itself are
+exempt — see `tools/check_docs_sync.py::INDEX_EXEMPT_DOCS`).
+
+#### Tutorials & Quick Start
+
 | Document | Description |
 |---|---|
 | [Tutorial: Your First Campaign](tutorials/your-first-campaign.md) | Step-by-step walkthrough |
+| [Tutorial: Getting Started](tutorials/getting-started.md) | Install + run your first campaign (~30 min) |
+| [Tutorial: Advanced Topics](tutorials/advanced-topics.md) | Custom workflows for experienced users |
+| [Tutorial: Migration from OpenStudio-Server](tutorials/migration-from-oss.md) | OSS/PAT → OSimFlow walkthrough |
+
+#### Configuration & Reference
+
+| Document | Description |
+|---|---|
 | [variables.yml Schema](variables-schema.md) | Complete variable and distribution reference |
-| [Packaging Measures](packaging-measures.md) | Building your template_sim_package |
-| [Docker Onboarding](docker-onboarding.md) | Container setup for real simulations |
-| [Podman Guide](podman-guide.md) | Podman as a Docker alternative |
 | [run.json Guide](runjson-guide.md) | Detailed monitoring trace interpretation |
 | [Monitoring Schema](monitoring-schema.md) | Complete run.json schema reference |
 | [Resource Allocation](resource-allocation.md) | CPU, memory, and time sizing |
 | [Time-Series Management](time-series-management.md) | Controlling output data volume |
 | [Cost Estimation](cost-estimation.md) | AWS Batch and Slurm cost modeling |
 | [Chaos Engine](chaos-engine.md) | Resilience testing via fault injection |
-| [OpenStudio Images](openstudio-image-distribution.md) | Container image versions and availability |
-| [Deployment: Slurm](deployment/slurm.md) | Full Slurm/HPC setup guide |
-| [Deployment: AWS Batch](deployment/aws-batch.md) | Full cloud deployment guide |
 | [eplusout.sql Guide](eplusout-sql-guide.md) | Querying EnergyPlus SQL output |
 | [Benchmarks](benchmarks.md) | Performance benchmarking reference |
+| [Compatibility Matrix](compatibility-matrix.md) | OpenStudio version compatibility |
+| [Observability](observability.md) | CloudWatch / Prometheus / OpenTelemetry backends |
+| [API Reference](api.md) | REST endpoints, TLS, and API keys (`[api]` extra) |
+| [Packaging Measures](packaging-measures.md) | Building your `template_sim_package` |
+| [Measure Runner Guide](measure-runner-guide.md) | Running OpenStudio measures programmatically + BYOS KPI extractors |
+| [CLI Lifecycle Management](cli-lifecycle-management.md) | OpenStudio CLI process supervision patterns |
+| [R DataFrame Export](r-dataframe-export.md) | OSS R/Rserve → Parquet bridge workflow |
+
+#### Deployment & Operations
+
+| Document | Description |
+|---|---|
+| [Installation](installation.md) | `pip` install + standalone binary |
+| [Docker Onboarding](docker-onboarding.md) | Container setup for real simulations |
+| [Podman Guide](podman-guide.md) | Podman as a Docker alternative |
+| [Container Image Strategy](container-image-strategy.md) | Digest pinning + ECR mirroring + cosign (issue #1320) |
+| [Container Image Customization](container-customization.md) | Pre-installing measures, gems, patched OpenStudio builds |
+| [OpenStudio Image Distribution](openstudio-image-distribution.md) | Container image versions and availability |
+| [Distributed Cache](distributed-cache.md) | `--redis-url` TLS baseline + circuit breakers |
+| [Air-Gapped Deployment](air-gapped-deployment.md) | Quick-start air-gap install |
+| [Offline Deployment Guide](offline-deployment-guide.md) | Full air-gap / offline operational runbook |
+| [Blue/Green Deployment](blue-green-deployment.md) | Zero-downtime `osimflow serve` updates (issue #402) |
+| [MongoDB Storage](mongodb-storage.md) | SQLite → distributed storage backend options |
+| [Deployment: Slurm](deployment/slurm.md) | Full Slurm/HPC setup guide |
+| [Deployment: AWS Batch](deployment/aws-batch.md) | Full cloud deployment guide |
+| [AWS Batch Terraform](aws-batch-terraform.md) | Zero-to-running AWS Batch IaC |
+| [Deployment: Multi-Executor](deployment/multi-executor.md) | Azure / Google / PBS / Dask-JobQueue / Docker Swarm |
+| [Nomad Production](nomad-production.md) | HA Nomad cluster topology and ACLs |
+| [Kubernetes Deployment](kubernetes-deployment.md) | K8s Job-based deployment (with HMAC task payloads) |
+
+#### Security
+
+| Document | Description |
+|---|---|
+| [Secret Management](secret-management.md) | HMAC secret provisioning, Vault / Secrets Manager, TLS baseline, `--allow-insecure-storage-endpoint` rationale (issues #1449, #1459, #1386) |
+
+#### Migration
+
+| Document | Description |
+|---|---|
+| [Migration from openstudio-server](migration-openstudio-server.md) | Migrating from PAT and openstudio-server |
+| [PAT Migration](pat-migration.md) | PAT-format data import/export |
+| [Algorithm Migration](algorithm-migration.md) | OSS algorithms → OSimFlow equivalents |
+| [Analysis Gem Migration](analysis-gem-migration.md) | openstudio-analysis-gem (Ruby) → OSimFlow Python library |
+| [MongoDB Migration](mongodb-migration.md) | legacy OSS MongoDB collections → SQLite document store (GAP-018) |
+
+#### Substrate Coverage
+
+| Document | Description |
+|---|---|
+| [Substrate Coverage Matrix](substrate-coverage.md) | Real-E2E coverage by execution substrate and external sink (issue #1020) |
+
+#### Project & Contributing
+
+| Document | Description |
+|---|---|
+| [PRD (OSimFlow.md)](OSimFlow.md) | Product Requirements Document |
 | [Development Guide](DEVELOPMENT.md) | Contributing to OSimFlow internals |
 | [Contributing Guide](CONTRIBUTING.md) | How to contribute |
-| [PRD (OSimFlow.md)](OSimFlow.md) | Product Requirements Document |
-| [Migration from openstudio-server](migration-openstudio-server.md) | Migrating from PAT and openstudio-server |
+| [Governance](GOVERNANCE.md) | Project governance and decision-making |
+| [Release Process](release-process.md) | Maintainer release runbook (semantic versioning) |
+| [Branch Protection](branch-protection.md) | Settings-as-code for `main` branch rules (issue #975) |
+
+#### BYOS
+
+| Document | Description |
+|---|---|
 | [user_scripts/README.md](../user_scripts/README.md) | BYOS script templates and examples |
 
 ### The Seven-Step DAG
