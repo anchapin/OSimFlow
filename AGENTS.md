@@ -322,10 +322,27 @@ make test-fast      # contract only, no coverage gate (pre-commit mirror)
 CI runs `make test-cov` (the CI `test` job calls the Makefile
 target; pytest flags are single-sourced in the Makefile —
 `PYTEST_CI_FLAGS` / `PYTEST_COV_FLAGS`, issue #1476) and requires
-82% coverage — gated by the Makefile's
+82% aggregate coverage — gated by the Makefile's
 `PYTEST_COV_FLAGS` (`--cov-fail-under=82`, composed only into
 `make test-cov`); `pyproject.toml [tool.pytest.ini_options]`
-holds only non-coverage pytest options. CI jobs in
+holds only non-coverage pytest options. In addition, after pytest
+exits, `make test-cov` invokes
+`tools/check_module_coverage.py` (issue #1571), which reads the
+``.coverage`` data file via `coverage json` and asserts each
+`osimflow/_campaign_*.py` collaborator and each
+`osimflow/executors/*.py` module is at or above a seed floor
+(stored in the `FLOORS` dict in that script, with comments pointing
+to the measured % on `origin/main` commit `30f3c79` minus a 1.0%
+epsilon). The per-module floor is additive to the 82% aggregate
+gate — it exists because an aggregate-only threshold structurally
+cannot notice a wholly-untested newly-extracted collaborator (the
+extraction PRs from #1462/#1463/#1464 are exactly that window).
+The script also fails when a new in-scope file appears without a
+`FLOORS` entry, so a refactor that lands a brand-new
+`_campaign_*.py` cannot sneak in under the aggregate gate. Ratchet
+floors up only with a fresh measurement comment in the script's
+docstring; do not lower them to compensate for the aggregate
+gate. CI jobs in
 `.github/workflows/ci.yml`: `lint` (ruff check + format --check),
 `typecheck` (mypy --strict), `test` (pytest + 82%), `contract`,
 `security` (pip-audit + gitleaks), `mlflow-real` (real MLflow
