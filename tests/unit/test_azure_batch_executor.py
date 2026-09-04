@@ -94,7 +94,7 @@ class TestAzureBatchExecutor:
         mock_task_succeeded.execution_info.end_time = "2024-01-01T00:00:00Z"
         ex._client.get_task.side_effect = [mock_task_running, mock_task_succeeded]
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             task = ex._wait_for_terminal("test-job")
         assert task.execution_info.end_time is not None
 
@@ -276,7 +276,7 @@ class TestAzureBatchHandle:
             submit_params=submit_params,
         )
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = handle.result()
         assert result is None
 
@@ -325,11 +325,11 @@ class TestAzureBatchHandle:
         sleep_durations: list[float] = []
         with (
             patch(
-                "osimflow.executors.azure_batch_executor.time.sleep",
+                "osimflow.testing.patch_targets.time.sleep",
                 side_effect=sleep_durations.append,
             ),
             patch(
-                "osimflow.executors.azure_batch_executor.random.uniform",
+                "osimflow.testing.patch_targets.random.uniform",
                 side_effect=lambda lo, hi: lo + (hi - lo) * 0.5,
             ),
         ):
@@ -378,7 +378,7 @@ class TestAzureBatchHandle:
             submit_params=submit_params,
         )
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(RuntimeError, match="Spot retries exhausted"):
                 handle.result()
 
@@ -425,7 +425,7 @@ class TestAzureBatchHandle:
             submit_params=submit_params,
         )
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = handle.result()
         assert result is None
 
@@ -462,7 +462,7 @@ class TestAzureBatchThrottleRetry:
                 raise _FakeBatchError("TooManyRequests")
             return "ok"
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = _retry_azure_submit(flaky)
 
         assert result == "ok"
@@ -484,7 +484,7 @@ class TestAzureBatchThrottleRetry:
                 return flaky
 
             flaky_fn = make_flaky(code)
-            with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+            with patch("osimflow.testing.patch_targets.time.sleep"):
                 result = _retry_azure_submit(flaky_fn)
 
             assert result == "ok"
@@ -493,7 +493,7 @@ class TestAzureBatchThrottleRetry:
         """Persistent throttle exhausts retries and re-raises the last exception."""
         always_fail = MagicMock(side_effect=_FakeBatchError("TooManyRequests"))
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(_FakeBatchError, match="TooManyRequests"):
                 _retry_azure_submit(always_fail, max_attempts=5)
 
@@ -503,7 +503,7 @@ class TestAzureBatchThrottleRetry:
         """Non-throttle exceptions propagate immediately without retry."""
         permanent = MagicMock(side_effect=RuntimeError("not throttled"))
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep") as sleep_mock:
+        with patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock:
             with pytest.raises(RuntimeError, match="not throttled"):
                 _retry_azure_submit(permanent)
 
@@ -520,7 +520,7 @@ class TestAzureBatchThrottleRetry:
             raise _FakeBatchError("TooManyRequests")
 
         with patch(
-            "osimflow.executors.azure_batch_executor.time.sleep",
+            "osimflow.testing.patch_targets.time.sleep",
             side_effect=sleeps.append,
         ):
             _retry_azure_submit(
@@ -543,7 +543,7 @@ class TestAzureBatchThrottleRetry:
             return "ok"
 
         with (
-            patch("osimflow.executors.azure_batch_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             patch("osimflow.executors.azure_batch_executor.log") as mock_log,
         ):
             _retry_azure_submit(flaky)
@@ -560,7 +560,7 @@ class TestAzureBatchThrottleRetry:
         """Regression: AzureBatchExecutor._submit_job retries a throttled client.create_job (issue #1396)."""
         ex = self._executor_with_throttle([_FakeBatchError("TooManyRequests"), None])
 
-        with patch("osimflow.executors.azure_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             job_id = ex._submit_job(
                 name="throttled-job",
                 cpus=1,
@@ -578,7 +578,7 @@ class TestAzureBatchThrottleRetry:
         ex = self._executor_with_throttle(_FakeBatchError("TooManyRequests"))
 
         with (
-            patch("osimflow.executors.azure_batch_executor.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             pytest.raises(_FakeBatchError, match="TooManyRequests"),
         ):
             ex._submit_job(

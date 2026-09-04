@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors import _AWSBatchHandle
+from osimflow.testing.patch_targets import _AWSBatchHandle
 from osimflow.work import TransientError, run_with_retry
 
 
@@ -151,7 +151,7 @@ class TestAwsBatchSpotRetryJitter:
             with pytest.raises(RuntimeError, match="exhausted"):
                 handle.result()
 
-        patcher = patch("osimflow.executors.time.sleep", side_effect=_capture_sleep)
+        patcher = patch("osimflow.testing.patch_targets.time.sleep", side_effect=_capture_sleep)
         patcher.start()
         try:
             threads = [threading.Thread(target=_worker, args=(i,)) for i in range(100)]

@@ -53,7 +53,7 @@ def _patch_transport(
 
 
 def _aws_handle() -> Any:
-    from osimflow.executors import _AWSBatchHandle
+    from osimflow.testing.patch_targets import _AWSBatchHandle
 
     executor = SimpleNamespace(
         max_retries=0,
@@ -127,7 +127,7 @@ def _pbs_handle() -> Any:
 
 
 def _nomad_handle() -> Any:
-    from osimflow.executors import _NomadHandle
+    from osimflow.testing.patch_targets import _NomadHandle
 
     executor = SimpleNamespace(
         max_retries=0,
@@ -185,7 +185,7 @@ def test_remote_handle_materializes_object_storage_result(
 
 def test_aws_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The on-demand fallback success path also materializes (issue #1333)."""
-    from osimflow.executors import _AWSBatchHandle
+    from osimflow.testing.patch_targets import _AWSBatchHandle
 
     calls: list[dict[str, Any]] = []
     _patch_transport(monkeypatch, "osimflow.executors", calls)

@@ -71,6 +71,8 @@ Orchestrator → Executor → Work function
 (`make contract` / `.github/workflows/agents-contract.yml`). It
 verifies that every public symbol in `osimflow/__init__.py`, every
 `bin/*.py`, every executor file under `osimflow/executors/`, every
+non-underscore top-level symbol defined in those executor files
+(issue #1574 — private helpers are explicitly skipped, see §5), every
 config module under `osimflow/executor_configs/` (issue #1575), every
 DAG step name, and every `--flag` registered on the CLI is
 **mentioned somewhere in this file**. The flag list is *derived*:
@@ -667,27 +669,44 @@ per-executor health check, issue #1024; `iter_health_checks()`
 feeds `osimflow.health.run_health_checks`) plus `discover_plugins()`
 via entry point `osimflow.executors`, the per-step resource defaults
 (`DEFAULT_STEP_RESOURCES` / `get_step_resources`), and the re-export
-of every executor (private helpers included) so
-`from osimflow.executors import X` keeps working. The registry's
-state dicts are anchored in `base.py`
+of every executor so `from osimflow.executors import X` keeps working.
+The registry's state dicts are anchored in `base.py`
 (`_EXECUTOR_REGISTRY` / `_EXECUTOR_HEALTH_CHECKS`) so they survive
 `importlib.reload`; health-check registration is bound from the
 `osimflow.health` side only (one-directional: health imports
-executors, never the reverse). `base.py` defines
-`BaseExecutor` + `Handle` + `SubmitRequest` + the shared
-`PollingHandle` poll-retry-fallback state machine with `PollOutcome`
+executors, never the reverse).
+
+**Issue #1574** removed the test patch seams from this package: the
+bare ``import time`` / ``import random`` ``# noqa: F401`` lines and
+private helper re-exports (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
+``_SpotPriceCache``, ``_retry_nomad_request``, ``_NOMAD_RETRY_*``,
+``_slugify_job_name``, ``_apply_slurm_params``, ...) are gone from
+``__init__.py``. Tests now patch through
+``osimflow.testing.patch_targets`` (which re-exports those helpers and
+the ``time`` / ``random`` stdlib modules). A :pep:`562` ``__getattr__``
+deprecation shim keeps third-party plug-ins that still import a
+private name from this package working, with a one-shot
+``DeprecationWarning`` pointing at the new surface. The contract
+checker enforces the new rule by requiring every non-underscore
+top-level executor symbol to be named in this section; private names
+are explicitly skipped.
+
+`base.py` defines `BaseExecutor` + `Handle` + `SubmitRequest` + the
+shared `PollingHandle` poll-retry-fallback state machine with
+`PollOutcome` + `poll_until_terminal` + `retry_with_backoff`
 (issue #1464 — owns the terminal-poll loop, #1465 deadline, jittered
 backoff, retry accounting, and fallback-to-on-demand transition;
 `_AzureBatchHandle` and `_GoogleBatchHandle` subclass it, supplying
-substrate hooks); `transport.py` is the
-executor-agnostic result-reference contract. All ten executors each
-have their own file:
+substrate hooks); `transport.py` is the executor-agnostic
+result-reference contract (`coerce_transport_mode`,
+`validate_transport_mode`, `encode_transport_value`,
+`decode_transport_value`, `local_path_to_storage_key`,
+`resolve_result_for_callback`, `materialize_object_storage_result`).
+All ten executors each have their own file:
 `local_executor.py` (`LocalExecutor` + `run_subprocess`),
-`slurm_executor.py` (`SlurmExecutor` + `_apply_slurm_params`),
-`aws_batch_executor.py` (`AWSBatchExecutor` + `_AWSBatchHandle` +
-`_TokenBucketRateLimiter` + `_SpotPriceCache`),
-`nomad_executor.py` (`NomadExecutor` + `_NomadClient` +
-`_NomadHandle` + `_retry_nomad_request`),
+`slurm_executor.py` (`SlurmExecutor`),
+`aws_batch_executor.py` (`AWSBatchExecutor`),
+`nomad_executor.py` (`NomadExecutor`),
 `azure_batch_executor.py` (`AzureBatchExecutor`),
 `dask_jobqueue_executor.py` (`DaskJobQueueExecutor`; Dask
 JobQueue with Slurm/PBS/K8s schedulers — distinct from the
@@ -734,6 +753,14 @@ resource-directive propagation, and health-check registration;
 the opt-in `three_sample_stub_campaign` check runs the full
 Campaign via a stub-mode 3-sample mini-campaign. Importable as
 `from osimflow.testing import ExecutorConformanceSuite`.
+`patch_targets.py` (issue #1574) is the explicit testing surface
+that replaces ``osimflow.executors.time`` / ``osimflow.executors.random``
+and the old private helper re-exports; tests patch sleep / jitter /
+helper calls through ``osimflow.testing.patch_targets.time``,
+``osimflow.testing.patch_targets.random``, and the private helpers
+re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
+``_SpotPriceCache``, ``_retry_nomad_request``, ``_NOMAD_RETRY_*``,
+``_slugify_job_name``, ``_apply_slurm_params``, ...).
 
 ### Top-level
 

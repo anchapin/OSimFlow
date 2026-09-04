@@ -72,7 +72,7 @@ class TestGoogleBatchExecutor:
         mock_job_succeeded.status.state = ex._batch_v1.JobStatus.State.SUCCEEDED
         ex._client.get_job.side_effect = [mock_job_running, mock_job_succeeded]
 
-        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             job = ex._wait_for_terminal("test-job")
         assert job.status.state == ex._batch_v1.JobStatus.State.SUCCEEDED
 
@@ -246,7 +246,7 @@ class TestGoogleBatchHandle:
             submit_params=submit_params,
         )
 
-        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = handle.result()
         assert result is None
 
@@ -292,11 +292,11 @@ class TestGoogleBatchHandle:
         sleep_durations: list[float] = []
         with (
             patch(
-                "osimflow.executors.google_batch_executor.time.sleep",
+                "osimflow.testing.patch_targets.time.sleep",
                 side_effect=sleep_durations.append,
             ),
             patch(
-                "osimflow.executors.google_batch_executor.random.uniform",
+                "osimflow.testing.patch_targets.random.uniform",
                 side_effect=lambda lo, hi: lo + (hi - lo) * 0.5,
             ),
         ):
@@ -343,7 +343,7 @@ class TestGoogleBatchHandle:
             submit_params=submit_params,
         )
 
-        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(RuntimeError, match="Spot retries exhausted"):
                 handle.result()
 
@@ -387,6 +387,6 @@ class TestGoogleBatchHandle:
             submit_params=submit_params,
         )
 
-        with patch("osimflow.executors.google_batch_executor.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = handle.result()
         assert result is None

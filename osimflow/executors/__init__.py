@@ -22,9 +22,16 @@ from its own module (``local_executor``, ``slurm_executor``,
 ``google_batch_executor``, ``kubernetes_executor``, ``pbs_executor``,
 ``dask_jobqueue_executor``, ``docker_swarm_executor``) — so
 ``from osimflow.executors import <Name>`` keeps working unchanged.
-Private helper classes and functions are re-exported too: tests patch
-them through this namespace (e.g. ``osimflow.executors.time.sleep``,
-``osimflow.executors.materialize_object_storage_result``).
+
+Issue #1574 separated the testing patch surface from this package:
+private helpers (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``, ...),
+the ``time`` / ``random`` stdlib modules, and the transport helpers now
+live on :mod:`osimflow.testing.patch_targets` — tests patch through
+that module instead of this one. The bare ``import time`` / ``import
+random`` ``# noqa: F401`` lines are gone; private helper re-exports
+are gone too. A :pep:`562` ``__getattr__`` deprecation shim on this
+package keeps third-party plug-ins that still import a private name
+working (with a :class:`DeprecationWarning`) until they migrate.
 
 Health-check registration (issue #1024, #1463) now lives entirely on the
 ``osimflow.health`` side: that module registers at import time and
@@ -33,20 +40,14 @@ imports ``osimflow.health`` — the dependency is one-directional.
 """
 
 import logging
-import random  # noqa: F401 — patch seam: tests patch osimflow.executors.random.uniform
-import time  # noqa: F401 — patch seam: tests patch osimflow.executors.time.sleep / time.monotonic
+import warnings
 from collections.abc import Callable
+from importlib import import_module
 from importlib.metadata import entry_points
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from osimflow.executor_configs.base import ExecutorArgumentHook
-from osimflow.executors.aws_batch_executor import (
-    _AWSBatchHandle,
-    _SpotPriceCache,
-    _TokenBucketRateLimiter,
-    _aws_error_code,
-    AWSBatchExecutor,
-)
+from osimflow.executors.aws_batch_executor import AWSBatchExecutor
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor as AzureBatchExecutor
 from osimflow.executors.base import (
     _EXECUTOR_HEALTH_CHECKS,
@@ -60,20 +61,9 @@ from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor as Dock
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor as GoogleBatchExecutor
 from osimflow.executors.kubernetes_executor import KubernetesExecutor as KubernetesExecutor
 from osimflow.executors.local_executor import LocalExecutor, run_subprocess
-from osimflow.executors.nomad_executor import (
-    _NOMAD_RETRY_CAP_S,
-    _NOMAD_RETRY_INITIAL_DELAY_S,
-    _NOMAD_RETRY_MAX_ATTEMPTS,
-    _NOMAD_RETRYABLE_HTTP_CODES,
-    _NomadClient,
-    _NomadHandle,
-    _nomad_error_code,
-    _retry_nomad_request,
-    _slugify_job_name,
-    NomadExecutor,
-)
+from osimflow.executors.nomad_executor import NomadExecutor
 from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
-from osimflow.executors.slurm_executor import SlurmExecutor, _apply_slurm_params
+from osimflow.executors.slurm_executor import SlurmExecutor
 from osimflow.executors.transport import (
     coerce_transport_mode as coerce_transport_mode,
     materialize_object_storage_result as materialize_object_storage_result,
@@ -88,6 +78,71 @@ log = logging.getLogger("osimflow.executors")
 
 #: Entry-point group for third-party executor plug-ins (issue #432).
 EXECUTOR_ENTRY_POINT_GROUP = "osimflow.executors"
+
+# ---------------------------------------------------------------------------
+# Deprecation shim for previously-re-exported private helpers (issue #1574)
+# ---------------------------------------------------------------------------
+# Before issue #1574 this package re-exported every ``_``-prefixed helper
+# from the per-executor modules so that tests could patch through this
+# namespace and so that AGENTS.md's contract-checked mention of those
+# names became load-bearing public API. The new testing surface
+# (:mod:`osimflow.testing.patch_targets`) is the supported way to reach
+# those helpers from tests.
+#
+# To avoid silently breaking any third-party plug-in that took a
+# dependency on the old re-exports, :pep:`562` ``__getattr__`` looks
+# each private name up in its defining module and emits a
+# :class:`DeprecationWarning` so plug-in authors see the migration path
+# the first time the name is touched. The warning is module-scoped so a
+# single import only fires once per process (issue #1115 pattern).
+_DEPRECATED_PRIVATE_NAMES: dict[str, str] = {
+    # AWS Batch (osimflow.executors.aws_batch_executor)
+    "_AWSBatchHandle": "osimflow.executors.aws_batch_executor",
+    "_SpotPriceCache": "osimflow.executors.aws_batch_executor",
+    "_TokenBucketRateLimiter": "osimflow.executors.aws_batch_executor",
+    "_aws_error_code": "osimflow.executors.aws_batch_executor",
+    # Nomad (osimflow.executors.nomad_executor)
+    "_NOMAD_RETRY_CAP_S": "osimflow.executors.nomad_executor",
+    "_NOMAD_RETRY_INITIAL_DELAY_S": "osimflow.executors.nomad_executor",
+    "_NOMAD_RETRY_MAX_ATTEMPTS": "osimflow.executors.nomad_executor",
+    "_NOMAD_RETRYABLE_HTTP_CODES": "osimflow.executors.nomad_executor",
+    "_NomadClient": "osimflow.executors.nomad_executor",
+    "_NomadHandle": "osimflow.executors.nomad_executor",
+    "_retry_nomad_request": "osimflow.executors.nomad_executor",
+    "_slugify_job_name": "osimflow.executors.nomad_executor",
+    "_nomad_error_code": "osimflow.executors.nomad_executor",
+    # Slurm (osimflow.executors.slurm_executor)
+    "_apply_slurm_params": "osimflow.executors.slurm_executor",
+}
+_DEPRECATION_EMITTED: set[str] = set()
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562 lazy lookup with deprecation warnings (issue #1574).
+
+    Resolves previously-re-exported private helpers on demand. Each
+    name is looked up in its defining module the first time it is
+    accessed; a :class:`DeprecationWarning` is emitted exactly once per
+    process so the caller learns about the migration path without being
+    drowned in repeat warnings.
+    """
+    module_name = _DEPRECATED_PRIVATE_NAMES.get(name)
+    if module_name is not None:
+        if name not in _DEPRECATION_EMITTED:
+            _DEPRECATION_EMITTED.add(name)
+            warnings.warn(
+                (
+                    f"Importing {name!r} from osimflow.executors is deprecated "
+                    f"(issue #1574) and will be removed in a future release. "
+                    f"Import it from {module_name} directly, or use "
+                    f"osimflow.testing.patch_targets for test patching."
+                ),
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return getattr(import_module(module_name), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "AWSBatchExecutor",

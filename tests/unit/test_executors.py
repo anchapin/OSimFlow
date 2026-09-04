@@ -30,18 +30,20 @@ from osimflow.executors import (
     LocalExecutor,
     NomadExecutor,
     SlurmExecutor,
-    _apply_slurm_params,
-    _AWSBatchHandle,
-    _NomadClient,
-    _NomadHandle,
-    _slugify_job_name,
-    _SpotPriceCache,
     run_subprocess,
 )
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SIG_ENV,
     sign_task_payload,
+)
+from osimflow.testing.patch_targets import (
+    _apply_slurm_params,
+    _AWSBatchHandle,
+    _NomadClient,
+    _NomadHandle,
+    _slugify_job_name,
+    _SpotPriceCache,
 )
 
 
@@ -481,7 +483,7 @@ class TestAWSBatchSubmit:
             {"jobs": [{"jobId": "j-3", "status": "RUNNING"}]},
             {"jobs": [{"jobId": "j-3", "status": "SUCCEEDED"}]},
         ]
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             job = ex._wait_for_terminal("j-3")
         assert job["status"] == "SUCCEEDED"
 
@@ -771,7 +773,7 @@ class TestNomadExecutor:
                 name="apply_0001",
                 result_hint=hint,
             )
-            with patch("osimflow.executors.time.sleep"):
+            with patch("osimflow.testing.patch_targets.time.sleep"):
                 result = handle.result()
         assert Path(str(result)) == hint
         ex.shutdown()
@@ -922,7 +924,7 @@ class TestNomadExecutor:
         mock_urlopen = self._mock_urlopen({"alloc": alloc_response})
         with patch("urllib.request.urlopen", side_effect=mock_urlopen.side_effect):
             ex = NomadExecutor(address="http://127.0.0.1:4646")
-            with patch("osimflow.executors.time.sleep"):
+            with patch("osimflow.testing.patch_targets.time.sleep"):
                 result = ex._wait_for_terminal("alloc-1")
         assert result["ClientStatus"] == "complete"
         ex.shutdown()
@@ -957,7 +959,7 @@ class TestNomadExecutor:
         mock.side_effect = _resp
         with patch("urllib.request.urlopen", side_effect=mock.side_effect):
             ex = NomadExecutor(address="http://127.0.0.1:4646")
-            with patch("osimflow.executors.time.sleep"):
+            with patch("osimflow.testing.patch_targets.time.sleep"):
                 result = ex._wait_for_terminal("alloc-1")
         assert result["ClientStatus"] == "complete"
         assert call_count == 2
@@ -987,7 +989,7 @@ class TestNomadExecutor:
 
         with patch("urllib.request.urlopen", side_effect=_resp):
             ex = NomadExecutor(address="http://127.0.0.1:4646")
-            with patch("osimflow.executors.time.sleep"):
+            with patch("osimflow.testing.patch_targets.time.sleep"):
                 with pytest.raises(TimeoutError, match="Timed out"):
                     ex._wait_for_terminal("alloc-1", timeout=0.05)
         assert call_count >= 1
@@ -1042,21 +1044,21 @@ class TestNomadHandle:
 
     def test_result_complete(self) -> None:
         handle, _ = self._make_handle(alloc_status="complete")
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             assert handle.result() is None
 
     def test_result_failed_raises(self) -> None:
         task_states = {"osimflow": {"Events": [{"Description": "Exit Code: 137 (OOM killed)"}]}}
         handle, _ = self._make_handle(alloc_status="failed", task_states=task_states)
         with (
-            patch("osimflow.executors.time.sleep"),
+            patch("osimflow.testing.patch_targets.time.sleep"),
             pytest.raises(RuntimeError, match="OOM killed"),
         ):
             handle.result()
 
     def test_done_complete(self) -> None:
         handle, _ = self._make_handle(alloc_status="complete")
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             handle.result()
         assert handle.done() is True
 

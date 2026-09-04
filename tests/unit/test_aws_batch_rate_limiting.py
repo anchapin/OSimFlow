@@ -18,8 +18,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors import (
-    AWSBatchExecutor,
+from osimflow.executors import AWSBatchExecutor
+from osimflow.testing.patch_targets import (
     _aws_error_code,
     _SpotPriceCache,
     _TokenBucketRateLimiter,
@@ -40,8 +40,10 @@ class TestTokenBucketRateLimiter:
         """After exhausting the bucket, acquire must sleep until a token refills."""
         sleep_mock = MagicMock()
         now_values = [0.0, 0.0, 0.5, 1.0]
-        with patch("osimflow.executors.time.monotonic", side_effect=lambda: now_values.pop(0)):
-            with patch("osimflow.executors.time.sleep", sleep_mock):
+        with patch(
+            "osimflow.testing.patch_targets.time.monotonic", side_effect=lambda: now_values.pop(0)
+        ):
+            with patch("osimflow.testing.patch_targets.time.sleep", sleep_mock):
                 limiter = _TokenBucketRateLimiter(rps=1)  # 1 token/s, capacity=1
                 limiter.acquire()  # drain the single token
                 limiter.acquire()  # should block ~0.5s for refill
@@ -53,7 +55,7 @@ class TestTokenBucketRateLimiter:
         """RPS=0 means no rate limiting — acquire should never sleep."""
         limiter = _TokenBucketRateLimiter(rps=0)
         sleep_mock = MagicMock()
-        with patch("osimflow.executors.time.sleep", sleep_mock):
+        with patch("osimflow.testing.patch_targets.time.sleep", sleep_mock):
             for _ in range(100):
                 limiter.acquire()
         sleep_mock.assert_not_called()
@@ -99,7 +101,7 @@ class TestSpotPriceCache:
         """After TTL, a cached value should miss (controllable clock, issue #1544)."""
         clock = {"now": 100.0}
         with patch(
-            "osimflow.executors.aws_batch_executor.time.monotonic",
+            "osimflow.testing.patch_targets.time.monotonic",
             side_effect=lambda: clock["now"],
         ):
             cache = _SpotPriceCache(ttl_s=0.01)
@@ -180,7 +182,7 @@ class TestSubmitJobWithRetry:
         client_mock.submit_job.side_effect = _mock_submit
         executor._client = client_mock  # noqa: SLF001
 
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = executor._submit_job_with_retry(submit_kwargs={})
 
         assert result["jobId"] == "job-3"
@@ -197,7 +199,7 @@ class TestSubmitJobWithRetry:
         client_mock.submit_job.side_effect = throttle_exc
         executor._client = client_mock  # noqa: SLF001
 
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(botocore.exceptions.ClientError, match="RequestLimitExceeded"):
                 executor._submit_job_with_retry(submit_kwargs={})
 
@@ -212,7 +214,7 @@ class TestSubmitJobWithRetry:
         client_mock.submit_job.side_effect = access_exc
         executor._client = client_mock  # noqa: SLF001
 
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             with pytest.raises(botocore.exceptions.ClientError, match="AccessDeniedException"):
                 executor._submit_job_with_retry(submit_kwargs={})
 
@@ -244,9 +246,9 @@ class TestSubmitJobWithRetry:
         executor._client = client_mock  # noqa: SLF001
 
         sleep_durations: list[float] = []
-        with patch("osimflow.executors.time.sleep", side_effect=sleep_durations.append):
+        with patch("osimflow.testing.patch_targets.time.sleep", side_effect=sleep_durations.append):
             with patch(
-                "osimflow.executors.random.uniform",
+                "osimflow.testing.patch_targets.random.uniform",
                 side_effect=lambda lo, hi: lo + (hi - lo) * 0.25,
             ):
                 result = executor._submit_job_with_retry(submit_kwargs={})
@@ -357,7 +359,7 @@ class TestGetSpotPriceCache:
 
         clock = {"now": 1000.0}
         with patch(
-            "osimflow.executors.aws_batch_executor.time.monotonic",
+            "osimflow.testing.patch_targets.time.monotonic",
             side_effect=lambda: clock["now"],
         ):
             price1 = executor._get_spot_price()

@@ -35,6 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from . import patch_targets as patch_targets
 from .executor_conformance import (
     ConformanceCheck,
     ConformanceReport,
@@ -46,6 +47,7 @@ __all__ = [
     "ConformanceCheck",
     "ConformanceReport",
     "ExecutorConformanceSuite",
+    "patch_targets",
     "run_executor_conformance",
 ]
 

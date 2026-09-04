@@ -747,7 +747,7 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 0.1
         ex.max_poll_interval_s = 1.0
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = ex._wait_for_terminal("osimflow-test")
         assert result["status"]["phase"] == "Succeeded"
 
@@ -761,7 +761,7 @@ class TestKubernetesExecutor:
         ex.namespace = "default"
         ex.poll_interval_s = 0.1
         ex.max_poll_interval_s = 1.0
-        with patch("osimflow.executors.time.sleep"):
+        with patch("osimflow.testing.patch_targets.time.sleep"):
             result = ex._wait_for_terminal("osimflow-test")
         assert result["status"]["phase"] == "Failed"
 
