@@ -770,6 +770,19 @@ resource-directive propagation, and health-check registration;
 the opt-in `three_sample_stub_campaign` check runs the full
 Campaign via a stub-mode 3-sample mini-campaign. Importable as
 `from osimflow.testing import ExecutorConformanceSuite`.
+
+Reusable test harness for third-party algorithm plug-in authors
+(issue #1565). `AlgorithmConformanceSuite` mirrors the executor
+suite shape (pytest mixin + non-pytest runner + factory attribute)
+and verifies the `BaseAlgorithm` sampling contract: `n_samples`
+exactness, seed determinism, variable-name/order stability, dtype
+coercion via `coerce_variable_type`, and cache-key reproducibility.
+The default `variables_spec` covers uniform + normal + discrete
+int so the suite exercises `coerce_variable_type` end-to-end;
+plug-ins whose algorithms cannot represent one of those (e.g.
+Sobol via SALib) override `variables_spec` / `sample_counts` on
+the subclass. Importable as
+`from osimflow.testing import AlgorithmConformanceSuite`.
 `patch_targets.py` (issue #1574) is the explicit testing surface
 that replaces ``osimflow.executors.time`` / ``osimflow.executors.random``
 and the old private helper re-exports; tests patch sleep / jitter /
@@ -1019,6 +1032,7 @@ land at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
 | Add a new sampling algorithm | new module in `osimflow/algorithms/`, subclass `BaseAlgorithm`, register via `AlgorithmRegistry.register` in `osimflow/algorithms/__init__.py`; or declare an entry point under `[project.entry-points."osimflow.algorithms"]` in a third-party `pyproject.toml` (auto-discovered) |
 | Add a new execution platform | new file in `osimflow/executors/`, subclass `BaseExecutor` from `base.py`, register via `ExecutorRegistry.register` in `osimflow/executors/__init__.py`, add the choice to `osimflow/__main__.py:_build_executor`; own the platform's `XConfig` + `add_arguments` hook in a new `osimflow/executor_configs/<name>.py` module (issue #1575); or declare an entry point under `[project.entry-points."osimflow.executors"]` |
 | Verify a third-party executor plug-in against the contract (issue #1478) | subclass `osimflow.testing.ExecutorConformanceSuite` in the plug-in's test module and point its `executor_factory` at the plug-in; for non-pytest use `osimflow.testing.run_executor_conformance`. Suite covers submit/Handle lifecycle, transport.py result-reference handling, resource directives, fanout chunk size, and health-check registration. |
+| Verify a third-party algorithm plug-in against the contract (issue #1565) | subclass `osimflow.testing.AlgorithmConformanceSuite` in the plug-in's test module and point its `algorithm_factory` at the plug-in (typically `AlgorithmRegistry.get("my_plugin_name")`); for non-pytest use `osimflow.testing.run_algorithm_conformance`. Suite covers `n_samples` exactness, seed determinism, variable-name/order stability, dtype coercion via `osimflow.config.coerce_variable_type`, and cache-key reproducibility. Example: `class TestMyAlgoConformance(AlgorithmConformanceSuite): algorithm_factory = staticmethod(lambda: AlgorithmRegistry.get("my_plugin"))`. |
 | Add a new step to the DAG | new method on `Campaign` in `osimflow/campaign.py`, call it from `Campaign.run`, emit `StepTrace` hooks, declare inputs/outputs in `_STEP_DEPENDENCIES`; update §2 of this file |
 | Change a default OpenStudio version | `pyproject.toml` default **and** the `osimflow run --openstudio_version` default in `osimflow/__main__.py` |
 | Add a user-facing CLI flag | executor-specific: the `add_arguments` hook in `osimflow/executor_configs/<name>.py` **and** (if it maps to a config field) the matching `CampaignConfig`/`XConfig` field + `load_config` parser. Campaign-wide: `osimflow/__main__.py:_build_parser` (`add_argument`) **and** the matching `CampaignConfig` field in `osimflow/config.py` **and** the `load_config` parser. Either way AGENTS.md §3 must mention the new flag (`make contract` enforces it — the list is derived from the hooks/parser, issue #1575) |
