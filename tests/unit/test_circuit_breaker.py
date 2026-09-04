@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -293,3 +294,163 @@ class TestCircuitBreakerObservability:
         breaker = CircuitBreaker(name="no_cb", failure_threshold=1, cooldown_s=0.001)
         breaker.record_failure()
         assert breaker.state == "open"
+
+
+class TestCircuitBreakerHalfOpenSingleProbeGate:
+    """Multi-threaded tests for the half-open single-probe gate (issue #1569).
+
+    Before this gate, ``allow()`` returned ``True`` for every caller while
+    the breaker was ``half_open``, so a fan-out pool hitting a still-down
+    Redis after a cooldown all passed simultaneously and each burned the
+    5 s socket timeout before ``record_failure`` reopened the circuit.
+    With the gate, exactly one thread per half-open cycle is admitted;
+    the rest are rejected until the probe resolves.
+    """
+
+    @staticmethod
+    def _breach_half_open(
+        clock: FakeClock, failure_threshold: int, cooldown_s: float
+    ) -> CircuitBreaker:
+        """Return a breaker that is freshly transitioned into ``half_open``.
+
+        Tripping the breaker and advancing the fake clock past ``cooldown_s``
+        primes the gate so that the next ``allow()`` call sees ``half_open``
+        with the in-flight flag still unset.
+        """
+        breaker = CircuitBreaker(
+            failure_threshold=failure_threshold, cooldown_s=cooldown_s, clock=clock
+        )
+        for _ in range(failure_threshold):
+            breaker.record_failure()
+        assert breaker.state == "open"
+        clock.advance(cooldown_s * 2)
+        # Touching ``state`` runs the open → half_open transition eagerly
+        # so every worker thread races against the same starting state.
+        assert breaker.state == "half_open"
+        return breaker
+
+    def test_concurrent_allow_admits_exactly_one_probe_in_half_open(self) -> None:
+        """N threads gated on a Barrier all call ``allow()`` — one wins."""
+        n_threads = 16
+        clock = FakeClock()
+        breaker = self._breach_half_open(clock, failure_threshold=2, cooldown_s=0.01)
+
+        results: list[bool] = []
+        results_lock = threading.Lock()
+        barrier = threading.Barrier(n_threads)
+
+        def worker() -> None:
+            barrier.wait()  # release all workers simultaneously
+            admitted = breaker.allow()
+            with results_lock:
+                results.append(admitted)
+
+        threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        admitted_count = sum(1 for r in results if r)
+        rejected_count = sum(1 for r in results if not r)
+        assert admitted_count == 1, (
+            f"expected exactly one admitted probe under concurrency, got "
+            f"{admitted_count} (results={sorted(results)})"
+        )
+        assert rejected_count == n_threads - 1
+        # The gate must still hold — a second call without resolution
+        # still rejects.
+        assert breaker.allow() is False
+
+    def test_record_success_releases_gate_and_circuit_closes(self) -> None:
+        """After the admitted probe succeeds the gate clears and state → closed."""
+        clock = FakeClock()
+        breaker = self._breach_half_open(clock, failure_threshold=1, cooldown_s=0.01)
+
+        n_threads = 8
+        start_barrier = threading.Barrier(n_threads)
+        post_allow_barrier = threading.Barrier(n_threads)
+        results: list[bool] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            start_barrier.wait()
+            admitted = breaker.allow()
+            with results_lock:
+                results.append(admitted)
+            # Wait until every other worker has also returned from
+            # ``allow()`` so the admitted thread's ``record_success``
+            # does not race with the late arrivals (which would otherwise
+            # observe ``closed`` state and pass through unchecked).
+            post_allow_barrier.wait()
+            if admitted:
+                breaker.record_success()
+
+        threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sum(1 for r in results if r) == 1
+        assert breaker.state == "closed"
+        # After the success the breaker is closed: every follow-up allow()
+        # is admitted regardless of the gate (gate cleared, not stuck).
+        assert breaker.allow() is True
+
+    def test_record_failure_reopens_and_next_cycle_is_freshly_gated(self) -> None:
+        """A failing probe reopens the circuit; the next half-open cycle
+        admits exactly one probe again (gate does not leak)."""
+        clock = FakeClock()
+        breaker = self._breach_half_open(clock, failure_threshold=1, cooldown_s=0.01)
+
+        # First cycle: single admitted probe, then failure → re-open.
+        assert breaker.allow() is True
+        assert breaker.allow() is False  # gate holds
+        breaker.record_failure()
+        assert breaker.state == "open"
+
+        # Second cycle: cooldown elapses, gate is fresh.
+        clock.advance(0.02)
+        assert breaker.state == "half_open"
+
+        n_threads = 8
+        barrier = threading.Barrier(n_threads)
+        results: list[bool] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            barrier.wait()
+            with results_lock:
+                results.append(breaker.allow())
+
+        threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sum(1 for r in results if r) == 1, (
+            f"second cycle must also admit exactly one probe, got {sum(1 for r in results if r)}"
+        )
+
+    def test_closed_state_is_unaffected_by_gate(self) -> None:
+        """The gate is half-open-only; closed-state traffic is unchanged."""
+        n_threads = 16
+        breaker = CircuitBreaker(failure_threshold=5)
+        barrier = threading.Barrier(n_threads)
+        results: list[bool] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            barrier.wait()
+            with results_lock:
+                results.append(breaker.allow())
+
+        threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert results == [True] * n_threads

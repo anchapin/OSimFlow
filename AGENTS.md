@@ -420,7 +420,13 @@ name in this section.
   data plane in `DistributedCache` and `RedisDocumentStore`
   against persistent outages, issue #1111; `_consecutive_failures`
   is reset to 0 on a failed ``half_open`` → ``open`` transition,
-  issue #1379).
+  issue #1379; in ``half_open`` a lock-protected
+  `_half_open_in_flight` flag admits exactly one probe per
+  cycle and rejects every other concurrent caller until the
+  admitted probe resolves via `record_success` /
+  `record_failure`, issue #1569 — fan-out threads no longer
+  race past the cooldown boundary and burn per-call socket
+  timeouts on a still-down Redis).
 - `osimflow/distributed_jobqueue.py` — `DistributedJobQueue` +
   `build_job_queue` (Redis pub/sub wrapper).  Carries its own
   `CircuitBreaker(name=f"jobqueue:{campaign_id}")` (issue #1397) so
