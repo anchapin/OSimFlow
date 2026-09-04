@@ -48,7 +48,10 @@ def _flaky(n_failures: int, return_value: Path):
     def _callable(*_args: object, **_kwargs: object) -> Path:
         state["calls"] += 1
         if state["calls"] <= n_failures:
-            raise _transient(f"call {state['calls']} timed out")
+            # Issue #1568: use a message that trips the fallback
+            # ``"connection refused"`` marker (the bare ``"timed out"``
+            # substring was dropped from the marker list).
+            raise _transient(f"call {state['calls']} connection refused")
         return return_value
 
     return _callable, state
@@ -96,7 +99,7 @@ class TestRunWithRetry:
         monkeypatch.setattr("osimflow.work.time.sleep", sleep_calls.append)
         flaky, state = _flaky(n_failures=10, return_value=Path("/never"))
 
-        with pytest.raises(_TransientError, match="call 4 timed out"):
+        with pytest.raises(_TransientError, match="call 4 connection refused"):
             run_with_retry(flaky, max_retries=3, base_delay=0.5)
 
         assert state["calls"] == 4
@@ -187,13 +190,31 @@ class TestRunWithRetry:
     def test_message_level_network_timeout_still_transient(self) -> None:
         """Non-subprocess timeouts (network, I/O) remain transient.
 
-        The issue #1534 fix must be scoped to ``subprocess.TimeoutExpired``
-        only — a connection timeout raised by a client library is still a
-        legitimately retryable condition.
+        Issue #1534 scoped the fix to ``subprocess.TimeoutExpired`` only —
+        a connection timeout raised by a client library is still a
+        legitimately retryable condition. Issue #1568 sharpened this to
+        type-precise matching: a real ``TimeoutError`` (parent of
+        ``subprocess.TimeoutExpired`` in 3.11+) is matched on type, not
+        on a "timeout" substring scan.
         """
         from osimflow.work import _is_transient_error  # noqa: PLC0415
 
-        assert _is_transient_error(_transient("connection timed out")) is True
+        # Type-precise match — no message required.
+        assert _is_transient_error(TimeoutError("read timed out")) is True
+
+    def test_message_level_timeout_substring_no_longer_drives_decision(self) -> None:
+        """Issue #1568 — the substring scan no longer keys on ``"timeout"`` / ``"timed out"``.
+
+        A plain ``RuntimeError("connection timed out")`` must be
+        non-transient under the new type-precise semantics; legitimate
+        network timeouts now flow through the ``TimeoutError`` /
+        ``ConnectionError`` exception-type branch instead of the message
+        fallback. Guards against accidentally re-introducing the bare
+        ``"timeout"`` substring marker.
+        """
+        from osimflow.work import _is_transient_error  # noqa: PLC0415
+
+        assert _is_transient_error(_transient("connection timed out")) is False
 
     # ------------------------------------------------------------------
     # Exponential backoff — durations follow base_delay * 2**attempt
