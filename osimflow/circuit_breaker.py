@@ -72,6 +72,12 @@ class CircuitBreaker:
         self._opened_at = 0.0
         self._on_transition = on_transition
         self._clock = clock
+        # Half-open single-probe gate (issue #1569): when the circuit is in
+        # ``half_open``, at most one caller may hold a probe in flight at a
+        # time. Cleared on ``record_success`` / ``record_failure`` so the
+        # next half-open cycle (after another cooldown) admits a fresh
+        # single probe.
+        self._half_open_in_flight = False
 
     def _now(self) -> float:
         """Return the current monotonic time, honoring an injected clock.
@@ -116,16 +122,32 @@ class CircuitBreaker:
 
         Transitions ``open`` → ``half_open`` once the cooldown has elapsed;
         in ``half_open`` exactly one probe per ``record_success`` /
-        ``record_failure`` cycle is admitted.
+        ``record_failure`` cycle is admitted. Concurrent callers hitting
+        ``half_open`` simultaneously see only one ``True`` (the admitted
+        probe); every other caller gets ``False`` until the probe resolves
+        (issue #1569). Without this gate the breaker would let every
+        fan-out thread probe a still-down Redis simultaneously and burn
+        per-call socket timeouts — defeating the cooldown boundary that
+        :class:`~osimflow.distributed_cache.DistributedCache` relies on.
         """
         with self._lock:
             prev_state = self._state
             state = self._effective_state()
             if state != prev_state and self._on_transition is not None:
                 self._on_transition(self.name, prev_state, state)
-            # closed: normal operation. half_open: admit the single probe;
-            # its outcome resolves back to closed or re-opens.
-            return state in ("closed", "half_open")
+            if state == "closed":
+                return True
+            if state == "half_open":
+                # Single-probe gate: only the first caller past the
+                # transition sets the flag and is admitted. Subsequent
+                # callers (including those arriving concurrently) see the
+                # flag and are rejected until ``record_success`` /
+                # ``record_failure`` clears it.
+                if self._half_open_in_flight:
+                    return False
+                self._half_open_in_flight = True
+                return True
+            return False
 
     def check(self) -> None:
         """Like :meth:`allow` but raises :class:`CircuitOpenError`."""
@@ -142,6 +164,11 @@ class CircuitBreaker:
             prev_state = self._state
             self._consecutive_failures = 0
             self._state = "closed"
+            # Clear the half-open in-flight flag unconditionally — safe
+            # even if no probe was in flight (idempotent) and required to
+            # release the gate when the admitted probe succeeded
+            # (issue #1569).
+            self._half_open_in_flight = False
             if prev_state != "closed" and self._on_transition is not None:
                 self._on_transition(self.name, prev_state, "closed")
 
@@ -159,6 +186,12 @@ class CircuitBreaker:
         with self._lock:
             self._consecutive_failures += 1
             was_half_open = self._state == "half_open"
+            # Clear the half-open in-flight gate unconditionally: if a
+            # probe was in flight it has now resolved, so the next
+            # half-open cycle (after another cooldown) can admit a fresh
+            # single probe. Safe (idempotent) when no probe was in flight
+            # (issue #1569).
+            self._half_open_in_flight = False
             if self._consecutive_failures >= self.failure_threshold or was_half_open:
                 prev_state = self._state
                 self._state = "open"
