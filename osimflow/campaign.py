@@ -1059,6 +1059,66 @@ class Campaign:
         """
         self._sample_traces.checkpoint_sample(sid)
 
+    def _mark_sample_failed(
+        self,
+        sid: str,
+        step_name: str,
+        error: BaseException,
+        trace_id: str,
+    ) -> None:
+        """Record a per-sample failure for the given step (issue #1570).
+
+        Centralises the failure-marking path so ``_await_one`` can route
+        ``concurrent.futures.CancelledError`` and submitit cancellation
+        errors through the same accounting as ordinary ``Exception``
+        failures.  Without this helper, cancellation errors (which are
+        ``BaseException`` subclasses, not ``Exception``) escaped the
+        ``except Exception`` block and left the job-queue entry stuck
+        ``in_progress``, the sample-state dict empty, no checkpoint
+        row, no observability metric, and no ``sample.failed`` alert.
+
+        The helper performs four side-effects, in order, each mirroring
+        the pre-#1570 inline failure block:
+
+        1. ``_job_queue.mark_failed(...)`` (issue #263).
+        2. ``_sample_state[...]`` populated with ``<step>_exit_code=1``,
+           ``<step>_status="failed"``, ``error_summary`` (issue #847).
+        3. ``_checkpoint_sample(sid)`` — incremental run.json write.
+        4. ``_obs.record_sample_status(sid, "failed", ...)`` + the
+           ``sample.failed`` alert via ``_maybe_alert`` (issue #1180).
+
+        Must remain a no-throw on the accounting side: the 3-strike
+        ``CampaignAbortError`` from ``_checkpoint_sample`` propagates
+        to the caller unchanged so the concurrent fan-out remains
+        abortable.
+        """
+        # Mark failed in the job queue (issue #263).
+        self._job_queue.mark_failed(
+            f"{sid}_{step_name}",
+            str(error)[:500],
+        )
+        # Record failure in _sample_state so _finalize_samples
+        # and _checkpoint_sample see a consistent failed sample.
+        state = self._sample_state.setdefault(sid, {})
+        state[f"{step_name.lower()}_exit_code"] = 1
+        state[f"{step_name.lower()}_status"] = "failed"
+        state["error_summary"] = str(error)[:500]
+        self._checkpoint_sample(sid)
+        # Record sample status to observability backend immediately
+        # so crashed samples are not missed (issue #847).
+        self._obs.record_sample_status(sid, "failed", trace_id=trace_id)
+        # Send sample failure alert (issue #1180).
+        self._maybe_alert(
+            "sample.failed",
+            {
+                "campaign_id": self.trace.campaign_id,
+                "sample_id": sid,
+                "step": step_name,
+                "status": "failed",
+                "error": str(error)[:500],
+            },
+        )
+
     def _submit_and_await_all(
         self,
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
@@ -1194,32 +1254,33 @@ class Campaign:
                                 )
                                 # Fall through to mark as failed.
 
-                # Mark failed in the job queue (issue #263).
-                self._job_queue.mark_failed(
-                    f"{sid}_{step_name}",
-                    str(e)[:500],
+                self._mark_sample_failed(sid, step_name, e, trace_id)
+                return sid
+            except BaseException as e:  # noqa: BLE001 — intentional (issue #1570)
+                # Cancellation / broken futures surface as ``BaseException``
+                # subclasses (``concurrent.futures.CancelledError``,
+                # submitit's cancellation error, ...) that explicitly
+                # bypass ``except Exception`` in modern Python.  This
+                # fallback runs only after ``except Exception`` above has
+                # missed the exception, so it sees true cancellation
+                # errors (not ordinary ``RuntimeError``/etc.).  Without
+                # it the sample would skip the entire failure-recording
+                # path and silently disappear from run.json /
+                # failed_simulations.csv — exactly the crash/cancel
+                # scenario the BYO-monitoring contract is supposed to
+                # capture.  Genuine ``KeyboardInterrupt`` /
+                # ``SystemExit`` are re-raised unchanged so the user
+                # signal still propagates.
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
+                log.error(
+                    "%s %s cancelled: %s",
+                    step_name,
+                    sid,
+                    e,
+                    exc_info=True,
                 )
-                # Record failure in _sample_state so _finalize_samples
-                # and _checkpoint_sample see a consistent failed sample.
-                state = self._sample_state.setdefault(sid, {})
-                state[f"{step_name.lower}_exit_code"] = 1
-                state[f"{step_name.lower}_status"] = "failed"
-                state["error_summary"] = str(e)[:500]
-                self._checkpoint_sample(sid)
-                # Record sample status to observability backend immediately
-                # so crashed samples are not missed (issue #847).
-                self._obs.record_sample_status(sid, "failed", trace_id=trace_id)
-                # Send sample failure alert (issue #1180).
-                self._maybe_alert(
-                    "sample.failed",
-                    {
-                        "campaign_id": self.trace.campaign_id,
-                        "sample_id": sid,
-                        "step": step_name,
-                        "status": "failed",
-                        "error": str(e)[:500],
-                    },
-                )
+                self._mark_sample_failed(sid, step_name, e, trace_id)
                 return sid
             # Incremental checkpoint: update run.json after each sample
             # completes so SSE clients see live progress (issue #275).
