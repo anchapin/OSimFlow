@@ -107,6 +107,12 @@ class TestBaseExecutor:
             def submit(self, fn, *args, **kwargs) -> Handle:  # type: ignore[override]
                 raise NotImplementedError
 
+            def _do_submit(self, fn, *args, **kwargs) -> Handle:  # type: ignore[override]
+                # Issue #1563: ``_do_submit`` is the new abstract seam.
+                # Provide a body so this test still validates the
+                # ``submit`` / ``shutdown`` contract.
+                raise NotImplementedError
+
         with pytest.raises(TypeError):
             _Partial()  # type: ignore[abstract]
 
@@ -115,6 +121,9 @@ class TestBaseExecutor:
             name = "complete"
 
             def submit(self, fn, *args, **kwargs) -> Handle:  # type: ignore[override]
+                raise NotImplementedError
+
+            def _do_submit(self, fn, *args, **kwargs) -> Handle:  # type: ignore[override]
                 raise NotImplementedError
 
             def shutdown(self) -> None:
@@ -128,6 +137,9 @@ class TestBaseExecutor:
             name = "complete"
 
             def submit(self, fn, *args, **kwargs) -> Handle:  # type: ignore[override]
+                raise NotImplementedError
+
+            def _do_submit(self, fn, *args, **kwargs) -> Handle:  # type: ignore[override]
                 raise NotImplementedError
 
             def shutdown(self) -> None:

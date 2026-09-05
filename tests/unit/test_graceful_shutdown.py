@@ -40,8 +40,12 @@ class StubExecutor(BaseExecutor):
 
     def __init__(self) -> None:
         self._cancel_called = False
+        # Issue #1563: install a disabled rate limiter so
+        # ``BaseExecutor.submit`` (template method) can acquire a
+        # token before delegating to ``_do_submit``.
+        self._init_rate_limiter(None)
 
-    def submit(
+    def _do_submit(
         self,
         fn: Any,
         *args: Any,

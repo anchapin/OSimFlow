@@ -139,6 +139,7 @@ FLOORS: dict[str, float] = {
     "osimflow/_campaign_sharding.py": 85.05,  # measured 86.05%
     # --- osimflow/executors/*.py ---
     "osimflow/executors/__init__.py": 90.91,  # measured 91.91%
+    "osimflow/executors/_rate_limiter.py": 95.00,  # measured 96.00% (issue #1563; shared token bucket)
     "osimflow/executors/aws_batch_executor.py": 94.15,  # measured 95.15%
     "osimflow/executors/azure_batch_executor.py": 82.19,  # measured 83.19%
     "osimflow/executors/base.py": 93.57,  # measured 94.57%

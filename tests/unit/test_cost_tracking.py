@@ -822,6 +822,13 @@ class TestSupportsSpotMarketProtocol:
             def submit(self, fn, *args, **kwargs):
                 raise NotImplementedError
 
+            def _do_submit(self, fn, *args, **kwargs):  # noqa: ANN001, ANN201, ARG002
+                # Issue #1563: ``_do_submit`` is the new abstract seam
+                # (``submit`` became a template method that acquires a
+                # token from the shared limiter then delegates here).
+                # The dummy below mirrors the legacy ``submit`` body.
+                raise NotImplementedError
+
             def shutdown(self) -> None:
                 pass
 

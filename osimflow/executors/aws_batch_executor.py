@@ -1,10 +1,13 @@
-"""AWS Batch executor for OSimFlow campaigns (issues #5, #1010, #131).
+"""AWS Batch executor for OSimFlow campaigns (issues #5, #1010, #131, #1563).
 
 Wraps ``boto3.client('batch').submit_job`` to launch one Batch task per
 call, then polls ``describe_jobs`` (exponential backoff) until terminal
 state. Spot handling: ``_SpotPriceCache`` (60 s TTL) feeds the ceiling
-check, ``_TokenBucketRateLimiter`` (shared, token-bucket) throttles
-fan-out submits, and the handle retries Spot interruptions up to
+check, the shared :class:`~osimflow.executors._rate_limiter.TokenBucketRateLimiter`
+throttles fan-out submits (was a private ``_TokenBucketRateLimiter``
+class before issue #1563; now lives on
+:mod:`osimflow.executors._rate_limiter` so every substrate shares one
+implementation), and the handle retries Spot interruptions up to
 ``max_retries`` before falling back to on-demand.
 
 Security: credentials resolve through IAM-role-only botocore providers
@@ -22,7 +25,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 from osimflow.executors.base import (
     BaseExecutor,
@@ -219,67 +222,12 @@ class _AWSBatchHandle(PollingHandle):
 
 
 # ---------------------------------------------------------------------------
-# Token-bucket rate limiter + spot-price cache (issue #1010)
+# Spot-price cache (issue #1010)
 # ---------------------------------------------------------------------------
-class _TokenBucketRateLimiter:
-    """Thread-safe token-bucket rate limiter for AWS Batch submit throttling.
-
-    Shared across all ``AWSBatchExecutor`` instances via
-    :meth:`get_shared` so that concurrent submissions from multiple
-    executor objects stay within the per-account submit_job rate limit
-    (issue #1010).  AWS Batch documents ``submit_job`` at 1 000 TPS per
-    account; the default of 800 RPS leaves headroom for burst contention
-    between concurrent fan-out threads.
-    """
-
-    DEFAULT_RPS: float = 800.0
-
-    _INSTANCES: ClassVar[dict[float, _TokenBucketRateLimiter]] = {}
-    _INSTANCES_LOCK: ClassVar[threading.Lock] = threading.Lock()
-
-    def __init__(self, rps: float = DEFAULT_RPS) -> None:
-        self._disabled: bool = rps <= 0
-        self._rate: float = float(rps) if not self._disabled else 0.0
-        self._capacity: int = max(int(rps), 1) if not self._disabled else 1
-        self._tokens: float = float(self._capacity)
-        self._last_refill: float = time.monotonic()
-        self._lock: threading.Lock = threading.Lock()
-
-    @classmethod
-    def get_shared(cls, rps: float | None = None) -> _TokenBucketRateLimiter:
-        """Return a shared limiter for the requested RPS (singleton per RPS).
-
-        All executor instances requesting the same RPS share the same
-        bucket, ensuring the aggregate submit rate stays bounded.
-        ``rps=None`` falls back to the default (800). ``rps=0`` disables
-        rate limiting entirely (use with caution).
-        """
-        effective: float = cls.DEFAULT_RPS if rps is None else float(rps)
-        with cls._INSTANCES_LOCK:
-            if effective not in cls._INSTANCES:
-                cls._INSTANCES[effective] = cls(rps=effective)
-            return cls._INSTANCES[effective]
-
-    def acquire(self) -> None:
-        """Block until a token is available, then consume one."""
-        if self._disabled:
-            return
-        while True:
-            with self._lock:
-                now = time.monotonic()
-                elapsed = now - self._last_refill
-                self._tokens = min(
-                    float(self._capacity),
-                    self._tokens + elapsed * self._rate,
-                )
-                self._last_refill = now
-                if self._tokens >= 1.0:
-                    self._tokens -= 1.0
-                    return
-                deficit = 1.0 - self._tokens
-                wait_s = deficit / self._rate
-            # Sleep without holding the lock so other threads aren't blocked.
-            time.sleep(wait_s)
+# Token-bucket rate limiting moved to :mod:`osimflow.executors._rate_limiter`
+# (issue #1563). ``AWSBatchExecutor`` shares one
+# :class:`~osimflow.executors._rate_limiter.TokenBucketRateLimiter` with
+# every other substrate via :meth:`BaseExecutor._init_rate_limiter`.
 
 
 class _SpotPriceCache:
@@ -400,7 +348,14 @@ class AWSBatchExecutor(BaseExecutor):
         "RequestLimitExceeded",
     )
 
-    _DEFAULT_SUBMIT_RPS: float = 800.0
+    # Issue #1563: substrate-appropriate default submit rate. AWS Batch
+    # documents ``submit_job`` at 1 000 TPS per account; the legacy
+    # ``--aws-batch-submit-rps`` defaulted to 800 to leave headroom for
+    # burst contention. We preserve that here so existing
+    # ``--aws-batch-submit-rps=800`` (now mapped to ``--submit-rps``)
+    # users keep the same semantics. ``_init_rate_limiter`` shares one
+    # bucket across all ``AWSBatchExecutor`` instances.
+    default_submit_rps: float | None = 800.0
 
     def __init__(
         self,
@@ -515,9 +470,12 @@ class AWSBatchExecutor(BaseExecutor):
         self._retry_config = BotoConfig(
             retries={"mode": "adaptive", "max_attempts": 10},
         )
-        # Token-bucket submit rate limiter, shared across all executor
-        # instances (issue #1010). Prevents ThrottlingException at fan-out.
-        self._submit_limiter = _TokenBucketRateLimiter.get_shared(rps=submit_rps)
+        # Issue #1563: shared token-bucket limiter (replaces the
+        # private ``_TokenBucketRateLimiter`` that used to live in
+        # this module — now lives on
+        # :mod:`osimflow.executors._rate_limiter`). ``BaseExecutor.submit``
+        # acquires from it before calling ``_do_submit``.
+        self._init_rate_limiter(submit_rps)
         # Spot price cache with 60s TTL — avoids one EC2 API call per
         # sample in a 10K-sample campaign (issue #1010).
         self._spot_price_cache = _SpotPriceCache(ttl_s=60.0)
@@ -830,10 +788,12 @@ class AWSBatchExecutor(BaseExecutor):
 
         Uses *job_queue* if provided, otherwise ``self.job_queue``.
 
-        Throttles via the shared token-bucket rate limiter (issue #1010)
-        and retries on ``ThrottlingException`` / ``RequestLimitExceeded``
-        with exponential backoff as defense-in-depth on top of boto3's
-        adaptive retry mode.
+        Throttling is owned by :meth:`BaseExecutor.submit` (issue #1563)
+        — every AWS Batch submission acquires a token from the shared
+        ``TokenBucketRateLimiter`` before this method is called.
+        Retries on ``ThrottlingException`` / ``RequestLimitExceeded``
+        remain here as defense-in-depth on top of boto3's adaptive
+        retry mode.
 
         When ``command`` is provided, it overrides the job definition's
         container command (e.g. to run ``python -m osimflow.remote_runner``).
@@ -853,8 +813,6 @@ class AWSBatchExecutor(BaseExecutor):
             "containerOverrides": overrides,
             "timeout": {"attemptDurationSeconds": attempt_duration_seconds},
         }
-        # Acquire a rate-limiter token before submitting (issue #1010).
-        self._submit_limiter.acquire()
         response = self._submit_job_with_retry(submit_kwargs)
         job_id: str = str(response["jobId"])
         log.info("aws_batch submit_job -> jobId=%s queue=%s", job_id, queue)
@@ -901,7 +859,7 @@ class AWSBatchExecutor(BaseExecutor):
             on_retry=_on_retry,
         )
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

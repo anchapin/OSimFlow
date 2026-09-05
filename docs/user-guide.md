@@ -229,6 +229,7 @@ All flags are passed to the `osimflow run` subcommand.
 |---|---|---|---|
 | `--executor` | choice | `local` | Executor backend. Accepted values: `local`, `slurm`, `aws_batch`, `azure_batch`, `google_batch`, `kubernetes`, `pbs`, `dask_jobqueue`, `nomad`, `docker_swarm`. See [§5 Running Campaigns](#5-running-campaigns) for one-paragraph quick-starts per executor. |
 | `--max-workers` | int | `cpu_count() or 4` | Thread pool size for `local` executor. Defaults to the host CPU count (PR #1375). |
+| `--submit-rps` | float | per-executor | Submit rate limit (requests/second) applied via the shared token-bucket rate limiter (issue #1563). Overrides the chosen executor's substrate-appropriate default (AWS/Azure/Google Batch = 10, Nomad/Kubernetes = 5, Slurm/PBS = 100, Docker Swarm = 20, Dask-JobQueue = 50, Local = off). Set to a low value for throttling conformance checks; leave unset to use the executor default. The legacy `--aws-batch-submit-rps` and `--nomad-fanout-submit-rate-per-sec` flags are still accepted but superseded by `--submit-rps`. |
 
 #### Slurm-specific
 

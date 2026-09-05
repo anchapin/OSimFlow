@@ -235,6 +235,13 @@ class DockerSwarmExecutor(BaseExecutor):
 
     name = "docker_swarm"
 
+    #: Issue #1563: Docker Swarm's ``services.create`` hits the
+    #: Swarm manager's Raft applies — burst fan-out from a single
+    #: orchestrator can stall task admission. 20 RPS matches a
+    #: middle ground (the manager can typically absorb this; larger
+    #: campaigns should override).
+    default_submit_rps: float | None = 20.0
+
     @property
     def requires_remote_runner_payload(self) -> bool:
         return True
@@ -247,6 +254,7 @@ class DockerSwarmExecutor(BaseExecutor):
         max_poll_interval_s: float = 60.0,
         image: str = "nrel/openstudio:3.11.0",
         network: str | None = None,
+        submit_rps: float | None = None,
     ):
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
@@ -254,6 +262,12 @@ class DockerSwarmExecutor(BaseExecutor):
         self.network = network
         self._client: Any = None
         self._stub_executor: Any = None
+        # Issue #1563: shared token-bucket limiter. The dev-fallback
+        # path (``OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK``) routes through
+        # ``LocalExecutor``, so the throttle is effectively a no-op for
+        # local-only test runs (``rate=20`` on LocalExecutor is still
+        # ~50 ms / call — acceptable).
+        self._init_rate_limiter(submit_rps)
 
         if self.image.endswith(":latest"):
             log.warning(
@@ -537,7 +551,7 @@ class DockerSwarmExecutor(BaseExecutor):
                 f"failed to create Docker Swarm service {service_name!r}: {exc}"
             ) from exc
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

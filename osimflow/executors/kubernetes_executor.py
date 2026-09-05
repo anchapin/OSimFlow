@@ -273,6 +273,11 @@ class KubernetesExecutor(BaseExecutor):
 
     name = "kubernetes"
 
+    #: Issue #1563: K8s API server is the most rate-limit-sensitive
+    #: substrate in the matrix; 5 RPS is conservative but well below
+    #: documented client-go ``discovery`` retry ceilings.
+    default_submit_rps: float | None = 5.0
+
     @property
     def requires_remote_runner_payload(self) -> bool:
         return True
@@ -289,6 +294,7 @@ class KubernetesExecutor(BaseExecutor):
         queue_name: str | None = None,
         security_context_strict: bool = True,
         payload_secret_ref: str | None = None,
+        submit_rps: float | None = None,
     ):
         self.namespace = namespace
         self.poll_interval_s = poll_interval_s
@@ -335,6 +341,12 @@ class KubernetesExecutor(BaseExecutor):
         # Issue #1331: cached version negotiation results.
         self._negotiated_versions: list[str] | None = None
         self._negotiated_image: str | None = None
+        # Issue #1563: shared token-bucket limiter. K8s API server is
+        # the most rate-limit-sensitive substrate in the matrix
+        # (``discovery client`` retries + ``flowcontrol.apiserver``
+        # throttling on burst). 5 RPS matches the Nomad default so
+        # the campaign-side pacing is uniform across remote substrates.
+        self._init_rate_limiter(submit_rps)
 
     def _get_client(self) -> Any:
         """Lazy Kubernetes client construction using config.load_kube_config
@@ -706,7 +718,7 @@ class KubernetesExecutor(BaseExecutor):
         )
         return job_name
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

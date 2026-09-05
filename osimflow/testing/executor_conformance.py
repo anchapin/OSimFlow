@@ -144,6 +144,7 @@ def run_executor_conformance(
     _check_transport_result_hint_default(report)
     _check_transport_result_hint_path_payload(report)
     _check_fanout_chunk_size_positive(executor, report)
+    _check_submit_throttles_when_low_rps(executor, report)
     if run_stub_campaign:
         _check_three_sample_stub_campaign(executor, report, example_package, n_samples)
     return report
@@ -394,6 +395,61 @@ def _check_fanout_chunk_size_positive(executor: BaseExecutor, report: Conformanc
         ok = False
         detail = f"{type(exc).__name__}: {exc}"
     report.checks.append(ConformanceCheck("fanout_chunk_size_positive", ok, detail))
+
+
+def _check_submit_throttles_when_low_rps(executor: BaseExecutor, report: ConformanceReport) -> None:
+    """``submit()`` must acquire from the shared rate limiter (issue #1563).
+
+    The check installs a temporary ``TokenBucketRateLimiter(rate=20, burst=1)``
+    on the executor, drains the single token, then measures how long a
+    second ``submit()`` call takes. With a 1-token burst at 20 RPS the
+    second call has to wait ~50 ms for the bucket to refill — slack
+    ``>= 40 ms`` absorbs scheduling jitter.
+
+    The check does not depend on the executor's substrate — it only
+    exercises ``BaseExecutor.submit``'s template-method acquire path.
+    """
+    from osimflow.executors._rate_limiter import (  # noqa: PLC0415
+        TokenBucketRateLimiter,
+    )
+
+    limiter = TokenBucketRateLimiter(rate_per_sec=20.0, burst=1)
+    original: TokenBucketRateLimiter | None = getattr(executor, "_rate_limiter", None)
+    executor._rate_limiter = limiter  # noqa: SLF001
+    try:
+        limiter.acquire()  # drain the single token
+        t0 = time.monotonic()
+        try:
+            handle = executor.submit(lambda: None, name="conformance_throttle")
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            detail = f"second submit() raised {type(exc).__name__}: {exc}"
+            report.checks.append(ConformanceCheck("submit_throttles_when_low_rps", ok, detail))
+            return
+        # Drain the handle result so the thread pool completes; we don't
+        # care about the value, only that submit() returned and didn't
+        # crash.
+        try:
+            if hasattr(handle, "result"):
+                handle.result(timeout=_DEFAULT_TIMEOUT_S)
+        except Exception:  # noqa: BLE001
+            pass
+        elapsed = time.monotonic() - t0
+        # 50 ms expected; slack 40 ms absorbs scheduling jitter on slow CI.
+        ok = elapsed >= 0.04
+        detail = (
+            f"submit() blocked {elapsed * 1000:.1f}ms with rate=20 burst=1 "
+            f"(expected >=40ms; rate=20 means 50ms refill interval)"
+        )
+    except AttributeError as exc:
+        ok = False
+        detail = (
+            f"executor {executor.name!r} has no ``_rate_limiter`` slot — "
+            f"BaseExecutor.submit cannot enforce throttling. ({exc})"
+        )
+    finally:
+        executor._rate_limiter = original  # type: ignore[assignment]  # noqa: SLF001
+    report.checks.append(ConformanceCheck("submit_throttles_when_low_rps", ok, detail))
 
 
 def _check_three_sample_stub_campaign(
@@ -665,6 +721,43 @@ class ExecutorConformanceSuite:
         chunk = conformance_executor.fanout_submit_chunk_size(1000)
         assert isinstance(chunk, int)
         assert chunk > 0
+
+    def test_submit_throttles_when_low_rps(self, conformance_executor: BaseExecutor) -> None:
+        """``submit()`` acquires from the shared rate limiter (issue #1563).
+
+        Installs a ``TokenBucketRateLimiter(rate=20, burst=1)`` on the
+        executor, drains the single token, then asserts that a second
+        ``submit()`` call takes ``>= 40 ms`` (50 ms expected — the
+        slack absorbs CI scheduling jitter). The check is fast (no
+        wall-clock wait of seconds) and substrate-agnostic — it only
+        exercises ``BaseExecutor.submit``'s template-method acquire.
+        """
+        from osimflow.executors._rate_limiter import (  # noqa: PLC0415
+            TokenBucketRateLimiter,
+        )
+
+        limiter = TokenBucketRateLimiter(rate_per_sec=20.0, burst=1)
+        original: TokenBucketRateLimiter | None = getattr(
+            conformance_executor, "_rate_limiter", None
+        )
+        conformance_executor._rate_limiter = limiter  # noqa: SLF001
+        try:
+            limiter.acquire()  # drain the single token
+            t0 = time.monotonic()
+            handle = conformance_executor.submit(lambda: None, name="conformance_throttle")
+            try:
+                if hasattr(handle, "result"):
+                    handle.result(timeout=_DEFAULT_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 — substrate may not support .result()
+                pass
+            elapsed = time.monotonic() - t0
+        finally:
+            conformance_executor._rate_limiter = original  # type: ignore[assignment]  # noqa: SLF001
+
+        assert elapsed >= 0.04, (
+            f"submit() did not throttle under rate=20 burst=1; took {elapsed * 1000:.1f}ms "
+            f"(expected >=40ms)"
+        )
 
     # ---- Health-check registration ----
 

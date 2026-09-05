@@ -86,7 +86,19 @@ class LocalExecutor(BaseExecutor):
 
     name = "local"
 
-    def __init__(self, max_workers: int | None = None, max_concurrent_samples: int | None = None):
+    #: Local execution has no substrate quota to bump against — set the
+    #: default to ``inf`` so the shared limiter is constructed as a no-op
+    #: (issue #1563). The base class default is ``None`` so we record
+    #: the policy decision explicitly here.
+    default_submit_rps: float | None = float("inf")
+
+    def __init__(
+        self,
+        max_workers: int | None = None,
+        max_concurrent_samples: int | None = None,
+        *,
+        submit_rps: float | None = None,
+    ):
         if max_workers is None:
             import os
 
@@ -98,8 +110,13 @@ class LocalExecutor(BaseExecutor):
             )
         else:
             self._semaphore = None
+        # Issue #1563: shared rate limiter (no-op at the default
+        # ``inf``). Users that want to artificially throttle local
+        # fan-out can pass ``submit_rps=20`` (for example) for
+        # conformance checks.
+        self._init_rate_limiter(submit_rps)
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

@@ -234,6 +234,10 @@ class GoogleBatchExecutor(BaseExecutor):
     """
 
     name = "google_batch"
+
+    #: Issue #1563: matches AWS/Azure Batch defaults so campaign-side
+    #: pacing is uniform across cloud substrates.
+    default_submit_rps: float | None = 10.0
     supports_spot_market = True
 
     @property
@@ -321,6 +325,7 @@ class GoogleBatchExecutor(BaseExecutor):
         use_spot: bool = False,
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
+        submit_rps: float | None = None,
     ):
         from google.cloud import batch_v1
 
@@ -338,6 +343,11 @@ class GoogleBatchExecutor(BaseExecutor):
         # ``_resolve_container_image`` is callable without going through
         # ``submit()`` (e.g. unit tests); overridden by ``submit()``.
         self._container_digest: str | None = None
+        # Issue #1563: shared token-bucket limiter. Google's CreateJob
+        # quota is generous but unbounded fan-out triggers plan/apply
+        # back-pressure; 10 RPS matches AWS/Azure defaults so the
+        # campaign-side pacing is uniform across cloud substrates.
+        self._init_rate_limiter(submit_rps)
 
     def _get_client(self) -> Any:
         """Lazy Google Cloud Batch synchronous client construction."""
@@ -470,7 +480,7 @@ class GoogleBatchExecutor(BaseExecutor):
         )
         return job_name
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

@@ -178,6 +178,11 @@ def _pbs_factory() -> BaseExecutor:
     ex._submit_job = _stub_submit_job  # type: ignore[method-assign]
     ex._wait_for_terminal = _stub_wait_for_terminal  # type: ignore[method-assign]
     ex._query_job_state = _stub_query_job_state  # type: ignore[method-assign]
+    # Issue #1563: ``BaseExecutor.submit`` funnels through the shared
+    # ``TokenBucketRateLimiter``; the conformance sweep bypasses the
+    # real constructor (via ``__new__``), so install a disabled limiter
+    # explicitly here.
+    ex._init_rate_limiter(None)
     return ex
 
 
@@ -202,6 +207,9 @@ def _aws_batch_factory() -> BaseExecutor:
     ex._botocore_session = None
     ex._wait_for_terminal = _stub_wait_for_terminal(_succeeded_terminal_job())  # type: ignore[method-assign]
     ex._submit_job = _stub_submit_job("aws")  # type: ignore[method-assign]
+    # Issue #1563: ``__new__``-based factory bypasses the real ctor;
+    # install a disabled limiter explicitly so ``submit()`` works.
+    ex._init_rate_limiter(None)
     return ex
 
 
@@ -242,6 +250,8 @@ def _azure_batch_factory() -> BaseExecutor:
 
     ex._get_task = _stub_get_task  # type: ignore[method-assign]
     ex._wait_for_terminal = _stub_wait  # type: ignore[method-assign]
+    # Issue #1563: install a disabled limiter (bypassed real ctor).
+    ex._init_rate_limiter(None)
     return ex
 
 
@@ -276,6 +286,8 @@ def _google_batch_factory() -> BaseExecutor:
 
     ex._submit_job = _stub_submit_job("google")  # type: ignore[method-assign]
     ex._wait_for_terminal = _stub_wait  # type: ignore[method-assign]
+    # Issue #1563: install a disabled limiter (bypassed real ctor).
+    ex._init_rate_limiter(None)
     return ex
 
 
@@ -327,6 +339,8 @@ def _nomad_factory() -> BaseExecutor:
         return {"ClientStatus": "complete"}
 
     ex._wait_for_terminal = _stub_wait  # type: ignore[method-assign]
+    # Issue #1563: install a disabled limiter (bypassed real ctor).
+    ex._init_rate_limiter(None)
     return ex
 
 
@@ -362,6 +376,8 @@ def _kubernetes_factory() -> BaseExecutor:
 
     ex._get_pod_status = _stub_get_pod_status  # type: ignore[method-assign]
     ex._wait_for_terminal = _stub_wait  # type: ignore[method-assign]
+    # Issue #1563: install a disabled limiter (bypassed real ctor).
+    ex._init_rate_limiter(None)
     return ex
 
 
@@ -393,6 +409,8 @@ def _docker_swarm_factory() -> BaseExecutor:
     # docker SDK's ``services.create()``.
     ex._check_docker_available = lambda: False  # type: ignore[method-assign]
     ex._is_dev_fallback_enabled = lambda: True  # type: ignore[method-assign]
+    # Issue #1563: install a disabled limiter (bypassed real ctor).
+    ex._init_rate_limiter(None)
     return ex
 
 
@@ -432,6 +450,8 @@ def _dask_jobqueue_factory() -> BaseExecutor:
     fake_cluster.close = MagicMock()
     ex._cluster = fake_cluster
     ex._client = fake_client
+    # Issue #1563: install a disabled limiter (bypassed real ctor).
+    ex._init_rate_limiter(None)
     return ex
 
 

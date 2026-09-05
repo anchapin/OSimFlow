@@ -24,7 +24,7 @@ from its own module (``local_executor``, ``slurm_executor``,
 ``from osimflow.executors import <Name>`` keeps working unchanged.
 
 Issue #1574 separated the testing patch surface from this package:
-private helpers (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``, ...),
+private helpers (``_AWSBatchHandle``, ...),
 the ``time`` / ``random`` stdlib modules, and the transport helpers now
 live on :mod:`osimflow.testing.patch_targets` — tests patch through
 that module instead of this one. The bare ``import time`` / ``import
@@ -99,7 +99,10 @@ _DEPRECATED_PRIVATE_NAMES: dict[str, str] = {
     # AWS Batch (osimflow.executors.aws_batch_executor)
     "_AWSBatchHandle": "osimflow.executors.aws_batch_executor",
     "_SpotPriceCache": "osimflow.executors.aws_batch_executor",
-    "_TokenBucketRateLimiter": "osimflow.executors.aws_batch_executor",
+    "_TokenBucketRateLimiter": (
+        "osimflow.executors._rate_limiter.TokenBucketRateLimiter "
+        "(issue #1563 — moved out of aws_batch_executor)"
+    ),
     "_aws_error_code": "osimflow.executors.aws_batch_executor",
     # Nomad (osimflow.executors.nomad_executor)
     "_NOMAD_RETRY_CAP_S": "osimflow.executors.nomad_executor",
