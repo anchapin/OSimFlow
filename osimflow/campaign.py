@@ -1202,13 +1202,21 @@ class Campaign:
             except Exception as e:
                 log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
 
-                # Worker auto-recovery (issue #443): check if heartbeat is stale.
-                # If stale and auto-recovery is enabled, attempt resubmission.
+                # Worker auto-recovery (issue #443, #1567): loop the
+                # resubmit until ``max_sample_retries`` is exhausted.
+                # ``recovery_manager.check_and_recover`` gates each
+                # iteration on heartbeat staleness and the recorded
+                # attempt count, so the loop naturally terminates when
+                # the retry budget is spent (or the worker comes back
+                # alive and the heartbeat is no longer stale).
+                recovered = False
                 if recovery_manager is not None and resubmit_callback is not None:
-                    can_recover, attempt = recovery_manager.check_and_recover(
-                        sid, self.cfg.max_sample_retries
-                    )
-                    if can_recover:
+                    for _ in range(self.cfg.max_sample_retries):
+                        can_recover, attempt = recovery_manager.check_and_recover(
+                            sid, self.cfg.max_sample_retries
+                        )
+                        if not can_recover:
+                            break
                         log.info(
                             "%s %s: stale heartbeat detected (attempt %d/%d), auto-recovering",
                             step_name,
@@ -1217,44 +1225,62 @@ class Campaign:
                             self.cfg.max_sample_retries,
                         )
                         # Clear the failed state so recovery doesn't show as failed.
+                        # NOTE: ``step_name.lower()`` must be called (issue #1567):
+                        # the unparenthesised ``step_name.lower`` is the bound
+                        # method object, not the lowercase string, so the prior
+                        # ``state.pop`` calls targeted garbage keys and the
+                        # clearing was dead code.
                         state = self._sample_state.setdefault(sid, {})
-                        state.pop(f"{step_name.lower}_exit_code", None)
-                        state.pop(f"{step_name.lower}_status", None)
+                        state.pop(f"{step_name.lower()}_exit_code", None)
+                        state.pop(f"{step_name.lower()}_status", None)
                         state.pop("error_summary", None)
                         # Resubmit and await the new handle.
                         new_handle = resubmit_callback(sid)
-                        if new_handle is not None:
-                            # Capture sid for use in the resubmit logic.
-                            recovery_sid = sid
+                        if new_handle is None:
+                            log.error(
+                                "%s %s auto-recovery: resubmit_callback returned None, "
+                                "aborting retries",
+                                step_name,
+                                sid,
+                            )
+                            break
+                        recovery_sid = sid
 
-                            # Create a new on_success callback wrapper for the resubmit.
-                            def _on_success_resubmit(
-                                result_path: Any,
-                                _recovery_sid: str = recovery_sid,
-                                _on_success: Callable[[Any], None] = on_success,
-                            ) -> None:
-                                _on_success(result_path)
-                                if recovery_manager is not None:
-                                    recovery_manager.reset(_recovery_sid)
+                        # Await the resubmitted handle.
+                        try:
+                            result = new_handle.result()
+                        except Exception as resubmit_error:
+                            log.error(
+                                "%s %s auto-recovery attempt %d/%d failed: %s",
+                                step_name,
+                                sid,
+                                attempt,
+                                self.cfg.max_sample_retries,
+                                resubmit_error,
+                                exc_info=True,
+                            )
+                            # Continue the loop: re-enter check_and_recover
+                            # for the next attempt (issue #1567).
+                            continue
 
-                            # Await the resubmitted handle.
-                            try:
-                                result = new_handle.result()
-                                _on_success_resubmit(result)
-                                self._job_queue.mark_completed(f"{recovery_sid}_{step_name}")
-                                self._checkpoint_sample(recovery_sid)
-                                return recovery_sid
-                            except Exception as resubmit_error:
-                                log.error(
-                                    "%s %s auto-recovery failed: %s",
-                                    step_name,
-                                    sid,
-                                    resubmit_error,
-                                    exc_info=True,
-                                )
-                                # Fall through to mark as failed.
+                        # Create a new on_success callback wrapper for the resubmit.
+                        def _on_success_resubmit(
+                            result_path: Any,
+                            _recovery_sid: str = recovery_sid,
+                            _on_success: Callable[[Any], None] = on_success,
+                        ) -> None:
+                            _on_success(result_path)
+                            if recovery_manager is not None:
+                                recovery_manager.reset(_recovery_sid)
 
-                self._mark_sample_failed(sid, step_name, e, trace_id)
+                        _on_success_resubmit(result)
+                        self._job_queue.mark_completed(f"{recovery_sid}_{step_name}")
+                        self._checkpoint_sample(recovery_sid)
+                        recovered = True
+                        return recovery_sid
+
+                if not recovered:
+                    self._mark_sample_failed(sid, step_name, e, trace_id)
                 return sid
             except BaseException as e:  # noqa: BLE001 — intentional (issue #1570)
                 # Cancellation / broken futures surface as ``BaseException``
@@ -3211,6 +3237,41 @@ class Campaign:
         self._obs.record_step_duration("APPLY_PARAMETERS", time.time() - t0, generation=generation)
         return out
 
+    def _build_run_sim_submit_kwargs(
+        self,
+        ctx: dict[str, Any],
+        sid: str,
+        os_version: str,
+    ) -> dict[str, Any]:
+        """Build the kwargs for ``run_openstudio_sim`` executor submission.
+
+        Shared by the primary fan-out submit
+        (:meth:`step_run_openstudio_sim`) and the auto-recovery resubmit
+        callback so the two paths cannot diverge again (issue #1567).
+        The previous resubmit path silently dropped ``timeout_s`` and
+        other kwargs, causing recovered samples to fall back to the
+        default 600 s function-level timeout.
+
+        ``ctx`` is the per-sample ``pending[sid]`` dict assembled in
+        ``step_run_openstudio_sim`` (Phase 1).  Returns a fresh dict so
+        callers can safely ``**`` it without aliasing.
+        """
+        return {
+            "name": f"sim_{sid}",
+            "cpus": 4,
+            "memory_mb": 8 * 1024,
+            "time_min": 240,
+            "container": CONTAINER_OS.format(version=os_version),
+            "container_digest": self._os_container_digest,
+            "openstudio_version": os_version,
+            "stdout_path": ctx["stdout_log"],
+            "stderr_path": ctx["stderr_log"],
+            "max_retries": self.cfg.max_sample_retries,
+            "timeout_s": self.cfg.byos_timeout_s,
+            "worker_id": "local",
+            "result_hint": Path(ctx["out_dir"]) / sid,
+        }
+
     def step_run_openstudio_sim(  # noqa: PLR0912, PLR0915
         self,
         parameterized: SampleDict,
@@ -3338,24 +3399,16 @@ class Campaign:
                         worker_id="local",
                     )
                 else:
+                    # Use the shared kwargs builder (issue #1567) so the
+                    # resubmit path cannot silently drop ``timeout_s`` or
+                    # any other submit kwarg the primary path sets.
                     return self.executor.submit(
                         run_openstudio_sim,
                         ctx["mod_pkg"],
                         sid,
                         os_version,
                         ctx["out_dir"],
-                        name=f"sim_{sid}",
-                        cpus=4,
-                        memory_mb=8 * 1024,
-                        time_min=240,
-                        container=CONTAINER_OS.format(version=os_version),
-                        container_digest=self._os_container_digest,
-                        openstudio_version=os_version,
-                        stdout_path=ctx["stdout_log"],
-                        stderr_path=ctx["stderr_log"],
-                        max_retries=self.cfg.max_sample_retries,
-                        worker_id="local",
-                        result_hint=Path(ctx["out_dir"]) / sid,
+                        **self._build_run_sim_submit_kwargs(ctx, sid, os_version),
                         **self._executor_submit_transport_kwargs,
                     )
 
@@ -3413,25 +3466,15 @@ class Campaign:
                         worker_id="local",
                     )
                 else:
+                    # Use the shared kwargs builder (issue #1567) so the
+                    # primary and resubmit paths stay in lock-step.
                     handle = self.executor.submit(
                         run_openstudio_sim,
                         ctx["mod_pkg"],
                         sid,
                         os_version,
                         ctx["out_dir"],
-                        name=f"sim_{sid}",
-                        cpus=4,
-                        memory_mb=8 * 1024,
-                        time_min=240,
-                        container=CONTAINER_OS.format(version=os_version),
-                        container_digest=self._os_container_digest,
-                        openstudio_version=os_version,
-                        stdout_path=ctx["stdout_log"],
-                        stderr_path=ctx["stderr_log"],
-                        max_retries=self.cfg.max_sample_retries,
-                        timeout_s=self.cfg.byos_timeout_s,
-                        worker_id="local",
-                        result_hint=Path(ctx["out_dir"]) / sid,
+                        **self._build_run_sim_submit_kwargs(ctx, sid, os_version),
                         **self._executor_submit_transport_kwargs,
                     )
 
