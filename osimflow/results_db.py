@@ -41,6 +41,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ._sqlite_store import connect as _store_connect
+
 log = logging.getLogger("osimflow.results_db")
 
 SCHEMA = """
@@ -109,11 +111,13 @@ class ResultsDatabase:
         conn.close()
 
     def _connect(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA busy_timeout=5000")
-        c.row_factory = sqlite3.Row
-        return c
+        # Issue #1564: shared SQLite access primitive — WAL, busy_timeout,
+        # synchronous=NORMAL, locking_mode=NORMAL, check_same_thread=False,
+        # timeout=10.0, and row_factory=sqlite3.Row now live in
+        # osimflow._sqlite_store. The schema PRAGMAs are the same as
+        # before; the extra ``synchronous=NORMAL`` / ``locking_mode=NORMAL``
+        # are SQLite-recommended for a shared database (issues #620/#1340).
+        return _store_connect(self.db_path)
 
     def _ensure_conn(self) -> sqlite3.Connection:
         if self._conn is None:

@@ -67,7 +67,6 @@ __all__ = ["DistributedCache", "build_cache", "campaign_state_namespace"]
 import hashlib
 import json
 import logging
-import os
 import ssl
 import threading
 import time
@@ -75,6 +74,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from ._sqlite_store import per_pid_path
 from .cache import CacheKey, CacheStats, SQLiteCache
 from .circuit_breaker import CircuitBreaker
 
@@ -182,16 +182,12 @@ def campaign_state_namespace(outdir: Path) -> str:
     return f"outdir-{digest}"
 
 
-def _private_db_path(db_path: Path) -> Path:
-    """Return the process-private variant of ``db_path``.
-
-    ``cache.sqlite`` -> ``cache.p<pid>.sqlite``.  The ``.sqlite`` suffix is
-    preserved so artifact-manifest categorisation (which keys on suffix)
-    still classifies the file as cache.  Every process gets its own file,
-    so concurrent campaign processes never lock the same SQLite database
-    (issue #993 / T8.1 reproducer).
-    """
-    return db_path.with_name(f"{db_path.stem}.p{os.getpid()}{db_path.suffix}")
+# Issue #1564: pid-private path scheme now lives in
+# ``osimflow._sqlite_store.per_pid_path``. The class-level method below
+# (``_private_db_path``) is preserved as a thin alias for any third-party
+# caller that imports it directly (issue #993 originally added it as a
+# module-level helper before issue #1564).
+_private_db_path = per_pid_path
 
 
 def _field_for_key(key: CacheKey) -> str:

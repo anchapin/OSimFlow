@@ -411,6 +411,19 @@ name in this section.
   contract for the subprocess.  Regenerate via `make contract` or
   pre-commit.
 - `osimflow/cache.py` — `SQLiteCache` + `CacheKey` + `CacheStats`.
+- `osimflow/_sqlite_store.py` — shared SQLite access primitive (issue
+  #1564): `connect()` (WAL + `busy_timeout=5000` +
+  `synchronous=NORMAL` + `locking_mode=NORMAL` +
+  `check_same_thread=False` + `row_factory` + `timeout=10.0`),
+  `per_pid_path()` (issue #993 pid-suffixed file scheme),
+  `encode_value` / `decode_value` (canonical JSON encode/decode with
+  safe fallback), `with_retries()` (exponential-backoff retry on
+  `OperationalError`), `transaction()` commit/rollback context
+  manager, `StoreConfig` dataclass.  Used by `cache.py`,
+  `document_store.py` (SQLiteDocumentStore), `registry.py`,
+  `results_db.py`, `event_log.py`, `distributed_cache.py`; each
+  store still owns its own persistent connection / threading lock /
+  cache-specific PRAGMA tweaks.
 - `osimflow/distributed_cache.py` — `DistributedCache` +
   `build_cache` + `campaign_state_namespace` (Redis-backed;
   pid-private local SQLite files in distributed mode).
