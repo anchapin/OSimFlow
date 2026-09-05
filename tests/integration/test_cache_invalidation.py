@@ -49,6 +49,43 @@ def test_failed_run_not_returned(tmp_cache: SQLiteCache, tmp_path: Path) -> None
     assert tmp_cache.lookup(key) is None  # failed runs must be re-run
 
 
+def test_sha256_of_files_is_relocation_stable(tmp_path: Path) -> None:
+    """Issue #1558: the same content tree rooted at two different
+    absolute directories must produce identical ``sha256_of_files``
+    output. Pinning this here (alongside the dedicated unit tests in
+    ``tests/unit/test_cache_key_portability.py``) keeps the
+    invalidation suite honest about the input-key half of the cache
+    key — a regression that reintroduced the absolute-path prefix
+    would break this assertion and surface as a cache-invalidation
+    bug for users who relocate their template packages."""
+    from osimflow.cache import sha256_of_files
+
+    pkg_a = tmp_path / "pkg_a"
+    pkg_b = tmp_path / "pkg_b"
+    for pkg in (pkg_a, pkg_b):
+        pkg.mkdir()
+        (pkg / "model.osm").write_text("OSM")
+        (pkg / "variables.yml").write_text("n_samples: 1\n")
+
+    # Move the entire package by computing the inputs hash at the new
+    # root and asserting it matches the original root.
+    h_a = sha256_of_files(sorted(pkg_a.rglob("*")))
+    h_b = sha256_of_files(sorted(pkg_b.rglob("*")))
+    assert h_a == h_b, (
+        "Inputs hash must be relocation-stable: the same template "
+        "package at a new absolute path must produce the same hash "
+        "(issue #1558)."
+    )
+
+    # Single-file inputs (the ``cfg.input_variables`` caller at
+    # campaign.py:2686) must hash equal across moves too.
+    vars_a = pkg_a / "variables.yml"
+    vars_b = pkg_b / "variables.yml"
+    h_va = sha256_of_files([vars_a])
+    h_vb = sha256_of_files([vars_b])
+    assert h_va == h_vb, "A relocated variables.yml must produce the same inputs hash."
+
+
 def test_bin_py_edit_invalidates(tmp_cache: SQLiteCache, tmp_path: Path) -> None:
     """The fix for architecture-decision issue #2: editing a bin/*.py file
     must invalidate the cached entry, because its content is part of the
