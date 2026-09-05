@@ -174,3 +174,100 @@ def test_warm_cache_resume_is_fully_cache_served(cfg_factory: object, outdir: Pa
     warm_trace = json.loads((outdir / "run.json").read_text())
     assert {row["status"] for row in cold_trace["per_sample"]} == {"ok"}
     assert {row["status"] for row in warm_trace["per_sample"]} == {"ok"}
+
+
+@pytest.mark.xdist_group(name="cache_resume_solo_with_repo_tree")
+def test_warm_cache_resume_survives_input_relocation(tmp_path: Path) -> None:
+    """Issue #1558: after a successful cold run, copy the
+    ``variables.yml`` and ``template_sim_package`` to a brand-new
+    absolute location and re-run against the SAME ``outdir`` (i.e.
+    the same ``cache_db``).
+
+    The fix in ``osimflow/cache.py:sha256_of_files`` makes the
+    cache-key components that derive from user-supplied inputs
+    (the ``inputs_sha256`` of GENERATE_LHS_SAMPLES,
+    PREFLIGHT_RUN_MODEL, and AGGREGATE_RESULTS) relocation-stable.
+    Those steps must hit every entry written by the cold run despite
+    the absolute path of the inputs having changed.
+
+    Scope note: ``step_run_openstudio_sim`` mixes
+    ``str(self.cfg.template_sim_package)`` into its ``inputs_sha256``
+    via ``sha256_of_dict`` (an unrelated path-dependency, not the
+    subject of issue #1558). This test therefore checks the
+    sha256_of_files-affected steps explicitly and does not assert on
+    the per-sample sim step cache total.
+    """
+    from osimflow import Campaign, CampaignConfig
+    from osimflow.cache import sha256_of_files
+    from osimflow.executors import LocalExecutor
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    variables_orig = workdir / "variables.yml"
+    variables_orig.write_text(
+        "algorithm: lhs\n"
+        "variables:\n"
+        "  - name: wwr\n"
+        "    distribution: uniform\n"
+        "    min: 0.2\n"
+        "    max: 0.6\n"
+        "    measure_argument: SetEnvelopePerformance.wwr\n"
+    )
+    template_orig = workdir / "template"
+    shutil.copytree(EXAMPLE_PKG, template_orig)
+    outdir = workdir / "out"
+    outdir.mkdir()
+
+    cfg = CampaignConfig(
+        input_variables=variables_orig,
+        template_sim_package=template_orig,
+        n_samples=3,
+        outdir=outdir,
+        openstudio_version="3.11.0",
+        archive_intermediates=False,
+    )
+    cold_campaign = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=3))
+    cold_campaign.run()
+    cold_campaign.executor.shutdown()
+    cold_stats: dict[str, object] = cold_campaign.cache.stats()
+    cold_by_step: dict[str, int] = dict(cold_stats["by_step"])  # type: ignore[arg-type]
+    assert sum(cold_by_step.values()) > 0
+
+    # Sanity: the inputs hash is relocation-stable on its own.
+    relocated_variables = workdir / "relocated" / "variables.yml"
+    relocated_template = workdir / "relocated" / "template"
+    relocated_variables.parent.mkdir(parents=True)
+    shutil.copy2(variables_orig, relocated_variables)
+    shutil.copytree(template_orig, relocated_template)
+    assert sha256_of_files([variables_orig]) == sha256_of_files([relocated_variables])
+    assert sha256_of_files(sorted(template_orig.rglob("*"))) == sha256_of_files(
+        sorted(relocated_template.rglob("*"))
+    )
+
+    # Warm run pointing at the relocated inputs but the SAME outdir
+    # (same cache_db). With the sha256_of_files fix in place, every
+    # cache entry whose inputs_sha256 derives from user inputs must
+    # hit despite the absolute path having changed.
+    relocated_cfg = CampaignConfig(
+        input_variables=relocated_variables,
+        template_sim_package=relocated_template,
+        n_samples=3,
+        outdir=outdir,
+        openstudio_version="3.11.0",
+        archive_intermediates=False,
+    )
+    warm_campaign = Campaign(cfg=relocated_cfg, executor=LocalExecutor(max_workers=3))
+    warm_campaign.run()
+    warm_campaign.executor.shutdown()
+    warm_stats: dict[str, object] = warm_campaign.cache.stats()
+    warm_by_step: dict[str, int] = dict(warm_stats["by_step"])  # type: ignore[arg-type]
+
+    # The sha256_of_files-affected steps must hit every cold entry
+    # (no new entries from the warm run for these steps).
+    for step in ("GENERATE_LHS_SAMPLES", "PREFLIGHT_RUN_MODEL", "AGGREGATE_RESULTS"):
+        assert warm_by_step.get(step, 0) == cold_by_step.get(step, 0), (
+            f"warm run produced a different number of {step} cache "
+            f"entries after input relocation: cold={cold_by_step.get(step, 0)} "
+            f"warm={warm_by_step.get(step, 0)}. The inputs_sha256 of "
+            f"this step is supposed to be relocation-stable (issue #1558)."
+        )

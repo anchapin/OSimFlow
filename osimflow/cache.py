@@ -139,20 +139,53 @@ class CacheEntry:
 
 
 def sha256_of_files(paths: Iterable[Path]) -> str:
-    """Hash a set of files (path-sorted for determinism)."""
+    """Hash a set of files (relocation-stable, separator-stable).
+
+    Issue #1558: the previous implementation hashed ``str(p)`` for every
+    top-level input and ``str(child.relative_to(p))`` for directory
+    walks. The former embedded the absolute machine path, the latter
+    used the host OS separator. As a result the same file tree at two
+    different absolute locations (new machine, moved campaign dir,
+    different mount point inside a container) produced different cache
+    keys and forced a full cold replay.
+
+    New contract:
+
+    * Top-level file inputs contribute ``Path(p).name`` + content.
+    * Top-level directory inputs walk sorted descendants and contribute
+      each child's path relative to the directory root (forward-slash
+      normalized) + content.
+    * Absolute path prefixes are never mixed in; the same tree rooted at
+      any absolute location hashes equal.
+    * Path separators are normalized to forward slashes so POSIX and
+      Windows hosts produce identical hashes for identical trees.
+
+    Backward-compatibility note: this changes the hash value produced
+    for any input that previously embedded an absolute path. Cache
+    entries created before this change will be regenerated on the next
+    campaign run (one cold replay, then warm).
+    """
     h = hashlib.sha256()
     for p in sorted(paths, key=str):
-        h.update(str(p).encode())
-        h.update(b"\0")
         if p.is_file():
+            # Top-level file: use the basename so the absolute path
+            # prefix is stripped. ``Path.name`` is stable across moves.
+            h.update(p.name.encode("utf-8"))
+            h.update(b"\0")
             h.update(p.read_bytes())
         else:
-            # directory: hash the sorted listing
+            # Directory (or non-existent path): walk sorted descendants
+            # and contribute each file's path relative to the directory
+            # root, normalized to forward slashes. ``as_posix()`` yields
+            # ``/``-separated paths on every host so Windows and POSIX
+            # agree.
             for child in sorted(p.rglob("*"), key=str):
-                h.update(str(child.relative_to(p)).encode())
-                h.update(b"\0")
                 if child.is_file():
+                    rel = child.relative_to(p).as_posix()
+                    h.update(rel.encode("utf-8"))
+                    h.update(b"\0")
                     h.update(child.read_bytes())
+        h.update(b"\xff\xff")
     return h.hexdigest()
 
 
