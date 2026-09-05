@@ -31,6 +31,18 @@ PRECOMMIT := $(VENV)/bin/pre-commit
 # there cannot block PRs. tests/contract/test_ci_marker_policy.py pins
 # this policy to the marker docs in pyproject.toml.
 PYTEST_CI_FLAGS := -n 2 --dist loadgroup --timeout=120 --ignore=tests/contract -m "not nomad_e2e and not slow and not chaos"
+# Subprocess coverage bootstrap (issue #1557): `bin/*.py` shims spawn
+# `python -m osimflow._work_scripts.*` workers; without
+# `COVERAGE_PROCESS_START` the auto-installed `coverage.pth` would not
+# start coverage in those subprocesses and the work-script execution
+# would be invisible to the 82% gate. `pyproject.toml`'s
+# `[tool.coverage.run]` then applies `patch = ["subprocess"]` (which
+# sets `parallel = true`) so every subprocess writes its own
+# `.coverage.<host>.<pid>.<rand>` data file; the pytest-cov xdist
+# master's `combine()` picks them up via `combinable_files` (which
+# globs `.coverage.*`). See
+# https://coverage.readthedocs.io/en/latest/subprocess.html.
+COVERAGE_PROCESS_START := $(PWD)/pyproject.toml
 PYTEST_COV_FLAGS := --cov=osimflow --cov-report=xml --cov-report=term-missing --cov-fail-under=82
 
 .PHONY: help install lint format typecheck test test-cov test-fast smoke contract byos-generate docs-sync agents-contract openapi-sync precommit act clean
@@ -59,8 +71,8 @@ typecheck: ## mypy --strict (osimflow/)
 test: ## pytest with CI flags, no coverage gate (same selection/timeouts as CI; use test-cov for the gate)
 	$(PYTEST) $(PYTEST_CI_FLAGS)
 
-test-cov: ## pytest with CI flags + 82% aggregate + per-module floor (exact CI test-job invocation — ci.yml runs this; issues #1417, #1476, #1571)
-	$(PYTEST) $(PYTEST_CI_FLAGS) $(PYTEST_COV_FLAGS) -q
+test-cov: ## pytest with CI flags + 82% aggregate + per-module floor (exact CI test-job invocation — ci.yml runs this; issues #1417, #1476, #1557, #1571)
+	COVERAGE_PROCESS_START="$(COVERAGE_PROCESS_START)" $(PYTEST) $(PYTEST_CI_FLAGS) $(PYTEST_COV_FLAGS) -q
 	$(PY) tools/check_module_coverage.py
 
 test-fast: ## pytest contract only (pre-commit mirror)

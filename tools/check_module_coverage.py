@@ -12,6 +12,15 @@ through the ``Campaign`` facade) can land while the total stays above
 82%. The gate structurally cannot notice a wholly untested new module —
 exactly the window where behavior silently changes on an extraction PR.
 
+Issue #1557 extends the per-module check to ``osimflow/_work_scripts/*.py``
+once subprocess coverage (``COVERAGE_PROCESS_START``) is enabled.
+``aggregate_results.py``, ``apply_params_to_model.py``,
+``extract_kpis.py`` and the rest of that directory hold the
+domain-critical work-layer code (severe-error classifier,
+pre-flight parameter check, KPI schema); without a per-module floor
+an extraction or refactor could silently drop their coverage below the
+already-measured baseline while the aggregate stays above 82%.
+
 This script closes that gap by reading the ``.coverage`` data file
 produced by ``make test-cov`` (via ``coverage json``) and asserting
 each in-scope module is at or above a seed floor (= current measured
@@ -20,10 +29,11 @@ an aspirational target — only ratchet up after a real measurement
 shows the module is stably above the previous floor. Do not lower the
 existing 82% aggregate gate to compensate; this check is additive.
 
-In-scope modules (issue #1571 acceptance criteria):
+In-scope modules (issue #1571 acceptance criteria + #1557 extension):
 
   * every ``osimflow/_campaign_*.py`` collaborator
   * every ``osimflow/executors/*.py`` module
+  * every ``osimflow/_work_scripts/*.py`` script (issue #1557)
 
 The seed floors below were captured on ``origin/main`` (commit
 ``30f3c79``, "refactor: resolve #1574 — explicit testing surface for
@@ -65,6 +75,18 @@ epsilon. When ``_campaign_chaos.py`` and the uncovered executor
 modules (``docker_swarm_executor``, ``google_batch_executor``,
 ``kubernetes_executor``) accrue direct tests, raise the floor to the
 new measured value.
+
+Issue #1557 added the ``_work_scripts/*.py`` floors on the branch
+that flips subprocess coverage on. The measured readings on the
+branch's tip (see commit body) are::
+
+    osimflow/_work_scripts/__init__.py          100.00%  (0 stmts, sentinel)
+    osimflow/_work_scripts/aggregate_results.py 84.15%  (266 stmts)
+    osimflow/_work_scripts/apply_params_to_model.py 73.81%  (40 stmts)
+    osimflow/_work_scripts/excel_to_variables.py  58.48%  (185 stmts)
+    osimflow/_work_scripts/extract_kpis.py       89.50%  (291 stmts)
+    osimflow/_work_scripts/generate_lhs.py       95.96%  (159 stmts)
+    osimflow/_work_scripts/generate_plots.py     48.46%  (546 stmts)
 
 Hook:
 
@@ -129,15 +151,28 @@ FLOORS: dict[str, float] = {
     "osimflow/executors/pbs_executor.py": 89.34,  # measured 90.34%
     "osimflow/executors/slurm_executor.py": 99.00,  # measured 100.00%
     "osimflow/executors/transport.py": 82.84,  # measured 83.84%
+    # --- osimflow/_work_scripts/*.py (issue #1557) ---
+    # Subprocess coverage was previously invisible — these floors
+    # hold the regression guard on now-measured work-layer code
+    # (severe-error classifier, KPI schema, pre-flight checks).
+    "osimflow/_work_scripts/__init__.py": 99.00,  # measured 100.00% (0 stmts; sentinel)
+    "osimflow/_work_scripts/aggregate_results.py": 83.15,  # measured 84.15%
+    "osimflow/_work_scripts/apply_params_to_model.py": 72.81,  # measured 73.81%
+    "osimflow/_work_scripts/excel_to_variables.py": 57.48,  # measured 58.48%
+    "osimflow/_work_scripts/extract_kpis.py": 88.50,  # measured 89.50%
+    "osimflow/_work_scripts/generate_lhs.py": 94.96,  # measured 95.96%
+    "osimflow/_work_scripts/generate_plots.py": 47.46,  # measured 48.46%
 }
 
-# Glob patterns that scope the check (issue #1571). A future addition
-# of a new ``osimflow/_campaign_<name>.py`` or
-# ``osimflow/executors/<name>.py`` file must add an entry to FLOORS;
-# the assertion below flags any in-scope file missing from the table.
+# Glob patterns that scope the check (issue #1571 + #1557). A future
+# addition of a new ``osimflow/_campaign_<name>.py``,
+# ``osimflow/executors/<name>.py`` or ``osimflow/_work_scripts/<name>.py``
+# file must add an entry to FLOORS; the assertion below flags any
+# in-scope file missing from the table.
 GLOBS = (
     "osimflow/_campaign_*.py",
     "osimflow/executors/*.py",
+    "osimflow/_work_scripts/*.py",
 )
 
 
