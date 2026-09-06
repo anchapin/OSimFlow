@@ -1885,7 +1885,14 @@ class TestFanOutRecoveryPath:
         template_pkg: Path,
         outdir: Path,
     ) -> None:
-        """When recovery_sid resubmit also fails, mark_failed is called for recovery_sid."""
+        """When all recovery attempts are exhausted, mark_failed is called.
+
+        Issue #1567 changed the recovery loop to retry up to
+        ``max_sample_retries`` times before falling through to
+        ``mark_failed``. With the default ``max_sample_retries=3`` and
+        every resubmit handle failing, the resubmit_callback should be
+        invoked exactly ``max_sample_retries`` times.
+        """
         cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, n_samples=2)
         campaign = Campaign(cfg=cfg, executor=MockExecutor())
 
@@ -1918,4 +1925,195 @@ class TestFanOutRecoveryPath:
 
             failed_keys = [call[0][0] for call in mock_jq.mark_failed.call_args_list]
             assert "sample_0_RUN_OPENSTUDIO_SIM" in failed_keys
-            assert resubmit_count == 1
+            assert resubmit_count == cfg.max_sample_retries
+
+    def test_recovery_succeeds_on_third_attempt_after_two_failures(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """Issue #1567 acceptance: sample completes after retries 1 and 2 fail.
+
+        The resubmit_callback returns a failing handle for the first two
+        recovery attempts and a successful handle on the third. The
+        sample must be marked completed (not failed), exactly three
+        resubmit attempts must be made, and the successful handle must
+        have run the original ``on_success`` callback (which sets
+        ``run_openstudio_sim_status == "ok"``).
+        """
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, n_samples=1)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+
+        submissions: dict[str, tuple[Handle, Any]] = {
+            "sample_0": (self._make_failing_handle(), MagicMock()),
+        }
+
+        from osimflow.monitoring import WorkerRecoveryManager
+
+        real_recovery_manager = WorkerRecoveryManager(outdir)
+        resubmit_count = 0
+        attempt_log: list[int] = []
+
+        def resubmit_callback(sid: str) -> Handle | None:
+            nonlocal resubmit_count
+            resubmit_count += 1
+            attempt_log.append(resubmit_count)
+            if resubmit_count < 3:
+                return self._make_failing_handle()
+            return self._make_successful_handle({"eplusout_sql": f"/tmp/{sid}.sql"})
+
+        with patch.object(campaign, "_job_queue") as mock_jq:
+            campaign._submit_and_await_all(
+                submissions=submissions,
+                step_name="RUN_OPENSTUDIO_SIM",
+                recovery_manager=real_recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+
+            assert resubmit_count == 3
+            assert attempt_log == [1, 2, 3]
+            completed_keys = [call[0][0] for call in mock_jq.mark_completed.call_args_list]
+            assert "sample_0_RUN_OPENSTUDIO_SIM" in completed_keys
+            failed_keys = [call[0][0] for call in mock_jq.mark_failed.call_args_list]
+            assert "sample_0_RUN_OPENSTUDIO_SIM" not in failed_keys
+
+    def test_recovery_exhausts_max_sample_retries_before_mark_failed(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """Issue #1567: every recovery attempt fails -> mark_failed after max retries.
+
+        With ``max_sample_retries=3`` and a permanently-failing
+        resubmit, exactly three retries must be attempted (one per
+        recovery iteration) before the sample is marked failed.
+        """
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            dry_run=True,
+            n_samples=1,
+            max_sample_retries=3,
+        )
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+
+        submissions: dict[str, tuple[Handle, Any]] = {
+            "sample_0": (self._make_failing_handle(), MagicMock()),
+        }
+
+        from osimflow.monitoring import WorkerRecoveryManager
+
+        real_recovery_manager = WorkerRecoveryManager(outdir)
+        resubmit_count = 0
+
+        def resubmit_callback(sid: str) -> Handle | None:
+            nonlocal resubmit_count
+            resubmit_count += 1
+            return self._make_failing_handle()
+
+        with patch.object(campaign, "_job_queue") as mock_jq:
+            campaign._submit_and_await_all(
+                submissions=submissions,
+                step_name="RUN_OPENSTUDIO_SIM",
+                recovery_manager=real_recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+
+            assert resubmit_count == cfg.max_sample_retries
+            failed_keys = [call[0][0] for call in mock_jq.mark_failed.call_args_list]
+            assert "sample_0_RUN_OPENSTUDIO_SIM" in failed_keys
+
+    def test_recovery_pops_correct_lowercase_state_keys(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """Issue #1567: failed-state clearing pops ``step_name.lower()`` keys.
+
+        The previous code used the bound-method ``step_name.lower``
+        (no parens) which stringified to ``"<method lower>"``, so the
+        ``state.pop`` calls targeted garbage keys and the clearing was
+        dead code. After the fix, the keys are the correctly-cased
+        ``run_openstudio_sim_exit_code`` / ``run_openstudio_sim_status``
+        and are removed from ``_sample_state`` before resubmit.
+        """
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True, n_samples=1)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+
+        sid = "sample_0"
+        # Pre-seed the failed-state keys the way _mark_sample_failed
+        # writes them, so we can assert the recovery path clears them.
+        campaign._sample_state[sid] = {
+            "run_openstudio_sim_exit_code": 1,
+            "run_openstudio_sim_status": "failed",
+            "error_summary": "old failure",
+        }
+
+        submissions: dict[str, tuple[Handle, Any]] = {
+            sid: (self._make_failing_handle(), MagicMock()),
+        }
+
+        from osimflow.monitoring import WorkerRecoveryManager
+
+        real_recovery_manager = WorkerRecoveryManager(outdir)
+        resubmit_count = 0
+
+        def resubmit_callback(inner_sid: str) -> Handle | None:
+            nonlocal resubmit_count
+            resubmit_count += 1
+            return self._make_successful_handle({"eplusout_sql": f"/tmp/{inner_sid}.sql"})
+
+        with patch.object(campaign, "_job_queue"):
+            campaign._submit_and_await_all(
+                submissions=submissions,
+                step_name="RUN_OPENSTUDIO_SIM",
+                recovery_manager=real_recovery_manager,
+                resubmit_callback=resubmit_callback,
+            )
+
+        state = campaign._sample_state.get(sid, {})
+        assert "run_openstudio_sim_exit_code" not in state
+        assert "run_openstudio_sim_status" not in state
+
+    def test_build_run_sim_submit_kwargs_includes_timeout_s(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+    ) -> None:
+        """Issue #1567: helper forwards ``timeout_s=cfg.byos_timeout_s``.
+
+        Both the primary fan-out submit and the auto-recovery resubmit
+        use ``Campaign._build_run_sim_submit_kwargs`` so they cannot
+        diverge again. Assert the helper emits the same kwargs
+        (including ``timeout_s``) that the primary submit relies on.
+        """
+        cfg = _cfg(
+            variables_yml,
+            template_pkg,
+            outdir,
+            dry_run=True,
+            byos_timeout_s=1800.0,
+        )
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+
+        ctx = {
+            "mod_pkg": template_pkg,
+            "out_dir": Path("/tmp/sim_out"),
+            "stdout_log": Path("/tmp/stdout.log"),
+            "stderr_log": Path("/tmp/stderr.log"),
+            "key": MagicMock(),
+            "state": {},
+        }
+        kwargs = campaign._build_run_sim_submit_kwargs(ctx, "sample_0", "3.11.0")
+
+        assert kwargs["timeout_s"] == 1800.0
+        assert kwargs["max_retries"] == cfg.max_sample_retries
+        assert kwargs["openstudio_version"] == "3.11.0"
+        assert kwargs["name"] == "sim_sample_0"
+        assert "nrel/openstudio" in kwargs["container"]
+        assert kwargs["worker_id"] == "local"
