@@ -949,11 +949,15 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument(
         "--track-costs",
         action="store_true",
+        dest="enable_cost_tracking",
         help=(
             "Enable campaign cost tracking (issue #447). "
             "Estimates cloud/HPC resource costs and writes a cost summary JSON "
             "alongside campaign outputs. Supports AWS Batch (on-demand/Spot), "
-            "Slurm (per-node-hour), and Local (no cost) executors."
+            "Slurm (per-node-hour), and Local (no cost) executors. "
+            "Alias of --enable-cost-tracking; both flags write to the "
+            "``enable_cost_tracking`` dest so ``load_config`` reads the "
+            "value correctly (issue #1556)."
         ),
     )
     run.add_argument(
