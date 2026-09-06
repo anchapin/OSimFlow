@@ -196,9 +196,7 @@ class TestAwaitDeadlineFlow:
             assert "sample_0_EXTRACT_KPIS" in failed_keys
 
             # The timed-out sample must NOT be marked completed.
-            completed_keys = [
-                call.args[0] for call in mock_jq.mark_completed.call_args_list
-            ]
+            completed_keys = [call.args[0] for call in mock_jq.mark_completed.call_args_list]
             assert "sample_0_EXTRACT_KPIS" not in completed_keys
 
     def test_timeout_error_records_failure_in_sample_state(
@@ -297,9 +295,7 @@ class TestAwaitDeadlineFlow:
                 step_name="EXTRACT_KPIS",
             )
 
-        failed_calls = [
-            call for call in mock_record.call_args_list if call.args[1] == "failed"
-        ]
+        failed_calls = [call for call in mock_record.call_args_list if call.args[1] == "failed"]
         assert any(call.args[0] == "sample_0" for call in failed_calls)
 
     def test_await_terminates_within_deadline(
