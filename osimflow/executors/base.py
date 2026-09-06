@@ -683,7 +683,6 @@ class BaseExecutor(abc.ABC):
             **kwargs,
         )
 
-    @abc.abstractmethod
     def _do_submit(
         self,
         fn: Callable[..., Any],
@@ -710,8 +709,40 @@ class BaseExecutor(abc.ABC):
         worker_id: str | None,
         **kwargs: Any,
     ) -> Handle:
-        """Substrate-specific submit. Called by :meth:`submit` after token acquisition."""
-        ...
+        """Substrate-specific submit. Called by :meth:`submit` after token acquisition.
+
+        Concrete executors MUST override exactly one of the following two
+        hooks (issue #1563, post-#1602 CI regression fix):
+
+        * :meth:`_do_submit` (recommended) — the template-method seam that
+          receives the per-call submit request *after* the rate limiter
+          has admitted it. Every production executor
+          (``AWSBatchExecutor``, ``AzureBatchExecutor``, ``GoogleBatchExecutor``,
+          ``NomadExecutor``, ``KubernetesExecutor``, ``DockerSwarmExecutor``,
+          ``PBSExecutor``, ``DaskJobQueueExecutor``, ``SlurmExecutor``,
+          ``LocalExecutor``) implements this hook.
+        * :meth:`submit` — the legacy full override. Kept working for
+          backward compatibility with in-tree test stubs (e.g.
+          ``tests/unit/test_resource_quota.py::_NoOpExecutor``,
+          ``tests/unit/test_pause_lifecycle.py``, ``TestParetoTracking``
+          in ``tests/unit/test_campaign.py``) that pre-date the
+          template-method split. A stub that overrides ``submit()``
+          bypasses the rate limiter by design — production executors
+          must NOT do this.
+
+        This method is intentionally *not* decorated with
+        ``@abc.abstractmethod`` even though it raises
+        ``NotImplementedError`` by default. The decorator would block
+        instantiation of legacy test stubs that override ``submit()``
+        directly (the parent's ``__abstractmethods__`` set would flag
+        them as still abstract, raising ``TypeError`` at construction
+        time — see the PR #1602 CI regression in
+        ``tests/unit/test_resource_quota.py`` and friends).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must override either _do_submit() (recommended, "
+            f"rate-limited template-method seam) or submit() (legacy full override)."
+        )
 
     def submit_request(self, request: SubmitRequest) -> Handle:
         """Submit a structured request (preferred over raw kwargs, issue #725).
