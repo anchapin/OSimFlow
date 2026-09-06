@@ -776,7 +776,9 @@ shared `PollingHandle` poll-retry-fallback state machine with
 (issue #1464 — owns the terminal-poll loop, #1465 deadline, jittered
 backoff, retry accounting, and fallback-to-on-demand transition;
 `_AzureBatchHandle` and `_GoogleBatchHandle` subclass it, supplying
-substrate hooks); `transport.py` is the executor-agnostic
+substrate hooks; executor-author guidance is in
+`docs/DEVELOPMENT.md` §7, "Subclassing `PollingHandle` for polling
+executors"); `transport.py` is the executor-agnostic
 result-reference contract (`coerce_transport_mode`,
 `validate_transport_mode`, `encode_transport_value`,
 `decode_transport_value`, `local_path_to_storage_key`,
