@@ -113,7 +113,7 @@ from .data_point_manager import DataPointManager
 from .distributed_cache import build_cache, campaign_state_namespace
 from .distributed_jobqueue import build_job_queue
 from .errors import OSimFlowRuntimeError
-from .executors import BaseExecutor, Handle
+from .executors import BaseExecutor, Handle, get_step_resources
 from .json_utils import safe_json_dumps, safe_json_loads
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
@@ -1119,6 +1119,81 @@ class Campaign:
             },
         )
 
+    def _compute_await_deadline(self, step_name: str) -> float | None:
+        """Derive the per-step orchestrator-side await deadline (issue #1566).
+
+        The deadline is the value passed to ``handle.result(timeout=...)``
+        in :meth:`_submit_and_await_all._await_one`.  It guards against
+        a wedged substrate (Nomad allocation that never reaches terminal,
+        Docker Swarm service in a non-terminal state, K8s ``time_min=0``
+        yielding no ``activeDeadlineSeconds``) parking an ``_await_one``
+        thread forever.
+
+        The deadline combines three inputs, each guarding a different
+        failure mode:
+
+        1. ``cfg.await_timeout_s`` — the user-supplied orchestrator-side
+           deadline (issue #1566, exposed as ``--sample-await-timeout-s``).
+           When set, this is the deadline (honoured directly — a wedged
+           substrate becomes a ``TimeoutError`` after *await_timeout_s*
+           seconds).  This is the opt-in for Nomad / Docker Swarm /
+           mis-configured K8s ``time_min=0`` users.
+        2. ``DEFAULT_STEP_RESOURCES[step_name]["time_min"] * 60`` — the
+           per-step substrate-aligned default (e.g. 240 s for
+           ``RUN_OPENSTUDIO_SIM``, 10 s for ``EXTRACT_KPIS``).  Mirrors
+           the ``time_min`` value the campaign hands the executor at
+           ``submit()`` time, which most substrates translate into a
+           substrate-side kill (Slurm ``--time``, K8s
+           ``activeDeadlineSeconds``, AWS Batch ``timeout``).  Steps
+           that are missing from :data:`DEFAULT_STEP_RESOURCES` fall
+           back to a 60 s floor.
+        3. ``cfg.byos_timeout_s`` — the BYOS subprocess watchdog
+           (issue #1109).  ``None`` is treated as unbounded and is
+           excluded from the maximum.
+
+        Resolution order: when ``await_timeout_s`` is set, it is the
+        deadline (the other two inputs would only add overhead on
+        already-working substrates).  Otherwise the deadline is the
+        maximum of the per-step ``time_min`` floor and ``byos_timeout_s``
+        so the orchestrator-side bound accommodates the longest
+        expected legitimate work.  Returns ``None`` only when the user
+        opted out of every orchestrator-side bound (neither
+        ``byos_timeout_s`` nor ``await_timeout_s`` is set) AND the
+        per-step ``time_min`` resolved to ``0``/missing — i.e. the user
+        is on a substrate without an executor-side kill and wants the
+        pre-#1566 bare-``handle.result()`` semantics.
+
+        The deadline is a **floor**, not an override: ``Handle.result``
+        accepts ``timeout=None`` for unbounded waits, but when a value
+        is supplied the substrate honours it strictly.  Callers that
+        pass a longer deadline via the per-handle hook would still be
+        honoured (this helper only fires when the campaign is the
+        caller).
+        """
+        # User-supplied orchestrator-side deadline wins (issue #1566).
+        # ``await_timeout_s=0`` is treated as unset (mirrors the
+        # ``byos_timeout_s=0`` semantics — issue #1109 history).
+        if self.cfg.await_timeout_s is not None and self.cfg.await_timeout_s > 0:
+            return self.cfg.await_timeout_s
+        candidates: list[float] = []
+        # Substrate-aligned per-step default (DEFAULT_STEP_RESOURCES falls
+        # back to {"time_min": 60} for unknown steps).  Use it as a floor
+        # so a wedged Nomad allocation / Docker Swarm service / K8s
+        # ``time_min=0`` misconfiguration becomes a TimeoutError instead
+        # of an indefinite hang.
+        step_resources = get_step_resources(step_name)
+        time_min = step_resources.get("time_min", 0)
+        if time_min and time_min > 0:
+            candidates.append(float(time_min) * 60.0)
+        # BYOS subprocess watchdog (issue #1109).  Excludes None — issue
+        # #1534 explicitly lifted the old 600 s stock bound because annual
+        # EnergyPlus runs routinely exceed it.
+        if self.cfg.byos_timeout_s is not None and self.cfg.byos_timeout_s > 0:
+            candidates.append(self.cfg.byos_timeout_s)
+        if not candidates:
+            return None
+        return max(candidates)
+
     def _submit_and_await_all(
         self,
         submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
@@ -1185,6 +1260,18 @@ class Campaign:
                 {"sample_id": sid, "step": step_name},
             )
 
+        # Per-step await deadline (issue #1566). Derived once per fan-out
+        # rather than per-sample: every sample in this step shares the same
+        # substrate-side ``time_min`` floor, so the deadline is identical.
+        # ``None`` (default) means "no orchestrator-side bound" and the
+        # pre-#1566 bare-``handle.result()`` semantics are preserved —
+        # users on K8s/Slurm with a working ``activeDeadlineSeconds`` /
+        # ``walltime`` continue to rely on the substrate-side kill; users
+        # on Nomad / Docker Swarm / mis-configured ``time_min=0`` K8s opt
+        # in via ``--sample-await-timeout-s`` (or the implicit
+        # ``DEFAULT_STEP_RESOURCES`` floor).
+        await_deadline = self._compute_await_deadline(step_name)
+
         def _await_one(
             item: tuple[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
         ) -> str:
@@ -1192,7 +1279,7 @@ class Campaign:
             sid, (handle, on_success) = item
             trace_id = self._trace_id_for(sid)
             try:
-                result = handle.result()
+                result = handle.result(timeout=await_deadline)
                 on_success(result)
                 # Mark completed in the job queue (issue #263).
                 self._job_queue.mark_completed(f"{sid}_{step_name}")
@@ -1248,7 +1335,7 @@ class Campaign:
 
                         # Await the resubmitted handle.
                         try:
-                            result = new_handle.result()
+                            result = new_handle.result(timeout=await_deadline)
                         except Exception as resubmit_error:
                             log.error(
                                 "%s %s auto-recovery attempt %d/%d failed: %s",

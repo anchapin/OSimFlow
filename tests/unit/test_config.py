@@ -231,6 +231,33 @@ class TestLoadConfig:
         cfg = load_config(args)
         assert cfg.byos_timeout_s == 1800.0
 
+    def test_sample_await_timeout_s_configurable(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """--sample-await-timeout-s flows through load_config into CampaignConfig (#1566).
+
+        argparse derives the destination key from the flag spelling:
+        ``--sample-await-timeout-s`` → ``args.sample_await_timeout_s``.
+        ``load_config`` reads from this key and stores it as
+        ``cfg.await_timeout_s``.
+        """
+        args = _base_args(
+            variables_yml,
+            template_pkg,
+            outdir,
+            sample_await_timeout_s="60.0",
+        )
+        cfg = load_config(args)
+        assert cfg.await_timeout_s == 60.0
+
+    def test_sample_await_timeout_s_default_is_none(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Without ``--sample-await-timeout-s``, ``cfg.await_timeout_s`` is ``None``."""
+        args = _base_args(variables_yml, template_pkg, outdir)
+        cfg = load_config(args)
+        assert cfg.await_timeout_s is None
+
     def test_missing_variables_yml(self, template_pkg: Path, outdir: Path) -> None:
         args = _base_args(Path("/nonexistent/variables.yml"), template_pkg, outdir)
         with pytest.raises(FileNotFoundError, match="variables_yml not found"):
