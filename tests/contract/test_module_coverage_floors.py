@@ -124,9 +124,22 @@ def _parse_floors() -> dict[str, float]:
 
 
 def _in_scope_files() -> set[str]:
-    """Return the set of in-scope file paths per the globs in the script."""
+    """Return the set of in-scope file paths per the globs in the script.
+
+    Mirrors the patterns the floor script declares (issue #1571 +
+    #1557 extension): every ``_campaign_*.py`` collaborator, every
+    ``executors/*.py`` module, and — since the subprocess coverage
+    bootstrap turned on in #1557 — every ``_work_scripts/*.py`` per-step
+    script. The ``test_every_in_scope_file_has_floor`` /
+    ``test_no_extra_floors`` invariants below rely on this set being
+    exactly the union of the floor script's ``GLOBS``.
+    """
     out: set[str] = set()
-    for pattern in ("osimflow/_campaign_*.py", "osimflow/executors/*.py"):
+    for pattern in (
+        "osimflow/_campaign_*.py",
+        "osimflow/executors/*.py",
+        "osimflow/_work_scripts/*.py",
+    ):
         out.update(
             str(p.relative_to(REPO_ROOT)).replace("\\", "/")
             for p in (REPO_ROOT).glob(pattern)
@@ -150,20 +163,26 @@ def test_floors_dict_present() -> None:
 
 
 def test_every_in_scope_file_has_floor() -> None:
-    """Every ``osimflow/_campaign_*.py`` and ``osimflow/executors/*.py``
-    file must have a ``FLOORS`` entry (issue #1571).
+    """Every ``osimflow/_campaign_*.py``, ``osimflow/executors/*.py``
+    and ``osimflow/_work_scripts/*.py`` file must have a ``FLOORS``
+    entry (issue #1571 + #1557 extension).
 
     A freshly-extracted collaborator that lands without a floor
     fails here, closing the "wholly untested new module under
-    aggregate gate" gap the issue describes.
+    aggregate gate" gap the issue describes. The ``_work_scripts``
+    branch was added when subprocess coverage turned on (issue #1557):
+    the scripts were previously invisible, and a future regression in
+    the severe-error classifier or pre-flight check must still fail
+    the merge gate.
     """
     in_scope = _in_scope_files()
     floors = _parse_floors()
     missing = sorted(in_scope - set(floors))
     assert not missing, (
         f"{_SCRIPT.name} has no FLOORS entry for in-scope module(s): "
-        f"{missing}. Issue #1571 requires every ``osimflow/_campaign_*.py`` "
-        "and ``osimflow/executors/*.py`` file to carry one — set the "
+        f"{missing}. Issue #1571 + #1557 require every "
+        "``osimflow/_campaign_*.py``, ``osimflow/executors/*.py`` and "
+        "``osimflow/_work_scripts/*.py`` file to carry one — set the "
         "floor to ``measured - 1.0%`` and add the measured value as a "
         "comment + docstring update."
     )
@@ -173,16 +192,19 @@ def test_no_extra_floors() -> None:
     """FLOORS must not carry entries for paths that no longer exist on disk.
 
     Catches stale floors referencing deleted/renamed modules — they
-    silently degrade the check's coverage report.
+    silently degrade the check's coverage report. Covers the
+    ``_campaign_*.py``, ``executors/*.py`` and ``_work_scripts/*.py``
+    globs (issue #1557 extension).
     """
     in_scope = _in_scope_files()
     floors = _parse_floors()
     stale = sorted(set(floors) - in_scope)
     assert not stale, (
         f"FLOORS references module(s) that no longer match the "
-        f"``osimflow/_campaign_*.py`` / ``osimflow/executors/*.py`` "
-        f"globs: {stale}. Either the glob moved (update GLOBS in the "
-        "script) or the module was deleted/renamed (drop the FLOORS row)."
+        f"``osimflow/_campaign_*.py`` / ``osimflow/executors/*.py`` / "
+        f"``osimflow/_work_scripts/*.py`` globs: {stale}. Either the "
+        "glob moved (update GLOBS in the script) or the module was "
+        "deleted/renamed (drop the FLOORS row)."
     )
 
 

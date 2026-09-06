@@ -587,14 +587,26 @@ so the gate now measures them. The remaining omissions are:
 - `osimflow/viz/dashboard.py` — Streamlit dashboard UI (`[viz]` extra);
   presentation-layer code that additionally requires an optional
   dependency to import.
-- `osimflow/_work_scripts/*` — the per-step scripts are executed in
-  **subprocesses** by the work layer (`osimflow/work.py` shells out to
-  them), so in-process coverage cannot attribute their lines. Measuring
-  them would require `COVERAGE_PROCESS_START` subprocess coverage, which
-  was evaluated and rejected as fragile in this repo (issue #1452).
-  The scripts are exercised end-to-end by the integration suite, and
-  their contents are hashed into the per-step cache key
-  (`code_hashes["bin"]`), so any edit still invalidates prior results.
+
+Note: `osimflow/_work_scripts/*` is **not** in the omit list anymore.
+Issue #1557 turns on subprocess coverage so the per-step scripts
+(`osimflow/_work_scripts/aggregate_results.py`,
+`osimflow/_work_scripts/apply_params_to_model.py`,
+`osimflow/_work_scripts/extract_kpis.py`,
+`osimflow/_work_scripts/generate_lhs.py`,
+`osimflow/_work_scripts/generate_plots.py`,
+`osimflow/_work_scripts/excel_to_variables.py`) are now measured and
+folded into the 82% gate. The work layer (`osimflow/work.py`) shells
+out to them via `bin/*.py` shims; the Makefile `test-cov` recipe sets
+`COVERAGE_PROCESS_START=$PWD/pyproject.toml` and `[tool.coverage.run]`
+declares `patch = ["subprocess"]`, so each subprocess writes its own
+`.coverage.<host>.<pid>.<rand>` data file that the xdist master's
+`combine()` picks up. Per-module floors for the scripts live in
+`tools/check_module_coverage.py` (issue #1557 extension of #1571).
+Prior to #1557 the scripts were omitted because in-process coverage
+could not attribute subprocess execution — the omission-vs-rationale
+bullet link in this section is the regression guard for that decision
+(see `tests/contract/test_coverage_omit_doc.py`).
 
 When you add a new `omit` entry, add a matching bullet here in the same
 change — the contract test will fail otherwise.

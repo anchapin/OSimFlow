@@ -173,6 +173,16 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["osimflow"]
+# Subprocess coverage (issue #1557): `patch = ["subprocess"]` is the
+# coverage.py-supported way to enable subprocess measurement. It implicitly
+# sets `parallel = true`, which gives every subprocess its own
+# `.coverage.<host>.<pid>.<rand>` data file; the parent pytest-cov worker's
+# `combine()` step then merges them. The Makefile `test-cov` target sets
+# `COVERAGE_PROCESS_START=$(pwd)/pyproject.toml` so subprocesses spawned by
+# tests (`bin/*.py` shims → `osimflow._work_scripts.*`) load this same
+# config and start coverage automatically via the installed `coverage.pth`.
+concurrency = ["multiprocessing", "thread"]
+patch = ["subprocess"]
 omit = [
     "osimflow/__main__.py",
     "osimflow/algorithms/fast99.py",
@@ -182,10 +192,26 @@ omit = [
     "osimflow/algorithms/ga.py",
     "osimflow/api/*",
     "osimflow/viz/dashboard.py",
-    "osimflow/_work_scripts/*",
 ]
 
 [tool.coverage.report]
+# `report.omit` mirrors `[tool.coverage.run] omit` for the report and
+# aggregate (issue #1557 follow-on). Without this, `coverage report`
+# 7.16+ includes the omitted files in the denominator at 0%, deflating
+# the TOTAL — the gate then tracks "all source files" rather than
+# "measured code". The previous 82% gate baseline (85.20% TOTAL on
+# commit 30f3c79) was implicitly measured-only; this key preserves
+# that semantic after subprocess coverage is enabled.
+omit = [
+    "osimflow/__main__.py",
+    "osimflow/algorithms/fast99.py",
+    "osimflow/algorithms/morris.py",
+    "osimflow/algorithms/nsga2.py",
+    "osimflow/algorithms/pso.py",
+    "osimflow/algorithms/ga.py",
+    "osimflow/api/*",
+    "osimflow/viz/dashboard.py",
+]
 show_missing = true
 skip_covered = false
 exclude_lines = [
