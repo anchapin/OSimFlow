@@ -70,6 +70,7 @@ import logging
 import ssl
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -291,6 +292,13 @@ class DistributedCache:
         self._redis_ssl_context = redis_ssl_context
         self._channel = f"osimflow:cache:invalidate:{campaign_id}"
         self._shared_key = f"osimflow:cache:entries:{campaign_id}"
+        # Stable per-process identifier used to drop self-published
+        # invalidation broadcasts on the subscriber thread (issue #1563,
+        # test ``test_per_sample_fanout_invalidation``). Without this
+        # filter the publisher's own broadcast can race past the local
+        # rebuild and have the subscriber re-delete the freshly-stored
+        # entry.
+        self._instance_id = uuid.uuid4().hex
         # Circuit breaker (issue #1111): after repeated consecutive Redis
         # failures, skip the shared data plane entirely for a cooldown
         # period instead of burning a 5 s socket timeout on every op.
@@ -519,8 +527,24 @@ class DistributedCache:
         self._subscriber_thread = t
 
     def _handle_invalidation(self, payload: dict[str, Any]) -> None:
-        """Process a received invalidation message against the local cache."""
+        """Process a received invalidation message against the local cache.
+
+        Self-published broadcasts are dropped: every ``invalidate_*`` call
+        applies the local DELETE synchronously *before* publishing, so the
+        subscriber side of this same process must not re-apply it on
+        arrival — otherwise the subscriber can race past a subsequent
+        local rebuild and delete a freshly-stored entry (issue #1563,
+        ``test_per_sample_fanout_invalidation``).
+        """
         action = payload.get("action")
+        originator = payload.get("instance_id")
+        if originator is not None and originator == self._instance_id:
+            log.debug(
+                "DistributedCache: dropping self-published invalidation action=%s (instance_id=%s)",
+                action,
+                originator,
+            )
+            return
         try:
             if action == "invalidate_step":
                 step = payload.get("step")
@@ -555,7 +579,17 @@ class DistributedCache:
             )
 
     def _publish(self, payload: dict[str, Any]) -> None:
-        """Publish an invalidation message to Redis (async, non-blocking)."""
+        """Publish an invalidation message to Redis (async, non-blocking).
+
+        Every published payload carries this instance's ``instance_id`` so
+        the subscriber thread can drop the publisher's own broadcast on
+        arrival (the local SQLite side of the invalidation has already
+        been applied synchronously before publishing; re-applying it
+        asynchronously would race past a subsequent local rebuild and
+        delete freshly-stored entries — issue #1563).
+        """
+        enriched = dict(payload)
+        enriched["instance_id"] = self._instance_id
         import asyncio  # noqa: PLC0415
 
         async def _pub() -> None:
@@ -564,7 +598,7 @@ class DistributedCache:
                 return
             try:
                 client = self._get_redis()
-                await client.publish(self._channel, json.dumps(payload))
+                await client.publish(self._channel, json.dumps(enriched))
             except Exception as exc:
                 self._breaker.record_failure()
                 log.warning(

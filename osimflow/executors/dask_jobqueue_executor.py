@@ -83,6 +83,11 @@ class DaskJobQueueExecutor(BaseExecutor):
 
     name = "dask_jobqueue"
 
+    #: Issue #1563: Dask-JobQueue's ``cluster.submit`` is a soft
+    #: scheduler-side admission path; 50 RPS is generous but well
+    #: below the documented adaptive-scaler backpressure window.
+    default_submit_rps: float | None = 50.0
+
     def __init__(
         self,
         cluster_type: str = "slurm",
@@ -96,6 +101,7 @@ class DaskJobQueueExecutor(BaseExecutor):
         project: str | None = None,
         job_extra: dict[str, Any] | None = None,
         scale_interval_s: float = 5.0,
+        submit_rps: float | None = None,
     ) -> None:
         self.cluster_type = cluster_type
         self.min_workers = min_workers
@@ -111,6 +117,12 @@ class DaskJobQueueExecutor(BaseExecutor):
         self._cluster: Any = None
         self._client: Any = None
         self._scaler_running = False
+        # Issue #1563: shared token-bucket limiter (was missing
+        # entirely before). Dask-JobQueue routes submits through
+        # ``cluster.get_client().submit``; throttling at this seam
+        # prevents the scheduler's adaptive scaler from being
+        # overwhelmed by bursts.
+        self._init_rate_limiter(submit_rps)
 
     def _build_cluster(self) -> Any:
         """Build and return a Dask-JobQueue cluster instance."""
@@ -186,7 +198,7 @@ class DaskJobQueueExecutor(BaseExecutor):
                 log.warning("dask_jobqueue: auto-scale error: %s", exc)
             time.sleep(self.scale_interval_s)
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

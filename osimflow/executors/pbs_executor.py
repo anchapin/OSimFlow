@@ -207,6 +207,12 @@ class PBSExecutor(BaseExecutor):
 
     name = "pbs"
 
+    #: Issue #1563: PBS Pro ``qsub`` server doesn't have a documented
+    #: hard rate limit, but the scheduler's pbs.server hook can choke
+    #: on bursts from a single orchestrator. 100 RPS is generous — the
+    #: slurm default — and easy to override for cluster benchmarks.
+    default_submit_rps: float | None = 100.0
+
     def __init__(
         self,
         server: str | None = None,
@@ -216,6 +222,7 @@ class PBSExecutor(BaseExecutor):
         max_poll_interval_s: float = 60.0,
         cpus_per_node: int = 1,
         mem_mb_per_node: int = 1024,
+        submit_rps: float | None = None,
     ):
         self.server = server or _default_pbs_server()
         self.queue = queue
@@ -228,6 +235,10 @@ class PBSExecutor(BaseExecutor):
         # ``_qsub_cmd`` can reference it without going through ``submit()``
         # (e.g. unit tests); overridden by ``submit()``.
         self._container_digest: str | None = None
+        # Issue #1563: shared token-bucket limiter. PBS qsub is a
+        # per-server subprocess invocation; throttling at this seam
+        # keeps the orchestrator polite on a shared PBS server.
+        self._init_rate_limiter(submit_rps)
 
     # -----------------------------------------------------------------------
     # PBS CLI helpers
@@ -448,7 +459,7 @@ class PBSExecutor(BaseExecutor):
     # submit / shutdown
     # -----------------------------------------------------------------------
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

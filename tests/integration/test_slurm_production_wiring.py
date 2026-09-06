@@ -452,6 +452,10 @@ def test_build_executor_propagates_slurm_advanced_flags() -> None:
         slurm_constraint = "gpu"
         slurm_gres = "gpu:1"
         resource_quota = None
+        # Issue #1563: substrate-agnostic --submit-rps propagation; the
+        # production default for the shared TokenBucketRateLimiter is
+        # 100 (Slurm has no I/O quota to bump against).
+        submit_rps = 100
 
     with patch("osimflow.__main__.SlurmExecutor") as mock_cls:
         mock_cls.return_value.name = "slurm"
@@ -461,6 +465,7 @@ def test_build_executor_propagates_slurm_advanced_flags() -> None:
     assert kwargs.get("constraint") == "gpu"
     assert kwargs.get("gres") == "gpu:1"
     assert kwargs.get("debug") is False  # --slurm_real
+    assert kwargs.get("submit_rps") == 100
 
 
 # ---------------------------------------------------------------------------

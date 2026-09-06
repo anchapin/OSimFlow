@@ -218,7 +218,7 @@ physically live in their executor's config module, not in
   `--aws-batch-instance-type`, `--aws-batch-job-definition`,
   `--aws-batch-max-retries`, `--aws-batch-max-spot-price-usd`,
   `--aws-batch-on-demand-price`, `--aws-batch-queue`, `--aws-batch-spot-price`,
-  `--aws-batch-submit-rps`, `--aws-batch-fallback-to-on-demand`,
+  `--aws-batch-submit-rps`, `--aws-batch-fallback-to-on-demand`, `--submit-rps`,
   `--azure-batch-account-name`, `--azure-batch-account-url`, `--azure-batch-location`,
   `--azure-batch-pool-id`, `--azure-fallback-to-on-demand`,
   `--azure-max-retries`, `--azure-use-spot`, `--coordinator-url`,
@@ -758,6 +758,17 @@ result-reference contract (`coerce_transport_mode`,
 `validate_transport_mode`, `encode_transport_value`,
 `decode_transport_value`, `local_path_to_storage_key`,
 `resolve_result_for_callback`, `materialize_object_storage_result`).
+`_rate_limiter.py` is the shared `TokenBucketRateLimiter` (issue
+#1563): a thread-safe token-bucket used by every executor via
+`BaseExecutor.submit`'s template-method acquire (replaces the
+pre-#1563 AWS-private `_TokenBucketRateLimiter` and Nomad's ad-hoc
+`fanout_submit_rate_per_sec` pacing hook). Every executor
+subclass declares a substrate-appropriate `default_submit_rps`
+(`LocalExecutor` = `inf`, `SlurmExecutor` / `PBSExecutor` = 100,
+`AWSBatchExecutor` / `AzureBatchExecutor` / `GoogleBatchExecutor` =
+10, `DockerSwarmExecutor` = 20, `NomadExecutor` /
+`KubernetesExecutor` = 5, `DaskJobQueueExecutor` = 50); the CLI
+`--submit-rps <float>` flag overrides the executor's default.
 All ten executors each have their own file:
 `local_executor.py` (`LocalExecutor` + `run_subprocess`),
 `slurm_executor.py` (`SlurmExecutor`),

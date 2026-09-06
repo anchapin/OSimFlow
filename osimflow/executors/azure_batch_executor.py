@@ -317,6 +317,11 @@ class AzureBatchExecutor(BaseExecutor):
     """
 
     name = "azure_batch"
+
+    #: Issue #1563: Azure Batch documents a per-account Tasks API quota;
+    #: 10 RPS leaves comfortable headroom under the documented limits
+    #: while keeping 1000+ sample fan-out runs unblocked.
+    default_submit_rps: float | None = 10.0
     supports_spot_market = True
 
     _SPOT_INTERRUPTION_MARKERS: tuple[str, ...] = (
@@ -339,6 +344,7 @@ class AzureBatchExecutor(BaseExecutor):
         use_spot: bool = False,
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
+        submit_rps: float | None = None,
     ):
         import azure.batch  # noqa: PLC0415
         import azure.identity  # noqa: PLC0415
@@ -355,6 +361,11 @@ class AzureBatchExecutor(BaseExecutor):
         self.fallback_to_on_demand = fallback_to_on_demand
         self.max_retries = max_retries
         self._client: Any = None
+        # Issue #1563: shared token-bucket limiter (was missing entirely
+        # before — Azure Batch pool/task API does have a soft per-account
+        # quota). 10 RPS default leaves headroom under the documented
+        # service limits while keeping large fan-out runs unblocked.
+        self._init_rate_limiter(submit_rps)
 
     def _get_client(self) -> Any:
         """Lazy Azure Batch client construction using DefaultAzureCredential.
@@ -564,7 +575,7 @@ class AzureBatchExecutor(BaseExecutor):
         )
         return job_id
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

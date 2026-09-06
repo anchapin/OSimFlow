@@ -391,8 +391,18 @@ def test_nomad_polling_uses_exponential_backoff() -> None:
         def fake_sleep(seconds: float) -> None:
             sleep_durations.append(seconds)
 
+        # Issue #1563: ``submit_rps=0.0`` selects the shared *disabled*
+        # token-bucket (no-op ``acquire()``) so the patched
+        # ``time.sleep`` only records the polling-loop sleeps. The
+        # default ``submit_rps=None`` resolves to
+        # ``NomadExecutor.default_submit_rps = 5.0``; when prior tests
+        # in the session have drained that shared bucket,
+        # ``BaseExecutor.submit``'s ``acquire()`` call sleeps ~0.2s
+        # (one token at 5 RPS) and pollutes ``sleep_durations`` with
+        # a pre-polling sleep that masks the backoff's first 1.0s
+        # entry.
         with patch("time.sleep", side_effect=fake_sleep):
-            ex = NomadExecutor(poll_interval_s=1.0, max_poll_interval_s=4.0)
+            ex = NomadExecutor(poll_interval_s=1.0, max_poll_interval_s=4.0, submit_rps=0.0)
             handle = ex.submit(lambda: None, name="poll")
             handle.result(timeout=5)
 

@@ -1,15 +1,21 @@
-"""Unit tests for AWS Batch rate-limiting and spot-price caching (issue #1010).
+"""Unit tests for AWS Batch spot-price caching + retry helpers (issue #1010).
+
+The pre-#1563 file also exercised the AWS Batch executor's private
+``_TokenBucketRateLimiter``. That class moved to
+:mod:`osimflow.executors._rate_limiter` (issue #1563) and is now
+covered by ``tests/unit/test_rate_limiter.py`` for the shared
+implementation. This module retains only the AWS-specific surface
+(``_SpotPriceCache``, ``_aws_error_code``, ``_submit_job_with_retry``,
+and ``AWSBatchExecutor.__init__`` wiring of ``submit_rps`` to the
+shared limiter).
 
 Tests cover:
-  - ``_TokenBucketRateLimiter``: token consumption, refill, shared singleton,
-    RPS=0 (disabled) path.
   - ``_SpotPriceCache``: get / set / TTL expiry, key scoping.
   - ``_aws_error_code``: extraction from ``botocore.exceptions.ClientError``.
   - ``_submit_job_with_retry``: exponential backoff on
     ``ThrottlingException`` / ``RequestLimitExceeded``.
-  - ``_submit_job``: rate-limiter is acquired before every ``submit_job``.
-  - ``AWSBatchExecutor.__init__``: ``submit_rps`` is wired to the shared
-    limiter and boto3 retry config.
+  - ``AWSBatchExecutor.__init__``: ``submit_rps`` is wired to the
+    shared ``TokenBucketRateLimiter`` (via ``BaseExecutor._init_rate_limiter``).
 """
 
 from __future__ import annotations
@@ -19,69 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from osimflow.executors import AWSBatchExecutor
-from osimflow.testing.patch_targets import (
-    _aws_error_code,
-    _SpotPriceCache,
-    _TokenBucketRateLimiter,
-)
-
-
-# ---------------------------------------------------------------------------
-# _TokenBucketRateLimiter
-# ---------------------------------------------------------------------------
-class TestTokenBucketRateLimiter:
-    def test_acquire_decrements_token(self) -> None:
-        """A burst of acquires within capacity should not block."""
-        limiter = _TokenBucketRateLimiter(rps=1000)
-        for _ in range(10):
-            limiter.acquire()
-
-    def test_acquire_blocks_when_empty(self) -> None:
-        """After exhausting the bucket, acquire must sleep until a token refills."""
-        sleep_mock = MagicMock()
-        now_values = [0.0, 0.0, 0.5, 1.0]
-        with patch(
-            "osimflow.testing.patch_targets.time.monotonic", side_effect=lambda: now_values.pop(0)
-        ):
-            with patch("osimflow.testing.patch_targets.time.sleep", sleep_mock):
-                limiter = _TokenBucketRateLimiter(rps=1)  # 1 token/s, capacity=1
-                limiter.acquire()  # drain the single token
-                limiter.acquire()  # should block ~0.5s for refill
-
-        # sleep should have been called once because we needed to wait ~0.5s
-        sleep_mock.assert_called_once()
-
-    def test_rps_zero_disables_limiting(self) -> None:
-        """RPS=0 means no rate limiting — acquire should never sleep."""
-        limiter = _TokenBucketRateLimiter(rps=0)
-        sleep_mock = MagicMock()
-        with patch("osimflow.testing.patch_targets.time.sleep", sleep_mock):
-            for _ in range(100):
-                limiter.acquire()
-        sleep_mock.assert_not_called()
-
-    def test_get_shared_returns_same_instance(self) -> None:
-        """``get_shared`` should return the same limiter for the same rps."""
-        a = _TokenBucketRateLimiter.get_shared(rps=100)
-        b = _TokenBucketRateLimiter.get_shared(rps=100)
-        assert a is b
-
-    def test_get_shared_different_rps_different_instance(self) -> None:
-        """Different RPS values should get different limiter instances."""
-        a = _TokenBucketRateLimiter.get_shared(rps=100)
-        b = _TokenBucketRateLimiter.get_shared(rps=200)
-        assert a is not b
-
-    def test_get_shared_none_uses_default(self) -> None:
-        """``None`` rps should use the default (800)."""
-        a = _TokenBucketRateLimiter.get_shared(rps=None)
-        b = _TokenBucketRateLimiter.get_shared(rps=800)
-        assert a is b
-
-    def test_get_shared_returns_disabled_for_default(self) -> None:
-        """The default (None) should still be a valid limiter."""
-        limiter = _TokenBucketRateLimiter.get_shared(rps=None)
-        assert limiter is not None
+from osimflow.testing.patch_targets import _aws_error_code, _SpotPriceCache
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +206,7 @@ class TestSubmitJobWithRetry:
 
 
 # ---------------------------------------------------------------------------
-# _submit_job: rate limiter integration
+# _submit_job: rate limiter integration (issue #1563)
 # ---------------------------------------------------------------------------
 class TestSubmitJobRateLimiting:
     @pytest.fixture
@@ -275,29 +219,33 @@ class TestSubmitJobRateLimiting:
         )
         return executor
 
-    def test_submit_calls_rate_limiter(self, executor: AWSBatchExecutor) -> None:
-        """``_submit_job`` must call ``self._submit_limiter.acquire()``."""
+    def test_submit_calls_rate_limiter_via_template_method(
+        self, executor: AWSBatchExecutor
+    ) -> None:
+        """``submit()`` must acquire from ``self._rate_limiter`` before
+        calling ``_do_submit`` / ``_submit_job``.
+
+        Issue #1563: the per-call acquire is owned by the
+        ``BaseExecutor.submit`` template method, not by
+        ``_submit_job``. The test patches ``_rate_limiter`` and asserts
+        that the limiter's ``acquire`` was reached during ``submit()``.
+        """
         acquire_mock = MagicMock()
-        executor._submit_limiter = MagicMock()  # noqa: SLF001
-        executor._submit_limiter.acquire = acquire_mock  # noqa: SLF001
+        executor._rate_limiter = MagicMock()  # noqa: SLF001
+        executor._rate_limiter.acquire = acquire_mock  # noqa: SLF001
 
         client_mock = MagicMock()
         client_mock.submit_job.return_value = {"jobId": "job-1", "job": {}}
         executor._client = client_mock  # noqa: SLF001
 
-        executor._submit_job(
-            name="test",
-            cpus=2,
-            memory_mb=1024,
-            time_min=10,
-            environment=[],
-        )
+        executor.submit(lambda: None, name="test")
 
         acquire_mock.assert_called_once()
         client_mock.submit_job.assert_called_once()
 
-    def test_submit_rps_none_defaults_to_800(self) -> None:
-        """When submit_rps is None, the default of 800 should be used."""
+    def test_submit_rps_none_uses_default(self) -> None:
+        """When ``submit_rps`` is None, the executor's ``default_submit_rps``
+        (800 for AWS Batch) should be used to construct the shared limiter."""
         executor = AWSBatchExecutor(
             job_queue="q",
             job_definition="d",
@@ -305,8 +253,9 @@ class TestSubmitJobRateLimiting:
             region_name="us-east-1",
         )
         assert executor._submit_rps is None
-        # The limiter should still be created with the default.
-        assert executor._submit_limiter is not None
+        # The limiter should still be created with the executor's default.
+        assert executor._rate_limiter is not None
+        assert executor._rate_limiter.rate_per_sec == pytest.approx(800.0)
 
 
 # ---------------------------------------------------------------------------

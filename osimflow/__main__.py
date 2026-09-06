@@ -247,13 +247,14 @@ def _warn_if_mutable_tag(executor_name: str, container_digest: str | None) -> No
     )
 
 
-def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
+def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911, PLR0912
     """Dispatch to the correct executor based on ``args.executor``."""
     max_concurrent_samples = _extract_max_concurrent_samples(args.resource_quota)
     if args.executor == "local":
         return LocalExecutor(
             max_workers=args.max_workers,
             max_concurrent_samples=max_concurrent_samples,
+            submit_rps=args.submit_rps,
         )
     # Slurm executor — partition, account, and submitit debug flag.
     if args.executor == "slurm":
@@ -267,9 +268,13 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             qos=args.slurm_qos,
             constraint=args.slurm_constraint,
             gres=args.slurm_gres,
+            submit_rps=args.submit_rps,
         )
     # AWS Batch executor — job queue, job definition, and Spot handling.
+    # Issue #1563: ``--submit-rps`` (substrate-agnostic) overrides
+    # ``--aws-batch-submit-rps`` (legacy) when both are set.
     if args.executor == "aws_batch":
+        aws_rps = args.submit_rps if args.submit_rps is not None else args.aws_batch_submit_rps
         return AWSBatchExecutor(
             job_queue=args.aws_batch_queue,
             job_definition=args.aws_batch_job_definition,
@@ -281,7 +286,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             fallback_to_on_demand=args.aws_batch_fallback_to_on_demand,
             max_retries=args.aws_batch_max_retries,
             instance_type=args.aws_batch_instance_type,
-            submit_rps=args.aws_batch_submit_rps,
+            submit_rps=aws_rps,
         )
     # Nomad executor — address and datacentre.
     if args.executor == "nomad":
@@ -291,12 +296,19 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
         dispatch_job_id = args.nomad_dispatch_job_id
         if dispatch_job_id is None and getattr(args, "outdir", None):
             dispatch_job_id = f"osimflow-worker-{abs(hash(str(args.outdir)))}"
+        # Issue #1563: ``--submit-rps`` takes precedence over the
+        # legacy ``--nomad-fanout-submit-rate-per-sec`` flag (still
+        # accepted for back-compat but superseded). The legacy kwarg
+        # has been removed from NomadExecutor.__init__; the
+        # substrate-agnostic ``submit_rps`` replaces it.
+        nomad_rps = args.submit_rps
+        if nomad_rps is None:
+            nomad_rps = getattr(args, "nomad_fanout_submit_rate_per_sec", None)
         return NomadExecutor(
             address=args.nomad_address,
             datacentre=args.nomad_datacentre,
             dispatch_policy=args.nomad_dispatch_policy,
             estimated_run_size=int(args.n_samples),
-            fanout_submit_rate_per_sec=args.nomad_fanout_submit_rate_per_sec,
             fanout_submit_chunk_size=args.nomad_fanout_submit_chunk_size,
             allocation_resolution_timeout_s=args.nomad_allocation_resolution_timeout_s,
             poll_interval_s=args.nomad_poll_interval_s,
@@ -309,6 +321,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             ca_cert=args.nomad_ca_cert,
             dispatch_job_id=dispatch_job_id,
             allow_insecure_token=args.nomad_allow_insecure_token,
+            submit_rps=nomad_rps,
         )
     # Azure Batch executor — account credentials, pool, and Spot handling.
     if args.executor == "azure_batch":
@@ -320,6 +333,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             use_spot=args.azure_use_spot,
             fallback_to_on_demand=args.azure_fallback_to_on_demand,
             max_retries=args.azure_max_retries,
+            submit_rps=args.submit_rps,
         )
     # Google Cloud Batch executor — project, region, service account, and Spot handling.
     if args.executor == "google_batch":
@@ -330,6 +344,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             use_spot=args.google_use_spot,
             fallback_to_on_demand=args.google_fallback_to_on_demand,
             max_retries=args.google_max_retries,
+            submit_rps=args.submit_rps,
         )
     # Kubernetes executor — namespace, polling config, and native Job
     # controls (issue #997). Defaults preserve the pre-#997 manifest
@@ -342,6 +357,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             backoff_limit=args.kubernetes_backoff_limit,
             ttl_seconds_after_finished=args.kubernetes_ttl_seconds_after_finished,
             queue_name=args.kubernetes_queue_name,
+            submit_rps=args.submit_rps,
         )
     # PBS executor — server, queue, and debug flag.
     if args.executor == "pbs":
@@ -349,6 +365,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             server=args.pbs_server,
             queue=args.pbs_queue,
             debug=not args.pbs_real,  # debug unless --pbs-real
+            submit_rps=args.submit_rps,
         )
     if args.executor == "dask_jobqueue":
         return DaskJobQueueExecutor(
@@ -360,6 +377,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             walltime=args.dask_walltime,
             queue=args.dask_queue,
             project=args.dask_project,
+            submit_rps=args.submit_rps,
         )
     if args.executor == "docker_swarm":
         return DockerSwarmExecutor(
@@ -367,6 +385,7 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911
             max_poll_interval_s=args.docker_swarm_max_poll_interval_s,
             image=args.docker_swarm_image,
             network=args.docker_swarm_network,
+            submit_rps=args.submit_rps,
         )
 
     # Fall back to the ExecutorRegistry for plugin-discovered executors
@@ -427,6 +446,27 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     # ``ExecutorRegistry.register_arguments`` /
     # ``osimflow.executor_configs.register_executor_arguments``.
     add_executor_arguments(run)
+    # Issue #1563: substrate-agnostic submit-rate override. Each
+    # executor carries a substrate-appropriate default RPS (e.g. 800 for
+    # AWS Batch, 5 for Nomad/Kubernetes); ``--submit-rps <float>``
+    # overrides the default for the chosen executor. ``None`` /
+    # omitted means "use the executor's default". Setting this to a
+    # low value is useful for cluster benchmarks and conformance
+    # checks that want to verify throttling without waiting seconds
+    # of wall time.
+    run.add_argument(
+        "--submit-rps",
+        type=float,
+        default=None,
+        help=(
+            "Submit rate limit in requests per second, enforced via the "
+            "shared token-bucket limiter (issue #1563). Overrides the "
+            "chosen executor's substrate-appropriate default (e.g. 800 "
+            "for AWS Batch, 5 for Nomad/Kubernetes, 100 for Slurm/PBS). "
+            "Set to a low value for throttling conformance checks; "
+            "leave unset to use the executor default."
+        ),
+    )
     run.add_argument(
         "--shard-count",
         type=int,

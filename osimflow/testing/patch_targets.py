@@ -3,8 +3,7 @@
 Why this module exists
 ----------------------
 Before issue #1574, ``osimflow/executors/__init__.py`` deliberately
-re-exported private helpers (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
-``_SpotPriceCache``, ``_retry_nomad_request``, ``_NOMAD_RETRY_*``, ...) and
+re-exported private helpers (``_AWSBatchHandle``, ``_SpotPriceCache``, ``_retry_nomad_request``, ``_NOMAD_RETRY_*``, ...) and
 even imported ``time`` and ``random`` with ``# noqa: F401`` so tests could
 patch ``osimflow.executors.time.sleep``. The module docstring documented
 this as a supported surface, and every mention in AGENTS.md made those
@@ -61,7 +60,6 @@ from osimflow.executors.aws_batch_executor import (
     _aws_error_code,
     _AWSBatchHandle,
     _SpotPriceCache,
-    _TokenBucketRateLimiter,
 )
 from osimflow.executors.base import BaseExecutor, Handle, PollingHandle
 from osimflow.executors.nomad_executor import (
@@ -98,7 +96,8 @@ __all__ = [
     # AWS Batch private helpers (issue #1574)
     "_AWSBatchHandle",
     "_SpotPriceCache",
-    "_TokenBucketRateLimiter",
+    # Token-bucket rate limiter moved to osimflow.executors._rate_limiter
+    # in issue #1563; tests import it directly from that module.
     "_aws_error_code",
     # Nomad private helpers
     "_NOMAD_RETRY_CAP_S",

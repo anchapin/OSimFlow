@@ -29,6 +29,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import TYPE_CHECKING, Any
 
+from osimflow.executors._rate_limiter import TokenBucketRateLimiter
 from osimflow.executors.transport import encode_transport_value, validate_transport_mode
 
 log = logging.getLogger("osimflow.executors.base")
@@ -520,6 +521,25 @@ class BaseExecutor(abc.ABC):
 
     name: str = "base"
 
+    #: Substrate-appropriate default submit rate (issue #1563).
+    #:
+    #: ``None`` (the base default) means *no throttling* — the
+    #: executor's ``__init__`` constructs a disabled
+    #: :class:`~osimflow.executors._rate_limiter.TokenBucketRateLimiter`
+    #: and :meth:`submit` short-circuits without acquiring. Each
+    #: concrete executor overrides this with a substrate-appropriate
+    #: value (e.g. 10 RPS for AWS/Azure/Google Batch, 5 RPS for
+    #: Kubernetes/Nomad, infinity for :class:`LocalExecutor`); the
+    #: user can override via ``--submit-rps <float>`` on the CLI or
+    #: the per-executor config dataclass.
+    #:
+    #: The base class deliberately leaves this ``None`` so the
+    #: abstract contract stays neutral. Concrete executors that
+    #: genuinely have no quota to bump against (only ``LocalExecutor``
+    #: today) should explicitly set ``default_submit_rps = float("inf")``
+    #: to record the policy decision rather than inheriting ``None``.
+    default_submit_rps: float | None = None
+
     @property
     def requires_remote_runner_payload(self) -> bool:
         """Whether this executor dispatches work via ``python -m osimflow.remote_runner``.
@@ -542,7 +562,52 @@ class BaseExecutor(abc.ABC):
     #: ``True`` in every executor that calls ``build_signature_env``.
     signs_task_payload: bool = False
 
-    @abc.abstractmethod
+    #: Per-instance rate limiter (issue #1563). Initialised in
+    #: :meth:`_init_rate_limiter` from :attr:`default_submit_rps` plus
+    #: the constructor's ``submit_rps`` override. ``None`` until
+    #: :meth:`_init_rate_limiter` runs (i.e. before ``__init__``
+    #: completes); subclasses MUST call :meth:`_init_rate_limiter`
+    #: from their own ``__init__`` so :meth:`submit` always has a
+    #: limiter to acquire from.
+    _rate_limiter: TokenBucketRateLimiter
+
+    def _init_rate_limiter(
+        self,
+        submit_rps: float | None,
+        *,
+        name: str | None = None,
+    ) -> TokenBucketRateLimiter:
+        """Resolve and memoise the shared rate limiter for this executor.
+
+        Subclasses call this at the end of their ``__init__`` with the
+        effective RPS (constructor ``submit_rps`` override if non-None,
+        else :attr:`default_submit_rps`). The shared singleton
+        semantics (one bucket per ``(name, effective_rps)`` tuple) are
+        critical so multiple executor instances stay within the same
+        quota — see :meth:`TokenBucketRateLimiter.get_shared` (issue
+        #1010's original AWS rationale; #1563's generalised version).
+
+        ``None``, ``<= 0``, or ``+inf`` selects the shared *disabled*
+        limiter — a no-op so the local-executor / test paths pay no
+        lock cost. ``+inf`` is treated as "no quota to bump against"
+        (``LocalExecutor`` uses ``float('inf')`` to record the policy
+        decision explicitly, per issue #1563).
+        """
+        import math
+
+        effective = float(submit_rps) if submit_rps is not None else self.default_submit_rps
+        resolved_name = name or self.name
+        if (
+            effective is None
+            or effective <= 0.0
+            or effective == float("inf")
+            or math.isnan(effective)
+        ):
+            self._rate_limiter = TokenBucketRateLimiter.get_shared(0.0, name=resolved_name)
+            return self._rate_limiter
+        self._rate_limiter = TokenBucketRateLimiter.get_shared(effective, name=resolved_name)
+        return self._rate_limiter
+
     def submit(
         self,
         fn: Callable[..., Any],
@@ -568,7 +633,116 @@ class BaseExecutor(abc.ABC):
         max_retries: int | None = None,
         worker_id: str | None = None,
         **kwargs: Any,
-    ) -> Handle: ...
+    ) -> Handle:
+        """Submit *fn* for execution on this executor's substrate.
+
+        Template method (issue #1563): acquires a token from the
+        executor's :attr:`_rate_limiter` (constructed by
+        :meth:`_init_rate_limiter` from :attr:`default_submit_rps` plus
+        any per-instance override) and delegates the substrate-specific
+        call to :meth:`_do_submit`. The throttle lives here, not in each
+        executor, so a substrate cannot accidentally skip it.
+        """
+        # Lazy init: tests that bypass the real constructor (e.g.
+        # ``ExecutorClass.__new__(ExecutorClass)`` followed by attribute
+        # injection) skip ``__init__`` and therefore ``_init_rate_limiter``.
+        # Fall back to a disabled singleton here so the template-method
+        # contract stays uniform across in-process and stub executors.
+        limiter = getattr(self, "_rate_limiter", None)
+        if limiter is None:
+            limiter = self._init_rate_limiter(None)
+        # Acquire BEFORE the substrate call so an over-eager fan-out
+        # caller can't bypass the throttle by calling
+        # ``executor._do_submit(...)`` directly. Disabled limiters
+        # short-circuit (TokenBucketRateLimiter.acquire returns
+        # immediately when rate <= 0).
+        limiter.acquire()
+        return self._do_submit(
+            fn,
+            *args,
+            name=name,
+            cpus=cpus,
+            memory_mb=memory_mb,
+            time_min=time_min,
+            container=container,
+            container_digest=container_digest,
+            openstudio_version=openstudio_version,
+            result_hint=result_hint,
+            remote_command=remote_command,
+            result_transport_mode=result_transport_mode,
+            result_storage_backend=result_storage_backend,
+            result_storage_bucket=result_storage_bucket,
+            result_storage_prefix=result_storage_prefix,
+            result_storage_endpoint=result_storage_endpoint,
+            variables_json=variables_json,
+            env=env,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            max_retries=max_retries,
+            worker_id=worker_id,
+            **kwargs,
+        )
+
+    def _do_submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        name: str,
+        cpus: int,
+        memory_mb: int,
+        time_min: int,
+        container: str | None,
+        container_digest: str | None,
+        openstudio_version: str | None,
+        result_hint: Any,
+        remote_command: str | None,
+        result_transport_mode: str | None,
+        result_storage_backend: str | None,
+        result_storage_bucket: str | None,
+        result_storage_prefix: str | None,
+        result_storage_endpoint: str | None,
+        variables_json: str | None,
+        env: dict[str, str] | None,
+        stdout_path: Any,
+        stderr_path: Any,
+        max_retries: int | None,
+        worker_id: str | None,
+        **kwargs: Any,
+    ) -> Handle:
+        """Substrate-specific submit. Called by :meth:`submit` after token acquisition.
+
+        Concrete executors MUST override exactly one of the following two
+        hooks (issue #1563, post-#1602 CI regression fix):
+
+        * :meth:`_do_submit` (recommended) — the template-method seam that
+          receives the per-call submit request *after* the rate limiter
+          has admitted it. Every production executor
+          (``AWSBatchExecutor``, ``AzureBatchExecutor``, ``GoogleBatchExecutor``,
+          ``NomadExecutor``, ``KubernetesExecutor``, ``DockerSwarmExecutor``,
+          ``PBSExecutor``, ``DaskJobQueueExecutor``, ``SlurmExecutor``,
+          ``LocalExecutor``) implements this hook.
+        * :meth:`submit` — the legacy full override. Kept working for
+          backward compatibility with in-tree test stubs (e.g.
+          ``tests/unit/test_resource_quota.py::_NoOpExecutor``,
+          ``tests/unit/test_pause_lifecycle.py``, ``TestParetoTracking``
+          in ``tests/unit/test_campaign.py``) that pre-date the
+          template-method split. A stub that overrides ``submit()``
+          bypasses the rate limiter by design — production executors
+          must NOT do this.
+
+        This method is intentionally *not* decorated with
+        ``@abc.abstractmethod`` even though it raises
+        ``NotImplementedError`` by default. The decorator would block
+        instantiation of legacy test stubs that override ``submit()``
+        directly (the parent's ``__abstractmethods__`` set would flag
+        them as still abstract, raising ``TypeError`` at construction
+        time — see the PR #1602 CI regression in
+        ``tests/unit/test_resource_quota.py`` and friends).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must override either _do_submit() (recommended, "
+            f"rate-limited template-method seam) or submit() (legacy full override)."
+        )
 
     def submit_request(self, request: SubmitRequest) -> Handle:
         """Submit a structured request (preferred over raw kwargs, issue #725).

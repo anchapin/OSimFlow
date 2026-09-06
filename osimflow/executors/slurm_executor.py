@@ -95,6 +95,15 @@ class SlurmExecutor(BaseExecutor):
 
     name = "slurm"
 
+    #: Slurm's ``sbatch`` controller is not a hard-rate-limited API in
+    #: the same way AWS Batch / Kubernetes are, but the cluster scheduler
+    #: does choke on thousands of submissions per second. A 100 RPS
+    #: default keeps the orchestrator polite on a shared cluster without
+    #: slowing large fan-out runs visibly (issue #1563). Set to a lower
+    #: value via ``--submit-rps`` for cluster benchmarks / conformance
+    #: checks.
+    default_submit_rps: float | None = 100.0
+
     def __init__(
         self,
         partition: str = "short",
@@ -106,6 +115,8 @@ class SlurmExecutor(BaseExecutor):
         qos: str | None = None,
         constraint: str | None = None,
         gres: str | None = None,
+        *,
+        submit_rps: float | None = None,
     ):
         # Lazy import so users who only ever run the local executor do
         # not pay the submitit import cost.
@@ -146,8 +157,11 @@ class SlurmExecutor(BaseExecutor):
                 "Set debug=False for real Slurm."
             )
         self._ex = ex
+        # Issue #1563: shared rate limiter honouring the executor's
+        # substrate-appropriate default. ``--submit-rps`` overrides it.
+        self._init_rate_limiter(submit_rps)
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,

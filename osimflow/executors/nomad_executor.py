@@ -696,6 +696,14 @@ class NomadExecutor(BaseExecutor):
 
     name = "nomad"
 
+    #: Issue #1563: Nomad's HTTP API is the substrate most sensitive to
+    #: fan-out bursts — ``/v1/jobs`` / ``/v1/plan`` calls trigger Raft
+    #: applies that backpressure quickly. 5 RPS default is conservative
+    #: but enough for a 1000-sample campaign (~3 min wall time at
+    #: fan-out, dominated by simulation anyway). Override via
+    #: ``--submit-rps`` or the legacy ``--nomad-fanout-submit-rate-per-sec``.
+    default_submit_rps: float | None = 5.0
+
     @property
     def requires_remote_runner_payload(self) -> bool:
         return True
@@ -724,7 +732,6 @@ class NomadExecutor(BaseExecutor):
         use_dispatch: bool = False,
         dispatch_policy: str | None = None,
         estimated_run_size: int | None = None,
-        fanout_submit_rate_per_sec: float | None = None,
         fanout_submit_chunk_size: int = 0,
         allocation_resolution_timeout_s: float = 30.0,
         remote_results_only: bool = True,
@@ -737,6 +744,7 @@ class NomadExecutor(BaseExecutor):
         allow_insecure_token: bool = False,
         vault_secret_path: str | None = None,
         vault_secret_key: str = "payload_secret",
+        submit_rps: float | None = None,
     ):
         # Address precedence: explicit kwarg > NOMAD_ADDR env > 127.0.0.1.
         # Pinning the address in code would hard-code the deployment,
@@ -748,11 +756,14 @@ class NomadExecutor(BaseExecutor):
         self.poll_interval_s = self._sanitize_positive_delay(poll_interval_s, fallback=5.0)
         max_interval = self._sanitize_positive_delay(max_poll_interval_s, fallback=60.0)
         self.max_poll_interval_s = max(max_interval, self.poll_interval_s)
-        self._fanout_submit_rate_per_sec = (
-            self._sanitize_positive_delay(fanout_submit_rate_per_sec, fallback=1.0)
-            if fanout_submit_rate_per_sec is not None
-            else None
-        )
+        # Issue #1563: legacy ``--nomad-fanout-submit-rate-per-sec`` now
+        # routes through the shared ``TokenBucketRateLimiter``. The
+        # constructor no longer needs the ad-hoc ``_fanout_submit_rate_per_sec``
+        # attribute — ``BaseExecutor._rate_limiter.acquire()`` enforces
+        # the throttle before every substrate call, and the old
+        # Campaign-side ``_fanout_submit_interval_s`` hook now reads from
+        # the limiter (returns ``1.0 / rate`` or ``0.0`` for the
+        # disabled case).
         self._fanout_submit_chunk_size = max(int(fanout_submit_chunk_size), 0)
         self.estimated_run_size = (
             max(int(estimated_run_size), 0) if estimated_run_size is not None else None
@@ -869,6 +880,10 @@ class NomadExecutor(BaseExecutor):
             key=key,
             ca_cert=ca_cert,
         )
+        # Issue #1563: shared token-bucket limiter. ``submit_rps`` (new
+        # ``--submit-rps`` flag) overrides ``NomadExecutor.default_submit_rps``
+        # (5 RPS — Nomad's Raft-applies choke on bursts).
+        self._init_rate_limiter(submit_rps)
 
     @staticmethod
     def _is_local_address(address: str) -> bool:
@@ -925,13 +940,26 @@ class NomadExecutor(BaseExecutor):
 
     @property
     def fanout_submit_rate_per_sec(self) -> float | None:
-        """Return the fan-out submit rate in submissions per second."""
-        return self._fanout_submit_rate_per_sec
+        """Return the fan-out submit rate in submissions per second.
+
+        Issue #1563: rate now lives on the shared
+        ``TokenBucketRateLimiter``. The legacy attribute name is kept
+        so downstream tests can still read the configured rate.
+        """
+        rate = self._rate_limiter.rate_per_sec
+        if rate <= 0:
+            return None
+        return rate
 
     def fanout_submit_interval_s(self) -> float:
-        """Return the per-submit pacing interval for Nomad fan-out submission."""
-        rate = self._fanout_submit_rate_per_sec
-        if rate is None or rate <= 0:
+        """Return the per-submit pacing interval for Nomad fan-out submission.
+
+        Issue #1563: derived from the shared ``TokenBucketRateLimiter``
+        so the Campaign-side pacing stays consistent with the
+        throttle the limiter applies inside ``BaseExecutor.submit``.
+        """
+        rate = self._rate_limiter.rate_per_sec
+        if rate <= 0:
             return 0.0
         return 1.0 / rate
 
@@ -1341,11 +1369,12 @@ class NomadExecutor(BaseExecutor):
         """
         concurrency_pressure = max(active_waiters - 8, 0) * 0.05
         rate_pressure = 0.0
-        if self._fanout_submit_rate_per_sec is not None:
-            rate_pressure = max(self._fanout_submit_rate_per_sec - 10.0, 0.0) * 0.01
+        rate = self.fanout_submit_rate_per_sec
+        if rate is not None:
+            rate_pressure = max(rate - 10.0, 0.0) * 0.01
         return 1.6 + min(concurrency_pressure + rate_pressure, 0.4)
 
-    def submit(
+    def _do_submit(
         self,
         fn: Callable[..., Any],
         *args: Any,
