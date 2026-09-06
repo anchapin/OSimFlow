@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
 
 from osimflow import (
     AWSBatchExecutor,
@@ -3115,7 +3114,24 @@ def _cmd_merge(args: argparse.Namespace) -> int:
 def _cmd_warm_cache(args: argparse.Namespace) -> int:
     """Pre-populate the simulation cache before a campaign (issue #427)."""
     _apply_preset(args)
-    cfg: CampaignConfig = load_config(vars(args))
+    try:
+        cfg: CampaignConfig = load_config(vars(args))
+    except FileNotFoundError as exc:
+        # Map internal error messages to user-facing flag names.
+        msg = str(exc)
+        if "variables_yml" in msg:
+            flag = "--input_variables"
+        elif "template_sim_package" in msg:
+            flag = "--template_sim_package"
+        else:
+            flag = "input"
+        print(f"error: {flag}: file not found: {msg.split(':')[-1].strip()}", file=sys.stderr)
+        print("Run with --help for usage.", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("Run with --help for usage.", file=sys.stderr)
+        return 1
     executor = _build_executor(args)
     task_queue = build_task_queue(cfg.task_queue, cfg.dask_scheduler_address)
     campaign = Campaign(
@@ -3474,42 +3490,6 @@ def _cmd_export_results(args: argparse.Namespace) -> int:
     )
 
 
-def _friendly_run_input_error(exc: Exception) -> str:
-    """Translate a run-input loading failure into a one-line, flag-referencing
-    error message (issue #1461).
-
-    ``osimflow.config.load_config`` raises exceptions whose messages name the
-    internal snake_case parameters (``variables_yml``, ``template_sim_package``).
-    This maps them onto the user-facing CLI flags so the most common first-run
-    mistakes surface as one actionable line instead of a raw traceback.
-    Multi-line exception text (e.g. YAML parse errors carrying line/column
-    context) is flattened to a single line.
-    """
-    message = " ".join(str(exc).split())
-
-    if isinstance(exc, FileNotFoundError):
-        for prefix, prefix_flag in (
-            ("variables_yml not found: ", "--input_variables"),
-            ("template_sim_package not found: ", "--template_sim_package"),
-        ):
-            if message.startswith(prefix):
-                return f"{prefix_flag}: file not found: {message.removeprefix(prefix)}"
-        return f"file not found: {message}"
-
-    flag: str | None = None
-    if isinstance(exc, ValidationError):
-        field = exc.field
-        if field == "template_sim_package":
-            flag = "--template_sim_package"
-        elif field in ("variables", None) or "variables.yml" in message:
-            flag = "--input_variables"
-    elif isinstance(exc, yaml.YAMLError):
-        flag = "--input_variables"
-    if flag is not None:
-        return f"{flag}: {message}"
-    return f"invalid configuration: {message}"
-
-
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR0915
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
@@ -3577,17 +3557,24 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
     if args.detach:
         return _perform_detach_handoff(args)
 
-    # Issue #1461: config/input-loading failures (missing --input_variables
-    # file, missing --template_sim_package dir, malformed YAML) must surface
-    # as a one-line, flag-referencing error — never a raw traceback. The
-    # exception types raised by load_config stay untouched; they are
-    # translated here at the CLI boundary only.
     try:
         cfg: CampaignConfig = load_config(vars(args))
-    except (FileNotFoundError, ValidationError, ValueError, yaml.YAMLError) as exc:
-        print(f"error: {_friendly_run_input_error(exc)}", file=sys.stderr)
-        print("See 'osimflow run --help' for usage.", file=sys.stderr)
-        sys.exit(1)
+    except FileNotFoundError as exc:
+        # Map internal error messages to user-facing flag names.
+        msg = str(exc)
+        if "variables_yml" in msg:
+            flag = "--input_variables"
+        elif "template_sim_package" in msg:
+            flag = "--template_sim_package"
+        else:
+            flag = "input"
+        print(f"error: {flag}: file not found: {msg.split(':')[-1].strip()}", file=sys.stderr)
+        print("Run with --help for usage.", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("Run with --help for usage.", file=sys.stderr)
+        return 1
     executor: BaseExecutor
     if cfg.dry_run:
         executor = LocalExecutor(max_workers=1)
