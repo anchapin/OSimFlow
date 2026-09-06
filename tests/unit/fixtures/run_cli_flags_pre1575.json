@@ -2236,8 +2236,8 @@
     "choices": null,
     "const": "True",
     "default": "False",
-    "dest": "track_costs",
-    "help": "Enable campaign cost tracking (issue #447). Estimates cloud/HPC resource costs and writes a cost summary JSON alongside campaign outputs. Supports AWS Batch (on-demand/Spot), Slurm (per-node-hour), and Local (no cost) executors.",
+    "dest": "enable_cost_tracking",
+    "help": "Enable campaign cost tracking (issue #447). Estimates cloud/HPC resource costs and writes a cost summary JSON alongside campaign outputs. Supports AWS Batch (on-demand/Spot), Slurm (per-node-hour), and Local (no cost) executors. Alias of --enable-cost-tracking; both flags write to the ``enable_cost_tracking`` dest so ``load_config`` reads the value correctly (issue #1556).",
     "metavar": null,
     "nargs": "0",
     "option_strings": [
