@@ -266,6 +266,16 @@ physically live in their executor's config module, not in
 
 - **BYOS:** `--byos-resource-limits`, `--byos-timeout-s`,
   `--byos-trust-level`,
+  `--sample-await-timeout-s` (orchestrator-side per-step await
+  deadline in seconds; issue #1566 — when set, the campaign passes
+  it directly to ``handle.result(timeout=...)`` so a wedged
+  substrate becomes a ``TimeoutError`` through the existing
+  per-sample failure-recording path instead of parking
+  ``_await_one`` indefinitely. When unset, the deadline is
+  ``max(time_min_for_step * 60, byos_timeout_s)`` so the
+  orchestrator-side bound accommodates the longest expected
+  legitimate work. ``None`` (default) preserves the
+  pre-#1566 bare-``handle.result()`` semantics.).,
   `--custom_apply_script`, `--custom_kpi_extractor`,
   `--require-cosign-identity`, `--require-trusted-scripts`.
 

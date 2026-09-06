@@ -501,6 +501,18 @@ class DAGConfig:
         BYOS / OpenStudio subprocess timeout in seconds (issue #1109).
         ``None`` (default) means effectively unbounded (issue #1534) —
         annual EnergyPlus simulations routinely exceed any stock bound.
+    await_timeout_s
+        Orchestrator-side per-step await deadline floor in seconds
+        (issue #1566).  When set, the campaign derives the deadline
+        passed to ``handle.result(timeout=...)`` as
+        ``max(time_min_for_step * 60, byos_timeout_s, await_timeout_s)``
+        and a wedged substrate (Nomad allocation that never reaches
+        terminal, Docker Swarm service in a non-terminal state, K8s
+        ``time_min=0`` yielding no ``activeDeadlineSeconds``) becomes
+        a ``TimeoutError`` that flows through the existing
+        per-sample failure recording.  ``None`` (default) preserves
+        the pre-#1566 bare-``handle.result()`` behaviour for users
+        who do not want an orchestrator-side bound.
     ecr_repository
         ECR repository URI for OpenStudio images (issue #144).
     resource_quota
@@ -538,6 +550,7 @@ class DAGConfig:
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
     byos_resource_limits: dict[str, int] | None = None
     byos_timeout_s: float | None = None
+    await_timeout_s: float | None = None
     ecr_repository: str | None = None
     resource_quota: ResourceQuota | None = None
     redis_url: str | None = None
@@ -890,6 +903,7 @@ class CampaignConfig:
     byos_trust_level: ByosTrustLevel = ByosTrustLevel.SUBPROCESS
     byos_resource_limits: dict[str, int] | None = None
     byos_timeout_s: float | None = None
+    await_timeout_s: float | None = None
     require_trusted_scripts: bool | None = None
     ecr_repository: str | None = None
     resource_quota: ResourceQuota | None = None
@@ -1008,6 +1022,7 @@ class CampaignConfig:
             byos_trust_level=self.byos_trust_level,
             byos_resource_limits=self.byos_resource_limits,
             byos_timeout_s=self.byos_timeout_s,
+            await_timeout_s=self.await_timeout_s,
             ecr_repository=self.ecr_repository,
             resource_quota=self.resource_quota,
             redis_url=self.redis_url,
@@ -1149,6 +1164,7 @@ class CampaignConfig:
                 "byos_trust_level": ("dag", "byos_trust_level"),
                 "byos_resource_limits": ("dag", "byos_resource_limits"),
                 "byos_timeout_s": ("dag", "byos_timeout_s"),
+                "await_timeout_s": ("dag", "await_timeout_s"),
                 "ecr_repository": ("dag", "ecr_repository"),
                 "resource_quota": ("dag", "resource_quota"),
                 "redis_url": ("dag", "redis_url"),
@@ -1737,6 +1753,18 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         # annual EnergyPlus runs routinely exceed the old 600 s stock bound.
         byos_timeout_s=(
             float(str(args["byos_timeout_s"])) if args.get("byos_timeout_s") is not None else None
+        ),
+        # Orchestrator-side per-step await deadline floor (issue #1566).
+        # ``None`` (default) preserves the pre-#1566 bare-``handle.result()``
+        # behaviour; set --sample-await-timeout-s to engage the
+        # ``TimeoutError`` failure-recording path for wedged substrates
+        # (Nomad / Docker Swarm / mis-configured K8s ``time_min=0``).
+        # argparse derives the destination key from the flag spelling:
+        # ``--sample-await-timeout-s`` → ``args.sample_await_timeout_s``.
+        await_timeout_s=(
+            float(str(args["sample_await_timeout_s"]))
+            if args.get("sample_await_timeout_s") is not None
+            else None
         ),
         result_storage_backend=str(args.get("result_storage_backend", "local")),
         result_storage_bucket=str(args.get("result_storage_bucket", "")),

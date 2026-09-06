@@ -790,6 +790,25 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--sample-await-timeout-s",
+        type=float,
+        default=None,
+        help=(
+            "Orchestrator-side per-step await deadline floor in seconds "
+            "(issue #1566). When set, the campaign derives the deadline "
+            "passed to ``handle.result(timeout=...)`` as "
+            "``max(time_min_for_step * 60, byos_timeout_s, await_timeout_s)`` "
+            "and a wedged substrate (Nomad allocation that never reaches "
+            "terminal, Docker Swarm service in a non-terminal state, K8s "
+            "``time_min=0`` yielding no ``activeDeadlineSeconds``) becomes "
+            "a ``TimeoutError`` that flows through the existing per-sample "
+            "failure recording (``failed_simulations.csv`` row, alert, "
+            "checkpoint) instead of parking an ``_await_one`` thread "
+            "indefinitely. Default: no orchestrator-side deadline "
+            "(preserves the pre-#1566 bare-``handle.result()`` semantics)."
+        ),
+    )
+    run.add_argument(
         "--observability",
         choices=["none", "cloudwatch", "prometheus", "opentelemetry"],
         default="none",

@@ -317,6 +317,7 @@ signature-verification workflow and
 | `--custom_apply_script` | path | none | Path to a custom parameter-application script. |
 | `--custom_kpi_extractor` | path | none | Path to a custom KPI extraction script. |
 | `--byos-timeout-s` | float | none (unbounded) | Wall-clock timeout in seconds for the BYOS subprocess and the real OpenStudio CLI simulation subprocess; a timeout kill is non-transient and is not retried (issues #1109, #1534). Default unbounded — bound long runs via the executor's walltime, or set this explicitly. |
+| `--sample-await-timeout-s` | float | none (unbounded) | Orchestrator-side per-step await deadline in seconds (issue #1566). When set, the campaign derives the deadline passed to ``handle.result(timeout=...)`` and a wedged substrate (Nomad allocation / Docker Swarm service / mis-configured K8s ``time_min=0``) becomes a ``TimeoutError`` that flows through the existing per-sample failure recording (``failed_simulations.csv`` row, alert, checkpoint) instead of parking ``_await_one`` indefinitely. Default ``None`` preserves the bare-``handle.result()`` semantics. |
 
 #### Advanced
 
