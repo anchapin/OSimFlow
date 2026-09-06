@@ -683,6 +683,28 @@ work script from reading the signing secret and forging payloads.
 
 The REST API server (`osimflow serve`) supports API key authentication for single-user and multi-user deployments.
 
+### SEC-001 localhost gap (issue #1553)
+
+When no `--api-key` and no `--api-keys-file` is supplied, `serve`
+auto-generates an ephemeral API key at startup and prints it once to
+stderr — including on a **read-only** localhost bind. The previous
+behaviour was fail-open for read-only serves: every local account on a
+shared host could read `run.json`, KPI results, and registry listings
+over `http://127.0.0.1:8000` without credentials. The auto-gen path
+reuses the `secrets.token_urlsafe(32)` mechanism that the write path
+already used (issue #1117) and emits a WARNING log describing the
+multi-user-host exposure. Pass `--api-key <key>` explicitly to pin a
+stable key across serves.
+
+```bash
+# Default read-only bind: auto-gen key printed to stderr.
+osimflow serve --outdir ./results
+# stderr: Generated ephemeral API key for localhost serve: <key> — pass --api-key <key> to pin it on subsequent serves.
+
+# Pin a stable key across serves.
+osimflow serve --outdir ./results --api-key '<your-api-key>'
+```
+
 ### Single-key mode
 
 Use `--api-key` for a single API key. When `--enable-writes` or `--read-write` is set, an API key is **required** (auto-generated and logged if not provided):

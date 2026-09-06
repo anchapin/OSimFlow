@@ -37,6 +37,25 @@ Pass `--api-key <key>` for single-key mode, or `--api-keys-file
 `readwrite`, `admin`; issue #395). The Python client
 (`osimflow.client.OSimFlowClient`) already sends the header.
 
+### Auto-generated ephemeral key (issue #1553, SEC-001 localhost gap)
+
+When `serve` is started without `--api-key` and without
+`--api-keys-file`, an ephemeral API key is auto-generated at startup
+and printed **once to stderr**:
+
+```text
+Generated ephemeral API key for localhost serve: <key> — pass --api-key <key> to pin it on subsequent serves.
+```
+
+The auto-gen path fires for **both** read-only and read-write binds
+so that a loopback `serve` is never unauthenticated — including on
+shared HPC login nodes where every local account can otherwise read
+`run.json`, KPI results, and registry listings over
+`http://127.0.0.1:8000`. A WARNING log describing the multi-user-host
+exposure is emitted at startup. Pass `--api-key <key>` explicitly to
+pin a stable key across serves (the auto-generated key is ephemeral
+and shown only once).
+
 ## TLS (SEC-004)
 
 **TLS is required for production deployments.** The API supports API key authentication (issue #268) but defaults to plain HTTP with no TLS enforcement. Without TLS, API keys are transmitted in clear text and are vulnerable to interception.
