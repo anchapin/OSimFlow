@@ -297,7 +297,7 @@ physically live in their executor's config module, not in
   `list` — `--format`, `--limit`, `--project`, `--registry`, `--status`;
   `status` / `download` — `--include-intermediates`,
   `--output-dir`; `backup` / `restore` — `--merge`, `--output`,
-  `--registry`; `health` — `--json`, `--offline`;
+  `--registry`;   `health` — `--json`, `--offline`, `--redis-url`;
   `mark-for-reanalysis` — `--priority`;
   `merge` — `--source-ids`, `--target-id`, `--target-work-dir`;
   `measure` / `list-measures` — `--filter`, `--project`,
@@ -446,7 +446,10 @@ name in this section.
   cache-specific PRAGMA tweaks.
 - `osimflow/distributed_cache.py` — `DistributedCache` +
   `build_cache` + `campaign_state_namespace` (Redis-backed;
-  pid-private local SQLite files in distributed mode).
+  pid-private local SQLite files in distributed mode). One of four
+  Redis-backed planes that share a single `--redis-url`; the scoped
+  decision is single-instance Redis (issue #1562 / ADR-0004), with
+  campaign-restart-by-replay as the recovery story.
 - `osimflow/circuit_breaker.py` — `CircuitBreaker` +
   `CircuitOpenError` + `set_on_transition_callback()`
   (closed/open/half-open; guards the Redis
@@ -465,7 +468,8 @@ name in this section.
   `CircuitBreaker(name=f"jobqueue:{campaign_id}")` (issue #1397) so
   persistent Redis outages fail-fast at the publish boundary instead of
   burning the 5 s socket timeout on every job state transition; closes
-  the control-plane sibling of issue #1111.
+  the control-plane sibling of issue #1111. Single-instance Redis is
+  the supported topology (issue #1562 / ADR-0004).
 - `osimflow/storage.py` — `ResultStorage` ABC + `LocalStorage`,
   `S3Storage`, `GCSStorage`, `AzureBlobStorage`,
   `S3ArtifactStorage`, `ResultStorageUploader`,
@@ -484,7 +488,11 @@ name in this section.
   `DuplicateDocumentError`, `SQLiteDocumentStore`,
   `RedisDocumentStore`, `build_document_store`
   (issue #1014; dispatch is by `redis_url` / `namespace` mirroring
-  `build_cache`).
+  `build_cache`). The `RedisDocumentStore` is the source-of-truth
+  control plane for the four-plane Redis design (issue #1562 /
+  ADR-0004): a Redis outage fails loud rather than silently diverges,
+  and recovery is via `osimflow run --outdir <same>` cache replay
+  (see `docs/user-guide.md` §7.7).
 - `osimflow/jobqueue.py` — filesystem-based `JobQueue`
   (crash recovery).
 - `osimflow/monitoring.py` — `RunTrace` (includes
@@ -573,7 +581,12 @@ name in this section.
   `INFORMATIONAL` by default, promoted to `CRITICAL` when
   `--executor <name>` is passed. Since issue #1463 the health-check
   registration lives on this module's side (`_register_executor_health_checks`
-  at import); `osimflow.executors` never imports this module.
+  at import); `osimflow.executors` never imports this module. The
+  Redis deployment-mode probe `_check_redis_deployment_mode`
+  (issue #1562 / ADR-0004) reports `single` / `sentinel` / `cluster` /
+  `unknown` and the Redis version + replication role for `--redis-url`
+  when the operator runs `osimflow health --redis-url <URL>`; the
+  probe SKIPs cleanly when no URL is set.
 - `osimflow/alerting.py` — `AlertManager`
   (`on_alert` callback for `RunTrace.record_alert` wiring),
   `build_alert_manager`.
@@ -1167,6 +1180,15 @@ context-mode / codebase-memory-mcp are exposed):
 - [ADR-0002
   (`.agents/results/architecture/0002-adopt-nrel-upstream-image.md`)](.agents/results/architecture/0002-adopt-nrel-upstream-image.md)
   — adopt `nrel/openstudio` directly.
+- [ADR-0003
+  (`.agents/results/architecture/0003-coordinator-high-availability.md`)](.agents/results/architecture/0003-coordinator-high-availability.md)
+  — campaign-level HA patterns (shared-filesystem redundancy +
+  campaign-per-worker).
+- [ADR-0004
+  (`.agents/results/architecture/0004-redis-ha-scope.md`)](.agents/results/architecture/0004-redis-ha-scope.md)
+  — single-instance Redis as the scoped decision for the four
+  Redis-backed planes; campaign-restart-by-replay is the recovery
+  story; `osimflow health --redis-url` surfaces the deployment mode.
 - [Decision verdict
   (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md)
   — spike outcome that ratified the foundation.

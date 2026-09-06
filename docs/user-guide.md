@@ -1085,6 +1085,67 @@ rm -rf my_campaign/
 **Performance:** A cached resume of a 5-sample campaign takes ~0.1s vs ~50s
 for the initial run (verified in benchmarks).
 
+### 7.7 Recovery: Redis outage mid-campaign (issue #1562 / ADR-0004)
+
+When `--redis-url` is set, four OSimFlow planes coordinate through one
+Redis instance: `DistributedCache` (cross-worker cache hint),
+`RedisDocumentStore` (the source of truth for documents), the
+`DistributedJobQueue` (control plane), and the API rate limiter.
+By design, the document store refuses silent divergence on outage
+(issue #1014) — a mid-campaign Redis outage aborts the running
+campaign rather than resuming against stale state.
+
+The recovery story is **cache-replay resume**: re-run the campaign
+against the same `--outdir`. Completed steps replay from cache;
+only the steps the breaker caught in flight re-execute.
+
+**Step 1 — Confirm Redis is back** (or stand up a new instance at the
+same `--redis-url`). You can probe the deployment mode before
+re-running:
+
+```bash
+osimflow health --offline --redis-url redis://redis.internal:6379/0
+```
+
+The `Redis Deployment Mode` check (issue #1562) reports the topology
+the rest of the system assumes and surfaces the recovery story in
+its `detail`. PASS for single-instance Redis; WARN for Sentinel /
+Cluster URLs (the current client path cannot route through); FAIL
+when the URL is unreachable.
+
+**Step 2 — Re-run the campaign with the same `--outdir`**:
+
+```bash
+osimflow run \
+  --executor local \
+  --input_variables variables.yml \
+  --template_sim_package ./template \
+  --n_samples 1000 \
+  --outdir ./results \
+  --redis-url redis://redis.internal:6379/0 \
+  --openstudio_version 3.11.0
+```
+
+Completed steps hit the cache (`work/cache.sqlite` for the
+single-node SQLite store, or the pid-private local SQLite backed by
+the Redis shared store in distributed mode — see
+`docs/distributed-cache.md`). The campaign picks up at the first
+un-cached step and continues.
+
+**Step 3 — Verify the recovery**. The `run.json.cache_hit_rate` field
+reflects how much work was replayed; on a clean recovery it climbs
+back to ~100 % for the completed steps. The `circuit_breaker_states`
+field (issue #1191, #1307) records the per-plane breaker states at
+shutdown — an `"open"` entry confirms Redis was unreachable.
+
+**Why not Sentinel / Cluster?** Per
+[ADR-0004](../.agents/results/architecture/0004-redis-ha-scope.md),
+single-instance Redis is the scoped decision for the current
+release. Sentinel / Cluster client wiring is tracked as future work
+(see ADR-0004 §"Gap Closure Criteria"); deploying Sentinel today
+gives you no failover benefit because the OSimFlow client path does
+not route through Sentinel.
+
 ### 7.6 OpenStudio Version Selection
 
 The `--openstudio_version` flag determines which `nrel/openstudio` container
