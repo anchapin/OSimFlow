@@ -870,3 +870,217 @@ class TestTaskPayloadSigningCheck:
         result = self._check("nomad")
         assert result.status.value.lower() == "warn", result.message
         assert "signature verification" in result.message or "swallow" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# Redis deployment-mode check (issue #1562 / ADR-0004)
+# ---------------------------------------------------------------------------
+# Uses fakeredis to keep the check hermetic and free of any network call.
+# Mirrors the wiring pattern in
+# tests/integration/test_distributed_cache_invalidation.py — the lazy
+# ``import redis`` is intercepted so ``from_url`` returns a
+# ``fakeredis.FakeRedis`` shared by every test that needs one. The
+# probe in ``_check_redis_deployment_mode`` only calls ``ping()`` and
+# ``info()`` on the client, both of which fakeredis implements.
+
+
+@pytest.fixture
+def fake_redis_module():
+    """Patch the lazy ``import redis`` inside ``osimflow.health`` to fakeredis.
+
+    Returns the shared :class:`fakeredis.FakeServer` so tests can flush
+    state or assert on writes if needed. The probe only reads, so this
+    fixture's main role is to make ``from_url`` succeed hermetically.
+
+    Fakeredis 2.x does not implement ``INFO`` (it raises
+    ``ResponseError``), so this fixture also patches the client's
+    ``info()`` to return a minimal but realistic payload so the role /
+    version / latency assertions in the tests are deterministic.
+    """
+    try:
+        import fakeredis as _fakeredis  # noqa: PLC0415
+    except ImportError:  # pragma: no cover — [dev] only
+        pytest.skip("fakeredis not installed")
+    server = _fakeredis.FakeServer()
+    fake = _fakeredis.FakeRedis(server=server, decode_responses=True)
+
+    def _info_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "redis_version": "7.4.0-fakeredis",
+            "replication": {"role": "master"},
+        }
+
+    fake.info = _info_stub  # type: ignore[method-assign]
+
+    class _FakeModule:
+        def from_url(self, *_args: object, **_kwargs: object) -> object:
+            return fake
+
+    class _FakeAsyncioModule:
+        def from_url(self, *_args: object, **_kwargs: object) -> object:  # pragma: no cover
+            return _fakeredis.FakeAsyncRedis(server=server)
+
+    with patch.dict(sys.modules, {"redis": _FakeModule()}):
+        yield server
+
+
+class TestRedisDeploymentModeCheck:
+    """Issue #1562 / ADR-0004 acceptance: health check reports the
+    deployment mode of the Redis instance behind ``--redis-url`` and
+    surfaces the cache-replay resume path on outage."""
+
+    @staticmethod
+    def _check(redis_url: str | None):
+        from osimflow.health import _check_redis_deployment_mode  # noqa: PLC0415
+
+        return _check_redis_deployment_mode(redis_url)
+
+    def test_skip_when_no_url(self) -> None:
+        """No URL -> SKIP with the four-plane pointer in detail."""
+        result = self._check(None)
+        assert result.name == "Redis Deployment Mode"
+        assert result.status == CheckStatus.SKIP
+        assert result.category == CheckCategory.INFORMATIONAL
+        assert "DistributedCache" in result.detail
+        assert "RedisDocumentStore" in result.detail
+        assert "DistributedJobQueue" in result.detail
+        assert "rate limiter" in result.detail
+        assert "1562" in result.detail
+
+    def test_pass_for_single_instance(self, fake_redis_module: object) -> None:
+        """A reachable ``redis://`` URL reports single + version + role."""
+        result = self._check("redis://localhost:6379/0")
+        assert result.status == CheckStatus.PASS
+        assert result.category == CheckCategory.INFORMATIONAL
+        assert "single-instance Redis" in result.message
+        # Info role: fakeredis returns role='master' by default.
+        assert "role=master" in result.detail
+        assert "ADR-0004" in result.detail
+        # URL redaction should be a no-op for a URL without credentials.
+        assert "localhost" in result.detail
+
+    def test_pass_redacts_embedded_password(self, fake_redis_module: object) -> None:
+        """A URL with ``user:pass@`` must not leak the password in detail."""
+        result = self._check("redis://user:secret@localhost:6379/0")
+        assert result.status == CheckStatus.PASS
+        assert "secret" not in result.detail
+        assert ":***@" in result.detail
+
+    def test_warn_for_sentinel_url(self, fake_redis_module: object) -> None:
+        """A ``redis+sentinel://`` URL is currently unsupported -> WARN."""
+        result = self._check("redis+sentinel://sentinel-1:26379,mymaster")
+        assert result.status == CheckStatus.WARN
+        assert result.category == CheckCategory.INFORMATIONAL
+        assert "sentinel" in result.message.lower()
+        assert "Sentinel" in result.detail
+        assert "not in this release" in result.detail or "not currently supported" in result.detail
+        assert "ADR-0004" in result.detail
+
+    def test_warn_for_cluster_url(self, fake_redis_module: object) -> None:
+        """A ``redis+cluster://`` URL is currently unsupported -> WARN."""
+        result = self._check("redis+cluster://redis-cluster-1:6379")
+        assert result.status == CheckStatus.WARN
+        assert "cluster" in result.message.lower()
+        assert "ADR-0004" in result.detail
+
+    def test_warn_for_unknown_scheme(self, fake_redis_module: object) -> None:
+        """An unrecognized scheme that still connects -> WARN unknown."""
+        result = self._check("http://localhost:6379")
+        assert result.status == CheckStatus.WARN
+        assert "mode=unknown" in result.detail or "unknown" in result.message.lower()
+
+    def test_fail_when_unreachable(self) -> None:
+        """An unreachable host must FAIL with the recovery story in detail."""
+        # 127.0.0.1:1 is reserved (tcpmux) and refused on every host —
+        # the connection refuses immediately rather than hanging on the
+        # 5 s timeout. We patch ``from_url`` to a stub that raises the
+        # same ConnectionError real redis-py would raise on refusal.
+        from redis.exceptions import ConnectionError as RedisConnectionError  # noqa: PLC0415
+
+        class _RaisingModule:
+            def from_url(self, *_args: object, **_kwargs: object) -> object:
+                raise RedisConnectionError("Connection refused.")
+
+        with patch.dict(sys.modules, {"redis": _RaisingModule()}):
+            result = self._check("redis://127.0.0.1:1/0")
+        assert result.status == CheckStatus.FAIL
+        assert "Redis outage" in result.detail
+        # Recovery story must be cited.
+        assert "cache" in result.detail.lower() and "replay" in result.detail.lower()
+        assert "ADR-0004" in result.detail
+        # Passwords must not leak even on FAIL.
+        assert "secret" not in result.detail
+
+    def test_fail_with_password_redacted(self) -> None:
+        """Failure path must not leak the URL password into detail."""
+        from redis.exceptions import ConnectionError as RedisConnectionError  # noqa: PLC0415
+
+        class _RaisingModule:
+            def from_url(self, *_args: object, **_kwargs: object) -> object:
+                raise RedisConnectionError("Connection refused.")
+
+        with patch.dict(sys.modules, {"redis": _RaisingModule()}):
+            result = self._check("redis://user:secret@127.0.0.1:1/0")
+        assert result.status == CheckStatus.FAIL
+        assert "secret" not in result.detail
+        assert ":***@" in result.detail
+
+    def test_skip_when_redis_not_installed(self) -> None:
+        """If the ``redis`` package is absent the check SKIPs cleanly."""
+        import builtins  # noqa: PLC0415
+
+        real_import = builtins.__import__
+
+        def _fake_import(name: str, *args: object, **kwargs: object):  # noqa: ANN001, ANN002
+            if name == "redis" or name.startswith("redis."):
+                raise ImportError("simulated missing redis")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=_fake_import):
+            result = self._check("redis://localhost:6379/0")
+        assert result.status == CheckStatus.SKIP
+        assert "redis" in result.message.lower()
+
+
+class TestHealthCLIRedisURLFlag:
+    """The ``osimflow health --redis-url`` CLI flag forwards to the check."""
+
+    def test_help_lists_redis_url_flag(self) -> None:
+        parser = _build_parser()
+        try:
+            args = parser.parse_args(
+                ["health", "--offline", "--redis-url", "redis://localhost:6379/0"]
+            )
+        except SystemExit as exc:  # argparse exits on parse error
+            pytest.fail(f"parser rejected --redis-url flag: exit={exc.code}")
+        assert args.redis_url == "redis://localhost:6379/0"
+
+    def test_cmd_health_forwards_redis_url(self, tmp_path: Path) -> None:
+        """_cmd_health forwards --redis-url to run_health_checks."""
+        with patch("osimflow.health.run_health_checks") as mock_run:
+            mock_run.return_value = HealthReport(results=[])
+            from osimflow.__main__ import _cmd_health  # noqa: PLC0415
+
+            parser = _build_parser()
+            args = parser.parse_args(
+                [
+                    "health",
+                    "--offline",
+                    "--redis-url",
+                    "redis://user:hush@redis.local:6379/0",
+                    "--outdir",
+                    str(tmp_path),
+                ]
+            )
+            exit_code = _cmd_health(args)
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("redis_url") == "redis://user:hush@redis.local:6379/0"
+        assert exit_code == 0
+
+    def test_run_health_checks_omits_redis_check_by_default(self, tmp_path: Path) -> None:
+        """Without ``redis_url=`` the Redis check SKIPs (single-node campaigns)."""
+        report = run_health_checks(outdir=tmp_path, skip_network=True)
+        redis_results = [r for r in report.results if r.name == "Redis Deployment Mode"]
+        assert len(redis_results) == 1
+        assert redis_results[0].status == CheckStatus.SKIP

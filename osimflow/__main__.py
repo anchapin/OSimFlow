@@ -1706,6 +1706,19 @@ def _add_health_args(health: argparse.ArgumentParser) -> None:
             "subcommand instead of merely warning. (issue #1024)"
         ),
     )
+    health.add_argument(
+        "--redis-url",
+        default=None,
+        help=(
+            "Probe the deployment mode of the Redis instance behind this "
+            "URL (issue #1562 / ADR-0004). Reports single / sentinel / "
+            "cluster / unknown based on a short PING + INFO probe. "
+            "Single-instance Redis is the only topology the OSimFlow "
+            "client path currently supports; the campaign-restart-by-"
+            "replay recovery path is documented in user-guide.md §7.7. "
+            "When omitted, the Redis check SKIPs."
+        ),
+    )
     health.add_argument("--log_level", default="ERROR")
 
 
@@ -3181,7 +3194,7 @@ def _cmd_warm_cache(args: argparse.Namespace) -> int:
 
 
 def _cmd_health(args: argparse.Namespace) -> int:
-    """Run system health checks (issue #411, #1024)."""
+    """Run system health checks (issue #411, #1024, #1562)."""
     from osimflow.health import (  # noqa: PLC0415
         format_results,
         get_exit_code,
@@ -3194,6 +3207,7 @@ def _cmd_health(args: argparse.Namespace) -> int:
         outdir=outdir,
         skip_network=args.offline,
         configured_executor=args.executor,
+        redis_url=args.redis_url,
     )
 
     if args.json:
