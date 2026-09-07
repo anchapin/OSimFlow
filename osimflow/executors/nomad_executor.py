@@ -40,6 +40,7 @@ from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SIG_ENV,
     TASK_PAYLOAD_SIG_META_KEY,
     build_signature_env,
+    build_transport_signature_env,
 )
 
 log = logging.getLogger("osimflow.executors")
@@ -1105,6 +1106,9 @@ class NomadExecutor(BaseExecutor):
                 env["OSIMFLOW_RESULT_STORAGE_PREFIX"] = transport.prefix
             if transport.endpoint is not None:
                 env["OSIMFLOW_RESULT_STORAGE_ENDPOINT"] = transport.endpoint
+            # Issue #1549: second HMAC over the canonical result-transport
+            # settings (see ``build_transport_signature_env``).
+            env.update(build_transport_signature_env(transport))
 
         image = self._resolve_nomad_image(
             container=container,

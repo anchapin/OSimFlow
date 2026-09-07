@@ -166,11 +166,32 @@ def _sign_and_set_payload(
 
 
 def _set_object_storage_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Configure env vars so _upload_artifacts_for_object_storage is engaged."""
+    """Configure env vars so _upload_artifacts_for_object_storage is engaged.
+
+    Signed campaigns (``OSIMFLOW_TASK_PAYLOAD_SECRET`` configured) must also
+    carry the transport signature over these exact settings (issue #1549) —
+    mirror what the executors emit via ``build_transport_signature_env``.
+    """
     monkeypatch.setenv("OSIMFLOW_RESULT_TRANSPORT_MODE", "object_storage")
     monkeypatch.setenv("OSIMFLOW_RESULT_STORAGE_BACKEND", "s3")
     monkeypatch.setenv("OSIMFLOW_RESULT_STORAGE_BUCKET", "bucket")
     monkeypatch.setenv("OSIMFLOW_RESULT_STORAGE_PREFIX", "run-1")
+    from osimflow.task_payload_hmac import (
+        RESULT_TRANSPORT_SIG_ENV,
+        build_transport_signature_env,
+    )
+
+    class _SignedTransport:
+        mode = "object_storage"
+        backend = "s3"
+        bucket = "bucket"
+        prefix = "run-1"
+        endpoint = None
+
+    monkeypatch.setenv(
+        RESULT_TRANSPORT_SIG_ENV,
+        build_transport_signature_env(_SignedTransport(), secret=_SECRET)[RESULT_TRANSPORT_SIG_ENV],
+    )
 
 
 def _register_paths_step(monkeypatch: pytest.MonkeyPatch, *, paths: list[Path]) -> str:

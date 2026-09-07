@@ -681,7 +681,19 @@ name in this section.
   submission; `remote_runner` verifies (via
   `hmac.compare_digest`, fail-closed) before decoding. Secret
   comes from the `OSIMFLOW_TASK_PAYLOAD_SECRET` env var (no CLI
-  flag — avoids new public surface).
+  flag — avoids new public surface).  Since issue #1549 a second
+  HMAC covers the result-transport settings:
+  `build_transport_signature_env` +
+  `canonical_result_transport_settings` +
+  `RESULT_TRANSPORT_SIG_ENV` / `RESULT_TRANSPORT_SIG_META_KEY` /
+  `RESULT_TRANSPORT_SIGNED_FIELDS`.  Every transport-carrying
+  executor (AWS/Azure/Google Batch, Kubernetes, Nomad, Docker
+  Swarm) emits `OSIMFLOW_RESULT_TRANSPORT_SIG` next to the
+  `OSIMFLOW_RESULT_*` env vars; `remote_runner` verifies it
+  fail-closed before constructing the storage backend, and the
+  `allow_insecure_storage_endpoint` escape hatch is honored at
+  the worker only when it authenticated as part of the signed
+  settings.
 - `osimflow/apply_params.py`, `osimflow/aggregation.py`,
   `osimflow/audit.py`, `osimflow/byos.py`,
   `osimflow/event_log.py`, `osimflow/json_utils.py`,

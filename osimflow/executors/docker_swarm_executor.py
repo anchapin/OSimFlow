@@ -44,7 +44,7 @@ from osimflow.executors.transport import (
     resolve_result_for_callback,
     validate_transport_mode,
 )
-from osimflow.task_payload_hmac import build_signature_env
+from osimflow.task_payload_hmac import build_signature_env, build_transport_signature_env
 
 log = logging.getLogger("osimflow.executors.docker_swarm")
 
@@ -496,6 +496,12 @@ class DockerSwarmExecutor(BaseExecutor):
                 env.append(f"OSIMFLOW_RESULT_STORAGE_PREFIX={transport.prefix}")
             if transport.endpoint is not None:
                 env.append(f"OSIMFLOW_RESULT_STORAGE_ENDPOINT={transport.endpoint}")
+            # Issue #1549: second HMAC over the canonical result-transport
+            # settings (see ``build_transport_signature_env``).
+            env.extend(
+                f"{_key}={_value}"
+                for _key, _value in build_transport_signature_env(transport).items()
+            )
         stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
         if stub_sim is not None:
             env.append(f"OSIMFLOW_STUB_SIM={stub_sim}")

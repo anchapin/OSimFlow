@@ -67,6 +67,18 @@ _EXEMPT_MAX_CALLS: dict[str, int] = {
     # on an elapsed-time assumption, and the SUBSCRIBE-confirmation wait
     # has no synchronizable hook without refactoring osimflow internals.
     "tests/integration/test_distributed_cache_invalidation.py": 4,
+    # 1 deadline-bounded join wait from issue #1538: the bounded-drain
+    # integration test waits for the (real) fan-out threads to observe
+    # the cancel flag inside a ``time.monotonic()`` deadline loop — the
+    # observable is genuine thread scheduling, which has no
+    # synchronizable hook without patching the scheduler under test.
+    "tests/integration/test_cancel_substrate_jobs.py": 1,
+    # 3 short park-and-release setups from issue #1538: the
+    # executor-cancel unit tests park a stub job in ``result()`` so the
+    # cancel sweep has something live to kill; each ``time.sleep`` keeps
+    # the stub parked (and is interrupted by the kill), not asserting on
+    # elapsed wall-clock.
+    "tests/unit/test_executor_cancel.py": 3,
 }
 
 _SLEEP_MODULES = frozenset({"time", "asyncio"})
