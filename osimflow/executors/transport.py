@@ -47,11 +47,15 @@ clear :class:`ValueError` instead of being silently discarded
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from osimflow.storage import build_result_storage
+
+if TYPE_CHECKING:
+    from osimflow.config import CampaignConfig
 
 type ResultTransportMode = Literal["auto", "shared_fs", "object_storage"]
 
@@ -149,6 +153,144 @@ def validate_transport_mode(executor_name: str, mode: str | None) -> ResultTrans
             "'shared_fs')."
         )
     return normalized
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultTransportConfig:
+    """Frozen value object carrying the result-transport contract (issue #1541).
+
+    Replaces the five loose parameters (``result_transport_mode``,
+    ``result_storage_backend``, ``result_storage_bucket``,
+    ``result_storage_prefix``, ``result_storage_endpoint``) that used to
+    be repeated as constructor kwargs on every remote handle, as class
+    attributes on ``PollingHandle``, and as submit-kwarg plumbing
+    through every executor.  ``Campaign`` constructs exactly one
+    instance (via :meth:`from_campaign_config`) and passes it through
+    ``submit()`` down to the handle, so a new transport option is a
+    field here instead of an edit across ~10 executor files.
+
+    ``mode`` is always stored **coerced** — :meth:`__post_init__` is
+    the single ``coerce_transport_mode`` call for the whole plumbing
+    path (constructing with a raw ``"object-storage"`` / ``"sharedfs"``
+    string normalizes it immediately).  Validation against the
+    per-executor capability matrix (:func:`validate_transport_mode`,
+    issue #1473) still happens at submit time and is unchanged.
+
+    ``presigned_url_expiration_s`` mirrors the existing
+    ``--s3-artifact-presigned-url-expiration`` flag (default 3600 s)
+    so the expiry option rides the same value object.  There is
+    deliberately no signing field: container-image signing (cosign,
+    ``osimflow.cosign``) and task-payload HMAC signing
+    (``osimflow.task_payload_hmac``) are separate contracts that do
+    not vary per result-transport mode.
+    """
+
+    mode: ResultTransportMode = "auto"
+    backend: str | None = None
+    bucket: str | None = None
+    prefix: str | None = None
+    endpoint: str | None = None
+    presigned_url_expiration_s: int | None = None
+
+    def __post_init__(self) -> None:
+        # The single coercion point for the whole submit -> handle path
+        # (issue #1541): raw alias strings normalize here, once.
+        object.__setattr__(self, "mode", coerce_transport_mode(self.mode))
+
+    @classmethod
+    def from_kwargs(
+        cls,
+        *,
+        result_transport_mode: str | None = None,
+        result_storage_backend: str | None = None,
+        result_storage_bucket: str | None = None,
+        result_storage_prefix: str | None = None,
+        result_storage_endpoint: str | None = None,
+        presigned_url_expiration_s: int | None = None,
+    ) -> ResultTransportConfig:
+        """Build a config from the historic five loose kwargs.
+
+        Kept as the migration seam for callers (and tests) that still
+        hold the legacy field set; new callers should construct the
+        dataclass directly or use :meth:`from_campaign_config`.
+        """
+        return cls(
+            # ``__post_init__`` coerces the raw string; the cast keeps the
+            # Literal-typed field honest for mypy.
+            mode=cast("ResultTransportMode", result_transport_mode or "auto"),
+            backend=result_storage_backend,
+            bucket=result_storage_bucket,
+            prefix=result_storage_prefix,
+            endpoint=result_storage_endpoint,
+            presigned_url_expiration_s=presigned_url_expiration_s,
+        )
+
+    @classmethod
+    def from_campaign_config(
+        cls, cfg: CampaignConfig, *, object_storage: bool
+    ) -> ResultTransportConfig:
+        """Build the config ``Campaign`` threads through every submit call.
+
+        Matches the historic ``_executor_submit_transport_kwargs``
+        logic exactly: ephemeral-runner executors (Nomad, Kubernetes)
+        with result storage configured ship results through object
+        storage under the outdir-name prefix; everything else returns
+        results in-band over the shared filesystem.
+        """
+        if not object_storage:
+            return cls(mode="shared_fs")
+        return cls(
+            mode="object_storage",
+            backend=cfg.result_storage_backend,
+            bucket=cfg.result_storage_bucket,
+            prefix=str(cfg.outdir.name),
+            endpoint=cfg.result_storage_endpoint,
+            presigned_url_expiration_s=cfg.s3_artifact_presigned_url_expiration,
+        )
+
+
+def resolve_transport_argument(
+    transport: ResultTransportConfig | None,
+    *,
+    result_transport_mode: str | None = None,
+    result_storage_backend: str | None = None,
+    result_storage_bucket: str | None = None,
+    result_storage_prefix: str | None = None,
+    result_storage_endpoint: str | None = None,
+) -> ResultTransportConfig | None:
+    """Merge ``BaseExecutor.submit``'s legacy transport kwargs into the config.
+
+    Back-compat shim (issue #1541): ``submit()`` still accepts the five
+    historic keyword arguments; when any of them is set they are folded
+    into a single :class:`ResultTransportConfig` here.  Passing both
+    the config and legacy fields is an error (ambiguous).  Returns
+    ``None`` when neither form was supplied — meaning "no transport
+    information at all", which submit paths preserve verbatim (no
+    ``OSIMFLOW_RESULT_*`` env vars are emitted for a ``None`` config).
+    """
+    legacy_fields = (
+        result_transport_mode,
+        result_storage_backend,
+        result_storage_bucket,
+        result_storage_prefix,
+        result_storage_endpoint,
+    )
+    if transport is not None:
+        if any(value is not None for value in legacy_fields):
+            raise ValueError(
+                "pass either transport= (ResultTransportConfig) or the legacy "
+                "result_transport_mode / result_storage_* kwargs, not both"
+            )
+        return transport
+    if all(value is None for value in legacy_fields):
+        return None
+    return ResultTransportConfig.from_kwargs(
+        result_transport_mode=result_transport_mode,
+        result_storage_backend=result_storage_backend,
+        result_storage_bucket=result_storage_bucket,
+        result_storage_prefix=result_storage_prefix,
+        result_storage_endpoint=result_storage_endpoint,
+    )
 
 
 def encode_transport_value(value: Any) -> Any:  # noqa: ANN401

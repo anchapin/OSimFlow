@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from osimflow.executors.base import PollingHandle, PollOutcome
+from osimflow.executors.transport import ResultTransportConfig
 
 _BASE = "osimflow.executors.base"
 
@@ -65,13 +66,10 @@ class _ScriptedPollingHandle(PollingHandle):
         self._script = list(script)
         self._poll_delay_s = poll_delay_s
         # Result-transport attributes (unused by these scripts but part
-        # of the shared-handle contract).
+        # of the shared-handle contract). One frozen value object
+        # (issue #1541) replaces the historic five per-handle fields.
         self._result_hint = None
-        self._result_transport_mode = "auto"
-        self._result_storage_backend = None
-        self._result_storage_bucket = None
-        self._result_storage_prefix = None
-        self._result_storage_endpoint = None
+        self._transport = ResultTransportConfig()
         self.worker_id: str | None = "job-0"
         # Accounting.
         self.polls = 0

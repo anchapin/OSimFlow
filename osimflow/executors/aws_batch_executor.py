@@ -35,7 +35,7 @@ from osimflow.executors.base import (
     poll_until_terminal,
     retry_with_backoff,
 )
-from osimflow.executors.transport import coerce_transport_mode, resolve_result_for_callback
+from osimflow.executors.transport import ResultTransportConfig, resolve_result_for_callback
 from osimflow.task_payload_hmac import build_signature_env
 
 log = logging.getLogger("osimflow.executors")
@@ -81,11 +81,7 @@ class _AWSBatchHandle(PollingHandle):
         submit_params: dict[str, Any],
         *,
         result_hint: Any = None,
-        result_transport_mode: str = "auto",
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
     ) -> None:
         self.job_id = job_id
         self._executor = executor
@@ -94,12 +90,10 @@ class _AWSBatchHandle(PollingHandle):
         # Result-transport contract (issue #1333): the handle materializes
         # object-storage artifacts on `.result()` so Campaign callbacks
         # receive local paths — identical to `_NomadHandle` and the
-        # Kubernetes handle.
-        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
-        self._result_storage_backend = result_storage_backend
-        self._result_storage_bucket = result_storage_bucket
-        self._result_storage_prefix = result_storage_prefix
-        self._result_storage_endpoint = result_storage_endpoint
+        # Kubernetes handle. One frozen value object (issue #1541)
+        # replaces the historic five per-handle kwargs; the default
+        # matches them (mode "auto", no storage configured).
+        self._transport = transport if transport is not None else ResultTransportConfig()
         # Keep a `Future` so the base-class `.result(timeout=...)` /
         # `.done()` paths remain reachable; we cache the poll result
         # in it so concurrent callers don't re-poll.
@@ -147,18 +141,19 @@ class _AWSBatchHandle(PollingHandle):
         # site after the executor moved out of the package __init__.
         from osimflow.executors import materialize_object_storage_result
 
+        transport = self._transport
         resolved = resolve_result_for_callback(
             self._result_hint,
             default=None,
-            transport_mode=self._result_transport_mode,
+            transport_mode=transport.mode,
         )
         return materialize_object_storage_result(
             resolved,
-            transport_mode=self._result_transport_mode,
-            result_storage_backend=self._result_storage_backend,
-            result_storage_bucket=self._result_storage_bucket,
-            result_storage_prefix=self._result_storage_prefix,
-            result_storage_endpoint=self._result_storage_endpoint,
+            transport_mode=transport.mode,
+            result_storage_backend=transport.backend,
+            result_storage_bucket=transport.bucket,
+            result_storage_prefix=transport.prefix,
+            result_storage_endpoint=transport.endpoint,
         )
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
@@ -614,13 +609,9 @@ class AWSBatchExecutor(BaseExecutor):
         container: str | None,
         openstudio_version: str | None,
         task_payload: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
     ) -> list[dict[str, str]]:
-        """Build the Batch `environment` list from the per-submit kwargs.
+        """Build the Batch `environment` list from the per-submit config.
 
         The serialized task payload travels in ``OSIMFLOW_TASK_PAYLOAD`` and
         the result-transport contract in the ``OSIMFLOW_RESULT_*`` vars so
@@ -628,6 +619,10 @@ class AWSBatchExecutor(BaseExecutor):
         object storage (issue #996). ``OSIMFLOW_STUB_SIM`` is propagated
         from the orchestrator environment when set so remote pods honour
         the orchestrator's stub-vs-real CLI choice.
+
+        The transport contract arrives as the single frozen value object
+        (issue #1541); a ``None`` config emits no ``OSIMFLOW_RESULT_*``
+        vars, matching the historic all-``None`` field set.
         """
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
@@ -651,18 +646,18 @@ class AWSBatchExecutor(BaseExecutor):
                 {"name": key, "value": value}
                 for key, value in build_signature_env(task_payload).items()
             )
-        if result_transport_mode is not None:
-            env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": result_transport_mode})
-        if result_storage_backend is not None:
-            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BACKEND", "value": result_storage_backend})
-        if result_storage_bucket is not None:
-            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BUCKET", "value": result_storage_bucket})
-        if result_storage_prefix is not None:
-            env.append({"name": "OSIMFLOW_RESULT_STORAGE_PREFIX", "value": result_storage_prefix})
-        if result_storage_endpoint is not None:
-            env.append(
-                {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": result_storage_endpoint}
-            )
+        if transport is not None:
+            env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": transport.mode})
+            if transport.backend is not None:
+                env.append({"name": "OSIMFLOW_RESULT_STORAGE_BACKEND", "value": transport.backend})
+            if transport.bucket is not None:
+                env.append({"name": "OSIMFLOW_RESULT_STORAGE_BUCKET", "value": transport.bucket})
+            if transport.prefix is not None:
+                env.append({"name": "OSIMFLOW_RESULT_STORAGE_PREFIX", "value": transport.prefix})
+            if transport.endpoint is not None:
+                env.append(
+                    {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": transport.endpoint}
+                )
         stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
         if stub_sim is not None:
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
@@ -884,11 +879,7 @@ class AWSBatchExecutor(BaseExecutor):
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
         variables_json: str | None = None,
         env: dict[str, str] | None = None,
         stdout_path: Any = None,
@@ -931,21 +922,7 @@ class AWSBatchExecutor(BaseExecutor):
             container=container,
             openstudio_version=openstudio_version,
             task_payload=task_payload,
-            result_transport_mode=(
-                str(result_transport_mode) if result_transport_mode is not None else None
-            ),
-            result_storage_backend=(
-                str(result_storage_backend) if result_storage_backend is not None else None
-            ),
-            result_storage_bucket=(
-                str(result_storage_bucket) if result_storage_bucket is not None else None
-            ),
-            result_storage_prefix=(
-                str(result_storage_prefix) if result_storage_prefix is not None else None
-            ),
-            result_storage_endpoint=(
-                str(result_storage_endpoint) if result_storage_endpoint is not None else None
-            ),
+            transport=transport,
         )
 
         # --- Spot price ceiling check (issue #131, #792) ---
@@ -999,21 +976,7 @@ class AWSBatchExecutor(BaseExecutor):
             executor=self,
             submit_params=submit_params,
             result_hint=result_hint,
-            result_transport_mode=(
-                str(result_transport_mode) if result_transport_mode is not None else "auto"
-            ),
-            result_storage_backend=(
-                str(result_storage_backend) if result_storage_backend is not None else None
-            ),
-            result_storage_bucket=(
-                str(result_storage_bucket) if result_storage_bucket is not None else None
-            ),
-            result_storage_prefix=(
-                str(result_storage_prefix) if result_storage_prefix is not None else None
-            ),
-            result_storage_endpoint=(
-                str(result_storage_endpoint) if result_storage_endpoint is not None else None
-            ),
+            transport=transport,
         )
 
     def shutdown(self) -> None:

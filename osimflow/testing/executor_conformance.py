@@ -143,6 +143,7 @@ def run_executor_conformance(
     _check_transport_path_round_trip(report)
     _check_transport_result_hint_default(report)
     _check_transport_result_hint_path_payload(report)
+    _check_result_transport_config_round_trip(executor, report)
     _check_fanout_chunk_size_positive(executor, report)
     _check_submit_throttles_when_low_rps(executor, report)
     if run_stub_campaign:
@@ -383,6 +384,56 @@ def _check_transport_result_hint_path_payload(report: ConformanceReport) -> None
         ok = False
         detail = f"{type(exc).__name__}: {exc}"
     report.checks.append(ConformanceCheck("transport_result_hint_path_payload", ok, detail))
+
+
+def _check_result_transport_config_round_trip(
+    executor: BaseExecutor, report: ConformanceReport
+) -> None:
+    """A ``ResultTransportConfig`` passed to ``submit()`` round-trips (issue #1541).
+
+    The frozen value object must be accepted by ``submit()`` as the single
+    transport parameter and survive to the handle:
+
+    * transport-participating executors (handles subclass
+      :class:`~osimflow.executors.base.PollingHandle`) must retain the
+      *identical* config on ``handle._transport`` — equality is field-wise
+      on the frozen dataclass, so an executor that reconstructs instead of
+      retaining also passes, as long as no field is dropped or mutated;
+    * in-band executors (results return via the handle's future) only need
+      to accept the config without raising and resolve the result — the
+      config is semantically inert on that path.
+    """
+    from osimflow.executors.base import Handle  # noqa: PLC0415
+    from osimflow.executors.transport import ResultTransportConfig  # noqa: PLC0415
+
+    config = ResultTransportConfig(
+        mode="shared_fs",
+        backend="s3",
+        bucket="conformance-transport-bucket",
+        prefix="out",
+        endpoint="https://s3.example.test",
+        presigned_url_expiration_s=3600,
+    )
+    try:
+        handle = executor.submit(
+            lambda: "ok", name="conformance_transport_config", transport=config
+        )
+        ok = isinstance(handle, Handle)
+        detail = f"submit(transport=...) returned {type(handle).__name__}"
+        if ok:
+            retained = getattr(handle, "_transport", None)
+            if retained is not None:
+                ok = retained == config
+                detail = f"handle retained _transport={retained!r} (expected {config!r})"
+            # The handle's lifecycle must accept the config end-to-end. The
+            # resolved *value* is deliberately not compared: stub / remote
+            # substrates resolve the result hint instead of executing the
+            # callable (the documented handle_result_returns_value gap).
+            handle.result(timeout=_DEFAULT_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        detail = f"{type(exc).__name__}: {exc}"
+    report.checks.append(ConformanceCheck("result_transport_config_round_trip", ok, detail))
 
 
 def _check_fanout_chunk_size_positive(executor: BaseExecutor, report: ConformanceReport) -> None:
@@ -711,6 +762,42 @@ class ExecutorConformanceSuite:
         assert isinstance(resolved, dict)
         assert resolved["status"] == "ok"
         assert resolved["result"] == Path("/tmp/conformance/result.txt")
+
+    def test_submit_round_trips_result_transport_config(
+        self, conformance_executor: BaseExecutor
+    ) -> None:
+        """``submit(transport=ResultTransportConfig(...))`` round-trips to the handle (issue #1541).
+
+        The config is the single transport parameter on ``submit()``.
+        In-band executors must accept it and still resolve results;
+        transport-participating executors (PollingHandle subclasses)
+        must additionally retain an equal config on ``handle._transport``
+        so no field is dropped between submit and materialization.
+        """
+        from osimflow.executors.base import Handle  # noqa: PLC0415
+        from osimflow.executors.transport import ResultTransportConfig  # noqa: PLC0415
+
+        config = ResultTransportConfig(
+            mode="shared_fs",
+            backend="s3",
+            bucket="conformance-transport-bucket",
+            prefix="out",
+            endpoint="https://s3.example.test",
+            presigned_url_expiration_s=3600,
+        )
+        handle = conformance_executor.submit(
+            lambda: "ok", name="transport_config", transport=config
+        )
+        assert isinstance(handle, Handle)
+        retained = getattr(handle, "_transport", None)
+        if retained is not None:
+            assert retained == config, (
+                f"handle dropped/mutated transport fields: {retained!r} != {config!r}"
+            )
+        # Must resolve without raising. The value is not compared: stub /
+        # remote substrates resolve the result hint instead of executing
+        # the callable (the documented handle_result_returns_value gap).
+        handle.result(timeout=_DEFAULT_TIMEOUT_S)
 
     # ---- Fan-out pacing ----
 

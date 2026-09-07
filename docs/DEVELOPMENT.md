@@ -894,15 +894,30 @@ TRANSPORT_CAPABILITIES["my_new"] = (
 )
 ```
 
-Then call `validate_transport_mode(self.name, result_transport_mode)`
-at the top of your `submit()` body (mirroring
-`osimflow/executors/slurm_executor.py:190`,
-`local_executor.py:134`, `dask_jobqueue_executor.py:219`,
-`docker_swarm_executor.py:674`) so a third-party plug-in that
-bypasses `submit_request()` still goes through the gate. The
+Then call `validate_transport_mode(self.name, transport.mode if transport is not None else None)`
+at the top of your `_do_submit()` body (mirroring
+`osimflow/executors/slurm_executor.py`,
+`osimflow/executors/local_executor.py`,
+`osimflow/executors/dask_jobqueue_executor.py`,
+`osimflow/executors/docker_swarm_executor.py`) so a third-party
+plug-in that bypasses `submit_request()` still goes through the
+gate. The
 `BaseExecutor.submit()` overload does *not* call the validator
 itself — only `submit_request()` does — so the per-executor call is
 the safety net.
+
+The transport contract itself arrives in `_do_submit()` (and your
+handle, if you implement one) as a single frozen
+`transport: ResultTransportConfig | None` value object
+(issue #1541): `mode` / `backend` / `bucket` / `prefix` /
+`endpoint` / `presigned_url_expiration_s`. `None` means "no
+transport information supplied" — treat it identically to the
+historic all-`None` field set (emit no `OSIMFLOW_RESULT_*` env
+vars; Nomad is the documented exception, normalizing to
+`mode="auto"` in its job-spec env). Do NOT add per-field
+`result_transport_mode` / `result_storage_*` kwargs to your
+`_do_submit()` signature — new transport options are fields on
+`ResultTransportConfig`, nothing else.
 
 The plug-in author hazard this section closes: an executor that
 passes every `osimflow.testing.ExecutorConformanceSuite` check
@@ -912,10 +927,12 @@ real campaign is launched with
 never registered in `TRANSPORT_CAPABILITIES`. The conformance
 suite's fast transport checks (`test_transport_path_round_trip`,
 `test_transport_result_hint_default_returns_default`,
-`test_transport_result_hint_path_payload_decodes`) exercise
+`test_transport_result_hint_path_payload_decodes`,
+`test_submit_round_trips_result_transport_config`) exercise
 `encode_transport_value` / `decode_transport_value` /
-`resolve_result_for_callback` but do *not* assert your executor's
-name is in `TRANSPORT_CAPABILITIES`. The opt-in slow check
+`resolve_result_for_callback` / the `ResultTransportConfig`
+submit-to-handle round-trip (issue #1541) but do *not* assert your
+executor's name is in `TRANSPORT_CAPABILITIES`. The opt-in slow check
 `test_three_sample_stub_campaign_produces_all_artifacts` does
 exercise it, but only when the campaign is configured with a
 non-`"auto"` mode — so the registration step above is what protects

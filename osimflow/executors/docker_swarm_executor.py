@@ -39,6 +39,7 @@ from osimflow.executors.base import (
     poll_until_terminal,
 )
 from osimflow.executors.transport import (
+    ResultTransportConfig,
     materialize_object_storage_result,
     resolve_result_for_callback,
     validate_transport_mode,
@@ -117,19 +118,24 @@ class _DockerSwarmHandle(PollingHandle):
         # Result-transport contract (issues #1333 / #1473): resolve
         # the result hint and materialize object-storage artifacts
         # so Campaign callbacks receive local paths — identical to
-        # the Nomad / Kubernetes / PBS handles.
+        # the Nomad / Kubernetes / PBS handles. The frozen config
+        # rides in ``submit_params["transport"]`` (issue #1541); a
+        # missing entry matches the historic per-field defaults.
+        transport = self._submit_params.get("transport")
+        if not isinstance(transport, ResultTransportConfig):
+            transport = ResultTransportConfig()
         resolved = resolve_result_for_callback(
             self._submit_params.get("result_hint"),
             default=None,
-            transport_mode=str(self._submit_params.get("result_transport_mode") or "auto"),
+            transport_mode=transport.mode,
         )
         return materialize_object_storage_result(
             resolved,
-            transport_mode=str(self._submit_params.get("result_transport_mode") or "auto"),
-            result_storage_backend=self._submit_params.get("result_storage_backend"),
-            result_storage_bucket=self._submit_params.get("result_storage_bucket"),
-            result_storage_prefix=self._submit_params.get("result_storage_prefix"),
-            result_storage_endpoint=self._submit_params.get("result_storage_endpoint"),
+            transport_mode=transport.mode,
+            result_storage_backend=transport.backend,
+            result_storage_bucket=transport.bucket,
+            result_storage_prefix=transport.prefix,
+            result_storage_endpoint=transport.endpoint,
         )
 
     def _failure_error(self, job: Any) -> RuntimeError:
@@ -445,11 +451,7 @@ class DockerSwarmExecutor(BaseExecutor):
         command: list[str] | None = None,
         task_payload: str | None = None,
         result_hint: Any = None,  # noqa: ARG002 — carried for the handle, not the service
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
     ) -> str:
         """Create a Docker Swarm service and return its name.
 
@@ -484,16 +486,16 @@ class DockerSwarmExecutor(BaseExecutor):
             # legacy unsigned mode.
             for key, value in build_signature_env(task_payload).items():
                 env.append(f"{key}={value}")
-        if result_transport_mode is not None:
-            env.append(f"OSIMFLOW_RESULT_TRANSPORT_MODE={result_transport_mode}")
-        if result_storage_backend is not None:
-            env.append(f"OSIMFLOW_RESULT_STORAGE_BACKEND={result_storage_backend}")
-        if result_storage_bucket is not None:
-            env.append(f"OSIMFLOW_RESULT_STORAGE_BUCKET={result_storage_bucket}")
-        if result_storage_prefix is not None:
-            env.append(f"OSIMFLOW_RESULT_STORAGE_PREFIX={result_storage_prefix}")
-        if result_storage_endpoint is not None:
-            env.append(f"OSIMFLOW_RESULT_STORAGE_ENDPOINT={result_storage_endpoint}")
+        if transport is not None:
+            env.append(f"OSIMFLOW_RESULT_TRANSPORT_MODE={transport.mode}")
+            if transport.backend is not None:
+                env.append(f"OSIMFLOW_RESULT_STORAGE_BACKEND={transport.backend}")
+            if transport.bucket is not None:
+                env.append(f"OSIMFLOW_RESULT_STORAGE_BUCKET={transport.bucket}")
+            if transport.prefix is not None:
+                env.append(f"OSIMFLOW_RESULT_STORAGE_PREFIX={transport.prefix}")
+            if transport.endpoint is not None:
+                env.append(f"OSIMFLOW_RESULT_STORAGE_ENDPOINT={transport.endpoint}")
         stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
         if stub_sim is not None:
             env.append(f"OSIMFLOW_STUB_SIM={stub_sim}")
@@ -573,11 +575,7 @@ class DockerSwarmExecutor(BaseExecutor):
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
         variables_json: str | None = None,
         env: dict[str, str] | None = None,
         stdout_path: Any = None,
@@ -622,11 +620,7 @@ class DockerSwarmExecutor(BaseExecutor):
                         openstudio_version=openstudio_version,
                         result_hint=result_hint,
                         remote_command=remote_command,
-                        result_transport_mode=result_transport_mode,
-                        result_storage_backend=result_storage_backend,
-                        result_storage_bucket=result_storage_bucket,
-                        result_storage_prefix=result_storage_prefix,
-                        result_storage_endpoint=result_storage_endpoint,
+                        transport=transport,
                         variables_json=variables_json,
                         env=env,
                         stdout_path=stdout_path,
@@ -667,11 +661,7 @@ class DockerSwarmExecutor(BaseExecutor):
                         openstudio_version=openstudio_version,
                         result_hint=result_hint,
                         remote_command=remote_command,
-                        result_transport_mode=result_transport_mode,
-                        result_storage_backend=result_storage_backend,
-                        result_storage_bucket=result_storage_bucket,
-                        result_storage_prefix=result_storage_prefix,
-                        result_storage_endpoint=result_storage_endpoint,
+                        transport=transport,
                         variables_json=variables_json,
                         env=env,
                         stdout_path=stdout_path,
@@ -694,7 +684,7 @@ class DockerSwarmExecutor(BaseExecutor):
         # of silently discarding an unsupported mode.  docker_swarm
         # supports all three modes — the handle materializes
         # object-storage results (issues #1333 / #1473).
-        validate_transport_mode(self.name, result_transport_mode)
+        validate_transport_mode(self.name, transport.mode if transport is not None else None)
 
         self._stub_executor = None
 
@@ -726,30 +716,14 @@ class DockerSwarmExecutor(BaseExecutor):
             "command": command,
             "task_payload": task_payload,
             "result_hint": result_hint,
-            "result_transport_mode": (
-                str(result_transport_mode) if result_transport_mode is not None else None
-            ),
-            "result_storage_backend": (
-                str(result_storage_backend) if result_storage_backend is not None else None
-            ),
-            "result_storage_bucket": (
-                str(result_storage_bucket) if result_storage_bucket is not None else None
-            ),
-            "result_storage_prefix": (
-                str(result_storage_prefix) if result_storage_prefix is not None else None
-            ),
-            "result_storage_endpoint": (
-                str(result_storage_endpoint) if result_storage_endpoint is not None else None
-            ),
+            "transport": transport,
         }
 
         del fn  # noqa: ARG002 — work runs inside the Swarm container via remote_runner
-        # Unused in Docker Swarm mode: remote_command, result_storage_* are
-        # forwarded via submit_params; variables_json, env, stdout/stderr_path,
+        # Unused in Docker Swarm mode: remote_command; the transport config
+        # is forwarded via submit_params; variables_json, env, stdout/stderr_path,
         # max_retries, worker_id are not consumed.
-        del remote_command, result_transport_mode  # noqa: F841
-        del result_storage_backend, result_storage_bucket, result_storage_prefix  # noqa: F841
-        del result_storage_endpoint, variables_json, env  # noqa: F841
+        del remote_command, variables_json, env  # noqa: F841
         del stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841
 
         service_name = self._submit_service(**submit_params)

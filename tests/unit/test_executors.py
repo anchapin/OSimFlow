@@ -32,6 +32,7 @@ from osimflow.executors import (
     SlurmExecutor,
     run_subprocess,
 )
+from osimflow.executors.transport import ResultTransportConfig
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SIG_ENV,
@@ -1114,11 +1115,12 @@ class TestNomadHandle:
                 eval_id="eval-1",
                 executor=_ExecutorStub(),  # type: ignore[arg-type]
                 result_hint=hint,
-                result_transport_mode="object_storage",
-                result_storage_backend="s3",
-                result_storage_bucket="bucket",
-                result_storage_prefix="out",
-                result_storage_endpoint=None,
+                transport=ResultTransportConfig(
+                    mode="object_storage",
+                    backend="s3",
+                    bucket="bucket",
+                    prefix="out",
+                ),
             )
             result = handle.result()
 

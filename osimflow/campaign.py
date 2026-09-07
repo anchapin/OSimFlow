@@ -127,6 +127,7 @@ from .distributed_cache import build_cache, campaign_state_namespace
 from .distributed_jobqueue import build_job_queue
 from .errors import OSimFlowRuntimeError
 from .executors import BaseExecutor, Handle
+from .executors.transport import ResultTransportConfig
 from .json_utils import safe_json_dumps, safe_json_loads
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
@@ -755,20 +756,22 @@ class Campaign(CampaignAnalysisMixin):
                     cfg.result_storage_bucket,
                     exc,
                 )
-        self._executor_submit_transport_kwargs: dict[str, Any] = {
-            "result_transport_mode": "shared_fs",
-        }
-        # Ephemeral-runner executors (Nomad, Kubernetes — issue #996) push
-        # results job-side to object storage when a backend is configured;
-        # their handles materialize the artifacts back to local paths.
-        if self.executor.requires_remote_runner_payload and self._result_storage is not None:
-            self._executor_submit_transport_kwargs = {
-                "result_transport_mode": "object_storage",
-                "result_storage_backend": cfg.result_storage_backend,
-                "result_storage_bucket": cfg.result_storage_bucket,
-                "result_storage_prefix": str(cfg.outdir.name),
-                "result_storage_endpoint": cfg.result_storage_endpoint,
-            }
+        # Result-transport contract (issues #1333 → #1541): one frozen
+        # ``ResultTransportConfig`` value object, constructed once here,
+        # threaded through every ``submit()`` call. Ephemeral-runner
+        # executors (Nomad, Kubernetes — issue #996) push results job-side
+        # to object storage when a backend is configured; their handles
+        # materialize the artifacts back to local paths. Everything else
+        # returns results in-band over the shared filesystem.
+        self._result_transport_config: ResultTransportConfig = (
+            ResultTransportConfig.from_campaign_config(
+                cfg,
+                object_storage=(
+                    self.executor.requires_remote_runner_payload
+                    and self._result_storage is not None
+                ),
+            )
+        )
 
         # Quota enforcement (issue #446 → #1462): the guard reads the
         # live trace / sample-state by reference so mid-campaign quota
@@ -2972,7 +2975,7 @@ class Campaign(CampaignAnalysisMixin):
                         container_digest=self._python_container_digest,
                         result_hint=apply_out_dir,
                         max_retries=self.cfg.max_sample_retries,
-                        **self._executor_submit_transport_kwargs,
+                        transport=self._result_transport_config,
                     )
 
                 # Build the on-success callback (captures per-sample context).
@@ -3212,7 +3215,7 @@ class Campaign(CampaignAnalysisMixin):
                         os_version,
                         ctx["out_dir"],
                         **self._build_run_sim_submit_kwargs(ctx, sid, os_version),
-                        **self._executor_submit_transport_kwargs,
+                        transport=self._result_transport_config,
                     )
 
         pending_items = list(pending.items())
@@ -3278,7 +3281,7 @@ class Campaign(CampaignAnalysisMixin):
                         os_version,
                         ctx["out_dir"],
                         **self._build_run_sim_submit_kwargs(ctx, sid, os_version),
-                        **self._executor_submit_transport_kwargs,
+                        transport=self._result_transport_config,
                     )
 
                 key = ctx["key"]
@@ -3584,7 +3587,7 @@ class Campaign(CampaignAnalysisMixin):
                         container_digest=self._python_container_digest,
                         result_hint=Path(ctx["kpi_dir"]) / f"kpi_{sid}.json",
                         max_retries=self.cfg.max_sample_retries,
-                        **self._executor_submit_transport_kwargs,
+                        transport=self._result_transport_config,
                     )
 
                 key = ctx["key"]
@@ -3750,7 +3753,7 @@ class Campaign(CampaignAnalysisMixin):
                 "parquet": self.cfg.outdir / "aggregated_results.parquet",
                 "failed": self.cfg.outdir / "failed_simulations.csv",
             },
-            **self._executor_submit_transport_kwargs,
+            transport=self._result_transport_config,
         )
         result_obj: object = handle.result(timeout=300)
         result = cast_aggregate_result(result_obj)
@@ -3798,7 +3801,7 @@ class Campaign(CampaignAnalysisMixin):
             container=self._python_container_image,
             container_digest=self._python_container_digest,
             result_hint=[],
-            **self._executor_submit_transport_kwargs,
+            transport=self._result_transport_config,
         )
         result_obj: object = handle.result(timeout=120)
         result = cast_plot_paths(result_obj)

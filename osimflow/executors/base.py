@@ -31,7 +31,12 @@ from concurrent.futures import Future
 from typing import TYPE_CHECKING, Any
 
 from osimflow.executors._rate_limiter import TokenBucketRateLimiter
-from osimflow.executors.transport import encode_transport_value, validate_transport_mode
+from osimflow.executors.transport import (
+    ResultTransportConfig,
+    encode_transport_value,
+    resolve_transport_argument,
+    validate_transport_mode,
+)
 
 log = logging.getLogger("osimflow.executors.base")
 
@@ -358,11 +363,12 @@ class PollingHandle(Handle):
 
     _executor: Any
     _result_hint: Any = None
-    _result_transport_mode: str = "auto"
-    _result_storage_backend: str | None = None
-    _result_storage_bucket: str | None = None
-    _result_storage_prefix: str | None = None
-    _result_storage_endpoint: str | None = None
+    #: Result-transport contract (issue #1541): one frozen value object
+    #: instead of five per-handle class attributes. Subclasses accept a
+    #: ``transport: ResultTransportConfig`` keyword in their constructors
+    #: and store it here; the class-level default matches the historic
+    #: per-field defaults (mode ``"auto"``, no storage configured).
+    _transport: ResultTransportConfig = ResultTransportConfig()
     #: Set by :meth:`cancel` on the first kill attempt so repeated
     #: cancellation sweeps never issue a second substrate call
     #: (issue #1538 idempotency contract).
@@ -598,17 +604,45 @@ class SubmitRequest:
     openstudio_version: str | None = None
     result_hint: Any = None
     remote_command: str | None = None
-    result_transport_mode: str | None = None
-    result_storage_backend: str | None = None
-    result_storage_bucket: str | None = None
-    result_storage_prefix: str | None = None
-    result_storage_endpoint: str | None = None
+    transport: ResultTransportConfig | None = None
+    """Result-transport contract as one frozen value object (issue #1541).
+
+    ``None`` means "no transport information supplied" — submit paths
+    treat it identically to the historic all-``None`` field set (no
+    ``OSIMFLOW_RESULT_*`` env vars are emitted).
+    """
     variables_json: str | None = None
     env: dict[str, str] | None = None
     stdout_path: Any = None
     stderr_path: Any = None
     max_retries: int | None = None
     worker_id: str | None = None
+
+    # Back-compat read-through properties (issue #1541): the historic
+    # five per-field attributes remain readable so consumers (and
+    # third-party plug-ins) that inspect ``request.result_transport_mode``
+    # & co. keep working. They return ``None`` when no config is set,
+    # matching the historic unset-field behaviour.
+
+    @property
+    def result_transport_mode(self) -> str | None:
+        return self.transport.mode if self.transport is not None else None
+
+    @property
+    def result_storage_backend(self) -> str | None:
+        return self.transport.backend if self.transport is not None else None
+
+    @property
+    def result_storage_bucket(self) -> str | None:
+        return self.transport.bucket if self.transport is not None else None
+
+    @property
+    def result_storage_prefix(self) -> str | None:
+        return self.transport.prefix if self.transport is not None else None
+
+    @property
+    def result_storage_endpoint(self) -> str | None:
+        return self.transport.endpoint if self.transport is not None else None
 
 
 class BaseExecutor(abc.ABC):
@@ -725,6 +759,7 @@ class BaseExecutor(abc.ABC):
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
+        transport: ResultTransportConfig | None = None,
         result_transport_mode: str | None = None,
         result_storage_backend: str | None = None,
         result_storage_bucket: str | None = None,
@@ -746,7 +781,24 @@ class BaseExecutor(abc.ABC):
         any per-instance override) and delegates the substrate-specific
         call to :meth:`_do_submit`. The throttle lives here, not in each
         executor, so a substrate cannot accidentally skip it.
+
+        The result-transport contract travels as the single frozen
+        ``transport`` value object (issue #1541). The five historic
+        ``result_transport_mode`` / ``result_storage_*`` keyword
+        arguments are accepted as a deprecated back-compat shim and
+        folded into a config via
+        :func:`~osimflow.executors.transport.resolve_transport_argument`;
+        new transport options are fields on the config, not new kwargs
+        here.
         """
+        transport = resolve_transport_argument(
+            transport,
+            result_transport_mode=result_transport_mode,
+            result_storage_backend=result_storage_backend,
+            result_storage_bucket=result_storage_bucket,
+            result_storage_prefix=result_storage_prefix,
+            result_storage_endpoint=result_storage_endpoint,
+        )
         # Lazy init: tests that bypass the real constructor (e.g.
         # ``ExecutorClass.__new__(ExecutorClass)`` followed by attribute
         # injection) skip ``__init__`` and therefore ``_init_rate_limiter``.
@@ -773,11 +825,7 @@ class BaseExecutor(abc.ABC):
             openstudio_version=openstudio_version,
             result_hint=result_hint,
             remote_command=remote_command,
-            result_transport_mode=result_transport_mode,
-            result_storage_backend=result_storage_backend,
-            result_storage_bucket=result_storage_bucket,
-            result_storage_prefix=result_storage_prefix,
-            result_storage_endpoint=result_storage_endpoint,
+            transport=transport,
             variables_json=variables_json,
             env=env,
             stdout_path=stdout_path,
@@ -834,11 +882,7 @@ class BaseExecutor(abc.ABC):
         openstudio_version: str | None,
         result_hint: Any,
         remote_command: str | None,
-        result_transport_mode: str | None,
-        result_storage_backend: str | None,
-        result_storage_bucket: str | None,
-        result_storage_prefix: str | None,
-        result_storage_endpoint: str | None,
+        transport: ResultTransportConfig | None,
         variables_json: str | None,
         env: dict[str, str] | None,
         stdout_path: Any,
@@ -848,6 +892,11 @@ class BaseExecutor(abc.ABC):
         **kwargs: Any,
     ) -> Handle:
         """Substrate-specific submit. Called by :meth:`submit` after token acquisition.
+
+        The result-transport contract arrives as the single frozen
+        ``transport`` value object (issue #1541); ``None`` means no
+        transport information was supplied (identical to the historic
+        all-``None`` field set).
 
         Concrete executors MUST override exactly one of the following two
         hooks (issue #1563, post-#1602 CI regression fix):
@@ -919,11 +968,7 @@ class BaseExecutor(abc.ABC):
             openstudio_version=request.openstudio_version,
             result_hint=request.result_hint,
             remote_command=request.remote_command,
-            result_transport_mode=request.result_transport_mode,
-            result_storage_backend=request.result_storage_backend,
-            result_storage_bucket=request.result_storage_bucket,
-            result_storage_prefix=request.result_storage_prefix,
-            result_storage_endpoint=request.result_storage_endpoint,
+            transport=request.transport,
             variables_json=request.variables_json,
             env=request.env,
             stdout_path=request.stdout_path,

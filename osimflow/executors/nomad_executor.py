@@ -33,7 +33,7 @@ from osimflow.executors.base import (
     poll_until_terminal,
     retry_with_backoff,
 )
-from osimflow.executors.transport import coerce_transport_mode, resolve_result_for_callback
+from osimflow.executors.transport import ResultTransportConfig, resolve_result_for_callback
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SECRET_META_KEY,
@@ -435,11 +435,7 @@ class _NomadHandle(PollingHandle):
         *,
         local_future: Future[Any] | None = None,
         result_hint: Any = None,
-        result_transport_mode: str = "auto",
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
     ) -> None:
         self.job_id = job_id
         self._eval_id = eval_id
@@ -447,11 +443,10 @@ class _NomadHandle(PollingHandle):
         self._executor = executor
         self._local_future = local_future
         self._result_hint = result_hint
-        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
-        self._result_storage_backend = result_storage_backend
-        self._result_storage_bucket = result_storage_bucket
-        self._result_storage_prefix = result_storage_prefix
-        self._result_storage_endpoint = result_storage_endpoint
+        # One frozen value object (issue #1541) replaces the historic five
+        # per-handle kwargs; the default matches them (mode "auto", no
+        # storage configured).
+        self._transport = transport if transport is not None else ResultTransportConfig()
         self._future: Future[Any] = Future()
         # Worker tracking (issue #105): populate at submit time.
         # allocation_id is not yet resolved; worker_id uses the job ID
@@ -521,18 +516,19 @@ class _NomadHandle(PollingHandle):
         # site after the executor moved out of the package __init__.
         from osimflow.executors import materialize_object_storage_result
 
+        transport = self._transport
         local_result: Any = resolve_result_for_callback(
             self._result_hint,
             default=None,
-            transport_mode=self._result_transport_mode,
+            transport_mode=transport.mode,
         )
         local_result = materialize_object_storage_result(
             local_result,
-            transport_mode=self._result_transport_mode,
-            result_storage_backend=self._result_storage_backend,
-            result_storage_bucket=self._result_storage_bucket,
-            result_storage_prefix=self._result_storage_prefix,
-            result_storage_endpoint=self._result_storage_endpoint,
+            transport_mode=transport.mode,
+            result_storage_backend=transport.backend,
+            result_storage_bucket=transport.bucket,
+            result_storage_prefix=transport.prefix,
+            result_storage_endpoint=transport.endpoint,
         )
         if self._local_future is not None:
             # Non-remote-results mode: the local mirror future ran the
@@ -1051,11 +1047,7 @@ class NomadExecutor(BaseExecutor):
         openstudio_version: str | None,
         remote_command: str | None = None,
         task_payload: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
     ) -> dict[str, Any]:
         """Build a Nomad ``batch`` job spec for one OpenStudio task.
 
@@ -1103,16 +1095,16 @@ class NomadExecutor(BaseExecutor):
             env.update(signature_env)
             if vault_template is not None:
                 env.pop(TASK_PAYLOAD_SECRET_ENV, None)
-        if result_transport_mode is not None:
-            env["OSIMFLOW_RESULT_TRANSPORT_MODE"] = result_transport_mode
-        if result_storage_backend is not None:
-            env["OSIMFLOW_RESULT_STORAGE_BACKEND"] = result_storage_backend
-        if result_storage_bucket is not None:
-            env["OSIMFLOW_RESULT_STORAGE_BUCKET"] = result_storage_bucket
-        if result_storage_prefix is not None:
-            env["OSIMFLOW_RESULT_STORAGE_PREFIX"] = result_storage_prefix
-        if result_storage_endpoint is not None:
-            env["OSIMFLOW_RESULT_STORAGE_ENDPOINT"] = result_storage_endpoint
+        if transport is not None:
+            env["OSIMFLOW_RESULT_TRANSPORT_MODE"] = transport.mode
+            if transport.backend is not None:
+                env["OSIMFLOW_RESULT_STORAGE_BACKEND"] = transport.backend
+            if transport.bucket is not None:
+                env["OSIMFLOW_RESULT_STORAGE_BUCKET"] = transport.bucket
+            if transport.prefix is not None:
+                env["OSIMFLOW_RESULT_STORAGE_PREFIX"] = transport.prefix
+            if transport.endpoint is not None:
+                env["OSIMFLOW_RESULT_STORAGE_ENDPOINT"] = transport.endpoint
 
         image = self._resolve_nomad_image(
             container=container,
@@ -1408,11 +1400,7 @@ class NomadExecutor(BaseExecutor):
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
         variables_json: str | None = None,
         env: dict[str, str] | None = None,
         stdout_path: Any = None,
@@ -1439,6 +1427,15 @@ class NomadExecutor(BaseExecutor):
             local_future = self._local_pool.submit(fn, *args, **local_callable_kwargs)
         else:
             del fn, args
+        # Historic Nomad contract (pinned by test_nomad_http_wiring): the
+        # job-spec / dispatch-meta env always carries
+        # ``OSIMFLOW_RESULT_TRANSPORT_MODE``, defaulting to ``"auto"`` when
+        # the caller supplied no transport information — so normalize the
+        # absent config to the default here rather than omitting the var.
+        # (``or`` not ``if``: the branch count of this method is at the
+        # PLR0912 ceiling, and a frozen-dataclass instance is always
+        # truthy, so the semantics are identical.)
+        transport = transport or ResultTransportConfig()
         self._submit_count += 1
         dispatch_mode = self._select_dispatch_mode()
         self.use_dispatch = dispatch_mode
@@ -1493,17 +1490,16 @@ class NomadExecutor(BaseExecutor):
                 meta[TASK_PAYLOAD_SIG_META_KEY] = signature_env[TASK_PAYLOAD_SIG_ENV]
                 if self._vault_secret_template() is None:
                     meta[TASK_PAYLOAD_SECRET_META_KEY] = signature_env[TASK_PAYLOAD_SECRET_ENV]
-            meta["result_transport_mode"] = (
-                str(result_transport_mode) if result_transport_mode is not None else "auto"
-            )
-            if result_storage_backend is not None:
-                meta["result_storage_backend"] = str(result_storage_backend)
-            if result_storage_bucket is not None:
-                meta["result_storage_bucket"] = str(result_storage_bucket)
-            if result_storage_prefix is not None:
-                meta["result_storage_prefix"] = str(result_storage_prefix)
-            if result_storage_endpoint is not None:
-                meta["result_storage_endpoint"] = str(result_storage_endpoint)
+            meta["result_transport_mode"] = transport.mode if transport is not None else "auto"
+            if transport is not None:
+                if transport.backend is not None:
+                    meta["result_storage_backend"] = str(transport.backend)
+                if transport.bucket is not None:
+                    meta["result_storage_bucket"] = str(transport.bucket)
+                if transport.prefix is not None:
+                    meta["result_storage_prefix"] = str(transport.prefix)
+                if transport.endpoint is not None:
+                    meta["result_storage_endpoint"] = str(transport.endpoint)
 
             response = self._client.dispatch_job(self._dispatch_job_id, meta=meta)
         else:
@@ -1516,21 +1512,7 @@ class NomadExecutor(BaseExecutor):
                 openstudio_version=openstudio_version,
                 remote_command=(str(remote_command) if remote_command else None),
                 task_payload=task_payload,
-                result_transport_mode=(
-                    str(result_transport_mode) if result_transport_mode is not None else "auto"
-                ),
-                result_storage_backend=(
-                    str(result_storage_backend) if result_storage_backend is not None else None
-                ),
-                result_storage_bucket=(
-                    str(result_storage_bucket) if result_storage_bucket is not None else None
-                ),
-                result_storage_prefix=(
-                    str(result_storage_prefix) if result_storage_prefix is not None else None
-                ),
-                result_storage_endpoint=(
-                    str(result_storage_endpoint) if result_storage_endpoint is not None else None
-                ),
+                transport=transport,
             )
             response = self._client.submit_job(spec)
 
@@ -1552,21 +1534,7 @@ class NomadExecutor(BaseExecutor):
             executor=self,
             local_future=local_future,
             result_hint=result_hint,
-            result_transport_mode=(
-                str(result_transport_mode) if result_transport_mode is not None else "auto"
-            ),
-            result_storage_backend=(
-                str(result_storage_backend) if result_storage_backend is not None else None
-            ),
-            result_storage_bucket=(
-                str(result_storage_bucket) if result_storage_bucket is not None else None
-            ),
-            result_storage_prefix=(
-                str(result_storage_prefix) if result_storage_prefix is not None else None
-            ),
-            result_storage_endpoint=(
-                str(result_storage_endpoint) if result_storage_endpoint is not None else None
-            ),
+            transport=transport,
         )
 
     def shutdown(self) -> None:
