@@ -799,7 +799,60 @@ from osimflow.executors.my_new_executor import MyNewExecutor
 ExecutorRegistry.register("my_new", MyNewExecutor)
 ```
 
-#### Step 1b: Declare the executor's result-transport capabilities (issue #1473)
+### Subclassing `PollingHandle` for polling executors
+
+Use `PollingHandle` whenever the substrate is asynchronous and a submitted job must be polled before its result is available. This applies to AWS Batch, Azure Batch, Google Batch, Nomad, and Kubernetes. Local, Slurm, PBS, Docker Swarm, and Dask-JobQueue return handles whose `result()` blocks on a future and generally do not need the polling state machine.
+
+`PollingHandle.result()` owns the shared poll-retry-fallback state machine. A polling handle supplies substrate hooks: `_wait_for_terminal(timeout)` polls until a terminal job, `_classify(job)` returns `(PollOutcome, reason)`, `_resolve_success_result(timeout)` materializes the result, and the retry/fallback hooks update the substrate job identity. `PollOutcome.SUCCEEDED` resolves the result, `FAILED` raises the substrate failure, and `INDETERMINATE` completes with `None`. Subclasses inherit the caller deadline, jittered exponential backoff, retry accounting, and optional fallback-to-on-demand transition; do not reimplement those in `result()`.
+
+The `_wait_for_terminal(timeout)` hook must pass the supplied timeout through to the substrate poll loop. The shared `PollingHandle.result(timeout=...)` deadline starts before polling and remains in force across spot retries and fallback. A polling handle that ignores this deadline fails the `test_handle_result_respects_timeout` conformance check and can block callers indefinitely (issue #1465).
+
+A minimal polling handle keeps substrate polling and error wording local while delegating state transitions to `PollingHandle`:
+
+```python
+from concurrent.futures import Future
+from typing import Any
+
+from osimflow.executors.base import PollOutcome, PollingHandle
+
+
+class MyPollingHandle(PollingHandle):
+    def __init__(self, job_id: str, executor: Any) -> None:
+        self.job_id = job_id
+        self._executor = executor
+        self._future: Future[Any] = Future()
+
+    def _poll_substrate(self, timeout: float | None) -> Any:
+        return self._executor.poll_until_terminal(self.job_id, timeout=timeout)
+
+    def _wait_for_terminal(self, timeout: float | None) -> Any:
+        return self._poll_substrate(timeout)
+
+    def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
+        return (PollOutcome.SUCCEEDED, None) if job.ok else (PollOutcome.FAILED, job.reason)
+
+    def _resolve_success_result(self, timeout: float | None = None) -> Any:
+        return self._executor.result_for(self.job_id)
+
+    def _failure_error(self, job: Any) -> RuntimeError:
+        return RuntimeError(f"job {self.job_id!r} failed")
+
+    def _fallback_failure_error(self, job: Any) -> RuntimeError:
+        return RuntimeError(f"job {self.job_id!r} failed after on-demand fallback")
+```
+
+The Azure and Google Batch handles are the reference implementations: each subclasses `PollingHandle`, implements these substrate hooks, and delegates `result()` to the base class. Implement `_resubmit`, `_submit_on_demand`, and `_is_spot_interruption` when the executor supports spot or preemptible capacity; otherwise the inherited single-attempt, no-fallback defaults are sufficient.
+
+#### What the conformance suite does and does not cover
+
+The `ExecutorConformanceSuite` checks the public `submit()` → `Handle` contract, but it is not a complete polling-state-machine test. The checks that exercise polling-relevant behavior are:
+
+- `test_handle_done_returns_bool` — exercises `done()` and a successful `result()` call; for a polling handle, this reaches the terminal poll path.
+- `test_handle_result_respects_timeout` — requires `result(timeout=0.1)` to raise `TimeoutError` before slow work completes; this is the direct #1465 deadline guard.
+
+The remaining checks do not verify polling retries, `PollOutcome` classification, jittered backoff, spot interruption handling, fallback-to-on-demand, or substrate poll deadlines: `test_submit_returns_handle`, `test_handle_job_id_is_non_empty_string`, `test_handle_result_returns_value`, `test_handle_error_propagates`, `test_resource_directives_accepted`, the three transport checks, `test_fanout_chunk_size_returns_positive_int`, `test_submit_throttles_when_low_rps`, `test_register_health_check_returns_callable`, and the optional `test_three_sample_stub_campaign_produces_all_artifacts`. The PollingHandle-specific gaps tracked for follow-up in #1559, including result-via-`result_hint` and submitit DebugJob timeout behavior, are intentionally outside this guide and suite.
+
+### Step 1b: Declare the executor's result-transport capabilities (issue #1473)
 
 `BaseExecutor.submit_request()` calls
 `validate_transport_mode(self.name, request.result_transport_mode)`
