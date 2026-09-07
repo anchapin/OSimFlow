@@ -29,6 +29,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -293,6 +294,51 @@ def _container_digest_for(label: str) -> str:
         log.debug("docker unavailable for label=%r — using unresolved sentinel", label)
         digest = "unresolved"
     return f"{label}@{digest}"
+
+
+def digest_pinned_image_ref(label: str, container_digest: str | None) -> str | None:
+    """Convert a cache-form digest into a pullable ``<repo>@sha256:`` ref (issue #1536).
+
+    Accepts any of the digested forms floating through the system —
+    the cache-key form ``<label-with-tag>@<repo>@sha256:<hex>`` produced
+    by :func:`_container_digest_for`, a direct ``<repo>@sha256:<hex>``,
+    or a bare ``sha256:<hex>`` (combined with the repository part of
+    *label*) — and returns the canonical digest-pinned reference a
+    container runtime can pull.  Returns ``None`` when *container_digest*
+    carries no usable digest (``None``, the ``unresolved`` sentinel from
+    issue #1218, or a malformed value) so callers can decide their own
+    fallback instead of submitting a broken image reference.
+
+    The *label* (e.g. ``docker.io/nrel/openstudio:3.11.0``) contributes
+    the repository when the digest itself does not carry one; its
+    mutable tag is intentionally dropped — the whole point (issue
+    #1536) is that the executed image must not resolve by tag.
+    """
+    if not container_digest:
+        return None
+    text = container_digest.strip()
+    # The repo group may contain colons (registry host:port) and must be
+    # the chunk immediately preceding the digest.
+    match = re.search(r"(?:([A-Za-z0-9._:/\-]+)@)?(sha256:[0-9a-f]{64})\b", text)
+    if match is None:
+        return None
+    repo, digest = match.group(1), match.group(2)
+
+    def _strip_tag(ref: str) -> str:
+        """Drop a mutable ``:tag`` suffix, keeping a registry ``host:port``."""
+        head, sep, tail = ref.rpartition("/")
+        base = head + "/" + tail.rsplit(":", 1)[0] if sep else ref.rsplit(":", 1)[0]
+        return base
+
+    if not repo:
+        if not label:
+            return None
+        repo = _strip_tag(label.split("@", 1)[0])
+    elif ":" in repo.rpartition("/")[2]:
+        # A captured repo that still carries a tag (e.g. the direct
+        # ``<label-with-tag>@sha256:`` form) — drop the tag.
+        repo = _strip_tag(repo)
+    return f"{repo}@{digest}"
 
 
 def _row_to_cache_dict(

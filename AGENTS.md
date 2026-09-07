@@ -411,7 +411,11 @@ name in this section.
 
 - `osimflow/__init__.py` — public API surface (`__all__`).
 - `osimflow/__main__.py` — `argparse` CLI entry point (`osimflow run ...`).
-- `osimflow/campaign.py` — `Campaign` orchestrator + `CampaignError` +
+- `osimflow/campaign.py` — `Campaign` orchestrator +
+  `CONTAINER_SUBSTRATE_EXECUTORS` (issue #1536: executors whose
+  substrate pulls the OpenStudio image; `run()` fails loudly when
+  the digest is unresolved and no `--container-digest` was given) +
+  `CampaignError` +
   `CampaignAbortError` + `QuotaExceededError` + the 7-step DAG.
 - `osimflow/config.py` — the campaign-config composer: `CampaignConfig`
   + the focused subsystem dataclasses it composes (`ObservabilityConfig`,
@@ -440,7 +444,10 @@ name in this section.
   `subprocess.Popen(['python', '-c', ...])`) and a snapshot of the
   contract for the subprocess.  Regenerate via `make contract` or
   pre-commit.
-- `osimflow/cache.py` — `SQLiteCache` + `CacheKey` + `CacheStats`.
+- `osimflow/cache.py` — `SQLiteCache` + `CacheKey` + `CacheStats`
+  + `digest_pinned_image_ref` (issue #1536: converts any digested
+  form — cache-key, direct, or bare — into a pullable
+  `<repo>@sha256:` ref; `None` for the `unresolved` sentinel).
 - `osimflow/_sqlite_store.py` — shared SQLite access primitive (issue
   #1564): `connect()` (WAL + `busy_timeout=5000` +
   `synchronous=NORMAL` + `locking_mode=NORMAL` +
@@ -654,11 +661,15 @@ name in this section.
 - `osimflow/cosign.py` — container image signature verification
   (issue #1385): `CosignVerificationError` +
   `build_cosign_image_ref` + `verify_image_signature` +
-  `write_cosign_receipt` + `DEFAULT_COSIGN_OIDC_ISSUER`. When
-  `--require-cosign-identity` is set, `Campaign` init shells out to
-  `cosign verify` (keyless sigstore) against the OpenStudio image ref
-  and refuses to run on failure — a cache hit must never silently
-  consume a substituted image.
+  `write_cosign_receipt` + `triangulate_image_ref` (issue #1536:
+  resolves a mutable-tag ref to its digest-pinned form via
+  `cosign triangulate` BEFORE verification — closing the
+  verify-tag/pull-tag TOCTOU) + `DEFAULT_COSIGN_OIDC_ISSUER`.
+  When `--require-cosign-identity` is set, `Campaign` init shells
+  out to `cosign verify` (keyless sigstore) against the OpenStudio
+  image ref and refuses to run on failure — a cache hit must never
+  silently consume a substituted image.  The receipt records the
+  verified digest and (when triangulated) the source tag.
 - `osimflow/data_point_manager.py` — `DataPoint`,
   `DataPointManager`, `DataPointStatus`.
 - `osimflow/cross_run_aggregator.py` — `CrossRunAggregator`.

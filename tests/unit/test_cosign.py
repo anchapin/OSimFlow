@@ -179,10 +179,27 @@ class TestCampaignWiring:
             raise CosignVerificationError("substituted image")
 
         monkeypatch.setattr("osimflow.campaign.verify_image_signature", boom)
+        # Issue #1536: the tag ref is triangulated BEFORE verification; a
+        # test host without the cosign binary would fail at triangulation
+        # instead of at the (mocked) verification step under test here.
+        monkeypatch.setattr(
+            "osimflow.campaign.triangulate_image_ref",
+            lambda ref: f"docker.io/nrel/openstudio@sha256:{'c' * 64}",
+        )
         from osimflow import Campaign
 
         cfg = self._cfg(tmp_path, require_cosign_identity="id@example.com")
         with pytest.raises(CosignVerificationError, match="substituted"):
+            Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+
+    def test_triangulation_failure_refuses_to_construct(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1536: a tag ref that cannot be triangulated refuses to run."""
+        from osimflow import Campaign
+
+        cfg = self._cfg(tmp_path, require_cosign_identity="id@example.com")
+        with pytest.raises(CosignVerificationError, match="triangulat"):
             Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
 
     def test_verification_success_constructs(
