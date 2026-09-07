@@ -10,7 +10,9 @@
 #   - lint       : ruff check + ruff format --check  (parallel; ~30s)
 #   - typecheck  : mypy --strict on osimflow/         (parallel; ~60s)
 #   - test       : pytest with 82% coverage gate      (depends on lint+typecheck; issue #1417)
-#   - contract   : AGENTS.md / docs drift gate        (parallel; ~10s)
+#   - contract   : AGENTS.md / docs drift gate + the bounded tests/contract
+#                  pytest suite (issue #1629 — the make test-fast /
+#                  pre-commit pytest-fast mirror; parallel; ~2 min)
 #   - security   : pip-audit dependency vulnerability check (parallel; ~30s)
 #
 # Install uses `uv` (~10x faster than pip) and the venv is cached on a hash
@@ -122,7 +124,7 @@ jobs:
   contract:
     name: agents & docs contract
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -142,16 +144,26 @@ jobs:
           restore-keys: |
             venv-${{ runner.os }}-py3.12-
 
-      - name: Install (editable + dev extras)
+      - name: Install (editable + dev + api extras)
+        # `api` extra (issue #1629): tests/contract's openapi-sync and
+        # API-contract tests import osimflow.api / fastapi; without the
+        # extra they importorskip and the gate silently loses coverage.
         run: |
           uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
+          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api]"
 
       - name: AGENTS.md / code drift
         run: .venv/bin/python tools/check_agents_contract.py
 
       - name: docs/ path resolution
         run: .venv/bin/python tools/check_docs_sync.py
+
+      - name: pytest (tests/contract, fast subset)
+        # Issue #1629: the SAME invocation the pre-commit `pytest-fast`
+        # hook and `make test-fast` use — byte-identical flags,
+        # single-sourced in .pre-commit-config.yaml and the Makefile.
+        # Do not inline different flags here.
+        run: .venv/bin/pytest -o addopts="" tests/contract -x -q -m "not slow and not chaos and not full"
 
   security:
     name: security (pip-audit)
