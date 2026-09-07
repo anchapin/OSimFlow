@@ -152,7 +152,9 @@ executor = NomadExecutor(
 )
 ```
 
-`vault_secret_path` is a **constructor parameter** (no CLI flag, mirroring the
+`vault_secret_path` is settable as a **constructor parameter** *and* via the
+CLI flags `--nomad-vault-secret-path` / `--nomad-vault-secret-key` (issue
+#1535; the CLI surface mirrors the constructor, unlike the
 `security_context_strict` pattern from issue #1383). When set:
 
 - the task env / dispatch-meta copy of `OSIMFLOW_TASK_PAYLOAD_SECRET` is

@@ -274,6 +274,8 @@ All flags are passed to the `osimflow run` subcommand.
 | `--nomad-tls-verify` | bool | `true` | Verify the Nomad TLS certificate; disable only for development with self-signed certificates (`--nomad-tls-verify=false`). |
 | `--nomad-allow-insecure-token` | flag | off | Allow `NOMAD_TOKEN` over non-TLS to a non-local address — fails closed without this flag (SEC-009, issue #1450); dev/test only. |
 | `--nomad-dispatch-job-id` | string | derived from outdir hash | Override the Nomad dispatch job ID in dispatch mode, e.g. to reuse a pre-registered job spec (issue #1316). |
+| `--nomad-vault-secret-path` | string | none | Vault KV path holding the task-payload HMAC secret (issues #1449/#1535). When set, the Nomad client renders `OSIMFLOW_TASK_PAYLOAD_SECRET` from Vault at allocation time via a `template` stanza — the raw secret never appears in the job spec or dispatch meta (where it would persist in the Nomad state store, readable via `nomad job inspect`). Requires `OSIMFLOW_TASK_PAYLOAD_SECRET` on the orchestrator with the same value for signing. See [nomad-production.md](nomad-production.md) and [secret-management.md](secret-management.md). |
+| `--nomad-vault-secret-key` | string | `payload_secret` | Field name inside the Vault KV entry at `--nomad-vault-secret-path` holding the HMAC secret. KV v2 paths (containing `/data/`) read the field from the wrapped data object (issues #1449/#1535). |
 
 Nomad runtime environment variables:
 
@@ -292,6 +294,7 @@ TLS/mTLS configuration for production clusters (including the full
 |---|---|---|---|
 | `--kubernetes-queue-name` | string | none | Kueue `ClusterQueue` name applied as the `kueue.x-k8s.io/queue-name` label on Jobs; enables Kueue suspend/resume, fair-sharing, and preemption. Inert on clusters without Kueue installed (issue #997). |
 | `--kubernetes-ttl-seconds-after-finished` | int | unset | Native Job `ttlSecondsAfterFinished` — the API server garbage-collects completed/failed Jobs after this many seconds, releasing etcd and pod resources across large sweeps (issue #997). |
+| `--kubernetes-payload-secret-ref` | string | none | Name of a pre-created Kubernetes Secret (key `OSIMFLOW_TASK_PAYLOAD_SECRET`) holding the task-payload HMAC secret. When set, the Job spec emits a `secretKeyRef` instead of a literal env value, so the raw secret never appears in the Job spec (issues #1449/#1535). Requires `OSIMFLOW_TASK_PAYLOAD_SECRET` on the orchestrator with the same value for signing. See [secret-management.md](secret-management.md) and [kubernetes-deployment.md](kubernetes-deployment.md). |
 
 See [kubernetes-deployment.md](kubernetes-deployment.md#cli-flags) for the
 full Kubernetes flag table (including `--kubernetes-backoff-limit` and its
