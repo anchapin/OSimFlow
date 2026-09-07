@@ -1089,6 +1089,28 @@ rm -rf my_campaign/
 **Performance:** A cached resume of a 5-sample campaign takes ~0.1s vs ~50s
 for the initial run (verified in benchmarks).
 
+**Pausing and resuming a campaign (issue #1628):** `osimflow pause` writes
+a `.pause` flag; the running campaign finishes in-flight samples, writes
+`run.json` with `"status": "paused"` (no `finished_at`), and **exits** —
+there is no background orchestrator holding the campaign open. For that
+reason `osimflow resume` does not just clear the flag: it removes `.pause`
+*and* re-launches the campaign invocation recorded at run start
+(`campaign_invocation.json`, written by every `osimflow run`) as a
+cache-replay — completed steps are cache hits and only the remaining work
+executes. `resume` propagates the replayed campaign's exit code.
+
+If no invocation record exists (campaign started by an older OSimFlow
+version, via the REST API, or programmatically), `osimflow resume` prints
+the manual equivalent instead:
+
+```bash
+osimflow run --outdir <same outdir>   # plus the original flags
+```
+
+`resume` on a campaign whose `run.json` status is not `paused` refuses
+with exit 1; a missing `.pause` flag file is a warning (the campaign is
+not flagged for pause) and the recovery replay still proceeds.
+
 ### 7.7 Recovery: Redis outage mid-campaign (issue #1562 / ADR-0004)
 
 When `--redis-url` is set, four OSimFlow planes coordinate through one
@@ -1652,8 +1674,8 @@ cross-links for depth.
 | `osimflow status` | Show detailed status of a campaign (reads `run.json`). Issue #266. |
 | `osimflow download` | Download results from a completed campaign (`--output-dir`, `--include-intermediates`). Issue #266. |
 | `osimflow cancel` | Request graceful cancellation of a running campaign — the final `run.json` records `"cancelled"`. See [runjson-guide.md](runjson-guide.md) §2.6 for the lifecycle status fields. |
-| `osimflow pause` | Request graceful pause of a running campaign (issue #444) — `run.json` records `paused_at`. |
-| `osimflow resume` | Resume a paused campaign (issue #444). |
+| `osimflow pause` | Request graceful pause of a running campaign (issue #444) — in-flight samples complete, `run.json` records `paused_at`, and the run process exits paused. |
+| `osimflow resume` | Resume a paused campaign (issue #1628): removes the `.pause` flag and re-launches the recorded `osimflow run` invocation as a cache replay; prints the manual replay command when no invocation record exists. See [§7.5](#75-cache-and-resume-behavior). |
 | `osimflow mark-for-reanalysis` | Mark a completed/failed sample for re-running (`--priority`, issue #420). |
 | `osimflow merge` | Merge multiple data points into a single target (`--source-ids`, `--target-id`, `--target-work-dir`; issue #418). |
 | `osimflow backup` | Create a backup of the campaign registry (`--output`, `--registry`; issue #440). |
