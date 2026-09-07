@@ -66,7 +66,14 @@ class TestServeCLI:
         mock_uvicorn.run.assert_called_once_with(mock_app, host="127.0.0.1", port=9000)
 
     def test_serve_read_write_flag(self, tmp_path: Path) -> None:
-        """Serve with --read-write passes read_only=False."""
+        """Serve with --read-write passes read_only=False and auto-generates an API key.
+
+        Since issue #1553 the SEC-001 localhost gap is closed by always
+        auto-generating an ephemeral key when no ``--api-key`` /
+        ``--api-keys-file`` is set. ``--read-write`` is no exception —
+        ``create_app`` must receive a non-None ``api_key`` so the
+        middleware enforces auth even when the operator omitted the flag.
+        """
         parser = _build_parser()
         args = parser.parse_args(
             [
@@ -86,25 +93,33 @@ class TestServeCLI:
         ):
             _cmd_serve(args)
 
-        mock_create_app.assert_called_once_with(
-            outdir=tmp_path,
-            read_only=False,
-            api_key=None,
-            api_keys_file=None,
-            allow_insecure_api_keys_file=False,
-            cors_origins=None,
-            rate_limit="60/minute",
-            rate_limit_key="ip",
-            ui_enabled=False,
-            variable_editor=False,
-            results_viewer=False,
-            dashboard=False,
-            registry_path=None,
-            redis_url=None,
-        )
+        mock_create_app.assert_called_once()
+        call_kwargs = mock_create_app.call_args[1]
+        assert call_kwargs["read_only"] is False
+        assert call_kwargs["api_keys_file"] is None
+        assert call_kwargs["allow_insecure_api_keys_file"] is False
+        assert call_kwargs["cors_origins"] is None
+        assert call_kwargs["rate_limit"] == "60/minute"
+        assert call_kwargs["rate_limit_key"] == "ip"
+        assert call_kwargs["ui_enabled"] is False
+        assert call_kwargs["variable_editor"] is False
+        assert call_kwargs["results_viewer"] is False
+        assert call_kwargs["dashboard"] is False
+        assert call_kwargs["registry_path"] is None
+        assert call_kwargs["redis_url"] is None
+        # The auto-gen fix (issue #1553): read-write with no --api-key
+        # must produce a non-None api_key so the server is never
+        # unauthenticated.
+        assert call_kwargs["api_key"], "expected an auto-generated API key, got None"
 
     def test_serve_read_only_default(self, tmp_path: Path) -> None:
-        """Serve defaults to read_only=True."""
+        """Serve defaults to read_only=True and still auto-generates an API key.
+
+        The SEC-001 localhost gap fix (issue #1553): the read-only path
+        previously ran fully unauthenticated on the loopback bind. It
+        now auto-generates a key on every serve that omits ``--api-key``
+        and ``--api-keys-file``.
+        """
         parser = _build_parser()
         args = parser.parse_args(
             [
@@ -123,22 +138,22 @@ class TestServeCLI:
         ):
             _cmd_serve(args)
 
-        mock_create_app.assert_called_once_with(
-            outdir=tmp_path,
-            read_only=True,
-            api_key=None,
-            api_keys_file=None,
-            allow_insecure_api_keys_file=False,
-            cors_origins=None,
-            rate_limit="60/minute",
-            rate_limit_key="ip",
-            ui_enabled=False,
-            variable_editor=False,
-            results_viewer=False,
-            dashboard=False,
-            registry_path=None,
-            redis_url=None,
-        )
+        mock_create_app.assert_called_once()
+        call_kwargs = mock_create_app.call_args[1]
+        assert call_kwargs["read_only"] is True
+        assert call_kwargs["api_keys_file"] is None
+        assert call_kwargs["allow_insecure_api_keys_file"] is False
+        assert call_kwargs["cors_origins"] is None
+        assert call_kwargs["rate_limit"] == "60/minute"
+        assert call_kwargs["rate_limit_key"] == "ip"
+        assert call_kwargs["ui_enabled"] is False
+        assert call_kwargs["variable_editor"] is False
+        assert call_kwargs["results_viewer"] is False
+        assert call_kwargs["dashboard"] is False
+        assert call_kwargs["registry_path"] is None
+        assert call_kwargs["redis_url"] is None
+        # Issue #1553: read-only with no --api-key MUST auto-gen a key.
+        assert call_kwargs["api_key"], "expected an auto-generated API key, got None"
 
     def test_serve_import_error_returns_1(self, tmp_path: Path) -> None:
         """Serve returns 1 when uvicorn is not installed."""

@@ -1276,10 +1276,15 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
             "API key for authentication (single-key mode). "
             "SEC-001: REQUIRED when binding to a non-local interface — "
             "without it every endpoint is reachable without credentials "
-            "(issue #1095). Required when --enable-writes is set "
-            "(auto-generated and logged if not provided). When read-only, "
-            "authentication is disabled unless this is set. "
-            "Use --api-keys-file for multi-user authentication (issue #395)."
+            "(issue #1095). When no --api-key is supplied and no "
+            "--api-keys-file is set, an ephemeral key is auto-generated and "
+            "printed to stderr at startup (issue #1553 / #1117) so the "
+            "serve is never left unauthenticated — including on a read-only "
+            "localhost bind, where other local accounts can otherwise read "
+            "run.json, KPI results, and registry listings over the loopback "
+            "interface on a shared host. Pass --api-key explicitly to pin a "
+            "stable key across serves. Use --api-keys-file for multi-user "
+            "authentication (issue #395)."
         ),
     )
     serve.add_argument(
@@ -2099,7 +2104,7 @@ def _warn_if_cleartext_nonlocal(tls_cert: Path | None, host: str, port: int) -> 
     log.warning("SEC-004: TLS disabled for non-local bind %s:%d — traffic is cleartext", host, port)
 
 
-def _cmd_serve(args: argparse.Namespace) -> int:  # noqa: PLR0912
+def _cmd_serve(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0912
     """Start the REST API server."""
     try:
         import uvicorn  # noqa: PLC0415
@@ -2121,20 +2126,54 @@ def _cmd_serve(args: argparse.Namespace) -> int:  # noqa: PLR0912
         if api_key is not None:
             log.warning("--api-key is ignored when --api-keys-file is set")
         api_key = None
-    elif args.enable_writes and not api_key:
-        # Auto-generate a key when writes are enabled but none was provided.
-        api_key = generate_api_key()
-        # Print the key to stdout once so the user can capture it (issue
-        # #1117): without this the auto-generated key is unusable because
-        # it is never surfaced anywhere. Never log the key itself — only a
-        # fingerprint for audit purposes.
+    elif api_key is None:
+        # No key store configured at all — close the SEC-001 localhost gap
+        # (issue #1553): previously a read-only ``osimflow serve`` on
+        # 127.0.0.1 ran fully unauthenticated, so every local account on a
+        # shared host could read ``run.json`` / KPI results / registry
+        # listings. Reuse the #1117 generation mechanism (same
+        # ``generate_api_key()`` call the writes path already uses) and
+        # surface the key once on stderr so the operator can capture it.
+        # Failure to generate must abort startup — never serve open.
+        try:
+            api_key = generate_api_key()
+        except Exception as exc:  # noqa: BLE001 — fail closed, never serve open
+            print(
+                f"Error: failed to auto-generate API key for serve ({exc}). "
+                "Refusing to start an unauthenticated serve — pass --api-key "
+                "explicitly or fix the underlying key-generation failure.",
+                file=sys.stderr,
+            )
+            return 1
+        # Single-line stderr notice so the operator can capture it
+        # programmatically (issue #1117) without polluting stdout (which
+        # is reserved for uvicorn access logs when piped). Distinct from
+        # the legacy --enable-writes banner — this message is intentionally
+        # terse and always prints because every unauthenticated serve is a
+        # bug, not a normal write-mode feature.
         print(
-            "Auto-generated API key (won't be shown again):\n"
-            f"  {api_key}\n"
-            "Pass it as the X-API-Key header on write requests.",
-            file=sys.stdout,
+            f"Generated ephemeral API key for localhost serve: {api_key} — "
+            "pass --api-key <key> to pin it on subsequent serves.",
+            file=sys.stderr,
         )
-        log.debug("API key generated")
+        log.debug("API key auto-generated (issue #1553 SEC-001 localhost gap)")
+        # Multi-user host warning (issue #1553): on a shared HPC login
+        # node or multi-tenant host every local account can reach
+        # 127.0.0.1:<port>; an auto-generated key is the *minimum*
+        # mitigation, not a substitute for host-level isolation. Always
+        # emit at WARNING when auto-gen fires so the message is visible
+        # regardless of log_level (default INFO already surfaces it).
+        log.warning(
+            "SEC-001: serve bound on %s:%d with an auto-generated API key. "
+            "On multi-user hosts every local account can reach the loopback "
+            "interface — restrict with --host 127.0.0.1 (already set), "
+            "tighter firewall rules, or stop other local users from "
+            "running on the same login node. The key is ephemeral and "
+            "shown once above; pin it with --api-key <key> on the next "
+            "serve. (issue #1553)",
+            args.host,
+            args.port,
+        )
 
     # Parse CORS origins.
     cors_origins: list[str] | None = None
