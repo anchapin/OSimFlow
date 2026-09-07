@@ -541,6 +541,9 @@ name in this section.
   `_transitive_import_closure` are re-exported from
   `osimflow.campaign`.
 - `osimflow/_campaign_lifecycle.py` — `CampaignLifecycle` +
+  `CancelSignal` (the explicit `request_cancel` / `request_pause` /
+  `request_resume` protocol Campaign satisfies structurally — issue
+  #1542 killed the former `Campaign` back-reference) +
   `CancelRegistry` / `cancel_registry` singleton + `handle_signal` +
   `CampaignPauseRequested` (issue #1537 — the dedicated soft-pause
   control-flow signal, distinct from `KeyboardInterrupt`-driven
@@ -550,6 +553,32 @@ name in this section.
   polling), soft pause/resume, SIGINT/SIGTERM handler bookkeeping
   extracted from `Campaign` (issue #1462). `_CancelRegistry` /
   `_cancel_registry` are re-exported from `osimflow.campaign`.
+  No `_campaign_*.py` module imports or type-references `Campaign`
+  (issue #1542 acceptance criterion; the documented unbound
+  `Campaign._compute_code_hashes(stub)` test path is preserved via
+  duck typing).
+- `osimflow/_campaign_fanout.py` — the fan-out wait loop extracted
+  from `Campaign` (issue #1542): `FanoutDeps` (explicit
+  call-time dependency bundle — job queue, sample-state,
+  sample-trace/checkpoint + alert + cancel/pause callbacks; no
+  Campaign back-reference) + `mark_sample_failed` (issue #1570
+  failure-accounting path) + `compute_await_deadline` (issue #1566)
+  + `submit_and_await_all` (issue #286 concurrent wait core with
+  the #443/#1567 recovery loop, #1539 abort propagation, and
+  #553/#1537 pause honouring).  Standalone unit tests:
+  `tests/unit/test_campaign_fanout.py`; `Campaign` keeps thin
+  call-time delegating methods (`_submit_and_await_all` /
+  `_mark_sample_failed` / `_compute_await_deadline` +
+  `_fanout_deps`) so the historical test seams
+  (`patch.object(campaign, "_job_queue")` & co.) keep working.
+- `osimflow/_campaign_analysis.py` — `CampaignAnalysisMixin`
+  (issue #1542): `step_compute_sensitivity_indices` (Sobol, issue
+  #346) and `step_compute_uq_indices` (issue #530) extracted from
+  `Campaign`; `Campaign` inherits the mixin so the step-method
+  surface and the data-driven DAG dispatcher are unchanged.
+- `osimflow/_campaign_types.py` — `SampleSpec` + `VariableSpec`
+  TypedDicts (issue #1542), re-exported from
+  `osimflow.campaign` so existing imports keep working.
 - `osimflow/_campaign_artifacts.py` — `CampaignArtifactWriter`:
   `campaign_meta.json` / `provenance.json` /
   `artifact_manifest.json` writers (issue #277) and intermediate/

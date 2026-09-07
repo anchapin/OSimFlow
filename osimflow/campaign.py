@@ -36,7 +36,6 @@ includes per-step timing, per-sample status, and cache hit/miss counts.
 
 __all__ = ["Campaign", "CampaignAbortError", "CampaignError", "QuotaExceededError", "SimResult"]
 
-import concurrent.futures
 import contextlib
 import dataclasses
 import json
@@ -48,10 +47,11 @@ import warnings
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TypedDict
+from typing import Any
 
 import yaml
 
+from ._campaign_analysis import CampaignAnalysisMixin
 from ._campaign_artifacts import CampaignArtifactWriter
 from ._campaign_baseline import (
     baseline_sample_id as _baseline_sid_from_cfg,
@@ -71,6 +71,18 @@ from ._campaign_code_hashes import (
 )
 from ._campaign_cost_tracker import CampaignCostTracker
 from ._campaign_epw import CampaignEpwResolver
+from ._campaign_fanout import (
+    FanoutDeps,
+)
+from ._campaign_fanout import (
+    compute_await_deadline as _compute_await_deadline_impl,
+)
+from ._campaign_fanout import (
+    mark_sample_failed as _mark_sample_failed_impl,
+)
+from ._campaign_fanout import (
+    submit_and_await_all as _submit_and_await_all_impl,
+)
 from ._campaign_hooks import (
     hook_env as _build_hook_env,
 )
@@ -94,6 +106,7 @@ from ._campaign_observability import ObservabilityManager
 from ._campaign_quota import CampaignQuotaGuard, QuotaExceededError
 from ._campaign_sample_trace import CampaignAbortError, CampaignSampleTraceRecorder
 from ._campaign_sharding import CampaignSharding
+from ._campaign_types import SampleSpec, VariableSpec  # noqa: F401  — re-exported API
 from .alerting import AlertManager, build_alert_manager
 from .algorithms import AlgorithmRegistry, BaseAlgorithm
 from .apply_params import (
@@ -113,7 +126,7 @@ from .data_point_manager import DataPointManager
 from .distributed_cache import build_cache, campaign_state_namespace
 from .distributed_jobqueue import build_job_queue
 from .errors import OSimFlowRuntimeError
-from .executors import BaseExecutor, Handle, get_step_resources
+from .executors import BaseExecutor, Handle
 from .json_utils import safe_json_dumps, safe_json_loads
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
@@ -188,25 +201,10 @@ class CampaignError(OSimFlowRuntimeError):
 
 
 # Type aliases — these are the schemas of intermediate DAG outputs.
-class SampleSpec(TypedDict, total=False):
-    sample_id: str
-    values: dict[str, object]
-    # Per-sample override paths (GAP-009). When set on a sample, these
-    # replace the campaign-level template_sim_package (seed_model) or
-    # weather file (weather_file) for that sample only.
-    seed_model: str
-    weather_file: str
-
-
-class VariableSpec(TypedDict, total=False):
-    name: str
-    distribution: str
-    min: float
-    max: float
-    mean: float
-    sigma: float
-
-
+# Issue #1542: the SampleSpec / VariableSpec TypedDicts live in
+# ``osimflow._campaign_types`` and are re-exported from the top import
+# block so ``from osimflow.campaign import SampleSpec`` (used by tests
+# and collaborators) keeps working.
 SampleDict = dict[str, Path]  # sample_id -> path (per-sample work dir)
 
 
@@ -536,7 +534,7 @@ def _verify_cosign_or_raise(cfg: CampaignConfig) -> None:
     )
 
 
-class Campaign:
+class Campaign(CampaignAnalysisMixin):
     def __init__(
         self,
         cfg: CampaignConfig,
@@ -810,8 +808,13 @@ class Campaign:
         # Graceful shutdown / soft pause / signal handling (issues #255,
         # #553 → #1462): flags, locks, and handler bookkeeping live in
         # the CampaignLifecycle collaborator; thin delegating methods
-        # below keep the instance API unchanged.
-        self._lifecycle = CampaignLifecycle()
+        # below keep the instance API unchanged.  Issue #1542: the
+        # lifecycle receives this Campaign as an explicit
+        # ``CancelSignal`` protocol (structural — Campaign provides
+        # request_cancel / request_pause / request_resume), NOT as the
+        # Campaign type, so the collaborator carries no circular
+        # back-reference.
+        self._lifecycle = CampaignLifecycle(signal=self)
 
         # Consecutive checkpoint failure counter (issue #739) now lives
         # on CampaignSampleTraceRecorder (see self._sample_traces).
@@ -1067,131 +1070,66 @@ class Campaign:
     ) -> None:
         """Record a per-sample failure for the given step (issue #1570).
 
-        Centralises the failure-marking path so ``_await_one`` can route
-        ``concurrent.futures.CancelledError`` and submitit cancellation
-        errors through the same accounting as ordinary ``Exception``
-        failures.  Without this helper, cancellation errors (which are
-        ``BaseException`` subclasses, not ``Exception``) escaped the
-        ``except Exception`` block and left the job-queue entry stuck
-        ``in_progress``, the sample-state dict empty, no checkpoint
-        row, no observability metric, and no ``sample.failed`` alert.
-
-        The helper performs four side-effects, in order, each mirroring
-        the pre-#1570 inline failure block:
-
-        1. ``_job_queue.mark_failed(...)`` (issue #263).
-        2. ``_sample_state[...]`` populated with ``<step>_exit_code=1``,
-           ``<step>_status="failed"``, ``error_summary`` (issue #847).
-        3. ``_checkpoint_sample(sid)`` — incremental run.json write.
-        4. ``_obs.record_sample_status(sid, "failed", ...)`` + the
-           ``sample.failed`` alert via ``_maybe_alert`` (issue #1180).
-
-        Must remain a no-throw on the accounting side: the 3-strike
-        ``CampaignAbortError`` from ``_checkpoint_sample`` propagates
-        to the caller unchanged so the concurrent fan-out remains
+        Delegates to
+        :func:`osimflow._campaign_fanout.mark_sample_failed`
+        (issue #1542) with a call-time dependency bundle so
+        instance-level patches of ``_job_queue`` /
+        ``_checkpoint_sample`` / ``_maybe_alert`` / ``_obs`` keep
+        working.  See the fanout module for the four recorded
+        side-effects (job-queue ``mark_failed``, ``_sample_state``
+        keys, incremental checkpoint, observability metric +
+        ``sample.failed`` alert).  The 3-strike
+        ``CampaignAbortError`` from ``_checkpoint_sample``
+        propagates unchanged so the concurrent fan-out remains
         abortable.
         """
-        # Mark failed in the job queue (issue #263).
-        self._job_queue.mark_failed(
-            f"{sid}_{step_name}",
-            str(error)[:500],
-        )
-        # Record failure in _sample_state so _finalize_samples
-        # and _checkpoint_sample see a consistent failed sample.
-        state = self._sample_state.setdefault(sid, {})
-        state[f"{step_name.lower()}_exit_code"] = 1
-        state[f"{step_name.lower()}_status"] = "failed"
-        state["error_summary"] = str(error)[:500]
-        self._checkpoint_sample(sid)
-        # Record sample status to observability backend immediately
-        # so crashed samples are not missed (issue #847).
-        self._obs.record_sample_status(sid, "failed", trace_id=trace_id)
-        # Send sample failure alert (issue #1180).
-        self._maybe_alert(
-            "sample.failed",
-            {
-                "campaign_id": self.trace.campaign_id,
-                "sample_id": sid,
-                "step": step_name,
-                "status": "failed",
-                "error": str(error)[:500],
-            },
-        )
+        _mark_sample_failed_impl(self._fanout_deps(), sid, step_name, error, trace_id)
 
     def _compute_await_deadline(self, step_name: str) -> float | None:
         """Derive the per-step orchestrator-side await deadline (issue #1566).
 
-        The deadline is the value passed to ``handle.result(timeout=...)``
-        in :meth:`_submit_and_await_all._await_one`.  It guards against
-        a wedged substrate (Nomad allocation that never reaches terminal,
-        Docker Swarm service in a non-terminal state, K8s ``time_min=0``
-        yielding no ``activeDeadlineSeconds``) parking an ``_await_one``
-        thread forever.
-
-        The deadline combines three inputs, each guarding a different
-        failure mode:
-
-        1. ``cfg.await_timeout_s`` — the user-supplied orchestrator-side
-           deadline (issue #1566, exposed as ``--sample-await-timeout-s``).
-           When set, this is the deadline (honoured directly — a wedged
-           substrate becomes a ``TimeoutError`` after *await_timeout_s*
-           seconds).  This is the opt-in for Nomad / Docker Swarm /
-           mis-configured K8s ``time_min=0`` users.
-        2. ``DEFAULT_STEP_RESOURCES[step_name]["time_min"] * 60`` — the
-           per-step substrate-aligned default (e.g. 240 s for
-           ``RUN_OPENSTUDIO_SIM``, 10 s for ``EXTRACT_KPIS``).  Mirrors
-           the ``time_min`` value the campaign hands the executor at
-           ``submit()`` time, which most substrates translate into a
-           substrate-side kill (Slurm ``--time``, K8s
-           ``activeDeadlineSeconds``, AWS Batch ``timeout``).  Steps
-           that are missing from :data:`DEFAULT_STEP_RESOURCES` fall
-           back to a 60 s floor.
-        3. ``cfg.byos_timeout_s`` — the BYOS subprocess watchdog
-           (issue #1109).  ``None`` is treated as unbounded and is
-           excluded from the maximum.
-
-        Resolution order: when ``await_timeout_s`` is set, it is the
-        deadline (the other two inputs would only add overhead on
-        already-working substrates).  Otherwise the deadline is the
-        maximum of the per-step ``time_min`` floor and ``byos_timeout_s``
-        so the orchestrator-side bound accommodates the longest
-        expected legitimate work.  Returns ``None`` only when the user
-        opted out of every orchestrator-side bound (neither
-        ``byos_timeout_s`` nor ``await_timeout_s`` is set) AND the
-        per-step ``time_min`` resolved to ``0``/missing — i.e. the user
-        is on a substrate without an executor-side kill and wants the
-        pre-#1566 bare-``handle.result()`` semantics.
-
-        The deadline is a **floor**, not an override: ``Handle.result``
-        accepts ``timeout=None`` for unbounded waits, but when a value
-        is supplied the substrate honours it strictly.  Callers that
-        pass a longer deadline via the per-handle hook would still be
-        honoured (this helper only fires when the campaign is the
-        caller).
+        Delegates to
+        :func:`osimflow._campaign_fanout.compute_await_deadline`
+        (issue #1542): ``cfg.await_timeout_s`` (the
+        ``--sample-await-timeout-s`` opt-in) honoured directly when
+        set, otherwise ``max(DEFAULT_STEP_RESOURCES[step]
+        ["time_min"] * 60, cfg.byos_timeout_s)``, ``None`` only when
+        every orchestrator-side bound is opted out of.  See the
+        fanout module for the full derivation notes.
         """
-        # User-supplied orchestrator-side deadline wins (issue #1566).
-        # ``await_timeout_s=0`` is treated as unset (mirrors the
-        # ``byos_timeout_s=0`` semantics — issue #1109 history).
-        if self.cfg.await_timeout_s is not None and self.cfg.await_timeout_s > 0:
-            return self.cfg.await_timeout_s
-        candidates: list[float] = []
-        # Substrate-aligned per-step default (DEFAULT_STEP_RESOURCES falls
-        # back to {"time_min": 60} for unknown steps).  Use it as a floor
-        # so a wedged Nomad allocation / Docker Swarm service / K8s
-        # ``time_min=0`` misconfiguration becomes a TimeoutError instead
-        # of an indefinite hang.
-        step_resources = get_step_resources(step_name)
-        time_min = step_resources.get("time_min", 0)
-        if time_min and time_min > 0:
-            candidates.append(float(time_min) * 60.0)
-        # BYOS subprocess watchdog (issue #1109).  Excludes None — issue
-        # #1534 explicitly lifted the old 600 s stock bound because annual
-        # EnergyPlus runs routinely exceed it.
-        if self.cfg.byos_timeout_s is not None and self.cfg.byos_timeout_s > 0:
-            candidates.append(self.cfg.byos_timeout_s)
-        if not candidates:
-            return None
-        return max(candidates)
+        return _compute_await_deadline_impl(self.cfg, step_name)
+
+    def _fanout_deps(self) -> FanoutDeps:
+        """Build the explicit fan-out dependency bundle (issue #1542).
+
+        Every field is read from ``self`` **at call time** — not at
+        construction — so the documented test seams
+        (``patch.object(campaign, "_job_queue")``,
+        ``patch.object(campaign, "_checkpoint_sample")``,
+        ``patch.object(campaign, "_maybe_alert")``, ...) applied
+        after construction behave exactly as before the fanout
+        extraction.  The bundle is the complete set of dependencies
+        :func:`osimflow._campaign_fanout.submit_and_await_all`
+        needs; it deliberately carries no Campaign back-reference.
+        """
+        return FanoutDeps(
+            cfg=self.cfg,
+            trace=self.trace,
+            obs=self._obs,
+            job_queue=self._job_queue,
+            sample_state=self._sample_state,
+            max_workers=self.max_workers,
+            effective_max_workers=self._effective_max_workers,
+            compute_await_deadline=self._compute_await_deadline,
+            trace_id_for=self._trace_id_for,
+            checkpoint_sample=self._checkpoint_sample,
+            mark_sample_failed=self._mark_sample_failed,
+            maybe_alert=self._maybe_alert,
+            check_cancel_requested=self._check_cancel_requested,
+            cancel_requested=lambda: self._cancel_requested,
+            check_pause_requested=self._check_pause_requested,
+            write_paused_trace=self._write_paused_trace,
+        )
 
     def _submit_and_await_all(
         self,
@@ -1202,275 +1140,36 @@ class Campaign:
     ) -> None:
         """Submit all samples to the executor, then await all results concurrently.
 
-        This is the core of the concurrent fan-out fix (issue #286).
+        Delegates to
+        :func:`osimflow._campaign_fanout.submit_and_await_all`
+        (issue #1542 — the fan-out wait loop extracted from
+        ``campaign.py`` with its own unit tests).  This is the core
+        of the concurrent fan-out fix (issue #286); see the fanout
+        module for the full behavioural contract:
 
-        Parameters
-        ----------
-        submissions
-            Mapping of sample_id to (handle, on_success_callback).
-            The ``handle`` has already been submitted to the executor.
-            The ``on_success_callback`` receives the result of
-            ``handle.result()`` and is responsible for updating
-            ``_sample_state``, cache, and monitoring.
-        step_name
-            The step name for logging.
-        recovery_manager
-            Optional worker recovery manager for auto-recovery (issue #443).
-            When provided and a job fails, the manager is consulted to check
-            if the heartbeat is stale. If so and auto-recovery is enabled,
-            the job is automatically resubmitted via resubmit_callback.
-        resubmit_callback
-            Optional callback to resubmit a failed job. Called with the
-            sample_id when auto-recovery is triggered. Must return a new
-            handle. Only used when recovery_manager is also provided.
+        - sequential await when ``max_workers <= 1``,
+          ``ThreadPoolExecutor`` otherwise (bounded by
+          ``resource_quota.max_concurrent_samples`` — issue #1009),
+        - per-sample errors caught, logged with ``exc_info=True``,
+          and recorded — never swallowed; ``CampaignAbortError``
+          (3-strike checkpoint abort, issue #739/#1539) re-raised
+          across the worker-thread boundary,
+        - job-queue enqueue / mark-completed / mark-failed (issue #263),
+        - cancellation and soft-pause honouring (issues #255, #553,
+          #1537),
+        - per-step await deadline (issue #1566) and the worker
+          auto-recovery resubmit loop (issues #443, #1567).
 
-        The method submits no new work — all submissions are already
-        dispatched.  It awaits results using a
-        ``concurrent.futures.ThreadPoolExecutor`` sized to
-        ``self._effective_max_workers()``, so up to that many results
-        are collected in parallel (bounded by
-        ``resource_quota.max_concurrent_samples`` when set — issue #1009).
-        Each per-sample error is caught, logged with ``exc_info=True``,
-        and recorded — it is never swallowed. The one exception is
-        :class:`CampaignAbortError` (3-strike checkpoint-failure abort,
-        issue #739/#1539): it is re-raised from the ``as_completed``
-        loop so the abort crosses the worker-thread boundary in
-        concurrent mode instead of being silently swallowed.
-
-        For ``max_workers=1`` the behaviour is identical to the old
-        sequential loop.
-
-        Job queue integration (issue #263): each sample is enqueued
-        before awaiting and marked completed/failed after.  The enqueue
-        is idempotent — a sample that was already queued from a previous
-        interrupted run is silently skipped.
-
-        Worker auto-recovery (issue #443): when a job fails and
-        recovery_manager is provided, the heartbeat is checked. If stale,
-        the job is resubmitted automatically up to max_sample_retries.
+        The dependency bundle is built at call time (see
+        ``_fanout_deps``) so instance-level patches keep working.
         """
-        if not submissions:
-            return
-
-        # Enqueue all samples for crash-recovery persistence (issue #263).
-        for sid in submissions:
-            self._job_queue.enqueue(
-                f"{sid}_{step_name}",
-                {"sample_id": sid, "step": step_name},
-            )
-
-        # Per-step await deadline (issue #1566). Derived once per fan-out
-        # rather than per-sample: every sample in this step shares the same
-        # substrate-side ``time_min`` floor, so the deadline is identical.
-        # ``None`` (default) means "no orchestrator-side bound" and the
-        # pre-#1566 bare-``handle.result()`` semantics are preserved —
-        # users on K8s/Slurm with a working ``activeDeadlineSeconds`` /
-        # ``walltime`` continue to rely on the substrate-side kill; users
-        # on Nomad / Docker Swarm / mis-configured ``time_min=0`` K8s opt
-        # in via ``--sample-await-timeout-s`` (or the implicit
-        # ``DEFAULT_STEP_RESOURCES`` floor).
-        await_deadline = self._compute_await_deadline(step_name)
-
-        def _await_one(
-            item: tuple[str, tuple[Handle, Callable[[Any], None]]],
-        ) -> str:
-            """Await one handle. Returns the sample_id."""
-            sid, (handle, on_success) = item
-            trace_id = self._trace_id_for(sid)
-            try:
-                result = handle.result(timeout=await_deadline)
-                on_success(result)
-                # Mark completed in the job queue (issue #263).
-                self._job_queue.mark_completed(f"{sid}_{step_name}")
-                # Reset recovery attempts on successful completion (issue #443).
-                if recovery_manager is not None:
-                    recovery_manager.reset(sid)
-            except Exception as e:
-                log.error("%s %s failed: %s", step_name, sid, e, exc_info=True)
-
-                # Worker auto-recovery (issue #443, #1567): loop the
-                # resubmit until ``max_sample_retries`` is exhausted.
-                # ``recovery_manager.check_and_recover`` gates each
-                # iteration on heartbeat staleness and the recorded
-                # attempt count, so the loop naturally terminates when
-                # the retry budget is spent (or the worker comes back
-                # alive and the heartbeat is no longer stale).
-                recovered = False
-                if recovery_manager is not None and resubmit_callback is not None:
-                    for _ in range(self.cfg.max_sample_retries):
-                        can_recover, attempt = recovery_manager.check_and_recover(
-                            sid, self.cfg.max_sample_retries
-                        )
-                        if not can_recover:
-                            break
-                        log.info(
-                            "%s %s: stale heartbeat detected (attempt %d/%d), auto-recovering",
-                            step_name,
-                            sid,
-                            attempt,
-                            self.cfg.max_sample_retries,
-                        )
-                        # Clear the failed state so recovery doesn't show as failed.
-                        # NOTE: ``step_name.lower()`` must be called (issue #1567):
-                        # the unparenthesised ``step_name.lower`` is the bound
-                        # method object, not the lowercase string, so the prior
-                        # ``state.pop`` calls targeted garbage keys and the
-                        # clearing was dead code.
-                        state = self._sample_state.setdefault(sid, {})
-                        state.pop(f"{step_name.lower()}_exit_code", None)
-                        state.pop(f"{step_name.lower()}_status", None)
-                        state.pop("error_summary", None)
-                        # Resubmit and await the new handle.
-                        new_handle = resubmit_callback(sid)
-                        if new_handle is None:
-                            log.error(
-                                "%s %s auto-recovery: resubmit_callback returned None, "
-                                "aborting retries",
-                                step_name,
-                                sid,
-                            )
-                            break
-                        recovery_sid = sid
-
-                        # Await the resubmitted handle.
-                        try:
-                            result = new_handle.result(timeout=await_deadline)
-                        except Exception as resubmit_error:
-                            log.error(
-                                "%s %s auto-recovery attempt %d/%d failed: %s",
-                                step_name,
-                                sid,
-                                attempt,
-                                self.cfg.max_sample_retries,
-                                resubmit_error,
-                                exc_info=True,
-                            )
-                            # Continue the loop: re-enter check_and_recover
-                            # for the next attempt (issue #1567).
-                            continue
-
-                        # Create a new on_success callback wrapper for the resubmit.
-                        def _on_success_resubmit(
-                            result_path: Any,
-                            _recovery_sid: str = recovery_sid,
-                            _on_success: Callable[[Any], None] = on_success,
-                        ) -> None:
-                            _on_success(result_path)
-                            if recovery_manager is not None:
-                                recovery_manager.reset(_recovery_sid)
-
-                        _on_success_resubmit(result)
-                        self._job_queue.mark_completed(f"{recovery_sid}_{step_name}")
-                        self._checkpoint_sample(recovery_sid)
-                        recovered = True
-                        return recovery_sid
-
-                if not recovered:
-                    self._mark_sample_failed(sid, step_name, e, trace_id)
-                return sid
-            except BaseException as e:  # noqa: BLE001 — intentional (issue #1570)
-                # Cancellation / broken futures surface as ``BaseException``
-                # subclasses (``concurrent.futures.CancelledError``,
-                # submitit's cancellation error, ...) that explicitly
-                # bypass ``except Exception`` in modern Python.  This
-                # fallback runs only after ``except Exception`` above has
-                # missed the exception, so it sees true cancellation
-                # errors (not ordinary ``RuntimeError``/etc.).  Without
-                # it the sample would skip the entire failure-recording
-                # path and silently disappear from run.json /
-                # failed_simulations.csv — exactly the crash/cancel
-                # scenario the BYO-monitoring contract is supposed to
-                # capture.  Genuine ``KeyboardInterrupt`` /
-                # ``SystemExit`` are re-raised unchanged so the user
-                # signal still propagates.
-                if isinstance(e, (KeyboardInterrupt, SystemExit)):
-                    raise
-                log.error(
-                    "%s %s cancelled: %s",
-                    step_name,
-                    sid,
-                    e,
-                    exc_info=True,
-                )
-                self._mark_sample_failed(sid, step_name, e, trace_id)
-                return sid
-            # Incremental checkpoint: update run.json after each sample
-            # completes so SSE clients see live progress (issue #275).
-            self._checkpoint_sample(sid)
-            return sid
-
-        # When max_workers == 1, use a sequential loop to avoid the
-        # overhead of spinning up a ThreadPoolExecutor.  This preserves
-        # the exact backward-compatible behaviour.
-        if self.max_workers <= 1:
-            for item in submissions.items():
-                if self._check_cancel_requested():
-                    log.warning("cancellation requested during %s — stopping fan-out", step_name)
-                    break
-                # Soft pause (issue #553): running samples complete, new ones are skipped.
-                if self._check_pause_requested():
-                    self._write_paused_trace()
-                    # Dedicated pause signal (issue #1537): run()'s
-                    # KeyboardInterrupt handler maps to *cancellation*;
-                    # pause must keep status "paused" so `osimflow
-                    # resume` can continue the campaign.
-                    raise CampaignPauseRequested("pause requested during fan-out")
-                _await_one(item)
-            if self._cancel_requested:
-                raise KeyboardInterrupt("cancellation requested during fan-out")
-            return
-
-        # max_workers > 1: use a ThreadPoolExecutor to await results
-        # concurrently.  Each _await_one call blocks on handle.result(),
-        # so the pool parallelism effectively controls how many samples
-        # we wait for at the same time.
-        def _drain_future(future: concurrent.futures.Future[str]) -> None:
-            """Collect one completed fan-out future (issue #1539).
-
-            A CampaignAbortError raised inside an _await_one worker
-            thread (3-strike checkpoint-failure abort, issue #739 /
-            #1539) must cross the thread boundary: re-raise it so the
-            campaign aborts instead of silently completing while its
-            monitoring plane cannot persist run.json. Cancel
-            not-yet-started futures so no new samples are awaited.
-            """
-            try:
-                future.result()
-            except CampaignAbortError:
-                log.error(
-                    "%s fan-out aborted after consecutive checkpoint failures",
-                    step_name,
-                )
-                for f in futures:
-                    f.cancel()
-                raise
-            # CancelledError is a BaseException (not Exception), so we must
-            # suppress it explicitly here — it is raised when a future was
-            # cancelled via f.cancel() during a cancellation sweep.
-            except (Exception, concurrent.futures.CancelledError):
-                pass
-
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._effective_max_workers(),
-            thread_name_prefix="osimflow-fanout",
-        ) as pool:
-            futures = {
-                pool.submit(_await_one, (sid, item)): sid for sid, item in submissions.items()
-            }
-            for future in concurrent.futures.as_completed(futures):
-                if self._check_cancel_requested():
-                    log.warning("cancellation requested during %s — stopping fan-out", step_name)
-                    # Cancel remaining futures.
-                    for f in futures:
-                        f.cancel()
-                    break
-                # Soft pause (issue #553): running samples complete, new ones are skipped.
-                # Do NOT cancel futures — let in-flight work finish naturally.
-                if self._check_pause_requested():
-                    self._write_paused_trace()
-                    log.warning("pause requested during %s — breaking fan-out", step_name)
-                    break
-                _drain_future(future)
+        _submit_and_await_all_impl(
+            self._fanout_deps(),
+            submissions,
+            step_name,
+            recovery_manager=recovery_manager,
+            resubmit_callback=resubmit_callback,
+        )
 
     def _record_costs(self, step_name: str, cost_usd: float, spot_savings_usd: float) -> None:
         """Record per-step aggregated costs from the completed fan-out.
@@ -1725,6 +1424,20 @@ class Campaign:
         stop a running campaign. Thread-safe. Idempotent.
         """
         self._lifecycle.request_cancel()
+
+    def request_pause(self) -> None:
+        """CancelSignal protocol surface (issue #1542): alias for :meth:`pause`.
+
+        ``Campaign`` satisfies the ``CancelSignal`` protocol
+        structurally; this alias (plus ``request_cancel`` /
+        ``request_resume``) is the explicit cancel/pause/resume
+        callback surface the lifecycle collaborators depend on.
+        """
+        self.pause()
+
+    def request_resume(self) -> None:
+        """CancelSignal protocol surface (issue #1542): alias for :meth:`resume`."""
+        self.resume()
 
     def _check_cancel_requested(self) -> bool:
         """Check if cancellation has been requested.
@@ -3953,224 +3666,6 @@ class Campaign:
         )
         self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
         return sorted(out)
-
-    def step_compute_sensitivity_indices(
-        self,
-        samples: list[SampleSpec],
-        kpi_files: list[Path],
-        variables: dict[str, Any],
-        generation: int = 0,
-    ) -> Path | None:
-        """Compute Sobol sensitivity indices after KPI extraction.
-
-        This step runs only when ``cfg.algorithm == "sobol"``. It reads
-        the per-sample KPI values, passes them to
-        :meth:`SobolAlgorithm.compute_sensitivity_indices`, and stores
-        the resulting ``sensitivity_indices.json`` in the campaign
-        output directory.
-
-        The step is not cached — sensitivity index computation is cheap
-        relative to simulation and the user may want to re-run with
-        different KPI selections.
-
-        Parameters
-        ----------
-        samples
-            Sample specs from ``step_generate_samples``.
-        kpi_files
-            Per-sample KPI JSON files from ``step_extract_kpis``.
-        variables
-            Parsed ``variables.yml`` dict.
-        generation
-            Generation number (included for consistency; Sobol is
-            single-shot so this is always 0).
-
-        Returns
-        -------
-        Path | None
-            Path to ``sensitivity_indices.json``, or ``None`` if the
-            algorithm is not ``"sobol"`` or no KPI files are available.
-        """
-        if self.cfg.algorithm != "sobol":
-            return None
-
-        t0 = time.time()
-
-        if self._check_cancel_requested():
-            raise KeyboardInterrupt("cancellation requested before COMPUTE_SENSITIVITY_INDICES")
-
-        if not kpi_files:
-            log.warning("COMPUTE_SENSITIVITY_INDICES: no KPI files — skipping")
-            self.trace.step_finished(
-                "COMPUTE_SENSITIVITY_INDICES",
-                cache="SKIPPED",
-                elapsed_s=0.0,
-                exit_code=0,
-            )
-            return None
-
-        # Build {sample_id: {kpi_name: value}} mapping from KPI files.
-        kpi_values: dict[str, dict[str, float]] = {}
-        for kpi_path in kpi_files:
-            try:
-                data = json.loads(kpi_path.read_text())
-                sid = str(data.get("sample_id", kpi_path.stem.replace("kpi_", "")))
-                kpis = data.get("kpis", {})
-                numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
-                kpi_values[sid] = numeric_kpis
-            except (json.JSONDecodeError, ValueError, TypeError) as exc:
-                log.warning("could not read KPI file %s: %s", kpi_path, exc, exc_info=True)
-
-        algo = AlgorithmRegistry.get("sobol")
-        indices_dir = self.cfg.outdir / "sensitivity"
-        indices_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            indices_path = algo.compute_sensitivity_indices(
-                variables=variables,
-                samples=samples,  # type: ignore[arg-type]
-                kpi_values=kpi_values,
-                outdir=indices_dir,
-            )
-        except Exception as exc:
-            log.error(
-                "COMPUTE_SENSITIVITY_INDICES failed: %s",
-                exc,
-                exc_info=True,
-            )
-            self.trace.step_finished(
-                "COMPUTE_SENSITIVITY_INDICES",
-                cache="MISS",
-                elapsed_s=time.time() - t0,
-                exit_code=1,
-            )
-            raise RuntimeError("compute_sensitivity_indices failed") from exc
-
-        elapsed = time.time() - t0
-        self.trace.step_finished(
-            "COMPUTE_SENSITIVITY_INDICES",
-            cache="MISS",
-            elapsed_s=elapsed,
-            exit_code=0,
-        )
-        self._obs.record_step_duration(
-            "COMPUTE_SENSITIVITY_INDICES", elapsed, generation=generation
-        )
-        log.info("COMPUTE_SENSITIVITY_INDICES: wrote %s", indices_path)
-        return indices_path
-
-    def step_compute_uq_indices(
-        self,
-        samples: list[SampleSpec],
-        kpi_files: list[Path],
-        variables: dict[str, Any],
-        generation: int = 0,
-    ) -> Path | None:
-        """Compute UQ indices (POF, CIs, distribution summaries) after KPI extraction.
-
-        This step runs only when ``cfg.algorithm == "uq"``. It reads the
-        per-sample KPI values, passes them to
-        :meth:`UncertaintyQuantification.compute_uq_indices`, and stores
-        the resulting ``uq_results.json`` in the campaign output directory.
-
-        The step is not cached — UQ computation is cheap relative to
-        simulation and the user may want to re-run with different thresholds.
-
-        Parameters
-        ----------
-        samples
-            Sample specs from ``step_generate_samples``.
-        kpi_files
-            Per-sample KPI JSON files from ``step_extract_kpis``.
-        variables
-            Parsed ``variables.yml`` dict.
-        generation
-            Generation number (included for consistency; UQ is
-            single-shot so this is always 0).
-
-        Returns
-        -------
-        Path | None
-            Path to ``uq_results.json``, or ``None`` if the algorithm
-            is not ``"uq"`` or no KPI files are available.
-        """
-        if self.cfg.algorithm != "uq":
-            return None
-
-        t0 = time.time()
-
-        if self._check_cancel_requested():
-            raise KeyboardInterrupt("cancellation requested before COMPUTE_UQ_INDICES")
-
-        if not kpi_files:
-            log.warning("COMPUTE_UQ_INDICES: no KPI files — skipping")
-            self.trace.step_finished(
-                "COMPUTE_UQ_INDICES",
-                cache="SKIPPED",
-                elapsed_s=0.0,
-                exit_code=0,
-            )
-            return None
-
-        kpi_values: dict[str, dict[str, float]] = {}
-        for kpi_path in kpi_files:
-            try:
-                data = json.loads(kpi_path.read_text())
-                sid = str(data.get("sample_id", kpi_path.stem.replace("kpi_", "")))
-                kpis = data.get("kpis", {})
-                numeric_kpis = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
-                kpi_values[sid] = numeric_kpis
-            except (json.JSONDecodeError, ValueError, TypeError) as exc:
-                log.warning("could not read KPI file %s: %s", kpi_path, exc, exc_info=True)
-
-        failure_thresholds: dict[str, tuple[float, str]] | None = None
-        if self.cfg.uq_failure_thresholds:
-            failure_thresholds = {}
-            from osimflow.algorithms.uq import _parse_failure_threshold  # noqa: PLC0415
-
-            for raw in self.cfg.uq_failure_thresholds:
-                try:
-                    kpi_name, threshold = _parse_failure_threshold(raw)
-                    failure_thresholds[kpi_name] = (threshold, "greater")
-                except ValueError as exc:
-                    log.warning("invalid failure threshold %r: %s", raw, exc, exc_info=True)
-
-        algo = AlgorithmRegistry.get("uq")
-        uq_dir = self.cfg.outdir / "uq"
-        uq_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            uq_path = algo.compute_uq_indices(
-                variables=variables,
-                samples=samples,  # type: ignore[arg-type]
-                kpi_values=kpi_values,
-                outdir=uq_dir,
-                failure_thresholds=failure_thresholds,
-            )
-        except Exception as exc:
-            log.error(
-                "COMPUTE_UQ_INDICES failed: %s",
-                exc,
-                exc_info=True,
-            )
-            self.trace.step_finished(
-                "COMPUTE_UQ_INDICES",
-                cache="MISS",
-                elapsed_s=time.time() - t0,
-                exit_code=1,
-            )
-            raise RuntimeError("compute_uq_indices failed") from exc
-
-        elapsed = time.time() - t0
-        self.trace.step_finished(
-            "COMPUTE_UQ_INDICES",
-            cache="MISS",
-            elapsed_s=elapsed,
-            exit_code=0,
-        )
-        self._obs.record_step_duration("COMPUTE_UQ_INDICES", elapsed, generation=generation)
-        log.info("COMPUTE_UQ_INDICES: wrote %s", uq_path)
-        return uq_path
 
     def step_aggregate_results(
         self,
