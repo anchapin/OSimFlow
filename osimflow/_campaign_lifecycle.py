@@ -19,6 +19,14 @@ thin delegating methods so the historical instance-API surface
 (``request_cancel``, ``pause``, ``resume``, ``_check_cancel_requested``,
 ...) is unchanged.  ``_CancelRegistry`` / ``_cancel_registry`` remain
 importable from ``osimflow.campaign`` via re-export (tests rely on it).
+
+Issue #1542: this module no longer imports or type-references
+``Campaign``.  The cancel/pause/resume surface Campaign exposes is
+captured by the explicit :class:`CancelSignal` protocol —
+``Campaign`` satisfies it structurally (it has ``request_cancel`` /
+``request_pause`` / ``request_resume`` methods), so lifecycle
+behavior is testable and reusable without constructing (or faking)
+a full Campaign.
 """
 
 import fcntl
@@ -29,17 +37,37 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol, runtime_checkable
 
 from .errors import OSimFlowError
 from .executors import BaseExecutor
 from .json_utils import safe_json_dumps
 from .monitoring import RunTrace
 
-if TYPE_CHECKING:
-    from .campaign import Campaign
-
 log = logging.getLogger("osimflow.campaign")
+
+
+@runtime_checkable
+class CancelSignal(Protocol):
+    """Explicit cancel/pause/resume surface a lifecycle owner depends on.
+
+    Issue #1542: replaces the former ``Campaign`` back-reference.
+    ``Campaign`` (and any test double) satisfies this protocol
+    structurally by providing the three request callbacks; the
+    lifecycle layer never needs the concrete Campaign type.
+    """
+
+    def request_cancel(self) -> None:
+        """Request campaign cancellation (sticky, thread-safe)."""
+        ...
+
+    def request_pause(self) -> None:
+        """Request a soft pause (running samples complete; new ones skip)."""
+        ...
+
+    def request_resume(self) -> None:
+        """Resume a paused campaign."""
+        ...
 
 
 class CampaignPauseRequested(OSimFlowError):
@@ -63,27 +91,32 @@ class CancelRegistry:
     """Global registry holding the currently-running Campaign for signal handling.
 
     When a SIGINT/SIGTERM is received, the signal handler calls
-    ``request_cancel()`` on whatever Campaign is registered here.
-    Only one Campaign can run at a time per process — the registry
+    ``request_cancel()`` on whatever :class:`CancelSignal` is registered
+    here. Only one Campaign can run at a time per process — the registry
     is updated at ``run()`` entry and cleared on exit.
+
+    Issue #1542: the slot is typed as the narrow ``CancelSignal``
+    protocol rather than ``Campaign`` — the registry only ever calls
+    ``request_cancel()`` on it, so the concrete type (and the circular
+    ``_campaign_lifecycle`` → ``campaign`` reference) is unnecessary.
     """
 
     def __init__(self) -> None:
-        self._campaign: Campaign | None = None
+        self._signal: CancelSignal | None = None
         self._lock = threading.Lock()
 
-    def register(self, campaign: "Campaign") -> None:
+    def register(self, signal_target: CancelSignal) -> None:
         with self._lock:
-            self._campaign = campaign
+            self._signal = signal_target
 
     def request_cancel(self) -> None:
         with self._lock:
-            if self._campaign is not None:
-                self._campaign.request_cancel()
+            if self._signal is not None:
+                self._signal.request_cancel()
 
     def clear(self) -> None:
         with self._lock:
-            self._campaign = None
+            self._signal = None
 
 
 cancel_registry = CancelRegistry()
@@ -101,9 +134,21 @@ def handle_signal(signum: int, _frame: object) -> None:
 
 
 class CampaignLifecycle:
-    """Owns cancellation, pause, and signal-handling state for a Campaign."""
+    """Owns cancellation, pause, and signal-handling state for a Campaign.
 
-    def __init__(self) -> None:
+    Issue #1542: the constructor receives an explicit
+    :class:`CancelSignal` protocol (the Campaign wires itself — or any
+    object exposing ``request_cancel`` / ``request_pause`` /
+    ``request_resume`` — in at construction) instead of holding the
+    ``Campaign`` type, so the lifecycle collaborator carries no
+    circular back-reference.
+    """
+
+    def __init__(self, signal: CancelSignal | None = None) -> None:
+        # The cancel/pause/resume surface of the owning campaign (or any
+        # other lifecycle-capable object). Structural: no Campaign
+        # import is needed (issue #1542).
+        self.signal = signal
         # Graceful shutdown (issue #255): cancellation flag and lock.
         self._cancel_requested = False
         self._cancel_lock = threading.Lock()

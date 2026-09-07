@@ -13,7 +13,7 @@ import inspect
 from pathlib import Path
 from typing import Any
 
-from osimflow import Campaign, CampaignConfig
+from osimflow import Campaign, CampaignConfig, _campaign_fanout
 from osimflow.config import ResourceQuota
 from osimflow.executors import BaseExecutor, Handle
 
@@ -108,8 +108,13 @@ class TestThreadPoolReceivesBoundedValue:
         assert campaign._effective_max_workers() == 8
 
     def test_fan_out_source_uses_bounded_helper(self, tmp_path: Path) -> None:
-        """The fan-out site at ~line 1063 must read `self._effective_max_workers()`,
-        not `self.max_workers`. Inspect the source to guard against regression."""
+        """The fan-out await pool must be sized by the quota-bounded helper,
+        not raw ``max_workers``. Inspect the source to guard against
+        regression (issue #1009; target moved to
+        ``osimflow._campaign_fanout`` by issue #1542 — the Campaign
+        delegates and wires ``effective_max_workers`` via
+        ``_fanout_deps``).
+        """
         var_file, pkg, out = _make_inputs(tmp_path)
         cfg = _cfg(
             var_file,
@@ -118,12 +123,19 @@ class TestThreadPoolReceivesBoundedValue:
             resource_quota=ResourceQuota(max_concurrent_samples=3),
         )
         campaign = Campaign(cfg, executor=_NoOpExecutor(), max_workers=10)
-        source = inspect.getsource(campaign._submit_and_await_all)
-        assert "self._effective_max_workers()" in source, (
-            "Regression: _submit_and_await_all must pass "
-            "max_workers=self._effective_max_workers() (issue #1009)"
+        deps_source = inspect.getsource(campaign._fanout_deps)
+        assert "effective_max_workers=self._effective_max_workers" in deps_source, (
+            "Regression: the fan-out dependency bundle must wire "
+            "effective_max_workers=self._effective_max_workers (issue #1009)"
         )
-        assert "max_workers=self.max_workers" not in source, (
-            "Regression: _submit_and_await_all still uses raw self.max_workers, "
+        fanout_source = inspect.getsource(_campaign_fanout.submit_and_await_all)
+        assert "deps.effective_max_workers()" in fanout_source, (
+            "Regression: submit_and_await_all must size its await pool with "
+            "deps.effective_max_workers() (issue #1009)"
+        )
+        assert "max_workers=deps.max_workers" not in fanout_source.replace(
+            "if deps.max_workers <= 1:", ""
+        ), (
+            "Regression: the fan-out await pool still uses raw max_workers, "
             "ignoring resource_quota.max_concurrent_samples (issue #1009)"
         )

@@ -45,16 +45,19 @@ tests/integration tests/unit`` + ``PYTEST_COV_FLAGS
 gate) and the per-module readings were::
 
     osimflow/_campaign_artifacts.py           91.28%
+    osimflow/_campaign_analysis.py            15.79% (fanout-oracle subset; full gate higher)
     osimflow/_campaign_baseline.py            98.44%
     osimflow/_campaign_chaos.py               29.33%
     osimflow/_campaign_code_hashes.py         92.99%
     osimflow/_campaign_cost_tracker.py        91.75%
     osimflow/_campaign_epw.py                 89.52%
+    osimflow/_campaign_fanout.py             83.94% (fanout-oracle subset; full gate higher)
     osimflow/_campaign_hooks.py               72.17%
     osimflow/_campaign_lifecycle.py           78.81%
     osimflow/_campaign_observability.py       91.39%
     osimflow/_campaign_quota.py               97.94%
     osimflow/_campaign_sample_trace.py        90.43%
+    osimflow/_campaign_types.py              100.00%
     osimflow/_campaign_sharding.py            86.05%
     osimflow/executors/__init__.py            91.91%
     osimflow/executors/aws_batch_executor.py  95.15%
@@ -126,16 +129,19 @@ COVERAGE_DATA = REPO_ROOT / ".coverage"
 FLOORS: dict[str, float] = {
     # --- osimflow/_campaign_*.py collaborators (#1462/#1463/#1464) ---
     "osimflow/_campaign_artifacts.py": 90.28,  # measured 91.28%
+    "osimflow/_campaign_analysis.py": 14.79,  # measured 15.79% (#1542; fanout-oracle subset — ratchet up with the full gate)
     "osimflow/_campaign_baseline.py": 97.44,  # measured 98.44%
     "osimflow/_campaign_chaos.py": 28.33,  # measured 29.33% (ratchet up as #1013 chaos tests directly cover)
     "osimflow/_campaign_code_hashes.py": 91.99,  # measured 92.99%
     "osimflow/_campaign_cost_tracker.py": 90.75,  # measured 91.75%
     "osimflow/_campaign_epw.py": 88.52,  # measured 89.52%
+    "osimflow/_campaign_fanout.py": 82.94,  # measured 83.94% (#1542; fanout-oracle subset — full gate measures higher)
     "osimflow/_campaign_hooks.py": 71.17,  # measured 72.17%
     "osimflow/_campaign_lifecycle.py": 77.81,  # measured 78.81%
     "osimflow/_campaign_observability.py": 90.39,  # measured 91.39%
     "osimflow/_campaign_quota.py": 96.94,  # measured 97.94%
     "osimflow/_campaign_sample_trace.py": 89.43,  # measured 90.43%
+    "osimflow/_campaign_types.py": 99.0,  # measured 100% (#1542; TypedDict declarations)
     "osimflow/_campaign_sharding.py": 85.05,  # measured 86.05%
     # --- osimflow/executors/*.py ---
     "osimflow/executors/__init__.py": 90.91,  # measured 91.91%

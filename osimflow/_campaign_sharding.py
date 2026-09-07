@@ -9,16 +9,19 @@ manifest and provenance writers.
 Mirrors the ``_campaign_cost_tracker.py`` collaborator pattern:
 :class:`CampaignSharding` is constructed with the campaign config
 and exposes pure functions over the sample list.
+
+Issue #1542: no import or type-reference of ``osimflow.campaign`` —
+``apply_sharding`` is generic over the sample-spec type (it only
+filters the list, so the element shape is irrelevant here).
 """
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TypeVar
 
 from .config import CampaignConfig
 
-if TYPE_CHECKING:
-    from .campaign import SampleSpec
+_SampleT = TypeVar("_SampleT")
 
 log = logging.getLogger("osimflow.campaign")
 
@@ -46,10 +49,10 @@ class CampaignSharding:
 
     def apply_sharding(
         self,
-        samples: list["SampleSpec"],
+        samples: list[_SampleT],
         *,
         generation: int,
-    ) -> list["SampleSpec"]:
+    ) -> list[_SampleT]:
         """Return only samples assigned to this shard (if sharding configured)."""
         if self._cfg.shard_count is not None and self._cfg.shard_index is not None:
             shard_count = self._cfg.shard_count

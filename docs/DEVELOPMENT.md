@@ -157,9 +157,12 @@ OSimFlow/
 ├── osimflow/                    # The main Python package
 │   ├── __init__.py              # Public API surface (__all__)
 │   ├── __main__.py              # CLI entry point (osimflow run ...)
-│   ├── campaign.py              # Campaign orchestrator — the 7-step DAG (~4200 LoC)
+│   ├── campaign.py              # Campaign orchestrator — the 7-step DAG
 │   │
-│   ├── _campaign_lifecycle.py   # CampaignLifecycle: cancel/pause/resume + signal handlers
+│   ├── _campaign_lifecycle.py   # CampaignLifecycle + CancelSignal protocol: cancel/pause/resume + signal handlers
+│   ├── _campaign_fanout.py      # Fan-out wait loop: submit_and_await_all + failure marking + await deadline
+│   ├── _campaign_analysis.py    # CampaignAnalysisMixin: Sobol + UQ analysis steps
+│   ├── _campaign_types.py       # SampleSpec / VariableSpec TypedDicts (re-exported from campaign)
 │   ├── _campaign_quota.py       # CampaignQuotaGuard: quota fail-fast + fan-out bounding
 │   ├── _campaign_sharding.py    # CampaignSharding: shard selection + shard labels
 │   ├── _campaign_chaos.py       # Chaos-engine wiring + schedule-aware injection hook
@@ -1069,7 +1072,19 @@ since issue #1462 the cross-cutting concerns are extracted into
 whether your change belongs in one of them:
 
 - Lifecycle (cancel/pause/resume, SIGINT/SIGTERM handling) →
-  `osimflow/_campaign_lifecycle.py` (`CampaignLifecycle`)
+  `osimflow/_campaign_lifecycle.py` (`CampaignLifecycle`; the
+  `CancelSignal` protocol — `request_cancel` / `request_pause` /
+  `request_resume` — is the explicit surface Campaign satisfies,
+  issue #1542)
+- Fan-out wait loop (concurrent await, per-sample failure marking,
+  await deadline, worker auto-recovery resubmit) →
+  `osimflow/_campaign_fanout.py` (`submit_and_await_all` /
+  `mark_sample_failed` / `compute_await_deadline` + `FanoutDeps`,
+  issue #1542; Campaign keeps thin call-time delegating methods so
+  `patch.object(campaign, ...)` seams keep working)
+- Analysis steps (Sobol sensitivity / UQ indices) →
+  `osimflow/_campaign_analysis.py` (`CampaignAnalysisMixin`,
+  issue #1542)
 - Quota enforcement (start fail-fast, mid-campaign hard limits,
   `max_concurrent_samples` fan-out bounding) →
   `osimflow/_campaign_quota.py` (`CampaignQuotaGuard`)
