@@ -1105,6 +1105,26 @@ class NomadExecutor(BaseExecutor):
                     TASK_PAYLOAD_SECRET_ENV,
                     TASK_PAYLOAD_SECRET_ENV,
                 )
+            if vault_template is None and TASK_PAYLOAD_SECRET_ENV in signature_env:
+                # Issue #1535: without a Vault template the shared secret
+                # ships as a literal env value / dispatch-meta entry, where
+                # it persists in the Nomad state store and is readable via
+                # ``nomad job inspect`` by any token with job-read —
+                # collapsing the HMAC to a no-op against the exact threat
+                # (#1177/#1205) it was built for.
+                log.warning(
+                    "SECURITY (issue #1535): %s is shipping as a literal "
+                    "env/dispatch-meta value because no "
+                    "--nomad-vault-secret-path is configured. The secret "
+                    "persists in the Nomad state store and is readable "
+                    "via ``nomad job inspect`` by any token with "
+                    "job-read, letting readers forge task-payload "
+                    "signatures. Store the secret in Vault and pass "
+                    "--nomad-vault-secret-path <path> (optionally "
+                    "--nomad-vault-secret-key <key>) so the Nomad client "
+                    "renders it from Vault at allocation time instead.",
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
             env.update(signature_env)
             if vault_template is not None:
                 env.pop(TASK_PAYLOAD_SECRET_ENV, None)

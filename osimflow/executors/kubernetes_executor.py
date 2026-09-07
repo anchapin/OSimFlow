@@ -442,6 +442,23 @@ class KubernetesExecutor(BaseExecutor):
                 TASK_PAYLOAD_SECRET_ENV,
                 TASK_PAYLOAD_SECRET_ENV,
             )
+        if not payload_secret_ref and TASK_PAYLOAD_SECRET_ENV in signature_env:
+            # Issue #1535: without a secretKeyRef the shared secret ships
+            # as a literal env value serialized into the Job spec, where
+            # anyone with job-read can read it and forge signatures —
+            # collapsing the HMAC to a no-op against the exact threat
+            # (#1177/#1205) it was built for.
+            log.warning(
+                "SECURITY (issue #1535): %s is shipping as a literal env "
+                "value in the Job spec because no "
+                "--kubernetes-payload-secret-ref is configured. Anyone "
+                "with job-read access on the cluster can read the secret "
+                "and forge task-payload signatures. Create a Kubernetes "
+                "Secret carrying the same value and pass "
+                "--kubernetes-payload-secret-ref <secret-name> to emit a "
+                "secretKeyRef instead.",
+                TASK_PAYLOAD_SECRET_ENV,
+            )
         entries: list[dict[str, Any]] = []
         for key, value in signature_env.items():
             if key == TASK_PAYLOAD_SECRET_ENV and payload_secret_ref:

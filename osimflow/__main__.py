@@ -323,6 +323,11 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911,
             dispatch_job_id=dispatch_job_id,
             allow_insecure_token=args.nomad_allow_insecure_token,
             submit_rps=nomad_rps,
+            # Issue #1535: surface the #1449 Vault-based secret delivery
+            # from the CLI — without it the HMAC secret ships as a
+            # literal dispatch-meta entry readable via `nomad job inspect`.
+            vault_secret_path=args.nomad_vault_secret_path,
+            vault_secret_key=args.nomad_vault_secret_key,
         )
     # Azure Batch executor — account credentials, pool, and Spot handling.
     if args.executor == "azure_batch":
@@ -359,6 +364,10 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911,
             ttl_seconds_after_finished=args.kubernetes_ttl_seconds_after_finished,
             queue_name=args.kubernetes_queue_name,
             submit_rps=args.submit_rps,
+            # Issue #1535: surface the #1449 secretKeyRef-based secret
+            # delivery from the CLI — without it the HMAC secret ships
+            # as a literal env value serialized into the Job spec.
+            payload_secret_ref=args.kubernetes_payload_secret_ref,
         )
     # PBS executor — server, queue, and debug flag.
     if args.executor == "pbs":

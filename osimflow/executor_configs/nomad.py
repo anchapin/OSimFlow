@@ -161,6 +161,31 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
         ),
     )
     parser_group.add_argument(
+        "--nomad-vault-secret-path",
+        default=None,
+        help=(
+            "Vault KV path holding the task-payload HMAC secret (issues "
+            "#1449/#1535). When set, the Nomad client renders "
+            "OSIMFLOW_TASK_PAYLOAD_SECRET from Vault at allocation time "
+            "via a template stanza — the raw secret never appears in the "
+            "job spec or dispatch meta (where it would persist in the "
+            "Nomad state store, readable via `nomad job inspect`). "
+            "Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator "
+            "with the same value for signing."
+        ),
+    )
+    parser_group.add_argument(
+        "--nomad-vault-secret-key",
+        default="payload_secret",
+        help=(
+            "Field name inside the Vault KV entry at "
+            "--nomad-vault-secret-path holding the HMAC secret "
+            "(default: payload_secret). KV v2 paths (containing /data/) "
+            "read the field from the wrapped Data.data object "
+            "(issues #1449/#1535)."
+        ),
+    )
+    parser_group.add_argument(
         "--nomad-cert",
         default=None,
         help=(

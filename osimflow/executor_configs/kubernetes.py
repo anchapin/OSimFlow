@@ -78,3 +78,16 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "Example: --kubernetes-queue-name team-a-cpu."
         ),
     )
+    parser_group.add_argument(
+        "--kubernetes-payload-secret-ref",
+        default=None,
+        help=(
+            "Name of a pre-created Kubernetes Secret (key "
+            "'OSIMFLOW_TASK_PAYLOAD_SECRET') holding the task-payload HMAC "
+            "secret. When set, the Job spec emits a secretKeyRef instead "
+            "of a literal env value, so the raw secret never appears in "
+            "the Job spec (issues #1449/#1535). Requires "
+            "OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the "
+            "same value for signing."
+        ),
+    )
