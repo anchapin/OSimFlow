@@ -429,12 +429,18 @@ class TestAPIKeyAuth:
 
     def test_query_param_key_rejected_in_multi_user_mode(self, tmp_outdir: Path) -> None:
         """Query-param transport is dropped in multi-user mode too (issue #1466)."""
+        import hashlib
+
         keys_file = tmp_outdir / "api_keys.json"
         keys_file.write_text(
             json.dumps(
                 {
                     "users": [
-                        {"key": TEST_API_KEY, "user_id": "alice", "role": "admin"},
+                        {
+                            "key_sha256": hashlib.sha256(TEST_API_KEY.encode()).hexdigest(),
+                            "user_id": "alice",
+                            "role": "admin",
+                        },
                     ]
                 }
             )

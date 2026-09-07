@@ -34,8 +34,12 @@ curl -H "X-API-Key: <your-key>" http://localhost:8000/api/v1/campaign
 
 Pass `--api-key <key>` for single-key mode, or `--api-keys-file
 <file.json>` for multi-user keys with per-user roles (`readonly`,
-`readwrite`, `admin`; issue #395). The Python client
-(`osimflow.client.OSimFlowClient`) already sends the header.
+`readwrite`, `admin`; issue #395). The keys file stores SHA-256
+digests (`key_sha256`), never plaintext keys (issue #1552) — see
+[Secret Management — Hashed API keys at
+rest](secret-management.md#hashed-api-keys-at-rest-issue-1552) for
+the file format and the plaintext-migration one-liner. The Python
+client (`osimflow.client.OSimFlowClient`) already sends the header.
 
 ### Auto-generated ephemeral key (issue #1553, SEC-001 localhost gap)
 

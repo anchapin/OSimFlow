@@ -1393,13 +1393,16 @@ def create_app(
         authenticated users get admin access.
     api_keys_file
         Path to a JSON file containing multiple API keys with per-user
-        roles (issue #395).  When set, ``api_key`` is ignored.
-        File format::
+        roles (issue #395).  When set, ``api_key`` is ignored.  Keys
+        are stored hashed at rest as ``key_sha256`` digests (issue
+        #1552); plaintext ``"key"`` entries are rejected at load with
+        an error pointing at the migration one-liner in
+        ``docs/secret-management.md``.  File format::
 
             {
                 "users": [
-                    {"key": "api-key-1", "user_id": "alice", "role": "admin"},
-                    {"key": "api-key-2", "user_id": "bob", "role": "readonly"}
+                    {"key_sha256": "<sha256-hex>", "user_id": "alice", "role": "admin"},
+                    {"key_sha256": "<sha256-hex>", "user_id": "bob", "role": "readonly"}
                 ]
             }
 
