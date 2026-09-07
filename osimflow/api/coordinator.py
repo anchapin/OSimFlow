@@ -41,7 +41,7 @@ import boto3
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from osimflow.aggregation import compile_aggregation, parse_manifest
-from osimflow.api.auth import get_user_permission
+from osimflow.api.auth import require_permission
 from osimflow.api.schemas import (
     CoordinatorAggregateResponse,
     CoordinatorArrayCompleteEvent,
@@ -445,8 +445,9 @@ async def coordinator_handoff(
     returned unchanged. This makes a CLI retry after a lost response safe —
     the user never ends up with two campaigns for one intended run.
     """
-    if not get_user_permission(request, "write"):
-        raise HTTPException(status_code=403, detail="Insufficient permissions for campaign handoff")
+    # Handoff creates campaign state → read-write transition (issue #1551;
+    # the legacy "write" level was invalid, 403-ing every multi-user caller).
+    require_permission(request, "readwrite")
 
     # --- Idempotent replay: same key -> same campaign (issue #630) ---
     if idempotency_key and idempotency_key in _idempotency_keys:
@@ -541,7 +542,7 @@ async def coordinator_handoff(
 )
 async def list_coordinator_campaigns(request: Request) -> list[CoordinatorCampaignRecord]:
     """Return all campaigns known to the Coordinator."""
-    get_user_permission(request, "read")  # authenticate
+    require_permission(request, "readonly")  # reads: readonly (issue #1551)
     return [
         CoordinatorCampaignRecord(
             campaign_id=cid,
@@ -567,7 +568,7 @@ async def get_coordinator_campaign(
     request: Request,
 ) -> CoordinatorCampaignRecord:
     """Return the current status of a Coordinator campaign."""
-    get_user_permission(request, "read")  # authenticate
+    require_permission(request, "readonly")  # reads: readonly (issue #1551)
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -599,8 +600,7 @@ async def update_coordinator_campaign_status(
     worker processes (Phase 3/4). It is not exposed to the public API
     without authentication.
     """
-    if not get_user_permission(request, "admin"):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    require_permission(request, "admin")  # internal state transition (issue #1551)
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -632,7 +632,7 @@ async def list_campaign_samples(
     Used by the Coordinator to inspect all samples before submitting an array job,
     and by array job children to enumerate available sample indices.
     """
-    get_user_permission(request, "read")  # authenticate
+    require_permission(request, "readonly")  # reads: readonly (issue #1551)
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -664,7 +664,7 @@ async def get_campaign_sample(
 
     Returns 404 if the campaign does not exist or the index is out of range.
     """
-    get_user_permission(request, "read")  # authenticate
+    require_permission(request, "readonly")  # reads: readonly (issue #1551)
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -705,8 +705,7 @@ async def submit_campaign_array_job(
 
     Requires AWS credentials with permissions to call ``batch.submit-job``.
     """
-    if not get_user_permission(request, "admin"):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    require_permission(request, "admin")  # submits compute: admin (issue #1551)
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -790,8 +789,7 @@ async def poll_array_job(
 
     Requires ``admin`` permission and a stored ``array_job_id`` on the campaign.
     """
-    if not get_user_permission(request, "admin"):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    require_permission(request, "admin")  # GET that mutates state: admin (issue #1551)
     rec = _campaign_or_404(campaign_id)
 
     array_job_id: str | None = rec.get("array_job_id")
@@ -846,7 +844,7 @@ async def get_campaign_results(
 
     Returns ``status: unavailable`` if no result bucket is configured.
     """
-    get_user_permission(request, "read")  # authenticate
+    require_permission(request, "readonly")  # reads: readonly (issue #1551)
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -935,8 +933,7 @@ async def notify_campaign(
     propagate: a notification mishap cannot flip a succeeded campaign
     back to failed (issue #628 criterion #4 — best-effort).
     """
-    if not get_user_permission(request, "admin"):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    require_permission(request, "admin")  # triggers side effects: admin (issue #1551)
     rec = _campaigns.get(campaign_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
@@ -1384,10 +1381,9 @@ async def aggregate_campaign_results(
     ``exc_info=True`` and counted as **failed** — it never crashes the
     aggregation or blocks the status transition.
     """
-    if not get_user_permission(request, "write"):
-        raise HTTPException(
-            status_code=403, detail="Insufficient permissions to aggregate campaign results"
-        )
+    # Aggregation is a state transition (aggregating -> complete) →
+    # read-write (issue #1551; the legacy "write" level was invalid).
+    require_permission(request, "readwrite")
 
     rec = _campaign_or_404(campaign_id)
 
