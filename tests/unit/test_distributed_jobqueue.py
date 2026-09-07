@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -498,5 +499,196 @@ class TestDistributedJobQueueCircuitBreaker:
         assert len(dq.jobs_by_state("failed")) == 1
         # Breaker stays open.
         assert dq._breaker.state == "open"
+
+        dq.close()
+
+    # ------------------------------------------------------------------
+    # Issue #1554 acceptance criterion (a): open-circuit fail-fast is
+    # immediate and never attempts a Redis round-trip.
+    # ------------------------------------------------------------------
+    def test_open_circuit_fail_fast_immediate_no_redis_roundtrip(
+        self, queue_dir: Path, mock_redis: MagicMock
+    ) -> None:
+        """``mark_failed`` with an open breaker returns instantly, zero Redis contact.
+
+        The documented fail-fast sentinel is the silent local-only return
+        (see ``breaker_state``): the call must complete in well under the
+        5 s socket timeout, dispatch no asyncio work, and never even
+        construct the Redis client.
+        """
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-fail-fast-immediate",
+            sample_ids=set(),
+        )
+        # Force the breaker open without ever contacting Redis.
+        for _ in range(dq._breaker.failure_threshold):
+            dq._breaker.record_failure()
+        assert dq._breaker.state == "open"
+
+        # Local-only enqueues while open (no publish dispatched).
+        dq.enqueue("sample_0_job_failed", {})
+        dq.enqueue("sample_0_job_done", {})
+        mock_redis.publish.reset_mock()
+
+        start = time.monotonic()
+        dq.mark_failed("sample_0_job_failed", "boom")
+        dq.mark_completed("sample_0_job_done")
+        elapsed = time.monotonic() - start
+
+        # Immediate: no per-transition socket-timeout burn.
+        assert elapsed < 0.05
+        # Documented fail-fast sentinel: local-only degradation, still open.
+        assert dq.breaker_state == "open"
+        # Drain the executor: nothing may have been dispatched at all.
+        self._wait_for_executor(dq)
+        assert mock_redis.publish.call_count == 0
+        # Not even the Redis client was constructed — no round-trip.
+        assert dq._redis_client is None
+        # Local state is consistent with the operations performed.
+        assert len(dq.jobs_by_state("failed")) == 1
+        assert len(dq.jobs_by_state("completed")) == 1
+
+        dq.close()
+
+    # ------------------------------------------------------------------
+    # Issue #1554 acceptance criterion (b): half-open recovery mirrors
+    # TestDistributedCacheBreaker::test_half_open_success_closes_breaker.
+    # ------------------------------------------------------------------
+    def test_half_open_failure_reopens_then_success_closes_and_resumes(
+        self, queue_dir: Path, mock_redis: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Failed half-open probe re-opens; a later success closes and publishing resumes.
+
+        The cooldown clock is monkeypatched (mirroring the sibling
+        ``TestDistributedCacheBreaker``) so the open → half_open
+        transitions happen deterministically without real sleeps.
+        """
+        now = [1000.0]
+        monkeypatch.setattr("osimflow.circuit_breaker.time.monotonic", lambda: now[0])
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-half-open-recovery",
+            sample_ids=set(),
+        )
+        dq._breaker = CircuitBreaker(
+            name="jobqueue:test-half-open-recovery",
+            failure_threshold=2,
+            cooldown_s=30.0,
+        )
+
+        # Force open without ever contacting Redis; enqueue local-only.
+        dq._breaker.record_failure()
+        dq._breaker.record_failure()
+        assert dq._breaker.state == "open"
+        dq.enqueue("sample_0_job_f", {})
+        dq.enqueue("sample_0_job_ok", {})
+        dq.enqueue("sample_0_job_post", {})
+        assert mock_redis.publish.call_count == 0
+
+        # --- half-open probe #1: fails → re-opens with counter at 0 ---
+        probe_failed = threading.Event()
+        calls = [0]
+
+        async def failing_first(*args: object, **kwargs: object) -> int:
+            calls[0] += 1
+            if calls[0] == 1:
+                probe_failed.set()
+                raise ConnectionError("redis still down")
+            return 1
+
+        mock_redis.publish = AsyncMock(side_effect=failing_first)
+
+        now[0] += 31.0  # past the 30 s cooldown — no sleep
+        assert dq._breaker.state == "half_open"
+        dq.mark_failed("sample_0_job_f", "probe window")
+        assert probe_failed.wait(timeout=5.0)
+        self._wait_for_executor(dq)
+        # The probe reached Redis (single attempt), then re-armed cooldown.
+        assert mock_redis.publish.call_count == 1
+        assert dq._breaker.state == "open"
+        # d1056b8 mirror: re-opened half-open probe resets the counter to 0.
+        assert dq._breaker.consecutive_failures == 0
+
+        # --- half-open probe #2: succeeds → closes the circuit ---
+        probe_ok = threading.Event()
+
+        async def succeeding(*args: object, **kwargs: object) -> int:
+            probe_ok.set()
+            return 1
+
+        mock_redis.publish = AsyncMock(side_effect=succeeding)
+
+        now[0] += 31.0
+        assert dq._breaker.state == "half_open"
+        dq.mark_completed("sample_0_job_ok")
+        assert probe_ok.wait(timeout=5.0)
+        self._wait_for_executor(dq)
+        assert dq._breaker.state == "closed"
+        assert dq._breaker.consecutive_failures == 0
+
+        # Circuit closed: subsequent state transitions publish again.
+        dq.mark_failed("sample_0_job_post", "post-recovery")
+        self._wait_for_executor(dq)
+        # One probe publish above + this post-recovery transition: the
+        # mock was replaced before probe #2, so both calls are on it.
+        assert mock_redis.publish.call_count == 2  # publishing resumed
+        assert dq._breaker.state == "closed"
+
+        dq.close()
+
+    def test_half_open_admits_exactly_one_probe_across_concurrent_publishes(
+        self, queue_dir: Path, mock_redis: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One half-open window admits exactly one Redis probe (issue #1569 wiring).
+
+        Three state transitions fired inside a single half-open window
+        must result in exactly one ``client.publish`` attempt: the
+        in-``_pub`` ``breaker.check()`` consumes the single-probe
+        admission, and the losing publishes are denied without touching
+        the client.
+        """
+        now = [1000.0]
+        monkeypatch.setattr("osimflow.circuit_breaker.time.monotonic", lambda: now[0])
+        dq = DistributedJobQueue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-single-probe",
+            sample_ids=set(),
+        )
+        dq._breaker = CircuitBreaker(
+            name="jobqueue:test-single-probe",
+            failure_threshold=2,
+            cooldown_s=30.0,
+        )
+        dq._breaker.record_failure()
+        dq._breaker.record_failure()
+        assert dq._breaker.state == "open"
+        for i in range(3):
+            dq.enqueue(f"sample_0_job_{i}", {})
+        assert mock_redis.publish.call_count == 0
+
+        first_attempt = threading.Event()
+
+        async def always_failing(*args: object, **kwargs: object) -> int:
+            first_attempt.set()
+            raise ConnectionError("redis still down")
+
+        mock_redis.publish = AsyncMock(side_effect=always_failing)
+
+        now[0] += 31.0
+        assert dq._breaker.state == "half_open"
+        dq.mark_completed("sample_0_job_0")
+        dq.mark_failed("sample_0_job_1", "concurrent")
+        dq.mark_completed("sample_0_job_2")
+        assert first_attempt.wait(timeout=5.0)
+        self._wait_for_executor(dq)
+
+        # Exactly one probe reached Redis despite three concurrent ops.
+        assert mock_redis.publish.call_count == 1
+        assert dq._breaker.state == "open"  # failed probe re-armed cooldown
+        assert dq._breaker.consecutive_failures == 0
 
         dq.close()
