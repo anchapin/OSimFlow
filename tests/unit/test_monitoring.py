@@ -355,7 +355,9 @@ class TestRunTraceUpdateSample:
 
         trace.update_sample(SampleTrace(sample_id="s0001", status="ok", elapsed_s=1.0))
 
-        tmp_files = list(tmp_path.glob("run.json.tmp"))
+        # No tmp leftovers of any naming scheme (issues #1627 / #1634:
+        # tmp names embed pid + thread id).
+        tmp_files = list(tmp_path.glob("*.tmp"))
         assert tmp_files == []
 
     def test_update_sample_no_checkpoint_path_noops(self) -> None:
