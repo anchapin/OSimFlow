@@ -3,11 +3,14 @@
 This module provides:
 - API key validation helpers
 - Multi-user API key store with per-user permission levels
+  (keys hashed at rest, issue #1552)
 - Permission checking decorators
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -56,6 +59,37 @@ def generate_api_key() -> str:
     Returns a URL-safe base64 string (~43 characters of entropy).
     """
     return secrets.token_urlsafe(32)
+
+
+def hash_api_key(key: str) -> str:
+    """Return the hex SHA-256 digest of an API key (issue #1552).
+
+    Keys are stored *hashed at rest* in ``api_keys_file`` — a leak of
+    the file itself (home-directory tarball, backup, accidental commit)
+    discloses no reusable credential.  The digest is unsalted by
+    design: keys are high-entropy ``secrets.token_urlsafe(32)`` values
+    (not low-entropy passwords), lookups are exact-match by presented
+    key, and a per-user salt would break the fixed-position digest
+    comparison that keeps :meth:`MultiUserAPIKeyStore.validate` flat.
+    """
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def _is_sha256_hex(value: object) -> bool:
+    """Return True when *value* looks like a 64-char lowercase-hex digest."""
+    return (
+        isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+# Migration pointer embedded in every fail-closed plaintext rejection
+# (issue #1552).  Points operators at the documented one-liner.
+API_KEYS_FILE_MIGRATION_HINT = (
+    'api_keys_file must store keys hashed at rest as "key_sha256" '
+    '(sha256 hex digest, issue #1552); plaintext "key" entries are no '
+    "longer accepted. Migrate an existing file with the one-liner under "
+    "docs/secret-management.md §'Hashed API keys at rest (issue #1552)'."
+)
 
 
 class APIKeyQueryParameterError(RuntimeError):
@@ -191,9 +225,18 @@ class MultiUserAPIKeyStore:
     This enables multi-user deployments where each user has their own API key
     and a role that determines their access level.
 
+    Keys are stored **hashed at rest** as ``key_sha256`` entries (issue
+    #1552): a file that leaks via backup, tarball, or accidental commit
+    discloses no reusable credential.  :meth:`validate` hashes the
+    presented key and compares digests against every entry with
+    ``hmac.compare_digest`` in a fixed-order scan with no early exit,
+    so response timing does not reveal which list position matched.
+
     The store supports two modes:
     - Single key mode: When ``single_key`` is set, validates against that one key
-      with the server's global read_only setting.
+      with the server's global read_only setting.  The key itself is supplied
+      in-memory (``--api-key``), never persisted, so no at-rest hashing
+      applies; behaviour is unchanged from the caller's perspective.
     - Multi-user mode: When ``users`` is populated, validates against the list
       of users and respects per-user roles.
     """
@@ -216,8 +259,43 @@ class MultiUserAPIKeyStore:
 
     @classmethod
     def from_users(cls, users: list[dict[str, str]]) -> MultiUserAPIKeyStore:
-        """Create a store with multiple users (issue #395)."""
-        return cls(users=users)
+        """Create a store with multiple users (issue #395, #1552).
+
+        Entries may carry either ``"key"`` (plaintext — hashed
+        immediately, never retained) or ``"key_sha256"`` (pre-hashed,
+        e.g. loaded from an ``api_keys_file``).  An entry carrying
+        **both** fields is rejected: it is ambiguous which credential
+        is authoritative.  This is the programmatic/in-memory path;
+        :meth:`from_file` additionally fails closed on any plaintext
+        entry so no at-rest plaintext is silently accepted.
+        """
+        normalized: list[dict[str, str]] = []
+        for index, user in enumerate(users):
+            has_plain = "key" in user
+            has_hashed = "key_sha256" in user
+            if has_plain and has_hashed:
+                raise OSimFlowValueError(
+                    f"User entry {index} has both 'key' and 'key_sha256' — "
+                    f"ambiguous; provide exactly one (issue #1552)."
+                )
+            if has_plain:
+                entry = {k: v for k, v in user.items() if k != "key"}
+                entry["key_sha256"] = hash_api_key(str(user["key"]))
+                normalized.append(entry)
+                continue
+            if not has_hashed:
+                raise OSimFlowValueError(
+                    f"User entry {index} has neither 'key' nor 'key_sha256' (issue #1552)."
+                )
+            digest = user["key_sha256"]
+            if not _is_sha256_hex(digest):
+                raise OSimFlowValueError(
+                    f"User entry {index} has malformed 'key_sha256' "
+                    f"(expected 64-char lowercase hex sha256 digest, "
+                    f"issue #1552)."
+                )
+            normalized.append(dict(user))
+        return cls(users=normalized)
 
     @classmethod
     def from_file(
@@ -226,16 +304,24 @@ class MultiUserAPIKeyStore:
         *,
         allow_insecure_perms: bool = False,
     ) -> MultiUserAPIKeyStore:
-        """Load API keys from a JSON file (issue #395, #1480).
+        """Load API keys from a JSON file (issue #395, #1480, #1552).
 
-        File format::
+        File format — keys are stored **hashed at rest** (issue #1552)::
 
             {
                 "users": [
-                    {"key": "api-key-1", "user_id": "alice", "role": "admin"},
-                    {"key": "api-key-2", "user_id": "bob", "role": "readonly"}
+                    {"key_sha256": "<sha256-hex-of-key-1>", "user_id": "alice", "role": "admin"},
+                    {"key_sha256": "<sha256-hex-of-key-2>", "user_id": "bob", "role": "readonly"}
                 ]
             }
+
+        Compute a digest with ``osimflow.api.auth.hash_api_key`` or
+        ``hashlib.sha256(key.encode()).hexdigest()``.  Plaintext
+        ``"key"`` entries — in whole or mixed with hashed entries —
+        are **rejected** with :class:`OSimFlowValueError` pointing at
+        the migration one-liner in ``docs/secret-management.md``:
+        accepting plaintext silently would keep every key disclosable
+        from the file itself, the exact exposure this issue closes.
 
         Security (issue #1480): the file must have restrictive permissions
         (mode ``0600`` recommended).  A file that is group or world
@@ -253,10 +339,12 @@ class MultiUserAPIKeyStore:
         OSimFlowValueError
             If the file does not have a ``.json`` or ``.keys`` extension,
             is not a regular file (e.g. a symlink to ``/dev/null`` or
-            ``/etc/passwd``), cannot be read, contains invalid JSON, or
-            has group/world readable mode while ``allow_insecure_perms``
-            is ``False``.  Inherits :class:`ValueError` so legacy
-            ``except ValueError:`` clauses keep matching.
+            ``/etc/passwd``), cannot be read, contains invalid JSON,
+            contains plaintext ``"key"`` entries (fail closed, issue
+            #1552 — migrate first), or has group/world readable mode
+            while ``allow_insecure_perms`` is ``False``.  Inherits
+            :class:`ValueError` so legacy ``except ValueError:`` clauses
+            keep matching.
         """
         resolved = file_path.resolve()
         if not resolved.is_file():
@@ -277,13 +365,47 @@ class MultiUserAPIKeyStore:
         users = keys_data.get("users", [])
         if not users:
             raise OSimFlowValueError("No users found in api_keys_file")
+        # Fail closed on plaintext at rest (issue #1552) — no silent
+        # acceptance, and no partial mixing of the two formats.
+        both_field_entries = [
+            i
+            for i, u in enumerate(users)
+            if isinstance(u, dict) and "key" in u and "key_sha256" in u
+        ]
+        if both_field_entries:
+            raise OSimFlowValueError(
+                f"Insecure api_keys_file (issue #1552): entries at indices "
+                f"{both_field_entries} have both 'key' and 'key_sha256' — "
+                f"ambiguous which credential is authoritative; provide "
+                f"exactly one. {API_KEYS_FILE_MIGRATION_HINT}"
+            )
+        plaintext_entries = [i for i, u in enumerate(users) if isinstance(u, dict) and "key" in u]
+        if plaintext_entries:
+            if any(isinstance(u, dict) and "key_sha256" in u for u in users):
+                detail = (
+                    f"entries mix plaintext 'key' (indices {plaintext_entries}) "
+                    f"and hashed 'key_sha256' formats — hash every entry"
+                )
+            else:
+                detail = f"plaintext 'key' entries found at indices {plaintext_entries}"
+            raise OSimFlowValueError(
+                f"Insecure api_keys_file (issue #1552): {detail}. {API_KEYS_FILE_MIGRATION_HINT}"
+            )
         return cls.from_users(users)
 
     def validate(self, provided_key: str | None) -> APIKeyUser | None:
         """Validate an API key and return the user if valid.
 
-        Uses constant-time comparison to prevent timing attacks.
-        Returns ``None`` if the key is invalid.
+        Single-key mode uses constant-time comparison against the
+        in-memory key (unchanged behaviour from the caller's
+        perspective).  Multi-user mode (issue #1552) hashes the
+        presented key once with SHA-256 and compares the digest
+        against **every** entry's stored ``key_sha256`` with
+        ``hmac.compare_digest`` — a fixed-order scan with no early
+        exit, so response timing does not reveal which list position
+        matched (the pre-#1552 early-return loop was a small
+        user-enumeration oracle).  Returns ``None`` if the key is
+        invalid.
         """
         if provided_key is None:
             return None
@@ -297,15 +419,22 @@ class MultiUserAPIKeyStore:
                 return None
             return None
 
-        # Multi-user mode
+        # Multi-user mode — flat-timing digest scan (issue #1552):
+        # hash once, compare against ALL entries, no early exit.
+        presented_digest = hash_api_key(provided_key)
+        matched: APIKeyUser | None = None
         for user in self.users:
-            if validate_api_key(provided_key, user["key"]):
-                return APIKeyUser(
+            stored_digest = str(user.get("key_sha256", ""))
+            if (
+                hmac.compare_digest(presented_digest.encode("utf-8"), stored_digest.encode("utf-8"))
+                and matched is None
+            ):  # first match wins, but the scan continues
+                matched = APIKeyUser(
                     key=provided_key,
                     user_id=user.get("user_id", "unknown"),
                     role=user.get("role", _READONLY),
                 )
-        return None
+        return matched
 
     def get_user_role(self, provided_key: str | None) -> str | None:
         """Get the role for a provided API key, or None if invalid."""

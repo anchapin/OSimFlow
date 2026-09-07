@@ -1621,7 +1621,7 @@ for the endpoint reference and `osimflow serve --help` for the full list.
 | `--dashboard` | Enable the campaign comparison dashboard. |
 | `--api-redis-url` | Redis URL for distributed rate limiting and document store. |
 | `--api-key` | Single-key API authentication. When omitted (and no `--api-keys-file` is set), `serve` auto-generates an ephemeral key and prints it once on stderr so the API is never unauthenticated — including on a read-only localhost bind (issue #1553 / SEC-001 localhost gap). Pass `--api-key <key>` explicitly to pin a stable key across serves. |
-| `--api-keys-file` | Path to JSON file with multiple API keys and per-user roles (issue #395). File must be mode `0600`; group/world readable files are refused at load time (issue #1480). |
+| `--api-keys-file` | Path to JSON file with multiple API keys and per-user roles (issue #395). Keys are stored hashed at rest as `key_sha256` digests — plaintext `key` entries are refused at load (issue #1552; see `docs/secret-management.md` for the migration one-liner). File must be mode `0600`; group/world readable files are refused at load time (issue #1480). |
 | `--allow-insecure-api-keys-file` | Override the `--api-keys-file` permission check (issue #1480; dev/test only — mirrors `--allow-insecure-storage-endpoint`). |
 | `--cors-origins` | Comma-separated allowed CORS origins (e.g. `http://localhost:3000`). |
 | `--rate-limit` | Rate limit string, e.g. `60/minute` (default: `60/minute`). |

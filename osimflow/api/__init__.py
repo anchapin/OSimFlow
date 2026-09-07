@@ -17,6 +17,7 @@ from osimflow.api.auth import (
     extract_api_key,
     generate_api_key,
     get_user_permission,
+    hash_api_key,
     validate_api_key,
 )
 
@@ -24,6 +25,7 @@ __all__ = [
     "create_app",
     "extract_api_key",
     "generate_api_key",
+    "hash_api_key",
     "validate_api_key",
     "get_user_permission",
     "APIKeyUser",

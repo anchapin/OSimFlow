@@ -1,4 +1,4 @@
-"""Tests for multi-user authentication and authorization (issue #395)."""
+"""Tests for multi-user authentication and authorization (issue #395, #1552)."""
 
 from __future__ import annotations
 
@@ -19,8 +19,21 @@ from osimflow.api import (
     APIKeyUser,
     MultiUserAPIKeyStore,
     create_app,
+    hash_api_key,
 )
 from osimflow.errors import OSimFlowError, OSimFlowValueError
+
+
+def _hashed_users(users: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Convert ``{"key": ...}`` entries to the at-rest ``key_sha256`` format.
+
+    Mirrors the documented migration one-liner (issue #1552): plaintext
+    keys never appear in keys files on disk.
+    """
+    return [
+        {**{k: v for k, v in u.items() if k != "key"}, "key_sha256": hash_api_key(u["key"])}
+        for u in users
+    ]
 
 
 @pytest.fixture
@@ -128,17 +141,23 @@ _skip_windows = pytest.mark.skipif(
 
 
 class TestMultiUserAPIKeyStoreFilePermissions:
-    """Tests for api_keys_file permission validation (issue #1480)."""
+    """Tests for api_keys_file permission validation (issue #1480).
+
+    All files use the hashed-at-rest ``key_sha256`` format (issue
+    #1552) — the permission check must keep firing on hashed files.
+    """
 
     @staticmethod
     def _write_keys_file(path: Path) -> Path:
         path.write_text(
             json.dumps(
                 {
-                    "users": [
-                        {"key": "admin-key", "user_id": "alice", "role": _ADMIN},
-                        {"key": "readonly-key", "user_id": "bob", "role": _READONLY},
-                    ]
+                    "users": _hashed_users(
+                        [
+                            {"key": "admin-key", "user_id": "alice", "role": _ADMIN},
+                            {"key": "readonly-key", "user_id": "bob", "role": _READONLY},
+                        ]
+                    )
                 }
             )
         )
@@ -199,6 +218,171 @@ class TestMultiUserAPIKeyStoreFilePermissions:
         assert readonly.role == _READONLY
 
 
+class TestHashedAPIKeysAtRest:
+    """Tests for hashed-at-rest API keys (issue #1552)."""
+
+    @staticmethod
+    def _write_file(path: Path, users: list[dict[str, str]]) -> Path:
+        path.write_text(json.dumps({"users": users}))
+        path.chmod(0o600)
+        return path
+
+    def test_from_file_hashed_entries_validate(self, tmp_path: Path) -> None:
+        """Hashed file: correct presented key returns the user record; wrong key → None."""
+        keys_file = self._write_file(
+            tmp_path / "api_keys.json",
+            _hashed_users(
+                [
+                    {"key": "admin-key", "user_id": "alice", "role": _ADMIN},
+                    {"key": "readonly-key", "user_id": "bob", "role": _READONLY},
+                ]
+            ),
+        )
+        store = MultiUserAPIKeyStore.from_file(keys_file)
+        user = store.validate("admin-key")
+        assert user is not None
+        assert user.user_id == "alice"
+        assert user.role == _ADMIN
+        assert store.validate("readonly-key") is not None
+        assert store.validate("wrong-key") is None
+        assert store.validate(None) is None
+
+    def test_from_file_rejects_plaintext_fail_closed(self, tmp_path: Path) -> None:
+        """Plaintext-only file is rejected with an error pointing at the migration."""
+        keys_file = self._write_file(
+            tmp_path / "api_keys.json",
+            [{"key": "admin-key", "user_id": "alice", "role": _ADMIN}],
+        )
+        with pytest.raises(OSimFlowValueError) as excinfo:
+            MultiUserAPIKeyStore.from_file(keys_file)
+        assert isinstance(excinfo.value, OSimFlowError)
+        assert isinstance(excinfo.value, ValueError)
+        msg = str(excinfo.value)
+        assert "issue #1552" in msg
+        assert "key_sha256" in msg
+        # Points the operator at the documented migration one-liner.
+        assert "docs/secret-management.md" in msg
+
+    def test_from_file_rejects_entry_with_both_fields(self, tmp_path: Path) -> None:
+        """An entry with BOTH key and key_sha256 is ambiguous → rejected."""
+        keys_file = self._write_file(
+            tmp_path / "api_keys.json",
+            [
+                {
+                    "key": "admin-key",
+                    "key_sha256": hash_api_key("admin-key"),
+                    "user_id": "alice",
+                    "role": _ADMIN,
+                }
+            ],
+        )
+        with pytest.raises(OSimFlowValueError, match="both 'key' and 'key_sha256'"):
+            MultiUserAPIKeyStore.from_file(keys_file)
+
+    def test_from_file_rejects_mixing_plaintext_and_hashed_entries(self, tmp_path: Path) -> None:
+        """A file mixing per-entry formats (some key, some key_sha256) is rejected."""
+        keys_file = self._write_file(
+            tmp_path / "api_keys.json",
+            [
+                {"key": "admin-key", "user_id": "alice", "role": _ADMIN},
+                {"key_sha256": hash_api_key("bob-key"), "user_id": "bob", "role": _READONLY},
+            ],
+        )
+        with pytest.raises(OSimFlowValueError) as excinfo:
+            MultiUserAPIKeyStore.from_file(keys_file)
+        assert "mix" in str(excinfo.value)
+        assert "docs/secret-management.md" in str(excinfo.value)
+
+    def test_from_file_single_hashed_entry(self, tmp_path: Path) -> None:
+        """A single key_sha256 entry (single-key file mode) works unchanged."""
+        keys_file = self._write_file(
+            tmp_path / "api_keys.json",
+            _hashed_users([{"key": "only-key", "user_id": "alice", "role": _ADMIN}]),
+        )
+        store = MultiUserAPIKeyStore.from_file(keys_file)
+        assert store.single_key is None
+        user = store.validate("only-key")
+        assert user is not None
+        assert user.user_id == "alice"
+        assert user.role == _ADMIN
+        assert store.validate("wrong-key") is None
+
+    def test_from_file_rejects_malformed_digest(self, tmp_path: Path) -> None:
+        """A key_sha256 that is not a 64-char hex digest is rejected."""
+        keys_file = self._write_file(
+            tmp_path / "api_keys.json",
+            [{"key_sha256": "not-a-digest", "user_id": "alice", "role": _ADMIN}],
+        )
+        with pytest.raises(OSimFlowValueError, match="malformed 'key_sha256'"):
+            MultiUserAPIKeyStore.from_file(keys_file)
+
+    def test_validate_scans_all_entries_no_early_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """validate compares against EVERY entry — no early exit (flat timing).
+
+        Wrap hmac.compare_digest with a counter: even when the FIRST
+        entry matches, all entries are still compared (issue #1552
+        removes the list-position timing oracle).
+        """
+        keys_file = self._write_file(
+            tmp_path / "api_keys.json",
+            _hashed_users(
+                [
+                    {"key": "first-key", "user_id": "alice", "role": _ADMIN},
+                    {"key": "second-key", "user_id": "bob", "role": _READWRITE},
+                    {"key": "third-key", "user_id": "carol", "role": _READONLY},
+                ]
+            ),
+        )
+        store = MultiUserAPIKeyStore.from_file(keys_file)
+
+        import osimflow.api.auth as auth_mod
+
+        calls: list[tuple[bytes, bytes]] = []
+        real_compare = auth_mod.hmac.compare_digest
+
+        def counting_compare(a: bytes, b: bytes) -> bool:
+            calls.append((a, b))
+            return bool(real_compare(a, b))
+
+        monkeypatch.setattr(auth_mod.hmac, "compare_digest", counting_compare)
+        user = store.validate("first-key")
+
+        assert user is not None
+        assert user.user_id == "alice"
+        # 3 users → 3 comparisons even though entry 0 matched.
+        assert len(calls) == 3
+
+    def test_from_users_hashes_plaintext_internally(self) -> None:
+        """from_users (in-memory path) keeps accepting plaintext and hashes it."""
+        store = MultiUserAPIKeyStore.from_users(
+            [{"key": "admin-key", "user_id": "alice", "role": _ADMIN}]
+        )
+        assert len(store.users) == 1
+        entry = store.users[0]
+        assert "key" not in entry  # plaintext never retained
+        assert entry["key_sha256"] == hash_api_key("admin-key")
+        user = store.validate("admin-key")
+        assert user is not None
+        assert user.user_id == "alice"
+        assert store.validate("wrong-key") is None
+
+    def test_single_key_in_memory_mode_unchanged(self) -> None:
+        """--api-key single-key mode (in-memory, not at rest) is unchanged."""
+        store = MultiUserAPIKeyStore.from_single_key("secret-key")
+        assert store.validate("secret-key") is None  # None == authenticated, role deferred
+        assert store.validate("wrong-key") is None
+        assert store.get_user_role("secret-key") is None
+
+    def test_hash_api_key_matches_sha256_hexdigest(self) -> None:
+        """The public helper is plain sha256 hexdigest (migration one-liner parity)."""
+        import hashlib
+
+        assert hash_api_key("admin-key") == hashlib.sha256(b"admin-key").hexdigest()
+        assert len(hash_api_key("x")) == 64
+
+
 class TestAPIKeyUser:
     """Tests for APIKeyUser."""
 
@@ -225,15 +409,17 @@ class TestMultiUserAuth:
     """Tests for multi-user authentication via API."""
 
     def test_multi_user_api_keys_file(self, tmp_outdir: Path) -> None:
-        """Test loading API keys from a file."""
+        """Test loading API keys from a file (hashed at rest, issue #1552)."""
         keys_file = tmp_outdir / "api_keys.json"
         keys_file.write_text(
             json.dumps(
                 {
-                    "users": [
-                        {"key": "admin-key", "user_id": "alice", "role": "admin"},
-                        {"key": "readonly-key", "user_id": "bob", "role": "readonly"},
-                    ]
+                    "users": _hashed_users(
+                        [
+                            {"key": "admin-key", "user_id": "alice", "role": "admin"},
+                            {"key": "readonly-key", "user_id": "bob", "role": "readonly"},
+                        ]
+                    )
                 }
             )
         )
@@ -308,10 +494,12 @@ class TestMultiUserAuth:
             create_app(outdir=tmp_path, api_keys_file=keys_link)
 
     def test_api_key_file_keys_extension_accepted(self, tmp_outdir: Path, tmp_path: Path) -> None:
-        """Test that .keys extension is accepted."""
+        """Test that .keys extension is accepted (hashed entries, issue #1552)."""
         keys_file = tmp_path / "api_keys.keys"
         keys_file.write_text(
-            json.dumps({"users": [{"key": "key1", "user_id": "alice", "role": "admin"}]})
+            json.dumps(
+                {"users": _hashed_users([{"key": "key1", "user_id": "alice", "role": "admin"}])}
+            )
         )
         keys_file.chmod(0o600)
         app = create_app(outdir=tmp_outdir, api_keys_file=keys_file)
@@ -356,11 +544,12 @@ class TestRBACWriteOperations:
     def _make_keys_file(self, tmp_path: Path, users: list[dict[str, str]]) -> Path:
         """Create an API keys file with the given users.
 
-        Writes the file with mode 0600 so it passes the fail-closed
-        permission check added in issue #1480.
+        Writes the hashed-at-rest ``key_sha256`` format (issue #1552)
+        with mode 0600 so it passes the fail-closed permission check
+        added in issue #1480.
         """
         keys_file = tmp_path / "api_keys.json"
-        keys_file.write_text(json.dumps({"users": users}))
+        keys_file.write_text(json.dumps({"users": _hashed_users(users)}))
         keys_file.chmod(0o600)
         return keys_file
 

@@ -727,17 +727,19 @@ curl -H "X-API-Key: <your-api-key>" http://localhost:8000/api/v1/campaign
 
 For multi-user deployments (issue #395), use `--api-keys-file` to specify a JSON file with per-user keys and roles. When set, `--api-key` is ignored.
 
-**`api_keys.json`:**
+**`api_keys.json`** — keys are stored **hashed at rest** as `key_sha256` digests (issue #1552):
 
 ```json
 {
   "users": [
-    {"key": "<alice-api-key>", "user_id": "alice", "role": "admin"},
-    {"key": "<bob-api-key>", "user_id": "bob", "role": "readwrite"},
-    {"key": "<carol-api-key>", "user_id": "carol", "role": "readonly"}
+    {"key_sha256": "<sha256-of-alice-api-key>", "user_id": "alice", "role": "admin"},
+    {"key_sha256": "<sha256-of-bob-api-key>", "user_id": "bob", "role": "readwrite"},
+    {"key_sha256": "<sha256-of-carol-api-key>", "user_id": "carol", "role": "readonly"}
   ]
 }
 ```
+
+Clients still send the **plaintext** key in the `X-API-Key` header — the wire protocol is unchanged; the server hashes the presented key and compares digests. See [Hashed API keys at rest](#hashed-api-keys-at-rest-issue-1552) below for generating entries and migrating an existing plaintext file.
 
 ```bash
 osimflow serve \
@@ -747,6 +749,42 @@ osimflow serve \
   --tls-cert /path/to/cert.pem \
   --tls-key /path/to/key.pem \
   --host 0.0.0.0
+```
+
+### Hashed API keys at rest (issue #1552)
+
+`api_keys_file` stores `sha256(key)` per entry, never the key itself. A leak of the file — home-directory tarball, backup, accidental commit — discloses no reusable credential, including `admin`-role keys. The server hashes the presented key and compares it against **every** stored digest with `hmac.compare_digest` in a fixed-order scan with no early exit, so response timing does not reveal which list position matched either. Plaintext `"key"` entries (whole-file or mixed with hashed entries) are **rejected at load** with an error pointing here — fail closed, no silent acceptance of plaintext.
+
+**Generating a new entry** (key + its digest):
+
+```bash
+KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+HASH="$(printf %s "$KEY" | python -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+echo "key (give to the user):     $KEY"
+echo "key_sha256 (put in file):   $HASH"
+```
+
+The digest is plain `sha256(key.encode("utf-8")).hexdigest()` — identical to `osimflow.api.auth.hash_api_key`. Keys are high-entropy `token_urlsafe(32)` values (not low-entropy passwords), so an unsalted digest is not meaningfully brute-forceable.
+
+**Migrating an existing plaintext file** — one-liner (reads the old format, hashes each `key` into `key_sha256`, writes back, enforces mode `0600`):
+
+```bash
+python -c '
+import hashlib, json, os, sys
+path = sys.argv[1]
+with open(path) as fh:
+    data = json.load(fh)
+migrated = []
+for user in data["users"]:
+    key = user.pop("key", None)
+    if key is not None:
+        user["key_sha256"] = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    migrated.append(user)
+with open(path, "w") as fh:
+    json.dump({"users": migrated}, fh, indent=2)
+os.chmod(path, 0o600)
+print(f"migrated {path}: {len(migrated)} entries hashed at rest, mode 0600")
+' api_keys.json
 ```
 
 ### Permission levels
@@ -759,7 +797,7 @@ Roles are hierarchical (`admin > readwrite > readonly`), defined in `osimflow/ap
 | `readwrite` | ✅ | ✅ | ❌ |
 | `admin` | ✅ | ✅ | ✅ |
 
-API key validation uses `secrets.compare_digest` (constant-time comparison) to prevent timing attacks. See `osimflow/api/auth.py:validate_api_key`.
+API key validation uses constant-time comparison (`hmac.compare_digest` / `secrets.compare_digest`) to prevent timing attacks. In multi-user mode the presented key is SHA-256-hashed and its digest compared against every stored `key_sha256` in a fixed-order scan with no early exit (issue #1552) — removing both the at-rest plaintext and the list-position timing oracle. See `osimflow/api/auth.py:MultiUserAPIKeyStore.validate`.
 
 ### Generating secure API keys
 
@@ -780,6 +818,9 @@ openssl rand -base64 32
 - **Never commit `api_keys.json` to git.** Add it to `.gitignore`.
 - Store the keys file outside the `--outdir` campaign directory so it is not included in archived results.
 - For containerised deployments, mount the keys file as a read-only volume.
+- **Store only `key_sha256` digests, never plaintext keys** (issue #1552). A leaked
+  or backed-up file then discloses no reusable credentials — hashing at rest is
+  defence in depth on top of the mode check below, not a substitute for it.
 - **Set restrictive file mode (`chmod 0600`).** The server refuses to
   load a file that is group or world readable at startup (issue #1480,
   mirrors the `--result-storage-endpoint` HTTPS rule from issue #1386).
