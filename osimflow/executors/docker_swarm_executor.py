@@ -137,6 +137,15 @@ class _DockerSwarmHandle(PollingHandle):
         err_msg = self._extract_error_message(job)
         return RuntimeError(f"Docker Swarm service {self._service_name!r} task {state}: {err_msg}")
 
+    def _cancel_job(self) -> bool:
+        # Issue #1538: removing the service tears down its tasks (the
+        # Swarm kill API — `docker service rm`). Removing an
+        # already-removed service raises NotFound — caught by the
+        # shared PollingHandle.cancel wrapper and reported as False.
+        service = self._executor._get_client().services.get(self._service_name)  # noqa: SLF001
+        service.remove()
+        return True
+
     def done(self) -> bool:
         if self._future.done():
             return True

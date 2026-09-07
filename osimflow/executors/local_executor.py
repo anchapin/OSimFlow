@@ -3,82 +3,30 @@
 Runs each step callable in a ``concurrent.futures`` thread pool — the
 dev/CI substrate. Extracted from ``osimflow/executors/__init__.py``
 (issue #1463) so the package init holds only the registry and
-re-exports. Also hosts :func:`run_subprocess`, the per-sample log
-capture helper (issue #6).
+re-exports. Also re-exports :func:`run_subprocess`, the per-sample
+log capture helper (issue #6; canonical home is
+``osimflow/_subprocess_utils.py``, issue #910).
 """
 
 from __future__ import annotations
 
 import logging
-import subprocess
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from osimflow._subprocess_utils import (
+    run_subprocess,  # noqa: F401 — re-exported for the historical import path
+    terminate_active_subprocesses,
+)
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.transport import validate_transport_mode
 
+__all__ = ["LocalExecutor", "run_subprocess"]
+
 log = logging.getLogger("osimflow.executors")
-
-
-# ---------------------------------------------------------------------------
-# Per-sample log capture (issue #6)
-# ---------------------------------------------------------------------------
-def run_subprocess(
-    cmd: Sequence[str],
-    *,
-    stdout_path: Path,
-    stderr_path: Path,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-    check: bool = False,
-    timeout: float | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run a subprocess and redirect stdout/stderr to per-sample log files.
-
-    This is the LocalExecutor-side analogue of what the Slurm and AWS
-    Batch executors will do at the substrate level: capture the process
-    output into `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log` so
-    the user can `cat` the files to debug a failed sample without
-    re-running the campaign.
-
-    Both files are created (possibly empty) before the subprocess is
-    invoked, so the paths exist on disk even when the process is killed
-    before flushing its output buffers. The `text=True` flag decodes
-    output as UTF-8; the `errors="replace"` policy keeps us from
-    crashing on a stray non-UTF-8 byte in an EnergyPlus log.
-
-    Returns the `CompletedProcess`. The `stdout` / `stderr` attributes of
-    the return value are empty strings because the output went to disk
-    (use `stdout_path.read_text()` to recover the captured output).
-
-    The function does NOT raise on non-zero exit when `check=False` (the
-    default); the caller decides how to surface failures. The Campaign
-    inspects the return code and writes the per-sample status.
-    """
-    stdout_path.parent.mkdir(parents=True, exist_ok=True)
-    stderr_path.parent.mkdir(parents=True, exist_ok=True)
-    # Open in write mode so the files are guaranteed to exist on disk
-    # (possibly empty) regardless of whether the subprocess ever flushes
-    # its output. Text mode + errors="replace" for EnergyPlus robustness.
-    with (
-        stdout_path.open("w", encoding="utf-8", errors="replace") as out_f,
-        stderr_path.open("w", encoding="utf-8", errors="replace") as err_f,
-    ):
-        return subprocess.run(  # nosec  # caller owns the argv
-            list(cmd),
-            stdout=out_f,
-            stderr=err_f,
-            cwd=str(cwd) if cwd is not None else None,
-            env=env,
-            check=check,
-            timeout=timeout,
-            text=True,
-            shell=False,
-        )
 
 
 class LocalExecutor(BaseExecutor):
@@ -234,6 +182,21 @@ class LocalExecutor(BaseExecutor):
             worker_ip=socket.gethostname(),
             worker_region=None,
         )
+
+    def cancel(self) -> None:
+        """Terminate in-flight work subprocesses, then sweep the futures (issue #1538).
+
+        The local substrate's "job" is the work subprocess spawned by
+        :func:`run_subprocess` inside a pool thread (e.g. the real
+        ``openstudio.cli run`` invocation). Terminating the registered
+        children unblocks those threads; the ``super().cancel()`` sweep
+        then cancels any future that was queued but never started (the
+        pool threads themselves cannot — and should not — be killed).
+        """
+        killed = terminate_active_subprocesses()
+        if killed:
+            log.info("local executor: terminated %d in-flight subprocess(es)", killed)
+        super().cancel()
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=True)

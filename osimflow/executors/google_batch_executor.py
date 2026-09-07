@@ -155,6 +155,14 @@ class _GoogleBatchHandle(PollingHandle):
         self.job_name = self._executor._submit_job(**self._submit_params, use_spot=False)
         self.worker_id = self.job_name
 
+    def _cancel_job(self) -> bool:
+        # Issue #1538: DeleteJob is the Cloud Batch kill API — deleting
+        # a job cancels its running task groups. Deleting an already-
+        # terminal job raises — caught by the shared PollingHandle.cancel
+        # wrapper and reported as False.
+        self._executor._get_client().delete_job(name=self.job_name)  # noqa: SLF001
+        return True
+
     def _failure_error(self, job: Any) -> RuntimeError:
         status_details = str(job.status.status_details or "")
         return RuntimeError(f"job {self.job_name} failed: {status_details}")

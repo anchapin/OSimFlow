@@ -565,7 +565,16 @@ name in this section.
   failure-accounting path) + `compute_await_deadline` (issue #1566)
   + `submit_and_await_all` (issue #286 concurrent wait core with
   the #443/#1567 recovery loop, #1539 abort propagation, and
-  #553/#1537 pause honouring).  Standalone unit tests:
+  #553/#1537 pause honouring).  Issue #1538 added the bounded
+  cancellation path: a poll-cadence wait loop (cancel/pause are
+  detectable even when every handle is parked), an early substrate
+  kill via the optional `FanoutDeps.cancel_active_jobs` callback
+  (wired to `Campaign._cancel_active_jobs`), and
+  `_shutdown_fanout_pool_bounded` (`shutdown(wait=False,
+  cancel_futures=True)` + a time-bounded join on the
+  `osimflow-fanout` threads) so a cancelled campaign always
+  returns to write `run.json` instead of hanging on the pool
+  context exit.  Standalone unit tests:
   `tests/unit/test_campaign_fanout.py`; `Campaign` keeps thin
   call-time delegating methods (`_submit_and_await_all` /
   `_mark_sample_failed` / `_compute_await_deadline` +
@@ -691,7 +700,13 @@ name in this section.
   (lazy-imports `mlflow`).
 - `osimflow/tui.py` — optional `rich`-based terminal UI.
 - `osimflow/_eval_safe.py`, `osimflow/_subprocess_utils.py` —
-  internal helpers.
+  internal helpers.  `_subprocess_utils.run_subprocess` (the
+  per-sample log-capture helper shared by `work.py` and the
+  executors package) spawns its child via `Popen` and registers it
+  in a thread-keyed registry so `terminate_active_subprocesses()`
+  can SIGTERM every in-flight work subprocess during graceful
+  shutdown (issue #1538 — the local substrate's kill API, invoked
+  by `LocalExecutor.cancel()`).
 - `osimflow/py.typed` — PEP 561 marker.
 
 ### `osimflow/_work_scripts/`
@@ -811,7 +826,31 @@ backoff, retry accounting, and fallback-to-on-demand transition;
 `_AzureBatchHandle` and `_GoogleBatchHandle` subclass it, supplying
 substrate hooks; executor-author guidance is in
 `docs/DEVELOPMENT.md` §7, "Subclassing `PollingHandle` for polling
-executors"); `transport.py` is the executor-agnostic
+executors"). Issue #1538 added substrate job cancellation:
+`Handle.cancel() -> bool` is the idempotent, never-raising kill
+affordance (the base implementation duck-types the backing future's
+`cancel()` — covers LocalExecutor's `concurrent.futures.Future`,
+SlurmExecutor/PBS-style submitit `Job.cancel` (`scancel` / debug
+SIGINT), and Dask futures); `PollingHandle.cancel()` routes through
+the `_cancel_job()` substrate hook instead; `BaseExecutor.submit`
+registers every issued handle in a lazily-initialised live-handle
+registry (`_register_handle`, pruned past
+`_LIVE_HANDLE_SWEEP_THRESHOLD` completed entries) so
+`BaseExecutor.cancel()` — invoked by
+`CampaignLifecycle.cancel_active_jobs()` on every graceful-shutdown
+path — sweeps each live handle exactly once (per-handle failures are
+logged, never raised; a second sweep is a no-op). Per-substrate kill
+APIs: LocalExecutor = `terminate_active_subprocesses()` (SIGTERM the
+`run_subprocess` Popen registry) + queued-future cancel; Slurm =
+submitit `Job.cancel()` (`scancel`); PBS = `qdel`;
+AWS Batch = `batch.terminate_job(jobId=...)`; Azure Batch =
+`BatchClient.terminate_task(job_id, task_id)`; Google Batch =
+`BatchServiceClient.delete_job(name=...)`; Kubernetes =
+`delete_namespaced_job(..., propagation_policy="Foreground")`;
+Nomad = `POST /v1/allocation/<id>/stop` (`_NomadClient.stop_allocation`);
+Docker Swarm = `services.get(name).remove()`;
+Dask-JobQueue = dask `Future.cancel()`.
+`transport.py` is the executor-agnostic
 result-reference contract (`coerce_transport_mode`,
 `validate_transport_mode`, `encode_transport_value`,
 `decode_transport_value`, `local_path_to_storage_key`,

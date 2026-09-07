@@ -33,6 +33,8 @@ instance.
 
 import concurrent.futures
 import logging
+import threading
+import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -44,6 +46,26 @@ from .executors import Handle, get_step_resources
 from .monitoring import RunTrace, WorkerRecoveryManager
 
 log = logging.getLogger("osimflow.campaign")
+
+#: Hard bound on the fan-out pool drain after cancellation (issue #1538).
+#:
+#: Once cancellation is detected the wait loop (a) issues the substrate
+#: kill via ``FanoutDeps.cancel_active_jobs`` so killed jobs unblock
+#: their parked await threads, then (b) joins the pool threads for at
+#: most this many seconds. Threads that somehow remain parked (kill
+#: failed, or the user opted out of every await deadline so
+#: ``handle.result(timeout=None)`` blocks forever — issue #1566) are
+#: abandoned: they finish in the background while ``run()`` proceeds to
+#: write the final ``status="cancelled"`` run.json. This is the bound
+#: that keeps the ``ThreadPoolExecutor`` context exit from hanging the
+#: cancelled process.
+_CANCEL_POOL_DRAIN_TIMEOUT_S = 10.0
+
+#: Poll cadence of the cancel/pause checks in the concurrent wait loop
+#: (issue #1538). The pre-#1538 ``as_completed`` loop could only check
+#: between completions, so a fully-wedged fan-out never reached the
+#: check at all; this interval bounds detection latency instead.
+_FANOUT_WAIT_POLL_S = 0.5
 
 
 class _JobQueueLike(Protocol):
@@ -86,6 +108,7 @@ class FanoutDeps:
         cancel_requested: Callable[[], bool],
         check_pause_requested: Callable[[], bool],
         write_paused_trace: Callable[[], None],
+        cancel_active_jobs: Callable[[], None] | None = None,
     ) -> None:
         self.cfg = cfg
         self.trace = trace
@@ -103,6 +126,14 @@ class FanoutDeps:
         self.cancel_requested = cancel_requested
         self.check_pause_requested = check_pause_requested
         self.write_paused_trace = write_paused_trace
+        # Issue #1538: early substrate kill on the cancel path. When
+        # wired (the Campaign passes ``_cancel_active_jobs``), the wait
+        # loop invokes it the moment cancellation is detected — before
+        # the bounded pool drain — so the killed jobs unblock their
+        # parked await threads and the drain completes quickly. ``None``
+        # (the default, e.g. in standalone unit tests) preserves the
+        # pre-#1538 behaviour: no kill is issued from inside the loop.
+        self.cancel_active_jobs = cancel_active_jobs
 
 
 def mark_sample_failed(
@@ -502,22 +533,145 @@ def submit_and_await_all(
         except (Exception, concurrent.futures.CancelledError):
             pass
 
-    with concurrent.futures.ThreadPoolExecutor(
+    # Issue #1538: the pool is managed explicitly (try/finally) instead
+    # of a ``with`` block so the cancellation path can bound its drain.
+    # The ``with`` block's ``__exit__`` calls ``shutdown(wait=True)``,
+    # which joins every worker thread — a thread parked in a wedged
+    # ``handle.result()`` would hang the "cancelled" process before it
+    # could write the final run.json (the exact failure mode of issue
+    # #1538). The non-cancel paths below still take the identical
+    # ``shutdown(wait=True)`` exit, so their behaviour is unchanged.
+    pool = concurrent.futures.ThreadPoolExecutor(
         max_workers=deps.effective_max_workers(),
         thread_name_prefix="osimflow-fanout",
-    ) as pool:
-        futures = {pool.submit(_await_one, (sid, item)): sid for sid, item in submissions.items()}
-        for future in concurrent.futures.as_completed(futures):
-            if deps.check_cancel_requested():
-                log.warning("cancellation requested during %s — stopping fan-out", step_name)
-                # Cancel remaining futures.
-                for f in futures:
-                    f.cancel()
-                break
-            # Soft pause (issue #553): running samples complete, new ones are skipped.
-            # Do NOT cancel futures — let in-flight work finish naturally.
-            if deps.check_pause_requested():
-                deps.write_paused_trace()
-                log.warning("pause requested during %s — breaking fan-out", step_name)
-                break
-            _drain_future(future)
+    )
+    futures = {pool.submit(_await_one, (sid, item)): sid for sid, item in submissions.items()}
+    # Pre-initialised so the ``finally`` below is valid even when the
+    # wait loop itself raises (e.g. the CampaignAbortError propagation
+    # from _drain_future, issue #1539): the abort path must take the
+    # ordinary ``shutdown(wait=True)`` exit, never an UnboundLocalError
+    # that would mask it.
+    cancel_during_wait = False
+    try:
+        cancel_during_wait = _wait_for_fanout_futures(deps, futures, _drain_future, step_name)
+    finally:
+        if cancel_during_wait:
+            _shutdown_fanout_pool_bounded(pool)
+        else:
+            # Identical to the old ``with`` block exit: join every
+            # worker (pause lets in-flight samples complete; ordinary
+            # completion drains naturally; the abort path must not
+            # leak threads either).
+            pool.shutdown(wait=True)
+
+
+def _issue_fanout_cancel(
+    deps: FanoutDeps,
+    step_name: str,
+    futures: dict[concurrent.futures.Future[str], str],
+) -> None:
+    """Issue the substrate kill and future-cancel sweep (issue #1538).
+
+    Called the moment the wait loop observes cancellation. The
+    substrate kill (``deps.cancel_active_jobs`` — the executor's
+    TerminateJob / scancel / job delete / alloc stop / subprocess
+    terminate sweep) fires FIRST so the await threads parked in
+    ``handle.result()`` unblock while the bounded pool drain below is
+    still joining; the fan-out future cancel then prevents any queued
+    (not-yet-started) await task from running.
+    """
+    log.warning("cancellation requested during %s — stopping fan-out", step_name)
+    if deps.cancel_active_jobs is not None:
+        try:
+            deps.cancel_active_jobs()
+        except Exception:  # noqa: BLE001 — never block cancellation
+            log.warning(
+                "cancel_active_jobs raised during %s fan-out",
+                step_name,
+                exc_info=True,
+            )
+    for f in futures:
+        f.cancel()
+
+
+def _wait_for_fanout_futures(
+    deps: FanoutDeps,
+    futures: dict[concurrent.futures.Future[str], str],
+    drain_future: Callable[[concurrent.futures.Future[str]], None],
+    step_name: str,
+) -> bool:
+    """Wait for the fan-out futures, honouring cancel/pause (issue #1538).
+
+    A bounded-cadence wait loop instead of a bare ``as_completed``
+    iterator: the bare iterator could only run the cancel/pause checks
+    between completions, so a fully-wedged fan-out (every handle
+    parked) never reached the check at all.
+    ``concurrent.futures.wait(FIRST_COMPLETED)`` returns immediately
+    when work is available; the timeout only bounds how long a
+    totally-idle iteration can sit before re-checking the flags, so
+    healthy runs behave exactly as before.
+
+    Returns ``True`` when the loop broke on cancellation (the caller
+    must bound its pool drain), ``False`` otherwise (ordinary
+    completion or soft pause).
+    """
+    pending_futures: set[concurrent.futures.Future[str]] = set(futures)
+    while pending_futures:
+        done_futures, pending_futures = concurrent.futures.wait(
+            pending_futures,
+            timeout=_FANOUT_WAIT_POLL_S,
+            return_when=concurrent.futures.FIRST_COMPLETED,
+        )
+        if deps.check_cancel_requested():
+            _issue_fanout_cancel(deps, step_name, futures)
+            return True
+        # Soft pause (issue #553): running samples complete, new ones
+        # are skipped. Do NOT cancel futures — let in-flight work
+        # finish naturally.
+        if deps.check_pause_requested():
+            deps.write_paused_trace()
+            log.warning("pause requested during %s — breaking fan-out", step_name)
+            return False
+        for future in done_futures:
+            drain_future(future)
+    return False
+
+
+def _shutdown_fanout_pool_bounded(pool: concurrent.futures.ThreadPoolExecutor) -> None:
+    """Shut the fan-out pool down with a bounded drain (issue #1538).
+
+    Called only from the cancellation path. Two mechanisms bound the
+    drain:
+
+    * ``shutdown(wait=False, cancel_futures=True)`` — queued
+      (not-yet-started) ``_await_one`` tasks are cancelled outright
+      instead of running after the break;
+    * a time-bounded join over the pool's worker threads
+      (:data:`_CANCEL_POOL_DRAIN_TIMEOUT_S`). Threads parked in
+      ``handle.result(timeout=await_deadline)`` (issue #1566) return
+      once the substrate kill lands; threads that do not (kill failed,
+      deadline opted out) are abandoned and finish in the background —
+      the cancelled ``run()`` proceeds to write ``status="cancelled"``
+      to run.json instead of hanging until SIGKILL.
+
+    The join targets threads by the pool's ``osimflow-fanout`` name
+    prefix (via ``threading.enumerate``) rather than the private
+    ``pool._threads`` attribute.
+    """
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except TypeError:  # pragma: no cover — Python < 3.9 signature guard
+        pool.shutdown(wait=False)
+    deadline = time.monotonic() + _CANCEL_POOL_DRAIN_TIMEOUT_S
+    for thread in threading.enumerate():
+        if not thread.name.startswith("osimflow-fanout"):
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        thread.join(timeout=remaining)
+    log.warning(
+        "fan-out pool drain bounded at %.1fs after cancellation "
+        "(parked threads, if any, finish in the background)",
+        _CANCEL_POOL_DRAIN_TIMEOUT_S,
+    )

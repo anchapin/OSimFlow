@@ -174,6 +174,18 @@ class _AWSBatchHandle(PollingHandle):
         self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
         self.worker_id = self.job_id
 
+    def _cancel_job(self) -> bool:
+        # Issue #1538: TerminateJob is the AWS Batch kill API. It moves
+        # the job to FAILED promptly, which unblocks every fan-out
+        # thread parked in _wait_for_terminal. Terminating an already-
+        # terminal job raises a ClientError — caught by the shared
+        # PollingHandle.cancel wrapper and reported as False.
+        self._executor._get_client().terminate_job(  # noqa: SLF001
+            jobId=self.job_id,
+            reason="OSimFlow campaign cancellation (issue #1538)",
+        )
+        return True
+
     def _failure_error(self, job: Any) -> RuntimeError:
         status = job.get("status")
         reason = job.get("statusReason", "")

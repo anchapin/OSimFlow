@@ -235,6 +235,17 @@ class _AzureBatchHandle(PollingHandle):
         self.job_id = self._executor._submit_job(**self._submit_params, use_spot=False)
         self.worker_id = self.job_id
 
+    def _cancel_job(self) -> bool:
+        # Issue #1538: terminate the single task backing the job (the
+        # task shares the job's id — see _submit_job). azure-batch 15.x
+        # exposes BatchClient.terminate_task(job_id, task_id); the
+        # task moves to the completed state with a nonzero exit code,
+        # unblocking every fan-out thread parked in _wait_for_terminal.
+        # Terminating an already-completed task raises — caught by the
+        # shared PollingHandle.cancel wrapper and reported as False.
+        self._executor._get_client().terminate_task(self.job_id, self.job_id)  # noqa: SLF001
+        return True
+
     def _failure_error(self, task: Any) -> RuntimeError:
         exit_code = getattr(self._executor._execution_info(task), "exit_code", None)
         return RuntimeError(f"Azure Batch job {self.job_id!r} failed: exit code {exit_code}")
