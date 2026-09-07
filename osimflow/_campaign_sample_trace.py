@@ -159,6 +159,13 @@ class CampaignSampleTraceRecorder:
         Raises :class:`CampaignAbortError` after 3 consecutive checkpoint
         failures (issue #739); the counter resets to 0 on any successful
         checkpoint (issue #1539 tests).
+
+        Since issues #1627 / #1634 the underlying ``RunTrace.update_sample``
+        serializes its read-merge-write under a lock and no longer
+        swallows read errors: a corrupted (unparseable) run.json raises
+        ``json.JSONDecodeError`` and I/O errors propagate, so they are
+        counted here exactly once per checkpoint (no silent no-ops that
+        would make the 3-strike counter unreachable).
         """
         state = self._sample_state.get(sid)
         if state is None:

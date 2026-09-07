@@ -27,6 +27,7 @@ __all__ = ["RunTrace", "StepTrace"]
 import dataclasses
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Sequence
@@ -174,6 +175,14 @@ class RunTrace:
         self.error_summary: str | None = None
         # tqdm handles; one per fan-out step that wants a progress bar.
         self._bars: dict[str, Any] = {}
+        # Serializes run.json disk writes (issues #1627 / #1634).
+        # ``update_sample`` is an unlocked read-modify-write called
+        # concurrently from fan-out checkpoint threads, and ``write``
+        # races those checkpoints at campaign start / cancel / end.
+        # One lock guards both so a last-writer-wins rename can never
+        # drop checkpointed rows, and so two writers never share a
+        # tmp path mid-rename.
+        self._io_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Step hooks (called by the Campaign)
@@ -346,6 +355,18 @@ class RunTrace:
             d["error_summary"] = self.error_summary
         return d
 
+    def _atomic_write(self, path: Path, payload: dict[str, object]) -> None:
+        """Write *payload* to *path* via tmp + rename.
+
+        The tmp name embeds the pid and thread id (issues #1627 /
+        #1634) so concurrent writers — even ones not holding
+        ``_io_lock`` — never write through the same tmp path while
+        another thread is mid-rename.
+        """
+        tmp = path.with_suffix(f".{os.getpid()}-{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(payload, indent=2, default=str))
+        tmp.rename(path)
+
     def update_sample(self, trace: SampleTrace) -> None:
         """Update a single sample entry in run.json (incremental checkpoint).
 
@@ -355,6 +376,19 @@ class RunTrace:
         step completes so SSE clients see live updates without waiting for
         campaign end.
 
+        Concurrency (issues #1627 / #1634): the whole read-merge-write
+        sequence runs under ``_io_lock``, shared with ``write()`` —
+        fan-out checkpoint threads cannot lose each other's rows or
+        collide on a shared tmp file, and the campaign-level
+        ``write()`` cannot interleave with a checkpoint.
+
+        Error handling: a corrupted (unparseable) run.json logs a
+        WARNING and raises ``json.JSONDecodeError``; I/O errors
+        propagate unchanged. Callers that count checkpoint failures
+        (``CampaignSampleTraceRecorder.checkpoint_sample``, issue #739)
+        depend on these exceptions surfacing — a silent return here
+        would leave the 3-strike counter unreachable (issue #1634).
+
         If run.json does not exist yet (campaign just started but the file
         was not yet written), creates a minimal run.json with the sample
         entry so monitoring tools always have something to read.
@@ -363,70 +397,82 @@ class RunTrace:
         if path is None:
             return
 
-        if not path.exists():
-            data: dict[str, object] = {
-                "schema_version": self.SCHEMA_VERSION,
-                "campaign_id": self.campaign_id,
-                "started_at": self.started_at,
-                "finished_at": None,
-                "elapsed_s": time.time() - self.started_at,
-                "config": self.config_summary,
-                "summary": {
-                    "n_samples": 1,
-                    "n_succeeded": 1 if trace.status == "ok" else 0,
-                    "n_failed": 1 if trace.status == "failed" else 0,
-                },
-                "quality_summary": {
-                    "n_quality_failures": 0,
-                    "n_quality_warnings": 0,
-                    "n_quality_ok": 1 if trace.status == "ok" else 0,
-                },
-                "steps": [],
-                "per_sample": [trace.to_dict()],
-                "total_cost_usd": 0.0,
-                "spot_savings_usd": 0.0,
-            }
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2, default=str))
-            tmp.rename(path)
-            log.info("created incremental run.json at %s", path)
-            return
+        with self._io_lock:
+            if not path.exists():
+                data: dict[str, object] = {
+                    "schema_version": self.SCHEMA_VERSION,
+                    "campaign_id": self.campaign_id,
+                    "started_at": self.started_at,
+                    "finished_at": None,
+                    "elapsed_s": time.time() - self.started_at,
+                    "config": self.config_summary,
+                    "summary": {
+                        "n_samples": 1,
+                        "n_succeeded": 1 if trace.status == "ok" else 0,
+                        "n_failed": 1 if trace.status == "failed" else 0,
+                    },
+                    "quality_summary": {
+                        "n_quality_failures": 0,
+                        "n_quality_warnings": 0,
+                        "n_quality_ok": 1 if trace.status == "ok" else 0,
+                    },
+                    "steps": [],
+                    "per_sample": [trace.to_dict()],
+                    "total_cost_usd": 0.0,
+                    "spot_savings_usd": 0.0,
+                }
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._atomic_write(path, data)
+                log.info("created incremental run.json at %s", path)
+                return
 
-        try:
-            data = cast(dict[str, Any], json.loads(path.read_text()))
-        except (json.JSONDecodeError, OSError):
-            return
+            try:
+                data = cast(dict[str, Any], json.loads(path.read_text()))
+            except json.JSONDecodeError as exc:
+                log.warning(
+                    "run.json at %s is corrupted and cannot be parsed; failing "
+                    "this checkpoint so the consecutive-failure counter can "
+                    "react (issue #1634): %s",
+                    path,
+                    exc,
+                )
+                raise
 
-        samples: list[dict[str, object]] = data.get("per_sample", [])  # type: ignore[assignment]
-        replaced = False
-        for i, s in enumerate(samples):
-            if s.get("sample_id") == trace.sample_id:
-                samples[i] = trace.to_dict()
-                replaced = True
-                break
-        if not replaced:
-            samples.append(trace.to_dict())
-        data["per_sample"] = samples
+            samples: list[dict[str, object]] = data.get("per_sample", [])  # type: ignore[assignment]
+            replaced = False
+            for i, s in enumerate(samples):
+                if s.get("sample_id") == trace.sample_id:
+                    samples[i] = trace.to_dict()
+                    replaced = True
+                    break
+            if not replaced:
+                samples.append(trace.to_dict())
+            data["per_sample"] = samples
 
-        n_succeeded = sum(1 for s in samples if s.get("status") == "ok")
-        n_failed = sum(1 for s in samples if s.get("status") == "failed")
-        if "summary" not in data:
-            data["summary"] = {}
-        data["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
-        data["summary"]["n_failed"] = n_failed  # type: ignore[index]
-        data["summary"]["n_samples"] = len(samples)  # type: ignore[index]
+            n_succeeded = sum(1 for s in samples if s.get("status") == "ok")
+            n_failed = sum(1 for s in samples if s.get("status") == "failed")
+            if "summary" not in data:
+                data["summary"] = {}
+            data["summary"]["n_succeeded"] = n_succeeded  # type: ignore[index]
+            data["summary"]["n_failed"] = n_failed  # type: ignore[index]
+            data["summary"]["n_samples"] = len(samples)  # type: ignore[index]
 
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2, default=str))
-        tmp.rename(path)
+            self._atomic_write(path, data)
 
     def write(self, path: Path) -> None:
-        """Write the run.json trace to disk. Idempotent."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Record path so update_sample() can do incremental writes.
-        self._checkpoint_path = str(path)
-        path.write_text(json.dumps(self.to_dict(), indent=2, default=str))
+        """Write the run.json trace to disk. Idempotent.
+
+        Atomic (tmp + rename, issue #1634) and serialized against
+        concurrent ``update_sample`` checkpoints via ``_io_lock``
+        (issue #1627) so a campaign-start / cancel / final write can
+        never interleave with a fan-out checkpoint's
+        read-modify-write.
+        """
+        with self._io_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Record path so update_sample() can do incremental writes.
+            self._checkpoint_path = str(path)
+            self._atomic_write(path, self.to_dict())
         log.info("wrote run trace to %s", path)
 
 
