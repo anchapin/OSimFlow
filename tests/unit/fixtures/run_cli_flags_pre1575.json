@@ -50,7 +50,7 @@
     "const": "True",
     "default": "False",
     "dest": "allow_insecure_storage_endpoint",
-    "help": "Opt-in flag to allow plaintext 'http://' --result-storage-endpoint and --s3-artifact-endpoint URLs (issue #1386). Defaults to False (fail-closed) \u2014 non-HTTPS endpoints are rejected by the storage backend to prevent AWS SigV4 signing material from leaking in cleartext. Use only for dev/test against a local MinIO; loopback hosts are exempt without this flag. Mirrors the Redis 'rediss://' enforcement from issue #1321.",
+    "help": "Opt-in flag to allow plaintext 'http://' --result-storage-endpoint, --s3-artifact-endpoint, and --coordinator-url / OSIMFLOW_COORDINATOR_URL URLs (issues #1386, #1550). Defaults to False (fail-closed) \u2014 non-HTTPS endpoints are rejected by the storage backend / Coordinator client to prevent AWS SigV4 signing material and the bearer API key from leaking in cleartext. Use only for dev/test against a local MinIO or loopback Coordinator; loopback hosts are exempt without this flag. Mirrors the Redis 'rediss://' enforcement from issue #1321.",
     "metavar": null,
     "nargs": "0",
     "option_strings": [
@@ -1147,6 +1147,21 @@
     "required": false,
     "type": null
   },
+  "--kubernetes-payload-secret-ref": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "kubernetes_payload_secret_ref",
+    "help": "Name of a pre-created Kubernetes Secret (key 'OSIMFLOW_TASK_PAYLOAD_SECRET') holding the task-payload HMAC secret. When set, the Job spec emits a secretKeyRef instead of a literal env value, so the raw secret never appears in the Job spec (issues #1449/#1535). Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--kubernetes-payload-secret-ref"
+    ],
+    "required": false,
+    "type": null
+  },
   "--kubernetes-poll-interval-s": {
     "action": "_StoreAction",
     "choices": null,
@@ -1544,6 +1559,36 @@
     "option_strings": [
       "--nomad-tls-verify",
       "--no-nomad-tls-verify"
+    ],
+    "required": false,
+    "type": null
+  },
+  "--nomad-vault-secret-key": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": "payload_secret",
+    "dest": "nomad_vault_secret_key",
+    "help": "Field name inside the Vault KV entry at --nomad-vault-secret-path holding the HMAC secret (default: payload_secret). KV v2 paths (containing /data/) read the field from the wrapped Data.data object (issues #1449/#1535).",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--nomad-vault-secret-key"
+    ],
+    "required": false,
+    "type": null
+  },
+  "--nomad-vault-secret-path": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "nomad_vault_secret_path",
+    "help": "Vault KV path holding the task-payload HMAC secret (issues #1449/#1535). When set, the Nomad client renders OSIMFLOW_TASK_PAYLOAD_SECRET from Vault at allocation time via a template stanza \u2014 the raw secret never appears in the job spec or dispatch meta (where it would persist in the Nomad state store, readable via `nomad job inspect`). Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--nomad-vault-secret-path"
     ],
     "required": false,
     "type": null

@@ -948,6 +948,11 @@ class CampaignConfig:
     nomad_key: Path | None = None
     nomad_ca_cert: Path | None = None
     nomad_allow_insecure_token: bool = False
+    # Issue #1535: surface the #1449 Vault-based HMAC secret delivery
+    # on the CLI — without it the secret ships as a literal dispatch-meta
+    # entry readable via ``nomad job inspect``.
+    nomad_vault_secret_path: str | None = None
+    nomad_vault_secret_key: str = "payload_secret"
 
     # --- Legacy flat Kubernetes executor fields (issue #997) ---
     # Native Job controls: ``backoff_limit`` (default 0 preserves the
@@ -957,6 +962,10 @@ class CampaignConfig:
     kubernetes_backoff_limit: int = 0
     kubernetes_ttl_seconds_after_finished: int | None = None
     kubernetes_queue_name: str | None = None
+    # Issue #1535: surface the #1449 secretKeyRef-based HMAC secret
+    # delivery on the CLI — without it the secret ships as a literal
+    # env value serialized into the Job spec.
+    kubernetes_payload_secret_ref: str | None = None
 
     # --- Legacy flat storage fields (for backward compatibility) ---
     result_storage_backend: str = "local"
