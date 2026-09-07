@@ -60,6 +60,7 @@ from osimflow.handoff_record import (
     write_handoff_record,
 )
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
+from osimflow.manifest import _validate_coordinator_url
 from osimflow.validation import ValidationError
 
 log = logging.getLogger("osimflow.__main__")
@@ -1163,11 +1164,13 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         action="store_true",
         default=False,
         help=(
-            "Opt-in flag to allow plaintext 'http://' --result-storage-endpoint "
-            "and --s3-artifact-endpoint URLs (issue #1386). Defaults to False "
+            "Opt-in flag to allow plaintext 'http://' --result-storage-endpoint, "
+            "--s3-artifact-endpoint, and --coordinator-url / OSIMFLOW_COORDINATOR_URL "
+            "URLs (issues #1386, #1550). Defaults to False "
             "(fail-closed) — non-HTTPS endpoints are rejected by the storage "
-            "backend to prevent AWS SigV4 signing material from leaking in "
-            "cleartext. Use only for dev/test against a local MinIO; loopback "
+            "backend / Coordinator client to prevent AWS SigV4 signing material and "
+            "the bearer API key from leaking in cleartext. Use only for dev/test "
+            "against a local MinIO or loopback Coordinator; loopback "
             "hosts are exempt without this flag. Mirrors the Redis 'rediss://' "
             "enforcement from issue #1321."
         ),
@@ -2892,7 +2895,7 @@ def _coordinator_idempotency_key(payload: dict[str, Any], outdir: Path | None) -
     return f"osimflow-{digest.hexdigest()[:32]}"
 
 
-def _perform_detach_handoff(args: argparse.Namespace) -> int:
+def _perform_detach_handoff(args: argparse.Namespace) -> int:  # noqa: PLR0911
     """Execute the ``osimflow run --detach`` fire-and-forget handoff.
 
     Posts the campaign config to the Coordinator with a deterministic
@@ -2905,6 +2908,19 @@ def _perform_detach_handoff(args: argparse.Namespace) -> int:
     coordinator_url = (args.coordinator_url or "").rstrip("/")
     if not coordinator_url:
         print("error: --detach requires --coordinator-url", file=sys.stderr)
+        return 1
+
+    # Fail-closed transport check (issue #1550): a non-loopback http://
+    # Coordinator would carry the campaign config (and any API key) in
+    # cleartext.  Mirrors the storage-endpoint gate (#1386); the escape
+    # hatch reuses --allow-insecure-storage-endpoint (no new flag).
+    try:
+        _validate_coordinator_url(
+            coordinator_url,
+            allow_insecure=bool(getattr(args, "allow_insecure_storage_endpoint", False)),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
 
     # Idempotent fast path: this outdir is already associated with a remote

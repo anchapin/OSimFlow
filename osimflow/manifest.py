@@ -54,7 +54,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 if TYPE_CHECKING:
     from .storage import ResultStorage
@@ -75,6 +75,84 @@ MANIFEST_FIELDS: tuple[str, ...] = (
     "first_severe_error",
     "finished_at",
 )
+
+#: Loopback hosts exempt from the coordinator HTTPS requirement (issue
+#: #1550).  Same set as ``osimflow.storage._LOOPBACK_HOSTS``; any host in
+#: ``127.0.0.0/8`` is additionally exempt inside the validator.
+_COORDINATOR_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def _validate_coordinator_url(coordinator_url: str | None, *, allow_insecure: bool = False) -> None:
+    """Validate that a Coordinator base URL uses TLS (issue #1550).
+
+    Mirrors :func:`osimflow.storage._validate_storage_endpoint` (issue
+    #1386) and :func:`osimflow.distributed_cache._validate_redis_url`
+    (issue #1321): rejects ``http://`` Coordinator URLs unless the
+    operator explicitly opted in with ``allow_insecure=True``.  The CLI
+    escape hatch reuses the existing ``--allow-insecure-storage-endpoint``
+    flag (no new CLI surface) — a plaintext coordinator transmits the
+    ``Authorization: Bearer $OSIMFLOW_API_KEY`` header and per-sample
+    campaign results in cleartext on every sample completion.
+
+    Loopback hosts (``localhost``, `127.0.0.0/8``, ``::1``, ``0.0.0.0``)
+    are exempt because they never traverse a real network — same
+    exception the storage and Redis validators use.
+
+    Parameters
+    ----------
+    coordinator_url
+        The candidate Coordinator base URL.  ``None`` and ``""`` pass
+        silently — the Coordinator is optional and simply not configured.
+    allow_insecure
+        When ``True``, non-loopback ``http://`` URLs are accepted with a
+        loud ``WARNING``.  Defaults to ``False`` (fail-closed).
+
+    Raises
+    ------
+    ValueError
+        When *coordinator_url* is non-empty, non-loopback, and uses a
+        scheme other than ``https`` while ``allow_insecure`` is ``False``.
+    """
+    if not coordinator_url:
+        return
+
+    parsed = urlparse(coordinator_url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+
+    if scheme == "https":
+        return
+
+    if scheme != "http":
+        raise ValueError(
+            f"invalid coordinator URL (issue #1550): {coordinator_url!r} "
+            f"uses scheme {scheme!r}; expected 'https://'. Non-HTTPS "
+            f"coordinator URLs are rejected unless "
+            f"--allow-insecure-storage-endpoint is set."
+        )
+
+    if host in _COORDINATOR_LOOPBACK_HOSTS or host.startswith("127."):
+        return
+
+    if allow_insecure:
+        log.warning(
+            "INSECURE coordinator URL (issue #1550): %s uses plaintext "
+            "HTTP; the bearer API key and per-sample results will "
+            "traverse the network in cleartext. This is allowed because "
+            "--allow-insecure-storage-endpoint was set — do not use in "
+            "production.",
+            coordinator_url,
+        )
+        return
+
+    raise ValueError(
+        f"insecure coordinator URL (issue #1550): {coordinator_url!r} "
+        f"uses plaintext HTTP and is not a loopback host. Non-HTTPS "
+        f"coordinator URLs transmit the bearer API key "
+        f"(OSIMFLOW_API_KEY) and campaign results in cleartext. Use "
+        f"https://, or set --allow-insecure-storage-endpoint to "
+        f"explicitly opt in (dev/test only)."
+    )
 
 
 def first_severe_error(err_path: Path) -> str | None:
@@ -215,6 +293,7 @@ def report_sample_completion(
     manifest: dict[str, Any],
     api_key: str | None = None,
     timeout_s: float = 10.0,
+    allow_insecure: bool = False,
 ) -> None:
     """Best-effort PATCH of sample completion to the Coordinator.
 
@@ -230,7 +309,33 @@ def report_sample_completion(
 
     This call is best-effort: any network or parsing failure is logged at
     ``WARNING`` and never re-raised — telemetry must not break the worker.
+
+    Fail-closed transport guard (issue #1550): the coordinator URL is
+    scheme-checked via :func:`_validate_coordinator_url` before any bytes
+    are sent.  An insecure (non-loopback ``http://``) URL without the
+    ``allow_insecure`` opt-in is refused — logged at ``ERROR`` and the
+    PATCH is skipped — so the bearer API key never leaves the worker in
+    cleartext even when the campaign-start gate was bypassed (e.g. remote
+    workers driven by ``OSIMFLOW_COORDINATOR_URL``).
+
+    Parameters
+    ----------
+    allow_insecure
+        Explicit opt-in for plaintext ``http://`` coordinators; the
+        Campaign forwards ``cfg.allow_insecure_storage_endpoint``
+        (``--allow-insecure-storage-endpoint``) here.  Defaults to
+        ``False`` (fail-closed).
     """
+    try:
+        _validate_coordinator_url(coordinator_url, allow_insecure=allow_insecure)
+    except ValueError as exc:
+        log.error(
+            "refusing to report sample completion for campaign %s over "
+            "insecure coordinator URL: %s",
+            campaign_id,
+            exc,
+        )
+        return
     url = f"{coordinator_url.rstrip('/')}/api/v1/coordinator/campaigns/{campaign_id}/status"
     body = json.dumps(manifest).encode("utf-8")
     headers = {"Content-Type": "application/json"}

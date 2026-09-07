@@ -1703,6 +1703,7 @@ def publish_kpi_results(
     archive_intermediates: bool,
     coordinator_url: str | None = None,
     api_key: str | None = None,
+    allow_insecure_coordinator: bool = False,
     tmp_dir: Path | None = None,
 ) -> str | None:
     """Push ``kpis.json`` + atomic ``_manifest.json`` directly to *storage*.
@@ -1754,6 +1755,11 @@ def publish_kpi_results(
         (contract §3.2).  ``None`` skips the report (no network).
     api_key
         Optional bearer token for the Coordinator PATCH.
+    allow_insecure_coordinator
+        Explicit opt-in for plaintext ``http://`` coordinator URLs
+        (issue #1550); the Campaign forwards
+        ``cfg.allow_insecure_storage_endpoint`` here.  Defaults to
+        ``False`` (fail-closed — non-loopback ``http://`` is refused).
     tmp_dir
         Directory used to stage the manifest temp file.  Defaults to
         *simulation_dir*.
@@ -1863,6 +1869,7 @@ def publish_kpi_results(
             campaign_id=campaign_id,
             manifest=record,
             api_key=api_key,
+            allow_insecure=allow_insecure_coordinator,
         )
 
     return manifest_key
