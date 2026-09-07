@@ -144,9 +144,7 @@ class TestServeAutoGenReadOnly:
         assert "Generated ephemeral API key for localhost serve" in captured.err
         # Single-line: only one newline in the notice (the trailing \n from print()).
         notice_line = next(
-            line
-            for line in captured.err.splitlines()
-            if "Generated ephemeral API key" in line
+            line for line in captured.err.splitlines() if "Generated ephemeral API key" in line
         )
         assert "\n" not in notice_line.rstrip("\n")
         assert "--api-key" in notice_line
@@ -203,9 +201,7 @@ class TestServeKeysFileMode:
     ) -> None:
         """When --api-keys-file is set, create_app receives None as api_key and no banner prints."""
         keys_file = tmp_path / "api_keys.json"
-        keys_file.write_text(
-            '{"users": [{"key": "k", "user_id": "u", "role": "admin"}]}'
-        )
+        keys_file.write_text('{"users": [{"key": "k", "user_id": "u", "role": "admin"}]}')
         parser = _build_parser()
         args = parser.parse_args(
             [
@@ -233,9 +229,7 @@ class TestServeKeysFileMode:
     ) -> None:
         """Passing --api-key alongside --api-keys-file still warns + ignores the key."""
         keys_file = tmp_path / "api_keys.json"
-        keys_file.write_text(
-            '{"users": [{"key": "k", "user_id": "u", "role": "admin"}]}'
-        )
+        keys_file.write_text('{"users": [{"key": "k", "user_id": "u", "role": "admin"}]}')
         parser = _build_parser()
         args = parser.parse_args(
             [
@@ -256,9 +250,7 @@ class TestServeKeysFileMode:
         assert result == 0
         assert mock_create.call_args[1]["api_key"] is None
         # The pre-existing "ignored" warning must still fire.
-        ignored = [
-            r for r in caplog.records if "--api-key is ignored" in r.getMessage()
-        ]
+        ignored = [r for r in caplog.records if "--api-key is ignored" in r.getMessage()]
         assert len(ignored) == 1
 
 
