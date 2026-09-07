@@ -150,6 +150,13 @@ class _PBSHandle(PollingHandle):
             f"PBS job {self.job_id!r} exited with code {exit_code} (state={job_state})"
         )
 
+    def _cancel_job(self) -> bool:
+        # Issue #1538: qdel is the PBS kill API. It removes a queued or
+        # running job from the server; a poll thread parked in
+        # _wait_for_terminal then sees the job vanish (qstat falls back
+        # to terminal "F"). _delete_job never raises.
+        return bool(self._executor._delete_job(self.job_id))  # noqa: SLF001
+
     def done(self) -> bool:
         # If the future is already finished (terminal status observed
         # by a prior ``result()`` call), report done without making
@@ -412,6 +419,29 @@ class PBSExecutor(BaseExecutor):
                 except (ValueError, IndexError):
                     pass
         return -1
+
+    def _delete_job(self, job_id: str) -> bool:
+        """Delete (cancel) a PBS job via ``qdel`` (issue #1538).
+
+        Returns ``True`` when ``qdel`` exited 0. Deleting an
+        already-finished job exits nonzero — reported as ``False`` by
+        the caller, never raised.
+        """
+        result = subprocess.run(
+            ["qdel", job_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        rc = int(result.returncode)
+        if rc != 0:
+            log.warning(
+                "pbs qdel failed for job %s (rc=%d): %s",
+                job_id,
+                rc,
+                (result.stderr or "").strip(),
+            )
+        return rc == 0
 
     def _wait_for_terminal(self, job_id: str, timeout: float | None = None) -> tuple[str, int]:
         """Poll ``qstat`` with exponential backoff until the job is terminal.

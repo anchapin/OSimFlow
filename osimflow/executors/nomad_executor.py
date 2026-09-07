@@ -336,6 +336,18 @@ class _NomadClient:
     def get_allocation(self, alloc_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/allocation/{alloc_id}")
 
+    def stop_allocation(self, alloc_id: str) -> dict[str, Any]:
+        """Stop an allocation via ``POST /v1/allocation/<id>/stop`` (issue #1538).
+
+        The Nomad kill API: the client stops the allocation's tasks and
+        the allocation reaches a terminal ``ClientStatus``, unblocking
+        every fan-out thread parked in ``_wait_for_terminal``. Stopping
+        an already-terminal allocation is accepted by Nomad (idempotent
+        server-side); transport-level failures raise and are caught by
+        the shared ``PollingHandle.cancel`` wrapper.
+        """
+        return self._request("POST", f"/v1/allocation/{alloc_id}/stop")
+
     def get_eval_allocations(self, eval_id: str) -> list[dict[str, Any]]:
         """Return the allocations created by an evaluation.
 
@@ -538,6 +550,15 @@ class _NomadHandle(PollingHandle):
         task_states = job.get("TaskStates", {}) or {}
         description = self._extract_failure_description(task_states)
         return RuntimeError(f"Nomad allocation {alloc_id!r} {status}: {description}")
+
+    def _cancel_job(self) -> bool:
+        # Issue #1538: stop the allocation backing this job. The
+        # allocation is resolved lazily (same cache as the poll path),
+        # so a cancel issued between submit and first poll still finds
+        # the right target once the eval materialises.
+        alloc_id = self._ensure_allocation_id()
+        self._executor._client.stop_allocation(alloc_id)  # noqa: SLF001
+        return True
 
     def done(self) -> bool:  # noqa: PLR0911
         # If the future is already finished (terminal status observed

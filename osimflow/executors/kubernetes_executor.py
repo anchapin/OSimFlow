@@ -158,6 +158,20 @@ class _KubernetesHandle(PollingHandle):
         reason = self._extract_failure_reason(job)
         return RuntimeError(f"Kubernetes job {self._job_name!r} {phase}: {reason}")
 
+    def _cancel_job(self) -> bool:
+        # Issue #1538: delete the Job with foreground propagation so the
+        # pods are torn down before the API returns — the fan-out threads
+        # parked in _wait_for_terminal then observe the Failed phase.
+        # Deleting an already-gone Job raises ApiException(404) — caught
+        # by the shared PollingHandle.cancel wrapper and reported as
+        # False.
+        self._executor._get_client().delete_namespaced_job(  # noqa: SLF001
+            name=self._job_name,
+            namespace=self._executor.namespace,  # noqa: SLF001
+            propagation_policy="Foreground",
+        )
+        return True
+
     def done(self) -> bool:
         if self._future.done():
             return True

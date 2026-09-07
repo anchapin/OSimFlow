@@ -1129,6 +1129,10 @@ class Campaign(CampaignAnalysisMixin):
             cancel_requested=lambda: self._cancel_requested,
             check_pause_requested=self._check_pause_requested,
             write_paused_trace=self._write_paused_trace,
+            # Issue #1538: early substrate kill from inside the wait
+            # loop's cancel branch, so parked await threads unblock
+            # before the bounded pool drain joins them.
+            cancel_active_jobs=self._cancel_active_jobs,
         )
 
     def _submit_and_await_all(

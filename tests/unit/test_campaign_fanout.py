@@ -16,10 +16,12 @@ delegating ``Campaign._submit_and_await_all``.
 from __future__ import annotations
 
 import concurrent.futures
+import threading
+import time
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -374,3 +376,139 @@ class TestSubmitAndAwaitAll:
         deps, spies = _deps(cfg, outdir)
         submit_and_await_all(deps, {}, "RUN_OPENSTUDIO_SIM")
         spies["job_queue"].enqueue.assert_not_called()
+
+
+class _BlockingHandle(Handle):
+    """Handle whose result() parks until released (a wedged substrate job)."""
+
+    def __init__(self, job_id: str, release: threading.Event, *, succeed: bool = False) -> None:
+        self.job_id = job_id
+        self._future: Future[Any] = Future()
+        self._release = release
+        self._succeed = succeed
+
+    def result(self, timeout: float | None = None) -> Any:
+        # Ignores the deadline on purpose: simulates a handle parked past
+        # the await deadline (kill failed / deadline opted out).
+        self._release.wait(timeout=30.0)
+        if self._succeed:
+            return Path(f"/released-{self.job_id}")
+        raise RuntimeError(f"{self.job_id} killed")
+
+    def done(self) -> bool:
+        return False
+
+
+class TestConcurrentCancelBoundedDrain:
+    """Issue #1538: cancellation must not hang the fan-out pool drain."""
+
+    def test_cancel_with_wedged_handles_returns_within_bound(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir, max_workers=2)
+        spies["flags"]["cancel"] = True
+        release = threading.Event()
+        submissions = {
+            f"sample_{i}": (_BlockingHandle(f"wedged-{i}", release), MagicMock()) for i in range(4)
+        }
+        cancel_cb = MagicMock()
+        deps.cancel_active_jobs = cancel_cb
+
+        import osimflow._campaign_fanout as fanout_module
+
+        with patch.object(fanout_module, "_CANCEL_POOL_DRAIN_TIMEOUT_S", 0.5):
+            start = time.monotonic()
+            submit_and_await_all(deps, submissions, "RUN_OPENSTUDIO_SIM")
+            elapsed = time.monotonic() - start
+
+        # Returned within the (patched, tightened) bound instead of
+        # joining the parked threads for their full 30 s wait.
+        assert elapsed < 15.0, f"fan-out drain took {elapsed:.1f}s"
+        # The early substrate kill was issued from inside the loop.
+        cancel_cb.assert_called_once()
+        # None of the wedged samples completed successfully.
+        for _, (_h, on_success) in submissions.items():
+            on_success.assert_not_called()
+        release.set()
+
+    def test_cancel_issued_without_callback_still_bounded(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """No cancel_active_jobs wired (default) — drain still bounded."""
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir, max_workers=2)
+        spies["flags"]["cancel"] = True
+        release = threading.Event()
+        submissions = {
+            f"sample_{i}": (_BlockingHandle(f"wedged-{i}", release), MagicMock()) for i in range(3)
+        }
+        assert deps.cancel_active_jobs is None
+
+        import osimflow._campaign_fanout as fanout_module
+
+        with patch.object(fanout_module, "_CANCEL_POOL_DRAIN_TIMEOUT_S", 0.5):
+            start = time.monotonic()
+            submit_and_await_all(deps, submissions, "EXTRACT_KPIS")
+            elapsed = time.monotonic() - start
+
+        assert elapsed < 15.0, f"fan-out drain took {elapsed:.1f}s"
+        release.set()
+
+    def test_cancel_flag_from_timer_detected(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """The wait loop reaches the cancel check even with zero completions.
+
+        Pre-#1538 the checks lived inside ``as_completed`` — a fully
+        wedged fan-out (every handle parked, zero completions) never
+        reached them. Here the cancel flag flips 1 s into a fully
+        blocked wait and must still be detected within the poll
+        cadence, far below the handles' 30 s park time.
+        """
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir, max_workers=2)
+        release = threading.Event()
+        submissions = {
+            f"sample_{i}": (_BlockingHandle(f"wedged-{i}", release), MagicMock()) for i in range(2)
+        }
+        timer = threading.Timer(1.0, lambda: spies["flags"].__setitem__("cancel", True))
+        timer.start()
+
+        import osimflow._campaign_fanout as fanout_module
+
+        try:
+            with patch.object(fanout_module, "_CANCEL_POOL_DRAIN_TIMEOUT_S", 0.5):
+                start = time.monotonic()
+                submit_and_await_all(deps, submissions, "RUN_OPENSTUDIO_SIM")
+                elapsed = time.monotonic() - start
+        finally:
+            timer.cancel()
+            release.set()
+
+        assert elapsed < 10.0, f"cancel detection took {elapsed:.1f}s"
+
+    def test_pause_path_still_waits_for_inflight(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Pause must NOT bound the drain — running samples complete."""
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir, max_workers=2)
+        release = threading.Event()
+        submissions = {
+            "sample_0": (_BlockingHandle("wedged-0", release, succeed=True), MagicMock()),
+        }
+        spies["flags"]["pause"] = True
+        timer = threading.Timer(0.5, release.set)
+        timer.start()
+
+        try:
+            submit_and_await_all(deps, submissions, "RUN_OPENSTUDIO_SIM")
+        finally:
+            timer.cancel()
+            release.set()
+
+        # The in-flight sample completed normally (on_success called),
+        # and the paused trace was written at the break.
+        submissions["sample_0"][1].assert_called_once()
+        assert spies["paused_trace_writes"]

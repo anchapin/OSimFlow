@@ -241,15 +241,22 @@ class CampaignLifecycle:
         return False
 
     def cancel_active_jobs(self, executor: BaseExecutor) -> None:
-        """Cancel all active futures submitted to the executor.
+        """Cancel all active jobs on the executor's substrate (issues #255, #1538).
 
         Called during graceful shutdown to stop in-flight work as quickly
-        as possible. The executor's ``cancel()`` method is called on
-        each active handle; handles that were already completing are
-        given a short grace period to finish.
+        as possible: ``executor.cancel()`` sweeps every live handle and
+        issues its substrate kill (TerminateJob / scancel / batch delete /
+        allocation stop / local subprocess terminate). The call is
+        defensive — a substrate-wide failure is logged but never
+        propagates, so the shutdown path always continues to the final
+        ``run.json`` write. Safe to call repeatedly; the executor's
+        handle registry is cleared by the first sweep.
         """
         log.info("canceling active executor jobs")
-        executor.cancel()
+        try:
+            executor.cancel()
+        except Exception:  # noqa: BLE001 — never block the shutdown trace
+            log.warning("executor cancel raised", exc_info=True)
         log.info("executor cancel requested")
 
     def write_shutdown_trace(

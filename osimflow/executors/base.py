@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -78,6 +79,46 @@ class Handle:
     def is_failed(self) -> bool:
         """Return True if a polling error has been captured."""
         return self.error is not None
+
+    def cancel(self) -> bool:
+        """Request the substrate kill for this job (issue #1538).
+
+        Idempotent and safe to call after the job has completed (a
+        no-op returning ``False``) or from any thread — never raises.
+
+        Returns ``True`` only when a kill was actually issued by this
+        call: the first successful invocation. Subsequent calls return
+        ``False`` without re-issuing, and a call on an unsupported
+        backing future (or one whose cancel API raised) also returns
+        ``False``.
+
+        The base implementation duck-types the backing future: when
+        ``self._future`` exposes a callable ``cancel()`` it is invoked
+        and a ``None`` return (submitit ``Job.cancel`` / dask
+        ``Future.cancel`` fire-and-forget conventions) is treated as
+        "issued", while a falsy boolean (an already-running
+        ``concurrent.futures.Future`` or an already-cancelled one)
+        means "no kill issued". Substrates without a future-backed
+        kill (AWS/Azure/Google Batch, Nomad, Kubernetes, Docker
+        Swarm, PBS) override this via :class:`PollingHandle`.
+        """
+        if getattr(self, "_cancel_issued", False):
+            return False
+        future_cancel = getattr(self._future, "cancel", None)
+        if not callable(future_cancel):
+            return False
+        self._cancel_issued = True
+        try:
+            outcome = future_cancel()
+        except Exception:  # noqa: BLE001 — cancel must never raise
+            log.warning(
+                "cancel() failed for job %s: %s",
+                getattr(self, "job_id", "<unknown>"),
+                "see traceback",
+                exc_info=True,
+            )
+            return False
+        return outcome is None or bool(outcome)
 
 
 class PollOutcome(enum.Enum):
@@ -322,6 +363,10 @@ class PollingHandle(Handle):
     _result_storage_bucket: str | None = None
     _result_storage_prefix: str | None = None
     _result_storage_endpoint: str | None = None
+    #: Set by :meth:`cancel` on the first kill attempt so repeated
+    #: cancellation sweeps never issue a second substrate call
+    #: (issue #1538 idempotency contract).
+    _cancel_issued: bool = False
 
     # ------------------------------------------------------------------
     # Substrate hooks
@@ -330,6 +375,18 @@ class PollingHandle(Handle):
     def _wait_for_terminal(self, timeout: float | None) -> Any:
         """Poll the substrate until the job reaches a terminal state."""
         raise NotImplementedError
+
+    def _cancel_job(self) -> bool:
+        """Issue the substrate kill for this job (issue #1538).
+
+        Substrate-specific: terminate the Batch job, delete the K8s
+        Job, stop the Nomad allocation, ... Must return ``True`` when
+        the kill request was accepted; the shared :meth:`cancel`
+        wrapper handles idempotency, logging, and exception
+        containment, so implementations may raise freely. The default
+        (no substrate kill available) reports not-supported.
+        """
+        return False
 
     def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
         """Classify a terminal job as (outcome, raw spot-classification reason)."""
@@ -464,6 +521,44 @@ class PollingHandle(Handle):
 
         raise RuntimeError("result loop exited unexpectedly")  # pragma: no cover
 
+    def cancel(self) -> bool:
+        """Issue the substrate kill via :meth:`_cancel_job` (issue #1538).
+
+        Idempotent (one substrate call per handle lifetime), safe
+        after completion (the substrate API error is caught and
+        reported as ``False``), and never raises — the graceful
+        shutdown path must be able to sweep every live handle without
+        one bad API response aborting the rest.
+        """
+        if self._cancel_issued:
+            return False
+        self._cancel_issued = True
+        job_id = self._poll_job_id()
+        try:
+            issued = bool(self._cancel_job())
+        except Exception:  # noqa: BLE001 — cancel must never raise
+            log.warning("substrate cancel failed for job %s", job_id, exc_info=True)
+            return False
+        if issued:
+            log.info("substrate cancel issued for job %s", job_id)
+        return issued
+
+
+def _mirror_future_done(handle: Handle) -> bool:
+    """Cheap completion probe for registry pruning (issue #1538).
+
+    Checks the handle's *local mirror* future only — never the
+    substrate. For thread/submitit-backed handles that is the real
+    completion signal; for polling handles the mirror flips when a
+    ``result()`` call reaches terminal state, so an un-awaited
+    completed job may linger until the next sweep — harmless, the
+    substrate kill on an already-terminal job is a caught no-op.
+    """
+    try:
+        return bool(handle._future.done())  # noqa: SLF001 — registry-internal
+    except Exception:  # noqa: BLE001 — pruning must never raise
+        return False
+
 
 @dataclasses.dataclass
 class SubmitRequest:
@@ -571,6 +666,15 @@ class BaseExecutor(abc.ABC):
     #: limiter to acquire from.
     _rate_limiter: TokenBucketRateLimiter
 
+    #: Live-handle registry (issue #1538): ``job_id -> Handle`` for
+    #: every handle issued via :meth:`submit` that has not yet been
+    #: swept by :meth:`cancel`. Lazily initialised (executors do not
+    #: call ``super().__init__()``) via the same ``__dict__``-setdefault
+    #: pattern as the rate limiter. Pruned opportunistically — see
+    #: :meth:`_register_handle`.
+    _live_handles: dict[str, Handle]
+    _live_handles_lock: threading.Lock
+
     def _init_rate_limiter(
         self,
         submit_rps: float | None,
@@ -657,7 +761,7 @@ class BaseExecutor(abc.ABC):
         # short-circuit (TokenBucketRateLimiter.acquire returns
         # immediately when rate <= 0).
         limiter.acquire()
-        return self._do_submit(
+        handle = self._do_submit(
             fn,
             *args,
             name=name,
@@ -682,6 +786,40 @@ class BaseExecutor(abc.ABC):
             worker_id=worker_id,
             **kwargs,
         )
+        # Issue #1538: track the issued handle so :meth:`cancel` can
+        # kill its substrate job during graceful shutdown. Legacy
+        # stubs that override ``submit()`` directly bypass this —
+        # by design, they have no substrate to kill.
+        self._register_handle(handle)
+        return handle
+
+    def _register_handle(self, handle: Handle) -> Handle:
+        """Record *handle* in the live-handle registry (issue #1538).
+
+        Registration is the single interception point that lets the
+        executor-wide :meth:`cancel` reach every in-flight substrate
+        job without each executor maintaining its own ID map. The
+        registry is pruned here once it exceeds
+        :attr:`_LIVE_HANDLE_SWEEP_THRESHOLD` entries: completed
+        handles are dropped so a 10k-sample campaign does not pin
+        every result in memory. Completion is detected via the cheap
+        local-mirror check (``_future.done()``) — a plain
+        ``concurrent.futures.Future`` — never via the substrate-poking
+        ``Handle.done()``.
+        """
+        lock = self.__dict__.setdefault(
+            "_live_handles_lock",
+            threading.Lock(),  # setdefault is atomic: every racer gets the same lock
+        )
+        with lock:
+            live = self.__dict__.setdefault("_live_handles", {})
+            live[handle.job_id] = handle
+            if len(live) > self._LIVE_HANDLE_SWEEP_THRESHOLD:
+                for job_id in [
+                    job_id for job_id, candidate in live.items() if _mirror_future_done(candidate)
+                ]:
+                    del live[job_id]
+        return handle
 
     def _do_submit(
         self,
@@ -827,15 +965,50 @@ class BaseExecutor(abc.ABC):
     @abc.abstractmethod
     def shutdown(self) -> None: ...
 
-    def cancel(self) -> None:
-        """Cancel all active futures (issue #255).
+    #: Registry size beyond which completed handles are pruned at
+    #: registration time (issue #1538). Large enough that a full
+    #: fan-out's in-flight handles always stay registered; small
+    #: enough that completed results are not pinned indefinitely.
+    _LIVE_HANDLE_SWEEP_THRESHOLD: int = 512
 
-        Override in subclasses that manage their own job queues
-        (Slurm, AWS Batch) to send cancellation signals to the
-        underlying substrate. The base implementation is a no-op
-        for executors that do not need explicit cancellation.
+    def cancel(self) -> None:
+        """Cancel all active jobs on this executor's substrate (issues #255, #1538).
+
+        Called by ``CampaignLifecycle.cancel_active_jobs`` on every
+        graceful-shutdown path (``osimflow cancel`` / ``.stop`` /
+        SIGINT / SIGTERM). Sweeps every handle issued through
+        :meth:`submit` that is still registered and issues its
+        substrate kill via :meth:`Handle.cancel` — TerminateJob /
+        scancel / job delete / allocation stop / subprocess terminate,
+        depending on the executor. Per-handle failures are logged and
+        skipped so one bad API response never aborts the sweep;
+        :meth:`Handle.cancel` itself is idempotent and safe on
+        completed jobs, so a racing completion is a no-op.
+
+        Executors that need extra substrate-wide cleanup (e.g.
+        :class:`LocalExecutor` terminating in-flight work subprocesses)
+        override this, do their kill, then call ``super().cancel()``.
+        The registry is cleared after the sweep, making repeated calls
+        cheap no-ops.
         """
-        return None
+        lock = self.__dict__.setdefault("_live_handles_lock", threading.Lock())
+        with lock:
+            live = self.__dict__.get("_live_handles", {})
+            handles = list(live.values())
+            live.clear()
+        cancelled = 0
+        for handle in handles:
+            try:
+                if handle.cancel():
+                    cancelled += 1
+            except Exception:  # noqa: BLE001 — never abort the sweep
+                log.warning("cancel() raised for job %s", handle.job_id, exc_info=True)
+        if handles:
+            log.info(
+                "executor cancel: substrate kill issued for %d/%d live handle(s)",
+                cancelled,
+                len(handles),
+            )
 
     def fanout_submit_chunk_size(self, total: int) -> int:
         """Return the bounded chunk size for fan-out submission.
