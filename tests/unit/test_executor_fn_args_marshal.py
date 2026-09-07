@@ -339,9 +339,12 @@ class TestDockerSwarmExecutorFnArgsMarshal:
         )
 
         call_kwargs = ex._submit_service.call_args.kwargs
-        assert call_kwargs["result_transport_mode"] == "object_storage"
-        assert call_kwargs["result_storage_backend"] == "s3"
-        assert call_kwargs["result_storage_bucket"] == "test-bucket"
+        # The legacy submit kwargs are folded into the single frozen
+        # transport value object before reaching _submit_service
+        # (issue #1541 back-compat shim).
+        assert call_kwargs["transport"].mode == "object_storage"
+        assert call_kwargs["transport"].backend == "s3"
+        assert call_kwargs["transport"].bucket == "test-bucket"
 
 
 class TestAllExecutorsRequiresRemoteRunnerPayload:

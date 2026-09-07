@@ -81,6 +81,7 @@ erl_crash.dump
 # Coverage / build reports
 htmlcov/
 .coverage
+.coverage.*
 coverage.xml
 build/
 dist/

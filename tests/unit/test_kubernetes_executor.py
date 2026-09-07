@@ -36,6 +36,7 @@ except ImportError:
 # block intentionally precedes these imports (see comment above).
 from osimflow.executors import KubernetesExecutor  # noqa: E402
 from osimflow.executors.kubernetes_executor import _KubernetesHandle  # noqa: E402
+from osimflow.executors.transport import ResultTransportConfig  # noqa: E402
 from osimflow.task_payload_hmac import (  # noqa: E402
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SIG_ENV,
@@ -935,10 +936,12 @@ class TestKubernetesHandle:
             executor=self._succeeded_executor(),
             submit_params={},
             result_hint=tmp_path / "out" / "work" / "kpis" / "kpi_s0.json",
-            result_transport_mode="object_storage",
-            result_storage_backend="s3",
-            result_storage_bucket="osimflow-results",
-            result_storage_prefix="out",
+            transport=ResultTransportConfig(
+                mode="object_storage",
+                backend="s3",
+                bucket="osimflow-results",
+                prefix="out",
+            ),
         )
         result = handle.result()
         assert result == tmp_path / "out" / "work" / "kpis" / "kpi_s0.json"
@@ -968,10 +971,12 @@ class TestKubernetesHandle:
             executor=self._succeeded_executor(),
             submit_params={},
             result_hint=hint,
-            result_transport_mode="object_storage",
-            result_storage_backend="s3",
-            result_storage_bucket="osimflow-results",
-            result_storage_prefix="out",
+            transport=ResultTransportConfig(
+                mode="object_storage",
+                backend="s3",
+                bucket="osimflow-results",
+                prefix="out",
+            ),
         )
         result = handle.result()
         assert result == hint
@@ -999,9 +1004,7 @@ class TestKubernetesHandle:
             executor=self._succeeded_executor(),
             submit_params={},
             result_hint=hint,
-            result_transport_mode="object_storage",
-            result_storage_backend=None,
-            result_storage_bucket=None,
+            transport=ResultTransportConfig(mode="object_storage"),
         )
         assert handle.result() == hint
         storage.download_file.assert_not_called()
@@ -1021,7 +1024,7 @@ class TestKubernetesHandle:
                     "__osimflow_type__": "path",
                     "value": "/campaign/out/work/sim/s0",
                 },
-                result_transport_mode="shared_fs",
+                transport=ResultTransportConfig(mode="shared_fs"),
             )
             result = handle.result()
         assert result == Path("/campaign/out/work/sim/s0")

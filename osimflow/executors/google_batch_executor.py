@@ -50,7 +50,7 @@ from osimflow.executors.base import (
     poll_until_terminal,
 )
 from osimflow.executors.transport import (
-    coerce_transport_mode,
+    ResultTransportConfig,
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
@@ -84,11 +84,7 @@ class _GoogleBatchHandle(PollingHandle):
         submit_params: dict[str, Any],
         *,
         result_hint: Any = None,
-        result_transport_mode: str = "auto",
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
     ) -> None:
         self.job_id = job_name
         self.job_name = job_name
@@ -97,12 +93,10 @@ class _GoogleBatchHandle(PollingHandle):
         self._result_hint = result_hint
         # Result-transport contract (issue #1333): materialize object-storage
         # artifacts on `.result()` so Campaign callbacks receive local paths
-        # — identical to the Nomad and Kubernetes handles.
-        self._result_transport_mode = coerce_transport_mode(result_transport_mode)
-        self._result_storage_backend = result_storage_backend
-        self._result_storage_bucket = result_storage_bucket
-        self._result_storage_prefix = result_storage_prefix
-        self._result_storage_endpoint = result_storage_endpoint
+        # — identical to the Nomad and Kubernetes handles. One frozen
+        # value object (issue #1541) replaces the historic five per-handle
+        # kwargs; the default matches them (mode "auto", no storage).
+        self._transport = transport if transport is not None else ResultTransportConfig()
         self._future: Future[Any] = Future()
         self.worker_id: str | None = job_name
         self.worker_ip: str | None = None
@@ -130,18 +124,19 @@ class _GoogleBatchHandle(PollingHandle):
         return PollOutcome.INDETERMINATE, None
 
     def _resolve_success_result(self, timeout: float | None = None) -> Any:
+        transport = self._transport
         resolved = resolve_result_for_callback(
             self._result_hint,
             default=None,
-            transport_mode=self._result_transport_mode,
+            transport_mode=transport.mode,
         )
         return materialize_object_storage_result(
             resolved,
-            transport_mode=self._result_transport_mode,
-            result_storage_backend=self._result_storage_backend,
-            result_storage_bucket=self._result_storage_bucket,
-            result_storage_prefix=self._result_storage_prefix,
-            result_storage_endpoint=self._result_storage_endpoint,
+            transport_mode=transport.mode,
+            result_storage_backend=transport.backend,
+            result_storage_bucket=transport.bucket,
+            result_storage_prefix=transport.prefix,
+            result_storage_endpoint=transport.endpoint,
         )
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
@@ -267,11 +262,7 @@ class GoogleBatchExecutor(BaseExecutor):
         container: str | None,
         openstudio_version: str | None,
         task_payload: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
     ) -> list[dict[str, str]]:
         """Build environment variables for the Batch task.
 
@@ -305,18 +296,18 @@ class GoogleBatchExecutor(BaseExecutor):
                 {"name": key, "value": value}
                 for key, value in build_signature_env(task_payload).items()
             )
-        if result_transport_mode is not None:
-            env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": result_transport_mode})
-        if result_storage_backend is not None:
-            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BACKEND", "value": result_storage_backend})
-        if result_storage_bucket is not None:
-            env.append({"name": "OSIMFLOW_RESULT_STORAGE_BUCKET", "value": result_storage_bucket})
-        if result_storage_prefix is not None:
-            env.append({"name": "OSIMFLOW_RESULT_STORAGE_PREFIX", "value": result_storage_prefix})
-        if result_storage_endpoint is not None:
-            env.append(
-                {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": result_storage_endpoint}
-            )
+        if transport is not None:
+            env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": transport.mode})
+            if transport.backend is not None:
+                env.append({"name": "OSIMFLOW_RESULT_STORAGE_BACKEND", "value": transport.backend})
+            if transport.bucket is not None:
+                env.append({"name": "OSIMFLOW_RESULT_STORAGE_BUCKET", "value": transport.bucket})
+            if transport.prefix is not None:
+                env.append({"name": "OSIMFLOW_RESULT_STORAGE_PREFIX", "value": transport.prefix})
+            if transport.endpoint is not None:
+                env.append(
+                    {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": transport.endpoint}
+                )
         stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
         if stub_sim is not None:
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
@@ -501,11 +492,7 @@ class GoogleBatchExecutor(BaseExecutor):
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
         variables_json: str | None = None,
         env: dict[str, str] | None = None,
         stdout_path: Any = None,
@@ -548,21 +535,7 @@ class GoogleBatchExecutor(BaseExecutor):
             container=container,
             openstudio_version=openstudio_version,
             task_payload=task_payload,
-            result_transport_mode=(
-                str(result_transport_mode) if result_transport_mode is not None else None
-            ),
-            result_storage_backend=(
-                str(result_storage_backend) if result_storage_backend is not None else None
-            ),
-            result_storage_bucket=(
-                str(result_storage_bucket) if result_storage_bucket is not None else None
-            ),
-            result_storage_prefix=(
-                str(result_storage_prefix) if result_storage_prefix is not None else None
-            ),
-            result_storage_endpoint=(
-                str(result_storage_endpoint) if result_storage_endpoint is not None else None
-            ),
+            transport=transport,
         )
 
         del fn  # noqa: ARG002 — work runs inside the Batch container via remote_runner
@@ -582,21 +555,7 @@ class GoogleBatchExecutor(BaseExecutor):
             executor=self,
             submit_params=submit_params,
             result_hint=result_hint,
-            result_transport_mode=(
-                str(result_transport_mode) if result_transport_mode is not None else "auto"
-            ),
-            result_storage_backend=(
-                str(result_storage_backend) if result_storage_backend is not None else None
-            ),
-            result_storage_bucket=(
-                str(result_storage_bucket) if result_storage_bucket is not None else None
-            ),
-            result_storage_prefix=(
-                str(result_storage_prefix) if result_storage_prefix is not None else None
-            ),
-            result_storage_endpoint=(
-                str(result_storage_endpoint) if result_storage_endpoint is not None else None
-            ),
+            transport=transport,
         )
 
     def shutdown(self) -> None:

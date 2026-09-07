@@ -65,9 +65,11 @@ from osimflow.executors.nomad_executor import NomadExecutor
 from osimflow.executors.pbs_executor import PBSExecutor as PBSExecutor
 from osimflow.executors.slurm_executor import SlurmExecutor
 from osimflow.executors.transport import (
+    ResultTransportConfig as ResultTransportConfig,
     coerce_transport_mode as coerce_transport_mode,
     materialize_object_storage_result as materialize_object_storage_result,
     resolve_result_for_callback as resolve_result_for_callback,
+    resolve_transport_argument as resolve_transport_argument,
     validate_transport_mode as validate_transport_mode,
 )
 
@@ -160,8 +162,10 @@ __all__ = [
     "LocalExecutor",
     "NomadExecutor",
     "PBSExecutor",
+    "ResultTransportConfig",
     "SlurmExecutor",
     "SubmitRequest",
+    "resolve_transport_argument",
 ]
 
 

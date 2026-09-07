@@ -29,13 +29,15 @@ from typing import Any
 
 import pytest
 
-_RESULT_TRANSPORT_KWARGS: dict[str, Any] = {
-    "result_transport_mode": "object_storage",
-    "result_storage_backend": "s3",
-    "result_storage_bucket": "bucket-a",
-    "result_storage_prefix": "campaigns/c1",
-    "result_storage_endpoint": "https://s3.example.test",
-}
+from osimflow.executors.transport import ResultTransportConfig
+
+_RESULT_TRANSPORT = ResultTransportConfig(
+    mode="object_storage",
+    backend="s3",
+    bucket="bucket-a",
+    prefix="campaigns/c1",
+    endpoint="https://s3.example.test",
+)
 
 _RESULT_HINT = {"__osimflow_type__": "path", "value": "s3://bucket-a/campaigns/c1/out.json"}
 
@@ -69,7 +71,7 @@ def _aws_handle() -> Any:
         executor=executor,
         submit_params={},
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
     return handle
 
@@ -89,7 +91,7 @@ def _azure_handle() -> Any:
         executor=executor,
         submit_params={},
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
 
 
@@ -109,7 +111,7 @@ def _google_handle() -> Any:
         executor=executor,
         submit_params={},
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
 
 
@@ -122,7 +124,7 @@ def _pbs_handle() -> Any:
         job_id="1[hostname]",
         executor=executor,
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
 
 
@@ -148,7 +150,7 @@ def _nomad_handle() -> Any:
         eval_id="eval-1",
         executor=executor,
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
 
 
@@ -216,7 +218,7 @@ def test_aws_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatc
         executor=executor,
         submit_params={},
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
 
     resolved = handle.result(timeout=10.0)
@@ -263,7 +265,7 @@ def test_azure_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPa
         executor=executor,
         submit_params={},
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
 
     resolved = handle.result(timeout=10.0)
@@ -311,7 +313,7 @@ def test_google_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyP
         executor=executor,
         submit_params={},
         result_hint=_RESULT_HINT,
-        **_RESULT_TRANSPORT_KWARGS,
+        transport=_RESULT_TRANSPORT,
     )
 
     resolved = handle.result(timeout=10.0)

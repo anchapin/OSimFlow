@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 from osimflow.executors.base import BaseExecutor, Handle
-from osimflow.executors.transport import validate_transport_mode
+from osimflow.executors.transport import ResultTransportConfig, validate_transport_mode
 
 log = logging.getLogger("osimflow.executors")
 
@@ -174,11 +174,7 @@ class SlurmExecutor(BaseExecutor):
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
         variables_json: str | None = None,
         env: dict[str, str] | None = None,
         stdout_path: Any = None,
@@ -196,12 +192,12 @@ class SlurmExecutor(BaseExecutor):
         # per-sample resources (different memory ceilings for a heavy
         # sample, etc.) are honored in the resulting sbatch header, not
         # just logged.
-        # Unused fields: result_hint, remote_command, result_storage_*,
-        # variables_json, env, stdout/stderr_path, max_retries,
-        # worker_id — accepted for API compatibility but not consumed
-        # locally.  result_transport_mode is validated against the
+        # Unused fields: result_hint, remote_command, the transport
+        # config's storage fields, variables_json, env, stdout/stderr_path,
+        # max_retries, worker_id — accepted for API compatibility but not
+        # consumed locally.  The transport mode is validated against the
         # capability matrix (issue #1473) — slurm is in-band only.
-        validate_transport_mode(self.name, result_transport_mode)
+        validate_transport_mode(self.name, transport.mode if transport is not None else None)
         if container:
             log.info(
                 "slurm submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",

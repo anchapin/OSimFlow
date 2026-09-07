@@ -26,6 +26,7 @@ from osimflow.executors.transport import (
     DEFAULT_TRANSPORT_CAPABILITIES,
     IN_BAND_TRANSPORT_MODES,
     TRANSPORT_CAPABILITIES,
+    ResultTransportConfig,
     validate_transport_mode,
 )
 
@@ -114,7 +115,9 @@ class TestSubmitRequestValidation:
     def test_local_submit_request_rejects_object_storage(self) -> None:
         executor = LocalExecutor(max_workers=1)
         request = SubmitRequest(
-            fn=lambda: None, name="sim_s0", result_transport_mode="object_storage"
+            fn=lambda: None,
+            name="sim_s0",
+            transport=ResultTransportConfig(mode="object_storage"),
         )
         with pytest.raises(ValueError, match="'local' does not support"):
             executor.submit_request(request)
@@ -144,7 +147,9 @@ class TestSubmitRequestValidation:
         # uninitialized SlurmExecutor (no submitit dependency) suffices.
         executor = SlurmExecutor.__new__(SlurmExecutor)
         request = SubmitRequest(
-            fn=lambda: None, name="sim_s0", result_transport_mode="object_storage"
+            fn=lambda: None,
+            name="sim_s0",
+            transport=ResultTransportConfig(mode="object_storage"),
         )
         with pytest.raises(ValueError, match="'slurm' does not support"):
             executor.submit_request(request)
@@ -172,7 +177,11 @@ class TestDockerSwarmCompletion:
         )
         assert handle is not None
         params = executor._submit_service.call_args.kwargs
-        assert params["result_transport_mode"] == "object_storage"
+        # The legacy submit kwargs are folded into the single frozen
+        # transport value object before reaching _submit_service
+        # (issue #1541 back-compat shim).
+        assert params["transport"].mode == "object_storage"
+        assert params["transport"].backend == "s3"
         assert params["result_hint"] == Path("/tmp/out/s0")
 
     def test_handle_materializes_object_storage_result(
@@ -197,11 +206,12 @@ class TestDockerSwarmCompletion:
             executor=executor,
             submit_params={
                 "result_hint": tmp_path / "s0",
-                "result_transport_mode": "object_storage",
-                "result_storage_backend": "s3",
-                "result_storage_bucket": "b",
-                "result_storage_prefix": "out",
-                "result_storage_endpoint": None,
+                "transport": ResultTransportConfig(
+                    mode="object_storage",
+                    backend="s3",
+                    bucket="b",
+                    prefix="out",
+                ),
             },
         )
         resolved = handle.result()

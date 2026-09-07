@@ -22,7 +22,7 @@ from osimflow._subprocess_utils import (
     terminate_active_subprocesses,
 )
 from osimflow.executors.base import BaseExecutor, Handle
-from osimflow.executors.transport import validate_transport_mode
+from osimflow.executors.transport import ResultTransportConfig, validate_transport_mode
 
 __all__ = ["LocalExecutor", "run_subprocess"]
 
@@ -77,11 +77,7 @@ class LocalExecutor(BaseExecutor):
         openstudio_version: str | None = None,
         result_hint: Any = None,
         remote_command: str | None = None,
-        result_transport_mode: str | None = None,
-        result_storage_backend: str | None = None,
-        result_storage_bucket: str | None = None,
-        result_storage_prefix: str | None = None,
-        result_storage_endpoint: str | None = None,
+        transport: ResultTransportConfig | None = None,
         variables_json: str | None = None,
         env: dict[str, str] | None = None,
         stdout_path: Any = None,
@@ -96,15 +92,15 @@ class LocalExecutor(BaseExecutor):
         self._container_digest = container_digest
         # Issue #1473: validate the transport capability matrix instead
         # of silently discarding an unsupported mode.
-        validate_transport_mode(self.name, result_transport_mode)
+        validate_transport_mode(self.name, transport.mode if transport is not None else None)
         _unused = [
             ("openstudio_version", openstudio_version),
             ("result_hint", result_hint),
             ("remote_command", remote_command),
-            ("result_storage_backend", result_storage_backend),
-            ("result_storage_bucket", result_storage_bucket),
-            ("result_storage_prefix", result_storage_prefix),
-            ("result_storage_endpoint", result_storage_endpoint),
+            ("result_storage_backend", transport.backend if transport else None),
+            ("result_storage_bucket", transport.bucket if transport else None),
+            ("result_storage_prefix", transport.prefix if transport else None),
+            ("result_storage_endpoint", transport.endpoint if transport else None),
             ("variables_json", variables_json),
             ("stdout_path", stdout_path),
             ("stderr_path", stderr_path),
