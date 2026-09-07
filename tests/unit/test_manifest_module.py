@@ -223,7 +223,9 @@ class TestReportSampleCompletion:
         ):
             with caplog.at_level(logging.WARNING, logger="osimflow.manifest"):
                 report_sample_completion(
-                    coordinator_url="http://coord",
+                    # loopback host — the scheme gate (issue #1550) exempts
+                    # it, so these URL/param tests still reach _do_patch.
+                    coordinator_url="http://localhost:8000",
                     campaign_id="camp-1",
                     manifest={"status": "completed"},
                 )
@@ -232,7 +234,7 @@ class TestReportSampleCompletion:
     def test_with_api_key_passes_auth_header(self) -> None:
         with patch("osimflow.manifest._do_patch") as mock_patch:
             report_sample_completion(
-                coordinator_url="http://coord/",
+                coordinator_url="http://localhost:8000/",
                 campaign_id="camp-2",
                 manifest={"status": "failed"},
                 api_key="secret",
@@ -248,17 +250,17 @@ class TestReportSampleCompletion:
     def test_url_strips_trailing_slash(self) -> None:
         with patch("osimflow.manifest._do_patch") as mock_patch:
             report_sample_completion(
-                coordinator_url="http://coord///",
+                coordinator_url="http://localhost:8000///",
                 campaign_id="camp-3",
                 manifest={"status": "completed"},
             )
             args, _ = mock_patch.call_args
-            assert args[0] == ("http://coord/api/v1/coordinator/campaigns/camp-3/status")
+            assert args[0] == ("http://localhost:8000/api/v1/coordinator/campaigns/camp-3/status")
 
     def test_status_param_defaults_to_unknown(self) -> None:
         with patch("osimflow.manifest._do_patch") as mock_patch:
             report_sample_completion(
-                coordinator_url="http://coord",
+                coordinator_url="http://localhost:8000",
                 campaign_id="camp-4",
                 manifest={},
             )
@@ -268,7 +270,7 @@ class TestReportSampleCompletion:
     def test_custom_timeout_passes_through(self) -> None:
         with patch("osimflow.manifest._do_patch") as mock_patch:
             report_sample_completion(
-                coordinator_url="http://coord",
+                coordinator_url="http://localhost:8000",
                 campaign_id="camp-5",
                 manifest={"status": "ok"},
                 timeout_s=2.5,

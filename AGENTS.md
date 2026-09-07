@@ -685,9 +685,16 @@ name in this section.
 - `osimflow/apply_params.py`, `osimflow/aggregation.py`,
   `osimflow/audit.py`, `osimflow/byos.py`,
   `osimflow/event_log.py`, `osimflow/json_utils.py`,
-  `osimflow/manifest.py`, `osimflow/results_db.py`,
+  `osimflow/results_db.py`,
   `osimflow/validation.py` (`ValidationError`),
   `osimflow/webhook.py` — internal supporting modules.
+- `osimflow/manifest.py` — per-sample manifest construction,
+  atomic publishing, and the Coordinator status client
+  (`report_sample_completion`); hosts
+  `_validate_coordinator_url` — the https gate for
+  `--coordinator-url` / `OSIMFLOW_COORDINATOR_URL` (issue #1550;
+  loopback-exempt, override reuses
+  `--allow-insecure-storage-endpoint`).
 - `osimflow/errors.py` — single package root
   (`OSimFlowError`) + intermediate mixins
   (`OSimFlowRuntimeError`, `OSimFlowValueError`) so every
@@ -1246,6 +1253,18 @@ context-mode / codebase-memory-mcp are exposed):
   loopback hosts exempt). Plaintext HTTP endpoints leak AWS
   SigV4 signing material in cleartext — do not enable
   `--allow-insecure-storage-endpoint` in production.
+- **Coordinator URL** (issue #1550): `--coordinator-url` /
+  `OSIMFLOW_COORDINATOR_URL` must use `https://` for non-loopback
+  hosts. Enforced by `osimflow.manifest._validate_coordinator_url`
+  at `Campaign.run()` entry (fail-fast) and in the coordinator
+  clients (`report_sample_completion` refuses to send;
+  `osimflow run --detach` handoff rejects with exit 1). Loopback
+  (`localhost`, `127.0.0.0/8`, `::1`, `0.0.0.0`) is exempt. The
+  escape hatch **reuses** `--allow-insecure-storage-endpoint`
+  (no new CLI flag — keeps the escape-hatch surface minimal and
+  mirrors the storage gate): a plaintext coordinator transmits the
+  `Authorization: Bearer $OSIMFLOW_API_KEY` header and per-sample
+  results in cleartext on every sample completion.
 - **Singularity on shared HPC:** never bind-mount secrets;
   pass via env vars or `submitit`'s
   `ex.update_parameters(setup=...)`, not as container mounts.

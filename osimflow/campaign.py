@@ -129,6 +129,7 @@ from .errors import OSimFlowRuntimeError
 from .executors import BaseExecutor, Handle
 from .executors.transport import ResultTransportConfig
 from .json_utils import safe_json_dumps, safe_json_loads
+from .manifest import _validate_coordinator_url
 from .measures import MeasureRegistry, UnmappedVariableError
 from .mlflow_hook import (
     log_mlflow_artifacts,
@@ -1535,6 +1536,14 @@ class Campaign(CampaignAnalysisMixin):
         return states
 
     def run(self) -> dict[str, object]:  # noqa: PLR0912, PLR0915
+        # Fail fast on insecure Coordinator URLs (issue #1550) — mirrors
+        # _validate_storage_endpoint (#1386) / _validate_redis_url (#1321).
+        # The override reuses --allow-insecure-storage-endpoint (no new
+        # CLI surface); loopback coordinators are always exempt.
+        _validate_coordinator_url(
+            self._coordinator_url(),
+            allow_insecure=bool(getattr(self.cfg, "allow_insecure_storage_endpoint", False)),
+        )
         log.info("=" * 60)
         log.info("OSimFlow campaign start")
         log.info("  executor:      %s", self.executor.name)
@@ -3450,6 +3459,9 @@ class Campaign(CampaignAnalysisMixin):
                 archive_intermediates=self.cfg.archive_intermediates,
                 coordinator_url=self._coordinator_url(),
                 api_key=self._coordinator_api_key(),
+                allow_insecure_coordinator=bool(
+                    getattr(self.cfg, "allow_insecure_storage_endpoint", False)
+                ),
             )
         except OSError as exc:
             # Storage failures must not abort the extract step; the manifest
