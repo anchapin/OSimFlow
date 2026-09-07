@@ -31,6 +31,7 @@ from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
+from osimflow.cache import digest_pinned_image_ref
 from osimflow.executors.base import (
     BaseExecutor,
     Handle,
@@ -452,6 +453,7 @@ class DockerSwarmExecutor(BaseExecutor):
         task_payload: str | None = None,
         result_hint: Any = None,  # noqa: ARG002 — carried for the handle, not the service
         transport: ResultTransportConfig | None = None,
+        container_digest: str | None = None,
     ) -> str:
         """Create a Docker Swarm service and return its name.
 
@@ -461,7 +463,14 @@ class DockerSwarmExecutor(BaseExecutor):
         client = self._get_client()
 
         service_name = self._build_service_name(name)
-        image = container or self.image
+        # Issue #1536: the digest-pinned ``<repo>@sha256:`` ref wins when a
+        # usable digest is available — Swarm must not resolve the image by
+        # its mutable tag while the campaign cache key describes a digest.
+        image = (
+            digest_pinned_image_ref(container or self.image, container_digest)
+            or container
+            or self.image
+        )
 
         # Build labels for tracking.
         labels: dict[str, str] = {
@@ -719,6 +728,7 @@ class DockerSwarmExecutor(BaseExecutor):
             "time_min": time_min,
             "openstudio_version": openstudio_version,
             "container": container,
+            "container_digest": container_digest,
             "command": command,
             "task_payload": task_payload,
             "result_hint": result_hint,

@@ -25,6 +25,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, ClassVar, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
+from osimflow.cache import digest_pinned_image_ref
 from osimflow.executors.base import (
     BaseExecutor,
     Handle,
@@ -986,15 +987,25 @@ class NomadExecutor(BaseExecutor):
         *,
         container: str | None,
         openstudio_version: str | None,
+        container_digest: str | None = None,
     ) -> str:
         """Resolve task image for Nomad with local-tag preference + fallback.
 
-        Resolution order:
-        1) explicit submit(container=...)
-        2) OSIMFLOW_NOMAD_PREFERRED_IMAGE env override
-        3) OSIMFLOW_OPENSTUDIO_CONTAINER_IMAGE env override
-        4) nrel/openstudio:<openstudio_version|latest>
+        Resolution order (issue #1536 puts the digest first — a re-published
+        tag must not change the image the allocation executes while the
+        campaign cache key still describes the old digest):
+        1) digest-pinned ``<repo>@sha256:`` ref derived from *container_digest*
+        2) explicit submit(container=...)
+        3) OSIMFLOW_NOMAD_PREFERRED_IMAGE env override
+        4) OSIMFLOW_OPENSTUDIO_CONTAINER_IMAGE env override
+        5) nrel/openstudio:<openstudio_version|latest>
         """
+        pinned = digest_pinned_image_ref(
+            container or f"nrel/openstudio:{openstudio_version or 'latest'}",
+            container_digest,
+        )
+        if pinned is not None:
+            return pinned
         if container:
             return container
         preferred = os.environ.get("OSIMFLOW_NOMAD_PREFERRED_IMAGE")
@@ -1049,6 +1060,7 @@ class NomadExecutor(BaseExecutor):
         remote_command: str | None = None,
         task_payload: str | None = None,
         transport: ResultTransportConfig | None = None,
+        container_digest: str | None = None,
     ) -> dict[str, Any]:
         """Build a Nomad ``batch`` job spec for one OpenStudio task.
 
@@ -1113,6 +1125,7 @@ class NomadExecutor(BaseExecutor):
         image = self._resolve_nomad_image(
             container=container,
             openstudio_version=openstudio_version,
+            container_digest=container_digest,
         )
         task_command = remote_command or "python -m osimflow.remote_runner"
         import uuid  # noqa: PLC0415
@@ -1468,6 +1481,7 @@ class NomadExecutor(BaseExecutor):
             image = self._resolve_nomad_image(
                 container=container,
                 openstudio_version=(str(openstudio_version) if openstudio_version else None),
+                container_digest=container_digest,
             )
             meta: dict[str, str] = {
                 "sample_id": _slugify_job_name(name),
@@ -1517,6 +1531,7 @@ class NomadExecutor(BaseExecutor):
                 remote_command=(str(remote_command) if remote_command else None),
                 task_payload=task_payload,
                 transport=transport,
+                container_digest=container_digest,
             )
             response = self._client.submit_job(spec)
 

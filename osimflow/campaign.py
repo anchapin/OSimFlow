@@ -113,14 +113,22 @@ from .apply_params import (
     _build_mappings,
     preflight_check,
 )
-from .cache import CacheKey, _container_digest_for, sha256_of_dict, sha256_of_files
+from .cache import (
+    CacheKey,
+    _container_digest_for,
+    digest_pinned_image_ref,
+    sha256_of_dict,
+    sha256_of_files,
+)
 from .chaos import ChaosEngine
 from .config import CampaignConfig
 from .cosign import (
     DEFAULT_COSIGN_OIDC_ISSUER,
     CosignVerificationError,
     build_cosign_image_ref,
+    triangulate_image_ref,
     verify_image_signature,
+    write_cosign_receipt,
 )
 from .data_point_manager import DataPointManager
 from .distributed_cache import build_cache, campaign_state_namespace
@@ -177,6 +185,22 @@ log = logging.getLogger("osimflow.campaign")
 # `docs/openstudio-image-distribution.md` and ADR-0002 for the rationale.
 # The scientific Python image remains a project-owned ghcr.io artifact.
 CONTAINER_OS = "docker.io/nrel/openstudio:{version}"
+
+#: Executors whose substrate pulls the OpenStudio container image.  For
+#: these, an unresolved image digest fails loudly at ``run()`` start —
+#: the executed image must be digest-pinned so a re-published tag cannot
+#: change what runs while the cache key still describes the old digest
+#: (issue #1536).
+CONTAINER_SUBSTRATE_EXECUTORS: frozenset[str] = frozenset(
+    {
+        "aws_batch",
+        "azure_batch",
+        "docker_swarm",
+        "google_batch",
+        "kubernetes",
+        "nomad",
+    }
+)
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 
 
@@ -515,6 +539,15 @@ def _verify_cosign_or_raise(cfg: CampaignConfig) -> None:
         openstudio_version=cfg.openstudio_version,
     )
     issuer = cfg.cosign_oidc_issuer or DEFAULT_COSIGN_OIDC_ISSUER
+    # Issue #1536: verifying a mutable-tag ref resolves tag→digest once
+    # inside cosign, but the executors pull by tag later — a re-push
+    # between verify and pull substitutes the executed image (TOCTOU).
+    # Triangulate FIRST and verify the digest-pinned ref; failure to
+    # triangulate refuses to run.
+    source_tag: str | None = None
+    if "@sha256:" not in os_image_ref:
+        source_tag = os_image_ref
+        os_image_ref = triangulate_image_ref(os_image_ref)
     try:
         verify_image_signature(
             os_image_ref,
@@ -529,6 +562,26 @@ def _verify_cosign_or_raise(cfg: CampaignConfig) -> None:
             os_image_ref,
         )
         raise
+    # Issue #1536: persist the audit receipt with the digest that was
+    # actually verified (and the source tag when the ref was
+    # triangulated) alongside ``run.json``.
+    receipt_digest = (
+        os_image_ref.split("@sha256:", 1)[1].split("@", 1)[0]
+        if "@sha256:" in os_image_ref
+        else None
+    )
+    try:
+        cfg.outdir.mkdir(parents=True, exist_ok=True)
+        write_cosign_receipt(
+            cfg.outdir,
+            image_ref=os_image_ref,
+            certificate_identity=str(cfg.require_cosign_identity),
+            certificate_oidc_issuer=issuer,
+            verified_digest=(f"sha256:{receipt_digest}" if receipt_digest else None),
+            triangulated_from_tag=source_tag,
+        )
+    except OSError as exc:  # pragma: no cover - filesystem edge
+        log.warning("could not write cosign verification receipt: %s", exc)
     log.info(
         "cosign verification passed for %s (identity=%s)",
         os_image_ref,
@@ -617,6 +670,14 @@ class Campaign(CampaignAnalysisMixin):
             self._python_container_digest = cfg.container_digest
             self._os_container_digest = cfg.container_digest
             log.info("container images pinned by digest: %s", cfg.container_digest)
+        # Issue #1536: the pullable digest-pinned ref every container
+        # substrate must execute (``<repo>@sha256:<hex>``).  ``None`` when
+        # the digest is unresolved — ``run()`` fails loudly for container
+        # substrates in that case instead of silently resolving by tag.
+        self._os_digest_ref = digest_pinned_image_ref(
+            CONTAINER_OS.format(version=cfg.openstudio_version),
+            self._os_container_digest,
+        )
         # Issue #1385: when the operator opts in via
         # ``--require-cosign-identity``, verify the OpenStudio image
         # signature (keyless sigstore) BEFORE anything runs.
@@ -1544,6 +1605,22 @@ class Campaign(CampaignAnalysisMixin):
             self._coordinator_url(),
             allow_insecure=bool(getattr(self.cfg, "allow_insecure_storage_endpoint", False)),
         )
+        # Issue #1536: container substrates must execute the digest-pinned
+        # image.  When the digest could not be resolved (docker absent, the
+        # image not pulled locally) and the operator did not pass
+        # ``--container-digest``, fail loudly instead of silently resolving
+        # the image by its mutable tag — a re-published tag would change
+        # what runs while the cache key still describes the old digest.
+        if self.executor.name in CONTAINER_SUBSTRATE_EXECUTORS and self._os_digest_ref is None:
+            raise RuntimeError(
+                f"executor {self.executor.name!r} requires a digest-pinned "
+                "container image, but the OpenStudio image digest could not "
+                "be resolved (docker unavailable or image not pulled) and no "
+                "--container-digest was provided. Pass --container-digest "
+                "<repo>@sha256:<hex> (or resolve/pull the image where docker "
+                "is reachable) so the executed image matches the cache key "
+                "(issue #1536)."
+            )
         log.info("=" * 60)
         log.info("OSimFlow campaign start")
         log.info("  executor:      %s", self.executor.name)
@@ -3076,7 +3153,10 @@ class Campaign(CampaignAnalysisMixin):
             "cpus": 4,
             "memory_mb": 8 * 1024,
             "time_min": 240,
-            "container": CONTAINER_OS.format(version=os_version),
+            # Issue #1536: submit the digest-pinned ref when one is known —
+            # a re-published tag must not change the image the campaign
+            # executes while the cache key still describes the old digest.
+            "container": self._os_digest_ref or CONTAINER_OS.format(version=os_version),
             "container_digest": self._os_container_digest,
             "openstudio_version": os_version,
             "stdout_path": ctx["stdout_log"],

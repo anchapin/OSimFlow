@@ -49,6 +49,7 @@ from concurrent.futures import Future
 from typing import Any, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
+from osimflow.cache import digest_pinned_image_ref
 from osimflow.executors.base import (
     BaseExecutor,
     Handle,
@@ -486,13 +487,17 @@ class KubernetesExecutor(BaseExecutor):
         env: list[dict[str, Any]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
-        # Issue #1081: a pinned SHA256 digest overrides the mutable tag
-        # for the OSIMFLOW_CONTAINER env var that remote_runner reads.
+        # Issue #1081/#1536: a pinned SHA256 digest overrides the mutable
+        # tag for the OSIMFLOW_CONTAINER env var that remote_runner reads.
+        # ``digest_pinned_image_ref`` converts the cache-form digest into a
+        # pullable ``<repo>@sha256:`` ref (and rejects the ``unresolved``
+        # sentinel, which is not a valid image reference).
         container_digest = getattr(self, "_container_digest", None)
-        if container_digest is not None:
-            resolved = container_digest
-        else:
-            resolved = container or f"nrel/openstudio:{openstudio_version or 'latest'}"
+        pinned = digest_pinned_image_ref(
+            container or f"nrel/openstudio:{openstudio_version or 'latest'}",
+            container_digest,
+        )
+        resolved = pinned or container or f"nrel/openstudio:{openstudio_version or 'latest'}"
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
@@ -982,10 +987,16 @@ class KubernetesExecutor(BaseExecutor):
     ) -> str:
         """Return the container image to use for version checking.
 
-        Mirrors the resolution logic in ``_build_environment``.
+        Mirrors the resolution logic in ``_build_environment``: the
+        digest-pinned ``<repo>@sha256:`` ref wins when the digest is
+        usable (issue #1536); the mutable tag is the fallback.
         """
-        if container_digest is not None:
-            return container_digest
+        pinned = digest_pinned_image_ref(
+            container or f"nrel/openstudio:{openstudio_version or 'latest'}",
+            container_digest,
+        )
+        if pinned is not None:
+            return pinned
         if container is not None:
             return container
         return f"nrel/openstudio:{openstudio_version or 'latest'}"

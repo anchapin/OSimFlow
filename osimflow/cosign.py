@@ -142,26 +142,97 @@ def verify_image_signature(
     log.info("cosign verification OK for %s", image_ref)
 
 
+def triangulate_image_ref(
+    image_ref: str,
+    *,
+    cosign_binary: str | None = None,
+    timeout_s: float = COSIGN_VERIFY_TIMEOUT_S,
+) -> str:
+    """Resolve a mutable-tag ref to its digest-pinned form via ``cosign triangulate``.
+
+    Issue #1536: verifying a tag ref resolves tag→digest once inside
+    ``cosign verify``, but the executors then pull by tag later — a tag
+    re-push between verify and pull substitutes the executed image while
+    the receipt still attests "verified: true" (TOCTOU).  Triangulating
+    FIRST and verifying the digest-pinned ref closes the window.
+
+    Returns the digest-pinned reference (``<repo>@sha256:<hex>``).
+    Returns *image_ref* unchanged when it is already digest-pinned.
+
+    Raises
+    ------
+    CosignVerificationError
+        When the binary is unavailable, times out, or exits non-zero —
+        the caller must refuse to run (issue #1536).
+    """
+    if "@sha256:" in image_ref:
+        return image_ref
+    resolved = cosign_binary or shutil.which("cosign")
+    if resolved is None:
+        raise CosignVerificationError(
+            "cosign binary not found on PATH. Install cosign "
+            "(https://docs.sigstore.dev/cosign/system_config/installation/) "
+            "— a tag ref requires triangulation before verification "
+            "(issue #1536)."
+        )
+    cmd = [str(resolved), "triangulate", image_ref]
+    log.info("triangulating image ref: %s", image_ref)
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CosignVerificationError(
+            f"cosign triangulate timed out after {timeout_s:.0f}s for {image_ref!r}"
+        ) from exc
+    except OSError as exc:
+        raise CosignVerificationError(
+            f"cosign triangulate could not execute {resolved!r}: {exc}"
+        ) from exc
+    pinned = (proc.stdout or "").strip()
+    if proc.returncode != 0 or "@sha256:" not in pinned:
+        stderr_tail = (proc.stderr or proc.stdout or "").strip()[-800:]
+        raise CosignVerificationError(
+            f"cosign triangulate FAILED for {image_ref!r} "
+            f"(exit={proc.returncode}): {stderr_tail} — refusing to verify a "
+            "mutable-tag ref without its digest (issue #1536)."
+        )
+    log.info("triangulated %s -> %s", image_ref, pinned)
+    return pinned
+
+
 def write_cosign_receipt(
     outdir: Path,
     *,
     image_ref: str,
     certificate_identity: str,
     certificate_oidc_issuer: str,
+    verified_digest: str | None = None,
+    triangulated_from_tag: str | None = None,
 ) -> Path:
     """Persist the verification inputs alongside ``run.json`` for audit.
 
     The receipt is a small JSON file (``cosign_verification.json``)
     recording *what* was verified — the image reference, expected
-    identity, and issuer — so post-hoc audits can re-run verification
-    against the same inputs.
+    identity, issuer, and (issue #1536) the digest ``cosign verify``
+    actually resolved plus the source tag when the ref was
+    triangulated — so post-hoc audits can re-run verification against
+    the same inputs.
     """
-    receipt = {
+    receipt: dict[str, object] = {
         "image_ref": image_ref,
         "certificate_identity": certificate_identity,
         "certificate_oidc_issuer": certificate_oidc_issuer,
         "verified": True,
     }
+    if verified_digest is not None:
+        receipt["verified_digest"] = verified_digest
+    if triangulated_from_tag is not None:
+        receipt["triangulated_from_tag"] = triangulated_from_tag
     path = outdir / "cosign_verification.json"
     path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
