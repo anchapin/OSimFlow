@@ -3620,7 +3620,20 @@ def _cmd_warm_cache(args: argparse.Namespace) -> int:
         print("Run with --help for usage.", file=sys.stderr)
         return 1
     except ValidationError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        # Map ValidationError.field (or message content) to a user-facing flag.
+        field = exc.field
+        msg = str(exc)
+        if field == "variables" or "variables_yml" in msg:
+            flag = "--input_variables"
+        elif field == "template_sim_package":
+            flag = "--template_sim_package"
+        elif field == "path":
+            flag = "--input_variables"
+        else:
+            flag = "input"
+        # Print only the first line — PyYAML errors can be multi-line.
+        first_line = msg.splitlines()[0] if msg else msg
+        print(f"error: {flag}: {first_line}", file=sys.stderr)
         print("Run with --help for usage.", file=sys.stderr)
         return 1
     executor = _build_executor(args)
@@ -4063,7 +4076,20 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         print("Run with --help for usage.", file=sys.stderr)
         return 1
     except ValidationError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        # Map ValidationError.field (or message content) to a user-facing flag.
+        field = exc.field
+        msg = str(exc)
+        if field == "variables" or "variables_yml" in msg:
+            flag = "--input_variables"
+        elif field == "template_sim_package":
+            flag = "--template_sim_package"
+        elif field == "path":
+            flag = "--input_variables"
+        else:
+            flag = "input"
+        # Print only the first line — PyYAML errors can be multi-line.
+        first_line = msg.splitlines()[0] if msg else msg
+        print(f"error: {flag}: {first_line}", file=sys.stderr)
         print("Run with --help for usage.", file=sys.stderr)
         return 1
     executor: BaseExecutor
