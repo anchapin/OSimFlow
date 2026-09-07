@@ -12,6 +12,7 @@ import dataclasses
 
 import pytest
 
+from osimflow.executors.base import Handle
 from osimflow.taskqueue import (
     ConsumerQueue,
     DaskTaskQueue,
@@ -92,6 +93,57 @@ def test_task_handle_defaults() -> None:
     assert handle._future is None
     assert handle.worker_id is None
     assert dataclasses.is_dataclass(handle)
+
+
+# ---------------------------------------------------------------------------
+# Handle unification (issue #1543 / ADR-0005)
+# ---------------------------------------------------------------------------
+
+
+def test_task_handle_is_executor_handle_subclass() -> None:
+    # ADR-0005: the work-dispatch queue returns handles that *are*
+    # executor handles, so Campaign fan-out references one type.
+    assert issubclass(TaskHandle, Handle)
+    handle = TaskHandle(task_id="h1")
+    assert isinstance(handle, Handle)
+
+
+def test_task_handle_job_id_mirrors_task_id() -> None:
+    # Whichever identifier was supplied wins; the other mirrors it so
+    # Handle-typed consumers see a meaningful job id.
+    handle = TaskHandle(task_id="h2")
+    assert handle.job_id == "h2"
+    reverse = TaskHandle(job_id="h3")
+    assert reverse.task_id == "h3"
+
+
+def test_task_handle_inherited_worker_attribution_defaults() -> None:
+    handle = TaskHandle(task_id="h4")
+    assert handle.worker_ip is None
+    assert handle.worker_region is None
+    assert handle.cost_usd is None
+    assert handle.billed_duration_seconds is None
+    assert handle.error is None
+    assert handle.is_failed() is False
+
+
+def test_build_task_queue_submissions_are_executor_handles() -> None:
+    queue = build_task_queue("none")
+    handle = queue.submit(lambda: "ok")
+    assert isinstance(handle, TaskHandle)
+    assert isinstance(handle, Handle)
+    assert handle.result() == "ok"
+    assert handle.job_id == handle.task_id
+
+
+def test_campaign_references_only_executor_handle() -> None:
+    # Acceptance criterion of #1543: no TQHandle alias / union survives
+    # in the orchestrator — the fan-out loop is single-typed.
+    import inspect
+
+    from osimflow import campaign as campaign_module
+
+    assert "TQHandle" not in inspect.getsource(campaign_module)
 
 
 # ---------------------------------------------------------------------------

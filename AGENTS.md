@@ -492,7 +492,11 @@ name in this section.
 - `osimflow/taskqueue.py` — `ProducerQueue` ABC (fan-out / push) +
   `ConsumerQueue` ABC (fan-in / pull) + `DaskTaskQueue`
   (implements both), `NoOpTaskQueue` (implements both),
-  `TaskHandle`, `TaskQueueStatus`, `build_task_queue`.
+  `TaskHandle` (a subclass of the executor `Handle` since
+  issue #1543, so `Campaign` fan-out references one handle type),
+  `TaskQueueStatus`, `build_task_queue`. Work-dispatch role only —
+  distinct from the `jobqueue.py` crash-recovery journal and the
+  `distributed_jobqueue.py` control-plane broadcast (ADR-0005).
 - `osimflow/document_store.py` — `DocumentStore` ABC,
   `DocumentStoreError`, `DocumentNotFoundError`,
   `DuplicateDocumentError`, `SQLiteDocumentStore`,
@@ -1201,6 +1205,13 @@ context-mode / codebase-memory-mcp are exposed):
   — single-instance Redis as the scoped decision for the four
   Redis-backed planes; campaign-restart-by-replay is the recovery
   story; `osimflow health --redis-url` surfaces the deployment mode.
+- [ADR-0005
+  (`.agents/results/architecture/0005-queue-modules-roles.md`)](.agents/results/architecture/0005-queue-modules-roles.md)
+  — `TaskHandle` subclasses the executor `Handle` (one handle
+  contract, issue #1543); documents the distinct roles of the three
+  queue modules: work dispatch (`taskqueue.py`) vs. crash-recovery
+  journal (`jobqueue.py`) vs. control-plane broadcast
+  (`distributed_jobqueue.py`).
 - [Decision verdict
   (`.agents/results/decision-verdict.md`)](.agents/results/decision-verdict.md)
   — spike outcome that ratified the foundation.

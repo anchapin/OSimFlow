@@ -133,7 +133,6 @@ from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import ConsumerQueue
-from .taskqueue import TaskHandle as TQHandle
 from .work import (
     SevereEnergyPlusError,
     aggregate_results,
@@ -1196,10 +1195,10 @@ class Campaign:
 
     def _submit_and_await_all(
         self,
-        submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
+        submissions: dict[str, tuple[Handle, Callable[[Any], None]]],
         step_name: str,
         recovery_manager: WorkerRecoveryManager | None = None,
-        resubmit_callback: Callable[[str], Handle | TQHandle | None] | None = None,
+        resubmit_callback: Callable[[str], Handle | None] | None = None,
     ) -> None:
         """Submit all samples to the executor, then await all results concurrently.
 
@@ -1273,7 +1272,7 @@ class Campaign:
         await_deadline = self._compute_await_deadline(step_name)
 
         def _await_one(
-            item: tuple[str, tuple[Handle | TQHandle, Callable[[Any], None]]],
+            item: tuple[str, tuple[Handle, Callable[[Any], None]]],
         ) -> str:
             """Await one handle. Returns the sample_id."""
             sid, (handle, on_success) = item
@@ -3193,7 +3192,7 @@ class Campaign:
             # (mirroring the pause-break path).
             if self._check_quota_exceeded():
                 break
-            submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
+            submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
             chunk = pending_items[chunk_start : chunk_start + chunk_size]
             for sid, ctx in chunk:
                 if self._check_pause_requested():
@@ -3203,7 +3202,7 @@ class Campaign:
                     if now < next_submit_at:
                         time.sleep(next_submit_at - now)
                     next_submit_at = max(next_submit_at, now) + submit_interval_s
-                handle: Handle | TQHandle
+                handle: Handle
                 # GAP-009: use per-sample seed_model override if set,
                 # otherwise fall back to the campaign-level template_sim_package.
                 template_pkg: Path = (
@@ -3456,12 +3455,12 @@ class Campaign:
         # Worker auto-recovery (issue #443): set up recovery manager and resubmit
         # callback when auto-recovery is enabled.
         recovery_manager: WorkerRecoveryManager | None = None
-        resubmit_callback: Callable[[str], Handle | TQHandle | None] | None = None
+        resubmit_callback: Callable[[str], Handle | None] | None = None
 
         if self.cfg.worker_auto_recovery:
             recovery_manager = WorkerRecoveryManager(self.cfg.outdir)
 
-            def resubmit_callback(sid: str) -> Handle | TQHandle | None:
+            def resubmit_callback(sid: str) -> Handle | None:
                 """Resubmit a failed job for auto-recovery."""
                 ctx = pending.get(sid)
                 if ctx is None:
@@ -3518,7 +3517,7 @@ class Campaign:
             # path).
             if self._check_quota_exceeded():
                 break
-            submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
+            submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
             chunk = pending_items[chunk_start : chunk_start + chunk_size]
             for sid, ctx in chunk:
                 if self._check_pause_requested():
@@ -3533,7 +3532,7 @@ class Campaign:
                 # case every sample submits under the configured fault
                 # schedule (network_delay / cpu_spike / kill_switch).
                 self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "per_sample", target_id=sid)
-                handle: Handle | TQHandle
+                handle: Handle
                 # RUN_OPENSTUDIO_SIM consumes ``--max-sample-retries`` at both
                 # the auto-recovery resubmit (above) and the per-chunk fan-out
                 # submit (below) — issue #1394.  Documented in
@@ -3576,7 +3575,7 @@ class Campaign:
                     _key: CacheKey = key,
                     _state: dict[str, object] = state,
                     _archive: bool = archive,
-                    _handle: Handle | TQHandle = h,
+                    _handle: Handle = h,
                 ) -> None:
                     err = result_path / "eplusout.err"
                     if err.exists():
@@ -3823,7 +3822,7 @@ class Campaign:
             # (mirroring the pause-break path).
             if self._check_quota_exceeded():
                 break
-            submissions: dict[str, tuple[Handle | TQHandle, Callable[[Any], None]]] = {}
+            submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
             chunk = pending_items[chunk_start : chunk_start + chunk_size]
             for sid, ctx in chunk:
                 if self._check_pause_requested():
@@ -3837,7 +3836,7 @@ class Campaign:
                 # KPI extraction fan-out. No-op unless the schedule is
                 # ``per_sample``.
                 self._maybe_inject_chaos("EXTRACT_KPIS", "per_sample", target_id=sid)
-                handle: Handle | TQHandle
+                handle: Handle
                 # EXTRACT_KPIS consumes ``--max-sample-retries`` at both
                 # ``self.task_queue.submit`` and ``self.executor.submit``
                 # below — issue #1394.  Documented in docs/user-guide.md

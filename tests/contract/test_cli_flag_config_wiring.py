@@ -155,6 +155,7 @@ RUN_INLINE_DESTS: frozenset[str] = frozenset(
         # mappings.
         "observability_flush_interval",  # -> cfg.flush_interval_seconds
         "registry",  # -> cfg.registry_path
+        "sample_await_timeout_s",  # -> cfg.await_timeout_s (issue #1566)
     }
 )
 
@@ -262,6 +263,10 @@ REGISTRY_INLINE_DESTS: frozenset[str] = frozenset(
         "json",
         "offline",
         "executor",
+        # `health` — ``--redis-url`` feeds the Redis deployment-mode
+        # probe (issue #1562 / ADR-0004); consumed inline by
+        # ``run_health_checks``, never a CampaignConfig field.
+        "redis_url",
         # `measure`
         "action",
         "template",

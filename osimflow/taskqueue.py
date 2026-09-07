@@ -19,6 +19,14 @@ is the abstract pull interface (dequeue). ``DaskTaskQueue`` and ``NoOpTaskQueue`
 implement both since dask.distributed and the no-op pass-through handle both
 push and pull semantics internally.
 
+``TaskHandle`` is a real subclass of the executor ``Handle``
+(``osimflow.executors.base.Handle``) since issue #1543 (ADR-0005): work
+dispatch and executor submission produce the *same* handle type, so the
+Campaign fan-out loop never unions the two. The queue modules are *not*
+interchangeable, though — see ADR-0005 for the distinct roles of
+``taskqueue.py`` (work dispatch), ``jobqueue.py`` (crash-recovery journal),
+and ``distributed_jobqueue.py`` (control-plane broadcast).
+
 The queue is opt-in via the ``--task-queue`` CLI flag. When ``none`` (the
 default), behaviour is identical to the existing direct-executor pattern.
 
@@ -53,6 +61,8 @@ from concurrent.futures import Future
 from enum import Enum
 from typing import Any
 
+from osimflow.executors.base import Handle
+
 log = logging.getLogger("osimflow.taskqueue")
 
 
@@ -67,20 +77,31 @@ class TaskQueueStatus(Enum):
 
 
 @dataclasses.dataclass
-class TaskHandle:
+class TaskHandle(Handle):
     """A future-like handle for a queued task.
 
-    Mirrors the ``Handle`` interface from the executor layer so callers
-    can use either ``TaskHandle`` or ``Handle`` interchangeably.
+    Since issue #1543 (ADR-0005) this is a real subclass of the
+    executor ``Handle`` (``osimflow.executors.base.Handle``): work
+    dispatched via ``task_queue.submit`` and jobs submitted via
+    ``executor.submit`` produce the *same* handle type, so the
+    Campaign fan-out loop references a single type and fixes to
+    shared Handle semantics (e.g. deadline handling, issue #1465)
+    reach both. Queue-specific vocabulary (``task_id``, ``status``,
+    ``retry``) is preserved on top of the inherited identity /
+    worker-attribution fields; ``__post_init__`` keeps ``job_id``
+    and ``task_id`` in sync.
 
     Attributes
     ----------
     task_id
-        Unique identifier for this task (assigned by the queue).
+        Unique identifier for this task (assigned by the queue);
+        mirrored onto the inherited ``job_id``.
     status
         Current task state.
     _future
         Backing future from the underlying queue implementation.
+        May be ``None`` for handles created without one; ``result()``
+        fails closed (``RuntimeError``) in that case.
     submitted_at
         Unix timestamp when the task was submitted.
     worker_id
@@ -88,14 +109,33 @@ class TaskHandle:
         the task starts).
     """
 
-    task_id: str
+    job_id: str = ""
+    # ``Handle`` types ``_future`` non-Optional (executors always have a
+    # backing future); a queued handle may legitimately exist before one
+    # is attached. The ``result()`` override fails closed on ``None``
+    # before the base implementation could ever observe it, so the
+    # widening is deliberate (issue #1543).
+    _future: Future[Any] | None = None  # type: ignore[assignment]
+    task_id: str = ""
     status: TaskQueueStatus = TaskQueueStatus.PENDING
-    _future: Future[Any] | None = None
     submitted_at: float = dataclasses.field(default_factory=time.time)
-    worker_id: str | None = None
+
+    def __post_init__(self) -> None:
+        # Mirror the queue identity (``task_id``) onto the executor
+        # identity (``job_id``) so code written against ``Handle`` sees
+        # a meaningful identifier — whichever one was supplied wins.
+        if not self.job_id:
+            self.job_id = self.task_id
+        elif not self.task_id:
+            self.task_id = self.job_id
 
     def done(self) -> bool:
-        """Return ``True`` if the task has reached a terminal state."""
+        """Return ``True`` if the task has reached a terminal state.
+
+        Queue semantics: terminality is tracked on ``status``, not by
+        probing the backing future (a PENDING dask handle whose future
+        has already resolved is still awaiting its state transition).
+        """
         return self.status in (TaskQueueStatus.SUCCESS, TaskQueueStatus.FAILED)
 
     def result(self, timeout: float | None = None) -> Any:
