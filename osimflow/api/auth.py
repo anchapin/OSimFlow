@@ -4,7 +4,8 @@ This module provides:
 - API key validation helpers
 - Multi-user API key store with per-user permission levels
   (keys hashed at rest, issue #1552)
-- Permission checking decorators
+- Permission checking helpers (``get_user_permission`` boolean check,
+  ``require_permission`` raising check — issue #1551)
 """
 
 from __future__ import annotations
@@ -15,10 +16,8 @@ import json
 import logging
 import secrets
 from pathlib import Path
-from typing import Any
 
-from fastapi import Request
-from starlette.responses import JSONResponse, Response
+from fastapi import HTTPException, Request
 
 from osimflow.errors import OSimFlowValueError
 
@@ -468,50 +467,106 @@ def get_user_permission(request: Request, required: str) -> bool:
     api_user: APIKeyUser | None = getattr(request.state, "api_user", None)
 
     if api_user is None:
-        # No auth configured or single-key auth (api_user=None defers to server read_only).
-        # Fall back to server-level read_only setting.
+        # No auth configured or single-key auth (api_user=None defers to
+        # server read_only).  The server-level ``read_only`` flag gates
+        # *writes* only: read-only mode means "only GET endpoints are
+        # available" (see ``create_app``), so a ``readonly`` requirement
+        # is always satisfied in these modes (issue #1551 — previously
+        # the fallback denied reads whenever read_only=True).
+        if required == _READONLY:
+            return True
         return not getattr(request.app.state, "read_only", True)
 
     # Multi-user mode: check per-user role
     return api_user.has_permission(required)
 
 
-def require_permission(required: str) -> Any:
-    """Decorator that checks if the user has the required permission level.
+def require_permission(request: Request, required: str) -> None:
+    """Enforce the required permission level for this request (issue #1551).
 
-    Usage::
+    A raising counterpart to :func:`get_user_permission`: call it at the
+    top of a route handler to make that endpoint's authorization point
+    real and self-sufficient (the global :class:`APIKeyMiddleware` still
+    runs first, but the check no longer *depends* on it — mounting the
+    router under a different app cannot silently open the endpoint).
 
-        @events_router.post("/endpoint")
-        @require_permission("readwrite")
-        async def endpoint(request: Request) -> dict[str, str]:
-            ...
+    Semantics per auth mode:
+
+    - **No key store configured** (no-auth mode): the global middleware
+      governs; reads (``readonly``) pass, and writes honor the
+      server-level ``read_only`` flag — exactly the pre-#1551 fallback
+      behaviour, so single-user local ``serve`` is unaffected.
+    - **Single-key mode**: the request must carry the valid key
+      (``HTTPException`` 401 otherwise, defense-in-depth on top of the
+      middleware); reads pass; writes honor the server ``read_only`` flag.
+    - **Multi-user mode**: the request must carry a valid key (401
+      otherwise) and the key's role must satisfy *required* under the
+      hierarchical ``readonly < readwrite < admin`` ordering (403
+      otherwise).
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+    required
+        Required permission level: ``readonly`` (reads),
+        ``readwrite`` (state transitions), or ``admin``.
+
+    Raises
+    ------
+    ValueError
+        If *required* is not a valid permission level — the exact class
+        of silent-always-False bug (``"read"``/``"write"``) this helper
+        exists to eliminate (issue #1551).
+    HTTPException
+        401 when a key store is configured but the request carries no
+        or an invalid key (including a key sent via the removed
+        ``api_key`` query parameter); 403 when the authenticated
+        identity lacks *required*.
     """
+    if required not in _PERMISSION_LEVELS:
+        raise ValueError(
+            f"Invalid permission level {required!r}; expected one of "
+            f"{_PERMISSION_LEVELS} (issue #1551)"
+        )
 
-    def decorator(func: Any) -> Any:
-        async def wrapper(*args: Any, **kwargs: Any) -> Response:
-            # Assume request is the last positional arg or in kwargs
-            request_obj: Request | None = None
-            for arg in args:
-                if isinstance(arg, Request):
-                    request_obj = arg
-                    break
-            if request_obj is None:
-                request_obj = kwargs.get("request")
+    key_store: MultiUserAPIKeyStore | str | None = getattr(request.app.state, "api_key_store", None)
+    if isinstance(key_store, str):
+        key_store = MultiUserAPIKeyStore.from_single_key(key_store)
 
-            if request_obj is None:
-                return JSONResponse(
-                    status_code=500,
-                    content={"detail": "Internal error: request not found"},
-                )
+    single_key = key_store.single_key if key_store is not None else None
 
-            if not get_user_permission(request_obj, required):
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": f"{required.capitalize()} permission required"},
-                )
+    if key_store is not None and single_key is None:
+        # Multi-user mode: authenticate + authorize against the role.
+        try:
+            provided = extract_api_key(request)
+        except APIKeyQueryParameterError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        user = key_store.validate(provided)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        if not user.has_permission(required):
+            raise HTTPException(
+                status_code=403, detail=f"{required.capitalize()} permission required"
+            )
+        return
 
-            return await func(*args, **kwargs)  # type: ignore[no-any-return]
+    if single_key is not None:
+        # Single-key mode: authenticate the key here (defense-in-depth;
+        # the middleware normally rejects first).  Role is the server's
+        # read_only setting, resolved by get_user_permission below.
+        try:
+            provided = extract_api_key(request)
+        except APIKeyQueryParameterError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        if not validate_api_key(provided, single_key):
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-        return wrapper
-
-    return decorator
+    # No-auth mode, or single-key mode with a valid key: defer to the
+    # server-level read_only fallback (reads pass, writes need
+    # read_only=False).
+    if not get_user_permission(request, required):
+        raise HTTPException(
+            status_code=403,
+            detail="Read-write permission required (server is in read-only mode)",
+        )
