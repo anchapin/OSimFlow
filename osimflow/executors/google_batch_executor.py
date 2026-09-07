@@ -54,7 +54,7 @@ from osimflow.executors.transport import (
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
-from osimflow.task_payload_hmac import build_signature_env
+from osimflow.task_payload_hmac import build_signature_env, build_transport_signature_env
 
 log = logging.getLogger("osimflow.executors.google_batch")
 
@@ -308,6 +308,10 @@ class GoogleBatchExecutor(BaseExecutor):
                 env.append(
                     {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": transport.endpoint}
                 )
+            # Issue #1549: second HMAC over the canonical result-transport
+            # settings (see ``build_transport_signature_env``).
+            for _key, _value in build_transport_signature_env(transport).items():
+                env.append({"name": _key, "value": _value})
         stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
         if stub_sim is not None:
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})

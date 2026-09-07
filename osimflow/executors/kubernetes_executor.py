@@ -61,7 +61,11 @@ from osimflow.executors.transport import (
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
-from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV, build_signature_env
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    build_signature_env,
+    build_transport_signature_env,
+)
 
 log = logging.getLogger("osimflow.executors.kubernetes")
 
@@ -511,6 +515,12 @@ class KubernetesExecutor(BaseExecutor):
                 env.append(
                     {"name": "OSIMFLOW_RESULT_STORAGE_ENDPOINT", "value": transport.endpoint}
                 )
+            # Issue #1549: second HMAC over the canonical result-transport
+            # settings so the runner can reject a rewritten endpoint /
+            # allow-insecure downgrade before constructing the storage
+            # backend.  No-op in legacy unsigned mode.
+            for key, value in build_transport_signature_env(transport).items():
+                env.append({"name": key, "value": value})
         stub_sim = os.environ.get("OSIMFLOW_STUB_SIM")
         if stub_sim is not None:
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})

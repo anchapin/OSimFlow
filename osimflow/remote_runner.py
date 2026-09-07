@@ -25,8 +25,11 @@ from .executors.transport import (
 )
 from .storage import build_result_storage
 from .task_payload_hmac import (
+    RESULT_TRANSPORT_SIG_ENV,
+    RESULT_TRANSPORT_SIG_META_KEY,
     TASK_PAYLOAD_SIG_ENV,
     TASK_PAYLOAD_SIG_META_KEY,
+    canonical_result_transport_settings,
     resolve_payload_secret,
     verify_task_payload,
 )
@@ -290,12 +293,45 @@ def _upload_artifacts_for_object_storage(result: Any) -> None:  # noqa: ANN401
     )
     # Forward the opt-in plaintext flag (issue #1386).  Loopback hosts
     # are exempt without this; see ``_validate_storage_endpoint``.
-    allow_insecure = bool(
-        _get_env_or_nomad_meta(
-            env_key="OSIMFLOW_ALLOW_INSECURE_STORAGE_ENDPOINT",
-            meta_key="allow_insecure_storage_endpoint",
-        )
+    allow_insecure_env = _get_env_or_nomad_meta(
+        env_key="OSIMFLOW_ALLOW_INSECURE_STORAGE_ENDPOINT",
+        meta_key="allow_insecure_storage_endpoint",
     )
+
+    # Issue #1549: when the campaign runs in HMAC-signed mode, the
+    # result-transport settings above are covered by a second signature
+    # (``OSIMFLOW_RESULT_TRANSPORT_SIG``, emitted next to the payload
+    # signature by every transport-carrying executor).  The unsigned job
+    # environment / Nomad dispatch meta is attacker-adjacent — without
+    # this check, a reader who cannot forge the payload signature could
+    # still rewrite the endpoint and exfiltrate all campaign artifacts,
+    # or downgrade the https enforcement added in #1386.
+    transport_secret = resolve_payload_secret()
+    allow_insecure = False
+    if transport_secret:
+        transport_sig = _get_env_or_nomad_meta(
+            env_key=RESULT_TRANSPORT_SIG_ENV,
+            meta_key=RESULT_TRANSPORT_SIG_META_KEY,
+        )
+        canonical = canonical_result_transport_settings(
+            mode=mode,
+            backend=backend,
+            bucket=bucket,
+            prefix=prefix,
+            endpoint=endpoint,
+            allow_insecure=bool(allow_insecure_env),
+        )
+        if not verify_task_payload(canonical, transport_sig, transport_secret):
+            raise RuntimeError(
+                "result-transport settings failed HMAC verification (issue #1549): "
+                "refusing to construct the storage backend or upload artifacts. "
+                "The OSIMFLOW_RESULT_* job environment was modified after "
+                "submission, or the signature is missing from a signed campaign."
+            )
+        # allow_insecure is only honored when it authenticated as part of
+        # the signed transport settings (issue #1549: remove env/meta as
+        # an unauthenticated source for the escape hatch at the worker).
+        allow_insecure = bool(allow_insecure_env)
 
     if not backend or not bucket:
         raise RuntimeError(
