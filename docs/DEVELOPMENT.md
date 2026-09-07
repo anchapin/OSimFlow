@@ -942,9 +942,12 @@ applies; the explicit registration is the contract.
 
 ### Step 2: Wire into the CLI
 
-Edit `osimflow/__main__.py`:
+Since issue #1575, executor-specific flags live in a per-executor
+config module under `osimflow/executor_configs/` — **not** in
+`osimflow/__main__.py`. Only the executor *dispatch* stays in
+`osimflow/__main__.py`:
 
-1. Add the executor to `_build_executor`:
+1. In `osimflow/__main__.py`, add the executor to `_build_executor`:
 
 ```python
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:
@@ -954,7 +957,8 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:
     raise ValueError(f"unknown executor: {args.executor}")
 ```
 
-2. Add the `--executor` choice to `_build_parser`:
+2. Add `"my_new"` to the `--executor` choices list in
+`_add_run_args()`:
 
 ```python
 run.add_argument(
@@ -964,16 +968,72 @@ run.add_argument(
 )
 ```
 
-3. Add any executor-specific flags:
+3. Create osimflow/executor_configs/my_new.py owning the
+executor's flags (and its `MyNewConfig` dataclass, if it needs
+one). The module defines an `add_arguments(parser_group)` hook that
+registers the `--my-new-*` flags on the `run` / `warm-cache`
+subparser — mirroring `osimflow/executor_configs/nomad.py`:
 
 ```python
-run.add_argument("--my-new-endpoint", default="http://localhost:8080")
+# osimflow/executor_configs/my_new.py
+
+import argparse
+
+
+def add_arguments(parser_group: argparse.ArgumentParser) -> None:
+    """Register the ``my_new`` executor's run/warm-cache flags."""
+    parser_group.add_argument(
+        "--my-new-endpoint",
+        default="http://localhost:8080",
+        help="MyNew substrate endpoint.",
+    )
 ```
 
-### Step 3: Wire into CampaignConfig
+4. Register the hook in `osimflow/executor_configs/__init__.py` —
+import the module alongside the other config modules and call
+`register_executor_arguments` with the other built-in registrations
+at the bottom of the file (registration order does not matter;
+hooks are iterated in sorted executor-name order):
 
-If your executor has new config fields, add them to `CampaignConfig`
-in `osimflow/config.py` and resolve them in `load_config()`.
+```python
+# osimflow/executor_configs/__init__.py
+
+from osimflow.executor_configs import my_new
+
+# ...at the bottom, next to the other built-in registrations:
+register_executor_arguments("my_new", my_new.add_arguments)
+```
+
+`osimflow.__main__._add_run_args` calls
+`add_executor_arguments(run)` once — every registered hook's flags
+are added automatically. Never call `run.add_argument(...)` for
+executor flags in `osimflow/__main__.py` directly.
+
+**Contract-checker implication:** the AGENTS.md contract check
+derives the flag list from the real parser (which calls every
+`add_arguments` hook), so each new `--my-new-*` flag **must** be
+mentioned in AGENTS.md §3 or `make contract` will fail. See
+Step 7 below.
+
+### Step 3: Wire the config into CampaignConfig
+
+If your executor has new config fields, define the `MyNewConfig`
+dataclass in osimflow/executor_configs/my_new.py (same module as
+the flag hook — see `NomadConfig` in
+`osimflow/executor_configs/nomad.py` for the pattern). Then:
+
+1. In `osimflow/config.py`, re-export the dataclass so
+   `from osimflow.config import MyNewConfig` keeps working (add it
+   to the top-of-module `from .executor_configs import ...` block
+   and to `__all__`), and compose it on `CampaignConfig` as a
+   field — exactly as `CampaignConfig` composes `NomadConfig`.
+2. Resolve the CLI names in `load_config()` in
+   `osimflow/config.py` (`MyNewConfig(endpoint=args.get("my_new_endpoint", ...))`).
+
+`osimflow/executor_configs/` is deliberately a leaf package
+(stdlib-only imports) so `osimflow.config` can compose every
+`XConfig` without pulling executor SDKs into its import graph —
+do not import executor implementations there.
 
 ### Step 4: Add to `osimflow/__init__.py`
 
@@ -983,7 +1043,11 @@ Export the new executor class from the package's public API.
 
 Add a file like `tests/integration/test_<executor_name>.py`. Follow the pattern
 from the existing stub tests — mock the external service
-and verify the Handle contract.
+and verify the Handle contract. If a test needs a deterministic
+clock or jitter (retry/backoff behavior), patch through
+`osimflow.testing.patch_targets` — e.g.
+`patch("osimflow.testing.patch_targets.time")` — never the private
+`osimflow.executors` re-exports (removed in issue #1574).
 
 ### Step 6: Add a health check
 
@@ -1236,11 +1300,47 @@ Add the new step to:
 
 ## 9. Adding a New CLI Flag
 
-Adding a flag touches three files in sequence.
+First decide which kind of flag it is — the routing differs
+(mirroring the AGENTS.md §9 task-routing table):
 
-### Step 1: Add the argparse argument
+- **Executor-specific** (`--my-executor-*`, only meaningful for one
+  executor): the flag and its config live in that executor's config
+  module under `osimflow/executor_configs/`.
+- **Campaign-wide** (`--outdir`, `--n_samples`, ...): the flag lives
+  in `osimflow/__main__.py` and the field on `CampaignConfig`.
 
-In `osimflow/__main__.py`, add to `_build_parser()`:
+### Executor-specific flags (issues #1575)
+
+1. In `osimflow/executor_configs/<name>.py`, add the argument inside
+   the module's `add_arguments(parser_group)` hook:
+
+```python
+def add_arguments(parser_group: argparse.ArgumentParser) -> None:
+    ...
+    parser_group.add_argument(
+        "--my-new-endpoint",
+        type=str,
+        default="http://localhost:8080",
+        help="Description of what this flag does.",
+    )
+```
+
+`osimflow.__main__._add_run_args` calls
+`add_executor_arguments(run)` which invokes every registered hook,
+so the flag appears on `osimflow run` / `osimflow warm-cache`
+automatically. New plug-in hooks must be registered via
+`register_executor_arguments` (built-ins are registered in
+`osimflow/executor_configs/__init__.py`).
+
+2. If the flag maps to config state, add it to the executor's
+   `XConfig` dataclass in the same module (re-exported by
+   `osimflow.config`; composed by `CampaignConfig` — see §7
+   Step 3).
+
+### Campaign-wide flags
+
+1. In `osimflow/__main__.py`, add to `_build_parser()` (via
+   `_add_run_args()`):
 
 ```python
 run.add_argument(
@@ -1251,10 +1351,8 @@ run.add_argument(
 )
 ```
 
-### Step 2: Add to CampaignConfig
-
-In `osimflow/config.py`, add the field to the `CampaignConfig`
-dataclass:
+2. In `osimflow/config.py`, add the field to the `CampaignConfig`
+   dataclass:
 
 ```python
 @dataclasses.dataclass
@@ -1272,14 +1370,17 @@ return CampaignConfig(
 )
 ```
 
-### Step 3: Use it in the Campaign
+3. In `osimflow/campaign.py`, read `self.cfg.my_new_flag` wherever
+   needed.
 
-In `osimflow/campaign.py`, read `self.cfg.my_new_flag` wherever
-needed.
+### Both kinds: Update AGENTS.md
 
-### Step 4: Update AGENTS.md
-
-Add to §4 (CLI flags) and the task-routing table in §9.
+Add the new flag to AGENTS.md §3 (CLI flags). The contract checker
+builds the real parser — which calls every per-executor
+`add_arguments` hook from `osimflow/executor_configs/` — and walks
+its actions, so a flag registered anywhere will fail `make
+contract` until it is mentioned there (plus the task-routing table
+in §9 if it changes where work is routed).
 
 ---
 
