@@ -75,8 +75,8 @@ test-cov: ## pytest with CI flags + 82% aggregate + per-module floor (exact CI t
 	COVERAGE_PROCESS_START="$(COVERAGE_PROCESS_START)" $(PYTEST) $(PYTEST_CI_FLAGS) $(PYTEST_COV_FLAGS) -q
 	$(PY) tools/check_module_coverage.py
 
-test-fast: ## pytest contract only (pre-commit mirror)
-	$(PYTEST) -o addopts="" tests/contract -x -q
+test-fast: ## pytest contract only, fast subset (pre-commit mirror; deselects slow/chaos/full — issue #1624)
+	$(PYTEST) -o addopts="" tests/contract -x -q -m "not slow and not chaos and not full"
 
 smoke: ## 3-sample stub-mode local campaign into ./results_smoke (validates the install; no real OpenStudio needed; issue #1479)
 	OSIMFLOW_STUB_SIM=1 $(PY) -m osimflow run \

@@ -50,12 +50,17 @@ repos:
         exclude: ^\.agents/spike/
 
       - id: pytest-fast
-        name: pytest (contract + fast integration)
-        entry: .venv/bin/pytest -o addopts="" tests/contract -x -q
+        name: pytest (contract, fast subset)
+        entry: .venv/bin/pytest -o addopts="" tests/contract -x -q -m "not slow and not chaos and not full"
         language: system
         types: [python]
         pass_filenames: false
-        # Integration tests stay in CI to keep pre-commit fast.
+        # Slow / chaos / full tests stay out of pre-commit (issue #1624):
+        # test_coverage_gate (@pytest.mark.full) recursively runs the whole
+        # integration+unit suite under coverage and stalled this hook >10 min.
+        # The 82% coverage gate is enforced by `make test-cov` / the CI
+        # `test` job, not here. Keep this entry identical to the Makefile
+        # `test-fast` target (AGENTS.md §2 documents it as the mirror).
 
       - id: agents-contract
         name: AGENTS.md / code drift contract

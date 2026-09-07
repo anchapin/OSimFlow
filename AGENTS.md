@@ -133,7 +133,7 @@ make format     # ruff format (write)
 make typecheck  # mypy --strict on osimflow/
 make test       # pytest with CI flags, no coverage gate (issue #1476)
 make test-cov   # exact CI test-job invocation, 82% gate  (ci.yml runs this; issues #1417, #1476)
-make test-fast  # pytest tests/contract -x -q          (pre-commit mirror)
+make test-fast  # pytest tests/contract -x -q -m "not slow and not chaos and not full" (pre-commit mirror; issue #1624)
 make smoke      # 3-sample stub-mode local campaign into ./results_smoke (no OpenStudio needed; issue #1479)
 make contract   # regenerate BYOS runner + agents-contract + docs-sync + openapi-sync
 make byos-generate  # regenerate osimflow/_byos_runner_generated.py only
@@ -325,10 +325,21 @@ physically live in their executor's config module, not in
 
 ```bash
 make test           # CI-flag suite (xdist, 120s timeout; no contract/slow/nomad_e2e/chaos), no coverage gate
-make test-fast      # contract only, no coverage gate (pre-commit mirror)
+make test-fast      # contract only, fast subset (pre-commit mirror; deselects slow/chaos/full)
 .venv/bin/pytest tests/integration/test_cache_invalidation.py -v
 .venv/bin/pytest --cov=osimflow
 ```
+
+The `pytest-fast` pre-commit hook and `make test-fast` run the
+IDENTICAL invocation
+(`.venv/bin/pytest -o addopts="" tests/contract -x -q -m "not slow and not chaos and not full"`,
+single-sourced in `.pre-commit-config.yaml` and the Makefile). The
+`full` mark (issue #1624) excludes `test_coverage_gate`, whose fixture
+recursively runs the entire integration+unit suite under coverage
+(>10 min serial — it stalled pre-commit past usability); the enforced
+82% coverage gate actually runs in `make test-cov` / the CI `test`
+job. Run the heavyweight duplicate explicitly with
+`pytest tests/contract -m full`.
 
 CI runs `make test-cov` (the CI `test` job calls the Makefile
 target; pytest flags are single-sourced in the Makefile —
@@ -1041,7 +1052,9 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
 - `.agents/results/` — ADRs and the framework-decision
   verdict.
 - `tests/contract/` — contract tests run by pre-commit and
-  `make test-fast`.
+  `make test-fast` (fast subset since issue #1624: the recursive
+  `test_coverage_gate` is `full`-marked and only runs when explicitly
+  selected with `-m full`).
 - `tests/unit/`, `tests/integration/`, `tests/benchmarks/`
   — pytest trees. The real-substrate companion tests in
   `tests/integration/test_real_<substrate>_campaign.py`

@@ -9,7 +9,10 @@ Each test corresponds to one acceptance criterion in issue #15:
   1. ruff lint runs clean                         -> test_ruff_passes
   2. ruff format is clean                         -> test_ruff_format_passes
   3. mypy --strict on osimflow/                   -> test_mypy_strict_passes
-  4. coverage gate >= 82%                         -> test_coverage_gate (issue #1417)
+  4. coverage gate >= 82%                         -> test_coverage_gate (issue #1417;
+                                                     ``full``-marked — excluded from
+                                                     pre-commit / ``make test-fast``
+                                                     since issue #1624)
   5. AGENTS.md / code contract                    -> test_agents_md_contract
   6. pre-commit config validates                  -> test_precommit_config_valid
   7. CI workflow YAMLs parse                      -> test_workflows_yaml_valid
@@ -118,6 +121,18 @@ def pytest_cov_result() -> subprocess.CompletedProcess[str]:
     # non-gating `chaos` CI job, issue #1468) so they cannot rot
     # (issue #623). ``--timeout`` bounds
     # any individual test that regresses into hanging.
+    #
+    # HEAVY (issue #1624): this fixture recursively runs the ENTIRE
+    # integration+unit suite (5,500+ tests, serial, including slow and
+    # chaos fault-injection) — measured at >10 minutes on a dev laptop.
+    # ``test_coverage_gate`` (the only consumer) is therefore marked
+    # ``@pytest.mark.full`` and deselected from the pre-commit
+    # ``pytest-fast`` hook and ``make test-fast`` via
+    # ``-m "not slow and not chaos and not full"``. The enforced 82%
+    # coverage gate is ``make test-cov`` / the CI ``test`` job
+    # (``--cov-fail-under=82`` in ``PYTEST_COV_FLAGS``); this test is
+    # the explicit opt-in duplicate — run it with
+    # ``pytest tests/contract -m full``.
     return _run(
         [
             sys.executable,
@@ -160,6 +175,7 @@ def test_mypy_strict_passes(mypy_result: subprocess.CompletedProcess[str]) -> No
     )
 
 
+@pytest.mark.full
 def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> None:
     """The 82% line-coverage gate on the osimflow/ package must pass (issue #1417).
 
@@ -173,6 +189,15 @@ def test_coverage_gate(pytest_cov_result: subprocess.CompletedProcess[str]) -> N
     corruption that breaks upstream AGGREGATE_RESULTS for many integration
     tests). The proper fix — option (b) of issue #1417 — is tracked as
     a follow-up.
+
+    ``@pytest.mark.full`` (issue #1624): the module-scoped
+    ``pytest_cov_result`` fixture recursively runs the entire
+    integration+unit suite (>10 minutes serial). Pre-commit's
+    ``pytest-fast`` hook and ``make test-fast`` deselect it with
+    ``-m "not slow and not chaos and not full"``; the enforced gate is
+    ``make test-cov`` / the CI ``test`` job, which applies the same
+    82% floor via ``PYTEST_COV_FLAGS``. Run this test explicitly with
+    ``pytest tests/contract -m full``.
     """
     assert pytest_cov_result.returncode == 0, (
         f"pytest (under coverage) failed:\nstdout:\n{pytest_cov_result.stdout}\n"
