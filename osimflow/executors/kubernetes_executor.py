@@ -26,6 +26,19 @@ environment variables — the same env vars `SlurmExecutor` and
 `AWSBatchExecutor` export, so downstream work scripts can be
 substrate-agnostic.
 
+Deleted / GC'd Jobs (issue #1635): an empty pod list is ambiguous
+("not scheduled yet" vs "Job already gone"), and
+``list_namespaced_pod`` never raises for a deleted Job — it just
+returns an empty list, which the pre-#1635 code reported as
+``Pending`` forever. ``_get_pod_status`` therefore reads the Job
+object when no pods are found: a 404 (TTL-GC-after-completion via
+``ttl_seconds_after_finished``, or external deletion) synthesizes a
+*terminal* pod status — Succeeded when the handle's
+result-reference verification retrieves the uploaded artifacts,
+Failed with reason "job deleted before result retrieval"
+otherwise — instead of polling to the await deadline
+(``TimeoutError``) and misclassifying a finished sample.
+
 Native Job controls (issue #997): ``backoff_limit``,
 ``ttl_seconds_after_finished``, and the optional
 ``kueue.x-k8s.io/queue-name`` label are configurable. Defaults
@@ -59,6 +72,7 @@ from osimflow.executors.base import (
 )
 from osimflow.executors.transport import (
     ResultTransportConfig,
+    _collect_path_leaves,
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
@@ -69,6 +83,18 @@ from osimflow.task_payload_hmac import (
 )
 
 log = logging.getLogger("osimflow.executors.kubernetes")
+
+#: Issue #1635: reason marker for the synthesized pod status of a Job
+#: whose object is already gone (TTL GC after completion via
+#: ``ttl_seconds_after_finished``, or external deletion) when the
+#: await path first probes it.
+_DELETED_JOB_REASON = "JobDeleted"
+
+#: Issue #1635: failure message when a deleted Job's uploaded result
+#: cannot be retrieved — the sample's disposition cannot be proven,
+#: so the handle must resolve as Failed rather than silently
+#: succeeding without evidence.
+_DELETED_JOB_NO_RESULT_MESSAGE = "job deleted before result retrieval"
 
 
 class _KubernetesHandle(PollingHandle):
@@ -112,6 +138,13 @@ class _KubernetesHandle(PollingHandle):
         # storage configured).
         self._transport = transport if transport is not None else ResultTransportConfig()
         self._future: Future[Any] = Future()
+        # Issue #1635: result value already materialized by the
+        # deleted-Job verification probe (``_verify_deleted_job_result``).
+        # ``result()``'s post-classification ``_resolve_success_result``
+        # returns it instead of downloading the artifacts a second time.
+        # Only ever set to a non-None verified value (verification that
+        # yields no evidence resolves the sample as Failed instead).
+        self._deleted_job_verified_result: Any = None
         self.worker_id: str | None = job_name
         self.worker_ip: str | None = None
         self.worker_region: str | None = None
@@ -130,7 +163,16 @@ class _KubernetesHandle(PollingHandle):
         # enforced by the executor poll loop. The Job's
         # ``activeDeadlineSeconds`` (when set) remains the
         # substrate-level kill (defense in depth).
-        return self._executor._wait_for_terminal(self._job_name, timeout=timeout)  # noqa: SLF001
+        #
+        # Issue #1635: the deleted-Job result verifier rides along so
+        # ``_get_pod_status`` can resolve a gone Job (TTL GC / external
+        # deletion) terminally through the evidence check instead of
+        # reporting Pending forever.
+        return self._executor._wait_for_terminal(  # noqa: SLF001
+            self._job_name,
+            timeout=timeout,
+            result_verifier=self._verify_deleted_job_result,
+        )
 
     def _classify(self, job: Any) -> tuple[PollOutcome, str | None]:
         phase = job.get("status", {}).get("phase", "")
@@ -139,6 +181,12 @@ class _KubernetesHandle(PollingHandle):
         return PollOutcome.FAILED, None
 
     def _resolve_success_result(self, timeout: float | None = None) -> Any:
+        # Issue #1635: when the terminal status came from the
+        # deleted-Job synthesis path, the verification probe already
+        # materialized the artifacts — return the stashed value rather
+        # than re-downloading from object storage.
+        if self._deleted_job_verified_result is not None:
+            return self._deleted_job_verified_result
         transport = self._transport
         resolved = resolve_result_for_callback(
             self._result_hint,
@@ -153,6 +201,47 @@ class _KubernetesHandle(PollingHandle):
             result_storage_prefix=transport.prefix,
             result_storage_endpoint=transport.endpoint,
         )
+
+    def _verify_deleted_job_result(self) -> Any:
+        """Evidence check for a deleted/GC'd Job (issue #1635).
+
+        Resolves this handle's result through the same
+        result-reference path a terminal-with-artifacts sample uses
+        (``resolve_result_for_callback`` +
+        ``materialize_object_storage_result``, i.e. the
+        ``OSIMFLOW_RESULT_*`` contract): a retrievable uploaded result
+        proves the deleted Job finished its work, so the executor
+        synthesizes a terminal *Succeeded* status. Returns ``None`` (or
+        raises) when no evidence can be retrieved — the executor then
+        resolves the sample as Failed with reason "job deleted before
+        result retrieval" instead of silently succeeding.
+        """
+        transport = self._transport
+        if transport.mode == "object_storage" and (not transport.backend or not transport.bucket):
+            # Degraded config (``materialize_object_storage_result``
+            # would warn and return hints without downloading): there
+            # is no way to retrieve evidence, so do not claim success.
+            raise RuntimeError(
+                "object_storage transport configured without backend/bucket; "
+                "cannot verify a deleted job's result"
+            )
+        resolved = self._resolve_success_result()
+        if resolved is not None and transport.mode != "object_storage":
+            # object_storage resolution already downloaded the
+            # artifacts (a missing object raises inside
+            # ``materialize_object_storage_result``), so it is its own
+            # evidence. The in-band modes only decode the hint —
+            # require the decoded local paths to actually exist before
+            # the deleted Job may resolve as Succeeded.
+            missing = [str(p) for p in _collect_path_leaves(resolved) if not p.exists()]
+            if missing:
+                raise FileNotFoundError(
+                    f"result paths missing after job deletion: {', '.join(missing)}"
+                )
+        # Stash so the post-classification ``_resolve_success_result``
+        # call does not download twice.
+        self._deleted_job_verified_result = resolved
+        return resolved
 
     def _failure_error(self, job: Any) -> RuntimeError:
         phase = job.get("status", {}).get("phase", "")
@@ -548,7 +637,13 @@ class KubernetesExecutor(BaseExecutor):
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
         return env
 
-    def _wait_for_terminal(self, job_name: str, timeout: float | None = None) -> dict[str, Any]:
+    def _wait_for_terminal(
+        self,
+        job_name: str,
+        timeout: float | None = None,
+        *,
+        result_verifier: Callable[[], Any] | None = None,
+    ) -> dict[str, Any]:
         """Poll job status with exponential backoff until terminal state.
 
         Returns the pod status dict for the job's pod.
@@ -559,11 +654,19 @@ class KubernetesExecutor(BaseExecutor):
         the Kubernetes loop grows the delay before sleeping and
         tolerates transient pod-status probe errors.
 
+        Issue #1635: ``result_verifier`` (supplied by
+        ``_KubernetesHandle._wait_for_terminal``) is threaded into the
+        probe so a Job whose object is already gone — empty pod list +
+        404 on ``read_namespaced_job`` — synthesizes a terminal status
+        (result-verified Succeeded, or Failed with reason "job deleted
+        before result retrieval") instead of reporting Pending until
+        the deadline.
+
         Raises:
             TimeoutError: if *timeout* seconds elapse before a terminal state.
         """
         return poll_until_terminal(
-            lambda: self._get_pod_status(job_name),
+            lambda: self._get_pod_status(job_name, result_verifier=result_verifier),
             is_terminal=lambda pod_status: (
                 pod_status.get("status", {}).get("phase", "") in ("Succeeded", "Failed")
             ),
@@ -589,10 +692,27 @@ class KubernetesExecutor(BaseExecutor):
             grow_before_sleep=True,
         )
 
-    def _get_pod_status(self, job_name: str) -> dict[str, Any]:
+    def _get_pod_status(
+        self,
+        job_name: str,
+        *,
+        result_verifier: Callable[[], Any] | None = None,
+    ) -> dict[str, Any]:
         """Get the pod status for a job's pod.
 
-        Lists pods matching the job selector and returns the first one.
+        Lists pods matching the job selector and returns the first
+        one. When the pod list is empty the status is ambiguous (issue
+        #1635): "not scheduled yet" and "Job already deleted" both
+        produce an empty list — ``list_namespaced_pod`` never raises
+        for a deleted Job. Disambiguate by reading the Job object:
+
+        * Job exists — the pods are genuinely not up (yet): Pending
+          (pre-#1635 behaviour).
+        * Job missing (HTTP 404) — since this executor submitted the
+          Job (the name is tracked on the handle), the object being
+          gone means TTL-GC-after-completion or external deletion:
+          synthesize a *terminal* pod status via
+          ``_deleted_job_pod_status``.
         """
         client = self._get_client()
         label_selector = f"job-name={job_name}"
@@ -600,9 +720,89 @@ class KubernetesExecutor(BaseExecutor):
             namespace=self.namespace,
             label_selector=label_selector,
         )
-        if not pods.items:
-            return {"status": {"phase": "Pending"}}
-        return cast(dict[str, Any], pods.items[0].to_dict())
+        if pods.items:
+            return cast(dict[str, Any], pods.items[0].to_dict())
+        try:
+            client.read_namespaced_job(name=job_name, namespace=self.namespace)
+        except Exception as exc:
+            if getattr(exc, "status", None) != 404:
+                raise
+            return self._deleted_job_pod_status(job_name, result_verifier=result_verifier)
+        return {"status": {"phase": "Pending"}}
+
+    def _deleted_job_pod_status(
+        self,
+        job_name: str,
+        *,
+        result_verifier: Callable[[], Any] | None = None,
+    ) -> dict[str, Any]:
+        """Synthesize the terminal pod status for a gone Job (issue #1635).
+
+        The Job's pods are gone together with the Job object, so there
+        is no substrate status left to observe. When a
+        ``result_verifier`` is supplied (the await path), retrieval of
+        the uploaded result is the evidence that the Job finished its
+        work: retrievable → Succeeded, anything else → Failed with
+        reason ``JobDeleted: job deleted before result retrieval``.
+        Without a verifier (the non-blocking ``done()`` probe) a gone
+        Job reports terminal-Failed — finished, disposition unknown —
+        and the subsequent ``result()`` call re-resolves the actual
+        outcome through the verifier.
+        """
+        verified: Any = None
+        if result_verifier is not None:
+            try:
+                verified = result_verifier()
+            except Exception as exc:  # noqa: BLE001 — any retrieval failure means "no evidence"
+                log.warning(
+                    "kubernetes job=%s is gone and its result could not be "
+                    "retrieved (%s: %s); resolving as failed",
+                    job_name,
+                    type(exc).__name__,
+                    exc,
+                )
+                verified = None
+        if verified is not None:
+            log.info(
+                "kubernetes job=%s is gone (TTL GC or external deletion) "
+                "but its uploaded result is retrievable; resolving as succeeded",
+                job_name,
+            )
+            return {
+                "status": {
+                    "phase": "Succeeded",
+                    "containerStatuses": [
+                        {
+                            "state": {
+                                "terminated": {
+                                    "exitCode": 0,
+                                    "reason": _DELETED_JOB_REASON,
+                                    "message": (
+                                        "job object deleted after completion "
+                                        "(TTL GC or external deletion); "
+                                        "result verified retrievable"
+                                    ),
+                                }
+                            }
+                        }
+                    ],
+                },
+            }
+        return {
+            "status": {
+                "phase": "Failed",
+                "containerStatuses": [
+                    {
+                        "state": {
+                            "waiting": {
+                                "reason": _DELETED_JOB_REASON,
+                                "message": _DELETED_JOB_NO_RESULT_MESSAGE,
+                            }
+                        }
+                    }
+                ],
+            },
+        }
 
     def _submit_job(
         self,
