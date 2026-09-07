@@ -20,11 +20,12 @@ import tarfile
 import tempfile
 import uuid
 import zipfile
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 
+from osimflow.api.auth import require_permission
 from osimflow.api.schemas import (
     MeasureArgument,
     MeasureDetailResponse,
@@ -37,6 +38,13 @@ from osimflow.api.schemas import (
 log = logging.getLogger("osimflow.api.measures")
 
 measures_router = APIRouter()
+
+# Security caps for archive extraction (issue #1625). A zip member's
+# declared ``file_size`` (and a tar member's ``size``) bound the
+# decompressed bytes each entry may produce; the totals bound the whole
+# bundle. Anything past these caps is a bomb signature, not a measure.
+_MAX_ARCHIVE_ENTRY_BYTES: Final[int] = 512 * 1024 * 1024  # 512 MiB per entry
+_MAX_ARCHIVE_TOTAL_BYTES: Final[int] = 2 * 1024 * 1024 * 1024  # 2 GiB per archive
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -420,6 +428,47 @@ def _compute_version_uuid(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()[:16]
 
 
+def _reject_member_outside_dest(name: str, dest_dir: Path) -> None:
+    """Reject an archive member whose path resolves outside dest_dir."""
+    member_path = (dest_dir / name).resolve()
+    if not member_path.is_relative_to(dest_dir.resolve()):
+        raise ValueError(f"Archive member {name} escapes extraction directory")
+
+
+def _reject_decompressed_size(name: str, size: int, total_so_far: int) -> int:
+    """Enforce the per-entry and total decompressed-size caps (issue #1625).
+
+    Returns the new running total for the archive.
+    """
+    if size > _MAX_ARCHIVE_ENTRY_BYTES:
+        raise ValueError(
+            f"Archive member {name} decompresses to {size} bytes, exceeding the "
+            f"per-entry cap of {_MAX_ARCHIVE_ENTRY_BYTES} bytes"
+        )
+    new_total = total_so_far + size
+    if new_total > _MAX_ARCHIVE_TOTAL_BYTES:
+        raise ValueError(
+            f"Archive decompresses to {new_total} bytes in total, exceeding the "
+            f"total cap of {_MAX_ARCHIVE_TOTAL_BYTES} bytes"
+        )
+    return new_total
+
+
+def _reject_link_outside_dest(member: tarfile.TarInfo, dest_dir: Path) -> None:
+    """Reject symlink/hardlink members whose link target escapes dest_dir.
+
+    Symlink targets are interpreted relative to the link's containing
+    directory; hardlink targets name another member of the archive
+    (i.e. are relative to the extraction root). Joining with an absolute
+    :class:`PurePosixPath` collapses to that absolute path, so absolute
+    targets fall out of the same containment check.
+    """
+    link_base = dest_dir / PurePosixPath(member.name).parent if member.issym() else dest_dir
+    link_target = (link_base / PurePosixPath(member.linkname)).resolve()
+    if not link_target.is_relative_to(dest_dir.resolve()):
+        raise ValueError(f"Archive member {member.name} links outside extraction directory")
+
+
 def _extract_measure_archive(
     archive_path: Path,
     dest_dir: Path,
@@ -429,32 +478,43 @@ def _extract_measure_archive(
     Returns the path to the extracted measure directory (the first directory
     inside the archive that contains measure.rb or measure.py).
     Raises ValueError if no measure is found.
+
+    Security (issue #1625):
+
+    - every member path (files, dirs, links) must resolve inside dest_dir;
+    - tar symlink/hardlink *targets* must also resolve inside dest_dir —
+      a link followed by a regular member writing through it is the
+      tar-slip arbitrary-write primitive;
+    - tar extraction runs with ``filter="data"`` (PEP 706), rejecting
+      absolute paths, ``..`` traversal, escaping links, and special
+      files as a second layer;
+    - declared decompressed sizes are capped per entry and in total
+      (zip bombs).
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     if zipfile.is_zipfile(archive_path):
         with zipfile.ZipFile(archive_path, "r") as zf:
-            # Security: reject zip bombs and path traversal attempts
+            total = 0
             for member in zf.infolist():
                 if member.is_dir():
                     continue
                 # Reject any member that writes outside dest_dir
-                member_path = (dest_dir / member.filename).resolve()
-                if not member_path.is_relative_to(dest_dir.resolve()):
-                    raise ValueError(
-                        f"Archive member {member.filename} escapes extraction directory"
-                    )
+                _reject_member_outside_dest(member.filename, dest_dir)
+                # Reject zip bombs (declared decompressed size, per entry + total)
+                total = _reject_decompressed_size(member.filename, member.file_size, total)
             zf.extractall(dest_dir)
     elif tarfile.is_tarfile(archive_path):
         with tarfile.open(archive_path, "r:*") as tf:
+            total = 0
             for tar_member in tf.getmembers():
+                # Containment for every member kind, link targets included
+                _reject_member_outside_dest(tar_member.name, dest_dir)
+                if tar_member.issym() or tar_member.islnk():
+                    _reject_link_outside_dest(tar_member, dest_dir)
                 if tar_member.isfile():
-                    tar_member_path = (dest_dir / tar_member.name).resolve()
-                    if not tar_member_path.is_relative_to(dest_dir.resolve()):
-                        raise ValueError(
-                            f"Archive member {tar_member.name} escapes extraction directory"
-                        )
-            tf.extractall(dest_dir)
+                    total = _reject_decompressed_size(tar_member.name, tar_member.size, total)
+            tf.extractall(dest_dir, filter="data")
     else:
         raise ValueError("Archive is neither a valid zip nor tar.gz file")
 
@@ -480,7 +540,13 @@ async def upload_measure(request: Request, file: UploadFile) -> MeasureUploadRes
 
     The measure is introspected, stored in the configured measures directory,
     and registered with a content-based ``version_uuid`` for idempotent re-upload.
+
+    Requires ``readwrite`` permission (issue #1626) — uploading installs
+    executable measure code, so a viewer-role key must not be able to do it
+    (parity with ``POST /api/v1/files/upload``).
     """
+    require_permission(request, "readwrite")  # installs measure code (issue #1626)
+
     measures_dir = _measures_dir_or_503(request)
 
     # Read uploaded file content into memory
@@ -879,9 +945,13 @@ async def patch_uploaded_measure(
 ) -> MeasureDetailResponse:
     """Update metadata for an uploaded measure.
 
+    Requires ``readwrite`` permission (issue #1626).
+
     Supports updating: ``taxonomy``, ``description``, ``tags``, ``measure_group``.
     Returns 404 for workflow-discovered measures.
     """
+    require_permission(request, "readwrite")  # mutates registry state (issue #1626)
+
     measures_dir = _measures_dir_or_503(request)
     registry = _load_measures_registry(measures_dir)
     if measure_id not in registry:
@@ -926,9 +996,14 @@ async def delete_uploaded_measure(
 ) -> dict[str, str]:
     """Delete an uploaded measure.
 
+    Requires ``readwrite`` permission (issue #1626) — parity with
+    ``DELETE /api/v1/files/{file_id}``.
+
     Refuses to delete workflow-discovered measures (returns 403).
     Returns 404 if the measure_id is not in the uploaded registry.
     """
+    require_permission(request, "readwrite")  # deletes other users' measures (issue #1626)
+
     measures_dir = _measures_dir_or_503(request)
     registry = _load_measures_registry(measures_dir)
     if measure_id not in registry:

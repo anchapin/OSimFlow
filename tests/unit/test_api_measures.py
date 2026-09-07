@@ -376,7 +376,7 @@ class TestUploadMeasure:
 
     def test_upload_measure_zip(self, tmp_path: Path) -> None:
         """A valid Ruby measure zip is accepted and stored."""
-        app = create_app(outdir=tmp_path)
+        app = create_app(outdir=tmp_path, read_only=False)
         client = TestClient(app)
         zip_bytes = _make_ruby_measure_zip()
 
@@ -394,7 +394,7 @@ class TestUploadMeasure:
 
     def test_upload_duplicate_hash_returns_existing(self, tmp_path: Path) -> None:
         """Re-uploading the same measure content returns the existing measure_id."""
-        app = create_app(outdir=tmp_path)
+        app = create_app(outdir=tmp_path, read_only=False)
         client = TestClient(app)
         zip_bytes = _make_ruby_measure_zip()
 
@@ -418,7 +418,7 @@ class TestUploadMeasure:
 
     def test_upload_invalid_file_400(self, tmp_path: Path) -> None:
         """A non-zip/tar.gz file is rejected with 400."""
-        app = create_app(outdir=tmp_path)
+        app = create_app(outdir=tmp_path, read_only=False)
         client = TestClient(app)
 
         resp = client.post(
@@ -441,7 +441,7 @@ class TestUploadedMeasureCrud:
         self, tmp_path: Path, name: str = "TestRubyMeasure"
     ) -> tuple[TestClient, str]:
         """Helper: upload a measure and return (client, measure_id)."""
-        app = create_app(outdir=tmp_path)
+        app = create_app(outdir=tmp_path, read_only=False)
         client = TestClient(app)
         zip_bytes = _make_ruby_measure_zip(name)
         resp = client.post(
@@ -497,7 +497,7 @@ class TestUploadedMeasureCrud:
 
     def test_delete_builtin_measure_403(self, tmp_outdir: Path, workflow_osw: Path) -> None:
         """DELETE on a workflow-discovered measure returns 403."""
-        app = create_app(outdir=tmp_outdir)
+        app = create_app(outdir=tmp_outdir, read_only=False)
         client = TestClient(app)
 
         # First upload a measure so there's something in the registry
@@ -535,7 +535,7 @@ class TestListMeasuresWithSearch:
 
     def test_list_measures_with_search(self, tmp_path: Path) -> None:
         """The search parameter filters by name and description."""
-        app = create_app(outdir=tmp_path)
+        app = create_app(outdir=tmp_path, read_only=False)
         client = TestClient(app)
 
         # Upload a measure
@@ -558,7 +558,7 @@ class TestListMeasuresWithSearch:
 
     def test_list_measures_with_taxonomy_filter(self, tmp_path: Path) -> None:
         """The taxonomy parameter filters uploaded measures by taxonomy prefix."""
-        app = create_app(outdir=tmp_path)
+        app = create_app(outdir=tmp_path, read_only=False)
         client = TestClient(app)
 
         # Upload and tag
@@ -588,7 +588,7 @@ class TestListMeasuresWithSearch:
 
     def test_list_measures_with_tag_filter(self, tmp_path: Path) -> None:
         """The tag parameter filters uploaded measures by exact tag."""
-        app = create_app(outdir=tmp_path)
+        app = create_app(outdir=tmp_path, read_only=False)
         client = TestClient(app)
 
         # Upload
