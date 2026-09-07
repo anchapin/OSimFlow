@@ -400,10 +400,14 @@ class DistributedJobQueue:
 
         Wraps the publish in a :class:`CircuitBreaker` (issue #1397) so that
         a persistent Redis outage does not burn the 5 s socket timeout on
-        every job state transition.  On open, the synchronous pre-check
-        short-circuits before the asyncio work is dispatched, and the
-        in-``_pub`` ``breaker.check()`` catches any race where the breaker
-        opens between the sync check and the async execution.
+        every job state transition.  While the breaker is inside its
+        hard-open cooldown window, the synchronous pre-check short-circuits
+        before any asyncio work is dispatched.  Once the cooldown elapses
+        (half-open), dispatch proceeds and the in-``_pub``
+        ``breaker.check()`` consumes the single-probe admission (issue
+        #1569) — exactly one publish per cooldown cycle reaches Redis.
+        That check also catches any race where the breaker opens between
+        the sync peek and the async execution.
 
         Parameters
         ----------
@@ -415,10 +419,17 @@ class DistributedJobQueue:
             per-sample channel from the payload's ``sample_id`` field.
         """
         # Synchronous pre-check (issue #1397): avoid spawning the asyncio
-        # work when the breaker is already open.  The in-_pub check below
-        # catches the race where the breaker opens between this check and
-        # the async execution.
-        if not self._breaker.allow():
+        # work while the breaker is inside its hard-open cooldown window.
+        # This must be a *non-consuming* peek: ``state`` transitions
+        # open → half_open once the cooldown elapses but leaves the
+        # single-probe gate (issue #1569) untouched, so the in-_pub
+        # ``check()`` below is the one place the probe admission is
+        # consumed.  Consuming it here (via ``allow()``) left
+        # ``_half_open_in_flight`` set forever — neither
+        # ``record_success`` nor ``record_failure`` was ever reached, so
+        # the publish path deadlocked in half_open and never recovered
+        # even after Redis came back (issue #1554).
+        if self._breaker.state == "open":
             log.debug(
                 "DistributedJobQueue: circuit open, skipping publish for campaign=%s",
                 self._campaign_id,
@@ -433,7 +444,10 @@ class DistributedJobQueue:
         async def _pub() -> None:
             # In-async check (issue #1397): fail-fast at the await boundary
             # even when the sync pre-check above was passed but the breaker
-            # has since opened (e.g. via a concurrent op).
+            # has since opened (e.g. via a concurrent op).  In half_open
+            # this is also where the single-probe admission is consumed
+            # (issue #1569): exactly one concurrent publish per cooldown
+            # cycle gets past this gate and reaches Redis.
             try:
                 self._breaker.check()
             except CircuitOpenError as exc:
