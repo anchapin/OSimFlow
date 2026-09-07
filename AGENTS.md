@@ -339,7 +339,9 @@ recursively runs the entire integration+unit suite under coverage
 (>10 min serial — it stalled pre-commit past usability); the enforced
 82% coverage gate actually runs in `make test-cov` / the CI `test`
 job. Run the heavyweight duplicate explicitly with
-`pytest tests/contract -m full`.
+`pytest tests/contract -m full`. Since issue #1629 the ci.yml
+`contract` CI job also runs this exact bounded contract pytest
+suite, so the pre-commit mirror is enforced on every PR.
 
 CI runs `make test-cov` (the CI `test` job calls the Makefile
 target; pytest flags are single-sourced in the Makefile —
@@ -386,8 +388,9 @@ plotter (`generate_plots.py`), Excel adapter (`excel_to_variables.py`)
 — into the gate; their per-module floors are seeded in
 `tools/check_module_coverage.py`. CI jobs in
 `.github/workflows/ci.yml`: `lint` (ruff check + format --check),
-`typecheck` (mypy --strict), `test` (pytest + 82%), `contract`,
-`security` (pip-audit + gitleaks), `mlflow-real` (real MLflow
+`typecheck` (mypy --strict), `test` (pytest + 82%), `contract`
+(drift checks + the bounded `tests/contract` pytest suite, issue
+#1629), `security` (pip-audit + gitleaks), `mlflow-real` (real MLflow
 smoke), `slow` (-m slow), `chaos` (-m chaos, non-gating —
 deselected from the required `test` gate via PYTEST_CI_FLAGS,
 issue #1468), per-PR Nomad E2E. Per-substrate E2E
