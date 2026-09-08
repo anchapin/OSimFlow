@@ -36,7 +36,11 @@ from osimflow.executors.base import (
     retry_with_backoff,
 )
 from osimflow.executors.transport import ResultTransportConfig, resolve_result_for_callback
-from osimflow.task_payload_hmac import build_signature_env, build_transport_signature_env
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    build_signature_env,
+    build_transport_signature_env,
+)
 
 log = logging.getLogger("osimflow.executors")
 
@@ -379,6 +383,7 @@ class AWSBatchExecutor(BaseExecutor):
         instance_type: str | None = None,
         submit_rps: float | None = None,
         allow_long_lived_credentials: bool = False,
+        payload_secret_arn: str | None = None,
     ):
         # Lazy import: keeps the boto3 import cost off the local /
         # slurm executor paths. ImportError here is intentional: the
@@ -471,6 +476,14 @@ class AWSBatchExecutor(BaseExecutor):
         self.ecr_repository = ecr_repository
         self._instance_type = instance_type
         self._submit_rps = submit_rps
+        # Issue #1633: ARN of an AWS Secrets Manager secret or SSM
+        # Parameter Store parameter holding the task-payload HMAC
+        # secret. When set, the secret ships via
+        # ``containerOverrides.secrets`` (resolved by the ECS/Batch
+        # agent at container start) instead of a literal env value in
+        # the job spec, where it would be readable via DescribeJobs and
+        # persist in job history.
+        self.payload_secret_arn = payload_secret_arn
         # boto3 retry config with adaptive mode for ThrottlingException
         # handling (issue #1010). Adaptive mode uses client-side rate
         # limiting + exponential backoff with jitter.
@@ -637,14 +650,52 @@ class AWSBatchExecutor(BaseExecutor):
         env.append({"name": "OSIMFLOW_CONTAINER", "value": resolved})
         if task_payload is not None:
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
-            # Issue #1445: when a shared secret is configured, sign the
-            # exact payload bytes and propagate secret + signature so
-            # the remote_runner verifies before decoding/executing
-            # (same contract as the Nomad / Azure / Google / DockerSwarm
-            # paths). No-op in legacy unsigned mode.
+            # Issue #1445/#1633: when a shared secret is configured, sign
+            # the exact payload bytes and propagate secret + signature so
+            # the remote_runner verifies before decoding/executing (same
+            # contract as the Nomad / Azure / Google / DockerSwarm
+            # paths). No-op in legacy unsigned mode. When a
+            # ``payload_secret_arn`` is configured (issue #1633) the
+            # signature ships alone — the raw secret is delivered
+            # out-of-band via ``containerOverrides.secrets`` so it never
+            # appears in the job spec (readable via DescribeJobs).
+            payload_secret_arn = getattr(self, "payload_secret_arn", None)
+            if payload_secret_arn and not os.environ.get(TASK_PAYLOAD_SECRET_ENV):
+                log.warning(
+                    "aws-batch-payload-secret-arn=%r is configured but no "
+                    "%s is set on the orchestrator, so the payload cannot "
+                    "be signed; submitting unsigned (legacy mode). Set %s "
+                    "on the orchestrator — and the same value in the "
+                    "referenced secret — to enable HMAC verification "
+                    "(issue #1633).",
+                    payload_secret_arn,
+                    TASK_PAYLOAD_SECRET_ENV,
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
+            if not payload_secret_arn and TASK_PAYLOAD_SECRET_ENV in os.environ:
+                # Issue #1633: without containerOverrides.secrets the
+                # shared secret ships as a literal env value serialized
+                # into the job spec, where anyone with
+                # batch:DescribeJobs can read it and forge signatures.
+                log.warning(
+                    "SECURITY (issue #1633): %s is shipping as a literal "
+                    "env value in the Batch containerOverrides because no "
+                    "--aws-batch-payload-secret-arn is configured. Anyone "
+                    "with batch:DescribeJobs can read the secret and "
+                    "forge task-payload signatures. Store the secret in "
+                    "AWS Secrets Manager (or SSM Parameter Store) and "
+                    "pass --aws-batch-payload-secret-arn <arn> to emit "
+                    "containerOverrides.secrets instead.",
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
             env.extend(
-                {"name": key, "value": value}
-                for key, value in build_signature_env(task_payload).items()
+                {
+                    "name": key,
+                    "value": value,
+                }
+                for key, value in build_signature_env(
+                    task_payload, include_secret=payload_secret_arn is None
+                ).items()
             )
         if transport is not None:
             env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": transport.mode})
@@ -667,6 +718,23 @@ class AWSBatchExecutor(BaseExecutor):
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
         return env
 
+    def _payload_secret_overrides(self) -> list[dict[str, str]]:
+        """Return the ``containerOverrides.secrets`` entries (issue #1633).
+
+        When ``payload_secret_arn`` is configured, the HMAC secret is
+        delivered out-of-band: the ECS/Batch agent resolves the ARN
+        (Secrets Manager secret or SSM Parameter Store parameter — the
+        job's task role needs ``secretsmanager:GetSecretValue`` or
+        ``ssm:GetParameter`` + ``kms:Decrypt`` on it) at container
+        start and injects it as the ``OSIMFLOW_TASK_PAYLOAD_SECRET``
+        env var, so the raw value never appears in the job spec.
+        Returns an empty list in legacy mode.
+        """
+        arn = getattr(self, "payload_secret_arn", None)
+        if not arn:
+            return []
+        return [{"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": arn}]
+
     def _build_container_overrides(
         self,
         *,
@@ -674,6 +742,7 @@ class AWSBatchExecutor(BaseExecutor):
         memory_mb: int,
         environment: list[dict[str, str]],
         command: list[str] | None = None,
+        secrets: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Translate OSimFlow resource directives to Batch overrides.
 
@@ -684,6 +753,10 @@ class AWSBatchExecutor(BaseExecutor):
 
         When ``command`` is provided, it overrides the job definition's
         container command (e.g. to run ``python -m osimflow.remote_runner``).
+
+        When *secrets* is provided (issue #1633), it is passed through
+        as ``containerOverrides.secrets`` — the substrate-resolved
+        out-of-band secret channel.
         """
         overrides: dict[str, Any] = {
             "vcpus": cpus,
@@ -692,6 +765,8 @@ class AWSBatchExecutor(BaseExecutor):
         }
         if command is not None:
             overrides["command"] = command
+        if secrets:
+            overrides["secrets"] = secrets
         return overrides
 
     def _calculate_job_cost(
@@ -815,6 +890,9 @@ class AWSBatchExecutor(BaseExecutor):
             memory_mb=memory_mb,
             environment=environment,
             command=command,
+            # Issue #1633: out-of-band HMAC secret delivery via
+            # containerOverrides.secrets when a secret ARN is configured.
+            secrets=self._payload_secret_overrides(),
         )
         attempt_duration_seconds = int(time_min) * 60
         submit_kwargs: dict[str, Any] = {

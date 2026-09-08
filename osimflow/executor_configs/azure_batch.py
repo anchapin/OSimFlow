@@ -30,6 +30,14 @@ class AzureBatchConfig:
         Whether to fall back to on-demand instances when Spot is unavailable.
     max_retries
         Maximum number of retries for failed jobs.
+    payload_secret_id
+        Azure Key Vault secret identifier for the task-payload HMAC
+        secret. Reserved config surface for issue #1633: the Azure
+        Batch data-plane API exposes no task-level secret-injection
+        mechanism (azure-batch 15.x ``EnvironmentSetting`` is name +
+        value only), so the executor REFUSES this option with a
+        documented error — see docs/secret-management.md for the
+        pool-level managed-identity pattern.
     """
 
     account_name: str | None = None
@@ -39,6 +47,7 @@ class AzureBatchConfig:
     use_spot: bool = False
     fallback_to_on_demand: bool = False
     max_retries: int = 3
+    payload_secret_id: str | None = None
 
 
 def add_arguments(parser_group: argparse.ArgumentParser) -> None:
@@ -90,5 +99,22 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "(default: 3). Each retry uses exponential backoff. After "
             "exhausting retries, the job fails unless "
             "--azure-fallback-to-on-demand is set."
+        ),
+    )
+    parser_group.add_argument(
+        "--azure-batch-payload-secret-id",
+        default=None,
+        help=(
+            "Azure Key Vault secret identifier holding the task-payload "
+            "HMAC secret. RESERVED BUT CURRENTLY REFUSED (issue #1633): "
+            "azure-batch 15.x EnvironmentSetting exposes only {name, value} "
+            "— the Batch data-plane API has no task-level secret-injection "
+            "mechanism — so the executor raises a documented error rather "
+            "than silently shipping the raw secret as a literal task "
+            "environment setting (readable via Get Task). Use the "
+            "pool-level managed-identity + Key Vault pattern documented in "
+            "docs/secret-management.md instead. "
+            "OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator remains "
+            "required for signing either way."
         ),
     )

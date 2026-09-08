@@ -54,7 +54,11 @@ from osimflow.executors.transport import (
     materialize_object_storage_result,
     resolve_result_for_callback,
 )
-from osimflow.task_payload_hmac import build_signature_env, build_transport_signature_env
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    build_signature_env,
+    build_transport_signature_env,
+)
 
 log = logging.getLogger("osimflow.executors.google_batch")
 
@@ -288,13 +292,51 @@ class GoogleBatchExecutor(BaseExecutor):
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
             # Issue #1281: verify BYOS contract version compatibility.
             env.append({"name": "OSIMFLOW_CONTRACT_VERSION", "value": BYOS_CONTRACT_VERSION})
-            # Issue #1177/#1384: when a shared secret is configured, sign the
-            # exact payload bytes and propagate secret + signature so the
-            # remote_runner verifies before decoding/executing. No-op in
-            # legacy unsigned mode.
+            # Issue #1177/#1384/#1633: when a shared secret is
+            # configured, sign the exact payload bytes and propagate
+            # secret + signature so the remote_runner verifies before
+            # decoding/executing. No-op in legacy unsigned mode. When a
+            # ``payload_secret_name`` is configured (issue #1633) the
+            # signature ships alone — the raw secret is delivered
+            # out-of-band via ``environment.secret_variables`` so it
+            # never appears in the job spec.
+            payload_secret_name = getattr(self, "payload_secret_name", None)
+            if payload_secret_name and not os.environ.get(TASK_PAYLOAD_SECRET_ENV):
+                log.warning(
+                    "google-batch-payload-secret-name=%r is configured but "
+                    "no %s is set on the orchestrator, so the payload "
+                    "cannot be signed; submitting unsigned (legacy mode). "
+                    "Set %s on the orchestrator — and the same value in "
+                    "the referenced Secret Manager secret — to enable "
+                    "HMAC verification (issue #1633).",
+                    payload_secret_name,
+                    TASK_PAYLOAD_SECRET_ENV,
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
+            if not payload_secret_name and TASK_PAYLOAD_SECRET_ENV in os.environ:
+                # Issue #1633: without secret_variables the shared
+                # secret ships as a literal env value serialized into
+                # the job spec, where anyone with batch.jobs.get can
+                # read it and forge signatures.
+                log.warning(
+                    "SECURITY (issue #1633): %s is shipping as a literal "
+                    "env value in the Batch job spec because no "
+                    "--google-batch-payload-secret-name is configured. "
+                    "Anyone with batch.jobs.get can read the secret and "
+                    "forge task-payload signatures. Store the secret in "
+                    "Secret Manager and pass "
+                    "--google-batch-payload-secret-name <name> to emit "
+                    "environment.secret_variables instead.",
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
             env.extend(
-                {"name": key, "value": value}
-                for key, value in build_signature_env(task_payload).items()
+                {
+                    "name": key,
+                    "value": value,
+                }
+                for key, value in build_signature_env(
+                    task_payload, include_secret=payload_secret_name is None
+                ).items()
             )
         if transport is not None:
             env.append({"name": "OSIMFLOW_RESULT_TRANSPORT_MODE", "value": transport.mode})
@@ -329,6 +371,7 @@ class GoogleBatchExecutor(BaseExecutor):
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
         submit_rps: float | None = None,
+        payload_secret_name: str | None = None,
     ):
         from google.cloud import batch_v1
 
@@ -341,6 +384,15 @@ class GoogleBatchExecutor(BaseExecutor):
         self.use_spot = use_spot
         self.fallback_to_on_demand = fallback_to_on_demand
         self.max_retries = max_retries
+        # Issue #1633: name of a Secret Manager secret holding the
+        # task-payload HMAC secret. When set, the secret ships via the
+        # job's ``environment.secret_variables`` mapping (the Batch
+        # agent resolves it at task start via the job's service
+        # account, which needs ``roles/secretmanager.secretAccessor``
+        # on the secret) instead of a literal env value in the job
+        # spec, where it would be readable via ``gcloud batch jobs
+        # describe`` and persist in job history.
+        self.payload_secret_name = payload_secret_name
         self._client: Any = None
         # Issue #1081: digest pinning. Initialized in the constructor so
         # ``_resolve_container_image`` is callable without going through
@@ -429,6 +481,23 @@ class GoogleBatchExecutor(BaseExecutor):
         # Use the provided command or default to remote_runner
         container_command = command or ["python", "-m", "osimflow.remote_runner"]
 
+        # Issue #1633: when a Secret Manager secret name is configured,
+        # the HMAC secret ships via ``environment.secret_variables``:
+        # the Batch agent resolves the secret at task start (using the
+        # job's service account, which needs
+        # ``roles/secretmanager.secretAccessor`` on it) and injects it
+        # as the ``OSIMFLOW_TASK_PAYLOAD_SECRET`` env var — the runner
+        # reads that env var exactly as in legacy mode, so its verify
+        # path is unchanged.
+        environment_map: dict[str, Any] = {
+            "variables": {e["name"]: e["value"] for e in environment},
+        }
+        payload_secret_name = getattr(self, "payload_secret_name", None)
+        if payload_secret_name and not any(e["name"] == TASK_PAYLOAD_SECRET_ENV for e in environment):
+            environment_map["secret_variables"] = {
+                TASK_PAYLOAD_SECRET_ENV: payload_secret_name
+            }
+
         task_group = self._batch_v1.TaskGroup(
             task_count=1,
             task_spec=self._batch_v1.TaskSpec(
@@ -436,9 +505,7 @@ class GoogleBatchExecutor(BaseExecutor):
                     image_uri=container_image,
                     command=container_command,
                 ),
-                environment={
-                    "variables": {e["name"]: e["value"] for e in environment},
-                },
+                environment=environment_map,
                 compute_resource=self._batch_v1.ComputeResource(
                     cpu_cores=cpus,
                     memory_mb=memory_mb,

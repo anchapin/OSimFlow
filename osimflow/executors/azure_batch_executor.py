@@ -351,6 +351,7 @@ class AzureBatchExecutor(BaseExecutor):
         fallback_to_on_demand: bool = False,
         max_retries: int = 3,
         submit_rps: float | None = None,
+        payload_secret_id: str | None = None,
     ):
         import azure.batch  # noqa: PLC0415
         import azure.identity  # noqa: PLC0415
@@ -366,6 +367,14 @@ class AzureBatchExecutor(BaseExecutor):
         self.use_spot = use_spot
         self.fallback_to_on_demand = fallback_to_on_demand
         self.max_retries = max_retries
+        # Issue #1633: Key Vault secret identifier for the task-payload
+        # HMAC secret. ACCEPTED BUT REFUSED at task-env build time —
+        # see ``_build_environment``: the Azure Batch data-plane API
+        # exposes no task-level secret-injection mechanism, so shipping
+        # the secret out-of-band is not implementable from the task
+        # submission surface. Stored so tooling can surface the
+        # configured intent in the error path.
+        self.payload_secret_id = payload_secret_id
         self._client: Any = None
         # Issue #1563: shared token-bucket limiter (was missing entirely
         # before — Azure Batch pool/task API does have a soft per-account
@@ -469,6 +478,37 @@ class AzureBatchExecutor(BaseExecutor):
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
             env.append({"name": "OSIMFLOW_OS_VERSION", "value": str(openstudio_version)})
+        # Issue #1633: Azure Batch has NO task-level secret-injection
+        # mechanism — verified against the installed azure-batch 15.x
+        # SDK (``models.EnvironmentSetting`` exposes only ``name`` +
+        # ``value``; no ``value_ref``/Key Vault variant exists, and the
+        # newest stable data-plane API 2025-06-01 matches) — so an
+        # out-of-band delivery comparable to K8s secretKeyRef / Nomad
+        # Vault / AWS containerOverrides.secrets / Google
+        # secret_variables is not implementable from task submission.
+        # Refuse the configured flag loudly instead of silently
+        # shipping the raw secret as a literal task environment
+        # setting (readable back via Get Task) — the exact exposure
+        # issue #1633 exists to close. The supported production
+        # pattern is pool-level: give the Batch pool a managed identity
+        # with Key Vault read access and materialize the secret on
+        # worker nodes out-of-band (see docs/secret-management.md,
+        # "Task-payload HMAC secret delivery"); keep
+        # OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator for signing
+        # either way.
+        if getattr(self, "payload_secret_id", None) is not None:
+            raise ValueError(
+                "--azure-batch-payload-secret-id is configured but Azure "
+                "Batch provides no task-level secret-injection mechanism: "
+                "azure-batch 15.x EnvironmentSetting exposes only "
+                "{name, value} (verified against SDK 15.1.0 and the Batch "
+                "data-plane API 2025-06-01), so the raw HMAC secret would "
+                "have to ship as a literal task environment setting — "
+                "readable back via Get Task and persisted in job history. "
+                "Remove the flag to keep the legacy literal mode, or use "
+                "the pool-level managed-identity + Key Vault pattern "
+                "documented in docs/secret-management.md (issue #1633)."
+            )
         # Issue #1081: a pinned SHA256 digest overrides the mutable tag
         # for the OSIMFLOW_CONTAINER env var the worker reads.
         container_digest = getattr(self, "_container_digest", None)

@@ -15,17 +15,21 @@ secret HMAC-SHA256 contract that closes that hole:
   the digest with ``hmac.compare_digest`` *before* decoding or
   executing anything, and fails closed on missing/tampered signatures.
 
-The module is stdlib-only (``hmac`` + ``hashlib``) so the remote runner
-keeps its no-extra-dependencies property. For maximum benefit on real
-clusters, inject ``OSIMFLOW_TASK_PAYLOAD_SECRET`` into worker pods via
-the substrate's secret store (Kubernetes Secret / Nomad Vault template)
-rather than a literal orchestrator environment variable.
+The module is stdlib-only (``hmac`` + ``hashlib`` + ``pathlib``) so the
+remote runner keeps its no-extra-dependencies property. For maximum
+benefit on real clusters, inject ``OSIMFLOW_TASK_PAYLOAD_SECRET`` into
+worker pods via the substrate's secret store (Kubernetes Secret /
+Nomad Vault template / AWS ``containerOverrides.secrets`` / Google
+Batch ``secret_variables`` / Docker Swarm secret files) rather than a
+literal orchestrator environment variable (issues #1449, #1535,
+#1633).
 """
 
 import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 #: Serialized step call carried in the job environment.
@@ -34,6 +38,11 @@ TASK_PAYLOAD_ENV = "OSIMFLOW_TASK_PAYLOAD"
 TASK_PAYLOAD_SIG_ENV = "OSIMFLOW_TASK_PAYLOAD_SIG"
 #: Shared secret used for signing (submission) and verification (runner).
 TASK_PAYLOAD_SECRET_ENV = "OSIMFLOW_TASK_PAYLOAD_SECRET"
+#: Path to a file holding the shared secret (issue #1633). Docker Swarm
+#: mounts secrets as files under ``/run/secrets/<name>`` — substrates
+#: with file-based out-of-band delivery point this env var at the mount
+#: path instead of shipping the literal secret in the job spec.
+TASK_PAYLOAD_SECRET_FILE_ENV = "OSIMFLOW_TASK_PAYLOAD_SECRET_FILE"
 
 #: Nomad dispatch-meta key mirroring ``TASK_PAYLOAD_ENV``.
 TASK_PAYLOAD_META_KEY = "task_payload"
@@ -71,12 +80,43 @@ def resolve_payload_secret() -> str | None:
     Checks ``OSIMFLOW_TASK_PAYLOAD_SECRET`` first, then the Nomad
     dispatch-meta fallback (``NOMAD_META_task_payload_secret``) — the
     same env-then-meta resolution order ``remote_runner`` uses for the
-    payload itself. Returns ``None`` in legacy (unsigned) mode.
+    payload itself — then the file fallback (issue #1633): when
+    ``OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`` is set (e.g. by the Docker
+    Swarm executor pointing at ``/run/secrets/<name>``), the secret is
+    read from that file, stripped of surrounding whitespace (``docker
+    secret create`` pipelines commonly append a trailing newline).
+    Returns ``None`` in legacy (unsigned) mode.
+
+    Raises ``RuntimeError`` when the file env var is set but the file
+    cannot be read or is empty — a misconfigured secret mount must fail
+    loud, not silently fall back to unsigned execution.
     """
     value = os.environ.get(TASK_PAYLOAD_SECRET_ENV)
     if value is not None:
         return value
-    return os.environ.get(f"NOMAD_META_{TASK_PAYLOAD_SECRET_META_KEY}")
+    value = os.environ.get(f"NOMAD_META_{TASK_PAYLOAD_SECRET_META_KEY}")
+    if value is not None:
+        return value
+    secret_file = os.environ.get(TASK_PAYLOAD_SECRET_FILE_ENV)
+    if secret_file:
+        try:
+            content = Path(secret_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"{TASK_PAYLOAD_SECRET_FILE_ENV} points at {secret_file!r} "
+                f"but the file could not be read: {exc}. Verify the "
+                "substrate actually mounted the secret (e.g. the Docker "
+                "Swarm secret exists and is attached to the service)."
+            ) from exc
+        stripped = content.strip()
+        if not stripped:
+            raise RuntimeError(
+                f"{TASK_PAYLOAD_SECRET_FILE_ENV} points at {secret_file!r} "
+                "but the file is empty — refusing to fall back to "
+                "unsigned execution (issue #1633)."
+            )
+        return stripped
+    return None
 
 
 def sign_task_payload(payload: str, secret: str) -> str:
@@ -101,23 +141,41 @@ def verify_task_payload(payload: str, signature: str | None, secret: str) -> boo
     return hmac.compare_digest(expected, signature)
 
 
-def build_signature_env(payload: str, *, secret: str | None = None) -> dict[str, str]:
+def build_signature_env(
+    payload: str,
+    *,
+    secret: str | None = None,
+    include_secret: bool = True,
+) -> dict[str, str]:
     """Return the env vars to attach alongside ``OSIMFLOW_TASK_PAYLOAD``.
 
     When a shared secret is configured (explicit *secret* or the
-    ``OSIMFLOW_TASK_PAYLOAD_SECRET`` environment variable), returns both
-    ``OSIMFLOW_TASK_PAYLOAD_SIG`` (the signature) and
-    ``OSIMFLOW_TASK_PAYLOAD_SECRET`` (so the remote worker can verify).
-    Returns an empty dict in legacy unsigned mode so executor env
-    builders stay byte-identical when no secret is configured.
+    ``OSIMFLOW_TASK_PAYLOAD_SECRET`` environment variable), returns
+    ``OSIMFLOW_TASK_PAYLOAD_SIG`` (the signature) and — unless
+    *include_secret* is False — ``OSIMFLOW_TASK_PAYLOAD_SECRET`` (so
+    the remote worker can verify). Returns an empty dict in legacy
+    unsigned mode so executor env builders stay byte-identical when no
+    secret is configured.
+
+    *include_secret=False* is the signature-only mode for substrates
+    that deliver the secret out-of-band (issue #1633: AWS Batch
+    ``containerOverrides.secrets``, Google Batch ``secret_variables``,
+    Docker Swarm secret files): the signature is public by design and
+    still ships as a literal, but the raw secret never appears in the
+    job spec. The remote runner reads the secret from the
+    substrate-injected channel — its ``resolve_payload_secret`` checks
+    the ``OSIMFLOW_TASK_PAYLOAD_SECRET`` env var first (which AWS /
+    Google inject from their secret stores) and the
+    ``OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`` path second (Swarm secret
+    mount), so verification works identically in both modes.
     """
     resolved = secret if secret is not None else os.environ.get(TASK_PAYLOAD_SECRET_ENV)
     if not resolved:
         return {}
-    return {
-        TASK_PAYLOAD_SIG_ENV: sign_task_payload(payload, resolved),
-        TASK_PAYLOAD_SECRET_ENV: resolved,
-    }
+    env = {TASK_PAYLOAD_SIG_ENV: sign_task_payload(payload, resolved)}
+    if include_secret:
+        env[TASK_PAYLOAD_SECRET_ENV] = resolved
+    return env
 
 
 def canonical_result_transport_settings(
