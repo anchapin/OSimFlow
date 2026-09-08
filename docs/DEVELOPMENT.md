@@ -1545,6 +1545,7 @@ key = CacheKey(
 | Change `variables.yml` | `GENERATE_LHS_SAMPLES` (and downstream) |
 | Change `--openstudio_version` | `RUN_OPENSTUDIO_SIM` only |
 | Change `template_sim_package` | `APPLY_PARAMETERS` + `RUN_OPENSTUDIO_SIM` |
+| Upgrade a third-party algorithm plugin (same entry-point name) | `GENERATE_<ALGO>_SAMPLES` (via `_algorithm_code_digest`, issue #1636) |
 | Delete an output file | The specific cache entry (detected on lookup) |
 
 ### Code hashing
@@ -1558,6 +1559,13 @@ The ``work`` hash covers only ``osimflow/work.py`` and is used by
 ``AGGREGATE_RESULTS`` exclusively. BYOS user scripts
 (``cfg.custom_apply_script`` / ``cfg.custom_kpi_extractor``) are mixed
 into the per-sample key via ``_combine_code_hash`` (issue #1011).
+The resolved algorithm's implementation files are digest-hashed
+(``_algorithm_code_digest`` in ``osimflow/_campaign_code_hashes.py``)
+and mixed into the ``GENERATE_*_SAMPLES`` step's ``code_sha256`` via
+the same ``_combine_code_hash`` convention, so a same-named
+third-party algorithm plugin upgrade invalidates cached samples
+(issue #1636; third-party package trees hash whole, built-in
+algorithms cap at ``osimflow/algorithms/``).
 
 ```python
 def _compute_code_hashes(self) -> dict[str, str]:
