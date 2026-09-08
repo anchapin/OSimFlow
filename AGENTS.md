@@ -1307,6 +1307,18 @@ context-mode / codebase-memory-mcp are exposed):
   mirrors the storage gate): a plaintext coordinator transmits the
   `Authorization: Bearer $OSIMFLOW_API_KEY` header and per-sample
   results in cleartext on every sample completion.
+- **Cross-measure conflict escape hatch** (issue #1638): setting
+  `OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT` (any **non-empty** value) in the
+  environment downgrades the pre-flight `CrossMeasureConflictError`
+  (§8 gotcha #2, `osimflow/apply_params.py:_check_cross_measure_conflicts`)
+  to a `log.warning`. Expert-only: when arguments conflict across measures,
+  which measure's value wins at runtime is **undefined**. This is the only
+  documented env-var bypass of a pre-flight check — no undocumented
+  exceptions should exist. Tested in
+  `tests/unit/test_apply_params.py:TestPreflightCrossMeasureConflict`;
+  documented in `docs/user-guide.md` §9. The email notifier's
+  `OSIMFLOW_SMTP_*` knobs (credentials from env only, never committed
+  config) are documented in `docs/user-guide.md` §4.4.
 - **Singularity on shared HPC:** never bind-mount secrets;
   pass via env vars or `submitit`'s
   `ex.update_parameters(setup=...)`, not as container mounts.
