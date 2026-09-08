@@ -384,9 +384,7 @@ class TestAzureBatchSecretDelivery:
         )
         assert cc.azure_batch_payload_secret_id == AZURE_SECRET_ID
 
-    def test_secret_ref_mode_refused_loud(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_secret_ref_mode_refused_loud(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Issue #1633: no task-level secret channel exists in Azure Batch.
 
         azure-batch 15.x ``EnvironmentSetting`` exposes only ``{name,
@@ -461,9 +459,7 @@ class TestGoogleBatchSecretDelivery:
         executor = _build_executor(ns)
         assert executor.payload_secret_name == GOOGLE_SECRET_NAME
 
-    def test_default_mode_ships_literal_secret(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_default_mode_ships_literal_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from osimflow.task_payload_hmac import (
             TASK_PAYLOAD_SECRET_ENV,
             TASK_PAYLOAD_SIG_ENV,
@@ -519,9 +515,7 @@ class TestGoogleBatchSecretDelivery:
             TASK_PAYLOAD, "super-secret"
         )
 
-    def test_legacy_mode_omits_secret_variables(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_legacy_mode_omits_secret_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
 
         monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, "super-secret")
@@ -574,9 +568,7 @@ class TestDockerSwarmSecretDelivery:
         executor = _build_executor(ns)
         assert executor.payload_secret == SWARM_SECRET_NAME
 
-    def test_default_mode_ships_literal_secret(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_default_mode_ships_literal_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
         from osimflow.task_payload_hmac import (
             TASK_PAYLOAD_SECRET_ENV,
