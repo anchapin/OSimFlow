@@ -80,8 +80,11 @@ class CampaignPauseRequested(OSimFlowError):
     ``finished_at``, status ``"cancelled"``), while this signal keeps
     the documented pause semantics — ``run.json`` status stays
     ``"paused"``, ``finished_at`` is not set, and running jobs are left
-    to complete so ``osimflow resume`` can continue the campaign from
-    cache replay.
+    to complete.  ``Campaign.run()`` then *returns*: the ``osimflow
+    run`` process exits and there is no live orchestrator parked on the
+    flag.  Recovery is cache replay — ``osimflow resume`` clears the
+    flag and re-launches the recorded run (issue #1628), or the user
+    re-runs ``osimflow run --outdir <same>`` manually.
 
     Only ``Campaign.run()`` catches this; it never escapes ``run()``.
     """
@@ -319,12 +322,16 @@ class CampaignLifecycle:
         log.warning("campaign pause requested (paused_at=%.0f)", trace.paused_at)
 
     def resume(self, outdir: Path, trace: RunTrace) -> None:
-        """Resume a paused campaign.
+        """Clear the pause flag and reset the trace's paused state.
 
-        Removes the ``.pause`` flag file and clears ``paused_at`` from
-        the run trace.  The executor's fan-out loop checks for the
-        ``.pause`` file between sample dispatches and will resume
-        queuing pending samples.
+        Removes the ``.pause`` flag file, clears the in-memory pause
+        flag, and resets ``run.json`` from ``"paused"`` to
+        ``"running"``.  This does NOT by itself continue a paused
+        campaign: a paused campaign has already exited
+        ``Campaign.run()`` — there is no live fan-out loop waiting on
+        the flag.  The end-user recovery is ``osimflow resume``, which
+        clears this flag and re-launches the recorded ``osimflow run``
+        invocation so completed steps replay from cache (issue #1628).
 
         Thread-safe and idempotent.
         """
