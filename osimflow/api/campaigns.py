@@ -208,7 +208,24 @@ async def create_campaign(
 
     # Generate campaign ID and output directory
     campaign_id = f"campaign-{uuid.uuid4().hex[:8]}"
-    outdir = Path(body.outdir).resolve() if body.outdir is not None else base / campaign_id
+    if body.outdir is not None:
+        # Containment (issue #1639): a client-supplied outdir must stay
+        # inside the campaigns base directory. Compare resolved-to-resolved
+        # so symlinked paths and ``..`` traversal cannot escape the base.
+        resolved_base = base.resolve()
+        outdir = Path(body.outdir).resolve()
+        try:
+            validate_path_within_base(outdir, resolved_base)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "outdir must resolve within the campaigns base directory "
+                    f"({resolved_base}); got {outdir}"
+                ),
+            ) from exc
+    else:
+        outdir = base / campaign_id
 
     outdir.mkdir(parents=True, exist_ok=True)
 
