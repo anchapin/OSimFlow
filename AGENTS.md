@@ -1112,7 +1112,12 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
   (union, sorted + deduped — issue #1021). Editing
   `osimflow/work.py` (and modules it imports) is hashed
   separately as `code_hashes["work"]` for `AGGREGATE_RESULTS`.
-  Do not bypass this hashing.
+  The resolved algorithm's own implementation code is
+  additionally digest-hashed into the `GENERATE_*_SAMPLES`
+  key (`_algorithm_code_digest` in
+  `osimflow/_campaign_code_hashes.py`, issue #1636) —
+  upgrading a same-named third-party algorithm plugin
+  invalidates cached samples. Do not bypass this hashing.
 - **Executor resource directives:** `cpus`, `memory_mb`,
   `time_min` are advisory on `LocalExecutor`, propagated to
   Slurm via `submitit`'s `update_parameters`, and translated

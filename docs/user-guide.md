@@ -1104,6 +1104,9 @@ completed step.
 - Changing `--template_sim_package` contents (different model).
 - Changing BYOS scripts (`--custom_apply_script`,
   `--custom_kpi_extractor`).
+- Upgrading a third-party algorithm plugin (same name, new code) —
+  the plugin's implementation is hashed into the sampling step's
+  cache key, so cached samples regenerate.
 
 **Force a full re-run:**
 
