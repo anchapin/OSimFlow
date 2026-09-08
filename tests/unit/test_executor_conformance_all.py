@@ -369,7 +369,14 @@ def _kubernetes_factory() -> BaseExecutor:
     # ``handle_result_respects_timeout`` case). Without this override,
     # the executor's poll loop calls _get_pod_status which returns
     # Succeeded immediately and the deadline never gets checked.
-    def _stub_wait(_job_name: str, timeout: float | None = None) -> Any:
+    # Issue #1635: the real executor's _wait_for_terminal (and thus
+    # this stub mirroring its interface) also accepts the handle's
+    # ``result_verifier`` keyword for deleted-Job terminal resolution.
+    def _stub_wait(
+        _job_name: str,
+        timeout: float | None = None,
+        **_kwargs: Any,
+    ) -> Any:
         if timeout is not None and timeout < 0.5:
             raise TimeoutError(f"timeout after {timeout}s")
         return _stub_get_pod_status(_job_name)

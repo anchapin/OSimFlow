@@ -8,11 +8,16 @@ Covers:
     remote_command override, and object-storage result materialization
     against a mocked storage backend.
   - Pod hardening (issue #1383): strict vs. relaxed SecurityContext.
+  - Deleted/GC'd Jobs (issue #1635): empty pod list + 404 Job resolves
+    terminally (result-verified Succeeded or explicit Failed with
+    "job deleted before result retrieval") instead of polling to
+    TimeoutError; empty pod list + existing Job stays Pending.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -1051,3 +1056,188 @@ class TestKubernetesHandle:
         handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
         with pytest.raises(RuntimeError, match="exit code 3"):
             handle.result()
+
+
+class TestKubernetesDeletedJob:
+    """Issue #1635: a deleted/GC'd Job resolves terminally, not via TimeoutError.
+
+    ``list_namespaced_pod`` on a deleted Job returns an EMPTY LIST (it
+    never raises), so the pre-#1635 ``_get_pod_status`` reported
+    Pending forever and the await path polled to the deadline. The fix
+    reads the Job object on an empty pod list: a 404 (TTL GC after
+    completion via ``ttl_seconds_after_finished`` or external
+    deletion) synthesizes a terminal pod status — result-verified
+    Succeeded, or Failed with reason "job deleted before result
+    retrieval".
+    """
+
+    @staticmethod
+    def _make_deleted_job_executor(
+        *, poll_interval_s: float = 5.0
+    ) -> tuple[MagicMock, KubernetesExecutor]:
+        """Executor whose client has no pods and no Job object (404)."""
+        mock_client = MagicMock()
+        mock_client.create_namespaced_job.return_value = None
+        mock_client.list_namespaced_pod.return_value.items = []
+        mock_client.read_namespaced_job.side_effect = client.ApiException(
+            status=404, reason="Not Found"
+        )
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex._client = mock_client
+        ex.namespace = "default"
+        ex.poll_interval_s = poll_interval_s
+        ex.max_poll_interval_s = 60.0
+        return mock_client, ex
+
+    @staticmethod
+    def _make_existing_job_executor() -> tuple[MagicMock, KubernetesExecutor]:
+        """Executor whose client has no pods but the Job object still exists."""
+        mock_client = MagicMock()
+        mock_client.create_namespaced_job.return_value = None
+        mock_client.list_namespaced_pod.return_value.items = []
+        # read_namespaced_job returns a MagicMock (the Job object) — no raise.
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex._client = mock_client
+        ex.namespace = "default"
+        ex.poll_interval_s = 0.1
+        ex.max_poll_interval_s = 1.0
+        return mock_client, ex
+
+    def test_deleted_job_with_retrievable_result_resolves_succeeded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty pods + 404 Job + retrievable upload → Succeeded well before deadline."""
+        storage = TestKubernetesHandle._make_mock_storage()
+        monkeypatch.setattr(
+            "osimflow.executors.transport.build_result_storage",
+            lambda **_kwargs: storage,
+        )
+        mock_client, ex = self._make_deleted_job_executor()
+        hint = tmp_path / "out" / "work" / "kpis" / "kpi_s0.json"
+        handle = _KubernetesHandle(
+            job_name="osimflow-sim-s0",
+            executor=ex,
+            submit_params={},
+            result_hint=hint,
+            transport=ResultTransportConfig(
+                mode="object_storage",
+                backend="s3",
+                bucket="osimflow-results",
+                prefix="out",
+            ),
+        )
+        start = time.monotonic()
+        result = handle.result(timeout=60)
+        elapsed = time.monotonic() - start
+        # The first probe resolves terminally — no backoff sleeps (the
+        # first would be 2 * poll_interval_s = 10s), no TimeoutError.
+        assert result == hint
+        assert hint.is_file()
+        assert elapsed < 5.0
+        mock_client.read_namespaced_job.assert_called_once_with(
+            name="osimflow-sim-s0",
+            namespace="default",
+        )
+        # The verification probe already downloaded the artifact; the
+        # post-classification resolve must not download it a second time.
+        assert storage.download_file.call_count == 1
+
+    def test_deleted_job_without_result_fails_with_reason(self) -> None:
+        """Empty pods + 404 Job + no result reference → Failed, clear reason."""
+        mock_client, ex = self._make_deleted_job_executor()
+        handle = _KubernetesHandle(
+            job_name="osimflow-sim-s0",
+            executor=ex,
+            submit_params={},
+            result_hint=None,
+            transport=ResultTransportConfig(
+                mode="object_storage",
+                backend="s3",
+                bucket="osimflow-results",
+                prefix="out",
+            ),
+        )
+        with pytest.raises(RuntimeError, match="job deleted before result retrieval"):
+            handle.result(timeout=60)
+
+    def test_deleted_job_unretrievable_upload_fails_with_reason(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty pods + 404 Job + missing object → Failed (no silent success)."""
+        storage = MagicMock()
+        storage.download_file.side_effect = FileNotFoundError("object missing")
+        monkeypatch.setattr(
+            "osimflow.executors.transport.build_result_storage",
+            lambda **_kwargs: storage,
+        )
+        mock_client, ex = self._make_deleted_job_executor()
+        handle = _KubernetesHandle(
+            job_name="osimflow-sim-s0",
+            executor=ex,
+            submit_params={},
+            result_hint=tmp_path / "out" / "work" / "kpis" / "kpi_s0.json",
+            transport=ResultTransportConfig(
+                mode="object_storage",
+                backend="s3",
+                bucket="osimflow-results",
+                prefix="out",
+            ),
+        )
+        with pytest.raises(RuntimeError, match="job deleted before result retrieval"):
+            handle.result(timeout=60)
+
+    def test_deleted_job_missing_shared_fs_path_fails_with_reason(self, tmp_path: Path) -> None:
+        """In-band modes need on-disk evidence: a missing decoded path → Failed."""
+        mock_client, ex = self._make_deleted_job_executor()
+        handle = _KubernetesHandle(
+            job_name="osimflow-sim-s0",
+            executor=ex,
+            submit_params={},
+            result_hint=tmp_path / "shared" / "work" / "sim" / "s0",
+            transport=ResultTransportConfig(mode="shared_fs"),
+        )
+        with pytest.raises(RuntimeError, match="job deleted before result retrieval"):
+            handle.result(timeout=60)
+
+    def test_deleted_job_missing_shared_fs_path_present_succeeds(self, tmp_path: Path) -> None:
+        """In-band evidence: an existing decoded shared-fs path → Succeeded."""
+        hint = tmp_path / "shared" / "work" / "sim" / "s0"
+        hint.mkdir(parents=True)
+        (hint / "eplusout.sql").write_text("-- stub sql")
+        mock_client, ex = self._make_deleted_job_executor()
+        handle = _KubernetesHandle(
+            job_name="osimflow-sim-s0",
+            executor=ex,
+            submit_params={},
+            result_hint=hint,
+            transport=ResultTransportConfig(mode="shared_fs"),
+        )
+        assert handle.result(timeout=60) == hint
+
+    def test_empty_pods_with_existing_job_stays_pending(self) -> None:
+        """Empty pods + existing Job → Pending (pre-#1635 behaviour preserved)."""
+        mock_client, ex = self._make_existing_job_executor()
+        status = ex._get_pod_status("osimflow-test")
+        assert status == {"status": {"phase": "Pending"}}
+        mock_client.read_namespaced_job.assert_called_once_with(
+            name="osimflow-test", namespace="default"
+        )
+
+    def test_wait_for_terminal_existing_job_pending_times_out(self) -> None:
+        """The poll loop treats an existing-but-podless Job as non-terminal."""
+        _mock_client, ex = self._make_existing_job_executor()
+        with patch("osimflow.testing.patch_targets.time.sleep"):
+            with pytest.raises(TimeoutError):
+                ex._wait_for_terminal("osimflow-test", timeout=0.3)
+
+    def test_done_false_when_existing_job_pending(self) -> None:
+        """done() stays False while the Job exists but has no pods yet."""
+        _mock_client, ex = self._make_existing_job_executor()
+        handle = _KubernetesHandle(job_name="osimflow-test", executor=ex, submit_params={})
+        assert handle.done() is False
+
+    def test_done_true_when_job_deleted(self) -> None:
+        """The no-verifier done() probe reports a gone Job as terminal."""
+        _mock_client, ex = self._make_deleted_job_executor()
+        handle = _KubernetesHandle(job_name="osimflow-sim-s0", executor=ex, submit_params={})
+        assert handle.done() is True
