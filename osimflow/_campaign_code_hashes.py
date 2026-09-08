@@ -7,7 +7,9 @@ This module extracts the code-hash machinery from ``osimflow.campaign``
   work layer (issue #1446),
 - the ``bin`` / ``work`` / BYOS file-content hashes mixed into
   :class:`osimflow.cache.CacheKey`,
-- the BYOS folding helper (issue #1011).
+- the BYOS folding helper (issue #1011),
+- the algorithm-implementation digest mixed into the
+  ``GENERATE_<ALGO>_SAMPLES`` cache key (issue #1636).
 
 ``compute_code_hashes`` intentionally keeps the legacy
 ``Campaign._compute_code_hashes(self, cfg=None)`` signature shape so
@@ -19,15 +21,20 @@ the function not depending on real instance state.
 import ast
 import hashlib
 import inspect
+import logging
 import sys
 from collections.abc import Iterator
+from importlib.metadata import packages_distributions, version
 from pathlib import Path
 from typing import Any
 
+from .algorithms import BaseAlgorithm
 from .cache import sha256_of_files
 from .config import CampaignConfig
 
 _IMPORT_CLOSURE_CACHE: dict[Path, frozenset[Path]] = {}
+
+log = logging.getLogger("osimflow.code_hashes")
 
 
 def _osimflow_prefixes(dotted: str) -> Iterator[str]:
@@ -233,6 +240,150 @@ def _combine_code_hash(*hashes: str) -> str:
         h.update(part.encode("utf-8"))
         h.update(b"|")
     return h.hexdigest()
+
+
+def _plugin_distribution_version(module_name: str) -> str:
+    """Best-effort installed-distribution version for an algorithm module.
+
+    Maps the module's top-level package to its distribution via
+    ``importlib.metadata.packages_distributions()`` and returns the
+    distribution version. Returns ``"unknown"`` on any failure — this
+    only feeds the *fallback* algorithm digest, so it must never raise
+    (issue #1636: never crash the campaign over hash computation).
+    """
+    try:
+        top_level = module_name.split(".", maxsplit=1)[0]
+        dists = packages_distributions().get(top_level, [])
+        if not dists:
+            return "unknown"
+        return version(dists[0])
+    except Exception:  # noqa: BLE001 — metadata lookup is best-effort only
+        return "unknown"
+
+
+def _algorithm_fallback_digest(cls: type, reason: str) -> str:
+    """Stable identity digest when the implementation source is unreadable.
+
+    Used when ``inspect.getfile(type(algo))`` fails (C extension,
+    ``__main__``-defined class, unimportable module) or the resolved
+    file is missing (zipimport). Hashes the qualified class name, the
+    module name, and — when discoverable — the plugin distribution
+    version. A same-identity plugin upgrade that keeps the version
+    unchanged will NOT invalidate the cache key through this path; a
+    warning is logged so operators can see the downgrade in coverage.
+    """
+    identity = f"{cls.__module__}.{getattr(cls, '__qualname__', cls.__name__)}"
+    digest_input = f"algo-fallback|{identity}|{_plugin_distribution_version(cls.__module__)}"
+    log.warning(
+        "cannot hash algorithm implementation source for %s (%s); "
+        "falling back to a name/distribution-version digest — same-identity "
+        "plugin code changes will NOT invalidate the GENERATE_SAMPLES "
+        "cache key",
+        identity,
+        reason,
+    )
+    return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+
+
+def _algorithm_package_scope(module_file: Path, module_name: object) -> Path | None:
+    """Distribution/package root directory for an algorithm module.
+
+    Resolves the module's dotted ``__name__`` against its on-disk
+    location: for ``pkg.sub.algo`` implemented in
+    ``<root>/pkg/sub/algo.py`` the root is ``<root>/pkg``. The
+    directory names walking up from the module file must spell the
+    dotted package chain — a module-name/path mismatch (a module
+    registered under an unrelated name) would otherwise scope the hash
+    at an arbitrary ancestor such as ``site-packages`` itself, so the
+    mismatch returns ``None`` (caller falls back to a bounded scope).
+
+    Returns ``None`` for a top-level plain module (``foo.py``, no
+    package) — its hash scope is the file itself.
+    """
+    if not isinstance(module_name, str) or not module_name:
+        return None
+    parts = module_name.split(".")
+    chain = parts if module_file.name == "__init__.py" else parts[:-1]
+    if not chain:
+        return None
+    # The innermost directory must match the innermost package name.
+    if module_file.parent.name != chain[-1]:
+        return None
+    # Every directory above must spell the remaining dotted prefixes.
+    for i in range(1, len(chain)):
+        try:
+            if module_file.parents[i].name != chain[len(chain) - 1 - i]:
+                return None
+        except IndexError:
+            return None
+    return module_file.parents[len(chain) - 1]
+
+
+def _algorithm_implementation_files(cls: type, module_file: Path) -> list[Path]:
+    """Source-file set covering one algorithm implementation (issue #1636).
+
+    Scope rules, most specific first:
+
+    * the module resolves to a package/distribution root outside
+      ``osimflow`` → every ``*.py`` under that root (recursively). A
+      whole third-party distribution is small and self-contained, and
+      over-approximation is safe for cache invalidation (the same
+      stance as ``_transitive_import_closure``);
+    * the module resolves *into* the ``osimflow`` package itself (the
+      built-in algorithms) → every ``*.py`` under the algorithm
+      module's own package directory, so unrelated ``osimflow`` edits
+      do not invalidate GENERATE keys;
+    * the module is a package ``__init__`` whose dotted name does not
+      match its path → the package tree of ``module_file.parent``
+      (bounded — it is a real package directory);
+    * anything else (top-level module, name/path mismatch) → the
+      module file alone.
+
+    The set is sorted and deduplicated so the hash is deterministic.
+    """
+    package_root = Path(__file__).resolve().parent
+    scope = _algorithm_package_scope(module_file, getattr(cls, "__module__", None))
+    if scope is not None and (scope == package_root or package_root in scope.parents):
+        # Built-in algorithm: cap the scope at the algorithm's own
+        # package directory instead of hashing the whole osimflow tree.
+        scope = module_file.parent
+    if scope is None:
+        if module_file.name == "__init__.py":
+            candidates: Iterator[Path] = module_file.parent.rglob("*.py")
+            return sorted({p.resolve() for p in candidates if p.is_file()})
+        return [module_file]
+    files = scope.rglob("*.py")
+    return sorted({p.resolve() for p in files if p.is_file()})
+
+
+def _algorithm_code_digest(algo: BaseAlgorithm) -> str:
+    """SHA-256 over the resolved algorithm implementation's source files.
+
+    Issue #1636: third-party algorithm plug-ins discovered via the
+    ``osimflow.algorithms`` entry-point group live outside the
+    ``osimflow`` package, so ``_transitive_import_closure`` (kept
+    inside ``package_root``) never sees their code and the
+    ``GENERATE_<ALGO>_SAMPLES`` cache key silently replayed samples
+    from an upgraded-but-same-named plug-in. This digest starts at
+    ``inspect.getfile(type(algo))`` and hashes the implementation's
+    package/distribution file set; it is mixed into the step's
+    ``code_sha256`` by ``Campaign.step_generate_samples``.
+
+    Never raises: when the implementation source cannot be located or
+    read (C extension, ``__main__``, zipimport), falls back to
+    ``_algorithm_fallback_digest`` with a warning.
+    """
+    cls = type(algo)
+    try:
+        module_file = Path(inspect.getfile(cls)).resolve()
+    except (TypeError, OSError) as exc:
+        return _algorithm_fallback_digest(cls, f"inspect.getfile failed: {exc}")
+    if not module_file.is_file():
+        return _algorithm_fallback_digest(cls, f"no source file at {module_file}")
+    files = _algorithm_implementation_files(cls, module_file)
+    if not files:
+        return _algorithm_fallback_digest(cls, f"no .py files beside {module_file}")
+    return sha256_of_files(files)
 
 
 def compute_code_hashes(
