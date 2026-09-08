@@ -82,14 +82,18 @@ class TestResolvePayloadSecret:
         monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, str(secret_file))
         assert resolve_payload_secret() == SECRET
 
-    def test_env_takes_precedence_over_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    def test_env_takes_precedence_over_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
         secret_file = tmp_path / "osimflow-hmac"
         secret_file.write_text("file-secret", encoding="utf-8")
         monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, str(secret_file))
         monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
         assert resolve_payload_secret() == SECRET
 
-    def test_file_strips_surrounding_whitespace(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    def test_file_strips_surrounding_whitespace(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
         """`docker secret create` pipelines commonly append a trailing newline."""
         secret_file = tmp_path / "osimflow-hmac"
         secret_file.write_text(f"\n{SECRET}\n", encoding="utf-8")

@@ -115,7 +115,9 @@ class TestConcurrentCheckpoints:
         assert data["campaign_id"] == "race-test"
         assert isinstance(data["per_sample"], list)
 
-    def test_tmp_paths_are_thread_unique(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_tmp_paths_are_thread_unique(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Both writers must use pid+thread-id-unique tmp names, not a
         shared run.tmp (the #1627 collision)."""
         trace = _mk_trace(tmp_path)
