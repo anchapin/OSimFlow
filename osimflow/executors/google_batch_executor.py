@@ -260,7 +260,7 @@ class GoogleBatchExecutor(BaseExecutor):
         "instance was preempted",
     )
 
-    def _build_environment(
+    def _build_environment(  # noqa: PLR0912 — issue #1633 secret-delivery branches; mirrors docker_swarm_executor._submit_service
         self,
         *,
         container: str | None,
@@ -493,10 +493,10 @@ class GoogleBatchExecutor(BaseExecutor):
             "variables": {e["name"]: e["value"] for e in environment},
         }
         payload_secret_name = getattr(self, "payload_secret_name", None)
-        if payload_secret_name and not any(e["name"] == TASK_PAYLOAD_SECRET_ENV for e in environment):
-            environment_map["secret_variables"] = {
-                TASK_PAYLOAD_SECRET_ENV: payload_secret_name
-            }
+        if payload_secret_name and not any(
+            e["name"] == TASK_PAYLOAD_SECRET_ENV for e in environment
+        ):
+            environment_map["secret_variables"] = {TASK_PAYLOAD_SECRET_ENV: payload_secret_name}
 
         task_group = self._batch_v1.TaskGroup(
             task_count=1,
