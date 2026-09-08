@@ -164,6 +164,21 @@
     "required": false,
     "type": "float"
   },
+  "--aws-batch-payload-secret-arn": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "aws_batch_payload_secret_arn",
+    "help": "ARN of an AWS Secrets Manager secret (or SSM Parameter Store parameter) holding the task-payload HMAC secret (key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, the job spec emits containerOverrides.secrets (valueFrom) instead of a literal env value, so the raw secret never appears in the job spec where it is readable via DescribeJobs and persists in job history (issue #1633). The job's task role needs secretsmanager:GetSecretValue (or ssm:GetParameter + kms:Decrypt) on the ARN. Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing. See docs/secret-management.md.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--aws-batch-payload-secret-arn"
+    ],
+    "required": false,
+    "type": null
+  },
   "--aws-batch-queue": {
     "action": "_StoreAction",
     "choices": null,
@@ -250,6 +265,21 @@
     "nargs": null,
     "option_strings": [
       "--azure-batch-location"
+    ],
+    "required": false,
+    "type": null
+  },
+  "--azure-batch-payload-secret-id": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "azure_batch_payload_secret_id",
+    "help": "Azure Key Vault secret identifier holding the task-payload HMAC secret. RESERVED BUT CURRENTLY REFUSED (issue #1633): azure-batch 15.x EnvironmentSetting exposes only {name, value} \u2014 the Batch data-plane API has no task-level secret-injection mechanism \u2014 so the executor raises a documented error rather than silently shipping the raw secret as a literal task environment setting (readable via Get Task). Use the pool-level managed-identity + Key Vault pattern documented in docs/secret-management.md instead. OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator remains required for signing either way.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--azure-batch-payload-secret-id"
     ],
     "required": false,
     "type": null
@@ -866,6 +896,21 @@
     "required": false,
     "type": null
   },
+  "--docker-swarm-payload-secret": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "docker_swarm_payload_secret",
+    "help": "Name of a pre-created Docker secret holding the task-payload HMAC secret (value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, the service mounts the secret at /run/secrets/<name> and the job env carries OSIMFLOW_TASK_PAYLOAD_SECRET_FILE pointing at it \u2014 the remote runner reads the secret from the file \u2014 so the raw secret never appears in the service spec where it is readable via 'docker service inspect' (issue #1633). Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing. See docs/secret-management.md.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--docker-swarm-payload-secret"
+    ],
+    "required": false,
+    "type": null
+  },
   "--docker-swarm-poll-interval-s": {
     "action": "_StoreAction",
     "choices": null,
@@ -966,6 +1011,21 @@
     ],
     "required": false,
     "type": "Path"
+  },
+  "--google-batch-payload-secret-name": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "google_batch_payload_secret_name",
+    "help": "Secret Manager secret name (e.g. osimflow-payload-hmac) holding the task-payload HMAC secret. When set, the job spec emits environment.secret_variables instead of a literal env value, so the raw secret never appears in the job spec where it is readable via 'gcloud batch jobs describe' and persists in job history (issue #1633). The Batch agent resolves the secret at task start via the job's service account (--google-batch-service-account), which needs roles/secretmanager.secretAccessor on it. Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing. See docs/secret-management.md.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--google-batch-payload-secret-name"
+    ],
+    "required": false,
+    "type": null
   },
   "--google-batch-project-id": {
     "action": "_StoreAction",

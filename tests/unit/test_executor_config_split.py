@@ -120,7 +120,9 @@ class TestFlagSurfaceParity:
         run = parser.add_subparsers().add_parser("run")
         add_executor_arguments(run)
         hook_flags = set(_action_specs(run))
-        assert len(hook_flags) == 71  # 68 pre-#1535 + 3 HMAC secret-delivery flags
+        assert (
+            len(hook_flags) == 75
+        )  # 68 pre-#1535 + 3 HMAC secret-delivery flags + 4 out-of-band secret-ref flags (#1633)
         # Representative flags from every executor module.
         assert {
             "--max-workers",

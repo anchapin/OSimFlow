@@ -84,8 +84,17 @@ def tmp_outdir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def client(tmp_outdir: Path) -> TestClient:
-    """Test client with a real app and a real outdir."""
-    app = create_app(outdir=tmp_outdir)
+    """Test client with a real app and a real outdir.
+
+    The rate limiter is effectively disabled (issue #1649): these are
+    validation-shape contract tests, and the app default of
+    ``60/minute`` silently shares a request budget with hypothesis
+    example counts — a property test with enough examples (or extra
+    DB-replayed examples after any prior failure) starts receiving
+    ``429`` instead of the ``422``/``200`` it asserts on, which
+    manifests as order- and load-dependent flakes in full-suite runs.
+    """
+    app = create_app(outdir=tmp_outdir, rate_limit="1000000/minute")
     return TestClient(app)
 
 
@@ -206,7 +215,16 @@ class TestSamplesQueryParams:
         page=st.integers(min_value=1, max_value=1000),
         per_page=st.integers(min_value=1, max_value=500),
     )
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    # deadline=None (issue #1649): per-example latency in the full-suite
+    # process (large heap, loaded CI runners) can transiently exceed
+    # hypothesis's 200 ms default deadline and fail the run with
+    # DeadlineExceeded even though every example returns the asserted
+    # status. Validation-shape property tests do not need a deadline.
+    @settings(
+        max_examples=50,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
     def test_samples_pagination_bounds(self, client: TestClient, page: int, per_page: int) -> None:
         """page >= 1 and per_page in [1, 500] must return HTTP 200."""
         response = client.get("/api/v1/samples", params={"page": page, "per_page": per_page})
@@ -228,21 +246,33 @@ class TestSamplesQueryParams:
         assert response.status_code == 422
 
     @given(page=st.integers(max_value=0))
-    @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(
+        max_examples=20,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
     def test_samples_negative_page_rejected(self, client: TestClient, page: int) -> None:
         """page < 1 is invalid and should return 422."""
         response = client.get("/api/v1/samples", params={"page": page})
         assert response.status_code == 422
 
     @given(per_page=st.integers(max_value=0))
-    @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(
+        max_examples=20,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
     def test_samples_negative_per_page_rejected(self, client: TestClient, per_page: int) -> None:
         """per_page < 1 is invalid and should return 422."""
         response = client.get("/api/v1/samples", params={"per_page": per_page})
         assert response.status_code == 422
 
     @given(page=st.integers(min_value=1, max_value=1000))
-    @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(
+        max_examples=20,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
     def test_samples_defaults(self, client: TestClient, page: int) -> None:
         """When only page is provided, per_page defaults to 50."""
         response = client.get("/api/v1/samples", params={"page": page})
