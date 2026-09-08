@@ -425,19 +425,54 @@ class TestCreateCampaign:
         config_path = Path(data["outdir"]) / "campaign_config.json"
         assert config_path.exists()
 
-    def test_create_campaign_with_outdir(self, client_rw: TestClient) -> None:
+    def test_create_campaign_with_outdir_inside_base(
+        self, client_rw: TestClient, campaigns_base: Path
+    ) -> None:
+        """A client-supplied outdir inside the campaigns base is honored."""
+        outdir = campaigns_base / "sub" / "camp"
         resp = client_rw.post(
             "/api/v1/campaigns",
             json={
                 "input_variables": "/tmp/vars.yml",
                 "template_sim_package": "/tmp/pkg",
                 "n_samples": 3,
-                "outdir": "/tmp/custom-outdir",
+                "outdir": str(outdir),
             },
         )
         assert resp.status_code == 201
         data = resp.json()
-        assert "/tmp/custom-outdir" in data["outdir"]
+        assert data["outdir"].startswith(str(outdir))
+        assert (outdir / "campaign_config.json").exists()
+
+    def test_create_campaign_outdir_absolute_outside_base_400(self, client_rw: TestClient) -> None:
+        """Issue #1639: an absolute outdir outside the base must be rejected."""
+        resp = client_rw.post(
+            "/api/v1/campaigns",
+            json={
+                "input_variables": "/tmp/vars.yml",
+                "template_sim_package": "/tmp/pkg",
+                "n_samples": 3,
+                "outdir": "/tmp/evil",
+            },
+        )
+        assert resp.status_code == 400
+        assert "campaigns base directory" in resp.json()["detail"]
+
+    def test_create_campaign_outdir_traversal_400(
+        self, client_rw: TestClient, campaigns_base: Path
+    ) -> None:
+        """Issue #1639: an outdir with ``..`` traversal must be rejected."""
+        resp = client_rw.post(
+            "/api/v1/campaigns",
+            json={
+                "input_variables": "/tmp/vars.yml",
+                "template_sim_package": "/tmp/pkg",
+                "n_samples": 3,
+                "outdir": f"{campaigns_base}/../escape",
+            },
+        )
+        assert resp.status_code == 400
+        assert "campaigns base directory" in resp.json()["detail"]
 
     def test_create_campaign_validation_n_samples_zero(self, client_rw: TestClient) -> None:
         """n_samples must be >= 1."""
