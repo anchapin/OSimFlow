@@ -1999,7 +1999,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_pause_args(pause_cmd)
     resume_cmd = sub.add_parser(
         "resume",
-        help="Request resume of a paused campaign (issue #444)",
+        help="Resume a paused campaign: clear .pause and re-launch the recorded run (cache replay; issue #1628)",
     )
     _add_resume_args(resume_cmd)
     bk = sub.add_parser(
@@ -3374,8 +3374,10 @@ def _cmd_pause(args: argparse.Namespace) -> int:
     Writes a ``.pause`` flag file to the campaign's output directory.
     The campaign orchestrator checks for this file during fan-out and
     waits for in-flight samples to complete before writing the paused
-    trace to run.json. Unlike cancellation, pausing allows subsequent
-    resume to continue from where the campaign left off.
+    trace to run.json — after which the ``osimflow run`` process exits
+    (there is no background orchestrator holding the campaign open).
+    ``osimflow resume`` clears the flag and re-launches the recorded
+    run via cache replay (issue #1628).
     """
     import json as json_mod  # noqa: PLC0415
 
@@ -3418,15 +3420,108 @@ def _cmd_pause(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_resume(args: argparse.Namespace) -> int:
-    """Request resume of a paused campaign.
+# Per-campaign invocation record (issue #1628): written by `osimflow run`
+# at start, consumed by `osimflow resume` to re-launch the exact command
+# (cache replay) instead of unlinking `.pause` as a silent no-op.
+_CAMPAIGN_INVOCATION_FILE = "campaign_invocation.json"
 
-    Removes the ``.pause`` flag file from the campaign's output directory.
-    The campaign orchestrator detects the cleared pause condition and
-    continues processing pending samples.
+
+def _persist_run_invocation(tokens: list[str], outdir: Path) -> None:
+    """Record the exact ``osimflow run`` argv for ``osimflow resume`` (issue #1628).
+
+    Writes ``<outdir>/campaign_invocation.json`` holding the subcommand
+    tokens (starting with ``run``) plus the invoking cwd, so a later
+    ``osimflow resume`` can re-launch the identical command — relative
+    paths included. Best-effort: a failure to persist only disables
+    auto-replay, never the run itself.
     """
-    import json as json_mod  # noqa: PLC0415
+    payload: dict[str, object] = {
+        "argv": tokens,
+        "cwd": str(Path.cwd()),
+        "recorded_at": time.time(),
+    }
+    try:
+        outdir.mkdir(parents=True, exist_ok=True)
+        (outdir / _CAMPAIGN_INVOCATION_FILE).write_text(json.dumps(payload, indent=2))
+    except OSError as exc:
+        log.warning("could not persist run invocation for resume: %s", exc)
 
+
+def _replay_paused_campaign(outdir: Path) -> int | None:
+    """Re-launch a paused campaign's recorded ``osimflow run`` invocation.
+
+    A paused campaign has no live orchestrator — ``Campaign.run()``
+    returns once the pause lands (issue #1537) — so the only real
+    recovery is cache replay: re-running the same command against the
+    same ``--outdir`` (completed steps are cache hits). This spawns
+    ``python -m osimflow <recorded argv>`` with the recorded cwd and
+    returns the child's exit code.
+
+    Returns ``None`` when no usable invocation record exists (campaign
+    started by an older version, via the REST API, or programmatically)
+    or when the record cannot be executed — callers fall back to
+    printing the manual recovery command.
+    """
+    import shlex  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    record_path = outdir / _CAMPAIGN_INVOCATION_FILE
+    try:
+        record = json.loads(record_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    argv = record.get("argv")
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or argv[0] != "run"
+        or not all(isinstance(tok, str) for tok in argv)
+    ):
+        return None
+    cwd_raw = record.get("cwd")
+    if not isinstance(cwd_raw, str) or not Path(cwd_raw).is_dir():
+        # The recorded cwd is gone; relative paths in the recorded argv
+        # would resolve against the wrong directory — fall back to the
+        # manual recovery message instead of mis-replaying.
+        return None
+    cmd = [sys.executable, "-m", "osimflow", *argv]
+    print(f"resuming via cache replay: {shlex.join(cmd)}  (cwd={cwd_raw})")
+    try:
+        completed = subprocess.run(cmd, cwd=cwd_raw, check=False)
+    except OSError as exc:
+        print(f"error: could not re-launch the campaign: {exc}", file=sys.stderr)
+        return None
+    if completed.returncode != 0:
+        print(
+            f"replayed campaign exited with code {completed.returncode}",
+            file=sys.stderr,
+        )
+    return completed.returncode
+
+
+def _cmd_resume(args: argparse.Namespace) -> int:
+    """Resume a paused campaign by driving the real recovery (issue #1628).
+
+    A paused campaign has no live orchestrator: when the pause lands,
+    ``Campaign.run()`` writes the paused ``run.json`` and returns, and
+    the ``osimflow run`` process exits (issue #1537). Clearing the
+    ``.pause`` flag alone therefore continues nothing.
+
+    This command:
+
+    1. removes the ``.pause`` flag file so the next run is not born
+       paused, and
+    2. re-launches the campaign recorded in ``campaign_invocation.json``
+       (written at ``osimflow run`` start). Completed steps replay from
+       the cache and the campaign continues where it left off.
+
+    When no invocation record exists (campaign started by an older
+    version, via the REST API, or programmatically), the manual
+    recovery is printed instead: ``osimflow run --outdir <same>``
+    with the original flags.
+    """
     outdir: Path = args.outdir.resolve()
     run_json_path = outdir / "run.json"
 
@@ -3436,8 +3531,8 @@ def _cmd_resume(args: argparse.Namespace) -> int:
 
     try:
         with open(run_json_path) as f:
-            run_data = json_mod.load(f)
-    except (OSError, json_mod.JSONDecodeError) as exc:
+            run_data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
         print(f"error: could not read run.json: {exc}", file=sys.stderr)
         return 1
 
@@ -3449,20 +3544,26 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         )
         return 1
 
+    campaign_id = run_data.get("campaign_id", outdir.name)
     pause_file = outdir / ".pause"
-    if not pause_file.exists():
-        print(
-            f"warning: .pause file not found in {outdir}; "
-            "campaign may not recognize resume request",
-            file=sys.stderr,
-        )
-
     if pause_file.exists():
         pause_file.unlink()
         print(f"pause flag removed from {pause_file}")
-    campaign_id = run_data.get("campaign_id", outdir.name)
+    else:
+        print(
+            f"warning: no .pause flag file in {outdir} — the campaign is "
+            "not flagged for pause; driving the recovery replay anyway",
+            file=sys.stderr,
+        )
     print(f"resume requested for campaign '{campaign_id}'")
-    return 0
+    replay_rc = _replay_paused_campaign(outdir)
+    if replay_rc is None:
+        print("no recorded 'osimflow run' invocation found for this campaign.")
+        print("Complete the recovery manually with cache replay (same outdir):")
+        print(f"  osimflow run --outdir {outdir}   # plus the original flags")
+        print("Completed steps are cache hits; only remaining work re-executes.")
+        return 0
+    return replay_rc
 
 
 def _cmd_backup(args: argparse.Namespace) -> int:
@@ -3670,6 +3771,7 @@ def _friendly_run_input_error(exc: Exception) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR0915
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
     args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -3747,6 +3849,11 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         print(f"error: {_friendly_run_input_error(exc)}", file=sys.stderr)
         print("See 'osimflow run --help' for usage.", file=sys.stderr)
         sys.exit(1)
+    # Persist the exact run invocation so `osimflow resume` can re-launch
+    # this campaign via cache replay (issue #1628). The raw argv is
+    # recorded pre-preset (replay re-applies the preset) and the
+    # subcommand token is normalized to the canonical "run".
+    _persist_run_invocation(["run", *raw_argv[1:]], cfg.outdir)
     executor: BaseExecutor
     if cfg.dry_run:
         executor = LocalExecutor(max_workers=1)

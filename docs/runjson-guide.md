@@ -222,8 +222,9 @@ Negative values indicate the parametric sample performed worse.
 ### 2.6 `status`, `paused_at`, `error_summary` — campaign lifecycle
 
 `status` is the headline: `"success"` means every sample finished, `"failed"`
-means the campaign aborted (check `error_summary`), `"paused"` means a
-`osimflow pause` is in effect (`paused_at` records when), `"cancelled"`
+means the campaign aborted (check `error_summary`), `"paused"` means an
+`osimflow pause` landed — the run process exited with `paused_at` recorded;
+recover with `osimflow resume` (cache replay, issue #1628), `"cancelled"`
 means a `osimflow cancel` terminated it, and `"running"` appears only in
 incremental checkpoints written mid-campaign.
 
