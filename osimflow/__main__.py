@@ -61,6 +61,7 @@ from osimflow.handoff_record import (
 )
 from osimflow.importers.osa import OSAImportError, osa_to_variables_yml, parse_osa
 from osimflow.manifest import _validate_coordinator_url
+from osimflow.offline_bundle import OfflineBundleError, verify_offline_bundle
 from osimflow.validation import ValidationError
 
 log = logging.getLogger("osimflow.__main__")
@@ -3849,6 +3850,19 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         print(f"error: {_friendly_run_input_error(exc)}", file=sys.stderr)
         print("See 'osimflow run --help' for usage.", file=sys.stderr)
         sys.exit(1)
+    # --- Offline-bundle integrity gate (issue #1640) ----------------------
+    # scripts/bundle_offline.py writes per-asset SHA-256 digests into the
+    # bundle's bundle_manifest.json; they were previously generated but
+    # never verified. The bundle is the USB/relay-transferred artifact of
+    # air-gapped installs, so verify every listed asset BEFORE anything
+    # consumes it (wheel install / image load / weather copy). Fail
+    # closed: a mismatched byte or a missing manifest aborts the run.
+    if cfg.offline_bundle is not None:
+        try:
+            verify_offline_bundle(cfg.offline_bundle)
+        except OfflineBundleError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
     # Persist the exact run invocation so `osimflow resume` can re-launch
     # this campaign via cache replay (issue #1628). The raw argv is
     # recorded pre-preset (replay re-applies the preset) and the

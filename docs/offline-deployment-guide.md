@@ -280,7 +280,18 @@ osimflow run \
 | `--offline` | `health` | Skips the network connectivity check in the health subcommand. |
 
 The bundle path is read from `CampaignConfig.offline_bundle` (defined in
-`osimflow/config.py`). When `--offline` is active, the campaign:
+`osimflow/config.py`). **Integrity gate (issue #1640):** whenever
+`--offline-bundle` is passed, `osimflow run` verifies every asset listed
+in the bundle's `bundle_manifest.json` (streaming SHA-256, per asset)
+immediately after config loading and *before* any asset is consumed —
+wheel install, image load, or weather copy. A missing manifest, a
+missing asset, or a single mismatched byte aborts the run with exit
+code 1 and an error naming the offending asset, so a bundle tampered
+with in USB/relay transfer never silently executes. Only manifest-listed
+assets are checked; extra unlisted files in the bundle directory are
+ignored.
+
+When `--offline` is active, the campaign:
 
 - Uses locally-loaded Docker images instead of pulling from Docker Hub.
 - Passes `--no-index --find-links=<bundle>/pip/` to any internal pip
@@ -827,8 +838,10 @@ sha256sum /data/osimflow/osimflow-offline.tar.gz
 ```
 
 If they differ, re-transfer. The `bundle_manifest.json` inside the bundle
-also contains per-file checksums for verifying individual assets after
-extraction (see [§3.4](#34-bundle-directory-structure)).
+also contains per-file checksums — and since issue #1640 `osimflow run`
+verifies them automatically against every listed asset before the
+campaign starts, failing closed on any mismatch (see
+[§3.4](#34-bundle-directory-structure) for the manifest layout).
 
 ---
 
