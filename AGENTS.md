@@ -735,6 +735,14 @@ name in this section.
   `--coordinator-url` / `OSIMFLOW_COORDINATOR_URL` (issue #1550;
   loopback-exempt, override reuses
   `--allow-insecure-storage-endpoint`).
+- `osimflow/offline_bundle.py` — fail-closed verification of
+  `--offline-bundle` assets against the bundle's
+  `bundle_manifest.json` SHA-256 digests (issue #1640):
+  `verify_offline_bundle()` + `OfflineBundleError` +
+  `MANIFEST_FILENAME`. Invoked from the `osimflow run` CLI path
+  right after `load_config` — before any bundle asset (pip wheel /
+  docker tar / EPW) is consumed; mismatch or missing manifest
+  aborts with exit 1.
 - `osimflow/errors.py` — single package root
   (`OSimFlowError`) + intermediate mixins
   (`OSimFlowRuntimeError`, `OSimFlowValueError`) so every
