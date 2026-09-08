@@ -625,6 +625,17 @@ class DockerSwarmExecutor(BaseExecutor):
                 placement=placement if placement else None,
                 endpoint_spec=endpoint_spec if endpoint_spec else None,
                 mode={"Replicated": {"Replicas": 1}},
+                # Issue #1641: pin the restart policy to "none" so a
+                # failed task stays terminal. Swarm's default policy
+                # (condition=any, unlimited attempts) replaces a crashed
+                # task with a new non-terminal one, so the
+                # all-tasks-terminal check in ``_wait_for_terminal``
+                # never holds and the poll burns the await deadline
+                # raising ``TimeoutError`` instead of surfacing the
+                # task failure. One task per sample: its outcome is the
+                # sample's outcome (retry accounting lives in the
+                # orchestrator's ``--max-sample-retries``, not Swarm).
+                restart_policy={"Condition": "none"},
             )
             log.info(
                 "docker_swarm submit_service -> service=%s image=%s",

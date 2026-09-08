@@ -317,3 +317,103 @@ class TestDockerSwarmExecutorTaskPayloadSigning:
         assert env_map["OSIMFLOW_TASK_PAYLOAD"] == task_payload
         assert TASK_PAYLOAD_SIG_ENV not in env_map
         assert TASK_PAYLOAD_SECRET_ENV not in env_map
+
+
+class TestDockerSwarmExecutorRestartPolicy:
+    """Issue #1641: pin the service restart policy so failed tasks stay terminal.
+
+    Swarm's default policy (condition=any, unlimited attempts) replaces a
+    crashed task with a new one in a non-terminal state, so the
+    all-tasks-terminal conjunction in ``_wait_for_terminal``'s
+    ``_is_terminal`` may never hold and the poll loops to the await
+    deadline — misclassifying a failed sample as a ``TimeoutError``
+    instead of surfacing the task failure. The one-task-per-sample model
+    (``mode={"Replicated": {"Replicas": 1}}``) requires
+    ``Condition: none``: the single task's outcome is the sample's
+    outcome.
+    """
+
+    def _make_executor(self) -> DockerSwarmExecutor:
+        """Build a DockerSwarmExecutor without invoking __init__."""
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)  # noqa: SLF001
+        ex.poll_interval_s = 5.0
+        ex.max_poll_interval_s = 60.0
+        ex.image = "nrel/openstudio:latest"
+        ex.network = None
+        ex._client = MagicMock()
+        ex._stub_executor = None
+        return ex
+
+    @staticmethod
+    def _stub_create_service(ex: DockerSwarmExecutor) -> dict[str, object]:
+        """Stub the docker SDK call and capture the kwargs passed to services.create."""
+        captured: dict[str, object] = {}
+
+        def fake_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            fake_service = MagicMock()
+            fake_service.name = "osimflow-test"
+            return fake_service
+
+        ex._client.services.create = MagicMock(side_effect=fake_create)  # type: ignore[method-assign]  # noqa: E501
+        return captured
+
+    def test_submit_service_pins_restart_policy_none(self) -> None:
+        """Issue #1641: the service spec must pin restart_policy Condition=none."""
+        ex = self._make_executor()
+        captured = self._stub_create_service(ex)
+        ex._submit_service(  # noqa: SLF001
+            name="test",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+        )
+        assert captured["restart_policy"] == {"Condition": "none"}
+
+    def test_wait_for_terminal_returns_promptly_when_single_task_failed(self) -> None:
+        """Issue #1641: a task reaching ``failed`` must satisfy ``_is_terminal``
+        on the first probe — no replacement task keeps it non-terminal, no
+        sleep, no ``TimeoutError``.
+        """
+        failed_task = {
+            "ID": "task-1",
+            "status": {"State": "failed", "Err": "exited nonzero"},
+        }
+        ex = self._make_executor()
+        with (
+            patch.object(ex, "_get_service_status", return_value={"tasks": [failed_task]}) as probe,
+            patch("osimflow.testing.patch_targets.time.sleep") as sleep_mock,
+        ):
+            result = ex._wait_for_terminal("osimflow-test", timeout=30.0)  # noqa: SLF001
+        assert result == failed_task
+        probe.assert_called_once_with("osimflow-test")
+        sleep_mock.assert_not_called()
+
+    def test_wait_for_terminal_times_out_while_replacement_task_running(self) -> None:
+        """Issue #1641 (failure mode the pin prevents): under a restart-churning
+        Swarm (a failed task plus a replacement in ``running``), the
+        all-tasks-terminal conjunction stays false and the poll raises
+        ``TimeoutError`` — demonstrating why the default policy must not
+        be left in place.
+        """
+        failed_task = {
+            "ID": "task-1",
+            "status": {"State": "failed", "Err": "exited nonzero"},
+        }
+        replacement_task = {
+            "ID": "task-2",
+            "status": {"State": "running"},
+        }
+        ex = self._make_executor()
+        with (
+            patch.object(
+                ex,
+                "_get_service_status",
+                return_value={"tasks": [failed_task, replacement_task]},
+            ),
+            patch("osimflow.testing.patch_targets.time.sleep"),
+        ):
+            with pytest.raises(TimeoutError, match="Timed out"):
+                ex._wait_for_terminal("osimflow-test", timeout=0.05)  # noqa: SLF001
