@@ -431,6 +431,25 @@ For detailed guidance on packaging measures, `measure_paths` configuration,
 Ruby vs Python measures, and the `requirements.txt` convention, see
 [packaging-measures.md](packaging-measures.md).
 
+### 4.4 Environment Variables
+
+OSimFlow uses a small number of environment variables. Most are covered
+inline in the sections above (`OSIMFLOW_STUB_SIM`, `OSIMFLOW_RUN_REAL_OPENSTUDIO`,
+`OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK`, `OSIMFLOW_COORDINATOR_URL`). The email
+notification backend is configured **exclusively** via environment variables —
+SMTP credentials never come from CLI flags or committed config files:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OSIMFLOW_SMTP_HOST` | `localhost` | SMTP relay hostname for `--alert-destinations` email alerts. |
+| `OSIMFLOW_SMTP_PORT` | `25` | SMTP server port (e.g. `587` for submission). |
+| `OSIMFLOW_SMTP_USER` | *(none)* | SMTP AUTH username; auth is skipped when unset. |
+| `OSIMFLOW_SMTP_PASSWORD` | *(none)* | SMTP AUTH password; read from the environment, never from config. |
+| `OSIMFLOW_SMTP_USE_TLS` | `0` | `1`/`true`/`yes`/`on` enable STARTTLS with certificate verification. |
+
+These apply when an `email` destination is configured in the
+`--alert-destinations` YAML file (see [runjson-guide.md](runjson-guide.md)).
+
 ---
 
 ## 5. Running Campaigns
@@ -1344,6 +1363,35 @@ but the specified measure or argument name doesn't exist in `workflow.osw`.
 
 **Fix:** Verify the `measure` and `argument` fields match the exact names
 in your `.osw` file's `steps[]` entries.
+
+### "PRE-FLIGHT check failed: the same argument is specified for multiple measures"
+
+**Cause:** `variables.yml` varies the *same* argument name for two different
+measures via dotted names — e.g. both `SetThermostatSchedule.heating_setpoint`
+and `SetEnvelopePerformance.heating_setpoint`, where both measures expose a
+`heating_setpoint` argument. The pre-flight check (issue #431) blocks this
+because both measures would receive different values for what is semantically
+the same parameter, making **which value wins at runtime undefined**.
+
+**Fix:** Keep only ONE dotted form per shared argument name (e.g. drop
+`SetEnvelopePerformance.heating_setpoint` and vary only
+`SetThermostatSchedule.heating_setpoint`).
+
+**Escape hatch:** Setting the environment variable
+`OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT` to any **non-empty** value downgrades
+this hard error to a warning and lets the campaign proceed:
+
+```bash
+export OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT=1
+osimflow run --executor local --input_variables variables.yml ...
+```
+
+> **Warning:** This is an expert-only escape hatch. When arguments conflict,
+> which measure's value wins is **undefined** — results may silently depend
+> on measure ordering in `workflow.osw`. Prefer restructuring `variables.yml`
+> so each shared argument is varied for exactly one measure. An empty-string
+> value (`OSIMFLOW_ALLOW_CROSS_MEASURE_CONFLICT=""`) does **not** bypass the
+> check — the value must be non-empty.
 
 ### All simulations succeed but KPIs are zeros
 
