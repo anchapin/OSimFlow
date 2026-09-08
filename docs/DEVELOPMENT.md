@@ -629,7 +629,9 @@ against each executor substrate:
 | `tests/integration/test_cache_invalidation.py` | 8 cache-invalidation scenarios |
 
 These all use the built-in stub mode (`OSIMFLOW_STUB_SIM` not needed;
-it's the default when `openstudio.cli` is not on PATH).
+it's the default when `openstudio.cli` is not on PATH). The executor
+stub tests that need deterministic clocks or injected retry failures
+patch through `osimflow.testing.patch_targets` — see §7 Step 5.
 
 ### Real OpenStudio E2E test
 
@@ -1044,10 +1046,30 @@ Export the new executor class from the package's public API.
 Add a file like `tests/integration/test_<executor_name>.py`. Follow the pattern
 from the existing stub tests — mock the external service
 and verify the Handle contract. If a test needs a deterministic
-clock or jitter (retry/backoff behavior), patch through
-`osimflow.testing.patch_targets` — e.g.
-`patch("osimflow.testing.patch_targets.time")` — never the private
-`osimflow.executors` re-exports (removed in issue #1574).
+clock or injected retry/jitter failures, patch through
+`osimflow.testing.patch_targets` (issue #1574) — never the removed
+bare `time` / `random` re-exports on the `osimflow.executors` package:
+
+```python
+from osimflow.testing import patch_targets
+
+# Deterministic clocks / injected retry failures — NOT the old
+# "osimflow.executors time" patch seam (removed in #1574). Every
+# executor module shares the same time/random singletons, so a patch
+# here propagates to every call site that calls time.sleep(...) /
+# random.uniform(...).
+monkeypatch.setattr(patch_targets.time, "sleep", lambda s: None)
+monkeypatch.setattr(patch_targets.random, "random", lambda: 0.0)
+```
+
+`patch_targets` also re-exports the private helpers tests used to
+import from `osimflow.executors` — `patch_targets._AWSBatchHandle`,
+`patch_targets._retry_nomad_request`, `patch_targets._apply_slurm_params`,
+... (full list: `osimflow/testing/patch_targets.py`). Legacy
+`osimflow.executors.<private-name>` imports still resolve through a
+PEP 562 `__getattr__` shim but emit a `DeprecationWarning` (once per
+process) — migrate to `patch_targets`; production code that needs a
+helper should import it from its defining module.
 
 ### Step 6: Add a health check
 
@@ -1136,6 +1158,15 @@ python -c "from osimflow.testing import run_executor_conformance; \\
 one :class:`ConformanceCheck` per contract area; `report.passed`
 is `True` only when every check passed. `report.to_dict()` is
 JSON-serialisable so it can be ingested by CI tooling directly.
+
+When writing your plug-in's own test suite — including overrides and
+extra checks you add alongside the `ExecutorConformanceSuite` mixin —
+patch sleep/jitter/backoff and OSimFlow's shared private helpers
+(`_retry_nomad_request`, ...) through `osimflow.testing.patch_targets`
+(see §7 Step 5). Your own module-level `import time` keeps working as
+usual; `patch_targets` is only the entry point for reaching *OSimFlow's*
+patch seams. Importing private names from `osimflow.executors` still
+resolves via the PEP 562 shim but emits a `DeprecationWarning`.
 
 Before publishing your plug-in, run the full suite (with stub
 campaign enabled) on a clean checkout — the campaign check is the
