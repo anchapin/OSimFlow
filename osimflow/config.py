@@ -921,6 +921,11 @@ class CampaignConfig:
     aws_batch_fallback_to_on_demand: bool = False
     aws_batch_max_retries: int = 3
     aws_batch_submit_rps: float | None = None
+    # Issue #1633: surface the containerOverrides.secrets-based HMAC
+    # secret delivery on the CLI — without it the secret ships as a
+    # literal env value in the Batch job spec (readable via
+    # DescribeJobs, persisted in job history).
+    aws_batch_payload_secret_arn: str | None = None
 
     azure_batch_account_name: str | None = None
     azure_batch_account_url: str | None = None
@@ -929,6 +934,11 @@ class CampaignConfig:
     azure_use_spot: bool = False
     azure_fallback_to_on_demand: bool = False
     azure_max_retries: int = 3
+    # Issue #1633: reserved surface — Azure Batch exposes no task-level
+    # secret-injection mechanism (azure-batch 15.x EnvironmentSetting is
+    # name+value only), so the executor refuses this option with a
+    # documented error pointing at the pool-level pattern.
+    azure_batch_payload_secret_id: str | None = None
 
     google_batch_project_id: str | None = None
     google_batch_region: str = "us-central1"
@@ -936,6 +946,10 @@ class CampaignConfig:
     google_use_spot: bool = False
     google_fallback_to_on_demand: bool = False
     google_max_retries: int = 3
+    # Issue #1633: surface the environment.secret_variables-based HMAC
+    # secret delivery on the CLI — without it the secret ships as a
+    # literal env value in the Batch job spec.
+    google_batch_payload_secret_name: str | None = None
 
     nomad_dispatch_policy: str = "keep_manual"
     nomad_allocation_resolution_timeout_s: float = 30.0
@@ -963,9 +977,15 @@ class CampaignConfig:
     kubernetes_ttl_seconds_after_finished: int | None = None
     kubernetes_queue_name: str | None = None
     # Issue #1535: surface the #1449 secretKeyRef-based HMAC secret
-    # delivery on the CLI — without it the secret ships as a literal
-    # env value serialized into the Job spec.
+    # delivery on the CLI — without it the HMAC secret ships as a
+    # literal env value serialized into the Job spec.
     kubernetes_payload_secret_ref: str | None = None
+
+    # --- Legacy flat Docker Swarm executor fields ---
+    # Issue #1633: surface the Docker-secret (file-mounted) HMAC
+    # secret delivery on the CLI — without it the secret ships as a
+    # literal env value on the Swarm service.
+    docker_swarm_payload_secret: str | None = None
 
     # --- Legacy flat storage fields (for backward compatibility) ---
     result_storage_backend: str = "local"

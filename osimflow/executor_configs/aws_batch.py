@@ -30,12 +30,21 @@ class AWSBatchConfig:
         Submit rate-limit in requests per second applied via a shared
         token-bucket limiter (default 800, below AWS Batch's 1000 TPS
         account limit — issue #1010).
+    payload_secret_arn
+        ARN of an AWS Secrets Manager secret or SSM Parameter Store
+        parameter holding the task-payload HMAC secret. When set, the
+        secret ships via ``containerOverrides.secrets`` (resolved by
+        the Batch agent at container start; the job's task role needs
+        ``secretsmanager:GetSecretValue`` or ``ssm:GetParameter`` +
+        ``kms:Decrypt`` on it) instead of a literal env value in the
+        job spec (issue #1633).
     """
 
     max_spot_price_usd: float | None = None
     fallback_to_on_demand: bool = False
     max_retries: int = 3
     submit_rps: float | None = None
+    payload_secret_arn: str | None = None
 
 
 def add_arguments(parser_group: argparse.ArgumentParser) -> None:
@@ -123,5 +132,22 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "AWS Batch on-demand price in USD per vCPU-hour for cost tracking "
             "(issue #447). When set alongside --track-costs, this rate is used "
             "instead of the default $0.0132/vCPU·hr to estimate job costs."
+        ),
+    )
+    parser_group.add_argument(
+        "--aws-batch-payload-secret-arn",
+        default=None,
+        help=(
+            "ARN of an AWS Secrets Manager secret (or SSM Parameter Store "
+            "parameter) holding the task-payload HMAC secret "
+            "(key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, "
+            "the job spec emits containerOverrides.secrets (valueFrom) "
+            "instead of a literal env value, so the raw secret never "
+            "appears in the job spec where it is readable via "
+            "DescribeJobs and persists in job history (issue #1633). "
+            "The job's task role needs secretsmanager:GetSecretValue (or "
+            "ssm:GetParameter + kms:Decrypt) on the ARN. Requires "
+            "OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the "
+            "same value for signing. See docs/secret-management.md."
         ),
     )

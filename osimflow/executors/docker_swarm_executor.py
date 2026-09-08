@@ -45,7 +45,12 @@ from osimflow.executors.transport import (
     resolve_result_for_callback,
     validate_transport_mode,
 )
-from osimflow.task_payload_hmac import build_signature_env, build_transport_signature_env
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SECRET_FILE_ENV,
+    build_signature_env,
+    build_transport_signature_env,
+)
 
 log = logging.getLogger("osimflow.executors.docker_swarm")
 
@@ -271,11 +276,20 @@ class DockerSwarmExecutor(BaseExecutor):
         image: str = "nrel/openstudio:3.11.0",
         network: str | None = None,
         submit_rps: float | None = None,
+        payload_secret: str | None = None,
     ):
         self.poll_interval_s = poll_interval_s
         self.max_poll_interval_s = max_poll_interval_s
         self.image = image
         self.network = network
+        # Issue #1633: name of a Docker secret holding the task-payload
+        # HMAC secret. When set, the service mounts the secret at
+        # ``/run/secrets/<name>`` and the job env carries
+        # ``OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`` pointing at it — the
+        # remote runner's ``resolve_payload_secret`` reads the file —
+        # so the raw secret never appears in the service spec (where
+        # it would be readable via ``docker service inspect``).
+        self.payload_secret = payload_secret
         self._client: Any = None
         self._stub_executor: Any = None
         # Issue #1563: shared token-bucket limiter. The dev-fallback
@@ -440,7 +454,7 @@ class DockerSwarmExecutor(BaseExecutor):
         tasks = service_status.get("tasks", []) or []
         return cast(dict[str, Any], tasks[0])
 
-    def _submit_service(
+    def _submit_service(  # noqa: PLR0912 — issue #1633 secret-delivery branches; extracting them would split the documented warning trio from the env it guards
         self,
         *,
         name: str,
@@ -489,12 +503,54 @@ class DockerSwarmExecutor(BaseExecutor):
             env.append(f"OSIMFLOW_TASK_PAYLOAD={task_payload}")
             # Issue #1281: verify BYOS contract version compatibility.
             env.append(f"OSIMFLOW_CONTRACT_VERSION={BYOS_CONTRACT_VERSION}")
-            # Issue #1177/#1384: when a shared secret is configured, sign the
-            # exact payload bytes and propagate secret + signature so the
-            # remote_runner verifies before decoding/executing. No-op in
-            # legacy unsigned mode.
-            for key, value in build_signature_env(task_payload).items():
+            # Issue #1177/#1384/#1633: when a shared secret is
+            # configured, sign the exact payload bytes and propagate
+            # secret + signature so the remote_runner verifies before
+            # decoding/executing. No-op in legacy unsigned mode. When a
+            # ``payload_secret`` is configured (issue #1633) the
+            # signature ships alone plus
+            # ``OSIMFLOW_TASK_PAYLOAD_SECRET_FILE`` pointing at the
+            # Swarm secret mount — the raw secret never appears in the
+            # service spec or its environment.
+            payload_secret = getattr(self, "payload_secret", None)
+            if payload_secret and not os.environ.get(TASK_PAYLOAD_SECRET_ENV):
+                log.warning(
+                    "docker-swarm-payload-secret=%r is configured but no "
+                    "%s is set on the orchestrator, so the payload cannot "
+                    "be signed; submitting unsigned (legacy mode). Set %s "
+                    "on the orchestrator — and the same value in the "
+                    "referenced Docker secret — to enable HMAC "
+                    "verification (issue #1633).",
+                    payload_secret,
+                    TASK_PAYLOAD_SECRET_ENV,
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
+            if not payload_secret and TASK_PAYLOAD_SECRET_ENV in os.environ:
+                # Issue #1633: without the Docker-secret mount the
+                # shared secret ships as a literal env value on the
+                # service, where anyone with swarm read access
+                # (``docker service inspect``) can read it and forge
+                # # signatures.
+                log.warning(
+                    "SECURITY (issue #1633): %s is shipping as a literal "
+                    "env value on the Swarm service because no "
+                    "--docker-swarm-payload-secret is configured. Anyone "
+                    "who can run 'docker service inspect' can read the "
+                    "secret and forge task-payload signatures. Create a "
+                    "Docker secret carrying the same value and pass "
+                    "--docker-swarm-payload-secret <name> to mount it at "
+                    "/run/secrets/<name> instead.",
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
+            for key, value in build_signature_env(
+                task_payload, include_secret=payload_secret is None
+            ).items():
                 env.append(f"{key}={value}")
+            if payload_secret:
+                # Out-of-band delivery (issue #1633): the Swarm secret
+                # is mounted at /run/secrets/<name>; the runner
+                # resolves it via the file env var.
+                env.append(f"{TASK_PAYLOAD_SECRET_FILE_ENV}=/run/secrets/{payload_secret}")
         if transport is not None:
             env.append(f"OSIMFLOW_RESULT_TRANSPORT_MODE={transport.mode}")
             if transport.backend is not None:
@@ -547,6 +603,15 @@ class DockerSwarmExecutor(BaseExecutor):
                 env=env,
                 labels=labels,
                 container_labels=labels,
+                # Issue #1633: mount the Docker secret holding the
+                # task-payload HMAC secret (defaults to
+                # /run/secrets/<name>, mode 0444 — readable by the
+                # worker container, never serialized into the spec).
+                secrets=(
+                    [{"Name": getattr(self, "payload_secret", None)}]
+                    if getattr(self, "payload_secret", None)
+                    else None
+                ),
                 resources={
                     "Limits": {
                         "NanoCPUs": nano_cpus,

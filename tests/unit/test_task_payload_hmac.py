@@ -8,12 +8,14 @@ Covers the shared signing/verification helpers in
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
 from osimflow import remote_runner
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SECRET_FILE_ENV,
     TASK_PAYLOAD_SIG_ENV,
     build_signature_env,
     resolve_payload_secret,
@@ -31,6 +33,7 @@ def _clean_signature_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate every test from the host's signature configuration."""
     monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
     monkeypatch.delenv(TASK_PAYLOAD_SIG_ENV, raising=False)
+    monkeypatch.delenv(TASK_PAYLOAD_SECRET_FILE_ENV, raising=False)
     monkeypatch.delenv("NOMAD_META_task_payload", raising=False)
     monkeypatch.delenv("NOMAD_META_task_payload_sig", raising=False)
     monkeypatch.delenv("NOMAD_META_task_payload_secret", raising=False)
@@ -72,6 +75,39 @@ class TestResolvePayloadSecret:
     def test_none_when_unconfigured(self) -> None:
         assert resolve_payload_secret() is None
 
+    def test_reads_secret_from_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        """Issue #1633: the Swarm file fallback resolves the mounted Docker secret."""
+        secret_file = tmp_path / "osimflow-hmac"
+        secret_file.write_text(SECRET, encoding="utf-8")
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, str(secret_file))
+        assert resolve_payload_secret() == SECRET
+
+    def test_env_takes_precedence_over_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        secret_file = tmp_path / "osimflow-hmac"
+        secret_file.write_text("file-secret", encoding="utf-8")
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, str(secret_file))
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+        assert resolve_payload_secret() == SECRET
+
+    def test_file_strips_surrounding_whitespace(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        """`docker secret create` pipelines commonly append a trailing newline."""
+        secret_file = tmp_path / "osimflow-hmac"
+        secret_file.write_text(f"\n{SECRET}\n", encoding="utf-8")
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, str(secret_file))
+        assert resolve_payload_secret() == SECRET
+
+    def test_unreadable_file_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, "/nonexistent/osimflow-hmac")
+        with pytest.raises(RuntimeError, match=TASK_PAYLOAD_SECRET_FILE_ENV):
+            resolve_payload_secret()
+
+    def test_empty_file_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        secret_file = tmp_path / "osimflow-hmac"
+        secret_file.write_text("   \n", encoding="utf-8")
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_FILE_ENV, str(secret_file))
+        with pytest.raises(RuntimeError, match="empty"):
+            resolve_payload_secret()
+
 
 class TestBuildSignatureEnv:
     def test_includes_signature_and_secret_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,6 +124,19 @@ class TestBuildSignatureEnv:
 
     def test_empty_in_legacy_unsigned_mode(self) -> None:
         assert build_signature_env(VALID_PAYLOAD) == {}
+
+    def test_include_secret_false_ships_signature_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1633: signature-only mode for out-of-band secret delivery."""
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, SECRET)
+        sig_env = build_signature_env(VALID_PAYLOAD, include_secret=False)
+        assert TASK_PAYLOAD_SIG_ENV in sig_env
+        assert TASK_PAYLOAD_SECRET_ENV not in sig_env
+        assert sig_env[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(VALID_PAYLOAD, SECRET)
+
+    def test_include_secret_false_empty_in_legacy_unsigned_mode(self) -> None:
+        assert build_signature_env(VALID_PAYLOAD, include_secret=False) == {}
 
 
 class TestRemoteRunnerVerification:

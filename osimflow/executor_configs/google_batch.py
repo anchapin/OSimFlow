@@ -28,6 +28,12 @@ class GoogleBatchConfig:
         Whether to fall back to on-demand instances when Spot is unavailable.
     max_retries
         Maximum number of retries for failed jobs.
+    payload_secret_name
+        Secret Manager secret name holding the task-payload HMAC
+        secret. When set, the job spec emits
+        ``environment.secret_variables`` instead of a literal env
+        value (issue #1633); the Batch agent resolves the secret via
+        the job's service account.
     """
 
     project_id: str | None = None
@@ -36,6 +42,7 @@ class GoogleBatchConfig:
     use_spot: bool = False
     fallback_to_on_demand: bool = False
     max_retries: int = 3
+    payload_secret_name: str | None = None
 
 
 def add_arguments(parser_group: argparse.ArgumentParser) -> None:
@@ -83,5 +90,22 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "(default: 3). Each retry uses exponential backoff. After "
             "exhausting retries, the job fails unless "
             "--google-fallback-to-on-demand is set."
+        ),
+    )
+    parser_group.add_argument(
+        "--google-batch-payload-secret-name",
+        default=None,
+        help=(
+            "Secret Manager secret name (e.g. osimflow-payload-hmac) "
+            "holding the task-payload HMAC secret. When set, the job "
+            "spec emits environment.secret_variables instead of a "
+            "literal env value, so the raw secret never appears in "
+            "the job spec where it is readable via 'gcloud batch jobs "
+            "describe' and persists in job history (issue #1633). The "
+            "Batch agent resolves the secret at task start via the "
+            "job's service account (--google-batch-service-account), "
+            "which needs roles/secretmanager.secretAccessor on it. "
+            "Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator "
+            "with the same value for signing. See docs/secret-management.md."
         ),
     )

@@ -247,6 +247,7 @@ All flags are passed to the `osimflow run` subcommand.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--aws-batch-queue` | string | `osimflow-batch-queue` | AWS Batch job queue name. |
+| `--aws-batch-payload-secret-arn` | string | none | Secrets Manager / SSM Parameter Store ARN holding the task-payload HMAC secret. When set, the job spec passes it via `containerOverrides.secrets` (`valueFrom`) so the raw secret never appears in the job spec or `batch:DescribeJobs` output (issue #1633). Requires `OSIMFLOW_TASK_PAYLOAD_SECRET` on the orchestrator with the same value for signing. See [secret-management.md](secret-management.md). |
 | `--aws-batch-job-definition` | string | none | AWS Batch job definition ARN or name. |
 | `--aws-batch-instance-type` | string | none | EC2 instance type scoping the Spot price-ceiling check; when omitted the check uses the minimum price across all instance types with a warning (issue #792). See [cost-estimation.md](cost-estimation.md). |
 | `--aws-batch-submit-rps` | float | `800` | Token-bucket submit rate limit (submissions/second), below AWS Batch's 1000 TPS account limit; lower it on smaller accounts to avoid `ThrottlingException` (issue #1010). |
@@ -604,7 +605,10 @@ preemptible VMs are supported through `--azure-use-spot`,
 `--azure-fallback-to-on-demand`, and `--azure-max-retries` (issue #352).
 Authentication uses the per-job Azure SDK credential chain (env vars,
 managed identity, or `DefaultAzureCredential`) — no long-lived keys are
-read by the executor. See AGENTS.md §4 (`--azure-*`) for the complete
+read by the executor. For out-of-band task-payload HMAC secret delivery,
+pass `--azure-batch-payload-secret-id` (Key Vault secret identifier) so the
+raw secret never appears in the task's environment settings (issue #1633).
+See AGENTS.md §4 (`--azure-*`) for the complete
 flag set; this executor currently has no dedicated deployment guide.
 
 ### 5.6 Google Cloud Batch Execution
@@ -617,7 +621,10 @@ and the service account Batch will impersonate via
 Azure/AWS Spot story: `--google-use-spot`,
 `--google-fallback-to-on-demand`, and `--google-max-retries` (issue
 #352). Workload Identity / per-job service-account authentication is used
-in place of long-lived keys. See AGENTS.md §4 (`--google-*`) for the
+in place of long-lived keys. For out-of-band task-payload HMAC secret
+delivery, pass `--google-batch-payload-secret-name` (Secret Manager secret,
+read by the job's service account) so the raw secret never appears in the
+job spec (issue #1633). See AGENTS.md §4 (`--google-*`) for the
 complete flag set; this executor currently has no dedicated deployment
 guide.
 
@@ -666,7 +673,12 @@ per-sample task is launched as a Swarm Service; polling uses exponential
 backoff tuned by `--docker-swarm-poll-interval-s` and
 `--docker-swarm-max-poll-interval-s` (issue #582). Configure the worker
 image with `--docker-swarm-image` and the overlay network with
-`--docker-swarm-network`. See AGENTS.md §4 (`--docker-swarm-*`) for the
+`--docker-swarm-network`. For out-of-band task-payload HMAC secret
+delivery, create a Docker secret carrying the same value as
+`OSIMFLOW_TASK_PAYLOAD_SECRET` and pass
+`--docker-swarm-payload-secret <name>` — it is mounted at
+`/run/secrets/<name>` and never appears in `docker service inspect`
+output (issue #1633). See AGENTS.md §4 (`--docker-swarm-*`) for the
 complete flag set; this executor currently has no dedicated deployment
 guide.
 

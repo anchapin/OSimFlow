@@ -37,3 +37,18 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
         default=None,
         help="Docker network to attach Swarm services to.",
     )
+    parser_group.add_argument(
+        "--docker-swarm-payload-secret",
+        default=None,
+        help=(
+            "Name of a pre-created Docker secret holding the task-payload "
+            "HMAC secret (value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, "
+            "the service mounts the secret at /run/secrets/<name> and the "
+            "job env carries OSIMFLOW_TASK_PAYLOAD_SECRET_FILE pointing at "
+            "it — the remote runner reads the secret from the file — so "
+            "the raw secret never appears in the service spec where it is "
+            "readable via 'docker service inspect' (issue #1633). Requires "
+            "OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the "
+            "same value for signing. See docs/secret-management.md."
+        ),
+    )

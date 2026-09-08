@@ -288,6 +288,10 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911,
             max_retries=args.aws_batch_max_retries,
             instance_type=args.aws_batch_instance_type,
             submit_rps=aws_rps,
+            # Issue #1633: surface the containerOverrides.secrets-based
+            # secret delivery from the CLI — without it the HMAC secret
+            # ships as a literal env value readable via DescribeJobs.
+            payload_secret_arn=args.aws_batch_payload_secret_arn,
         )
     # Nomad executor — address and datacentre.
     if args.executor == "nomad":
@@ -340,6 +344,12 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911,
             fallback_to_on_demand=args.azure_fallback_to_on_demand,
             max_retries=args.azure_max_retries,
             submit_rps=args.submit_rps,
+            # Issue #1633: reserved surface — the executor refuses this
+            # option at task-env build time with a documented error
+            # (azure-batch 15.x has no task-level secret-injection
+            # mechanism); the pool-level managed-identity pattern is
+            # documented in docs/secret-management.md.
+            payload_secret_id=args.azure_batch_payload_secret_id,
         )
     # Google Cloud Batch executor — project, region, service account, and Spot handling.
     if args.executor == "google_batch":
@@ -351,6 +361,10 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911,
             fallback_to_on_demand=args.google_fallback_to_on_demand,
             max_retries=args.google_max_retries,
             submit_rps=args.submit_rps,
+            # Issue #1633: surface the environment.secret_variables-based
+            # secret delivery from the CLI — without it the HMAC secret
+            # ships as a literal env value in the Batch job spec.
+            payload_secret_name=args.google_batch_payload_secret_name,
         )
     # Kubernetes executor — namespace, polling config, and native Job
     # controls (issue #997). Defaults preserve the pre-#997 manifest
@@ -396,6 +410,10 @@ def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911,
             image=args.docker_swarm_image,
             network=args.docker_swarm_network,
             submit_rps=args.submit_rps,
+            # Issue #1633: surface the Docker-secret (file-mounted)
+            # secret delivery from the CLI — without it the HMAC secret
+            # ships as a literal env value on the Swarm service.
+            payload_secret=args.docker_swarm_payload_secret,
         )
 
     # Fall back to the ExecutorRegistry for plugin-discovered executors
