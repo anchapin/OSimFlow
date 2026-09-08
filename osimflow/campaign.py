@@ -63,6 +63,7 @@ from ._campaign_baseline import (
 )
 from ._campaign_chaos import CampaignChaosWiring
 from ._campaign_code_hashes import (
+    _algorithm_code_digest,  # noqa: F401  — re-exported test seam
     _byos_file_hash,  # noqa: F401  — re-exported test seam
     _combine_code_hash,  # noqa: F401  — re-exported test seam
     _transitive_import_closure,  # noqa: F401  — re-exported test seam
@@ -2580,7 +2581,12 @@ class Campaign(CampaignAnalysisMixin):
         Dispatches to ``algo.generate_samples()`` with the campaign's
         variables and sample count.  The result is cached under a key
         that includes the algorithm name *and* the generation number so
-        each generation's samples are independently cacheable.
+        each generation's samples are independently cacheable.  The
+        step's ``code_sha256`` additionally folds in a digest of the
+        resolved algorithm implementation's own source files (issue
+        #1636), so upgrading a same-named third-party plug-in
+        invalidates cached sample sets instead of silently replaying
+        them.
 
         This is the preferred entry point.  ``step_generate_lhs()`` is
         kept as a deprecated convenience wrapper.
@@ -2602,12 +2608,23 @@ class Campaign(CampaignAnalysisMixin):
                     variables = raw
 
         inputs_hash = sha256_of_files([self.cfg.input_variables])
+        # Issue #1636: fold the resolved algorithm implementation's own
+        # source digest into the step's code hash. Third-party plug-ins
+        # (entry-point group ``osimflow.algorithms``) live outside the
+        # osimflow package, so the ``bin`` closure never covers their
+        # code — without this digest, upgrading a same-named plug-in
+        # replayed the OLD samples from cache. The digest changes with
+        # any edit to the plug-in's implementation files.
+        code_sha = _combine_code_hash(
+            self.code_hashes["bin"],
+            _algorithm_code_digest(algo),
+        )
         key = CacheKey(
             step=step_label,
             sample_id="ALL",
             openstudio_version="N/A",
             inputs_sha256=inputs_hash,
-            code_sha256=self.code_hashes["bin"],
+            code_sha256=code_sha,
             container_digest=self._python_container_digest,
             generation=generation,
             n_samples=self.cfg.n_samples,

@@ -10,10 +10,12 @@ Each test sets up a cache, performs an action, mutates something, and
 asserts the cache key no longer matches.
 """
 
+import sys
 from pathlib import Path
 
 import pytest
 
+from osimflow.algorithms import AlgorithmRegistry, BaseAlgorithm
 from osimflow.cache import CacheError, CacheKey, SQLiteCache, sha256_of_dict, sha256_of_files
 from osimflow.config import CampaignConfig
 
@@ -964,3 +966,307 @@ def test_store_raises_cache_error_on_db_error(tmp_cache: SQLiteCache, tmp_path: 
 
     with pytest.raises(CacheError, match="Failed to store cache entry"):
         tmp_cache.store(key, out, exit_code=0)
+
+
+# ---------------------------------------------------------------------------
+# Issue #1636 — third-party algorithm plug-in code must be hashed into
+# the GENERATE_<ALGO>_SAMPLES cache key. Entry-point plug-ins
+# (``osimflow.algorithms`` group) live outside the osimflow package, so
+# ``_transitive_import_closure`` never sees their source and a
+# same-named plug-in upgrade silently replayed the OLD samples from
+# cache. ``Campaign.step_generate_samples`` therefore folds
+# ``_algorithm_code_digest(algo)`` (source digest of the resolved
+# implementation) into the step's ``code_sha256``.
+# ---------------------------------------------------------------------------
+_PLUGIN_MODULE_NAME = "issue1636_my_plugin"
+_PLUGIN_REGISTRY_NAME = "issue1636plugin"
+
+_PLUGIN_SOURCE_TEMPLATE = '''"""Same-named third-party plug-in under test (issue #1636)."""
+
+import json
+from pathlib import Path
+from typing import Any
+
+from osimflow.algorithms import BaseAlgorithm
+
+
+class PluginAlgorithm(BaseAlgorithm):
+    """{marker} implementation."""
+
+    def generate_samples(
+        self,
+        variables: dict[str, Any],
+        n_samples: int,
+        seed: int | None,
+        outdir: Path,
+    ) -> Path:
+        outdir.mkdir(parents=True, exist_ok=True)
+        samples = [
+            {{"sample_id": f"s{{i}}", "values": {{"x": {value}}}}}
+            for i in range(n_samples)
+        ]
+        path = outdir / "samples.json"
+        path.write_text(json.dumps({{"samples": samples}}))
+        return path
+
+    def observe(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return history[-1]["samples"] if history else []
+
+    def is_converged(self, history: list[dict[str, Any]]) -> bool:
+        return True
+
+    def name(self) -> str:
+        return "{name}"
+
+    def is_iterative(self) -> bool:
+        return False
+'''
+
+
+def _load_plugin_class(
+    plugin_path: Path,
+    module_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> type:
+    """Load a plug-in module from ``plugin_path`` and return its class.
+
+    Registers the module in ``sys.modules`` (monkeypatch restores the
+    prior state) because ``inspect.getfile(type(algo))`` resolves the
+    class's module through ``sys.modules`` — exactly how an entry-point
+    plug-in is loaded by ``AlgorithmRegistry.discover_plugins``. Each
+    version gets its own file/module name so the source loader cannot
+    serve stale ``__pycache__`` bytecode when two versions share a
+    byte-length.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(module_name, plugin_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+    plugin_cls = module.PluginAlgorithm
+    assert isinstance(plugin_cls, type)
+    return plugin_cls
+
+
+@pytest.fixture
+def generate_samples_campaign(tmp_path: Path):
+    """A minimal real Campaign wired for direct ``step_generate_samples`` calls."""
+    from osimflow import Campaign
+    from osimflow.executors import LocalExecutor
+
+    variables_yml = tmp_path / "variables.yml"
+    variables_yml.write_text(
+        "variables:\n  - name: x\n    distribution: uniform\n    min: 0.0\n    max: 2.0\n"
+    )
+    template = tmp_path / "template"
+    template.mkdir()
+    (template / "workflow.osw").write_text("{}")
+    outdir = tmp_path / "outdir"
+    outdir.mkdir()
+    cfg = CampaignConfig(
+        input_variables=variables_yml,
+        template_sim_package=template,
+        n_samples=2,
+        outdir=outdir,
+        openstudio_version="3.11.0",
+    )
+    return Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+
+
+def _last_step_cache(campaign, step: str) -> str:
+    """Cache outcome ("HIT"/"MISS") of the last trace entry for ``step``."""
+    entries = [s for s in campaign.trace.steps if s.step == step]
+    assert entries, f"no trace entries recorded for {step!r}"
+    return entries[-1].cache
+
+
+def test_plugin_code_change_invalidates_generate_samples_cache(
+    generate_samples_campaign,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1636 acceptance criterion (cache MISS on plug-in upgrade).
+
+    Registers a same-named third-party plug-in implementation, runs the
+    GENERATE step (MISS, then HIT on re-run), then "upgrades" the
+    plug-in — same entry-point name, different implementation code —
+    and asserts the step is a cache MISS whose fresh samples reflect
+    the new implementation, not a replay of the old ones.
+    """
+    from osimflow.algorithms import AlgorithmRegistry
+
+    campaign = generate_samples_campaign
+    step = f"GENERATE_{_PLUGIN_REGISTRY_NAME.upper()}_SAMPLES"
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+
+    # v1 plug-in installed and registered under the entry-point name.
+    v1_path = plugins_dir / "my_plugin_v1.py"
+    v1_path.write_text(
+        _PLUGIN_SOURCE_TEMPLATE.format(
+            marker="v1 baseline sampling logic", value=1.0, name=_PLUGIN_REGISTRY_NAME
+        )
+    )
+    v1_cls = _load_plugin_class(v1_path, "issue1636_my_plugin_v1", monkeypatch)
+    monkeypatch.setitem(AlgorithmRegistry._registry, _PLUGIN_REGISTRY_NAME, v1_cls)
+
+    samples_v1 = campaign.step_generate_samples(AlgorithmRegistry.get(_PLUGIN_REGISTRY_NAME))
+    assert _last_step_cache(campaign, step) == "MISS"
+    assert [s["values"]["x"] for s in samples_v1] == [1.0, 1.0]
+
+    # Same code, second invocation → identical key → cache HIT.
+    samples_v1_again = campaign.step_generate_samples(AlgorithmRegistry.get(_PLUGIN_REGISTRY_NAME))
+    assert _last_step_cache(campaign, step) == "HIT"
+    assert samples_v1_again == samples_v1
+
+    # "Upgrade": same entry-point name, NEW implementation code.
+    v2_path = plugins_dir / "my_plugin_v2.py"
+    v2_path.write_text(
+        _PLUGIN_SOURCE_TEMPLATE.format(
+            marker="v2 upgraded sampling logic", value=2.0, name=_PLUGIN_REGISTRY_NAME
+        )
+    )
+    v2_cls = _load_plugin_class(v2_path, "issue1636_my_plugin_v2", monkeypatch)
+    monkeypatch.setitem(AlgorithmRegistry._registry, _PLUGIN_REGISTRY_NAME, v2_cls)
+
+    samples_v2 = campaign.step_generate_samples(AlgorithmRegistry.get(_PLUGIN_REGISTRY_NAME))
+    assert _last_step_cache(campaign, step) == "MISS", (
+        "Upgrading a same-named third-party algorithm plug-in must "
+        "invalidate the GENERATE_SAMPLES cache key (issue #1636)."
+    )
+    assert [s["values"]["x"] for s in samples_v2] == [2.0, 2.0], (
+        "The post-upgrade run must return fresh samples from the new "
+        "implementation, not a replay of the cached v1 sample set."
+    )
+    # Two distinct cache entries stored for the step (v1 key + v2 key).
+    by_step = campaign.cache.stats()["by_step"]
+    assert by_step.get(step) == 2
+
+
+def test_plugin_package_helper_edit_invalidates_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The digest covers the plug-in's whole distribution tree, not just
+    the entry file: editing a same-package helper module the algorithm
+    imports must change ``_algorithm_code_digest``.
+    """
+    import importlib.util
+
+    from osimflow.campaign import _algorithm_code_digest
+
+    pkg_root = tmp_path / "issue1636_pkg"
+    pkg_dir = pkg_root / "my_plugin"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text(
+        _PLUGIN_SOURCE_TEMPLATE.format(marker="v1", value=1.0, name="pkgplugin")
+    )
+    (pkg_dir / "helpers.py").write_text("SCALE = 1.0\n")
+
+    spec = importlib.util.spec_from_file_location(
+        "issue1636_pkg.my_plugin", pkg_dir / "__init__.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "issue1636_pkg.my_plugin", module)
+    spec.loader.exec_module(module)
+
+    algo = module.PluginAlgorithm()
+    digest_v1 = _algorithm_code_digest(algo)
+
+    # Edit ONLY the sibling helper module — the distribution-tree scope
+    # must pick it up.
+    (pkg_dir / "helpers.py").write_text("SCALE = 2.0\n")
+    digest_v2 = _algorithm_code_digest(algo)
+
+    assert digest_v1 != digest_v2, (
+        "Editing a same-package helper module must change the algorithm "
+        "code digest (distribution-tree scope, issue #1636)."
+    )
+
+
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
+def test_builtin_algorithm_digest_stable_and_scoped() -> None:
+    """Built-in (in-package) algorithms: the digest is deterministic
+    across invocations and scoped to the ``osimflow/algorithms``
+    package — never the whole ``osimflow`` tree, so unrelated osimflow
+    edits cannot churn GENERATE keys, and never a directory outside
+    the package.
+    """
+    from osimflow._campaign_code_hashes import _algorithm_implementation_files
+    from osimflow.campaign import _algorithm_code_digest
+
+    lhs = AlgorithmRegistry.get("lhs")
+    digest_1 = _algorithm_code_digest(lhs)
+    digest_2 = _algorithm_code_digest(AlgorithmRegistry.get("lhs"))
+    assert digest_1 == digest_2, (
+        "The built-in algorithm digest must be stable across two "
+        "identical invocations (no spurious invalidation)."
+    )
+
+    import inspect
+
+    module_file = Path(inspect.getfile(type(lhs))).resolve()
+    files = _algorithm_implementation_files(type(lhs), module_file)
+    assert files, "the built-in digest must hash at least the algorithms package"
+    algorithms_dir = module_file.parent
+    assert all(algorithms_dir in f.parents for f in files), (
+        f"built-in algorithm digest scope leaked outside {algorithms_dir}: {files}"
+    )
+
+
+@pytest.mark.xdist_group(name="code_hash_repo_tree")
+def test_builtin_lhs_second_invocation_is_cache_hit(
+    generate_samples_campaign,
+) -> None:
+    """No spurious invalidation on the built-in path: two identical
+    ``step_generate_samples`` invocations with LHS produce one stored
+    cache entry and the second call is a HIT (issue #1636 acceptance
+    criterion).
+    """
+    lhs = AlgorithmRegistry.get("lhs")
+    samples_1 = generate_samples_campaign.step_generate_samples(lhs)
+    assert _last_step_cache(generate_samples_campaign, "GENERATE_LHS_SAMPLES") == "MISS"
+
+    samples_2 = generate_samples_campaign.step_generate_samples(lhs)
+    assert _last_step_cache(generate_samples_campaign, "GENERATE_LHS_SAMPLES") == "HIT"
+    assert samples_2 == samples_1, "the HIT must replay the cached sample set verbatim"
+
+    by_step = generate_samples_campaign.cache.stats()["by_step"]
+    assert by_step.get("GENERATE_LHS_SAMPLES") == 1
+
+
+def test_algorithm_code_digest_fallback_is_stable_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the implementation source cannot be resolved (C extension,
+    unimportable module), the digest must never crash the campaign: it
+    falls back to a stable name/distribution-version digest and logs a
+    warning (issue #1636 fallback requirement).
+    """
+    import logging
+
+    from osimflow.campaign import _algorithm_code_digest
+
+    cls = type(
+        "UnresolvableAlgo",
+        (BaseAlgorithm,),
+        {
+            "generate_samples": lambda self, variables, n_samples, seed, outdir: Path(),
+            "observe": lambda self, history: [],
+            "is_converged": lambda self, history: True,
+            "name": lambda self: "unresolvable",
+            "is_iterative": lambda self: False,
+        },
+    )
+    cls.__module__ = "issue1636_unresolvable_module"
+    algo = cls()
+
+    with caplog.at_level(logging.WARNING, logger="osimflow.code_hashes"):
+        digest_1 = _algorithm_code_digest(algo)
+        digest_2 = _algorithm_code_digest(algo)
+
+    assert len(digest_1) == 64
+    assert digest_1 == digest_2, "the fallback digest must be stable"
+    assert "cannot hash algorithm implementation source" in caplog.text
