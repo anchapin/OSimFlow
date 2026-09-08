@@ -2670,7 +2670,7 @@
     "/api/v1/measures/upload": {
       "post": {
         "summary": "Upload Measure",
-        "description": "Upload a measure bundle (zip or tar.gz).\n\nThe bundle must contain a ``measure.rb`` (Ruby) or ``measure.py`` (Python)\nfile inside a named directory. Optional ``tests/`` and ``resources/``\nsubdirectories are also accepted.\n\nThe measure is introspected, stored in the configured measures directory,\nand registered with a content-based ``version_uuid`` for idempotent re-upload.",
+        "description": "Upload a measure bundle (zip or tar.gz).\n\nThe bundle must contain a ``measure.rb`` (Ruby) or ``measure.py`` (Python)\nfile inside a named directory. Optional ``tests/`` and ``resources/``\nsubdirectories are also accepted.\n\nThe measure is introspected, stored in the configured measures directory,\nand registered with a content-based ``version_uuid`` for idempotent re-upload.\n\nRequires ``readwrite`` permission (issue #1626) \u2014 uploading installs\nexecutable measure code, so a viewer-role key must not be able to do it\n(parity with ``POST /api/v1/files/upload``).",
         "operationId": "upload_measure_api_v1_measures_upload_post",
         "requestBody": {
           "content": {
@@ -2872,7 +2872,7 @@
       },
       "patch": {
         "summary": "Patch Uploaded Measure",
-        "description": "Update metadata for an uploaded measure.\n\nSupports updating: ``taxonomy``, ``description``, ``tags``, ``measure_group``.\nReturns 404 for workflow-discovered measures.",
+        "description": "Update metadata for an uploaded measure.\n\nRequires ``readwrite`` permission (issue #1626).\n\nSupports updating: ``taxonomy``, ``description``, ``tags``, ``measure_group``.\nReturns 404 for workflow-discovered measures.",
         "operationId": "patch_uploaded_measure_api_v1_measures_by_id__measure_id__patch",
         "parameters": [
           {
@@ -2920,7 +2920,7 @@
       },
       "delete": {
         "summary": "Delete Uploaded Measure",
-        "description": "Delete an uploaded measure.\n\nRefuses to delete workflow-discovered measures (returns 403).\nReturns 404 if the measure_id is not in the uploaded registry.",
+        "description": "Delete an uploaded measure.\n\nRequires ``readwrite`` permission (issue #1626) \u2014 parity with\n``DELETE /api/v1/files/{file_id}``.\n\nRefuses to delete workflow-discovered measures (returns 403).\nReturns 404 if the measure_id is not in the uploaded registry.",
         "operationId": "delete_uploaded_measure_api_v1_measures_by_id__measure_id__delete",
         "parameters": [
           {
