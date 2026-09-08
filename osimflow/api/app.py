@@ -42,6 +42,7 @@ from osimflow.api.auth import (
     APIKeyQueryParameterError,
     MultiUserAPIKeyStore,
     extract_api_key,
+    require_permission,
     validate_api_key,
 )
 
@@ -731,7 +732,9 @@ class ValidateConfigResponse(BaseModel):  # type: ignore[no-redef]
 
 
 @router.post("/api/v1/validate")  # type: ignore[untyped-decorator]
-async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:  # noqa: PLR0912
+async def validate_config(  # noqa: PLR0912
+    req: ValidateConfigRequest, request: Request
+) -> ValidateConfigResponse:
     """Pre-flight configuration validation (issue #398).
 
     Validates the supplied config fields without running a campaign.
@@ -744,6 +747,7 @@ async def validate_config(req: ValidateConfigRequest) -> ValidateConfigResponse:
     - Max generations sanity
     - Script paths (custom_apply_script, custom_kpi_extractor, etc.)
     """
+    require_permission(request, "readonly")  # pure validation, no mutation (issue #1647)
     errors: list[str] = []
     warnings: list[str] = []
 

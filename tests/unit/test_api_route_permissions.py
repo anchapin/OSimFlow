@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import pkgutil
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,10 @@ pytest.importorskip("slowapi", reason="osimflow[api] extra required")
 pytest.importorskip("boto3", reason="osimflow[aws] extra required")
 from fastapi import APIRouter
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 
 import osimflow.api
+from osimflow.api import create_app, hash_api_key
 
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _PERMISSION_MARKERS = ("require_permission", "get_user_permission")
@@ -44,22 +47,17 @@ _ALLOWED_UNGUARDED: dict[str, tuple[str | None, str]] = {
         "fail-closed webhook-secret check (X-OSimFLOW-Webhook-Secret), a "
         "machine-to-machine caller rather than an API-key user.",
     ),
+}
+
+# Mutating routes whose permission floor was decided by the #1647 audit:
+# POST verbs carrying read-only semantics gate at ``readonly`` (any
+# authenticated key satisfies them; an unauthenticated request is 401).
+_READONLY_FLOOR_ROUTES: dict[str, str] = {
     "osimflow.api.campaigns.compare_campaigns_post": (
-        None,
-        # TODO(follow-up out of #1626 scope): POST verb carries read-only
-        # semantics (computes a multi-campaign comparison, mutates no
-        # state). Gate on require_permission(request, "readonly") for 401
-        # parity with the other endpoints in a follow-up issue.
-        "Read-only comparison query exposed over POST (issue #404 shape); "
-        "no server state is mutated.",
+        'require_permission(request, "readonly")  # read-only semantics over POST (issue #1647)'
     ),
     "osimflow.api.app.validate_config": (
-        None,
-        # TODO(follow-up out of #1626 scope): pure pre-flight validation
-        # of caller-supplied paths (issue #398) exposed over POST; no
-        # server state is mutated. Gate on require_permission(request,
-        # "readonly") for 401 parity in a follow-up issue.
-        "Pre-flight configuration validation over POST; mutates no state.",
+        'require_permission(request, "readonly")  # pure validation, no mutation (issue #1647)'
     ),
 }
 
@@ -100,6 +98,23 @@ def _collect_mutating_routes() -> dict[str, str]:
 
 def _is_guarded(source: str) -> bool:
     return any(marker in source for marker in _PERMISSION_MARKERS)
+
+
+@pytest.fixture
+def multiuser_client(tmp_path: Path) -> TestClient:
+    """Multi-user key store (readonly role present), read_write server.
+
+    Mirrors the issue-#1626 measures-security fixture: a 0600 keys file
+    with keys hashed at rest (issue #1552) and a ``readonly``-role user,
+    so the behavioral tests below exercise real key authentication.
+    """
+    users = [
+        {"key_sha256": hash_api_key("ro-key-1"), "user_id": "reader", "role": "readonly"},
+    ]
+    keys_file = tmp_path / "api_keys.json"
+    keys_file.write_text(json.dumps({"users": users}))
+    keys_file.chmod(0o600)
+    return TestClient(create_app(outdir=tmp_path, api_keys_file=keys_file, read_only=False))
 
 
 class TestMutatingRoutesHavePermissionGates:
@@ -146,3 +161,66 @@ class TestMutatingRoutesHavePermissionGates:
             assert not _is_guarded(source), (
                 f"{qualified} now has a permission check — remove it from _ALLOWED_UNGUARDED"
             )
+
+
+class TestReadonlyFloorRoutes:
+    """#1647 audit decisions: POST routes with read-only semantics must
+    carry an explicit ``require_permission(request, "readonly")`` floor
+    (any authenticated key passes; unauthenticated requests are 401).
+    """
+
+    def test_readonly_floor_routes_call_require_permission_readonly(self) -> None:
+        routes = _collect_mutating_routes()
+        for qualified, expected_call in sorted(_READONLY_FLOOR_ROUTES.items()):
+            source = routes.get(qualified)
+            assert source is not None, f"{qualified} is no longer a live mutating route"
+            assert expected_call in source, (
+                f"{qualified} must gate at require_permission(request, 'readonly') "
+                "(issue #1647 audit decision) — the call is missing or was changed"
+            )
+            assert qualified not in _ALLOWED_UNGUARDED, (
+                f"{qualified} is gated — it must not sit in _ALLOWED_UNGUARDED"
+            )
+
+    def test_readonly_floor_routes_401_without_key(self, multiuser_client: Any) -> None:
+        # compare: unauthenticated POST → 401 (not the never-404 body).
+        resp = multiuser_client.post(
+            "/api/v1/campaigns/compare",
+            json={"campaigns": [{"campaign_id": "a"}, {"campaign_id": "b"}]},
+        )
+        assert resp.status_code == 401
+        # validate: unauthenticated POST → 401 (not a validation report).
+        resp = multiuser_client.post(
+            "/api/v1/validate",
+            json={
+                "input_variables": "variables.yml",
+                "template_sim_package": "pkg",
+                "n_samples": 3,
+                "openstudio_version": "3.11.0",
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_readonly_floor_routes_200_with_readonly_key(self, multiuser_client: Any) -> None:
+        ro = {"X-API-Key": "ro-key-1"}
+        resp = multiuser_client.post(
+            "/api/v1/campaigns/compare",
+            json={"campaigns": [{"campaign_id": "a"}, {"campaign_id": "b"}]},
+            headers=ro,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 2
+
+        resp = multiuser_client.post(
+            "/api/v1/validate",
+            json={
+                "input_variables": "variables.yml",
+                "template_sim_package": "pkg",
+                "n_samples": 3,
+                "openstudio_version": "3.11.0",
+            },
+            headers=ro,
+        )
+        assert resp.status_code == 200
+        # Paths do not exist — the endpoint reports them; it never 4xx/5xx's.
+        assert resp.json()["valid"] is False

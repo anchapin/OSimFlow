@@ -39,7 +39,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 if TYPE_CHECKING:
     from osimflow.executors.base import BaseExecutor
 
-from osimflow.api.auth import get_user_permission
+from osimflow.api.auth import get_user_permission, require_permission
 from osimflow.api.schemas import (
     BatchUploadRequest,
     BatchUploadResponse,
@@ -776,6 +776,7 @@ async def compare_campaigns_post(
     ``found=False`` and an ``error`` message — the endpoint never raises
     404 so callers can compare even when some campaigns are missing.
     """
+    require_permission(request, "readonly")  # read-only semantics over POST (issue #1647)
     entries: list[CampaignComparisonEntry] = []
 
     for identifier in body.campaigns:
