@@ -91,6 +91,11 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         outdir=outdir,
         openstudio_version="3.11.0",
         archive_intermediates=False,
+        # Container substrates refuse to run without a digest-pinned
+        # image (issue #1536) — the CI runner has no pulled OpenStudio
+        # image, so pin a clearly-fake digest as the operator would
+        # with --container-digest.
+        container_digest="docker.io/nrel/openstudio@sha256:" + "a1b2c3d4" * 8,
     )
 
 

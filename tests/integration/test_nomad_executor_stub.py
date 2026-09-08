@@ -101,6 +101,11 @@ def cfg(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         openstudio_version="3.11.0",
         archive_intermediates=False,
         skip_preflight=True,
+        # Container substrates refuse to run without a digest-pinned
+        # image (issue #1536) — the CI runner has no pulled OpenStudio
+        # image, so pin a clearly-fake digest as the operator would
+        # with --container-digest.
+        container_digest="docker.io/nrel/openstudio@sha256:" + "a1b2c3d4" * 8,
     )
 
 
@@ -371,10 +376,12 @@ def test_three_sample_campaign_via_nomad_stub_produces_artifacts(
     spec = sim_specs[0]
     job = spec["Job"]
     assert job["Type"] == "batch"
-    # The container image must carry the OS version tag.
+    # The container image must be the digest-pinned OpenStudio ref
+    # (issue #1536 drops the mutable tag); the OS version travels in
+    # OSIMFLOW_OS_VERSION (asserted below).
     task = job["TaskGroups"][0]["Tasks"][0]
-    assert "3.11.0" in task["Config"]["image"], (
-        f"OpenStudio version not in container image: {task['Config']['image']!r}"
+    assert task["Config"]["image"] == ("docker.io/nrel/openstudio@sha256:" + "a1b2c3d4" * 8), (
+        f"expected digest-pinned image: {task['Config']['image']!r}"
     )
     # Env vars must carry the OSIMFLOW_OS_VERSION.
     env_dict = task["Env"]
