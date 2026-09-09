@@ -17,6 +17,7 @@ Covers:
 - LHSAlgorithm error wrapping
 """
 
+import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -156,6 +157,20 @@ class TestAlgorithmRegistry:
                 AlgorithmRegistry.get("anything")
         finally:
             AlgorithmRegistry._registry.update(saved)
+
+    def test_registration_survives_package_reload(self) -> None:
+        """Reloading the package must not replace the registry state."""
+        import osimflow.algorithms as algorithms
+
+        original_base_algorithm = algorithms.BaseAlgorithm
+        name = "reload_stability_test"
+        AlgorithmRegistry.register(name, LHSAlgorithm)
+        try:
+            reloaded = importlib.reload(algorithms)
+            assert reloaded.AlgorithmRegistry.get(name).__class__ is LHSAlgorithm
+        finally:
+            algorithms.BaseAlgorithm = original_base_algorithm
+            AlgorithmRegistry._registry.pop(name, None)
 
     def test_get_creates_new_instance_each_time(self) -> None:
         a1 = AlgorithmRegistry.get("lhs")

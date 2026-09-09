@@ -50,6 +50,7 @@ import scipy.stats
 import scipy.stats.qmc
 
 from osimflow._eval_safe import ExpressionError, safe_eval
+from osimflow.algorithms._registry_state import _registry
 
 log = logging.getLogger("osimflow.algorithms")
 
@@ -268,7 +269,8 @@ class AlgorithmRegistry:
         samples_path = algo.generate_samples(variables, n, seed, outdir)
     """
 
-    _registry: dict[str, type[BaseAlgorithm]] = {}
+    # Anchored in the cached leaf module so package reloads preserve state.
+    _registry: dict[str, type[BaseAlgorithm]] = _registry
 
     @classmethod
     def register(cls, name: str, algo_cls: type[BaseAlgorithm]) -> None:
