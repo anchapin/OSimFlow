@@ -65,7 +65,7 @@ cache = build_cache(
 
 When `redis_url` is `None`, `build_cache` returns a plain `SQLiteCache` at `db_path` — single-node behaviour is unchanged. When a Redis URL is provided, it returns a `DistributedCache` whose shared state lives in Redis.
 
-If Redis is unreachable, every shared-store operation logs a warning and degrades to local-only behaviour — a Redis outage never fails the campaign.
+If Redis is unreachable, every shared-store operation logs a warning and degrades to local-only behaviour — through the *cache* plane, a Redis outage never fails the campaign. (The document-store plane deliberately fails loud instead, aborting the campaign by design; see §4.)
 
 ### Redis key naming
 
@@ -190,7 +190,72 @@ For TLS connections use `rediss://`.
 
 The `CampaignConfig.redis_url` field is wired from both sources and passed to `build_cache()`.
 
-## 4. Using Distributed Cache
+## 4. Redis Scope, Availability, and Recovery (ADR-0004)
+
+A single `--redis-url` does not back just the cache. When it is set, four OSimFlow planes coordinate through the same Redis instance, so the availability of that one instance is the availability of the whole distributed mode. [ADR-0004](../.agents/results/architecture/0004-redis-ha-scope.md) records the scoped decision: **single-instance Redis is the supported deployment topology**, and the documented recovery for a mid-campaign outage is **campaign restart by cache replay** — not automatic failover.
+
+### The four planes behind one `--redis-url`
+
+| Plane | Module | Role | Behaviour on Redis outage |
+|---|---|---|---|
+| Distributed cache | `osimflow/distributed_cache.py` | Cross-worker cache *hint* (§2) | Circuit-breaker fail-fast (issue #1111); degrades to the pid-private local SQLite because the cache is a soft hint |
+| Document store | `osimflow/document_store.py` (`RedisDocumentStore`) | **Source of truth** for documents | Circuit-breaker fail-fast; **refuses silent divergence** — raises `DocumentStoreError` (issue #1014) |
+| Control-plane broadcast | `osimflow/distributed_jobqueue.py` | Cross-worker job-state transitions | Circuit-breaker fail-fast (issue #1397) |
+| API rate limiter | `osimflow/api/app.py` (`RateLimitMiddleware`) | Shared security state (per-key abuse counters) | Falls back to an in-process dict — backward-compatible but unsafe for multi-worker (issues #663, #768) |
+
+The split between "degrade" and "fail loud" is deliberate. A Redis outage that *seems* to recover but serves stale data would corrupt the source-of-truth view across workers, so `RedisDocumentStore` raises and the running campaign **aborts by design** rather than resuming against diverged state (issue #1014). Recovery is *restart*, not *auto-resume* — see below.
+
+Three queue-adjacent modules with similar names have distinct roles ([ADR-0005](../.agents/results/architecture/0005-queue-modules-roles.md)), and only one of them is Redis-backed:
+
+| Module | Role (ADR-0005) | Backing store |
+|---|---|---|
+| `osimflow/taskqueue.py` | **Work dispatch** — moving per-sample callables to compute (opt-in `--task-queue`) | Executor / task-queue backend (e.g. dask) |
+| `osimflow/jobqueue.py` | **Crash-recovery journal** — which `{sample}_{step}` items were in flight when a process died | Local filesystem |
+| `osimflow/distributed_jobqueue.py` | **Control-plane broadcast** — pub/sub fan-out of job-state transitions (ADR-0004 plane 3) | Redis (`--redis-url`) |
+
+### Single-instance scope and the health probe
+
+All four Redis-backed planes construct a plain single-instance client (`redis.from_url()` / `redis.ConnectionPool.from_url()`); the redis-py `Sentinel` and `RedisCluster` entry points are unused — there is no cluster-aware hashing, master/replica routing, or Sentinel-aware topology refresh. Sentinel and Cluster URLs are therefore *unsupported*, not merely untested.
+
+Confirm the topology before a long campaign with the deployment-mode probe (issue #1562):
+
+```bash
+osimflow health --offline --redis-url redis://redis.internal:6379/0
+```
+
+The `Redis Deployment Mode` check reports the deployment mode (`single` / `sentinel` / `cluster` / `unknown`, plus Redis version, replication role, and `PING` latency when reachable):
+
+| Result | Meaning |
+|---|---|
+| PASS | Single-instance Redis — the documented topology |
+| WARN | Sentinel / Cluster URL — the current client path cannot route through it |
+| FAIL | URL unreachable |
+
+The probe runs INFORMATIONAL and skips cleanly when no `--redis-url` is configured.
+
+> The multi-AZ ElastiCache recipe in §3 survives node loss at the *infrastructure* level, but the client is still a plain single-instance client: a failover event reaches the campaign as a Redis-outage window, and the mitigation is the restart-by-replay procedure below — not automatic failover (ADR-0004 §Consequences).
+
+### Circuit-breaker behaviour on outage
+
+Each Redis-backed plane carries its own `CircuitBreaker` (`osimflow/circuit_breaker.py`, issue #1111) so a *persistent* outage fails fast instead of burning the 5 s socket timeout on every call:
+
+1. **closed** — normal operation; consecutive failures are counted.
+2. **open** — after `failure_threshold` consecutive failures (default 5), callers are rejected immediately (`CircuitOpenError`) for `cooldown_s` seconds (default 30).
+3. **half-open** — once the cooldown elapses, exactly **one** probe request is admitted (issue #1569): success closes the circuit, failure re-opens it for another cooldown.
+
+The per-plane breaker states are recorded in `run.json` under `circuit_breaker_states` (issues #1191, #1307) — an `"open"` entry at shutdown confirms Redis was unreachable.
+
+### Recovery: restart by cache replay
+
+A campaign aborted by a Redis outage is recovered by re-running it against the **same `--outdir`**:
+
+```bash
+osimflow run --outdir <same outdir>   # plus the original flags (--redis-url included)
+```
+
+Completed steps are cache hits (local SQLite fast path, backfilled from the Redis shared store) and the campaign picks up at the first un-cached step. The full three-step operator procedure — probe the deployment mode, re-run, then verify that `run.json.cache_hit_rate` climbs back to ~100 % for the completed steps — is documented in [`docs/user-guide.md` §7.7](user-guide.md#77-recovery-redis-outage-mid-campaign-issue-1562--adr-0004). The replay path is the same one `osimflow warm-cache` pre-populates (issue #1027); it is exercised end-to-end by `make smoke` and the per-substrate cache-resume integration tests listed in [`docs/substrate-coverage.md`](substrate-coverage.md).
+
+## 5. Using Distributed Cache
 
 `DistributedCache` is instantiated automatically by the `Campaign` orchestrator when `redis_url` is configured. No per-step changes are required — the `Campaign` calls `build_cache()` internally.
 
@@ -260,7 +325,7 @@ osimflow run \
 
 Each Slurm job (one step of one sample) connects to Redis, subscribes to the campaign's invalidation channel, and invalidates its local cache when any other worker invalidates.
 
-## 5. Cache Key Strategy
+## 6. Cache Key Strategy
 
 The `CacheKey` class (`osimflow/cache.py`) defines the content-addressable cache key:
 
@@ -321,7 +386,7 @@ redis-cli HLEN osimflow:cache:entries:<namespace>
 redis-cli HSCAN osimflow:cache:entries:<namespace> 0 MATCH 'RUN_OPENSTUDIO_SIM|*' COUNT 20
 ```
 
-## 6. Cache Invalidation
+## 7. Cache Invalidation
 
 ### When cache is invalidated
 
@@ -370,7 +435,7 @@ cache.close()
 
 This broadcasts the invalidation to all other workers.
 
-## 7. Performance Considerations
+## 8. Performance Considerations
 
 ### Latency tradeoffs
 
@@ -413,14 +478,14 @@ find outdir/work/cache.sqlite -mtime +30 -delete
 If a worker loses Redis connectivity:
 
 1. The subscriber thread logs a warning and attempts to reconnect.
-2. Shared-store operations (`store` / shared `lookup` / shared invalidation) log a warning and degrade to local-only — they never raise, so a Redis outage cannot fail the campaign.
+2. Shared-store operations (`store` / shared `lookup` / shared invalidation) log a warning and degrade to local-only — they never raise, so a Redis outage cannot fail the campaign *through the cache plane*. The document-store plane fails loud instead (see §4).
 3. Local cache operations continue normally (the pid-private `SQLiteCache` is always available).
 4. Invalidation broadcasts from other workers are missed until reconnection.
 5. On reconnection, the subscriber re-subscribes to the channel and resumes receiving broadcasts.
 
 Workers that miss invalidation events may produce stale cache entries for that campaign. The next explicit invalidation (e.g., changing `variables.yml`) will correct the state.
 
-## 8. Alternatives
+## 9. Alternatives
 
 ### S3-backed read-only cache
 
