@@ -693,6 +693,16 @@ name in this section.
 - `osimflow/data_point_manager.py` — `DataPoint`,
   `DataPointManager`, `DataPointStatus`.
 - `osimflow/cross_run_aggregator.py` — `CrossRunAggregator`.
+- `osimflow/results_query.py` — cross-campaign results query/export
+  helpers (issue #1699): `query_results_cli` (powers
+  ``osimflow query-results``), `export_results_cli` (powers
+  ``osimflow export-results``), `load_aggregated_results`, and
+  `apply_filter`. Pure stdlib + pandas — no `fastapi` import at
+  module scope, so the CLI subcommands work on installs without
+  the optional `[api]` extra. `osimflow/api/results_query.py`
+  imports `apply_filter` / `load_aggregated_results` from here for
+  its route handlers; do not import the CLI helpers from the api
+  module (use this module directly).
 - `osimflow/handoff_record.py` — `HandoffRecord` +
   `NoHandoffRecordError` + `IDEMPOTENCY_KEY_HEADER` +
   `HANDOFF_RECORD_NAME` + `read_handoff_record`,
