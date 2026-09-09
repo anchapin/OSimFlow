@@ -8,6 +8,7 @@ including:
 - Campaign duration and flush
 - Periodic flush to prevent metric loss on early crash (issue #1186)
 - Multi-backend composition with coordinated flush (issue #1332)
+- Record-path exception containment (issue #1668)
 
 The ObservabilityManager is constructed with a CampaignConfig and exposes
 a clean interface for the Campaign to call without directly coupling to
@@ -16,6 +17,16 @@ the ObservabilityBackend implementation.
 When multiple backends are configured (issue #1332), the ObservabilityManager
 coordinates flush across all backends, catching per-backend exceptions
 individually and re-raising only after all backends have attempted flush.
+
+Reliability contract (issue #1668): every ``record_*`` method contains
+backend exceptions at this layer.  The Campaign calls ``record_sample_status``
+from inside the fan-out success callback (``_on_success``), so a backend
+exception escaping the record path — e.g. CloudWatch throttling on the
+inline 20-metric buffer flush inside ``CloudWatchBackend._add_metric`` —
+would be caught by ``_await_one``'s ``except Exception`` and route a
+successful sample through ``mark_sample_failed``.  A backend failure is
+logged and swallowed instead; it must never fail the campaign or distort
+sample accounting.
 """
 
 from __future__ import annotations
@@ -24,6 +35,7 @@ __all__ = ["ObservabilityManager"]
 
 import logging
 import threading
+from collections.abc import Callable
 
 from .config import CampaignConfig
 from .observability import (
@@ -49,7 +61,13 @@ class ObservabilityManager:
     When multiple backends are configured (e.g., "cloudwatch,prometheus"),
     all record methods fan out to every backend, and flush() coordinates
     across all of them, catching per-backend exceptions individually and
-    re-raising only after every backend has attempted its flush (issue #1332).
+    re-raising only after every backend has attempted its flush (issue
+    #1332).
+
+    Record-path containment (issue #1668): every ``record_*`` method
+    catches and logs per-backend exceptions and never propagates them
+    to the caller — the Campaign invokes these from fan-out callbacks
+    where an escaping exception would mark a successful sample failed.
 
     Parameters
     ----------
@@ -135,6 +153,44 @@ class ObservabilityManager:
         return None
 
     # ------------------------------------------------------------------
+    # Record-path containment (issue #1668)
+    # ------------------------------------------------------------------
+    def _fanout_record(
+        self,
+        op: str,
+        record: Callable[[ObservabilityBackend], None],
+    ) -> None:
+        """Fan a record operation out to every backend, containing failures.
+
+        Each backend is attempted in turn; an exception raised by one
+        backend (e.g. ``CloudWatchBackend`` hitting a throttling error on
+        the inline buffer flush triggered from ``record_sample_metric``)
+        is logged and swallowed so that (a) it never propagates into the
+        Campaign hot path — the record methods are invoked from the
+        fan-out success/failure callbacks, where an escaping exception
+        would mark a successful sample failed — and (b) the remaining
+        backends still receive the metric (mirroring the per-backend
+        coordination of :meth:`flush`, issue #1332).
+
+        This containment is deliberate: an observability-backend failure
+        must never fail the campaign.  Buffering backends retain their
+        buffered metrics on a failed flush, so the periodic flush
+        (issue #1186) retries delivery later.
+        """
+        for backend in self._backends:
+            try:
+                record(backend)
+            except Exception as exc:  # noqa: BLE001 — containment is the point (issue #1668)
+                log.error(
+                    "observability backend %s failed to record %s "
+                    "(metric dropped; campaign unaffected): %s",
+                    type(backend).__name__,
+                    op,
+                    exc,
+                    exc_info=True,
+                )
+
+    # ------------------------------------------------------------------
     # Per-step metrics
     # ------------------------------------------------------------------
     def record_step_duration(
@@ -154,8 +210,12 @@ class ObservabilityManager:
         generation
             Generation number for iterative algorithms.
         """
-        for backend in self._backends:
-            backend.record_step_duration(step_name, duration_s, generation=generation)
+        self._fanout_record(
+            f"step_duration:{step_name}",
+            lambda backend: backend.record_step_duration(
+                step_name, duration_s, generation=generation
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Per-sample metrics
@@ -180,8 +240,12 @@ class ObservabilityManager:
         trace_id
             Optional trace ID for distributed correlation.
         """
-        for backend in self._backends:
-            backend.record_sample_metric(sample_id, metric_name, value, trace_id=trace_id)
+        self._fanout_record(
+            f"sample_metric:{metric_name}",
+            lambda backend: backend.record_sample_metric(
+                sample_id, metric_name, value, trace_id=trace_id
+            ),
+        )
 
     def record_sample_cost(
         self, sample_id: str, cost_usd: float | None, trace_id: str | None = None
@@ -192,8 +256,12 @@ class ObservabilityManager:
         "cost_usd" as the metric name.
         """
         if cost_usd is not None:
-            for backend in self._backends:
-                backend.record_sample_metric(sample_id, "cost_usd", cost_usd, trace_id=trace_id)
+            self._fanout_record(
+                "sample_metric:cost_usd",
+                lambda backend: backend.record_sample_metric(
+                    sample_id, "cost_usd", cost_usd, trace_id=trace_id
+                ),
+            )
 
     def record_sample_status(
         self,
@@ -216,8 +284,12 @@ class ObservabilityManager:
             Optional trace ID for distributed correlation.
         """
         value = 1.0 if status == "ok" else 0.0
-        for backend in self._backends:
-            backend.record_sample_metric(sample_id, "status", value, trace_id=trace_id)
+        self._fanout_record(
+            "sample_metric:status",
+            lambda backend: backend.record_sample_metric(
+                sample_id, "status", value, trace_id=trace_id
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Campaign-level metrics
@@ -230,8 +302,10 @@ class ObservabilityManager:
         duration_s
             Total elapsed time in seconds.
         """
-        for backend in self._backends:
-            backend.record_campaign_duration(duration_s)
+        self._fanout_record(
+            "campaign_duration",
+            lambda backend: backend.record_campaign_duration(duration_s),
+        )
 
     def flush(self) -> None:
         """Flush all buffered metrics to every backend (issue #1332).
