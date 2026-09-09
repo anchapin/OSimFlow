@@ -779,6 +779,7 @@ class Campaign(CampaignAnalysisMixin):
                     rules_path=obs_cfg.alert_rules,
                     destinations_path=obs_cfg.alert_destinations,
                     on_alert=self.trace.record_alert,
+                    background_dispatch=True,
                 )
                 log.info(
                     "alerting enabled: rules=%s destinations=%s",
@@ -1889,6 +1890,16 @@ class Campaign(CampaignAnalysisMixin):
                     )
                 except Exception:
                     log.exception("result storage: close failed during teardown")
+
+            # Issue #1673: bounded close of the alert dispatcher. Same
+            # containment shape as _teardown_observability above: never
+            # raises into the campaign outcome. Past the deadline any
+            # in-flight alerts are abandoned (logged by AlertManager).
+            if self._alert_manager is not None:
+                try:
+                    self._alert_manager.close(timeout_s=5.0)
+                except Exception:
+                    log.exception("alert manager: close failed during teardown")
 
     def _abort_run_path_cancel(
         self,

@@ -50,9 +50,11 @@ from __future__ import annotations
 __all__ = ["AlertManager", "build_alert_manager"]
 
 import abc
+import contextlib
 import dataclasses
 import json
 import logging
+import queue
 import smtplib
 import threading
 import time
@@ -302,6 +304,7 @@ class AlertManager:
         self,
         *,
         on_alert: Callable[[Alert], None] | None = None,
+        per_alert_deadline_s: float = 30.0,
     ) -> None:
         self._rules: list[AlertRule] = []
         self._destinations: list[AlertDestination] = []
@@ -313,6 +316,17 @@ class AlertManager:
         # Retried opportunistically at the start of every notify() call.
         self._alert_history: deque[_PendingAlert] = deque(maxlen=_ALERT_HISTORY_MAXLEN)
         self._history_lock = threading.Lock()
+        # Background-dispatch plumbing (issue #1673). The worker thread
+        # owns the blocking destination.send() calls (webhook retry sleeps,
+        # SMTP timeouts) so they never run on the fan-out worker threads.
+        # notify() enqueues an Alert + rule to the worker when the dispatcher
+        # is started; otherwise notify() dispatches synchronously (legacy).
+        self._per_alert_deadline_s = per_alert_deadline_s
+        self._dispatch_queue: queue.Queue[tuple[Alert, AlertRule] | None] | None = None
+        self._dispatch_thread: threading.Thread | None = None
+        self._dispatch_started = threading.Event()
+        self._dispatch_stopped = threading.Event()
+        self._dispatch_lock = threading.Lock()
 
     def add_rule(self, rule: AlertRule) -> None:
         self._rules.append(rule)
@@ -326,8 +340,19 @@ class AlertManager:
         Best-effort: destination failures are logged, queued in the
         bounded pending-alert history for retry (issue #1185), and never
         raise.
+
+        When :meth:`start_background_dispatch` has been called, the
+        dispatch itself (destination.send() and its blocking retries) is
+        moved off the caller's thread onto a worker thread (issue #1673);
+        :meth:`notify` then returns once the alert is enqueued. Without a
+        background dispatcher, dispatch runs synchronously as before.
         """
-        self._retry_pending()
+        # Retry pending inline: this is cheap (best-effort re-attempt of
+        # previously failed deliveries) and keeps the synchronous path's
+        # behavior identical. When the worker is running, the retry sweep
+        # runs there periodically (issue #1185) so we don't duplicate it.
+        if not self._is_dispatcher_running():
+            self._retry_pending()
         for rule in self._rules:
             if rule.event_type != event_type:
                 continue
@@ -350,16 +375,30 @@ class AlertManager:
                 message=message,
                 context=context,
                 timestamp=time.time(),
-                delivery_status="unknown",
+                delivery_status="queued" if self._is_dispatcher_running() else "unknown",
             )
 
-            alert.delivery_status = self._dispatch_to_destinations(alert, rule)
+            if self._is_dispatcher_running():
+                # Background-dispatch path. Enqueue and return immediately
+                # so a slow/blackholed webhook can't stall the fan-out
+                # worker that called notify().
+                self._enqueue_dispatch(alert, rule)
+                continue
 
-            if self._on_alert is not None:
-                try:
-                    self._on_alert(alert)
-                except Exception as exc:
-                    log.warning("on_alert callback raised — continuing: %s", exc)
+            self._do_dispatch(alert, rule)
+
+    def _do_dispatch(self, alert: Alert, rule: AlertRule) -> None:
+        """Dispatch *alert* synchronously and invoke the on_alert callback.
+
+        Called directly by :meth:`notify` when no background dispatcher
+        is running, and by the dispatcher worker thread when one is.
+        """
+        alert.delivery_status = self._dispatch_to_destinations(alert, rule)
+        if self._on_alert is not None:
+            try:
+                self._on_alert(alert)
+            except Exception as exc:
+                log.warning("on_alert callback raised — continuing: %s", exc)
 
     def _dispatch_to_destinations(self, alert: Alert, rule: AlertRule) -> str:
         """Send alert to all destinations and return overall delivery status."""
@@ -474,6 +513,150 @@ class AlertManager:
         if still_failing:
             with self._history_lock:
                 self._alert_history.extend(still_failing)
+
+    # ------------------------------------------------------------------
+    # Background dispatcher (issue #1673)
+    # ------------------------------------------------------------------
+    def _is_dispatcher_running(self) -> bool:
+        """True when the background dispatcher worker thread is alive."""
+        return self._dispatch_thread is not None and self._dispatch_thread.is_alive()
+
+    def start_background_dispatch(self) -> None:
+        """Start the background dispatcher thread (idempotent).
+
+        Once started, :meth:`notify` enqueues alerts and returns
+        immediately; a single daemon worker drains the queue, runs
+        :meth:`_do_dispatch` per alert with a per-alert deadline, and
+        sweeps the pending-retry history periodically.
+
+        Matches the bounded-teardown pattern from issue #1672: the worker
+        is a daemon (exits when the process exits) and :meth:`close`
+        performs a bounded join. Calling this twice is a no-op.
+        """
+        with self._dispatch_lock:
+            if self._dispatch_thread is not None and self._dispatch_thread.is_alive():
+                return
+            self._dispatch_queue = queue.Queue()
+            self._dispatch_stopped.clear()
+            self._dispatch_started.clear()
+            thread = threading.Thread(
+                target=self._dispatch_worker,
+                name=f"alert-dispatcher-{id(self)}",
+                daemon=True,
+            )
+            self._dispatch_thread = thread
+            thread.start()
+        # Wait for the worker to signal it has entered its main loop so
+        # callers that immediately enqueue don't race the startup.
+        self._dispatch_started.wait(timeout=5.0)
+
+    def close(self, timeout_s: float = 5.0) -> None:
+        """Signal the worker and join with a bounded timeout.
+
+        Bounded by design (issue #1672 family): a wedged destination
+        cannot block Campaign teardown forever. Any alerts still enqueued
+        past the deadline are abandoned — their on_alert callbacks will
+        not fire, matching the failure-as-best-effort contract. Idempotent.
+        """
+        thread = self._dispatch_thread
+        q = self._dispatch_queue
+        if thread is None or q is None:
+            return
+        with contextlib.suppress(Exception):  # pragma: no cover — best effort
+            q.put_nowait(None)
+        thread.join(timeout=timeout_s)
+        self._dispatch_stopped.set()
+        if thread.is_alive():
+            log.warning(
+                "alert dispatcher did not exit within %.1fs — abandoning %d pending alerts",
+                timeout_s,
+                q.qsize(),
+            )
+
+    def _enqueue_dispatch(self, alert: Alert, rule: AlertRule) -> None:
+        q = self._dispatch_queue
+        if q is None:
+            # Should not happen — notify() only enqueues when the
+            # dispatcher is running. Fall back to inline dispatch so
+            # the alert is never silently dropped.
+            self._do_dispatch(alert, rule)
+            return
+        try:
+            q.put_nowait((alert, rule))
+        except queue.Full:  # pragma: no cover — queue is unbounded
+            log.warning(
+                "alert dispatch queue full — falling back to inline dispatch for rule %s",
+                rule.name,
+            )
+            self._do_dispatch(alert, rule)
+
+    def _dispatch_worker(self) -> None:
+        """Worker loop: drain the queue, run _do_dispatch per alert.
+
+        Also runs the pending-retry sweep (issue #1185) once at startup
+        and then on each enqueue wakeup. Exits cleanly when the queue
+        receives a sentinel ``None``.
+        """
+        assert self._dispatch_queue is not None  # set by start_background_dispatch
+        q = self._dispatch_queue
+        self._dispatch_started.set()
+        # Drain pending at startup so any alerts left from a prior
+        # process / campaign session get re-attempted promptly.
+        self._retry_pending()
+        while True:
+            try:
+                item = q.get()
+            except Exception as exc:
+                log.warning("alert dispatcher queue.get failed: %s", exc)
+                continue
+            if item is None:
+                q.task_done()
+                break
+            alert, rule = item
+            try:
+                self._dispatch_one(alert, rule)
+            except Exception as exc:
+                log.warning(
+                    "alert dispatcher unhandled error on rule %s: %s",
+                    rule.name,
+                    exc,
+                    exc_info=True,
+                )
+            finally:
+                q.task_done()
+        self._dispatch_stopped.set()
+
+    def _dispatch_one(self, alert: Alert, rule: AlertRule) -> None:
+        """Run _do_dispatch for one alert with a per-alert deadline.
+
+        The deadline prevents a single wedged destination (a webhook with
+        a blackholed DNS, an unreachable SMTP relay) from clogging the
+        worker indefinitely. On expiry the alert is logged and dropped;
+        the pending-retry sweep will not re-attempt it (it's a single
+        delivery attempt by design, not a retry loop — retries live in
+        the existing _retry_pending pipeline for previously-queued alerts).
+        """
+        if self._per_alert_deadline_s <= 0:
+            self._do_dispatch(alert, rule)
+            return
+        result: dict[str, object] = {}
+
+        def _run() -> None:
+            result["done"] = True
+            self._do_dispatch(alert, rule)
+
+        runner = threading.Thread(target=_run, daemon=True)
+        runner.start()
+        runner.join(timeout=self._per_alert_deadline_s)
+        if runner.is_alive():
+            log.warning(
+                "alert dispatch for rule %s exceeded %.1fs deadline — abandoning delivery "
+                "(destination may be unreachable)",
+                rule.name,
+                self._per_alert_deadline_s,
+            )
+            # Note: do not join — the thread is a daemon and will exit with
+            # the process; we don't block teardown on it.
 
     def update_cache_stats(self, stats: dict[str, Any]) -> None:
         self._cache_stats = stats
@@ -739,6 +922,8 @@ def build_alert_manager(
     include_builtin: bool = True,
     *,
     on_alert: Callable[[Alert], None] | None = None,
+    background_dispatch: bool = False,
+    per_alert_deadline_s: float = 30.0,
 ) -> AlertManager:
     """Build and configure an AlertManager from YAML files.
 
@@ -756,8 +941,23 @@ def build_alert_manager(
     on_alert
         Optional callback invoked for every alert dispatched (issue #1308).
         Intended to forward fired alerts to RunTrace.alerts_fired.
+    background_dispatch
+        When ``True`` (issue #1673), start a background dispatcher thread
+        so destination.send() (and its blocking retries) never run on
+        the caller's thread — the campaign's fan-out workers stay free.
+        Defaults to ``False`` to preserve the legacy synchronous path
+        (and existing tests that assert on synchronous delivery_status).
+    per_alert_deadline_s
+        When background dispatch is enabled, the wall-clock budget for
+        each individual alert delivery. Past the deadline the worker
+        abandons that delivery (logs a WARNING) and moves on — a wedged
+        webhook cannot clog the dispatcher. Only consulted when
+        ``background_dispatch=True``.
     """
-    manager = AlertManager(on_alert=on_alert)
+    manager = AlertManager(
+        on_alert=on_alert,
+        per_alert_deadline_s=per_alert_deadline_s,
+    )
 
     if include_builtin:
         for rule in manager.builtin_rules():
@@ -770,5 +970,8 @@ def build_alert_manager(
     if destinations_path is not None and destinations_path.is_file():
         for dest in load_alert_destinations_from_yaml(destinations_path):
             manager.add_destination(dest)
+
+    if background_dispatch:
+        manager.start_background_dispatch()
 
     return manager
