@@ -120,7 +120,7 @@ Post-MVP, the project aims for a minor release every 4–6 weeks.
 
 1. Ensure `main` is green on CI.
 2. Update the version in `pyproject.toml`.
-3. Update `CHANGELOG.md` (to be created post-MVP).
+3. Update `CHANGELOG.md`.
 4. Commit: `chore(release): bump version to X.Y.Z`.
 5. Tag: `git tag vX.Y.Z && git push --tags`.
 6. Publish to PyPI (post-MVP).
