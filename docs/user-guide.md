@@ -38,8 +38,9 @@
   - [7.4 MLflow Integration](#74-mlflow-integration)
   - [7.5 Cache and Resume Behavior](#75-cache-and-resume-behavior)
   - [7.6 OpenStudio Version Selection](#76-openstudio-version-selection)
-  - [7.7 Importing from OpenStudio Analysis Spreadsheet (.osa)](#77-importing-from-openstudio-analysis-spreadsheet-osa)
-  - [7.8 Chaos Fault Injection (Resilience Testing)](#78-chaos-fault-injection-resilience-testing)
+  - [7.7 Recovery: Redis outage mid-campaign (issue #1562 / ADR-0004)](#77-recovery-redis-outage-mid-campaign-issue-1562--adr-0004)
+  - [7.8 Importing from OpenStudio Analysis Spreadsheet (.osa)](#78-importing-from-openstudio-analysis-spreadsheet-osa)
+  - [7.9 Chaos Fault Injection (Resilience Testing)](#79-chaos-fault-injection-resilience-testing)
 - [8. Health Checks](#8-health-checks)
 - [9. Troubleshooting](#9-troubleshooting)
 - [10. Reference](#10-reference)
@@ -1145,6 +1146,30 @@ osimflow run --outdir <same outdir>   # plus the original flags
 with exit 1; a missing `.pause` flag file is a warning (the campaign is
 not flagged for pause) and the recovery replay still proceeds.
 
+### 7.6 OpenStudio Version Selection
+
+The `--openstudio_version` flag determines which `nrel/openstudio` container
+image is used. The version maps directly to the Docker Hub tag:
+
+| `--openstudio_version` | Container image | Notes |
+|---|---|---|
+| `3.7.0` | `docker.io/nrel/openstudio:3.7.0` | Floor version (Ubuntu 20.04 base) |
+| `3.7.0-2204` | `docker.io/nrel/openstudio:3.7.0-2204` | Ubuntu 22.04 base |
+| `3.8.0` | `docker.io/nrel/openstudio:3.8.0` | |
+| `3.9.0` | `docker.io/nrel/openstudio:3.9.0` | |
+| `3.10.0` | `docker.io/nrel/openstudio:3.10.0` | |
+| `3.11.0` | `docker.io/nrel/openstudio:3.11.0` | latest stable (default) |
+
+**When to pin:** Always pin in production campaigns for reproducibility.
+Changing the version invalidates the cache for the simulation step.
+
+**When to float:** During development, you may omit the flag (defaults to
+`3.11.0`) or update it to test compatibility with a new OpenStudio release.
+
+For the full supported-version policy and how to add a new tag, see
+[openstudio-image-distribution.md](openstudio-image-distribution.md) and
+[compatibility-matrix.md](compatibility-matrix.md).
+
 ### 7.7 Recovery: Redis outage mid-campaign (issue #1562 / ADR-0004)
 
 When `--redis-url` is set, four OSimFlow planes coordinate through one
@@ -1206,31 +1231,7 @@ release. Sentinel / Cluster client wiring is tracked as future work
 gives you no failover benefit because the OSimFlow client path does
 not route through Sentinel.
 
-### 7.6 OpenStudio Version Selection
-
-The `--openstudio_version` flag determines which `nrel/openstudio` container
-image is used. The version maps directly to the Docker Hub tag:
-
-| `--openstudio_version` | Container image | Notes |
-|---|---|---|
-| `3.7.0` | `docker.io/nrel/openstudio:3.7.0` | Floor version (Ubuntu 20.04 base) |
-| `3.7.0-2204` | `docker.io/nrel/openstudio:3.7.0-2204` | Ubuntu 22.04 base |
-| `3.8.0` | `docker.io/nrel/openstudio:3.8.0` | |
-| `3.9.0` | `docker.io/nrel/openstudio:3.9.0` | |
-| `3.10.0` | `docker.io/nrel/openstudio:3.10.0` | |
-| `3.11.0` | `docker.io/nrel/openstudio:3.11.0` | latest stable (default) |
-
-**When to pin:** Always pin in production campaigns for reproducibility.
-Changing the version invalidates the cache for the simulation step.
-
-**When to float:** During development, you may omit the flag (defaults to
-`3.11.0`) or update it to test compatibility with a new OpenStudio release.
-
-For the full supported-version policy and how to add a new tag, see
-[openstudio-image-distribution.md](openstudio-image-distribution.md) and
-[compatibility-matrix.md](compatibility-matrix.md).
-
-### 7.7 Importing from OpenStudio Analysis Spreadsheet (.osa)
+### 7.8 Importing from OpenStudio Analysis Spreadsheet (.osa)
 
 OSimFlow can import parametric variable definitions from an OpenStudio
 Analysis Spreadsheet (`.osa`) file:
@@ -1242,7 +1243,7 @@ python -m osimflow import-osa path/to/analysis.osa --output variables.yml
 This converts the `.osa` parameter definitions into a `variables.yml` file
 compatible with OSimFlow's LHS sampler.
 
-### 7.8 Chaos Fault Injection (Resilience Testing)
+### 7.9 Chaos Fault Injection (Resilience Testing)
 
 OSimFlow can inject controlled faults — process kills, network delay,
 CPU spikes, memory pressure — into a running campaign to validate that
@@ -1682,7 +1683,7 @@ Every invocation is recorded in `run.json` → `chaos_invocations`.
 
 See [chaos-engine.md](chaos-engine.md) for the scenario catalog, schedule
 semantics, and production examples, or
-[§7.8 Chaos Fault Injection](#78-chaos-fault-injection-resilience-testing)
+[§7.9 Chaos Fault Injection](#79-chaos-fault-injection-resilience-testing)
 for the introductory walkthrough.
 
 #### `osimflow serve` subcommand
@@ -1726,7 +1727,7 @@ cross-links for depth.
 |---|---|
 | `osimflow run` | Run a parametric campaign — the main command. See [§3 Quick Start](#3-quick-start) and [§5 Running Campaigns](#5-running-campaigns). |
 | `osimflow warm-cache` | Pre-populate the simulation cache with `--n_warm` pilot samples (default 10) before a campaign; accepts the full `run` flag surface. See [§7.5 Cache and Resume Behavior](#75-cache-and-resume-behavior). |
-| `osimflow import-osa` | Import a PAT/OpenStudio Analysis `.osa` or `analysis.json` into campaign config. See [§7.7](#77-importing-from-openstudio-analysis-spreadsheet-osa) and [pat-migration.md](pat-migration.md). |
+| `osimflow import-osa` | Import a PAT/OpenStudio Analysis `.osa` or `analysis.json` into campaign config. See [§7.8](#78-importing-from-openstudio-analysis-spreadsheet-osa) and [pat-migration.md](pat-migration.md). |
 | `osimflow export` | Export campaign state to an external format (`--target pat`) with `--variables` / `--n_samples` / `--algorithm`. |
 | `osimflow serve` | Start the REST API server (flags above; requires `pip install osimflow[api]`). See [api.md](api.md). |
 | `osimflow dashboard` | Launch a local ephemeral dashboard for campaign results (`--port`, default 8000). |
