@@ -2,7 +2,6 @@
 
 [![ci](https://github.com/anchapin/OSimFlow/actions/workflows/ci.yml/badge.svg)](https://github.com/anchapin/OSimFlow/actions/workflows/ci.yml)
 [![bench](https://github.com/anchapin/OSimFlow/actions/workflows/bench.yml/badge.svg)](https://github.com/anchapin/OSimFlow/actions/workflows/bench.yml)
-[![codecov](https://codecov.io/gh/anchapin/OSimFlow/graph/badge.svg?token=PLACEHOLDER)](https://codecov.io/gh/anchapin/OSimFlow)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 > **Status:** `v0.1.0` released (`2026-06-24`, see [CHANGELOG.md](CHANGELOG.md)). The orchestration foundation (`osimflow/` package) and per-step work-layer scripts (`osimflow/_work_scripts/`) are implemented; the `bin/*.py` entry points are stable shims over them. Active line: `v0.1.x` hardening + polish + ecosystem coverage.
@@ -30,7 +29,7 @@ The framework foundation — a custom Python driver where every executor conform
 ### 1. Install
 
 ```bash
-make install    # creates .venv + pip install -e ".[dev,aws,slurm,kubernetes,api,sensitivity,optimization,ga]"
+make install    # creates .venv + pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
 ```
 
 `make install` bootstraps `.venv` and installs the full development
