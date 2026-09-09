@@ -1307,19 +1307,125 @@ class ResultStorageUploader:
                 remote_path = f"{remote_prefix}/{rel}" if remote_prefix else str(rel)
                 self.upload_file(file_path, remote_path)
 
-    def close(self) -> None:
-        """Drain the upload queue, stop workers, and surface upload failures."""
+    def _drain(self, timeout_s: float | None) -> bool:
+        """Wait for every queued upload to finish (issue #1672).
+
+        ``Queue.join()`` has no timeout parameter, so the bounded mode
+        runs it on a short-lived daemon thread joined with the deadline:
+        if that thread is still alive the drain is abandoned.  Returns
+        ``True`` when the queue drained, ``False`` when ``timeout_s``
+        elapsed first.
+        """
+        if timeout_s is None:
+            self._queue.join()
+            return True
+        drain = threading.Thread(
+            target=self._queue.join,
+            name="osimflow-upload-drain",
+            daemon=True,
+        )
+        drain.start()
+        drain.join(timeout_s)
+        return not drain.is_alive()
+
+    def _abandon_pending(self) -> int:
+        """Discard queued-not-started items; return how many were dropped.
+
+        ``task_done()`` is still called for every discarded item so the
+        abandoned ``join()`` drain thread (if mid-wake) observes a
+        consistent ``unfinished_tasks`` count and exits cleanly.
+        """
+        abandoned = 0
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return abandoned
+            self._queue.task_done()
+            abandoned += 1
+
+    def _stop_workers(self, timeout_s: float | None) -> None:
+        """Signal worker shutdown and join them under the deadline.
+
+        Workers are daemon threads, so a worker still grinding through
+        retry backoff sleeps past the deadline is simply logged and
+        left to die at process exit — ``close()`` must return, not wait.
+        """
+        for _ in self._workers:
+            self._queue.put(None)
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        for worker in self._workers:
+            if deadline is None:
+                worker.join()
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    worker.join(timeout=remaining)
+        stragglers = [worker.name for worker in self._workers if worker.is_alive()]
+        if stragglers:
+            log.warning(
+                "result storage: %d upload(s) still in flight after close "
+                "deadline (workers %s abandoned as daemon threads)",
+                self._queue.unfinished_tasks,
+                ", ".join(stragglers),
+            )
+        self._workers = []
+
+    def close(
+        self,
+        timeout_s: float | None = None,
+        *,
+        raise_on_failure: bool = True,
+    ) -> None:
+        """Drain the upload queue, stop workers, and surface upload failures.
+
+        Parameters
+        ----------
+        timeout_s : float | None
+            Bound (seconds) on how long ``close()`` waits for queued
+            uploads to drain and for the workers to exit (issue #1672).
+            ``None`` (the default) preserves the legacy unbounded drain
+            for direct/library callers.  When the deadline passes,
+            remaining items are logged and abandoned: an auxiliary
+            storage outage must never stall teardown past the bound.
+        raise_on_failure : bool
+            When ``False``, permanently-failed uploads are logged at
+            ERROR instead of raising ``OSError`` — for best-effort
+            teardown call sites (``Campaign.run()``'s finally block)
+            where raising would crash a successful campaign or mask the
+            original in-flight exception.
+        """
         with self._close_lock:
             if self._closed:
                 return
             self._closed = True
-        self._queue.join()
-        for _ in self._workers:
-            self._queue.put(None)
-        for worker in self._workers:
-            worker.join()
-        self._workers = []
+        drained = self._drain(timeout_s)
+        if not drained:
+            abandoned = self._abandon_pending()
+            if abandoned:
+                log.error(
+                    "result storage: close deadline of %ss exceeded — "
+                    "%d queued upload(s) abandoned",
+                    timeout_s,
+                    abandoned,
+                )
+        self._stop_workers(timeout_s)
         if self._azure_executor is not None:
-            self._azure_executor.shutdown(wait=True)
+            if drained:
+                self._azure_executor.shutdown(wait=True)
+            else:
+                # Deadline already exceeded: do not add another
+                # unbounded wait on in-flight Azure futures.
+                self._azure_executor.shutdown(wait=False, cancel_futures=True)
             self._azure_executor = None
-        self._raise_if_failed()
+        if raise_on_failure:
+            self._raise_if_failed()
+        else:
+            with self._error_lock:
+                errors = list(self._errors)
+            if errors:
+                log.error(
+                    "result storage: %d upload(s) failed permanently (best-effort close): %s",
+                    len(errors),
+                    "; ".join(errors[:3]),
+                )

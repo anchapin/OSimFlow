@@ -204,6 +204,14 @@ CONTAINER_SUBSTRATE_EXECUTORS: frozenset[str] = frozenset(
 )
 CONTAINER_PY = "ghcr.io/anchapin/scientific_python_image:latest"
 
+#: Deadline (seconds) for the best-effort result-storage drain in
+#: ``Campaign.run()``'s finally block (issue #1672).  Past this bound the
+#: uploader logs-and-abandons whatever remains — an auxiliary storage
+#: outage must never stall (let alone crash) campaign teardown, which
+#: would defeat the restart-by-replay recovery story by preventing the
+#: final ``run.json`` rewrite and ``cache.close()``.
+_RESULT_STORAGE_CLOSE_TIMEOUT_S = 120.0
+
 
 # NOTE (issue #1462): ``QuotaExceededError`` is defined in
 # ``osimflow._campaign_quota`` and re-exported here (it stays in
@@ -895,6 +903,34 @@ class Campaign(CampaignAnalysisMixin):
                 self._alert_manager.notify(event_type, context)
             except Exception as exc:
                 log.warning("alert %s failed: %s", event_type, exc)
+
+    def _teardown_observability(self, duration: float) -> None:
+        """Final observability recording + flush, best-effort (issue #1672).
+
+        ``ObservabilityManager.flush()`` deliberately re-raises the first
+        backend exception after attempting every backend, and
+        ``stop_periodic_flush()`` performs a coordinated ``flush()`` as
+        its last step — so a backend outage at teardown would raise out
+        of ``run()``'s finally block, turning a successful multi-hour
+        campaign into a crashed process or replacing the original
+        in-flight exception and corrupting diagnosis. Contained here,
+        mirroring the ``_maybe_alert`` pattern: log at ERROR, never
+        raise. Belt-and-suspenders with the per-backend containment
+        inside ``ObservabilityManager.record_*`` (issue #1668): that
+        guards mid-run recording, this guards the teardown call sites.
+        """
+        try:
+            self._obs.record_campaign_duration(duration)
+        except Exception:
+            log.exception("observability: failed to record campaign duration")
+        try:
+            self._obs.stop_periodic_flush()
+        except Exception:
+            log.exception("observability: periodic-flush teardown failed")
+        try:
+            self._obs.flush()
+        except Exception:
+            log.exception("observability: final flush failed")
 
     def _wire_circuit_breaker_callbacks(self) -> None:
         """Wire CircuitBreaker state transitions to the observability backend (issue #1310).
@@ -1802,9 +1838,13 @@ class Campaign(CampaignAnalysisMixin):
             # notification that the campaign aborted.
             duration = time.time() - t0
             # Observability: record campaign duration and flush backend.
-            self._obs.record_campaign_duration(duration)
-            self._obs.stop_periodic_flush()
-            self._obs.flush()
+            # Best-effort (issue #1672): ``ObservabilityManager.flush()``
+            # deliberately re-raises the first backend exception after
+            # attempting every backend, so an unguarded call here would
+            # crash a successful campaign or replace the original
+            # in-flight exception. Contained in ``_teardown_observability``
+            # (mirroring ``_maybe_alert``) — log at ERROR, never raise.
+            self._teardown_observability(duration)
             self._run_finalize_script(campaign_status, duration)
             # Re-write run.json to include finalize hook timing
             if (self.cfg.outdir / "run.json").exists():
@@ -1835,9 +1875,20 @@ class Campaign(CampaignAnalysisMixin):
             # times (close() is idempotent and thread-safe).
             self.cache.close()
 
-            # Close the result storage uploader (issue #339).
+            # Close the result storage uploader (issue #339). Best-effort
+            # and bounded (issue #1672): permanently-failed uploads or a
+            # wedged storage backend must never raise out of this finally
+            # block (masking the campaign outcome) or stall teardown —
+            # past the drain deadline the uploader logs-and-abandons
+            # whatever remains.
             if self._result_storage is not None:
-                self._result_storage.close()
+                try:
+                    self._result_storage.close(
+                        timeout_s=_RESULT_STORAGE_CLOSE_TIMEOUT_S,
+                        raise_on_failure=False,
+                    )
+                except Exception:
+                    log.exception("result storage: close failed during teardown")
 
     def _abort_run_path_cancel(
         self,
