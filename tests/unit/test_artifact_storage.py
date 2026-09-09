@@ -540,7 +540,7 @@ class TestS3ArtifactStorageIntegration:
 class TestS3EndpointTLSPolicy:
     """Endpoint TLS validation for S3 backends (issue #1386).
 
-    Mirrors the Redis ``_validate_redis_url`` policy: reject non-`https://`
+    Mirrors the Redis ``validate_redis_url`` policy: reject non-`https://`
     endpoints unless the operator explicitly opts in via
     ``allow_insecure_endpoint=True`` / ``--allow-insecure-storage-endpoint``.
     Loopback hosts (``localhost``, ``127.0.0.1``, ``::1``, ``0.0.0.0``) are

@@ -1061,7 +1061,7 @@ def _redact_redis_url(redis_url: str) -> str:
 
     Surfaces the URL in ``CheckResult.detail`` without leaking
     credentials to logs / CI artifacts. Mirrors the safety stance of
-    ``osimflow.distributed_cache._validate_redis_url`` (#1277).
+    ``osimflow.distributed_cache.validate_redis_url`` (#1277).
     """
     parsed = urlparse(redis_url)
     if parsed.password is None:

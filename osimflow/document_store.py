@@ -90,11 +90,11 @@ from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
-from urllib.parse import urlparse
 
 from ._sqlite_store import connect as _store_connect
 from ._sqlite_store import encode_value as _encode_value
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
+from .distributed_cache import validate_redis_url
 from .errors import OSimFlowError
 
 if TYPE_CHECKING:
@@ -1871,49 +1871,6 @@ class DocumentStoreConfig(TypedDict, total=False):
     namespace: str
 
 
-_NONLOCALHOST_BLOCKLIST = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
-
-
-def _validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
-    """Validate that a Redis URL meets the minimum security baseline (issue #1277, #1321).
-
-    Mirrors the validation in ``distributed_cache._validate_redis_url``.
-    When ``redis_url`` points to a non-localhost host, the connection must
-    use ``rediss://`` (TLS).  The ``require_auth=True`` flag allows operators
-    who configure authentication externally (e.g. via ``AUTH`` environment
-    variable consumed by the Redis server, not the client) to explicitly opt
-    out of the URL-embedded-credentials check.
-    """
-    parsed = urlparse(redis_url)
-    host = parsed.hostname or ""
-
-    if host in _NONLOCALHOST_BLOCKLIST:
-        return
-
-    has_tls = parsed.scheme == "rediss"
-    has_creds = bool(parsed.username and parsed.password)
-
-    # TLS is always required for non-localhost (issue #1321).
-    if not has_tls:
-        raise ValueError(
-            f"insecure Redis URL (issue #1321): host {host!r} is not localhost "
-            f"but the URL uses {parsed.scheme!r} without TLS. "
-            f"Non-localhost Redis requires TLS (rediss://). "
-            f"Set --require-redis-auth only if TLS is handled externally."
-        )
-
-    # Credentials are optional when require_auth=True (external auth mechanism).
-    if not has_creds and not require_auth:
-        raise ValueError(
-            f"insecure Redis URL (issue #1277): host {host!r} is not localhost "
-            f"but the URL has no embedded credentials. "
-            f"Non-localhost Redis requires either:\n"
-            f"  (a) credentials in URL: rediss://user:pass@{host}:PORT\n"
-            f"  (b) --require-redis-auth (set this if Redis auth is handled "
-            f"externally, e.g. via an AUTH file or environment variable)."
-        )
-
-
 def _build_document_store_redis(
     redis_url: str,
     namespace: str,
@@ -1922,8 +1879,13 @@ def _build_document_store_redis(
     require_auth: bool = False,
     redis_ssl_context: ssl.SSLContext | None = None,
 ) -> DocumentStore:
-    """Return a ``RedisDocumentStore`` for distributed campaigns (issue #1014)."""
-    _validate_redis_url(redis_url, require_auth)
+    """Return a ``RedisDocumentStore`` for distributed campaigns (issue #1014).
+
+    Security baseline (issue #1277, #1321): delegates to the shared public
+    :func:`osimflow.distributed_cache.validate_redis_url` so the four
+    Redis-backed planes stay a single source of truth.
+    """
+    validate_redis_url(redis_url, require_auth)
     return RedisDocumentStore(
         redis_url=redis_url,
         namespace=namespace,

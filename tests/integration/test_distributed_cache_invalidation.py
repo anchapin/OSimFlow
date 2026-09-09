@@ -355,7 +355,7 @@ class TestDistributedCacheInvalidation:
 
         # Hostname is irrelevant — fakeredis rewires both sync and async
         # module factories (see _wire_fakeredis).  localhost URL bypasses
-        # the no-TLS-for-non-loopback guard in ``_validate_redis_url``.
+        # the no-TLS-for-non-loopback guard in ``validate_redis_url``.
         redis_url = "redis://localhost:6379/0"
 
         # --- Cold run: every per-sample step must MISS ------------------------

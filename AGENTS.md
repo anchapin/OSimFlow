@@ -512,7 +512,7 @@ name in this section.
   `--result-storage-endpoint` /
   `--s3-artifact-endpoint` URLs unless
   `--allow-insecure-storage-endpoint` is set (issue #1386);
-  mirrors `osimflow.distributed_cache._validate_redis_url`.
+  mirrors `osimflow.distributed_cache.validate_redis_url`.
 - `osimflow/taskqueue.py` — `ProducerQueue` ABC (fan-out / push) +
   `ConsumerQueue` ABC (fan-in / pull) + `DaskTaskQueue`
   (implements both), `NoOpTaskQueue` (implements both),

@@ -829,7 +829,7 @@ class TestApiRedisUrlValidation:
     abuse counters); a MITM on a plaintext connection could read and reset
     it.  ``create_app`` must therefore reject insecure URLs at app
     creation (fail closed), with the same semantics as
-    ``osimflow.distributed_cache._validate_redis_url`` used by
+    ``osimflow.distributed_cache.validate_redis_url`` used by
     ``build_cache`` (``require_auth=False`` parity).
     """
 
