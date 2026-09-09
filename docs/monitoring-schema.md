@@ -38,6 +38,7 @@ is the primary observability artifact (per
 | `chaos_schedule` | `str` | Which chaos schedule was active (`"before_step"`, `"after_step"`, or `"per_sample"`) (issue #1191). |
 | `circuit_breaker_states` | `object` | Final circuit-breaker state per breaker name (issue #1191). |
 | `alerts_fired` | `array` | Alerts dispatched during the campaign, including per-alert `delivery_status` (issues #1191, #1308). |
+| `accounting_errors` | `array` | Failure-accounting errors swallowed by the fan-out drain — always present, `[]` when none (issue #1674). |
 | `paused_at` | `float` | Unix epoch when the campaign was paused (issue #553). Present only when paused. |
 | `error_summary` | `str` | Campaign-level error message set when an unhandled exception fails the campaign (issue #737). |
 
@@ -314,6 +315,22 @@ is issue #1308). Each entry is a serialised
 ```
 
 ---
+
+## `accounting_errors`
+
+`array` — always present (`[]` when clean). One entry per
+failure-accounting error swallowed by the fan-out drain (issue #1674):
+an exception raised by the accounting path *itself*
+(`mark_sample_failed`, `checkpoint_sample`, the observability record
+call), not the original per-sample error. A non-empty list means the
+affected samples appear in neither the succeeded nor the failed
+accounting for that step.
+
+| Field | Type | Description |
+|---|---|---|
+| `step` | `str` | DAG step the drain was sweeping when the accounting path raised. |
+| `sample_id` | `str` | Sample whose accounting was lost (`"<unknown>"` when the future could not be mapped). |
+| `error` | `str` | Stringified exception (truncated to 500 chars). |
 
 ## Lifecycle fields
 

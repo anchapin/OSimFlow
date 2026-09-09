@@ -79,6 +79,7 @@ Below is a practitioner-oriented walk-through of every field.
 | `chaos_schedule` | `str` | Active chaos schedule (issue #1191; §2.11). |
 | `circuit_breaker_states` | `object` | Final circuit-breaker state per breaker name (issue #1191; §2.12). |
 | `alerts_fired` | `array` | Alerts dispatched, with `delivery_status` per alert (issues #1191, #1308; §2.13). |
+| `accounting_errors` | `array` | Fan-out drain failures where the failure-accounting path itself raised — always present, `[]` when none (issue #1674; §2.14). |
 | `paused_at` | `float` | Unix epoch when the campaign was paused — present only when paused (issue #553). |
 | `error_summary` | `str` | Campaign-level error message — present only when the campaign failed (issue #737). |
 
@@ -382,6 +383,29 @@ One entry per alert dispatched by `AlertManager` (issue #1191; the
 `"no_destinations"` (no destinations configured). A `"failed"` status
 means the problem was detected but nobody was told — check your webhook
 /email configuration.
+
+### 2.14 `accounting_errors` — samples lost from the succeeded/failed books
+
+One entry per failure-accounting error swallowed by the fan-out drain
+(issue #1674). These are exceptions raised by the accounting path
+*itself* (`mark_sample_failed`, `checkpoint_sample`, the observability
+record) — not the original per-sample error, which was already routed
+through `mark_sample_failed`. A non-empty list means those samples
+appear in neither `succeeded` nor `failed` accounting:
+
+```json
+"accounting_errors": [
+  {
+    "step": "RUN_OPENSTUDIO_SIM",
+    "sample_id": "sample_0042",
+    "error": "OSError: [Errno 28] No space left on device: '.../jobqueue.json'"
+  }
+]
+```
+
+Always present (`[]` when clean). Treat any entry as an operations
+signal — the campaign continued, but `run.json`'s per-sample books are
+incomplete for that step.
 
 ---
 
