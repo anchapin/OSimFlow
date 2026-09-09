@@ -66,10 +66,22 @@ Legend:
   `aggregated_results.csv`, `failed_simulations.csv`, KPI JSONs,
   `plots/`, plus `run.json` with all DAG steps recorded).
 
+> **Matrix ↔ workflow sync (issue #1701).** The `Trigger` column is
+> derived from each `<substrate>-e2e.yml` workflow's `on:` block:
+> `nightly` requires a `schedule:` cron, `dispatch` requires
+> `workflow_dispatch:`, `release-required` requires the workflow (or
+> a CI gate job) to run on `branches: [release/**]`. Today the
+> mapping is **manually maintained** — review the workflow's `on:`
+> block (or run `python tools/check_docs_sync.py` for the docs gate)
+> when you touch a row, and flag any drift in the PR. A
+> workflow-vs-matrix contract check (issue #1701 follow-up) is the
+> ideal long-term enforcement; until then, contributors are the
+> contract.
+
 | # | Substrate | Real-E2E test | Gate | Trigger | CI workflow | Contract |
 |---|-----------|---------------|------|---------|-------------|----------|
 | 1 | LocalExecutor | `tests/integration/test_local_executor.py` | n/a (always runs) | `pr` | `ci.yml` (test) | 4-artifact + run.json |
-| 2 | Slurm (real cluster) | `tests/integration/test_slurm_real_cluster.py` | `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH | `nightly` / `dispatch` | `.github/workflows/slurm-e2e.yml` | 4-artifact + run.json + structural JOBID proof (#941) |
+| 2 | Slurm (real cluster) | `tests/integration/test_slurm_real_cluster.py` | `OSIMFLOW_SLURM_E2E=1` + `sbatch`/`srun` on PATH | `dispatch` (self-hosted `[self-hosted, slurm]` runner — no cron; deliberate so the runner never queues without an explicit operator action) | `.github/workflows/slurm-e2e.yml` | 4-artifact + run.json + structural JOBID proof (#941) |
 | 3 | AWS Batch | `tests/integration/test_aws_batch_real.py` | `OSIMFLOW_AWS_BATCH_E2E=1` + queue/job-def/region env vars | `nightly` / `dispatch` | `.github/workflows/aws-batch-e2e.yml` | 4-artifact + run.json + executor=aws_batch (#942) |
 | 4 | AWS Batch cache-warm | `tests/integration/test_aws_batch_cache_resume.py` | `OSIMFLOW_AWS_BATCH_E2E=1` + S3 result-storage env vars | `nightly` / `dispatch` | `.github/workflows/aws-batch-e2e.yml` | cold + warm cache HIT on re-run (#960) |
 | 4b | AWS Batch real `openstudio.cli` in `nrel/openstudio` container | `tests/integration/test_aws_batch_real_openstudio.py` | `OSIMFLOW_AWS_BATCH_E2E=1` + `OSIMFLOW_AWS_BATCH_REAL_OPENSTUDIO=1` + `OSIMFLOW_AWS_BATCH_QUEUE` + `OSIMFLOW_AWS_BATCH_JOB_DEFINITION` + `OSIMFLOW_AWS_REGION`; job-def image must be `nrel/openstudio:<v>` | `nightly` / `dispatch` (`aws-batch-real-openstudio-e2e` job) | `.github/workflows/aws-batch-e2e.yml` | 4-artifact + run.json + real `eplusout.sql` (valid EnergyPlus tables) + executor=aws_batch (#942, #1472) |
