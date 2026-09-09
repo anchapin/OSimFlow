@@ -534,8 +534,11 @@ name in this section.
 - `osimflow/jobqueue.py` — filesystem-based `JobQueue`
   (crash recovery).
 - `osimflow/monitoring.py` — `RunTrace` (includes
-  `chaos_schedule`, `circuit_breaker_states`, `alerts_fired`) +
-  `StepTrace` + `record_alert()`; writes `run.json`.
+  `chaos_schedule`, `circuit_breaker_states`, `alerts_fired`,
+  `accounting_errors`) + `StepTrace` + `record_alert()` +
+  `record_accounting_error()` (issue #1674 — fan-out drain
+  accounting-failure counter surfaced in `run.json`); writes
+  `run.json`.
 - `osimflow/observability.py` — `ObservabilityBackend` ABC +
   `NullBackend`, `CloudWatchBackend`, `PrometheusBackend`, `OpenTelemetryBackend`
   + `new_trace_id` + `record_circuit_breaker_event`.

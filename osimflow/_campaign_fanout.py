@@ -508,30 +508,8 @@ def submit_and_await_all(
     # so the pool parallelism effectively controls how many samples
     # we wait for at the same time.
     def _drain_future(future: concurrent.futures.Future[str]) -> None:
-        """Collect one completed fan-out future (issue #1539).
-
-        A CampaignAbortError raised inside an _await_one worker
-        thread (3-strike checkpoint-failure abort, issue #739 /
-        #1539) must cross the thread boundary: re-raise it so the
-        campaign aborts instead of silently completing while its
-        monitoring plane cannot persist run.json. Cancel
-        not-yet-started futures so no new samples are awaited.
-        """
-        try:
-            future.result()
-        except CampaignAbortError:
-            log.error(
-                "%s fan-out aborted after consecutive checkpoint failures",
-                step_name,
-            )
-            for f in futures:
-                f.cancel()
-            raise
-        # CancelledError is a BaseException (not Exception), so we must
-        # suppress it explicitly here — it is raised when a future was
-        # cancelled via f.cancel() during a cancellation sweep.
-        except (Exception, concurrent.futures.CancelledError):
-            pass
+        """Delegate to :func:`_drain_fanout_future` with this fan-out's future→sid mapping."""
+        _drain_fanout_future(deps, futures, future, step_name)
 
     # Issue #1538: the pool is managed explicitly (try/finally) instead
     # of a ``with`` block so the cancellation path can bound its drain.
@@ -563,6 +541,85 @@ def submit_and_await_all(
             # completion drains naturally; the abort path must not
             # leak threads either).
             pool.shutdown(wait=True)
+
+
+def _drain_fanout_future(
+    deps: FanoutDeps,
+    futures: dict[concurrent.futures.Future[str], str],
+    future: concurrent.futures.Future[str],
+    step_name: str,
+) -> None:
+    """Collect one completed fan-out future (issues #1539 / #1674).
+
+    A CampaignAbortError raised inside an ``_await_one`` worker
+    thread (3-strike checkpoint-failure abort, issue #739 / #1539)
+    must cross the thread boundary: re-raise it so the campaign
+    aborts instead of silently completing while its monitoring plane
+    cannot persist run.json. Cancel not-yet-started futures so no
+    new samples are awaited.
+
+    Every other exception carried by the future was raised by the
+    per-sample accounting itself — the ``mark_sample_failed``
+    failure-recording path (job-queue ``mark_failed`` hitting a
+    filesystem error, ``checkpoint_sample`` raising a non-abort
+    error, the observability ``record_sample_status`` raise) or the
+    success-path ``checkpoint_sample`` / recovery bookkeeping. The
+    sample then appears in *neither* the succeeded nor the failed
+    accounting (issue #1674): log it at ERROR with the sample id
+    and record it on the trace so run.json surfaces the hole
+    (``RunTrace.accounting_errors``) instead of silently dropping
+    the sample. Suppression semantics are unchanged — the drain
+    loop must survive accounting failures — but nothing is
+    swallowed silently any more.
+
+    ``CancelledError`` keeps its #1538 suppression semantics (a
+    future cancelled by the cancellation sweep must not fail the
+    drain): a genuine campaign cancel logs at DEBUG and is still
+    suppressed, while an unexpected cancellation (no cancel flag
+    set) is treated like the accounting errors above.
+    """
+    sid = futures.get(future, "<unknown>")
+    try:
+        future.result()
+    except CampaignAbortError:
+        log.error(
+            "%s fan-out aborted after consecutive checkpoint failures",
+            step_name,
+        )
+        for f in futures:
+            f.cancel()
+        raise
+    # CancelledError is a BaseException (not Exception), so it must
+    # be suppressed explicitly here — it is raised when a future was
+    # cancelled via f.cancel() during a cancellation sweep.
+    except concurrent.futures.CancelledError as e:
+        if deps.cancel_requested():
+            # Genuine campaign cancel (#1538 sweep): still suppress,
+            # but leave a debug breadcrumb instead of pure silence.
+            log.debug(
+                "%s fan-out future for sample %s cancelled by cancellation sweep",
+                step_name,
+                sid,
+            )
+            return
+        log.error(
+            "%s fan-out future for sample %s cancelled unexpectedly: %s",
+            step_name,
+            sid,
+            e,
+            exc_info=True,
+        )
+        deps.trace.record_accounting_error(step_name, sid, str(e))
+    except Exception as e:  # noqa: BLE001 — drain must survive accounting failures
+        log.error(
+            "%s fan-out: failure accounting for sample %s itself raised "
+            "(sample missing from succeeded/failed accounting): %s",
+            step_name,
+            sid,
+            e,
+            exc_info=True,
+        )
+        deps.trace.record_accounting_error(step_name, sid, str(e))
 
 
 def _issue_fanout_cancel(

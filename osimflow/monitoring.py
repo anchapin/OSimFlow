@@ -168,6 +168,18 @@ class RunTrace:
         # Alerts fired (issue #1191). One dict per alert dispatched with
         # event_type, severity, and delivery_status keys.
         self.alerts_fired: list[dict[str, object]] | None = None
+        # Failure-accounting errors (issue #1674). One dict per
+        # exception swallowed by the fan-out drain loop because the
+        # failure-recording path itself raised (job-queue
+        # ``mark_failed`` filesystem error, non-abort
+        # ``checkpoint_sample`` raise, observability
+        # ``record_sample_status`` raise). Such a sample appears in
+        # neither the succeeded nor failed accounting, so run.json
+        # must surface the hole explicitly instead of silently
+        # dropping the sample. Appended from the fan-out drain loop
+        # (campaign thread) — plain ``list.append`` is atomic and the
+        # drain is sequential.
+        self.accounting_errors: list[dict[str, object]] = []
         self.status: str = "running"  # "running", "success", "cancelled", "failed", "paused"
         # Timestamp when the campaign was paused (None if not paused).
         self.paused_at: float | None = None
@@ -276,6 +288,24 @@ class RunTrace:
             }
         )
 
+    def record_accounting_error(self, step: str, sample_id: str, error: str) -> None:
+        """Record a failure-accounting error swallowed by the fan-out drain (issue #1674).
+
+        ``error`` is the stringified exception raised by the
+        failure-recording path itself (not the original per-sample
+        error, which was already routed through
+        ``mark_sample_failed``). Stored as a plain dict so the trace
+        stays JSON-friendly and run.json shows which samples went
+        missing from the succeeded/failed accounting.
+        """
+        self.accounting_errors.append(
+            {
+                "step": step,
+                "sample_id": sample_id,
+                "error": error[:500],
+            }
+        )
+
     # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
@@ -338,6 +368,12 @@ class RunTrace:
         # so downstream tooling can rely on the key — the value is
         # ``[]`` when chaos was never enabled or never fired.
         d["chaos_invocations"] = list(self.chaos_invocations)
+        # Failure-accounting errors (issue #1674). Always present as
+        # a list so downstream tooling can rely on the key — the
+        # value is ``[]`` when no accounting path raised; a non-empty
+        # list means those samples are missing from both the
+        # succeeded and failed accounting.
+        d["accounting_errors"] = list(self.accounting_errors)
         # Chaos schedule (issue #1191). Present when chaos is configured.
         if self.chaos_schedule is not None:
             d["chaos_schedule"] = self.chaos_schedule

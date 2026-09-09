@@ -16,6 +16,7 @@ delegating ``Campaign._submit_and_await_all``.
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import threading
 import time
 from concurrent.futures import Future
@@ -28,11 +29,13 @@ import pytest
 from osimflow import CampaignConfig
 from osimflow._campaign_fanout import (
     FanoutDeps,
+    _drain_fanout_future,
     compute_await_deadline,
     mark_sample_failed,
     submit_and_await_all,
 )
 from osimflow._campaign_lifecycle import CampaignPauseRequested
+from osimflow._campaign_sample_trace import CampaignAbortError
 from osimflow.executors import Handle
 from osimflow.monitoring import RunTrace, WorkerRecoveryManager
 
@@ -376,6 +379,225 @@ class TestSubmitAndAwaitAll:
         deps, spies = _deps(cfg, outdir)
         submit_and_await_all(deps, {}, "RUN_OPENSTUDIO_SIM")
         spies["job_queue"].enqueue.assert_not_called()
+
+
+class TestDrainFutureAccountingErrors:
+    """Issue #1674: an accounting path that itself raises must not vanish.
+
+    ``_drain_fanout_future`` used to swallow every non-abort
+    exception with a bare ``pass`` — a ``mark_sample_failed``
+    filesystem error, a non-abort ``checkpoint_sample`` raise, or an
+    observability ``record_sample_status`` raise left the sample in
+    neither the succeeded nor the failed accounting. These tests pin
+    the ERROR log with the sample id, the ``RunTrace.accounting_errors``
+    counter, and the preserved cancel/abort semantics.
+    """
+
+    def test_mark_failed_raising_is_logged_and_counted(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir, max_workers=2)
+
+        def _raising_mark_failed(sid: str, step: str, err: BaseException, tid: str) -> None:
+            raise OSError("job-queue filesystem error")
+
+        deps.mark_sample_failed = _raising_mark_failed  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.ERROR, logger="osimflow.campaign"):
+            submit_and_await_all(
+                deps,
+                {
+                    "sample_0": (
+                        _make_failing_handle(RuntimeError("simulator crashed")),
+                        MagicMock(),
+                    )
+                },
+                "RUN_OPENSTUDIO_SIM",
+            )
+
+        # The accounting failure is logged at ERROR with the sample id.
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any(
+            "sample_0" in r.getMessage() and "accounting" in r.getMessage() for r in error_records
+        ), [r.getMessage() for r in error_records]
+        # And recorded on the trace so run.json surfaces the hole.
+        errors = spies["trace"].accounting_errors
+        assert len(errors) == 1
+        assert errors[0]["sample_id"] == "sample_0"
+        assert errors[0]["step"] == "RUN_OPENSTUDIO_SIM"
+        assert "job-queue filesystem error" in errors[0]["error"]
+
+    def test_successful_samples_unaffected(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir, max_workers=2)
+
+        def _raising_mark_failed(sid: str, step: str, err: BaseException, tid: str) -> None:
+            raise OSError("job-queue filesystem error")
+
+        deps.mark_sample_failed = _raising_mark_failed  # type: ignore[method-assign]
+
+        ok_on_success = MagicMock()
+        with caplog.at_level(logging.ERROR, logger="osimflow.campaign"):
+            submit_and_await_all(
+                deps,
+                {
+                    "sample_0": (_make_ok_handle(Path("/tmp/r0")), ok_on_success),
+                    "sample_1": (
+                        _make_failing_handle(RuntimeError("simulator crashed")),
+                        MagicMock(),
+                    ),
+                },
+                "RUN_OPENSTUDIO_SIM",
+            )
+
+        # The successful sample completed normally.
+        ok_on_success.assert_called_once()
+        spies["job_queue"].mark_completed.assert_called_once_with("sample_0_RUN_OPENSTUDIO_SIM")
+        # Exactly one accounting error — for the failing sample only.
+        errors = spies["trace"].accounting_errors
+        assert len(errors) == 1
+        assert errors[0]["sample_id"] == "sample_1"
+
+    def test_checkpoint_raising_on_success_path_counted(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A non-abort ``checkpoint_sample`` raise on the success path
+        (after the try/except, outside the failure handler) also lands
+        in ``_drain_fanout_future``'s ``except Exception`` arm."""
+
+        def _raising_checkpoint(sid: str) -> None:
+            raise OSError("disk full")
+
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir, max_workers=2)
+        deps.checkpoint_sample = _raising_checkpoint  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.ERROR, logger="osimflow.campaign"):
+            submit_and_await_all(
+                deps,
+                {"sample_0": (_make_ok_handle(Path("/tmp/r0")), MagicMock())},
+                "RUN_OPENSTUDIO_SIM",
+            )
+
+        assert any("sample_0" in r.getMessage() for r in caplog.records), [
+            r.getMessage() for r in caplog.records
+        ]
+        errors = spies["trace"].accounting_errors
+        assert len(errors) == 1
+        assert errors[0]["sample_id"] == "sample_0"
+        assert "disk full" in errors[0]["error"]
+
+    def test_campaign_cancel_suppressed_at_debug(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """#1538 sweep semantics: a genuine campaign cancel is still
+        suppressed (no raise, no accounting error) — but no longer
+        completely silent."""
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir)
+        spies["flags"]["cancel"] = True
+
+        fut: concurrent.futures.Future[str] = concurrent.futures.Future()
+        assert fut.cancel() is True  # a pending future cancels cleanly
+
+        with caplog.at_level(logging.DEBUG, logger="osimflow.campaign"):
+            _drain_fanout_future(deps, {fut: "sample_0"}, fut, "RUN_OPENSTUDIO_SIM")
+
+        assert spies["trace"].accounting_errors == []
+        assert any("cancellation sweep" in r.getMessage() for r in caplog.records), [
+            r.getMessage() for r in caplog.records
+        ]
+
+    def test_unexpected_cancellation_logged_and_counted(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A cancelled future with NO cancel flag set is unexpected —
+        the sample vanished from accounting, so it is logged at ERROR
+        and counted like the other accounting errors."""
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir)
+        assert spies["flags"]["cancel"] is False
+
+        fut: concurrent.futures.Future[str] = concurrent.futures.Future()
+        assert fut.cancel() is True
+
+        with caplog.at_level(logging.ERROR, logger="osimflow.campaign"):
+            _drain_fanout_future(deps, {fut: "sample_0"}, fut, "RUN_OPENSTUDIO_SIM")
+
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("sample_0" in r.getMessage() for r in error_records)
+        errors = spies["trace"].accounting_errors
+        assert len(errors) == 1
+        assert errors[0]["sample_id"] == "sample_0"
+
+    def test_unknown_future_drained_without_crash(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A future missing from the mapping still drains — the sid
+        falls back to ``<unknown>`` instead of raising."""
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir)
+
+        fut: concurrent.futures.Future[str] = concurrent.futures.Future()
+        fut.set_exception(RuntimeError("orphan accounting error"))
+
+        with caplog.at_level(logging.ERROR, logger="osimflow.campaign"):
+            _drain_fanout_future(deps, {}, fut, "RUN_OPENSTUDIO_SIM")
+
+        errors = spies["trace"].accounting_errors
+        assert len(errors) == 1
+        assert errors[0]["sample_id"] == "<unknown>"
+
+    def test_campaign_abort_error_still_reraises(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """The #1539 abort propagation is unchanged: the drain re-raises
+        CampaignAbortError (and cancels sibling futures) instead of
+        logging-and-counting it."""
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        deps, spies = _deps(cfg, outdir)
+
+        fut: concurrent.futures.Future[str] = concurrent.futures.Future()
+        fut.set_exception(CampaignAbortError("3-strike checkpoint failure"))
+        sibling: concurrent.futures.Future[str] = concurrent.futures.Future()
+
+        with pytest.raises(CampaignAbortError):
+            _drain_fanout_future(
+                deps, {fut: "sample_0", sibling: "sample_1"}, fut, "RUN_OPENSTUDIO_SIM"
+            )
+
+        # Sibling futures were cancelled by the abort branch.
+        assert sibling.cancelled()
+        # The abort is NOT counted as an accounting error — it
+        # propagates to the campaign's own abort handling.
+        assert spies["trace"].accounting_errors == []
 
 
 class _BlockingHandle(Handle):
