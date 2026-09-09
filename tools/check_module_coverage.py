@@ -137,6 +137,8 @@ FLOORS: dict[str, float] = {
     "osimflow/_campaign_epw.py": 88.52,  # measured 89.52%
     "osimflow/_campaign_fanout.py": 82.94,  # measured 83.94% (#1542; fanout-oracle subset — full gate measures higher)
     "osimflow/_campaign_hooks.py": 71.17,  # measured 72.17%
+    "osimflow/_campaign_kpis.py": 76.00,  # measured 77.00% (issue #1679; EXTRACT_KPIS step + worker direct-to-storage publish extracted from Campaign)
+    "osimflow/_campaign_optimization.py": 76.00,  # measured 77.00% (issue #1679; generational loop + Pareto persistence extracted from Campaign)
     "osimflow/_campaign_lifecycle.py": 77.81,  # measured 78.81%
     "osimflow/_campaign_observability.py": 90.39,  # measured 91.39%
     "osimflow/_campaign_quota.py": 96.94,  # measured 97.94%

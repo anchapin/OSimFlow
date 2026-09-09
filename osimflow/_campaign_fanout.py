@@ -272,6 +272,94 @@ def compute_await_deadline(cfg: CampaignConfig, step_name: str) -> float | None:
     return max(candidates)
 
 
+class _ConsumerQueueLike(Protocol):
+    """Structural slice of :class:`~osimflow.taskqueue.ConsumerQueue`
+    used by :func:`dispatch_step_work`.
+
+    The Campaign's ``task_queue`` attribute is typed
+    :class:`~osimflow.taskqueue.ConsumerQueue | None`; a Protocol
+    keeps this helper decoupled from that class so the fanout
+    module can be imported without pulling in the Dask dependency
+    graph (issue #1542 rule).
+    """
+
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Handle: ...
+
+
+class _ExecutorLike(Protocol):
+    """Structural slice of :class:`~osimflow.executors.BaseExecutor`
+    used by :func:`dispatch_step_work`.
+
+    Mirrors the ``_ConsumerQueueLike`` Protocol above: keeps the
+    fanout helper decoupled from the executor package and lets
+    the module-level helper type-check without an import cycle.
+
+    The ``submit`` signature is intentionally minimal (positional
+    ``fn`` + ``*args``/``**kwargs``) so every concrete
+    :class:`~osimflow.executors.BaseExecutor` subclass
+    — :class:`LocalExecutor` / :class:`SlurmExecutor` /
+    :class:`AWSBatchExecutor` / :class:`NomadExecutor` /
+    :class:`AzureBatchExecutor` / :class:`GoogleBatchExecutor` /
+    :class:`KubernetesExecutor` / :class:`PBSExecutor` /
+    :class:`DaskJobQueueExecutor` / :class:`DockerSwarmExecutor`
+    — each with its own per-substrate ``submit`` signature, is
+    accepted without per-executor Protocol shims.
+    """
+
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Handle: ...
+
+
+def dispatch_step_work(
+    *,
+    task_queue: _ConsumerQueueLike | None,
+    executor: _ExecutorLike,
+    fn: Callable[..., Any],
+    task_args: tuple[Any, ...],
+    task_kwargs: dict[str, Any],
+    exec_args: tuple[Any, ...],
+    exec_kwargs: dict[str, Any],
+) -> Handle:
+    """Submit one per-sample step to the configured substrate (issue #1679).
+
+    Consolidates the four hand-rolled ``if self.task_queue is not
+    None: ... else: self.executor.submit(...)`` branches the
+    per-sample fan-out steps (APPLY_PARAMETERS, the
+    RUN_OPENSTUDIO_SIM primary submit + auto-recovery resubmit, and
+    EXTRACT_KPIS) used to carry inline.
+
+    Picks ``task_queue.submit`` when set (the ``ConsumerQueue`` /
+    Dask-JobQueue code path — task-queue mode), otherwise calls
+    ``executor.submit`` directly with the executor-specific kwargs
+    (the ``BaseExecutor`` code path).  The two arg/kwargs surfaces
+    are intentionally separate: ``task_queue.submit`` takes the
+    BYOS work function's natural signature, while
+    ``executor.submit`` needs the executor-directive kwargs
+    (``cpus`` / ``memory_mb`` / ``time_min`` / ``container`` /
+    ``container_digest`` / ``result_hint`` / ``transport``) which
+    the task-queue path does not.
+
+    This helper does no fan-out itself — it returns the single
+    :class:`~osimflow.executors.Handle` the step then folds into
+    its existing ``submissions`` dict for
+    :func:`submit_and_await_all` to await in the normal way.
+    """
+    if task_queue is not None:
+        return task_queue.submit(fn, *task_args, **task_kwargs)
+    return executor.submit(fn, *exec_args, **exec_kwargs)
+
+
 def submit_and_await_all(
     deps: FanoutDeps,
     submissions: dict[str, tuple[Handle, Callable[[Any], None]]],

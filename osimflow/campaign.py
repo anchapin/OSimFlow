@@ -79,6 +79,9 @@ from ._campaign_fanout import (
     compute_await_deadline as _compute_await_deadline_impl,
 )
 from ._campaign_fanout import (
+    dispatch_step_work as _dispatch_step_work_impl,
+)
+from ._campaign_fanout import (
     mark_sample_failed as _mark_sample_failed_impl,
 )
 from ._campaign_fanout import (
@@ -92,6 +95,7 @@ from ._campaign_hooks import (
     run_finalize_script,
     run_init_script,
 )
+from ._campaign_kpis import CampaignKpisMixin
 from ._campaign_lifecycle import (
     CampaignLifecycle,
     CampaignPauseRequested,
@@ -104,6 +108,7 @@ from ._campaign_lifecycle import (
     cancel_registry as _cancel_registry,
 )
 from ._campaign_observability import ObservabilityManager
+from ._campaign_optimization import CampaignOptimizationMixin
 from ._campaign_quota import CampaignQuotaGuard, QuotaExceededError
 from ._campaign_sample_trace import CampaignAbortError, CampaignSampleTraceRecorder
 from ._campaign_sharding import CampaignSharding
@@ -148,12 +153,10 @@ from .mlflow_hook import (
     maybe_start_mlflow_run,
 )
 from .monitoring import (
-    GenerationTrace,
     RunTrace,
     WorkerRecoveryManager,
     sample_log_paths,
 )
-from .pareto import ParetoFront, ParetoSolution
 from .registry import CampaignRegistry
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import ConsumerQueue
@@ -164,7 +167,6 @@ from .work import (
     extract_kpis,
     generate_plots,
     preflight_run_model,
-    publish_kpi_results,
     run_openstudio_sim,
 )
 
@@ -598,7 +600,7 @@ def _verify_cosign_or_raise(cfg: CampaignConfig) -> None:
     )
 
 
-class Campaign(CampaignAnalysisMixin):
+class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMixin):
     def __init__(
         self,
         cfg: CampaignConfig,
@@ -1276,6 +1278,46 @@ class Campaign(CampaignAnalysisMixin):
             step_name,
             recovery_manager=recovery_manager,
             resubmit_callback=resubmit_callback,
+        )
+
+    def _dispatch_step_work(
+        self,
+        *,
+        fn: Callable[..., Any],
+        task_args: tuple[Any, ...],
+        task_kwargs: dict[str, Any],
+        exec_args: tuple[Any, ...],
+        exec_kwargs: dict[str, Any],
+    ) -> Handle:
+        """Submit one per-sample step to the configured substrate (issue #1679).
+
+        Thin delegator to
+        :func:`osimflow._campaign_fanout.dispatch_step_work`.  See
+        that helper for the full behavioural contract.  Picks
+        ``task_queue.submit`` when set, otherwise
+        ``executor.submit``; the two arg/kwargs surfaces are
+        intentionally separate because the task-queue path takes the
+        BYOS work function's natural signature while the
+        executor path needs the executor-directive kwargs
+        (``cpus`` / ``memory_mb`` / ``time_min`` / ``container`` /
+        ``container_digest`` / ``result_hint`` / ``transport``).
+
+        Used by ``step_apply_parameters``,
+        ``step_run_openstudio_sim`` (primary fan-out and the
+        auto-recovery resubmit callback), and the EXTRACT_KPIS step
+        in :class:`osimflow._campaign_kpis.CampaignKpisMixin` —
+        the four hand-rolled ``if self.task_queue is not None: ...
+        else: self.executor.submit(...)`` branches collapse into
+        this single helper (issue #1679 acceptance criterion).
+        """
+        return _dispatch_step_work_impl(
+            task_queue=self.task_queue,
+            executor=self.executor,
+            fn=fn,
+            task_args=task_args,
+            task_kwargs=task_kwargs,
+            exec_args=exec_args,
+            exec_kwargs=exec_kwargs,
         )
 
     def _record_costs(self, step_name: str, cost_usd: float, spot_savings_usd: float) -> None:
@@ -2197,331 +2239,6 @@ class Campaign(CampaignAnalysisMixin):
 
         return self._finalize_full_campaign(t0, all_kpi_files, last_simulated, last_samples)
 
-    def _run_one_generation(  # noqa: PLR0912
-        self,
-        algo: BaseAlgorithm,
-        history: list[dict[str, Any]],
-        generation: int,
-    ) -> tuple[list[SampleSpec], list[Path], SampleDict] | None:
-        """Run one generation of the fan-out DAG.
-
-        Returns (samples, kpi_files, simulated_dirs), or ``None`` if
-        the algorithm has converged and the loop should stop.
-
-        The feedback loop (issue #270):
-
-        1. For generation > 0, check convergence. If converged, stop.
-        2. Call ``algo.observe(history)`` — this reads KPI results from
-           previous generations and updates the optimizer's internal
-           state (best params, proposed samples, etc.).
-        3. Call ``step_generate_samples(algo)`` — for iterative algorithms,
-           ``algo.generate_samples()`` reads the internal state set by
-           ``observe()`` and returns the proposed samples. For single-shot
-           algorithms, it always returns LHS samples.
-        4. Run the fan-out DAG: apply → simulate → extract KPIs.
-        5. Record per-generation monitoring (issue #270).
-        """
-        gen_t0 = time.time()
-
-        # Convergence check: after the first generation, ask the
-        # algorithm whether we should continue.
-        if generation > 0:
-            if algo.is_converged(history):
-                log.info(
-                    "algorithm %s converged at generation %d; stopping loop",
-                    algo.name(),
-                    generation,
-                )
-                return None
-            # observe() reads KPI history and updates optimizer state.
-            # The returned samples are also stored in the explicit
-            # _pending_proposed_samples slot for verifiable contract
-            # (issue #332).
-            new_samples = algo.observe(history)
-            if new_samples:
-                cast_samples(new_samples)
-                # Verify observe() return matches the explicit slot
-                # (issue #332). This catches bugs where an algorithm
-                # sets internal state but fails to return.
-                pending = getattr(algo, "_pending_proposed_samples", None)
-                if pending is not None and pending != new_samples:
-                    log.error(
-                        "observe() return value does not match "
-                        "_pending_proposed_samples for algorithm %s",
-                        algo.name(),
-                    )
-            else:
-                # verify there is actually something to reuse before continuing
-                pending = getattr(algo, "_pending_proposed_samples", None)
-                if not pending:
-                    raise RuntimeError(
-                        f"observe() returned empty samples at generation {generation} "
-                        f"for algorithm {algo.name()!r} and no previous samples are "
-                        "available; cannot continue iterative optimisation"
-                    )
-                log.warning(
-                    "observe() returned empty samples at generation %d; reusing %d previous samples",
-                    generation,
-                    len(pending),
-                )
-
-        samples = self.step_generate_samples(algo, generation=generation)
-        samples = self._inject_dp_overrides(samples)
-        samples = self._apply_sharding(samples, generation=generation)
-        samples_link = self._samples_manifest_path()
-        samples_link.parent.mkdir(parents=True, exist_ok=True)
-        safe_json_dumps({"samples": samples}, samples_link, indent=2, raise_on_error=True)
-        self._latest_samples_file = samples_link
-
-        # Per-generation state namespace (issue #1392).  Each step's
-        # ``inputs_signature`` callable reads from this and each step's
-        # ``outputs_signature`` callable writes back into it.  ``samples``
-        # is seeded here from the pre-loop ``step_generate_samples`` call;
-        # ``parameterized``/``simulated``/``kpi_files``/``aggregated`` are
-        # populated by their respective ``outputs_signature`` as the
-        # dispatcher iterates.
-        gen_state = SimpleNamespace(
-            samples=samples,
-            parameterized=None,
-            simulated={},
-            kpi_files=[],
-            aggregated={},
-        )
-
-        for step_name, step_info in _STEP_DEPENDENCIES.items():
-            if step_info.condition is not None and not step_info.condition(
-                self, algo, generation=generation
-            ):
-                log.debug("step %s skipped (condition returned False)", step_name)
-                continue
-
-            self._verify_step_inputs(step_name)
-            step_method = getattr(self, step_info.method, None)
-            if step_method is None:
-                log.warning(
-                    "step method %r for %r not found; skipping", step_info.method, step_name
-                )
-                continue
-
-            self._maybe_inject_chaos(step_name, "before_step")
-
-            # Dispatcher consults ``inputs_signature``/``outputs_signature``
-            # instead of a hardcoded if/elif chain (issue #1392).  Each step
-            # declares its own arg tuple via ``inputs_signature``; each
-            # step captures its return value into ``gen_state`` via
-            # ``outputs_signature``.  New steps just register their own
-            # callables in ``_STEP_DEPENDENCIES`` — no dispatcher edit.
-            #
-            # A ``None`` ``inputs_signature`` means the step is configured
-            # in the table for monitoring / configuration purposes but is
-            # *not* dispatched by this loop (the legacy ``COMPUTE_*``
-            # steps are invoked explicitly in the post-loop code below;
-            # this preserves their pre-#1392 behaviour where the if/elif
-            # chain did not invoke them but still ran the
-            # before/after chaos hooks).
-            if step_info.inputs_signature is not None:
-                args: tuple[Any, ...] = step_info.inputs_signature(
-                    gen_state, self, algo, generation
-                )
-                result = step_method(*args)
-                if step_info.outputs_signature is not None:
-                    slot = step_info.outputs_signature(result)
-                    if slot is not None:
-                        slot_name, slot_value = slot
-                        setattr(gen_state, slot_name, slot_value)
-            else:
-                log.debug(
-                    "step %s has no inputs_signature; not invoked by dispatcher",
-                    step_name,
-                )
-
-            self._maybe_inject_chaos(step_name, "after_step")
-            log.debug("step %s completed", step_name)
-
-        # Mirror the per-generation state back to local variables for the
-        # post-loop code below (Sobol / UQ / Pareto / monitoring).
-        samples = gen_state.samples
-        simulated = gen_state.simulated
-        kpi_files = gen_state.kpi_files
-
-        # Sobol sensitivity indices (issue #346): compute after KPI extraction.
-        if self.cfg.algorithm == "sobol":
-            variables: dict[str, Any] = {}
-            if self.cfg.input_variables.exists():
-                with self.cfg.input_variables.open() as fh:
-                    raw = yaml.safe_load(fh)
-                    if isinstance(raw, dict):
-                        variables = raw
-            self.step_compute_sensitivity_indices(
-                samples, kpi_files, variables, generation=generation
-            )
-
-        # UQ analysis (issue #530): compute POF, CIs, and distribution summaries.
-        if self.cfg.algorithm == "uq":
-            uq_variables: dict[str, Any] = {}
-            if self.cfg.input_variables.exists():
-                with self.cfg.input_variables.open() as fh:
-                    raw = yaml.safe_load(fh)
-                    if isinstance(raw, dict):
-                        uq_variables = raw
-            self.step_compute_uq_indices(samples, kpi_files, uq_variables, generation=generation)
-
-        # Per-generation Pareto front persistence for multi-objective
-        # algorithms (issue #141).  When the algorithm reports
-        # is_multi_objective(), build ParetoSolution objects from the
-        # extracted KPIs and persist the front to outdir/pareto/gen_N.json.
-        if algo.is_multi_objective() and kpi_files:
-            self._persist_pareto_front(algo, samples, kpi_files, generation)
-
-        # Per-generation monitoring (issue #270).
-        gen_elapsed = time.time() - gen_t0
-        gen_samples = [s for s in self.trace.per_sample if s.generation == generation]
-        n_succeeded = sum(1 for s in gen_samples if s.status == "ok")
-        n_failed = sum(1 for s in gen_samples if s.status == "failed")
-        best_objective = self._extract_best_objective(algo, kpi_files)
-        self.trace.generation_done(
-            GenerationTrace(
-                generation=generation,
-                n_samples=len(samples),
-                n_succeeded=n_succeeded,
-                n_failed=n_failed,
-                converged=False,  # updated later if needed
-                best_objective=best_objective,
-                elapsed_s=round(gen_elapsed, 3),
-            )
-        )
-        log.info(
-            "generation %d complete: %d samples (%d ok, %d failed) in %.1fs",
-            generation,
-            len(samples),
-            n_succeeded,
-            n_failed,
-            gen_elapsed,
-        )
-
-        return samples, kpi_files, simulated
-
-    @staticmethod
-    def _extract_best_objective(
-        algo: BaseAlgorithm,
-        kpi_files: list[Path],
-    ) -> float | None:
-        """Extract the best objective value from KPI files.
-
-        For single-objective algorithms (DE, DA, PSO), reads the primary
-        KPI. For multi-objective (NSGA-II), returns None (use Pareto front
-        instead). The objective name is inferred from the algorithm's
-        default (``eui`` for DE/DA/PSO).
-        """
-        if algo.is_multi_objective():
-            return None
-        if not kpi_files:
-            return None
-        best: float | None = None
-        for kpi_path in kpi_files:
-            try:
-                data = json.loads(kpi_path.read_text())
-                kpis = data.get("kpis", {})
-                # Default objective is "eui" — matches DE/DA/PSO defaults.
-                val = kpis.get("eui")
-                if (
-                    val is not None
-                    and isinstance(val, (int, float))
-                    and (best is None or float(val) < best)
-                ):
-                    best = float(val)
-            except (json.JSONDecodeError, ValueError, TypeError):
-                continue
-        return best
-
-    def _persist_pareto_front(
-        self,
-        algo: BaseAlgorithm,
-        samples: list[SampleSpec],
-        kpi_files: list[Path],
-        generation: int,
-    ) -> None:
-        """Build/update the Pareto front and persist per-generation JSON.
-
-        Parameters
-        ----------
-        algo
-            The algorithm instance (must report ``is_multi_objective()``).
-        samples
-            The sample specs for this generation.
-        kpi_files
-            Extracted KPI JSON files (one per sample).
-        generation
-            0-based generation index — used in the output filename.
-        """
-        # Load existing front (if any) from the previous generation.
-        pareto_dir = self.cfg.outdir / "pareto"
-        pareto_path = pareto_dir / f"gen_{generation}.json"
-        front: ParetoFront | None = None
-
-        # Try to load from previous generation's file to carry forward
-        # non-dominated solutions.
-        if generation > 0:
-            prev_path = pareto_dir / f"gen_{generation - 1}.json"
-            if prev_path.exists():
-                try:
-                    front = ParetoFront.load(prev_path)
-                except Exception as exc:
-                    log.warning("could not load previous Pareto front: %s", exc, exc_info=True)
-
-        # Determine objective names from the first KPI file that has data.
-        objective_names: list[str] = []
-        for kpi_path in kpi_files:
-            try:
-                kpi_data = json.loads(kpi_path.read_text())
-                kpis = kpi_data.get("kpis", {})
-                objective_names = sorted(k for k, v in kpis.items() if isinstance(v, (int, float)))
-                if objective_names:
-                    break
-            except Exception:
-                continue
-
-        if not objective_names:
-            log.warning("no objective KPIs found; skipping Pareto front")
-            return
-
-        if front is None:
-            front = ParetoFront(objective_names=objective_names)
-
-        # Build ParetoSolution objects from samples + KPIs.
-        # Match by index (samples[i] -> kpi_files[i]) — this is the
-        # same correspondence the Campaign uses throughout.
-        new_solutions: list[ParetoSolution] = []
-        for i, sample in enumerate(samples):
-            if i >= len(kpi_files):
-                break
-            try:
-                kpi_data = json.loads(kpi_files[i].read_text())
-                kpis = kpi_data.get("kpis", {})
-                objectives = {k: float(v) for k, v in kpis.items() if isinstance(v, (int, float))}
-                parameters = {
-                    k: float(v) for k, v in sample["values"].items() if isinstance(v, (int, float))
-                }
-                new_solutions.append(
-                    ParetoSolution(
-                        sample_id=str(sample["sample_id"]),
-                        objectives=objectives,
-                        parameters=parameters,
-                        generation=generation,
-                    )
-                )
-            except Exception as exc:
-                log.warning(
-                    "could not build ParetoSolution for sample %s: %s",
-                    sample.get("sample_id"),
-                    exc,
-                    exc_info=True,
-                )
-
-        if new_solutions:
-            front.add_generation(new_solutions)
-            front.save(pareto_path)
-
     def _finalize_full_campaign(
         self,
         t0: float,
@@ -3116,32 +2833,30 @@ class Campaign(CampaignAnalysisMixin):
                 # sample outright.  ``max_retries<=0`` disables retry.  See
                 # issue #1394.  Documented in docs/user-guide.md
                 # §"--max-sample-retries: which DAG steps honor it".
-                if self.task_queue is not None:
-                    handle = self.task_queue.submit(
-                        self.apply_fn,
-                        template_pkg,
-                        ctx["resolved_params"],
-                        sid,
-                        apply_out_dir,
-                        max_retries=self.cfg.max_sample_retries,
-                    )
-                else:
-                    handle = self.executor.submit(
-                        self.apply_fn,
-                        template_pkg,
-                        ctx["resolved_params"],
-                        sid,
-                        apply_out_dir,
-                        name=f"apply_{sid}",
-                        cpus=1,
-                        memory_mb=512,
-                        time_min=5,
-                        container=self._python_container_image,
-                        container_digest=self._python_container_digest,
-                        result_hint=apply_out_dir,
-                        max_retries=self.cfg.max_sample_retries,
-                        transport=self._result_transport_config,
-                    )
+                # Issue #1679: the historical ``if self.task_queue is
+                # not None: ... else: self.executor.submit(...)`` branch
+                # is collapsed into ``_dispatch_step_work`` — same
+                # semantics, single source of truth for the dispatch
+                # contract.
+                handle = self._dispatch_step_work(
+                    fn=self.apply_fn,
+                    task_args=(template_pkg, ctx["resolved_params"], sid, apply_out_dir),
+                    task_kwargs={
+                        "max_retries": self.cfg.max_sample_retries,
+                    },
+                    exec_args=(template_pkg, ctx["resolved_params"], sid, apply_out_dir),
+                    exec_kwargs={
+                        "name": f"apply_{sid}",
+                        "cpus": 1,
+                        "memory_mb": 512,
+                        "time_min": 5,
+                        "container": self._python_container_image,
+                        "container_digest": self._python_container_digest,
+                        "result_hint": apply_out_dir,
+                        "max_retries": self.cfg.max_sample_retries,
+                        "transport": self._result_transport_config,
+                    },
+                )
 
                 # Build the on-success callback (captures per-sample context).
                 key = ctx["key"]
@@ -3359,32 +3074,27 @@ class Campaign(CampaignAnalysisMixin):
                     sid,
                     ctx["out_dir"],
                 )
-                if self.task_queue is not None:
-                    return self.task_queue.submit(
-                        run_openstudio_sim,
-                        ctx["mod_pkg"],
-                        sid,
-                        os_version,
-                        ctx["out_dir"],
-                        stdout_path=ctx["stdout_log"],
-                        stderr_path=ctx["stderr_log"],
-                        max_retries=self.cfg.max_sample_retries,
-                        timeout_s=self.cfg.byos_timeout_s,
-                        worker_id="local",
-                    )
-                else:
-                    # Use the shared kwargs builder (issue #1567) so the
-                    # resubmit path cannot silently drop ``timeout_s`` or
-                    # any other submit kwarg the primary path sets.
-                    return self.executor.submit(
-                        run_openstudio_sim,
-                        ctx["mod_pkg"],
-                        sid,
-                        os_version,
-                        ctx["out_dir"],
+                # Issue #1679: collapsed via ``_dispatch_step_work``.
+                # The executor kwargs builder (issue #1567) stays in
+                # place so the resubmit path cannot silently drop
+                # ``timeout_s`` or any other submit kwarg the primary
+                # path sets.
+                return self._dispatch_step_work(
+                    fn=run_openstudio_sim,
+                    task_args=(ctx["mod_pkg"], sid, os_version, ctx["out_dir"]),
+                    task_kwargs={
+                        "stdout_path": ctx["stdout_log"],
+                        "stderr_path": ctx["stderr_log"],
+                        "max_retries": self.cfg.max_sample_retries,
+                        "timeout_s": self.cfg.byos_timeout_s,
+                        "worker_id": "local",
+                    },
+                    exec_args=(ctx["mod_pkg"], sid, os_version, ctx["out_dir"]),
+                    exec_kwargs={
                         **self._build_run_sim_submit_kwargs(ctx, sid, os_version),
-                        transport=self._result_transport_config,
-                    )
+                        "transport": self._result_transport_config,
+                    },
+                )
 
         pending_items = list(pending.items())
         if pending_items:
@@ -3426,31 +3136,23 @@ class Campaign(CampaignAnalysisMixin):
                 # submit (below) — issue #1394.  Documented in
                 # docs/user-guide.md §"--max-sample-retries: which DAG steps
                 # honor it".
-                if self.task_queue is not None:
-                    handle = self.task_queue.submit(
-                        run_openstudio_sim,
-                        ctx["mod_pkg"],
-                        sid,
-                        os_version,
-                        ctx["out_dir"],
-                        stdout_path=ctx["stdout_log"],
-                        stderr_path=ctx["stderr_log"],
-                        max_retries=self.cfg.max_sample_retries,
-                        timeout_s=self.cfg.byos_timeout_s,
-                        worker_id="local",
-                    )
-                else:
-                    # Use the shared kwargs builder (issue #1567) so the
-                    # primary and resubmit paths stay in lock-step.
-                    handle = self.executor.submit(
-                        run_openstudio_sim,
-                        ctx["mod_pkg"],
-                        sid,
-                        os_version,
-                        ctx["out_dir"],
+                # Issue #1679: collapsed via ``_dispatch_step_work``.
+                handle = self._dispatch_step_work(
+                    fn=run_openstudio_sim,
+                    task_args=(ctx["mod_pkg"], sid, os_version, ctx["out_dir"]),
+                    task_kwargs={
+                        "stdout_path": ctx["stdout_log"],
+                        "stderr_path": ctx["stderr_log"],
+                        "max_retries": self.cfg.max_sample_retries,
+                        "timeout_s": self.cfg.byos_timeout_s,
+                        "worker_id": "local",
+                    },
+                    exec_args=(ctx["mod_pkg"], sid, os_version, ctx["out_dir"]),
+                    exec_kwargs={
                         **self._build_run_sim_submit_kwargs(ctx, sid, os_version),
-                        transport=self._result_transport_config,
-                    )
+                        "transport": self._result_transport_config,
+                    },
+                )
 
                 key = ctx["key"]
                 state = ctx["state"]
@@ -3576,274 +3278,6 @@ class Campaign(CampaignAnalysisMixin):
     def _coordinator_api_key(self) -> str | None:
         """Resolve an optional bearer token for Coordinator PATCH calls."""
         return os.environ.get("OSIMFLOW_API_KEY")
-
-    def _publish_sample_results(
-        self,
-        *,
-        sample_id: str,
-        index: int,
-        simulation_dir: Path,
-        kpi_path: Path | None,
-        exit_code: int,
-        status: str,
-    ) -> None:
-        """Push one sample's results directly to storage (issue #625).
-
-        Uploads ``kpis.json`` + an atomic ``_manifest.json`` to the configured
-        :class:`ResultStorage` backend and best-effort reports completion to
-        the Coordinator.  This is a no-op when no result storage is configured
-        or when the backend is :class:`LocalStorage` (local path unchanged).
-
-        Uses the **raw** synchronous backend (``ResultStorageUploader._storage``)
-        rather than the async upload queue, because the manifest must become
-        visible strictly after ``kpis.json`` — the async wrapper cannot
-        guarantee that ordering.
-        """
-        if self._result_storage is None:
-            return
-        # Access the raw sync backend that the async uploader wraps.
-        backend = getattr(self._result_storage, "_storage", None)
-        if backend is None:
-            return
-        try:
-            publish_kpi_results(
-                storage=backend,
-                campaign_id=self.trace.campaign_id,
-                sample_id=sample_id,
-                index=index,
-                simulation_dir=simulation_dir,
-                kpi_path=kpi_path,
-                exit_code=exit_code,
-                status=status,
-                archive_intermediates=self.cfg.archive_intermediates,
-                coordinator_url=self._coordinator_url(),
-                api_key=self._coordinator_api_key(),
-                allow_insecure_coordinator=bool(
-                    getattr(self.cfg, "allow_insecure_storage_endpoint", False)
-                ),
-            )
-        except OSError as exc:
-            # Storage failures must not abort the extract step; the manifest
-            # is telemetry/coordination, not the primary result.
-            log.warning(
-                "EXTRACT_KPIS: direct-to-storage publish failed for %s: %s",
-                sample_id,
-                exc,
-                exc_info=True,
-            )
-
-    def step_extract_kpis(  # noqa: PLR0912, PLR0915
-        self,
-        simulated: SampleDict,
-        generation: int = 0,
-    ) -> list[Path]:
-        """Fan-out: for each simulated sample, extract KPIs."""
-        t0 = time.time()
-
-        if self._check_cancel_requested():
-            raise KeyboardInterrupt("cancellation requested before EXTRACT_KPIS")
-
-        # Soft pause (issue #553): skip this step entirely if pause was requested.
-        if self._check_pause_requested():
-            self._write_paused_trace()
-            raise CampaignPauseRequested("pause requested before EXTRACT_KPIS")
-
-        out: list[Path] = []
-        n = len(simulated)
-        self.trace.step_started("EXTRACT_KPIS", total=n)
-
-        # --- Phase 1: cache check for all samples ---
-        pending: dict[str, dict[str, Any]] = {}
-        os_version = self.cfg.openstudio_version
-        for sid, sim_dir in simulated.items():
-            inputs_hash = sha256_of_dict(
-                {
-                    "sim_dir": str(sim_dir),
-                    "sid": sid,
-                    "os_version": os_version,
-                    # Issue #1082: include the KPI filter in the cache key so
-                    # that changing --kpis invalidates stale KPI JSON.
-                    "kpis": list(self.cfg.kpis) if self.cfg.kpis else [],
-                }
-            )
-            key = CacheKey(
-                step="EXTRACT_KPIS",
-                sample_id=sid,
-                openstudio_version=os_version,
-                inputs_sha256=inputs_hash,
-                code_sha256=self._code_hash_with_byos("byos_kpi"),
-                container_digest=self._python_container_digest,
-                generation=generation,
-            )
-            state = self._sample_state.setdefault(sid, {})
-            cached = self.cache.lookup(key)
-            if cached:
-                out.append(cached)
-                state["extract_exit_code"] = 0
-                state["extract_status"] = "cached"
-                self.trace.step_item_done("EXTRACT_KPIS", status="cached")
-                continue
-            kpi_dir = self.cfg.work_dir / "kpis"
-            kpi_dir.mkdir(parents=True, exist_ok=True)
-            pending[sid] = {
-                "sim_dir": sim_dir,
-                "kpi_dir": kpi_dir,
-                "key": key,
-                "state": state,
-                "os_version": os_version,
-            }
-
-        # --- Phase 2/3: bounded submit and await in chunks ---
-        pending_items = list(pending.items())
-        # Zero-based sample index within the campaign (issue #625 manifest field).
-        index_map: dict[str, int] = {sid: i for i, (sid, _c) in enumerate(pending_items)}
-        if pending_items:
-            chunk_size = self._fanout_submit_chunk_size(len(pending_items))
-        else:
-            chunk_size = 1  # unused when pending_items is empty, but avoids range(0,0,0)
-        submit_interval_s = self._fanout_submit_interval_s()
-        next_submit_at = 0.0
-        for chunk_start in range(0, len(pending_items), chunk_size):
-            if self._check_pause_requested():
-                break
-            # Quota enforcement (issue #1533): stop submitting new
-            # chunks once a hard resource-quota limit trips.  Samples
-            # already submitted run to completion; the skipped pending
-            # samples fall through to the failure recording below
-            # (mirroring the pause-break path).
-            if self._check_quota_exceeded():
-                break
-            submissions: dict[str, tuple[Handle, Callable[[Any], None]]] = {}
-            chunk = pending_items[chunk_start : chunk_start + chunk_size]
-            for sid, ctx in chunk:
-                if self._check_pause_requested():
-                    break
-                if submit_interval_s > 0.0:
-                    now = time.monotonic()
-                    if now < next_submit_at:
-                        time.sleep(next_submit_at - now)
-                    next_submit_at = max(next_submit_at, now) + submit_interval_s
-                # Chaos wiring (issue #1013): per-sample injection for the
-                # KPI extraction fan-out. No-op unless the schedule is
-                # ``per_sample``.
-                self._maybe_inject_chaos("EXTRACT_KPIS", "per_sample", target_id=sid)
-                handle: Handle
-                # EXTRACT_KPIS consumes ``--max-sample-retries`` at both
-                # ``self.task_queue.submit`` and ``self.executor.submit``
-                # below — issue #1394.  Documented in docs/user-guide.md
-                # §"--max-sample-retries: which DAG steps honor it".
-                if self.task_queue is not None:
-                    handle = self.task_queue.submit(
-                        self.extract_fn,
-                        ctx["sim_dir"],
-                        sid,
-                        ctx["kpi_dir"],
-                        openstudio_version=ctx["os_version"],
-                        kpis=self.cfg.kpis,
-                        max_retries=self.cfg.max_sample_retries,
-                    )
-                else:
-                    handle = self.executor.submit(
-                        self.extract_fn,
-                        ctx["sim_dir"],
-                        sid,
-                        ctx["kpi_dir"],
-                        openstudio_version=ctx["os_version"],
-                        kpis=self.cfg.kpis,
-                        name=f"kpi_{sid}",
-                        cpus=1,
-                        memory_mb=1024,
-                        time_min=10,
-                        container=self._python_container_image,
-                        container_digest=self._python_container_digest,
-                        result_hint=Path(ctx["kpi_dir"]) / f"kpi_{sid}.json",
-                        max_retries=self.cfg.max_sample_retries,
-                        transport=self._result_transport_config,
-                    )
-
-                key = ctx["key"]
-                state = ctx["state"]
-                # Bind loop variables so each closure captures its own sample.
-                _sim_dir = ctx["sim_dir"]
-                _sample_index = index_map[sid]
-
-                def _on_success(
-                    result_path: Any,
-                    _sid: str = sid,
-                    _key: CacheKey = key,
-                    _state: dict[str, object] = state,
-                    _sim_dir: Path = _sim_dir,
-                    _index: int = _sample_index,
-                ) -> None:
-                    self.cache.store(_key, Path(result_path), exit_code=0)
-                    out.append(Path(result_path))
-                    _state["extract_exit_code"] = 0
-                    _state["extract_status"] = "ok"
-                    self.trace.step_item_done("EXTRACT_KPIS", status="ok")
-                    # Record sample status to observability backend immediately
-                    # so completed samples are not missed if campaign crashes
-                    # before _finalize_samples (issue #847).
-                    self._obs.record_sample_status(_sid, "ok", trace_id=self._trace_id_for(_sid))
-                    # Worker direct-to-storage push (issue #625): upload
-                    # kpis.json + atomic _manifest.json, then report to the
-                    # Coordinator. No-op for the LocalStorage backend.
-                    self._publish_sample_results(
-                        sample_id=_sid,
-                        index=_index,
-                        simulation_dir=_sim_dir,
-                        kpi_path=Path(result_path),
-                        exit_code=0,
-                        status="completed",
-                    )
-
-                submissions[sid] = (handle, _on_success)
-            self._submit_and_await_all(submissions, "EXTRACT_KPIS")
-        total_cost, total_savings = self._cost_tracker.sum_sample_costs(self._sample_state)
-        self._record_costs("EXTRACT_KPIS", total_cost, total_savings)
-
-        # Record failures for samples that didn't succeed.
-        for _sid, ctx in pending.items():
-            state = ctx["state"]
-            if state.get("extract_exit_code") != 0 and "extract_status" not in state:
-                state["extract_exit_code"] = 1
-                state["extract_status"] = "failed"
-                state["error_summary"] = "EXTRACT: unknown error during concurrent execution"
-                self.trace.step_item_done("EXTRACT_KPIS", status="failed")
-            # Worker direct-to-storage (issue #625): publish a 'failed'
-            # manifest for any sample that did not complete cleanly. Successful
-            # samples were already published in _on_success above and are
-            # skipped here (extract_status == "ok" / "cached").
-            # Also record sample status to observability backend (issue #847).
-            if state.get("extract_status") == "failed":
-                self._publish_sample_results(
-                    sample_id=_sid,
-                    index=index_map.get(_sid, -1),
-                    simulation_dir=Path(ctx["sim_dir"]),
-                    kpi_path=None,
-                    exit_code=int(state.get("extract_exit_code", 1) or 1),
-                    status="failed",
-                )
-                self._obs.record_sample_status(_sid, "failed", trace_id=self._trace_id_for(_sid))
-                # Send sample failure alert (issue #1180).
-                self._maybe_alert(
-                    "sample.failed",
-                    {
-                        "campaign_id": self.trace.campaign_id,
-                        "sample_id": _sid,
-                        "step": "EXTRACT_KPIS",
-                        "status": "failed",
-                        "error": "extract exited with non-zero code",
-                    },
-                )
-
-        self.trace.step_finished(
-            "EXTRACT_KPIS",
-            cache="MISS×N" if n else "SKIPPED",
-            elapsed_s=time.time() - t0,
-            exit_code=0,
-        )
-        self._obs.record_step_duration("EXTRACT_KPIS", time.time() - t0, generation=generation)
-        return sorted(out)
 
     def step_aggregate_results(
         self,
