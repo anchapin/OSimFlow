@@ -66,6 +66,82 @@ class TestBuildJobQueue:
         assert not isinstance(queue, JobQueue)
 
 
+class TestBuildJobQueueRedisUrlValidation:
+    """``build_job_queue`` enforces the shared Redis URL security baseline (issue #1704).
+
+    The four Redis-backed planes (``build_cache``, ``build_document_store``,
+    ``build_job_queue``, and the API rate-limit store) now funnel through the
+    public :func:`osimflow.distributed_cache.validate_redis_url` so a library
+    consumer cannot silently attach the control-plane broadcast to an
+    insecure endpoint.
+    """
+
+    def test_nonlocalhost_redis_rejected(self, queue_dir: Path) -> None:
+        """Plain ``redis://`` to a remote host must raise ValueError before queue construction."""
+
+        def _fail_if_constructed() -> None:
+            raise AssertionError(
+                "DistributedJobQueue must not be constructed for an insecure redis_url"
+            )
+
+        with patch(
+            "osimflow.distributed_jobqueue.DistributedJobQueue",
+            side_effect=_fail_if_constructed,
+        ):
+            with pytest.raises(ValueError, match="issue #1321"):
+                build_job_queue(
+                    queue_dir=queue_dir,
+                    redis_url="redis://remote.example.com:6379/0",
+                    campaign_id="test-campaign",
+                )
+
+    def test_nonlocalhost_redis_with_creds_still_rejected(self, queue_dir: Path) -> None:
+        """Embedded credentials cannot bypass the TLS requirement (non-loopback)."""
+
+        def _fail_if_constructed() -> None:
+            raise AssertionError(
+                "DistributedJobQueue must not be constructed for an insecure redis_url"
+            )
+
+        with patch(
+            "osimflow.distributed_jobqueue.DistributedJobQueue",
+            side_effect=_fail_if_constructed,
+        ):
+            with pytest.raises(ValueError, match="issue #1321"):
+                build_job_queue(
+                    queue_dir=queue_dir,
+                    redis_url="redis://user:pass@remote.example.com:6379/0",
+                    campaign_id="test-campaign",
+                )
+
+    def test_loopback_redis_accepted(self, queue_dir: Path) -> None:
+        """``redis://localhost`` is exempt from the TLS baseline (loopback hosts)."""
+        queue = build_job_queue(
+            queue_dir=queue_dir,
+            redis_url="redis://localhost:6379/0",
+            campaign_id="test-campaign",
+        )
+        assert isinstance(queue, DistributedJobQueue)
+
+    def test_loopback_rediss_accepted(self, queue_dir: Path) -> None:
+        """``rediss://localhost`` is also exempt (loopback hosts)."""
+        queue = build_job_queue(
+            queue_dir=queue_dir,
+            redis_url="rediss://localhost:6379/0",
+            campaign_id="test-campaign",
+        )
+        assert isinstance(queue, DistributedJobQueue)
+
+    def test_nonlocalhost_rediss_with_creds_accepted(self, queue_dir: Path) -> None:
+        """``rediss://user:pass@remote`` is the canonical production form."""
+        queue = build_job_queue(
+            queue_dir=queue_dir,
+            redis_url="rediss://user:pass@remote.example.com:6379/0",
+            campaign_id="test-campaign",
+        )
+        assert isinstance(queue, DistributedJobQueue)
+
+
 class TestDistributedJobQueueInit:
     """Initialization and directory structure."""
 

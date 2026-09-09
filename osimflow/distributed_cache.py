@@ -91,14 +91,30 @@ if TYPE_CHECKING:
 _NONLOCALHOST_BLOCKLIST = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
 
-def _validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
-    """Validate that a Redis URL meets the minimum security baseline.
+def validate_redis_url(redis_url: str, require_auth: bool = False) -> None:
+    """Validate that a Redis URL meets the minimum security baseline (public).
 
-    When ``redis_url`` points to a non-localhost host, the connection must
-    use ``rediss://`` (TLS).  The ``require_auth=True`` flag allows operators
-    who configure authentication externally (e.g. via ``AUTH`` environment
-    variable consumed by the Redis server, not the client) to explicitly opt
-    out of the URL-embedded-credentials check.
+    The four Redis-backed planes (``build_cache``,
+    ``build_document_store``, ``build_job_queue``, and the API rate-limit
+    store built by ``osimflow.api.create_app``) all funnel through this
+    helper so that the fail-closed posture documented in ADR-0004 and
+    issue #1321 stays a single source of truth — a library consumer
+    using ``osimflow.build_job_queue`` directly is held to the same
+    baseline as the CLI flag, with no opt-out beyond the documented
+    ``require_auth`` escape hatch.
+
+    Policy
+    ------
+    * **Loopback hosts are exempt** — ``localhost``, ``127.0.0.1``,
+      ``::1``, and ``0.0.0.0`` never traverse a real network, so TLS and
+      embedded credentials are not required for those URLs.  This matches
+      the loopback exemptions in ``_validate_storage_endpoint``
+      (issue #1386) and ``_validate_coordinator_url`` (issue #1550).
+    * **Non-loopback must use TLS** (``rediss://``) — issue #1321.
+    * **Non-loopback must carry embedded credentials** unless
+      ``require_auth=True`` — issue #1277.  Set ``require_auth=True`` when
+      authentication is handled externally (e.g. via an ``AUTH`` file
+      consumed by the Redis server, not the client).
 
     Raises
     ------
@@ -798,7 +814,7 @@ def build_cache(
     """
     if redis_url is None:
         return SQLiteCache(db_path)
-    _validate_redis_url(redis_url, require_auth)
+    validate_redis_url(redis_url, require_auth)
     return DistributedCache(
         db_path=db_path,
         redis_url=redis_url,

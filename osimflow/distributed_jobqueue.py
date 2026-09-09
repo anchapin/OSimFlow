@@ -84,6 +84,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
+from .distributed_cache import validate_redis_url
 from .jobqueue import JobQueue
 
 if TYPE_CHECKING:
@@ -663,9 +664,23 @@ def build_job_queue(
     -------
     JobQueue | DistributedJobQueue
         The concrete queue instance.
+
+    Raises
+    ------
+    ValueError
+        When ``redis_url`` is configured and fails the shared
+        :func:`osimflow.distributed_cache.validate_redis_url` security
+        baseline (non-loopback host without ``rediss://`` TLS or embedded
+        credentials — issues #1277 / #1321).  The four Redis-backed
+        planes share this single source of truth so a library consumer
+        cannot silently attach the control-plane broadcast to an
+        insecure endpoint.
     """
     if redis_url is None:
         return JobQueue(queue_dir)
+    # Security baseline (issue #1277 / #1321 / #1704): fail closed before
+    # constructing the queue. Mirrors build_cache / build_document_store.
+    validate_redis_url(redis_url)
     return DistributedJobQueue(
         queue_dir=queue_dir,
         redis_url=redis_url,

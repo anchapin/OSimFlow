@@ -86,7 +86,7 @@ def _validate_coordinator_url(coordinator_url: str | None, *, allow_insecure: bo
     """Validate that a Coordinator base URL uses TLS (issue #1550).
 
     Mirrors :func:`osimflow.storage._validate_storage_endpoint` (issue
-    #1386) and :func:`osimflow.distributed_cache._validate_redis_url`
+    #1386) and :func:`osimflow.distributed_cache.validate_redis_url`
     (issue #1321): rejects ``http://`` Coordinator URLs unless the
     operator explicitly opted in with ``allow_insecure=True``.  The CLI
     escape hatch reuses the existing ``--allow-insecure-storage-endpoint``

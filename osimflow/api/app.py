@@ -61,7 +61,7 @@ from osimflow.api.results_viewer import results_viewer_router
 from osimflow.api.timeseries import timeseries_router
 from osimflow.api.variable_designer import variable_designer_router
 from osimflow.api.variables import variables_router
-from osimflow.distributed_cache import _validate_redis_url
+from osimflow.distributed_cache import validate_redis_url
 from osimflow.validation import ValidationError as OsimflowValidationError
 from osimflow.validation import (
     sanitize_filename,
@@ -1558,9 +1558,9 @@ def create_app(  # noqa: PLR0912
     # counters); a MITM on a plaintext connection could read and reset
     # it.  Enforce the same non-localhost rediss:// TLS baseline (and
     # require_auth parity) as build_cache / build_document_store via
-    # osimflow.distributed_cache._validate_redis_url.
+    # osimflow.distributed_cache.validate_redis_url.
     if redis_url is not None:
-        _validate_redis_url(redis_url)
+        validate_redis_url(redis_url)
     #
     # Middleware ordering (add_middleware inserts at front → last added
     # is outermost):

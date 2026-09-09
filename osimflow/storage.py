@@ -54,7 +54,7 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 def _validate_storage_endpoint(endpoint_url: str | None, *, allow_insecure: bool = False) -> None:
     """Validate that an S3 endpoint URL uses TLS (issue #1386).
 
-    Mirrors :func:`osimflow.distributed_cache._validate_redis_url`: rejects
+    Mirrors :func:`osimflow.distributed_cache.validate_redis_url`: rejects
     ``http://`` endpoints unless the operator has explicitly opted in with
     ``allow_insecure=True`` (typically only for local MinIO / dev).  The
     loopback hosts (localhost, ``127.0.0.1``, ``::1``, ``0.0.0.0``) are

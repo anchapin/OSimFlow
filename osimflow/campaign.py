@@ -1636,7 +1636,7 @@ class Campaign(CampaignAnalysisMixin):
 
     def run(self) -> dict[str, object]:  # noqa: PLR0912, PLR0915
         # Fail fast on insecure Coordinator URLs (issue #1550) — mirrors
-        # _validate_storage_endpoint (#1386) / _validate_redis_url (#1321).
+        # _validate_storage_endpoint (#1386) / validate_redis_url (#1321).
         # The override reuses --allow-insecure-storage-endpoint (no new
         # CLI surface); loopback coordinators are always exempt.
         _validate_coordinator_url(
