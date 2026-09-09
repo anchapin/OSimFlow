@@ -394,6 +394,46 @@ def _download_directory(*, path: Path, remote_prefix: str, storage: Any) -> None
         storage.download_file(obj, target)
 
 
+def resolve_and_materialize(
+    result_hint: Any,  # noqa: ANN401
+    transport: ResultTransportConfig,
+    *,
+    default: Any = None,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    """Resolve ``result_hint`` through the frozen ``transport`` config (issue #1697).
+
+    Single-entry facade that collapses the seven copy-pasted
+    ``resolve_result_for_callback(...)`` +
+    ``materialize_object_storage_result(...)`` expansions in every
+    remote handle's ``_resolve_success_result``. Pass the frozen
+    :class:`ResultTransportConfig` instead of exploding its five fields
+    across two primitives::
+
+        return resolve_and_materialize(self._result_hint, self._transport)
+
+    Test seams: the canonical :func:`resolve_result_for_callback` /
+    :func:`materialize_object_storage_result` are invoked with the
+    transport fields unpacked, so contract tests that patch those
+    primitives and assert their kwargs see the expected ``transport_mode``
+    + ``result_storage_*`` arguments. New tests should prefer patching
+    :func:`resolve_and_materialize` directly on the executor module
+    under test (see ``tests/unit/test_result_transport_contract.py``).
+    """
+    resolved = resolve_result_for_callback(
+        result_hint,
+        default=default,
+        transport_mode=transport.mode,
+    )
+    return materialize_object_storage_result(
+        resolved,
+        transport_mode=transport.mode,
+        result_storage_backend=transport.backend,
+        result_storage_bucket=transport.bucket,
+        result_storage_prefix=transport.prefix,
+        result_storage_endpoint=transport.endpoint,
+    )
+
+
 def materialize_object_storage_result(
     callback_result: Any,  # noqa: ANN401
     *,

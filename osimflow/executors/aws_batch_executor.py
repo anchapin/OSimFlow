@@ -35,7 +35,10 @@ from osimflow.executors.base import (
     poll_until_terminal,
     retry_with_backoff,
 )
-from osimflow.executors.transport import ResultTransportConfig, resolve_result_for_callback
+from osimflow.executors.transport import (
+    ResultTransportConfig,
+    resolve_and_materialize,
+)
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     build_signature_env,
@@ -139,26 +142,11 @@ class _AWSBatchHandle(PollingHandle):
         return PollOutcome.FAILED, job.get("statusReason", "")
 
     def _resolve_success_result(self, timeout: float | None = None) -> Any:
-        # Issue #1463: resolved through the package namespace at call time
-        # so tests that monkeypatch ``osimflow.executors.
-        # materialize_object_storage_result`` keep intercepting this call
-        # site after the executor moved out of the package __init__.
-        from osimflow.executors import materialize_object_storage_result
-
-        transport = self._transport
-        resolved = resolve_result_for_callback(
-            self._result_hint,
-            default=None,
-            transport_mode=transport.mode,
-        )
-        return materialize_object_storage_result(
-            resolved,
-            transport_mode=transport.mode,
-            result_storage_backend=transport.backend,
-            result_storage_bucket=transport.bucket,
-            result_storage_prefix=transport.prefix,
-            result_storage_endpoint=transport.endpoint,
-        )
+        # Issue #1697: collapsed the seven-line resolve+materialize
+        # expansion into a single ``resolve_and_materialize`` call on
+        # the frozen ``ResultTransportConfig`` — ``transport.py`` owns
+        # the field unpacking now.
+        return resolve_and_materialize(self._result_hint, self._transport)
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
         return bool(self._executor._is_spot_interruption(reason))  # noqa: SLF001

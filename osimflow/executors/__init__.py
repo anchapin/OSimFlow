@@ -68,6 +68,7 @@ from osimflow.executors.transport import (
     ResultTransportConfig as ResultTransportConfig,
     coerce_transport_mode as coerce_transport_mode,
     materialize_object_storage_result as materialize_object_storage_result,
+    resolve_and_materialize as resolve_and_materialize,
     resolve_result_for_callback as resolve_result_for_callback,
     resolve_transport_argument as resolve_transport_argument,
     validate_transport_mode as validate_transport_mode,

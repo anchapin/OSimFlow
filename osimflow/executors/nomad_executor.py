@@ -34,7 +34,10 @@ from osimflow.executors.base import (
     poll_until_terminal,
     retry_with_backoff,
 )
-from osimflow.executors.transport import ResultTransportConfig, resolve_result_for_callback
+from osimflow.executors.transport import (
+    ResultTransportConfig,
+    resolve_and_materialize,
+)
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SECRET_META_KEY,
@@ -512,26 +515,11 @@ class _NomadHandle(PollingHandle):
         return PollOutcome.FAILED, None
 
     def _resolve_success_result(self, timeout: float | None = None) -> Any:
-        # Issue #1463: resolved through the package namespace at call time
-        # so tests that monkeypatch ``osimflow.executors.
-        # materialize_object_storage_result`` keep intercepting this call
-        # site after the executor moved out of the package __init__.
-        from osimflow.executors import materialize_object_storage_result
-
-        transport = self._transport
-        local_result: Any = resolve_result_for_callback(
-            self._result_hint,
-            default=None,
-            transport_mode=transport.mode,
-        )
-        local_result = materialize_object_storage_result(
-            local_result,
-            transport_mode=transport.mode,
-            result_storage_backend=transport.backend,
-            result_storage_bucket=transport.bucket,
-            result_storage_prefix=transport.prefix,
-            result_storage_endpoint=transport.endpoint,
-        )
+        # Issue #1697: collapsed the seven-line resolve+materialize
+        # expansion into a single ``resolve_and_materialize`` call on
+        # the frozen ``ResultTransportConfig`` — ``transport.py`` owns
+        # the field unpacking now.
+        local_result: Any = resolve_and_materialize(self._result_hint, self._transport)
         if self._local_future is not None:
             # Non-remote-results mode: the local mirror future ran the
             # work function locally; its result is authoritative and
