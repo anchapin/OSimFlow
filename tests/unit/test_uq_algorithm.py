@@ -24,7 +24,7 @@ from osimflow.algorithms.uq import (
     _compute_confidence_interval,
     _compute_distribution_summary,
     _compute_pof,
-    _parse_failure_threshold,
+    parse_failure_threshold,
 )
 
 _VARIABLES_2D: dict[str, Any] = {
@@ -128,30 +128,153 @@ class TestUQGenerateSamples:
 
 
 class TestFailureThresholdParsing:
-    """Tests for _parse_failure_threshold helper."""
+    """Tests for parse_failure_threshold helper (issue #1706 public surface).
+
+    Covers the documented grammar: ``"<kpi_name>=<value>"`` where
+    ``<value>`` is any string accepted by :func:`float`. Boundary cases
+    exercised here were chosen to lock in the contract that any future
+    grammar refinement must remain backward-compatible with.
+    """
 
     def test_parses_valid_threshold(self) -> None:
-        kpi_name, threshold = _parse_failure_threshold("eui=150")
+        kpi_name, threshold = parse_failure_threshold("eui=150")
         assert kpi_name == "eui"
         assert threshold == 150.0
 
     def test_parses_threshold_with_spaces(self) -> None:
-        kpi_name, threshold = _parse_failure_threshold("cooling = 5000")
+        kpi_name, threshold = parse_failure_threshold("cooling = 5000")
         assert kpi_name == "cooling"
         assert threshold == 5000.0
 
     def test_parses_float_threshold(self) -> None:
-        kpi_name, threshold = _parse_failure_threshold("temp=23.5")
+        kpi_name, threshold = parse_failure_threshold("temp=23.5")
         assert kpi_name == "temp"
         assert threshold == 23.5
 
     def test_raises_on_invalid_format(self) -> None:
         with pytest.raises(ValueError, match="must be 'kpi_name=value'"):
-            _parse_failure_threshold("invalid_format")
+            parse_failure_threshold("invalid_format")
 
     def test_raises_on_non_numeric_value(self) -> None:
         with pytest.raises(ValueError, match="must be numeric"):
-            _parse_failure_threshold("eui=abc")
+            parse_failure_threshold("eui=abc")
+
+    # --- boundary cases for the numeric grammar -----------------------------
+
+    def test_parses_negative_float_threshold(self) -> None:
+        kpi_name, threshold = parse_failure_threshold("delta=-3.25")
+        assert kpi_name == "delta"
+        assert threshold == -3.25
+
+    def test_parses_zero_threshold(self) -> None:
+        kpi_name, threshold = parse_failure_threshold("eui=0")
+        assert kpi_name == "eui"
+        assert threshold == 0.0
+
+    def test_parses_scientific_notation_threshold(self) -> None:
+        # Scientific notation is a valid float() input — the parser must
+        # accept it because the grammar is "any string float() accepts".
+        kpi_name, threshold = parse_failure_threshold("pressure=1e-3")
+        assert kpi_name == "pressure"
+        assert threshold == pytest.approx(1e-3)
+
+    def test_parses_positive_signed_value(self) -> None:
+        kpi_name, threshold = parse_failure_threshold("eui=+150.5")
+        assert kpi_name == "eui"
+        assert threshold == 150.5
+
+    def test_parses_kpi_name_with_underscores_and_digits(self) -> None:
+        kpi_name, threshold = parse_failure_threshold("cooling_load_2=42")
+        assert kpi_name == "cooling_load_2"
+        assert threshold == 42.0
+
+    def test_parses_only_first_equals_when_value_has_second(self) -> None:
+        # Grammar: split on the first '=' only. The value fragment is then
+        # fed to float(); "1=2" must therefore raise 'must be numeric'.
+        with pytest.raises(ValueError, match="must be numeric"):
+            parse_failure_threshold("eui=1=2")
+
+    def test_raises_when_value_is_empty(self) -> None:
+        with pytest.raises(ValueError, match="must be numeric"):
+            parse_failure_threshold("eui=")
+
+    def test_empty_kpi_name_is_passed_through_to_caller(self) -> None:
+        """Lock in the current grammar: empty KPI name is NOT a parse error.
+
+        ``raw = "=150"`` splits on the first ``=`` to produce
+        ``("", "150")``; ``float("150")`` succeeds, so the parser returns
+        ``("", 150.0)``.  The grammar does NOT enforce a non-empty KPI
+        identifier — that validation is the downstream caller's
+        responsibility (e.g. ``compute_uq_indices`` is a no-op for the
+        empty name since no KPI in ``all_kpi_names`` matches ``""``).
+
+        A future grammar refinement may tighten this and reject
+        ``=value`` outright; this test pins the current behaviour so
+        that the change is a documented, public-API breakage rather
+        than an implicit one.
+        """
+        kpi_name, threshold = parse_failure_threshold("=150")
+        assert kpi_name == ""
+        assert threshold == 150.0
+
+    def test_kpi_name_preserves_only_leading_and_trailing_whitespace(self) -> None:
+        """Lock in the strip()-only behaviour for KPI identifiers.
+
+        The parser does not lowercase, slugify, or otherwise
+        canonicalise the KPI name beyond ``str.strip()``.  Two
+        semantically-identical names (``"EUI"`` vs ``"eui"``) therefore
+        produce different keys, and the campaign step relies on that to
+        surface typos as POF=0 (no matching KPI) rather than silently
+        reusing another KPI's threshold.
+        """
+        kpi_name, threshold = parse_failure_threshold("EUI=150")
+        assert kpi_name == "EUI"
+        assert threshold == 150.0
+        kpi_name_lower, _ = parse_failure_threshold("eui=150")
+        assert kpi_name_lower != kpi_name
+
+    def test_kpi_name_is_stripped_but_preserves_internal_chars(self) -> None:
+        # The parser does not normalise the KPI identifier beyond strip().
+        # Whether "eui.peak" is a valid metric is the algorithm's concern;
+        # the parser must not silently rewrite it.
+        kpi_name, threshold = parse_failure_threshold("  eui.peak  =  42  ")
+        assert kpi_name == "eui.peak"
+        assert threshold == 42.0
+
+    def test_only_public_threshold_parser_exported(self) -> None:
+        """Lock in the rename from #1706: no private alias may leak.
+
+        The module previously exposed the parser under a leading-
+        underscore name.  The rename closed the private/public seam
+        by promoting the parser to a single public name.  This guard
+        ensures no future patch accidentally re-adds a private alias
+        (e.g. for back-compat) that would re-introduce the dual-name
+        seam the issue asked us to close.  We check by introspecting
+        the module — anything in the public namespace whose name
+        starts with ``parse_failure`` must resolve to the same
+        callable as the public one.
+        """
+        import osimflow.algorithms.uq as uq_mod
+
+        public = uq_mod.parse_failure_threshold
+        # Every other name the module exposes that matches
+        # ``parse_failure*`` must be the same object — guards against
+        # accidental dual-name re-exports.
+        for attr in dir(uq_mod):
+            if attr.startswith("parse_failure") and attr != "parse_failure_threshold":
+                other = getattr(uq_mod, attr)
+                assert other is public, (
+                    f"unexpected alias {attr!r} in osimflow.algorithms.uq "
+                    f"should not exist alongside the public name"
+                )
+
+    def test_public_alias_exposed_on_package(self) -> None:
+        """Third-party plug-ins must be able to ``from osimflow.algorithms
+        import parse_failure_threshold`` (issue #1706 public surface)."""
+        import osimflow.algorithms as alg_pkg
+
+        assert hasattr(alg_pkg, "parse_failure_threshold")
+        assert alg_pkg.parse_failure_threshold is parse_failure_threshold
 
 
 class TestComputePOF:

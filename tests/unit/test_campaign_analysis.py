@@ -369,12 +369,17 @@ class TestUQStep:
 
     def test_threshold_parsing_happy_path(self) -> None:
         """The threshold parser: 'name=value' → (name, float); missing '='
-        or non-numeric value → ValueError."""
-        from osimflow.algorithms.uq import _parse_failure_threshold
+        or non-numeric value → ValueError.
 
-        assert _parse_failure_threshold("eui=150") == ("eui", 150.0)
-        assert _parse_failure_threshold("cooling = 42.5") == ("cooling", 42.5)
+        Imports via the public surface ``osimflow.algorithms`` — the
+        ``_campaign_*`` collaborator must depend on the public name
+        documented for issue #1706, not on the previous private helper.
+        """
+        from osimflow.algorithms import parse_failure_threshold
+
+        assert parse_failure_threshold("eui=150") == ("eui", 150.0)
+        assert parse_failure_threshold("cooling = 42.5") == ("cooling", 42.5)
         with pytest.raises(ValueError, match=r"failure threshold must be"):
-            _parse_failure_threshold("eui")
+            parse_failure_threshold("eui")
         with pytest.raises(ValueError, match=r"must be numeric"):
-            _parse_failure_threshold("cooling=abc")
+            parse_failure_threshold("cooling=abc")

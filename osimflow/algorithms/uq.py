@@ -46,10 +46,53 @@ log = logging.getLogger("osimflow.algorithms.uq")
 SUPPORTED_UQ_METHODS = {"monte_carlo", "latin_hypercube"}
 
 
-def _parse_failure_threshold(raw: str) -> tuple[str, float]:
-    """Parse a failure threshold string like 'eui=150' or 'cooling=5000'.
+def parse_failure_threshold(raw: str) -> tuple[str, float]:
+    """Parse a ``--uq-failure-threshold`` style string into ``(kpi_name, value)``.
 
-    Returns (kpi_name, threshold_value).
+    The threshold grammar is intentionally minimal so it round-trips through
+    ``argparse``'s ``action="append"`` storage and the campaign-level
+    ``CampaignConfig.uq_failure_thresholds`` field without losing fidelity.
+
+    Grammar (issue #1706)
+    ---------------------
+
+    ``raw`` must be of the form ``"<kpi_name>=<value>"``.  Splits on the
+    first ``=`` only, so values containing further ``=`` are preserved
+    as part of the value field (and then rejected by the numeric check
+    in most realistic cases).
+
+    - ``<kpi_name>`` — non-empty identifier; surrounding whitespace is stripped.
+      The string returned preserves internal characters verbatim, including
+      digits, underscores, and hyphens (callers typically re-validate against
+      the actual ``kpis`` dict keys before using it).
+    - ``<value>`` — any string accepted by :func:`float` (Python's built-in
+      numeric parsing: integer literals, fixed-point floats, scientific
+      notation like ``1e2``, infinities, NaN, signed numbers, etc.).
+      Surrounding whitespace is stripped.
+
+    This parser does *not* support unit suffixes (e.g. ``150 kWh``),
+    percentage suffixes (e.g. ``80%``), or count keywords
+    (e.g. ``all``, ``none``).  Extending the grammar is a public API
+    change — see ``osimflow.algorithms.parse_failure_threshold``; refinements
+    should land as additive, backward-compatible branches that still
+    accept the plain ``name=value`` numeric form.
+
+    Parameters
+    ----------
+    raw
+        Threshold string, as parsed from ``--uq-failure-threshold`` or
+        from the persisted campaign config.
+
+    Returns
+    -------
+    tuple[str, float]
+        ``(kpi_name, threshold_value)``.
+
+    Raises
+    ------
+    ValueError
+        When *raw* does not contain ``=``, or the value fragment cannot
+        be parsed as a float.
     """
     if "=" not in raw:
         raise ValueError(f"failure threshold must be 'kpi_name=value', got {raw!r}")

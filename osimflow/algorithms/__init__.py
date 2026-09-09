@@ -33,7 +33,7 @@ The ``Campaign`` class dispatches through the registry via
 stays decoupled from the sampling strategy.
 """
 
-__all__ = ["AlgorithmRegistry", "BaseAlgorithm", "LHSAlgorithm"]
+__all__ = ["AlgorithmRegistry", "BaseAlgorithm", "LHSAlgorithm", "parse_failure_threshold"]
 
 import abc
 import bisect
@@ -841,7 +841,10 @@ from osimflow.algorithms.custom import CustomDOEAlgorithm  # noqa: E402
 
 AlgorithmRegistry.register("custom", CustomDOEAlgorithm)
 
-from osimflow.algorithms.uq import UncertaintyQuantification  # noqa: E402
+from osimflow.algorithms.uq import (  # noqa: E402
+    UncertaintyQuantification,
+    parse_failure_threshold,  # issue #1706 — public surface
+)
 
 AlgorithmRegistry.register("uq", UncertaintyQuantification)
 
