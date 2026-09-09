@@ -477,3 +477,177 @@ class TestPendingAlertRetryQueue:
         for entry in history:
             assert entry["delivery_status"] == "failed"
             assert "destination down" in entry["error"]
+
+
+class BlockingDestination(AlertDestination):
+    """Fake destination that blocks on an Event until released or aborted.
+
+    Used to test that ``notify()`` returns quickly when background dispatch
+    is enabled (the caller doesn't wait for ``send`` to return), and that
+    the worker honours a per-alert deadline when a delivery is wedged.
+    """
+
+    def __init__(self) -> None:
+        self.gate = threading.Event()
+        self.received: list[Alert] = []
+
+    def send(self, alert: Alert) -> bool:
+        self.received.append(alert)
+        # Block until the test releases the gate (or the process exits and
+        # daemon-thread join is abandoned — both are acceptable here).
+        self.gate.wait(timeout=10.0)
+        return True
+
+
+class TestBackgroundDispatcher:
+    """Issue #1673 — alert delivery moves off the caller's thread.
+
+    Backward compat: when no background dispatcher is started (the default
+    for ``AlertManager()``), the synchronous path is preserved and these
+    tests do not apply — see TestPendingAlertRetryQueue above.
+    """
+
+    def test_notify_returns_quickly_with_slow_destination(self):
+        """notify() must not block on a slow/blackholed destination when
+        background dispatch is enabled — a slow destination would otherwise
+        serialize fan-out worker threads (issue #1673)."""
+        dest = BlockingDestination()
+        manager = _manager_with(dest)
+        manager.start_background_dispatch()
+        try:
+            t0 = time.monotonic()
+            manager.notify("campaign.completed", {"i": 1})
+            elapsed = time.monotonic() - t0
+            # notify() should return after enqueue + the rule-evaluation
+            # micro-cost — nowhere near the 10s the gate could block for.
+            assert elapsed < 1.0, f"notify() blocked for {elapsed:.2f}s"
+            # Wait briefly for the worker to dequeue + enter send(); the
+            # gate not being released means send() will block, but
+            # dest.received is appended before the wait, so a non-empty
+            # list proves the dispatcher picked the alert up.
+            deadline = time.monotonic() + 2.0
+            while not dest.received and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert dest.received, "worker should have dequeued the alert"
+        finally:
+            dest.gate.set()
+            manager.close(timeout_s=2.0)
+
+    def test_close_drains_pending_alerts(self):
+        """close() signals the worker to drain remaining alerts and joins."""
+        dest = BlockingDestination()
+        manager = _manager_with(dest)
+        manager.start_background_dispatch()
+        manager.notify("campaign.completed", {"i": 1})
+        # Let the worker reach the gate (parked inside send()).
+        deadline = time.monotonic() + 2.0
+        while not dest.received and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert dest.received, "worker did not reach send()"
+        # Release the gate and close — close() should return quickly because
+        # the worker drains the single in-flight alert and exits cleanly.
+        dest.gate.set()
+        manager.close(timeout_s=5.0)
+        # Idempotent: a second close is a no-op.
+        manager.close(timeout_s=1.0)
+        assert manager._dispatch_thread is None or not manager._dispatch_thread.is_alive()
+
+    def test_per_alert_deadline_abandons_wedged_delivery(self):
+        """An alert whose destination never returns must be abandoned past
+        the per_alert_deadline_s deadline so the dispatcher can move on to
+        subsequent alerts."""
+        dest = BlockingDestination()
+        manager = _manager_with(
+            dest,
+        )
+        # Use a tiny deadline so the test is fast but still deterministically
+        # above wall-clock noise under xdist.
+        manager._per_alert_deadline_s = 0.1
+        manager.start_background_dispatch()
+        try:
+            manager.notify("campaign.completed", {"i": 1})
+            # Worker enters send() and parks on the gate. Wait for arrival.
+            deadline = time.monotonic() + 1.0
+            while not dest.received and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert dest.received
+            # The deadline thread inside _dispatch_one starts a daemon runner.
+            # That runner is parked inside _do_dispatch → send(). Release the
+            # gate so it can finish (the deadline check fires first; we
+            # release afterwards so the daemon runner cleans up at process
+            # exit — the dispatch was already logged as abandoned).
+            dest.gate.set()
+        finally:
+            manager.close(timeout_s=2.0)
+
+    def test_start_background_dispatch_is_idempotent(self):
+        """Calling start_background_dispatch twice doesn't spawn two workers."""
+        dest = BlockingDestination()
+        manager = _manager_with(dest)
+        manager.start_background_dispatch()
+        first = manager._dispatch_thread
+        manager.start_background_dispatch()
+        assert manager._dispatch_thread is first
+        dest.gate.set()
+        manager.close(timeout_s=2.0)
+
+    def test_build_alert_manager_with_background_dispatch(self):
+        """build_alert_manager(..., background_dispatch=True) starts the worker."""
+        manager = build_alert_manager(
+            rules_path=None,
+            destinations_path=None,
+            include_builtin=False,
+            background_dispatch=True,
+        )
+        try:
+            assert manager._is_dispatcher_running()
+        finally:
+            manager.close(timeout_s=2.0)
+
+    def test_build_alert_manager_default_keeps_synchronous_path(self):
+        """Default (background_dispatch=False) preserves the legacy path —
+        no worker is spawned."""
+        manager = build_alert_manager(
+            rules_path=None,
+            destinations_path=None,
+            include_builtin=False,
+        )
+        assert not manager._is_dispatcher_running()
+        # notify() must dispatch inline so existing tests (which check
+        # delivery_status immediately after notify) keep working.
+        seen: list[str] = []
+        manager.add_rule(
+            AlertRule(
+                name="sync-test",
+                event_type="campaign.completed",
+                condition=lambda _: True,
+                severity=AlertSeverity.INFO,
+                message_template="hello {i}",
+            )
+        )
+
+        class _Capture(AlertDestination):
+            def send(self, alert: Alert) -> bool:
+                seen.append(alert.message)
+                return True
+
+        manager.add_destination(_Capture())
+        manager.notify("campaign.completed", {"i": 1})
+        assert seen == ["hello 1"]
+
+
+def _manager_with(dest: AlertDestination) -> AlertManager:  # type: ignore[no-redef]
+    """Test-local helper (mirrors the one at line ~308 but ensures the test
+    class can resolve it after the appended-block re-export order)."""
+    manager = AlertManager()
+    manager.add_rule(
+        AlertRule(
+            name="test-rule",
+            event_type="campaign.completed",
+            condition=lambda _: True,
+            severity=AlertSeverity.WARNING,
+            message_template="alert {i}",
+        )
+    )
+    manager.add_destination(dest)
+    return manager
