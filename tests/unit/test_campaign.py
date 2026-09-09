@@ -21,6 +21,7 @@ so DAG can be exercised without real HPC/cloud.
 """
 
 import json
+import threading
 import time
 from concurrent.futures import Future
 from pathlib import Path
@@ -2117,3 +2118,158 @@ class TestFanOutRecoveryPath:
         assert kwargs["name"] == "sim_sample_0"
         assert "nrel/openstudio" in kwargs["container"]
         assert kwargs["worker_id"] == "local"
+
+
+# -----------------------------------------------------------------------
+# Teardown best-effort / bounded (issue #1672)
+# -----------------------------------------------------------------------
+class TestTeardownBestEffort:
+    """``run()``'s finally block must never let auxiliary-subsystem
+    failures (observability flush, result-storage close) crash a
+    successful campaign or mask the original in-flight exception
+    (issue #1672)."""
+
+    @staticmethod
+    def _make_dry_run_campaign(variables_yml: Path, template_pkg: Path, outdir: Path) -> Campaign:
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        return Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
+
+    @staticmethod
+    def _install_flush_failing_backend(campaign: Campaign) -> None:
+        from osimflow.observability import NullBackend
+
+        class FlushFailingBackend(NullBackend):
+            def flush(self) -> None:
+                raise RuntimeError("observability backend is down")
+
+        # ObservabilityManager.flush() attempts every backend then
+        # re-raises the first backend exception — the exact hazard the
+        # finally-block containment must absorb.
+        campaign._obs._backends[:] = [FlushFailingBackend()]
+
+    def test_flush_failure_does_not_crash_successful_campaign(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        campaign = self._make_dry_run_campaign(variables_yml, template_pkg, outdir)
+        self._install_flush_failing_backend(campaign)
+        result = campaign.run()  # must not raise
+        assert isinstance(result, dict)
+        assert result["samples"] is not None
+        data = json.loads((outdir / "run.json").read_text())
+        assert data["status"] == "success"
+
+    def test_flush_failure_does_not_mask_original_exception(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        campaign = self._make_dry_run_campaign(variables_yml, template_pkg, outdir)
+        self._install_flush_failing_backend(campaign)
+        with patch.object(Campaign, "_run_dry_run", side_effect=RuntimeError("original boom")):
+            with pytest.raises(RuntimeError, match="original boom"):
+                campaign.run()
+        # The finally block still ran to completion (final run.json write).
+        data = json.loads((outdir / "run.json").read_text())
+        assert data["status"] == "failure"
+
+    def test_failing_result_storage_does_not_fail_campaign(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        import asyncio
+
+        from osimflow.storage import ResultStorage, ResultStorageUploader
+
+        class FailingStorage(ResultStorage):
+            name = "failing"
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                raise OSError("storage backend permanently down")
+
+            def download_file(self, remote_path: str, local_path: Path) -> None:
+                return None
+
+            def list_results(self, prefix: str = "") -> list[str]:
+                return []
+
+            async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+                return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+            async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+                return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+            async def list_results_async(self, prefix: str = "") -> list[str]:
+                return asyncio.to_thread(self.list_results, prefix)
+
+        campaign = self._make_dry_run_campaign(variables_yml, template_pkg, outdir)
+        uploader = ResultStorageUploader(
+            FailingStorage(), worker_count=1, max_retries=0, retry_backoff_s=0.0
+        )
+        campaign._result_storage = uploader
+        result = campaign.run()  # must not raise despite failed uploads
+        assert isinstance(result, dict)
+        data = json.loads((outdir / "run.json").read_text())
+        assert data["status"] == "success"
+        # The permanently-failed upload really happened (not skipped).
+        assert uploader._errors, "expected at least one recorded upload failure"
+
+    def test_bounded_result_storage_close_does_not_stall_teardown(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import asyncio
+        import logging as stdlib_logging
+
+        from osimflow.storage import ResultStorage, ResultStorageUploader
+
+        upload_started = threading.Event()
+        release_upload = threading.Event()
+
+        class BlockingStorage(ResultStorage):
+            name = "blocking"
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                upload_started.set()
+                assert release_upload.wait(timeout=60.0), "upload never released"
+
+            def download_file(self, remote_path: str, local_path: Path) -> None:
+                return None
+
+            def list_results(self, prefix: str = "") -> list[str]:
+                return []
+
+            async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+                return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+            async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+                return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+            async def list_results_async(self, prefix: str = "") -> list[str]:
+                return asyncio.to_thread(self.list_results, prefix)
+
+        campaign = self._make_dry_run_campaign(variables_yml, template_pkg, outdir)
+        uploader = ResultStorageUploader(BlockingStorage(), worker_count=1)
+        worker = uploader._workers[0]
+        campaign._result_storage = uploader
+
+        # Pre-enqueue one item so the worker is parked on it for the whole
+        # campaign; the campaign's own per-sample upload stays queued and
+        # must be logged-and-abandoned at the (shrunken) drain deadline.
+        parked_file = outdir / "parked.txt"
+        parked_file.write_text("x")
+        uploader.upload_file(parked_file, "remote/parked.txt")
+        assert upload_started.wait(timeout=10.0), "worker never picked up parked upload"
+
+        monkeypatch.setattr("osimflow.campaign._RESULT_STORAGE_CLOSE_TIMEOUT_S", 0.2)
+        with caplog.at_level(stdlib_logging.ERROR, logger="osimflow.storage"):
+            result = campaign.run()  # must return despite the parked backend
+        assert isinstance(result, dict)
+        assert any(
+            "abandoned" in rec.message and "queued upload" in rec.message for rec in caplog.records
+        ), f"expected abandon log, got: {[r.message for r in caplog.records]}"
+        assert uploader._closed
+
+        release_upload.set()
+        worker.join(timeout=10.0)
+        assert not worker.is_alive(), "worker never exited after release"

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
+import time
 from pathlib import Path
 
 import pytest
+
+from osimflow.storage import ResultStorage
 
 
 class TestLocalStorage:
@@ -1297,3 +1301,216 @@ class TestResultStorageUploaderEdgeCases:
         uploader.close()
         assert routed == ["r/a.txt"]
         assert uploader._azure_executor is None
+
+
+class _FailingUploadStorage(ResultStorage):
+    """Backend whose uploads always fail (test double)."""
+
+    name = "failing-upload"
+
+    def upload_file(self, local_path: Path, remote_path: str) -> None:
+        raise OSError("hard failure")
+
+    def download_file(self, remote_path: str, local_path: Path) -> None:
+        return None
+
+    def list_results(self, prefix: str = "") -> list[str]:
+        return []
+
+    async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+        return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+    async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+        return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+    async def list_results_async(self, prefix: str = "") -> list[str]:
+        return asyncio.to_thread(self.list_results, prefix)
+
+
+class TestResultStorageUploaderBoundedClose:
+    """Bounded, best-effort ``close()`` (issue #1672).
+
+    Contract: teardown must never hang on ``queue.join()`` while workers
+    grind through retry backoff, and must never raise for best-effort
+    callers. Tests use ``threading.Event`` parking and mocked sleeps —
+    no wall-clock assumptions (issue #1544 policy).
+    """
+
+    def test_bounded_close_returns_promptly_and_abandons_pending(self, tmp_path: Path) -> None:
+        from osimflow.storage import ResultStorageUploader
+
+        upload_started = threading.Event()
+        release_upload = threading.Event()
+        uploaded: list[str] = []
+
+        class BlockingStorage(_FailingUploadStorage):
+            name = "blocking"
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                uploaded.append(remote_path)
+                upload_started.set()
+                if not release_upload.wait(timeout=30.0):
+                    return
+                raise OSError("post-release failure")
+
+        uploader = ResultStorageUploader(
+            BlockingStorage(), worker_count=1, max_retries=0, retry_backoff_s=0.0
+        )
+        worker = uploader._workers[0]
+        for i in range(3):
+            f = tmp_path / f"f{i}.txt"
+            f.write_text("x")
+            uploader.upload_file(f, f"remote/f{i}.txt")
+
+        # Worker is now parked inside the first upload; f1/f2 are queued.
+        assert upload_started.wait(timeout=10.0), "worker never picked up first item"
+
+        deadline_start = time.monotonic()
+        uploader.close(timeout_s=0.2, raise_on_failure=False)  # must not raise / hang
+        elapsed = time.monotonic() - deadline_start
+        # Failure-bound (not timing-assumption) bound: the 0.2 s deadline
+        # plus sentinel bookkeeping must return well inside 10 s even on
+        # a loaded CI runner.
+        assert elapsed < 10.0, f"bounded close took {elapsed:.1f}s"
+        assert uploader._closed
+        with pytest.raises(OSError, match="uploader is closed"):
+            uploader.upload_file(tmp_path / "late.txt", "remote/late.txt")
+
+        # Release the parked worker; it finishes item 0, then consumes the
+        # shutdown sentinel and exits. The two QUEUED items were abandoned
+        # (discarded at the deadline) and must never reach the backend.
+        release_upload.set()
+        worker.join(timeout=10.0)
+        assert not worker.is_alive(), "worker never exited after sentinel"
+        assert uploaded == ["remote/f0.txt"]
+
+    def test_bounded_close_waits_for_inflight_upload_that_completes(self, tmp_path: Path) -> None:
+        from osimflow.storage import ResultStorage, ResultStorageUploader
+
+        upload_started = threading.Event()
+        release_upload = threading.Event()
+
+        class BlockingThenOkStorage(ResultStorage):
+            name = "blocking-then-ok"
+            calls: list[str] = []
+
+            def upload_file(self, local_path: Path, remote_path: str) -> None:
+                self.calls.append(remote_path)
+                upload_started.set()
+                assert release_upload.wait(timeout=30.0)
+
+            def download_file(self, remote_path: str, local_path: Path) -> None:
+                return None
+
+            def list_results(self, prefix: str = "") -> list[str]:
+                return []
+
+            async def upload_file_async(self, local_path: Path, remote_path: str) -> None:
+                return asyncio.to_thread(self.upload_file, local_path, remote_path)
+
+            async def download_file_async(self, remote_path: str, local_path: Path) -> None:
+                return asyncio.to_thread(self.download_file, remote_path, local_path)
+
+            async def list_results_async(self, prefix: str = "") -> list[str]:
+                return asyncio.to_thread(self.list_results, prefix)
+
+        store = BlockingThenOkStorage()
+        uploader = ResultStorageUploader(store, worker_count=1)
+        f = tmp_path / "ok.txt"
+        f.write_text("x")
+        uploader.upload_file(f, "remote/ok.txt")
+        assert upload_started.wait(timeout=10.0), "worker never picked up the item"
+
+        close_done = threading.Event()
+        close_exc: list[BaseException] = []
+
+        def _closer() -> None:
+            try:
+                uploader.close(timeout_s=10.0)
+            except BaseException as exc:  # noqa: BLE001
+                close_exc.append(exc)
+            finally:
+                close_done.set()
+
+        closer = threading.Thread(target=_closer, daemon=True)
+        closer.start()
+        # The drain cannot complete while the upload is parked
+        # (unfinished_tasks > 0), so close() returning now would mean it
+        # abandoned the upload. Failure-bound grace, not a timing assert.
+        assert not close_done.wait(timeout=0.2), "close() abandoned a drainable upload"
+        release_upload.set()
+        assert close_done.wait(timeout=10.0), "close() never returned after release"
+        assert close_exc == []
+        assert store.calls == ["remote/ok.txt"]
+
+    def test_close_raise_on_failure_false_logs_instead_of_raising(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from osimflow.storage import ResultStorageUploader
+
+        uploader = ResultStorageUploader(
+            _FailingUploadStorage(), worker_count=1, max_retries=1, retry_backoff_s=0.0
+        )
+        f = tmp_path / "fail.txt"
+        f.write_text("x")
+        uploader.upload_file(f, "remote/fail.txt")
+        with caplog.at_level(logging.ERROR, logger="osimflow.storage"):
+            uploader.close(raise_on_failure=False)  # must not raise
+        assert any("failed permanently" in rec.message for rec in caplog.records), (
+            f"expected best-effort failure log, got: {[r.message for r in caplog.records]}"
+        )
+
+    def test_close_default_call_still_raises_on_failed_uploads(self, tmp_path: Path) -> None:
+        from osimflow.storage import ResultStorageUploader
+
+        uploader = ResultStorageUploader(
+            _FailingUploadStorage(), worker_count=1, max_retries=0, retry_backoff_s=0.0
+        )
+        f = tmp_path / "fail.txt"
+        f.write_text("x")
+        uploader.upload_file(f, "remote/fail.txt")
+        with pytest.raises(OSError, match="failed uploads"):
+            uploader.close()  # legacy direct-caller behaviour unchanged
+
+    def test_bounded_close_returns_despite_parked_retry_sleep(self, tmp_path: Path) -> None:
+        """A worker parked in retry backoff (sleep up to 60 s) cannot stall close.
+
+        The sleep itself is replaced with an ``Event`` park (issue #1544
+        policy: no wall-clock sleeps), so the deadline firing is proven
+        without waiting any real time.
+        """
+        from unittest.mock import patch
+
+        from osimflow.storage import ResultStorageUploader
+
+        first_sleep_started = threading.Event()
+        release_sleep = threading.Event()
+
+        def _parked_sleep(seconds: float) -> None:
+            first_sleep_started.set()
+            assert release_sleep.wait(timeout=30.0), "parked sleep never released"
+
+        uploader = ResultStorageUploader(
+            _FailingUploadStorage(),
+            worker_count=1,
+            max_retries=3,
+            retry_backoff_s=30.0,  # sleeps up to 60 s per retry unmocked
+        )
+        f = tmp_path / "parked.txt"
+        f.write_text("x")
+        uploader.upload_file(f, "remote/parked.txt")
+        worker = uploader._workers[0]
+
+        with patch("osimflow.storage.time.sleep", side_effect=_parked_sleep):
+            assert first_sleep_started.wait(timeout=10.0), "worker never entered backoff"
+            start = time.monotonic()
+            uploader.close(timeout_s=0.1, raise_on_failure=False)  # must not raise / hang
+            elapsed = time.monotonic() - start
+            assert elapsed < 10.0, f"bounded close took {elapsed:.1f}s"
+            # close() returned while the worker was still parked inside its
+            # backoff sleep: the straggler is abandoned as a daemon thread.
+            assert worker.is_alive()
+            release_sleep.set()
+            worker.join(timeout=10.0)
+            assert not worker.is_alive(), "worker never exited after release"
+        assert uploader._closed
