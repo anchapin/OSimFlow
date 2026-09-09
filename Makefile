@@ -98,6 +98,7 @@ agents-contract: ## check AGENTS.md / code drift
 
 docs-sync: ## check docs/ references resolve
 	$(PY) tools/check_docs_sync.py
+	$(PY) tools/check_api_doc_coverage.py
 
 openapi-sync: ## check docs/openapi.json matches the live FastAPI app (issue #1049)
 	@$(PY) -c "import fastapi" 2>/dev/null || $(PY) -m pip install -e ".[dev,api]" --quiet
