@@ -51,8 +51,7 @@ from osimflow.executors.base import (
 )
 from osimflow.executors.transport import (
     ResultTransportConfig,
-    materialize_object_storage_result,
-    resolve_result_for_callback,
+    resolve_and_materialize,
 )
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
@@ -128,20 +127,11 @@ class _GoogleBatchHandle(PollingHandle):
         return PollOutcome.INDETERMINATE, None
 
     def _resolve_success_result(self, timeout: float | None = None) -> Any:
-        transport = self._transport
-        resolved = resolve_result_for_callback(
-            self._result_hint,
-            default=None,
-            transport_mode=transport.mode,
-        )
-        return materialize_object_storage_result(
-            resolved,
-            transport_mode=transport.mode,
-            result_storage_backend=transport.backend,
-            result_storage_bucket=transport.bucket,
-            result_storage_prefix=transport.prefix,
-            result_storage_endpoint=transport.endpoint,
-        )
+        # Issue #1697: collapsed the seven-line resolve+materialize
+        # expansion into a single ``resolve_and_materialize`` call on
+        # the frozen ``ResultTransportConfig`` — ``transport.py`` owns
+        # the field unpacking now.
+        return resolve_and_materialize(self._result_hint, self._transport)
 
     def _is_spot_interruption(self, reason: str | None) -> bool:
         return bool(self._executor._is_spot_interruption(reason))

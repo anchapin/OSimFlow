@@ -10,9 +10,13 @@ Before #1333 only the Nomad and Kubernetes handles materialized; the
 AWS Batch, Azure Batch, Google Batch, and PBS handles returned raw
 object-storage keys to the callback. These tests pin the contract for
 all six transport-participating executors by asserting that a stubbed
-``materialize_object_storage_result`` is invoked with the handle's
-transport configuration on every success path (including the
-spot-retry and on-demand-fallback paths).
+``resolve_and_materialize`` is invoked with the handle's frozen
+``ResultTransportConfig`` on every success path (including the
+spot-retry and on-demand-fallback paths). Issue #1697 collapsed the
+prior ``resolve_result_for_callback`` +
+``materialize_object_storage_result`` two-step into a single helper;
+the assertion now pins the helper's single ``transport`` argument
+instead of the explode-form kwargs.
 
 The submitit-style executors (``slurm``, ``docker_swarm``,
 ``dask_jobqueue``) and ``local`` are exempt: their work function's
@@ -45,13 +49,13 @@ _RESULT_HINT = {"__osimflow_type__": "path", "value": "s3://bucket-a/campaigns/c
 def _patch_transport(
     monkeypatch: pytest.MonkeyPatch, module: str, calls: list[dict[str, Any]]
 ) -> None:
-    """Stub ``materialize_object_storage_result`` in *module*, recording calls."""
+    """Stub ``resolve_and_materialize`` in *module*, recording calls."""
 
-    def _fake_materialize(callback_result: Any, **kwargs: Any) -> Any:
-        calls.append({"callback_result": callback_result, **kwargs})
+    def _fake_resolve_and_materialize(result_hint: Any, transport: Any, **kwargs: Any) -> Any:
+        calls.append({"result_hint": result_hint, "transport": transport, **kwargs})
         return {"materialized": True}
 
-    monkeypatch.setattr(f"{module}.materialize_object_storage_result", _fake_materialize)
+    monkeypatch.setattr(f"{module}.resolve_and_materialize", _fake_resolve_and_materialize)
 
 
 def _aws_handle() -> Any:
@@ -157,11 +161,16 @@ def _nomad_handle() -> Any:
 @pytest.mark.parametrize(
     ("handle_factory", "materialize_module"),
     [
-        (_aws_handle, "osimflow.executors"),
+        # AWS / Nomad import ``resolve_and_materialize`` from
+        # ``osimflow.executors.transport`` (the defining module) rather
+        # than the ``osimflow.executors`` re-export, so the test must
+        # patch the per-executor module to intercept the name lookup
+        # (issue #1697).
+        (_aws_handle, "osimflow.executors.aws_batch_executor"),
         (_azure_handle, "osimflow.executors.azure_batch_executor"),
         (_google_handle, "osimflow.executors.google_batch_executor"),
         (_pbs_handle, "osimflow.executors.pbs_executor"),
-        (_nomad_handle, "osimflow.executors"),
+        (_nomad_handle, "osimflow.executors.nomad_executor"),
     ],
     ids=["aws_batch", "azure_batch", "google_batch", "pbs", "nomad"],
 )
@@ -178,11 +187,15 @@ def test_remote_handle_materializes_object_storage_result(
     assert resolved == {"materialized": True}
     assert len(calls) == 1
     call = calls[0]
-    assert call["transport_mode"] == "object_storage"
-    assert call["result_storage_backend"] == "s3"
-    assert call["result_storage_bucket"] == "bucket-a"
-    assert call["result_storage_prefix"] == "campaigns/c1"
-    assert call["result_storage_endpoint"] == "https://s3.example.test"
+    # Issue #1697: the helper accepts the frozen ``ResultTransportConfig``
+    # and unpacks the explode-form fields internally; the test now pins
+    # the helper's ``transport`` argument instead of the per-field kwargs.
+    transport = call["transport"]
+    assert transport.mode == "object_storage"
+    assert transport.backend == "s3"
+    assert transport.bucket == "bucket-a"
+    assert transport.prefix == "campaigns/c1"
+    assert transport.endpoint == "https://s3.example.test"
 
 
 def test_aws_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,7 +203,10 @@ def test_aws_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatc
     from osimflow.testing.patch_targets import _AWSBatchHandle
 
     calls: list[dict[str, Any]] = []
-    _patch_transport(monkeypatch, "osimflow.executors", calls)
+    # Issue #1697: patch the per-executor module (where
+    # ``resolve_and_materialize`` is bound in the module globals) rather
+    # than the ``osimflow.executors`` re-export package.
+    _patch_transport(monkeypatch, "osimflow.executors.aws_batch_executor", calls)
 
     # First poll: spot interruption; second poll (on-demand): success.
     polls = iter(
@@ -226,7 +242,9 @@ def test_aws_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatc
     assert resolved == {"materialized": True}
     assert len(resubmits) == 1
     assert len(calls) == 1
-    assert calls[0]["transport_mode"] == "object_storage"
+    # Issue #1697: pin the helper's ``transport`` argument (the explode-
+    # form kwargs are now an internal of ``resolve_and_materialize``).
+    assert calls[0]["transport"].mode == "object_storage"
 
 
 def test_azure_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -273,7 +291,9 @@ def test_azure_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPa
     assert resolved == {"materialized": True}
     assert len(resubmits) == 1
     assert len(calls) == 1
-    assert calls[0]["transport_mode"] == "object_storage"
+    # Issue #1697: pin the helper's ``transport`` argument (the explode-
+    # form kwargs are now an internal of ``resolve_and_materialize``).
+    assert calls[0]["transport"].mode == "object_storage"
 
 
 def test_google_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -321,7 +341,9 @@ def test_google_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyP
     assert resolved == {"materialized": True}
     assert len(resubmits) == 1
     assert len(calls) == 1
-    assert calls[0]["transport_mode"] == "object_storage"
+    # Issue #1697: pin the helper's ``transport`` argument (the explode-
+    # form kwargs are now an internal of ``resolve_and_materialize``).
+    assert calls[0]["transport"].mode == "object_storage"
 
 
 def test_handles_default_to_auto_transport_without_storage_config() -> None:

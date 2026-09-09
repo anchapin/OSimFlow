@@ -195,11 +195,16 @@ class TestDockerSwarmCompletion:
         )
         calls: list[dict[str, object]] = []
 
-        def _fake_materialize(callback_result: object, **kwargs: object) -> object:
-            calls.append(dict(kwargs))
-            return callback_result
+        def _fake_resolve_and_materialize(
+            result_hint: object, transport: object, **kwargs: object
+        ) -> object:
+            calls.append({"result_hint": result_hint, "transport": transport, **kwargs})
+            return result_hint
 
-        monkeypatch.setattr(swarm_mod, "materialize_object_storage_result", _fake_materialize)
+        # Issue #1697: patch ``resolve_and_materialize`` (the new helper)
+        # instead of ``materialize_object_storage_result`` directly —
+        # ``transport.py`` owns the explode-form field unpacking now.
+        monkeypatch.setattr(swarm_mod, "resolve_and_materialize", _fake_resolve_and_materialize)
 
         handle = _DockerSwarmHandle(
             service_name="svc-1",
@@ -215,9 +220,9 @@ class TestDockerSwarmCompletion:
         )
         resolved = handle.result()
         assert resolved == tmp_path / "s0"
-        assert calls, "materialize_object_storage_result must be invoked"
-        assert calls[0]["transport_mode"] == "object_storage"
-        assert calls[0]["result_storage_backend"] == "s3"
+        assert calls, "resolve_and_materialize must be invoked"
+        assert calls[0]["transport"].mode == "object_storage"
+        assert calls[0]["transport"].backend == "s3"
 
     def test_handle_returns_none_without_hint(self) -> None:
         executor = DockerSwarmExecutor.__new__(DockerSwarmExecutor)

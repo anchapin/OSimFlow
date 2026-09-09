@@ -941,7 +941,8 @@ Dask-JobQueue = dask `Future.cancel()`.
 result-reference contract (`coerce_transport_mode`,
 `validate_transport_mode`, `encode_transport_value`,
 `decode_transport_value`, `local_path_to_storage_key`,
-`resolve_result_for_callback`, `materialize_object_storage_result`)
+`resolve_result_for_callback`, `materialize_object_storage_result`,
+`resolve_and_materialize`)
 and, since issue #1541, exports the frozen `ResultTransportConfig`
 value object (mode + backend + bucket + prefix + endpoint +
 `presigned_url_expiration_s`) plus `resolve_transport_argument`:

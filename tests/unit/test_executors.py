@@ -1107,8 +1107,15 @@ class TestNomadHandle:
             ) -> dict[str, object]:  # noqa: ARG004
                 return {"ID": "alloc-r", "ClientStatus": "complete", "TaskStates": {}}
 
-        with patch("osimflow.executors.materialize_object_storage_result") as materialize:
-            materialize.side_effect = lambda value, **_: value
+        # Issue #1697: patch the new ``resolve_and_materialize`` helper
+        # on the per-executor module (where it's bound in the module
+        # globals — ``nomad_executor.py`` imports from
+        # ``osimflow.executors.transport`` directly) rather than
+        # ``materialize_object_storage_result`` on the package re-export.
+        with patch(
+            "osimflow.executors.nomad_executor.resolve_and_materialize"
+        ) as resolve_and_materialize:
+            resolve_and_materialize.side_effect = lambda result_hint, transport, **_: result_hint
             hint = Path("/repo/out/work/kpis/kpi_0001.json")
             handle = _NomadHandle(
                 job_id="job-1",
@@ -1125,7 +1132,7 @@ class TestNomadHandle:
             result = handle.result()
 
         assert result == hint
-        materialize.assert_called_once()
+        resolve_and_materialize.assert_called_once()
 
     def test_extract_failure_description(self) -> None:
         states = {"task": {"Events": [{"Description": "OOM killed"}]}}

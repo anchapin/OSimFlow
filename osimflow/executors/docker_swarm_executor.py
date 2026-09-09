@@ -41,8 +41,7 @@ from osimflow.executors.base import (
 )
 from osimflow.executors.transport import (
     ResultTransportConfig,
-    materialize_object_storage_result,
-    resolve_result_for_callback,
+    resolve_and_materialize,
     validate_transport_mode,
 )
 from osimflow.task_payload_hmac import (
@@ -140,20 +139,10 @@ class _DockerSwarmHandle(PollingHandle):
         # contract (issue #1680); ``submit_params`` no longer carries
         # the config so plug-in authors reading the documented
         # constructor signature cannot accidentally bypass it.
-        transport = self._transport
-        resolved = resolve_result_for_callback(
-            self._result_hint,
-            default=None,
-            transport_mode=transport.mode,
-        )
-        return materialize_object_storage_result(
-            resolved,
-            transport_mode=transport.mode,
-            result_storage_backend=transport.backend,
-            result_storage_bucket=transport.bucket,
-            result_storage_prefix=transport.prefix,
-            result_storage_endpoint=transport.endpoint,
-        )
+        # Issue #1697: the field explosion moved into ``transport.py``'s
+        # ``resolve_and_materialize`` helper so this call site is now
+        # a single line.
+        return resolve_and_materialize(self._result_hint, self._transport)
 
     def _failure_error(self, job: Any) -> RuntimeError:
         state = job.get("status", {}).get("State", "")
