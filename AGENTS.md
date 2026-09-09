@@ -726,8 +726,17 @@ name in this section.
   `osimflow/audit.py`, `osimflow/byos.py`,
   `osimflow/event_log.py`, `osimflow/json_utils.py`,
   `osimflow/results_db.py`,
-  `osimflow/validation.py` (`ValidationError`),
-  `osimflow/webhook.py` — internal supporting modules.
+  `osimflow/validation.py` (`ValidationError`) — internal
+  supporting modules.
+- `osimflow/webhook.py` — `WebhookClient` (campaign-completion
+  callback POSTs with retry/backoff) + `WebhookSSRFError` +
+  `WebhookDeliveryError`.  SSRF validation (issues #1175, #1671):
+  hostnames resolved via `socket.getaddrinfo` with fail-closed
+  semantics on resolution failure, `_BLOCKED_NETWORKS` covering
+  loopback / RFC1918 / CGNAT (100.64.0.0/10) / link-local /
+  metadata ranges (IPv4-mapped IPv6 unwrapped), and every redirect
+  hop re-validated (scheme + host) by `_SSRFValidatingRedirectHandler`
+  before being followed.
 - `osimflow/manifest.py` — per-sample manifest construction,
   atomic publishing, and the Coordinator status client
   (`report_sample_completion`); hosts
