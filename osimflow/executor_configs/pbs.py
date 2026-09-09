@@ -8,6 +8,7 @@ parsed CLI namespace by ``osimflow.__main__._build_executor``.
 """
 
 import argparse
+from typing import Any
 
 
 def add_arguments(parser_group: argparse.ArgumentParser) -> None:
@@ -30,3 +31,13 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Submit to real PBS (default: debug mode runs locally).",
     )
+
+
+def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
+    """Translate the flat CLI / API kwargs into ``PBSExecutor`` kwargs (issue #1681)."""
+    return {
+        "server": kwargs.get("pbs_server"),
+        "queue": kwargs.get("pbs_queue"),
+        "debug": not bool(kwargs.get("pbs_real", False)),
+        "submit_rps": kwargs.get("submit_rps"),
+    }

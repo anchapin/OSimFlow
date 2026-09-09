@@ -27,6 +27,16 @@ This package is deliberately a leaf (stdlib-only imports) so
 ``osimflow.config`` can compose the configs without pulling the
 executor implementations — and their SDK imports — into its import
 graph.
+
+Issue #1681: each module additionally exposes a
+``kwargs_for_executor(**kwargs) -> dict`` hook that the shared
+:func:`osimflow.executor_configs.build_executor` factory dispatches
+into. Both the CLI and the REST API now call this factory, so the
+executor-name → constructor-kwargs mapping is no longer duplicated
+across two transport surfaces. Plug-ins register a builder via
+:func:`osimflow.executor_configs.register_executor_kwargs_builder`
+(or rely on the kwargs-passthrough fallback for executors whose
+``__init__`` already accepts ``**kwargs``).
 """
 
 from osimflow.executor_configs import (  # noqa: F401 — re-exported modules
@@ -49,6 +59,13 @@ from osimflow.executor_configs.base import (
     iter_executor_argument_hooks,
     register_executor_arguments,
 )
+from osimflow.executor_configs.factory import (
+    ExecutorKwargsBuilder,
+    build_executor,
+    iter_executor_kwargs_builders,
+    register_executor_kwargs_builder,
+    supported_executor_names,
+)
 from osimflow.executor_configs.google_batch import GoogleBatchConfig
 from osimflow.executor_configs.local import LocalConfig
 from osimflow.executor_configs.nomad import NomadConfig
@@ -58,13 +75,18 @@ __all__ = [
     "AWSBatchConfig",
     "AzureBatchConfig",
     "ExecutorArgumentHook",
+    "ExecutorKwargsBuilder",
     "GoogleBatchConfig",
     "LocalConfig",
     "NomadConfig",
     "SlurmConfig",
     "add_executor_arguments",
+    "build_executor",
     "iter_executor_argument_hooks",
+    "iter_executor_kwargs_builders",
     "register_executor_arguments",
+    "register_executor_kwargs_builder",
+    "supported_executor_names",
 ]
 
 
@@ -84,3 +106,24 @@ register_executor_arguments("local", local.add_arguments)
 register_executor_arguments("nomad", nomad.add_arguments)
 register_executor_arguments("pbs", pbs.add_arguments)
 register_executor_arguments("slurm", slurm.add_arguments)
+
+
+# ======================================================================
+# Register built-in executor kwargs builders (issue #1681)
+# ======================================================================
+# Each builder is registered next to the matching ``add_arguments`` hook
+# so the CLI flags and the constructor-kwargs mapping live in the same
+# per-executor module. ``build_executor`` dispatches by
+# :class:`osimflow.executors.ExecutorRegistry` name and the contract
+# test in ``tests/contract/test_executor_factory_coverage.py`` asserts
+# every registered executor has a builder.
+register_executor_kwargs_builder("aws_batch", aws_batch.kwargs_for_executor)
+register_executor_kwargs_builder("azure_batch", azure_batch.kwargs_for_executor)
+register_executor_kwargs_builder("dask_jobqueue", dask_jobqueue.kwargs_for_executor)
+register_executor_kwargs_builder("docker_swarm", docker_swarm.kwargs_for_executor)
+register_executor_kwargs_builder("google_batch", google_batch.kwargs_for_executor)
+register_executor_kwargs_builder("kubernetes", kubernetes.kwargs_for_executor)
+register_executor_kwargs_builder("local", local.kwargs_for_executor)
+register_executor_kwargs_builder("nomad", nomad.kwargs_for_executor)
+register_executor_kwargs_builder("pbs", pbs.kwargs_for_executor)
+register_executor_kwargs_builder("slurm", slurm.kwargs_for_executor)

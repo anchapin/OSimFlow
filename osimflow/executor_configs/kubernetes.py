@@ -15,6 +15,7 @@ namespace by ``osimflow.__main__._build_executor``.
 """
 
 import argparse
+from typing import Any
 
 
 def add_arguments(parser_group: argparse.ArgumentParser) -> None:
@@ -91,3 +92,17 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "same value for signing."
         ),
     )
+
+
+def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
+    """Translate the flat CLI / API kwargs into ``KubernetesExecutor`` kwargs (issue #1681)."""
+    return {
+        "namespace": kwargs.get("kubernetes_namespace") or "default",
+        "poll_interval_s": kwargs.get("kubernetes_poll_interval_s") or 5.0,
+        "max_poll_interval_s": kwargs.get("kubernetes_max_poll_interval_s") or 60.0,
+        "backoff_limit": int(kwargs.get("kubernetes_backoff_limit", 0)),
+        "ttl_seconds_after_finished": kwargs.get("kubernetes_ttl_seconds_after_finished"),
+        "queue_name": kwargs.get("kubernetes_queue_name"),
+        "submit_rps": kwargs.get("submit_rps"),
+        "payload_secret_ref": kwargs.get("kubernetes_payload_secret_ref"),
+    }

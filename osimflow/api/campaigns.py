@@ -283,122 +283,21 @@ async def create_campaign(
 def _build_executor_from_request(body: CampaignCreateRequest) -> BaseExecutor:
     """Build the correct executor from a campaign creation request body.
 
-    Mirrors the CLI ``_build_executor`` logic in ``osimflow.__main__``.
+    Issue #1681: the previous hand-rolled mirror of
+    ``osimflow.__main__._build_executor`` silently drifted (it
+    omitted ``docker_swarm`` entirely) so the REST surface supported
+    9 of the CLI's 10 executors and invented a second, divergent
+    set of Slurm resource defaults. This is now a thin wrapper that
+    forwards the request body into the shared
+    :func:`osimflow.executor_configs.build_executor` factory, which
+    the CLI also calls — both surfaces use the same executor-name →
+    constructor-kwargs mapping and the same hardcoded-vs-policy
+    resource defaults.
     """
-    from osimflow.executors import (  # noqa: PLC0415
-        AWSBatchExecutor,
-        AzureBatchExecutor,
-        DaskJobQueueExecutor,
-        GoogleBatchExecutor,
-        KubernetesExecutor,
-        LocalExecutor,
-        NomadExecutor,
-        PBSExecutor,
-        SlurmExecutor,
-    )
+    from osimflow.executor_configs import build_executor  # noqa: PLC0415
 
-    _executors: dict[str, tuple[type[BaseExecutor], dict[str, object]]] = {
-        "local": (
-            LocalExecutor,
-            {"max_workers": body.max_workers},
-        ),
-        "slurm": (
-            SlurmExecutor,
-            {
-                "partition": body.slurm_partition or "short",
-                "account": body.slurm_account,
-                "cpus_per_task": 2,
-                "mem_gb": 4,
-                "time_h": 2,
-                "debug": not body.slurm_real,
-                "qos": body.slurm_qos,
-                "constraint": body.slurm_constraint,
-                "gres": body.slurm_gres,
-            },
-        ),
-        "aws_batch": (
-            AWSBatchExecutor,
-            {
-                "job_queue": body.aws_batch_queue or "osimflow-batch-queue",
-                "job_definition": body.aws_batch_job_definition,
-                "max_spot_price_usd": body.aws_batch_max_spot_price_usd,
-                "fallback_to_on_demand": body.aws_batch_fallback_to_on_demand,
-                "max_retries": body.aws_batch_max_retries,
-                "submit_rps": body.aws_batch_submit_rps,
-                "ecr_repository": body.ecr_repository,
-            },
-        ),
-        "azure_batch": (
-            AzureBatchExecutor,
-            {
-                "account_name": body.azure_batch_account_name,
-                "account_url": body.azure_batch_account_url,
-                "pool_id": body.azure_batch_pool_id or "osimflow-pool",
-                "location": body.azure_batch_location or "eastus",
-                "use_spot": body.azure_use_spot,
-                "fallback_to_on_demand": body.azure_fallback_to_on_demand,
-                "max_retries": body.azure_max_retries,
-            },
-        ),
-        "google_batch": (
-            GoogleBatchExecutor,
-            {
-                "project_id": body.google_batch_project_id,
-                "region": body.google_batch_region or "us-central1",
-                "batch_service_account": body.google_batch_service_account,
-                "use_spot": body.google_use_spot,
-                "fallback_to_on_demand": body.google_fallback_to_on_demand,
-                "max_retries": body.google_max_retries,
-            },
-        ),
-        "kubernetes": (
-            KubernetesExecutor,
-            {
-                "namespace": body.kubernetes_namespace or "default",
-                "poll_interval_s": body.kubernetes_poll_interval_s or 5.0,
-                "max_poll_interval_s": body.kubernetes_max_poll_interval_s or 60.0,
-            },
-        ),
-        "nomad": (
-            NomadExecutor,
-            {
-                "address": body.nomad_address,
-                "datacentre": body.nomad_datacentre or "dc1",
-                "verify_tls": body.nomad_tls_verify,
-                "tls": body.nomad_tls,
-                "cert": Path(body.nomad_cert) if body.nomad_cert else None,
-                "key": Path(body.nomad_key) if body.nomad_key else None,
-                "ca_cert": Path(body.nomad_ca_cert) if body.nomad_ca_cert else None,
-            },
-        ),
-        "pbs": (
-            PBSExecutor,
-            {
-                "server": body.pbs_server,
-                "queue": body.pbs_queue,
-                "debug": not body.pbs_real,
-            },
-        ),
-        "dask_jobqueue": (
-            DaskJobQueueExecutor,
-            {
-                "cluster_type": body.dask_cluster_type or "slurm",
-                "min_workers": 1 if body.dask_min_workers is None else body.dask_min_workers,
-                "max_workers": body.dask_max_workers or 10,
-                "cpus_per_worker": body.dask_cpus_per_worker or 2,
-                "memory_per_worker": body.dask_memory_per_worker or "4GiB",
-                "walltime": body.dask_walltime or "02:00:00",
-                "queue": body.dask_queue,
-                "project": body.dask_project,
-            },
-        ),
-    }
-
-    entry = _executors.get(body.executor)
-    if entry is None:
-        raise ValueError(f"unknown executor: {body.executor}")
-    executor_cls, kwargs = entry
-    return executor_cls(**kwargs)
+    payload = body.model_dump()
+    return build_executor(body.executor, **payload)
 
 
 def _launch_campaign_background(

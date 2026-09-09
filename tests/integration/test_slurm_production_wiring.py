@@ -439,33 +439,52 @@ def test_cli_parser_accepts_slurm_advanced_flag_values() -> None:
 
 # ---------------------------------------------------------------------------
 # __main__: _build_executor propagates the advanced flags to SlurmExecutor.
+# Issue #1681: the per-executor instantiation now flows through
+# ``osimflow.executor_configs.build_executor`` (single source of truth
+# for both the CLI and the REST surface). The factory resolves the
+# executor class through ``ExecutorRegistry._registry`` (a class
+# object captured at import time), so patching the module-level
+# ``SlurmExecutor`` symbol does NOT affect what the registry hands
+# out — patch the registry mapping instead. The factory also reads
+# the CLI fields via ``vars(args)`` so the test fixture must use
+# instance attributes (``self.x = y``), not class attributes.
 # ---------------------------------------------------------------------------
 def test_build_executor_propagates_slurm_advanced_flags() -> None:
     from osimflow.__main__ import _build_executor  # noqa: PLC0415
+    from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
 
     class A:
-        executor = "slurm"
-        slurm_partition = "gpu"
-        slurm_account = None
-        slurm_real = True
-        slurm_qos = "high"
-        slurm_constraint = "gpu"
-        slurm_gres = "gpu:1"
-        resource_quota = None
-        # Issue #1563: substrate-agnostic --submit-rps propagation; the
-        # production default for the shared TokenBucketRateLimiter is
-        # 100 (Slurm has no I/O quota to bump against).
-        submit_rps = 100
+        def __init__(self) -> None:
+            self.executor = "slurm"
+            self.slurm_partition = "gpu"
+            self.slurm_account = None
+            self.slurm_real = True
+            self.slurm_qos = "high"
+            self.slurm_constraint = "gpu"
+            self.slurm_gres = "gpu:1"
+            self.resource_quota = None
+            # Issue #1563: substrate-agnostic --submit-rps propagation;
+            # the production default for the shared TokenBucketRateLimiter
+            # is 100 (Slurm has no I/O quota to bump against).
+            self.submit_rps = 100
 
-    with patch("osimflow.__main__.SlurmExecutor") as mock_cls:
-        mock_cls.return_value.name = "slurm"
+    class _MockSlurm:
+        name = "slurm"
+        # Class-level recording so the test can read back the kwargs
+        # without holding an instance reference.
+        call_kwargs: dict[str, object] = {}
+
+        def __init__(self, **kwargs: object) -> None:
+            type(self).call_kwargs = kwargs
+
+    with patch.dict(ExecutorRegistry._registry, {"slurm": _MockSlurm}, clear=False):
         _build_executor(A())  # type: ignore[arg-type]
-    kwargs = mock_cls.call_args.kwargs
-    assert kwargs.get("qos") == "high"
-    assert kwargs.get("constraint") == "gpu"
-    assert kwargs.get("gres") == "gpu:1"
-    assert kwargs.get("debug") is False  # --slurm_real
-    assert kwargs.get("submit_rps") == 100
+    captured = _MockSlurm.call_kwargs
+    assert captured.get("qos") == "high"
+    assert captured.get("constraint") == "gpu"
+    assert captured.get("gres") == "gpu:1"
+    assert captured.get("debug") is False  # --slurm_real
+    assert captured.get("submit_rps") == 100
 
 
 # ---------------------------------------------------------------------------

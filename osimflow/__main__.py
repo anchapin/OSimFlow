@@ -27,21 +27,21 @@ import httpx
 import yaml
 
 from osimflow import (
-    AWSBatchExecutor,
-    AzureBatchExecutor,
+    AWSBatchExecutor,  # noqa: F401 — re-exported for the historical ``osimflow.__main__.<X>Executor`` patch seam (pre-#1681).
+    AzureBatchExecutor,  # noqa: F401 — see above.
     BaseExecutor,
     Campaign,
     CampaignConfig,
     CampaignRecord,
     CampaignRegistry,
-    DaskJobQueueExecutor,
-    DockerSwarmExecutor,
-    GoogleBatchExecutor,
-    KubernetesExecutor,
+    DaskJobQueueExecutor,  # noqa: F401 — see above.
+    DockerSwarmExecutor,  # noqa: F401 — see above.
+    GoogleBatchExecutor,  # noqa: F401 — see above.
+    KubernetesExecutor,  # noqa: F401 — see above.
     LocalExecutor,
-    NomadExecutor,
-    PBSExecutor,
-    SlurmExecutor,
+    NomadExecutor,  # noqa: F401 — see above.
+    PBSExecutor,  # noqa: F401 — see above.
+    SlurmExecutor,  # noqa: F401 — see above.
     build_task_queue,
     load_config,
 )
@@ -250,189 +250,32 @@ def _warn_if_mutable_tag(executor_name: str, container_digest: str | None) -> No
 
 
 def _build_executor(args: argparse.Namespace) -> BaseExecutor:  # noqa: PLR0911, PLR0912
-    """Dispatch to the correct executor based on ``args.executor``."""
-    max_concurrent_samples = _extract_max_concurrent_samples(args.resource_quota)
-    if args.executor == "local":
-        return LocalExecutor(
-            max_workers=args.max_workers,
-            max_concurrent_samples=max_concurrent_samples,
-            submit_rps=args.submit_rps,
-        )
-    # Slurm executor — partition, account, and submitit debug flag.
-    if args.executor == "slurm":
-        return SlurmExecutor(
-            partition=args.slurm_partition,
-            account=args.slurm_account,
-            cpus_per_task=2,
-            mem_gb=4,
-            time_h=2,
-            debug=not args.slurm_real,  # debug unless --slurm_real
-            qos=args.slurm_qos,
-            constraint=args.slurm_constraint,
-            gres=args.slurm_gres,
-            submit_rps=args.submit_rps,
-        )
-    # AWS Batch executor — job queue, job definition, and Spot handling.
-    # Issue #1563: ``--submit-rps`` (substrate-agnostic) overrides
-    # ``--aws-batch-submit-rps`` (legacy) when both are set.
-    if args.executor == "aws_batch":
-        aws_rps = args.submit_rps if args.submit_rps is not None else args.aws_batch_submit_rps
-        return AWSBatchExecutor(
-            job_queue=args.aws_batch_queue,
-            job_definition=args.aws_batch_job_definition,
-            max_spot_price_usd=(
-                args.aws_batch_max_spot_price_usd
-                if args.aws_batch_max_spot_price_usd is not None
-                else None
-            ),
-            fallback_to_on_demand=args.aws_batch_fallback_to_on_demand,
-            max_retries=args.aws_batch_max_retries,
-            instance_type=args.aws_batch_instance_type,
-            submit_rps=aws_rps,
-            # Issue #1633: surface the containerOverrides.secrets-based
-            # secret delivery from the CLI — without it the HMAC secret
-            # ships as a literal env value readable via DescribeJobs.
-            payload_secret_arn=args.aws_batch_payload_secret_arn,
-        )
-    # Nomad executor — address and datacentre.
-    if args.executor == "nomad":
-        # Issue #1316: derive a unique dispatch job ID per campaign to prevent
-        # concurrent campaigns on the same Nomad cluster from overwriting each other's
-        # parameterized job spec. The user can override with --nomad-dispatch-job-id.
-        dispatch_job_id = args.nomad_dispatch_job_id
-        if dispatch_job_id is None and getattr(args, "outdir", None):
-            dispatch_job_id = f"osimflow-worker-{abs(hash(str(args.outdir)))}"
-        # Issue #1563: ``--submit-rps`` takes precedence over the
-        # legacy ``--nomad-fanout-submit-rate-per-sec`` flag (still
-        # accepted for back-compat but superseded). The legacy kwarg
-        # has been removed from NomadExecutor.__init__; the
-        # substrate-agnostic ``submit_rps`` replaces it.
-        nomad_rps = args.submit_rps
-        if nomad_rps is None:
-            nomad_rps = getattr(args, "nomad_fanout_submit_rate_per_sec", None)
-        return NomadExecutor(
-            address=args.nomad_address,
-            datacentre=args.nomad_datacentre,
-            dispatch_policy=args.nomad_dispatch_policy,
-            estimated_run_size=int(args.n_samples),
-            fanout_submit_chunk_size=args.nomad_fanout_submit_chunk_size,
-            allocation_resolution_timeout_s=args.nomad_allocation_resolution_timeout_s,
-            poll_interval_s=args.nomad_poll_interval_s,
-            max_poll_interval_s=args.nomad_max_poll_interval_s,
-            remote_results_only=args.nomad_remote_results_only,
-            verify_tls=args.nomad_tls_verify,
-            tls=args.nomad_tls,
-            cert=args.nomad_cert,
-            key=args.nomad_key,
-            ca_cert=args.nomad_ca_cert,
-            dispatch_job_id=dispatch_job_id,
-            allow_insecure_token=args.nomad_allow_insecure_token,
-            submit_rps=nomad_rps,
-            # Issue #1535: surface the #1449 Vault-based secret delivery
-            # from the CLI — without it the HMAC secret ships as a
-            # literal dispatch-meta entry readable via `nomad job inspect`.
-            vault_secret_path=args.nomad_vault_secret_path,
-            vault_secret_key=args.nomad_vault_secret_key,
-        )
-    # Azure Batch executor — account credentials, pool, and Spot handling.
-    if args.executor == "azure_batch":
-        return AzureBatchExecutor(
-            account_name=args.azure_batch_account_name,
-            account_url=args.azure_batch_account_url,
-            pool_id=args.azure_batch_pool_id,
-            location=args.azure_batch_location,
-            use_spot=args.azure_use_spot,
-            fallback_to_on_demand=args.azure_fallback_to_on_demand,
-            max_retries=args.azure_max_retries,
-            submit_rps=args.submit_rps,
-            # Issue #1633: reserved surface — the executor refuses this
-            # option at task-env build time with a documented error
-            # (azure-batch 15.x has no task-level secret-injection
-            # mechanism); the pool-level managed-identity pattern is
-            # documented in docs/secret-management.md.
-            payload_secret_id=args.azure_batch_payload_secret_id,
-        )
-    # Google Cloud Batch executor — project, region, service account, and Spot handling.
-    if args.executor == "google_batch":
-        return GoogleBatchExecutor(
-            project_id=args.google_batch_project_id,
-            region=args.google_batch_region,
-            batch_service_account=args.google_batch_service_account,
-            use_spot=args.google_use_spot,
-            fallback_to_on_demand=args.google_fallback_to_on_demand,
-            max_retries=args.google_max_retries,
-            submit_rps=args.submit_rps,
-            # Issue #1633: surface the environment.secret_variables-based
-            # secret delivery from the CLI — without it the HMAC secret
-            # ships as a literal env value in the Batch job spec.
-            payload_secret_name=args.google_batch_payload_secret_name,
-        )
-    # Kubernetes executor — namespace, polling config, and native Job
-    # controls (issue #997). Defaults preserve the pre-#997 manifest
-    # byte-for-byte; passing flags here is opt-in.
-    if args.executor == "kubernetes":
-        return KubernetesExecutor(
-            namespace=args.kubernetes_namespace,
-            poll_interval_s=args.kubernetes_poll_interval_s,
-            max_poll_interval_s=args.kubernetes_max_poll_interval_s,
-            backoff_limit=args.kubernetes_backoff_limit,
-            ttl_seconds_after_finished=args.kubernetes_ttl_seconds_after_finished,
-            queue_name=args.kubernetes_queue_name,
-            submit_rps=args.submit_rps,
-            # Issue #1535: surface the #1449 secretKeyRef-based secret
-            # delivery from the CLI — without it the HMAC secret ships
-            # as a literal env value serialized into the Job spec.
-            payload_secret_ref=args.kubernetes_payload_secret_ref,
-        )
-    # PBS executor — server, queue, and debug flag.
-    if args.executor == "pbs":
-        return PBSExecutor(
-            server=args.pbs_server,
-            queue=args.pbs_queue,
-            debug=not args.pbs_real,  # debug unless --pbs-real
-            submit_rps=args.submit_rps,
-        )
-    if args.executor == "dask_jobqueue":
-        return DaskJobQueueExecutor(
-            cluster_type=args.dask_cluster_type,
-            min_workers=args.dask_min_workers,
-            max_workers=args.dask_max_workers,
-            cpus_per_worker=args.dask_cpus_per_worker,
-            memory_per_worker=args.dask_memory_per_worker,
-            walltime=args.dask_walltime,
-            queue=args.dask_queue,
-            project=args.dask_project,
-            submit_rps=args.submit_rps,
-        )
-    if args.executor == "docker_swarm":
-        return DockerSwarmExecutor(
-            poll_interval_s=args.docker_swarm_poll_interval_s,
-            max_poll_interval_s=args.docker_swarm_max_poll_interval_s,
-            image=args.docker_swarm_image,
-            network=args.docker_swarm_network,
-            submit_rps=args.submit_rps,
-            # Issue #1633: surface the Docker-secret (file-mounted)
-            # secret delivery from the CLI — without it the HMAC secret
-            # ships as a literal env value on the Swarm service.
-            payload_secret=args.docker_swarm_payload_secret,
-        )
+    """Dispatch to the correct executor based on ``args.executor``.
 
-    # Fall back to the ExecutorRegistry for plugin-discovered executors
-    # (issue #432, #1275).  Third-party executors registered via entry_points
-    # are available here.  CLI args are forwarded as kwargs so plugin
-    # executors can receive configuration (issue #1275).
-    from osimflow.executors import ExecutorRegistry  # noqa: PLC0415
+    Issue #1681: the per-executor ``if args.executor == "..."`` chain
+    used to live in both this function and
+    ``osimflow.api.campaigns._build_executor_from_request``. The two
+    copies silently drifted (the API mirror omitted ``docker_swarm``)
+    so the REST surface supported 9 of the CLI's 10 executors. The
+    CLI now forwards its parsed namespace into the shared
+    :func:`osimflow.executor_configs.build_executor` factory; the
+    REST API does the same with its request body. Per-executor
+    kwargs translation lives in each module under
+    :mod:`osimflow.executor_configs`.
 
-    if args.executor in ExecutorRegistry.list_available():
-        executor_cls = ExecutorRegistry.get(args.executor)
-        log.info(
-            "instantiating executor '%s' from registry (class=%s)",
-            args.executor,
-            executor_cls.__qualname__,
-        )
-        return executor_cls(**vars(args))
+    The campaign-level ``max_concurrent_samples`` quota is the only
+    CLI-specific derivation (extracted from ``--resource-quota``),
+    so it is computed here and merged into the flat kwargs payload
+    the factory consumes — preserving the pre-#1681 behaviour for
+    every substrate.
+    """
+    payload = vars(args).copy()
+    payload["max_concurrent_samples"] = _extract_max_concurrent_samples(
+        getattr(args, "resource_quota", None)
+    )
+    from osimflow.executor_configs import build_executor  # noqa: PLC0415
 
-    raise ValueError(f"unknown executor: {args.executor}")
+    return build_executor(args.executor, **payload)
 
 
 def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915

@@ -3265,7 +3265,7 @@
           "executor": {
             "type": "string",
             "title": "Executor",
-            "description": "Executor type: local | slurm | aws_batch | azure_batch | google_batch | dask_jobqueue | nomad | pbs | kubernetes",
+            "description": "Executor type: local | slurm | aws_batch | azure_batch | google_batch | dask_jobqueue | nomad | pbs | kubernetes | docker_swarm. All 10 built-in executors are supported through the shared osimflow.executor_configs.build_executor factory (issue #1681).",
             "default": "local"
           },
           "algorithm": {
@@ -3793,6 +3793,78 @@
             ],
             "title": "Dask Project",
             "description": "HPC project/account for Dask workers"
+          },
+          "docker_swarm_poll_interval_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docker Swarm Poll Interval S",
+            "description": "Docker Swarm service poll interval (seconds)"
+          },
+          "docker_swarm_max_poll_interval_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docker Swarm Max Poll Interval S",
+            "description": "Docker Swarm service max poll interval (seconds)"
+          },
+          "docker_swarm_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docker Swarm Image",
+            "description": "Docker image for Swarm services (default: nrel/openstudio:3.11.0). Avoid 'latest' for production due to supply-chain risk."
+          },
+          "docker_swarm_network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docker Swarm Network",
+            "description": "Docker network to attach Swarm services to"
+          },
+          "docker_swarm_payload_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docker Swarm Payload Secret",
+            "description": "Name of a pre-created Docker secret holding the task-payload HMAC secret (issue #1633). The remote runner reads the secret from /run/secrets/<name> so the raw value never appears in the service spec."
+          },
+          "submit_rps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submit Rps",
+            "description": "Substrate-agnostic submit rate limit in requests per second, honored by every executor (issue #1563)."
           }
         },
         "type": "object",

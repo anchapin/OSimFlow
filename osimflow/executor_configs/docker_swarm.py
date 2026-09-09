@@ -9,6 +9,7 @@ parsed CLI namespace by ``osimflow.__main__._build_executor``.
 """
 
 import argparse
+from typing import Any
 
 
 def add_arguments(parser_group: argparse.ArgumentParser) -> None:
@@ -52,3 +53,22 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "same value for signing. See docs/secret-management.md."
         ),
     )
+
+
+def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
+    """Translate the flat CLI / API kwargs into ``DockerSwarmExecutor`` kwargs (issue #1681).
+
+    Adds the previously-missing ``docker_swarm`` wiring on the API
+    side: the pre-#1681 hand-rolled API mirror omitted this executor
+    entirely so the REST surface supported 9 of the CLI's 10
+    executors. The shared factory now constructs it from the same
+    flat kwargs the CLI consumes.
+    """
+    return {
+        "poll_interval_s": kwargs.get("docker_swarm_poll_interval_s") or 5.0,
+        "max_poll_interval_s": kwargs.get("docker_swarm_max_poll_interval_s") or 60.0,
+        "image": kwargs.get("docker_swarm_image") or "nrel/openstudio:3.11.0",
+        "network": kwargs.get("docker_swarm_network"),
+        "submit_rps": kwargs.get("submit_rps"),
+        "payload_secret": kwargs.get("docker_swarm_payload_secret"),
+    }
