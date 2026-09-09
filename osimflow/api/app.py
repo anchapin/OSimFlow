@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -1353,7 +1354,7 @@ async def root_redirect() -> RedirectResponse:
 # ---------------------------------------------------------------------------
 
 
-def create_app(
+def create_app(  # noqa: PLR0912
     outdir: Path | None = None,
     *,
     campaigns_base_dir: Path | None = None,
@@ -1480,6 +1481,50 @@ def create_app(
     app.state.api_key_store = key_store
     # Keep api_key for backward compat
     app.state.api_key = api_key
+
+    # --- Coordinator bucket allowlist (issue #1670) ---
+    # The Coordinator endpoint accepts client-supplied ``result_storage_bucket``
+    # / ``result_storage_endpoint`` / ``allow_insecure_storage_endpoint`` from
+    # the handoff payload and then uses its own IAM credentials to list and
+    # presign that bucket — a readwrite user could otherwise aim the
+    # Coordination plane at any bucket the server's role can read, or
+    # self-serve the #1386 plaintext-endpoint escape hatch. Operators gate
+    # that here with a server-side allowlist (env var) and endpoint policy.
+    # Unset allowlist = legacy behavior, with a startup WARNING mirroring
+    # the #1633 security-warning pattern.
+    _allowed_raw = os.environ.get("OSIMFLOW_ALLOWED_RESULT_BUCKETS", "").strip()
+    if _allowed_raw:
+        app.state.allowed_result_buckets = frozenset(
+            b.strip() for b in _allowed_raw.split(",") if b.strip()
+        )
+    else:
+        app.state.allowed_result_buckets = None
+        logging.getLogger("osimflow.api.app").warning(
+            "SECURITY (issue #1670): OSIMFLOW_ALLOWED_RESULT_BUCKETS is unset — "
+            "Coordinator handoffs and result-storage URLs will accept any "
+            "client-supplied bucket. Set it to a comma-separated allowlist of "
+            "bucket/container names before serving untrusted clients."
+        )
+    app.state.result_storage_endpoint = os.environ.get("OSIMFLOW_RESULT_STORAGE_ENDPOINT") or None
+    # Default secure (no plaintext endpoints). The CLI's
+    # ``--allow-insecure-storage-endpoint`` escape hatch is operator-only and
+    # wired through OSIMFLOW_ALLOW_INSECURE_STORAGE_ENDPOINT here so a client
+    # cannot self-serve it via the handoff payload's extra dict.
+    app.state.allow_insecure_storage_endpoint = bool(
+        os.environ.get("OSIMFLOW_ALLOW_INSECURE_STORAGE_ENDPOINT")
+    )
+
+    # Mirror the allowlist / endpoint policy into the coordinator module's
+    # process-wide dict so background threads (aggregation workers,
+    # completion-notification dispatch) enforce the same rules without
+    # needing a request context (issue #1670).
+    from osimflow.api.coordinator import set_coordinator_server_endpoint_policy  # noqa: PLC0415
+
+    set_coordinator_server_endpoint_policy(
+        allowed_result_buckets=app.state.allowed_result_buckets,
+        result_storage_endpoint=app.state.result_storage_endpoint,
+        allow_insecure_storage_endpoint=app.state.allow_insecure_storage_endpoint,
+    )
 
     # --- Registry for campaign ID resolution (issue #404) ---
     registry: Any = None
