@@ -129,7 +129,7 @@ COVERAGE_DATA = REPO_ROOT / ".coverage"
 FLOORS: dict[str, float] = {
     # --- osimflow/_campaign_*.py collaborators (#1462/#1463/#1464) ---
     "osimflow/_campaign_artifacts.py": 90.28,  # measured 91.28%
-    "osimflow/_campaign_analysis.py": 14.79,  # measured 15.79% (#1542; fanout-oracle subset — ratchet up with the full gate)
+    "osimflow/_campaign_analysis.py": 99.00,  # measured 100.00% (#1675; full gate — error branches + numeric sanity)
     "osimflow/_campaign_baseline.py": 97.44,  # measured 98.44%
     "osimflow/_campaign_chaos.py": 28.33,  # measured 29.33% (ratchet up as #1013 chaos tests directly cover)
     "osimflow/_campaign_code_hashes.py": 91.99,  # measured 92.99%
