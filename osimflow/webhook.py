@@ -74,8 +74,7 @@ def _resolved_addresses(
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except (socket.gaierror, OSError) as exc:
         raise WebhookSSRFError(
-            f"Could not resolve webhook host {host!r} — treating it as "
-            f"blocked (fail-closed): {exc}"
+            f"Could not resolve webhook host {host!r} — treating it as blocked (fail-closed): {exc}"
         ) from exc
 
     addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
@@ -208,8 +207,7 @@ class WebhookClient:
             )
 
         raise WebhookSSRFError(
-            f"URL scheme must be https:// (or http:// for allowed hosts). "
-            f"Got {scheme!r} in {url!r}"
+            f"URL scheme must be https:// (or http:// for allowed hosts). Got {scheme!r} in {url!r}"
         )
 
     def _check_ip_blocklist(self, host: str) -> None:
@@ -301,8 +299,7 @@ class WebhookClient:
                 # A redirect hop pointed somewhere forbidden (issue #1671).
                 # Do not retry: the target is blocked, not transiently failing.
                 log.error(
-                    "webhook to %s blocked by SSRF validation on a redirect "
-                    "hop: %s",
+                    "webhook to %s blocked by SSRF validation on a redirect hop: %s",
                     self.url,
                     exc,
                 )
