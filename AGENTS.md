@@ -612,6 +612,31 @@ name in this section.
   #346) and `step_compute_uq_indices` (issue #530) extracted from
   `Campaign`; `Campaign` inherits the mixin so the step-method
   surface and the data-driven DAG dispatcher are unchanged.
+- `osimflow/_campaign_optimization.py` — `CampaignOptimizationMixin`
+  (issue #1679): the GA / NSGA-II / DE / SPEA2 generational
+  optimization loop (`_run_one_generation`, issue #270 feedback
+  loop with the data-driven step dispatcher of #1392), the
+  per-generation best-objective extraction
+  (`_extract_best_objective`), and the per-generation Pareto
+  front persistence (`_persist_pareto_front`, issue #141)
+  extracted from `Campaign`; `Campaign` inherits the mixin so
+  the historical method surface
+  (`campaign._run_one_generation(...)` &
+  `campaign._persist_pareto_front(...)` &
+  `campaign._extract_best_objective(...)`) is unchanged.
+- `osimflow/_campaign_kpis.py` — `CampaignKpisMixin` (issue
+  #1679): the `EXTRACT_KPIS` per-sample fan-out step
+  (`step_extract_kpis` — issue #1082 cache key, the #286/#1533/
+  #1566 bounded-submit-and-await chunking, the #847/#1180
+  failure-recording path) and the worker direct-to-storage
+  push helper (`_publish_sample_results`, issue #625) extracted
+  from `Campaign`; `Campaign` inherits the mixin so the
+  historical method surface
+  (`campaign.step_extract_kpis(...)` &
+  `campaign._publish_sample_results(...)`) is unchanged and
+  the data-driven dispatcher
+  (``getattr(self, step_info.method)``) still resolves the
+  method.
 - `osimflow/_campaign_types.py` — `SampleSpec` + `VariableSpec`
   TypedDicts (issue #1542), re-exported from
   `osimflow.campaign` so existing imports keep working.
