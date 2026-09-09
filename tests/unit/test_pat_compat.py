@@ -245,7 +245,8 @@ class TestCreatePATAnalysis:
                         "variables": [],
                     },
                 },
-                "template_sim_package": "/nonexistent/path",
+                # Inside the base but nonexistent → 422 not-a-directory branch
+                "template_sim_package": str(campaign_outdir / "nonexistent-pkg"),
             },
         )
         assert resp.status_code == 422
@@ -358,7 +359,8 @@ class TestCreatePATAnalysis:
         resp = client.post(
             "/api/v1/pat/analyses",
             json={
-                "osa_path": "/nonexistent/file.osa",
+                # Inside the base but nonexistent → 422 file-not-found branch
+                "osa_path": str(campaign_outdir / "nonexistent.osa"),
                 "template_sim_package": str(tsp),
             },
         )
@@ -401,6 +403,168 @@ class TestCreatePATAnalysis:
         analysis_id = data["analysis_id"]
         campaign_dir = campaign_outdir / analysis_id
         assert (campaign_dir / "run.json").exists()
+
+
+class TestCreatePATAnalysisPathContainment:
+    """Path-containment enforcement on POST /api/v1/pat/analyses (issue #1669).
+
+    All client-supplied host paths (``outdir``, ``osa_path``,
+    ``template_sim_package``) must resolve within the operator-configured
+    campaigns base directory — mirroring the campaigns-router fix for
+    issue #1639.  A readwrite user must not be able to make the server
+    read arbitrary host files or write campaign artifacts into arbitrary
+    directories.
+    """
+
+    def _client(self, campaign_outdir: Path) -> TestClient:
+        app = create_app(campaigns_base_dir=campaign_outdir, read_only=False)
+        return TestClient(app)
+
+    def test_outdir_outside_base_rejected(self, campaign_outdir: Path) -> None:
+        """outdir=/tmp (outside base) → 400, no directory created."""
+        import tempfile
+
+        outside = Path(tempfile.gettempdir()) / "osimflow-1669-outdir"
+        client = self._client(campaign_outdir)
+        resp = client.post(
+            "/api/v1/pat/analyses",
+            json={
+                "analysis": {
+                    "problem": {
+                        "algorithm": {"type": "lhs", "number_of_samples": 2},
+                        "variables": [],
+                    },
+                },
+                "template_sim_package": str(campaign_outdir / "template_pkg"),
+                "outdir": str(outside),
+            },
+        )
+        assert resp.status_code == 400
+        assert "campaigns base directory" in resp.json()["detail"]
+        assert not outside.exists()
+
+    def test_outdir_traversal_escape_rejected(self, campaign_outdir: Path) -> None:
+        """outdir with .. escaping the base → 400."""
+        client = self._client(campaign_outdir)
+        resp = client.post(
+            "/api/v1/pat/analyses",
+            json={
+                "analysis": {
+                    "problem": {
+                        "algorithm": {"type": "lhs", "number_of_samples": 2},
+                        "variables": [],
+                    },
+                },
+                "template_sim_package": str(campaign_outdir / "template_pkg"),
+                "outdir": str(campaign_outdir / ".." / "escaped"),
+            },
+        )
+        assert resp.status_code == 400
+        assert "outdir" in resp.json()["detail"]
+
+    def test_osa_path_outside_base_rejected(self, campaign_outdir: Path) -> None:
+        """osa_path pointing at an arbitrary host file (/etc/passwd-style) → 400.
+
+        The containment check must fire before the file is read, so the
+        parsed content of the host file can never surface in the response.
+        """
+        tsp = campaign_outdir / "template_pkg"
+        tsp.mkdir()
+        client = self._client(campaign_outdir)
+        resp = client.post(
+            "/api/v1/pat/analyses",
+            json={
+                "osa_path": "/etc/passwd",
+                "template_sim_package": str(tsp),
+            },
+        )
+        assert resp.status_code == 400
+        assert "osa_path" in resp.json()["detail"]
+        assert "root:" not in resp.text
+
+    def test_template_sim_package_outside_base_rejected(self, campaign_outdir: Path) -> None:
+        """template_sim_package outside the base → 400 even when it exists."""
+        import tempfile
+
+        outside_pkg = Path(tempfile.gettempdir()) / "osimflow-1669-tsp"
+        outside_pkg.mkdir(exist_ok=True)
+        try:
+            client = self._client(campaign_outdir)
+            resp = client.post(
+                "/api/v1/pat/analyses",
+                json={
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 2},
+                            "variables": [],
+                        },
+                    },
+                    "template_sim_package": str(outside_pkg),
+                },
+            )
+            assert resp.status_code == 400
+            assert "template_sim_package" in resp.json()["detail"]
+        finally:
+            outside_pkg.rmdir()
+
+    def test_symlink_inside_base_pointing_outside_rejected(self, campaign_outdir: Path) -> None:
+        """A symlink within the base resolving outside it → 400.
+
+        The comparison is resolved-to-resolved (mirroring campaigns.py:216-218),
+        so symlinks cannot smuggle an out-of-base target past the check.
+        """
+        import tempfile
+
+        tsp_link = campaign_outdir / "tsp_link"
+        real_tsp = Path(tempfile.gettempdir()) / "osimflow-1669-real-pkg"
+        real_tsp.mkdir(exist_ok=True)
+        tsp_link.symlink_to(real_tsp, target_is_directory=True)
+        try:
+            client = self._client(campaign_outdir)
+            resp = client.post(
+                "/api/v1/pat/analyses",
+                json={
+                    "analysis": {
+                        "problem": {
+                            "algorithm": {"type": "lhs", "number_of_samples": 2},
+                            "variables": [],
+                        },
+                    },
+                    "template_sim_package": str(tsp_link),
+                },
+            )
+            assert resp.status_code == 400
+            assert "template_sim_package" in resp.json()["detail"]
+        finally:
+            tsp_link.unlink()
+            real_tsp.rmdir()
+
+    def test_outdir_inside_base_accepted(self, campaign_outdir: Path) -> None:
+        """A client-supplied outdir inside the base is still accepted (201)."""
+        tsp = campaign_outdir / "template_pkg"
+        tsp.mkdir()
+        outdir = campaign_outdir / "my-analysis"
+        client = self._client(campaign_outdir)
+        resp = client.post(
+            "/api/v1/pat/analyses",
+            json={
+                "analysis": {
+                    "problem": {
+                        "algorithm": {"type": "lhs", "number_of_samples": 2},
+                        "variables": [
+                            {
+                                "name": "v",
+                                "distribution": {"type": "uniform", "minimum": 0, "maximum": 1},
+                            },
+                        ],
+                    },
+                },
+                "template_sim_package": str(tsp),
+                "outdir": str(outdir),
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        assert (outdir / "campaign_config.json").exists()
 
 
 # ---------------------------------------------------------------------------

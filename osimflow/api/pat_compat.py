@@ -17,7 +17,9 @@ Endpoints
     Create a new analysis (campaign) from a PAT-style JSON payload.
     Accepts both the raw PAT ``analysis.json`` format and a simplified
     ``{osa_path, template_sim_package, n_samples}`` body that triggers
-    OSA import internally.
+    OSA import internally.  All client-supplied host paths (``outdir``,
+    ``osa_path``, ``template_sim_package``) must resolve within the
+    operator-configured campaigns base directory (issue #1669).
 
 ``GET /api/v1/pat/analyses/{analysis_id}/status``
     PAT-style status polling.  Returns analysis-level status with
@@ -50,6 +52,10 @@ from osimflow.api.campaigns import (
     _derive_status,
     _load_campaign_json,
 )
+from osimflow.validation import (
+    ValidationError,
+    validate_path_within_base,
+)
 
 log = logging.getLogger("osimflow.api.pat_compat")
 
@@ -77,14 +83,20 @@ class PATAnalysisRequest(BaseModel):
 
     osa_path: str | None = Field(
         default=None,
-        description="Path to a .osa or analysis.json file to import",
+        description=(
+            "Path to a .osa or analysis.json file to import. Must resolve "
+            "within the server's campaigns base directory (issue #1669)"
+        ),
     )
     analysis: dict[str, Any] | None = Field(
         default=None,
         description="Inline OSA analysis JSON object (alternative to osa_path)",
     )
     template_sim_package: str = Field(
-        description="Path to the template simulation package directory",
+        description=(
+            "Path to the template simulation package directory. Must resolve "
+            "within the server's campaigns base directory (issue #1669)"
+        ),
     )
     n_samples: int = Field(
         default=10,
@@ -140,6 +152,31 @@ class PATDataPointResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_within_base(raw_path: str, resolved_base: Path, field: str) -> Path:
+    """Resolve a client-supplied host path and enforce containment (issue #1669).
+
+    All paths accepted by the analysis-create endpoint (``outdir``,
+    ``osa_path``, ``template_sim_package``) must resolve within the
+    operator-configured campaigns base directory — the same allowlist root
+    the campaigns router uses for ``outdir`` (issue #1639) and where
+    ``/api/v1/files`` uploads land.  Mirrors ``campaigns.py`` semantics:
+    compare resolved-to-resolved so symlinked paths and ``..`` traversal
+    cannot escape the base.
+    """
+    resolved = Path(raw_path).resolve()
+    try:
+        validate_path_within_base(resolved, resolved_base)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{field} must resolve within the campaigns base directory "
+                f"({resolved_base}); got {resolved}"
+            ),
+        ) from exc
+    return resolved
 
 
 def _import_osa_to_campaign(
@@ -239,29 +276,40 @@ async def create_pat_analysis(
     base = _campaigns_base_dir(request)
     base.mkdir(parents=True, exist_ok=True)
 
+    # Path containment (issue #1669): every client-supplied host path is
+    # confined to the operator-configured campaigns base directory.
+    resolved_base = base.resolve()
+
     # Generate campaign ID
     campaign_id = f"pat-{uuid.uuid4().hex[:8]}"
-    outdir = Path(body.outdir).resolve() if body.outdir is not None else base / campaign_id
+    if body.outdir is not None:
+        outdir = _resolve_within_base(body.outdir, resolved_base, "outdir")
+    else:
+        outdir = base / campaign_id
     outdir.mkdir(parents=True, exist_ok=True)
 
     # Validate template_sim_package
-    tsp = Path(body.template_sim_package).resolve()
+    tsp = _resolve_within_base(body.template_sim_package, resolved_base, "template_sim_package")
     if not tsp.is_dir():
         raise HTTPException(
             status_code=422,
             detail=f"template_sim_package not found or not a directory: {tsp}",
         )
 
+    # Validate osa_path containment before any file is read (issue #1669)
+    osa_path: Path | None = None
+    if body.osa_path is not None:
+        osa_path = _resolve_within_base(body.osa_path, resolved_base, "osa_path")
+        if not osa_path.exists():
+            raise HTTPException(
+                status_code=422,
+                detail=f"OSA file not found: {osa_path}",
+            )
+
     # Import OSA → variables.yml
     variables_yml_path: Path
     try:
-        if body.osa_path is not None:
-            osa_path = Path(body.osa_path).resolve()
-            if not osa_path.exists():
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"OSA file not found: {osa_path}",
-                )
+        if osa_path is not None:
             variables_yml_path = _import_osa_to_campaign(osa_path, outdir)
         else:
             variables_yml_path = _import_inline_analysis(

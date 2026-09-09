@@ -5624,7 +5624,7 @@
               }
             ],
             "title": "Osa Path",
-            "description": "Path to a .osa or analysis.json file to import"
+            "description": "Path to a .osa or analysis.json file to import. Must resolve within the server's campaigns base directory (issue #1669)"
           },
           "analysis": {
             "anyOf": [
@@ -5642,7 +5642,7 @@
           "template_sim_package": {
             "type": "string",
             "title": "Template Sim Package",
-            "description": "Path to the template simulation package directory"
+            "description": "Path to the template simulation package directory. Must resolve within the server's campaigns base directory (issue #1669)"
           },
           "n_samples": {
             "type": "integer",
