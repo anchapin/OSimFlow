@@ -42,6 +42,26 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field
 
+# Shared response models — imported from the canonical schema module so that
+# adding a field to a response schema requires exactly one edit in the
+# codebase (issue #1700).  ``osimflow.api.schemas`` is a transport-neutral
+# leaf module that itself only depends on pydantic; importing it via the
+# ``osimflow.api`` package transitively loads the FastAPI-bound ``app``
+# module, but the client already lives in the ``[api]`` extra and the
+# existing tests require it (see ``tests/unit/test_client.py``'s
+# ``pytest.importorskip("fastapi", ...)``), so the new dependency edge is
+# consistent with the existing ``[api]``-extra contract.
+from osimflow.api.schemas import (
+    CampaignPauseResponse,
+    CampaignResumeResponse,
+    SampleDetailResponse,
+    SampleSummary,
+    VariableDetailResponse,
+)
+from osimflow.api.schemas import (
+    SampleListResponse as SamplesResponse,
+)
+
 log = logging.getLogger("osimflow.client")
 
 __all__ = [
@@ -51,13 +71,14 @@ __all__ = [
     "NotFoundError",
     "RateLimitError",
     "ServerError",
-    # Response models
+    # Response models (issue #1700: shared with osimflow.api.schemas)
     "HealthResponse",
     "ReadyResponse",
     "CampaignResponse",
     "StepsResponse",
     "SamplesResponse",
     "SampleDetailResponse",
+    "SampleSummary",
     "ResultRow",
     "PlotFile",
     "PlotsResponse",
@@ -74,6 +95,7 @@ __all__ = [
     "ValidateConfigResponse",
     "VariableBatchUpdateItem",
     "VariableBatchUpdateError",
+    "VariableDetailResponse",
     "VariableBatchUpdateResponse",
     # Results query (issue #585)
     "QueryResultsResponse",
@@ -167,45 +189,6 @@ class StepsResponse(BaseModel):
     total_steps: int = 0
 
 
-class SampleSummary(BaseModel):
-    """A single per-sample summary row."""
-
-    sample_id: str | None = None
-    status: str | None = None
-    elapsed_s: float | None = None
-    error_summary: str | None = None
-    generation: int | None = None
-    worker_id: str | None = None
-    cost_usd: float | None = None
-
-
-class SamplesResponse(BaseModel):
-    """Response from ``GET /api/v1/samples``."""
-
-    samples: list[SampleSummary] = Field(default_factory=list)
-    total: int = 0
-    page: int = 1
-    per_page: int = 50
-
-
-class SampleDetailResponse(BaseModel):
-    """Response from ``GET /api/v1/samples/{sample_id}`` — full sample detail."""
-
-    sample_id: str
-    status: str | None = None
-    elapsed_s: float | None = None
-    kpis: dict[str, Any] | None = None
-    log_files: dict[str, str] = Field(default_factory=dict)
-    error_summary: str | None = None
-    generation: int | None = None
-    worker_id: str | None = None
-    cost_usd: float | None = None
-    apply_exit_code: int = 0
-    sim_exit_code: int = 0
-    extract_exit_code: int = 0
-    eplusout_sql: str | None = None
-
-
 class ResultRow(BaseModel):
     """A single row from ``GET /api/v1/results`` (aggregated_results.csv).
 
@@ -250,20 +233,6 @@ class CampaignStopResponse(BaseModel):
     """Response from ``POST /api/v1/campaign/stop``."""
 
     status: str = Field(description="Always 'stopping' on success.")
-
-
-class CampaignPauseResponse(BaseModel):
-    """Response from ``POST /api/v1/campaigns/{campaign_id}/pause``."""
-
-    campaign_id: str
-    status: str = Field(description="Always 'paused' on success.")
-
-
-class CampaignResumeResponse(BaseModel):
-    """Response from ``POST /api/v1/campaigns/{campaign_id}/resume``."""
-
-    campaign_id: str
-    status: str = Field(description="Always 'running' on success.")
 
 
 class Event(BaseModel):
@@ -437,25 +406,6 @@ class VariableBatchUpdateError(BaseModel):
 
     name: str
     error: str
-
-
-class VariableDetailResponse(BaseModel):
-    """Full variable detail returned by ``GET /api/v1/variables/{name}``."""
-
-    name: str
-    distribution: str
-    description: str | None = None
-    min: float | None = None
-    max: float | None = None
-    mean: float | None = None
-    sigma: float | None = None
-    mode: float | None = None
-    values: list[Any] | None = None
-    alpha: float | None = None
-    beta: float | None = None
-    rate: float | None = None
-    target: str | None = None
-    mapping: dict[str, Any] | None = None
 
 
 class VariableBatchUpdateResponse(BaseModel):
