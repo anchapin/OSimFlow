@@ -364,21 +364,115 @@ class TestSkipPreflight:
 # -----------------------------------------------------------------------
 class TestCacheIntegration:
     def test_cold_then_warm(self, variables_yml: Path, template_pkg: Path, outdir: Path) -> None:
+        # Issue #1707: the previous timing-based assertion
+        #     `warm_elapsed < cold_elapsed or warm_elapsed > 0`
+        # was vacuous — the right disjunct always holds whenever any
+        # work happened, so a regression that completely breaks cache
+        # hits (the 50 s cold → 0.1 s warm property from
+        # decision-verdict.md §1) would silently sail through.
+        #
+        # Replace the timing comparison with a *structural* assertion
+        # that reads each Campaign's StepTrace cache accounting (the
+        # same data that lands in run.json — see monitoring.py:StepTrace
+        # and test_cache_invalidation.py:_last_step_cache for the
+        # canonical pattern). Both Campaign instances are kept around
+        # so campaign1.trace survives the warm run that would otherwise
+        # overwrite outdir/run.json on disk.
+        #
+        # We pin on ``GENERATE_LHS_SAMPLES`` because it is the only
+        # DAG step whose StepTrace.cache label flips HIT/MISS
+        # deterministically (see osimflow/campaign.py:step_generate_samples
+        # — the per-sample loop steps pre-set ``cache_label = "MISS×N"``
+        # before the cache lookup and never revise it, so their
+        # step-level cache field cannot serve this fence). The
+        # dedicated broken-cache fence — per-cache-key mutation,
+        # code-hash invalidation, plug-in upgrade — lives in
+        # tests/integration/test_cache_invalidation.py (issue #1636).
         cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
         campaign1 = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        t0 = time.time()
         campaign1.run()
-        cold_elapsed = time.time() - t0
 
         # Re-run with same outdir (should hit cache)
         campaign2 = Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1))
-        t0 = time.time()
         campaign2.run()
-        warm_elapsed = time.time() - t0
 
-        assert cold_elapsed > 0
-        # Warm run should be faster (cache hits)
-        assert warm_elapsed < cold_elapsed or warm_elapsed > 0  # at minimum, completes
+        cold_cache = _last_step_cache(campaign1, "GENERATE_LHS_SAMPLES")
+        warm_cache = _last_step_cache(campaign2, "GENERATE_LHS_SAMPLES")
+
+        assert cold_cache == "MISS", (
+            f"cold run was expected to MISS the GENERATE_LHS_SAMPLES "
+            f"cache, got {cold_cache!r} — the cold-side premise of the "
+            f"cold→warm property is broken."
+        )
+        assert warm_cache == "HIT", (
+            f"warm run was expected to HIT the GENERATE_LHS_SAMPLES "
+            f"cache (re-run with same --outdir, AGENTS.md §2), got "
+            f"{warm_cache!r}. A regression that breaks cache hits "
+            f"would surface here. See "
+            f"tests/integration/test_cache_invalidation.py for the "
+            f"dedicated broken-cache fence (per-cache-key mutation, "
+            f"code-hash invalidation, plug-in upgrade)."
+        )
+
+    def test_cold_then_warm_detects_broken_cache(
+        self,
+        variables_yml: Path,
+        template_pkg: Path,
+        outdir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Issue #1707 acceptance criterion: add a mutation check that
+        # demonstrates the structural assertion above has teeth —
+        # i.e. a deliberately broken cache (lookup always returns
+        # None so every read is a miss) flips the warm run back to
+        # MISS, and the test_cold_then_warm assertion no longer
+        # vacuously passes. We don't run the broken-cache scenario
+        # *inside* test_cold_then_warm because that would couple a
+        # structural fence to a mutation harness; instead this
+        # mirrors it side-by-side.
+        cfg = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        Campaign(cfg=cfg, executor=LocalExecutor(max_workers=1)).run()
+
+        # Patch cache.lookup to always return None so the warm run
+        # cannot replay any cached entries. Monkeypatching at the
+        # class level applies to every Campaign() instance
+        # constructed from this point onwards in the test.
+        from osimflow.cache import SQLiteCache
+
+        def _always_miss(self: SQLiteCache, key: object) -> None:
+            return None
+
+        monkeypatch.setattr(SQLiteCache, "lookup", _always_miss)
+
+        cfg2 = _cfg(variables_yml, template_pkg, outdir, dry_run=True)
+        campaign2 = Campaign(cfg=cfg2, executor=LocalExecutor(max_workers=1))
+        campaign2.run()
+        warm_cache = _last_step_cache(campaign2, "GENERATE_LHS_SAMPLES")
+
+        # With caching broken, the warm run must NOT report HIT — if
+        # the structural fence has teeth this is what trips the
+        # test_cold_then_warm assertion on a real regression.
+        assert warm_cache != "HIT", (
+            f"expected warm run to report MISS when cache.lookup is "
+            f"neutered, but it reported {warm_cache!r}; either the "
+            f"cache patch didn't take effect or the cold→warm HIT "
+            f"label is being synthesised by something other than "
+            f"the cache itself (which would also be a bug)."
+        )
+
+
+def _last_step_cache(campaign: Campaign, step: str) -> str:
+    """Cache outcome ("HIT"/"MISS") of the last StepTrace for ``step``.
+
+    Mirrors the helper in tests/integration/test_cache_invalidation.py
+    so this unit test can pin on deterministic cache accounting without
+    re-running the per-sample loops. Inlined here (rather than imported)
+    so the cross-module contract stays optional and the unit-test stays
+    self-contained.
+    """
+    entries = [s for s in campaign.trace.steps if s.step == step]
+    assert entries, f"no StepTrace entries recorded for {step!r}"
+    return entries[-1].cache
 
 
 # -----------------------------------------------------------------------
