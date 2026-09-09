@@ -74,6 +74,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: api-doc-coverage
+        name: docs/api.md covers every docs/openapi.json path (issue #1677)
+        entry: .venv/bin/python tools/check_api_doc_coverage.py
+        language: system
+        pass_filenames: false
+
       - id: byos-generate
         name: BYOS runner generator (issue #1061)
         entry: .venv/bin/python tools/_generate_byos_runner.py
