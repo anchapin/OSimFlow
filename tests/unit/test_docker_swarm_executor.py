@@ -21,11 +21,16 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
+from osimflow.executors.docker_swarm_executor import (
+    DockerSwarmExecutor,
+    _DockerSwarmHandle,
+)
+from osimflow.executors.transport import ResultTransportConfig
 from osimflow.task_payload_hmac import (
     TASK_PAYLOAD_SECRET_ENV,
     TASK_PAYLOAD_SIG_ENV,
@@ -417,3 +422,138 @@ class TestDockerSwarmExecutorRestartPolicy:
         ):
             with pytest.raises(TimeoutError, match="Timed out"):
                 ex._wait_for_terminal("osimflow-test", timeout=0.05)  # noqa: SLF001
+
+
+class TestDockerSwarmHandleTransportContract:
+    """Issue #1680: ``_DockerSwarmHandle`` honors the uniform ``PollingHandle``
+    result-transport constructor contract.
+
+    Seven ``PollingHandle`` subclasses (Nomad, Kubernetes, AWS, Azure,
+    Google, PBS, ...) accept ``transport: ResultTransportConfig | None = None``
+    as a typed keyword argument and store it on ``self._transport``.
+    ``_DockerSwarmHandle`` previously smuggled the frozen config through the
+    untyped ``submit_params`` dict and recovered it with an ``isinstance``
+    fallback inside ``_resolve_success_result`` — a plug-in author reading
+    the documented ``PollingHandle`` constructor contract had no way to
+    know the dict smuggling existed. These tests assert the contract
+    directly so the gap cannot reopen silently.
+    """
+
+    @staticmethod
+    def _make_executor() -> DockerSwarmExecutor:
+        """Build a ``DockerSwarmExecutor`` without invoking ``__init__``."""
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)  # noqa: SLF001
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.image = "nrel/openstudio:3.11.0"
+        ex.network = None
+        ex._client = MagicMock()
+        ex._stub_executor = None
+        return ex
+
+    def test_handle_stores_transport_passed_as_kwarg(self) -> None:
+        """``_DockerSwarmHandle(..., transport=cfg)`` stores the identical config."""
+        cfg = ResultTransportConfig(
+            mode="object_storage",
+            backend="s3",
+            bucket="handle-transport-bucket",
+            prefix="out",
+            endpoint="https://s3.example.test",
+            presigned_url_expiration_s=600,
+        )
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+            transport=cfg,
+        )
+        # The identical frozen config must be retained (issue #1541's
+        # field-wise equality on the dataclass means reconstructing the
+        # config would also satisfy the assertion, but retaining the
+        # same instance is the strictest contract).
+        assert handle._transport is cfg
+
+    def test_handle_transport_defaults_when_unset(self) -> None:
+        """``_DockerSwarmHandle(...)`` with no transport defaults to ``auto``.
+
+        Matches the historic per-field defaults documented on the base
+        ``PollingHandle._transport`` class attribute (issue #1541).
+        """
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+        )
+        assert handle._transport == ResultTransportConfig()
+        assert handle._transport.mode == "auto"
+
+    def test_handle_stores_result_hint_passed_as_kwarg(self) -> None:
+        """``_DockerSwarmHandle(..., result_hint=hint)`` stores the hint.
+
+        Symmetric with the Kubernetes / Nomad / AWS handles — the
+        ``result_hint`` plumbs through the uniform constructor signature
+        instead of the ``submit_params`` dict so plug-in authors cannot
+        accidentally bypass it.
+        """
+        ex = self._make_executor()
+        sentinel_hint = Path("/tmp/sentinel-result-hint")
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+            result_hint=sentinel_hint,
+        )
+        assert handle._result_hint == sentinel_hint
+
+    def test_submit_routes_transport_through_typed_kwarg(self) -> None:
+        """``DockerSwarmExecutor.submit(..., transport=cfg)`` reaches the handle.
+
+        Exercises the full submit path with a stubbed Swarm so the
+        executor's ``_do_submit`` is exercised end-to-end: the
+        ``ResultTransportConfig`` accepted by ``submit`` must land on the
+        handle via the typed constructor kwarg, not the legacy
+        ``submit_params`` dict smuggling path (issue #1680 acceptance
+        criterion).
+        """
+        cfg = ResultTransportConfig(
+            mode="shared_fs",
+            backend="s3",
+            bucket="submit-routing-bucket",
+        )
+        ex = self._make_executor()
+        ex._check_docker_available = MagicMock(return_value=True)  # type: ignore[method-assign]
+        ex._submit_service = MagicMock(return_value="svc-1")  # type: ignore[method-assign]
+        ex._init_rate_limiter(None)
+
+        handle = ex.submit(lambda: None, name="sim_s0", transport=cfg)
+        assert isinstance(handle, _DockerSwarmHandle)
+        # The transport on the handle matches the one submitted — no
+        # default-instance sneak-through and no smuggling via submit_params.
+        assert handle._transport == cfg
+
+    def test_submit_no_longer_carries_transport_in_submit_params(self) -> None:
+        """``_submit_service`` receives ``transport=`` via kwargs, not the dict.
+
+        The acceptance criterion explicitly removes the
+        ``submit_params["transport"]`` smuggling. The executor passes
+        the config explicitly to ``_submit_service`` and the handle, but
+        the dict must no longer carry it.
+        """
+        cfg = ResultTransportConfig(
+            mode="shared_fs",
+            backend="s3",
+            bucket="no-smuggle-bucket",
+        )
+        ex = self._make_executor()
+        ex._check_docker_available = MagicMock(return_value=True)  # type: ignore[method-assign]
+        ex._submit_service = MagicMock(return_value="svc-1")  # type: ignore[method-assign]
+        ex._init_rate_limiter(None)
+
+        ex.submit(lambda: None, name="sim_s0", transport=cfg)
+        params = ex._submit_service.call_args.kwargs
+        # ``transport`` is still passed to ``_submit_service`` (it writes
+        # ``OSIMFLOW_RESULT_*`` env vars) but it is no longer a member of
+        # the dict that used to smuggle it through to the handle.
+        assert params["transport"] == cfg

@@ -85,11 +85,22 @@ class _DockerSwarmHandle(PollingHandle):
         service_name: str,
         executor: DockerSwarmExecutor,
         submit_params: dict[str, Any],
+        *,
+        result_hint: Any = None,
+        transport: ResultTransportConfig | None = None,
     ) -> None:
         self.job_id = service_name
         self._service_name = service_name
         self._executor = executor
         self._submit_params = submit_params
+        self._result_hint = result_hint
+        # Result-transport contract (issue #1541): one frozen value object
+        # replaces the historic five per-handle kwargs; the default matches
+        # them (mode "auto", no storage configured). Matches the uniform
+        # ``PollingHandle`` constructor contract (Nomad, Kubernetes, AWS,
+        # Azure, Google, PBS — issue #1680 closes the DockerSwarm gap that
+        # previously smuggled the config through ``submit_params``).
+        self._transport = transport if transport is not None else ResultTransportConfig()
         self._future: Future[Any] = Future()
         # Worker tracking (issue #105): populated at submit time.
         self.worker_id: str | None = service_name
@@ -125,13 +136,13 @@ class _DockerSwarmHandle(PollingHandle):
         # the result hint and materialize object-storage artifacts
         # so Campaign callbacks receive local paths — identical to
         # the Nomad / Kubernetes / PBS handles. The frozen config
-        # rides in ``submit_params["transport"]`` (issue #1541); a
-        # missing entry matches the historic per-field defaults.
-        transport = self._submit_params.get("transport")
-        if not isinstance(transport, ResultTransportConfig):
-            transport = ResultTransportConfig()
+        # lives on ``self._transport`` per the uniform ``PollingHandle``
+        # contract (issue #1680); ``submit_params`` no longer carries
+        # the config so plug-in authors reading the documented
+        # constructor signature cannot accidentally bypass it.
+        transport = self._transport
         resolved = resolve_result_for_callback(
-            self._submit_params.get("result_hint"),
+            self._result_hint,
             default=None,
             transport_mode=transport.mode,
         )
@@ -807,23 +818,40 @@ class DockerSwarmExecutor(BaseExecutor):
             "container_digest": container_digest,
             "command": command,
             "task_payload": task_payload,
-            "result_hint": result_hint,
-            "transport": transport,
         }
 
         del fn  # noqa: ARG002 — work runs inside the Swarm container via remote_runner
-        # Unused in Docker Swarm mode: remote_command; the transport config
-        # is forwarded via submit_params; variables_json, env, stdout/stderr_path,
-        # max_retries, worker_id are not consumed.
+        # Unused in Docker Swarm mode: remote_command; variables_json,
+        # env, stdout/stderr_path, max_retries, worker_id are not
+        # consumed. ``result_hint`` and ``transport`` were previously
+        # carried in ``submit_params`` for the handle; per the uniform
+        # ``PollingHandle`` constructor contract (issue #1680) both are
+        # now passed as typed kwargs to ``_submit_service`` /
+        # ``_DockerSwarmHandle`` instead.
         del remote_command, variables_json, env  # noqa: F841
         del stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841
 
-        service_name = self._submit_service(**submit_params)
+        # Issue #1680: ``_submit_service`` still accepts ``transport`` and
+        # ``result_hint`` as kwargs (the former writes ``OSIMFLOW_RESULT_*``
+        # env vars; the latter is plumbed through for the handle's
+        # ``_resolve_success_result``), so the call site passes them
+        # explicitly here even though ``submit_params`` no longer carries
+        # them. The handle receives the same values via the uniform typed
+        # ``transport`` / ``result_hint`` keyword arguments that
+        # ``PollingHandle`` subclasses (Nomad, Kubernetes, AWS, ...) accept
+        # per the issue #1541 contract.
+        service_name = self._submit_service(
+            **submit_params,
+            transport=transport,
+            result_hint=result_hint,
+        )
 
         return _DockerSwarmHandle(
             service_name=service_name,
             executor=self,
             submit_params=submit_params,
+            transport=transport,
+            result_hint=result_hint,
         )
 
     def shutdown(self) -> None:

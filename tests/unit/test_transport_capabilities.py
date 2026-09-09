@@ -204,15 +204,14 @@ class TestDockerSwarmCompletion:
         handle = _DockerSwarmHandle(
             service_name="svc-1",
             executor=executor,
-            submit_params={
-                "result_hint": tmp_path / "s0",
-                "transport": ResultTransportConfig(
-                    mode="object_storage",
-                    backend="s3",
-                    bucket="b",
-                    prefix="out",
-                ),
-            },
+            submit_params={},
+            result_hint=tmp_path / "s0",
+            transport=ResultTransportConfig(
+                mode="object_storage",
+                backend="s3",
+                bucket="b",
+                prefix="out",
+            ),
         )
         resolved = handle.result()
         assert resolved == tmp_path / "s0"
