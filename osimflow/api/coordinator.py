@@ -100,6 +100,35 @@ _idempotency_keys: dict[str, str] = {}
 # so the CLI and server agree on it without the CLI importing FastAPI.
 _CAMPAIGN_STATUS_PATH = "/api/v1/coordinator/campaigns/{campaign_id}"
 
+# Issue #1670: process-wide endpoint policy consulted by
+# :func:`_storage_from_campaign` when invoked outside an HTTP request context
+# (e.g. by aggregation workers). The setter
+# :func:`set_coordinator_server_endpoint_policy` is called from
+# ``create_app`` at startup so per-thread ``request.app.state`` reads are not
+# required.
+_SERVER_ENDPOINT_POLICY: dict[str, object] = {
+    "allowed_result_buckets": None,
+    "result_storage_endpoint": None,
+    "allow_insecure_storage_endpoint": False,
+}
+
+
+def set_coordinator_server_endpoint_policy(
+    *,
+    allowed_result_buckets: frozenset[str] | None,
+    result_storage_endpoint: str | None,
+    allow_insecure_storage_endpoint: bool,
+) -> None:
+    """Install the operator-configured result-storage endpoint policy (issue #1670).
+
+    Called by ``create_app`` once at startup. Mirrors the values stored on
+    ``app.state`` so background threads without a request context (aggregation
+    workers, completion-notification dispatch) can enforce the same policy.
+    """
+    _SERVER_ENDPOINT_POLICY["allowed_result_buckets"] = allowed_result_buckets
+    _SERVER_ENDPOINT_POLICY["result_storage_endpoint"] = result_storage_endpoint
+    _SERVER_ENDPOINT_POLICY["allow_insecure_storage_endpoint"] = allow_insecure_storage_endpoint
+
 
 # ---------------------------------------------------------------------------
 # Array-completion detection helpers (issue #626, Epic #624)
@@ -372,6 +401,54 @@ def _lookup_http_array_job(array_job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=code, detail=message) from exc
 
 
+def _check_bucket_allowed(request: Request, bucket: str | None) -> None:
+    """Enforce the operator-configured result-storage bucket allowlist (issue #1670).
+
+    When the operator has set ``OSIMFLOW_ALLOWED_RESULT_BUCKETS`` (server-side,
+    via ``create_app``), only buckets in that allowlist may be used for
+    Coordinator handoffs or result-presign URLs. ``None``/unset on the server
+    preserves legacy behavior (and emits a startup warning).
+
+    Raises 403 when the bucket is set but not in the allowlist.
+    """
+    if bucket is None:
+        return
+    allowed = getattr(request.app.state, "allowed_result_buckets", None)
+    if allowed is None:
+        return
+    if bucket in allowed:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"result_storage_bucket {bucket!r} is not in the operator-configured "
+            f"allowlist (OSIMFLOW_ALLOWED_RESULT_BUCKETS). Set the bucket in the "
+            f"server environment before serving untrusted clients."
+        ),
+    )
+
+
+def _check_bucket_allowed_globally(bucket: str | None) -> None:
+    """Like :func:`_check_bucket_allowed` but reads from the module-global
+    process-wide endpoint policy (issue #1670).
+
+    Used by background threads that have no HTTP request context (the
+    aggregation worker's storage builder, the completion dispatcher's
+    presign helper) where ``request.app.state`` is unreachable.
+    """
+    if bucket is None:
+        return
+    allowed_raw = _SERVER_ENDPOINT_POLICY.get("allowed_result_buckets")
+    allowed: frozenset[str] | None = allowed_raw if isinstance(allowed_raw, frozenset) else None
+    if allowed is None or bucket in allowed:
+        return
+    raise RuntimeError(
+        f"result_storage_bucket {bucket!r} is not in the operator-configured "
+        f"allowlist (OSIMFLOW_ALLOWED_RESULT_BUCKETS). Set the bucket in the "
+        f"server environment before serving untrusted clients."
+    )
+
+
 def _campaign_or_404(campaign_id: str) -> dict[str, Any]:
     """Return the campaign record or raise HTTP 404."""
     rec = _campaigns.get(campaign_id)
@@ -489,6 +566,11 @@ async def coordinator_handoff(
     user_id: str = getattr(request.state, "user_id", None) or "anonymous"
     samples: list[dict[str, Any]] = payload.samples or []
     n_samples = len(samples) if samples else payload.n_samples
+
+    # Issue #1670: server-side bucket allowlist. When set, a handoff naming a
+    # non-allowlisted bucket is rejected with 403 before any record is
+    # persisted or any IAM-signed URL is minted.
+    _check_bucket_allowed(request, payload.result_storage_bucket)
 
     record: dict[str, Any] = {
         "campaign_id": campaign_id,
@@ -860,6 +942,11 @@ async def get_campaign_results(
             message="No result_storage_bucket configured for this campaign.",
         )
 
+    # Issue #1670: confirm the bucket is still in the server-side allowlist
+    # before minting any IAM-signed URL (an operator may have tightened the
+    # allowlist between handoff and result-presign).
+    _check_bucket_allowed(request, bucket)
+
     result_status = rec.get("result_status", "unavailable")
     aggregated_key = rec.get("aggregated_results_key")
 
@@ -943,6 +1030,9 @@ async def notify_campaign(
 
     aggregated_key = rec.get("aggregated_results_key")
     bucket = rec.get("result_storage_bucket")
+    # Issue #1670: allowlist guard before signing any URL with the
+    # Coordinator's IAM role.
+    _check_bucket_allowed(request, bucket)
     download_url = _presign_aggregated_get(bucket, aggregated_key, expires=expires_in)
 
     payload = _build_notify_payload(
@@ -1072,6 +1162,11 @@ def _notify_campaign_completion(rec: dict[str, Any]) -> None:
 
     bucket = rec.get("result_storage_bucket")
     aggregated_key = rec.get("aggregated_results_key")
+    # Issue #1670: allowlist guard via the module-global policy (this
+    # caller runs outside an HTTP request context). The check raises
+    # RuntimeError if the operator tightened the allowlist between handoff
+    # and notification — caught by ``_dispatch_notify``'s broad except.
+    _check_bucket_allowed_globally(bucket)
     download_url = _presign_aggregated_get(bucket, aggregated_key, expires=expires_in)
 
     payload = _build_notify_payload(
@@ -1227,17 +1322,52 @@ def _storage_from_campaign(rec: dict[str, Any]) -> ResultStorage | None:
     without object storage).  Workers embed the ``campaign_id`` in every key
     (``{campaign_id}/samples/{sample_id}/...``), so the backend is built with
     an empty prefix and campaign-relative keys are used throughout.
+
+    Issue #1670 operator-policy application: when the server-side
+    ``OSIMFLOW_ALLOWED_RESULT_BUCKETS`` allowlist is set, the per-handoff
+    ``result_storage_endpoint`` and ``allow_insecure_storage_endpoint`` from
+    the payload's ``extra`` dict are IGNORED in favor of the operator-side
+    ``OSIMFLOW_RESULT_STORAGE_ENDPOINT`` /
+    ``OSIMFLOW_ALLOW_INSECURE_STORAGE_ENDPOINT`` settings. This closes the
+    #1386 plaintext-endpoint escape hatch on the API surface (the CLI's
+    flag remains operator-only). The bucket itself is enforced at handoff
+    time and re-checked at presign time; here we additionally consult the
+    allowlist when this function is called outside an HTTP request context.
     """
     payload = rec.get("payload") or {}
     backend = (payload.get("result_storage_backend") or "s3").lower()
     bucket = rec.get("result_storage_bucket") or payload.get("result_storage_bucket")
     if not bucket:
         return None
-    endpoint = (
-        payload.get("extra", {}).get("result_storage_endpoint")
-        if isinstance(payload.get("extra"), dict)
-        else None
-    )
+    # Issue #1670: operator endpoint policy wins over payload-supplied values
+    # whenever the allowlist is set. Outside an HTTP request (e.g. aggregation
+    # worker thread), use the module-global _SERVER_ENDPOINT_POLICY below.
+    # The dict stores ``object`` values for ergonomic mutation, so we narrow
+    # via isinstance at the read site.
+    _allowed_raw = _SERVER_ENDPOINT_POLICY.get("allowed_result_buckets")
+    _allowed: frozenset[str] | None = _allowed_raw if isinstance(_allowed_raw, frozenset) else None
+    if _allowed is not None and bucket not in _allowed:
+        # Defensive: when the allowlist is set, the handoff endpoint rejects
+        # non-allowlisted buckets before storing the record. A record that
+        # nonetheless names a non-allowlisted bucket (e.g. allowlist tightened
+        # post-handoff) cannot be served; return None so the endpoint 409s.
+        log.warning(
+            "aggregate: bucket %r not in operator allowlist — refusing storage",
+            bucket,
+        )
+        return None
+    if _allowed is not None:
+        # Operator policy wins over payload-supplied endpoint policy.
+        _ep_raw = _SERVER_ENDPOINT_POLICY.get("result_storage_endpoint")
+        endpoint: str | None = _ep_raw if isinstance(_ep_raw, str) else None
+        allow_insecure = bool(_SERVER_ENDPOINT_POLICY.get("allow_insecure_storage_endpoint"))
+    else:
+        endpoint = (
+            payload.get("extra", {}).get("result_storage_endpoint")
+            if isinstance(payload.get("extra"), dict)
+            else None
+        )
+        allow_insecure = bool(payload.get("allow_insecure_storage_endpoint"))
     from osimflow.storage import build_result_storage  # noqa: PLC0415
 
     try:
@@ -1246,7 +1376,7 @@ def _storage_from_campaign(rec: dict[str, Any]) -> ResultStorage | None:
             bucket=str(bucket),
             prefix="",
             endpoint_url=endpoint,
-            allow_insecure_endpoint=bool(payload.get("allow_insecure_storage_endpoint")),
+            allow_insecure_endpoint=allow_insecure,
         )
     except ValueError as exc:
         log.warning("aggregate: unknown result_storage_backend %r: %s", backend, exc)
