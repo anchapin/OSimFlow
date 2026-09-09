@@ -121,7 +121,13 @@ class CampaignCreateRequest(BaseModel):
     openstudio_version: str = Field(default="3.11.0")
     executor: str = Field(
         default="local",
-        description="Executor type: local | slurm | aws_batch | azure_batch | google_batch | dask_jobqueue | nomad | pbs | kubernetes",
+        description=(
+            "Executor type: local | slurm | aws_batch | azure_batch | "
+            "google_batch | dask_jobqueue | nomad | pbs | kubernetes | "
+            "docker_swarm. All 10 built-in executors are supported "
+            "through the shared osimflow.executor_configs.build_executor "
+            "factory (issue #1681)."
+        ),
     )
     algorithm: str = Field(default="lhs")
     outdir: str | None = Field(default=None, description="Output dir (auto-generated if omitted)")
@@ -233,6 +239,44 @@ class CampaignCreateRequest(BaseModel):
     dask_queue: str | None = Field(default=None, description="HPC queue/partition for Dask workers")
     dask_project: str | None = Field(
         default=None, description="HPC project/account for Dask workers"
+    )
+    # Docker Swarm parameters (used when executor="docker_swarm",
+    # issue #1681: previously omitted from the API surface entirely)
+    docker_swarm_poll_interval_s: float | None = Field(
+        default=None, description="Docker Swarm service poll interval (seconds)"
+    )
+    docker_swarm_max_poll_interval_s: float | None = Field(
+        default=None, description="Docker Swarm service max poll interval (seconds)"
+    )
+    docker_swarm_image: str | None = Field(
+        default=None,
+        description=(
+            "Docker image for Swarm services (default: nrel/openstudio:3.11.0). "
+            "Avoid 'latest' for production due to supply-chain risk."
+        ),
+    )
+    docker_swarm_network: str | None = Field(
+        default=None, description="Docker network to attach Swarm services to"
+    )
+    docker_swarm_payload_secret: str | None = Field(
+        default=None,
+        description=(
+            "Name of a pre-created Docker secret holding the task-payload "
+            "HMAC secret (issue #1633). The remote runner reads the secret "
+            "from /run/secrets/<name> so the raw value never appears in the "
+            "service spec."
+        ),
+    )
+    # Substrate-agnostic submit rate (issue #1563 / #1681). When set
+    # on the API request, it overrides every executor's
+    # ``default_submit_rps`` and the per-executor legacy ``submit_rps``
+    # field (e.g. ``aws_batch_submit_rps``).
+    submit_rps: float | None = Field(
+        default=None,
+        description=(
+            "Substrate-agnostic submit rate limit in requests per second, "
+            "honored by every executor (issue #1563)."
+        ),
     )
 
 

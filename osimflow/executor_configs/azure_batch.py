@@ -8,6 +8,7 @@ hook by ``osimflow/executor_configs/__init__.py``.
 
 import argparse
 import dataclasses
+from typing import Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -118,3 +119,18 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "required for signing either way."
         ),
     )
+
+
+def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
+    """Translate the flat CLI / API kwargs into ``AzureBatchExecutor`` kwargs (issue #1681)."""
+    return {
+        "account_name": kwargs.get("azure_batch_account_name"),
+        "account_url": kwargs.get("azure_batch_account_url"),
+        "pool_id": kwargs.get("azure_batch_pool_id") or "osimflow-pool",
+        "location": kwargs.get("azure_batch_location") or "eastus",
+        "use_spot": bool(kwargs.get("azure_use_spot", False)),
+        "fallback_to_on_demand": bool(kwargs.get("azure_fallback_to_on_demand", False)),
+        "max_retries": int(kwargs.get("azure_max_retries", 3)),
+        "submit_rps": kwargs.get("submit_rps"),
+        "payload_secret_id": kwargs.get("azure_batch_payload_secret_id"),
+    }

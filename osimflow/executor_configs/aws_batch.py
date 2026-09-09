@@ -8,6 +8,7 @@ register for the ``aws_batch`` executor. Registered as the
 
 import argparse
 import dataclasses
+from typing import Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -151,3 +152,29 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "same value for signing. See docs/secret-management.md."
         ),
     )
+
+
+def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
+    """Translate the flat CLI / API kwargs into ``AWSBatchExecutor`` kwargs (issue #1681).
+
+    Mirrors the pre-#1681 CLI precedence: the substrate-agnostic
+    ``--submit-rps`` (or the API's ``submit_rps`` field) overrides the
+    legacy ``--aws-batch-submit-rps`` when both are set (issue #1563).
+    """
+    submit_rps = kwargs.get("submit_rps")
+    legacy_submit_rps = kwargs.get("aws_batch_submit_rps")
+    if submit_rps is None:
+        submit_rps = legacy_submit_rps
+    max_spot_price_usd = kwargs.get("aws_batch_max_spot_price_usd")
+    return {
+        "job_queue": kwargs.get("aws_batch_queue") or "osimflow-batch-queue",
+        "job_definition": kwargs.get("aws_batch_job_definition"),
+        "max_spot_price_usd": (
+            float(max_spot_price_usd) if max_spot_price_usd is not None else None
+        ),
+        "fallback_to_on_demand": bool(kwargs.get("aws_batch_fallback_to_on_demand", False)),
+        "max_retries": int(kwargs.get("aws_batch_max_retries", 3)),
+        "instance_type": kwargs.get("aws_batch_instance_type"),
+        "submit_rps": submit_rps,
+        "payload_secret_arn": kwargs.get("aws_batch_payload_secret_arn"),
+    }

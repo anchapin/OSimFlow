@@ -44,6 +44,13 @@ try:
 except ImportError:
     _HAS_SUBMITIT = False
 
+try:
+    import docker  # noqa: F401
+
+    _HAS_DOCKER = True
+except ImportError:
+    _HAS_DOCKER = False
+
 
 def _req(
     executor: str,
@@ -72,6 +79,7 @@ def _req(
         "aws_batch_max_spot_price_usd": None,
         "aws_batch_fallback_to_on_demand": False,
         "aws_batch_max_retries": 3,
+        "aws_batch_submit_rps": None,
         "ecr_repository": None,
         "azure_batch_account_name": None,
         "azure_batch_account_url": None,
@@ -107,6 +115,15 @@ def _req(
         "dask_walltime": None,
         "dask_queue": None,
         "dask_project": None,
+        # Issue #1681: previously the API had no Docker Swarm fields at
+        # all and the surface silently rejected docker_swarm requests.
+        "docker_swarm_poll_interval_s": None,
+        "docker_swarm_max_poll_interval_s": None,
+        "docker_swarm_image": None,
+        "docker_swarm_network": None,
+        "docker_swarm_payload_secret": None,
+        # Substrate-agnostic submit rate (issue #1563 / #1681).
+        "submit_rps": None,
     }
     base.update(overrides)
     return CampaignCreateRequest(**base)
@@ -288,6 +305,89 @@ class TestBuildExecutorFromRequest:
         )
         executor = _build_executor_from_request(req)
         assert isinstance(executor, DaskJobQueueExecutor)
+
+    @pytest.mark.skipif(not _HAS_DOCKER, reason="docker package not installed")
+    def test_docker_swarm_executor(self) -> None:
+        """Issue #1681 regression: the pre-#1681 hand-rolled API mirror
+        omitted ``docker_swarm`` entirely so the REST surface supported
+        9 of the CLI's 10 executors. The shared factory now constructs
+        it from the same flat kwargs the CLI consumes."""
+        from osimflow import DockerSwarmExecutor
+
+        req = _req(
+            "docker_swarm",
+            docker_swarm_poll_interval_s=2.0,
+            docker_swarm_max_poll_interval_s=30.0,
+            docker_swarm_image="nrel/openstudio:3.11.0",
+            docker_swarm_network="osimflow-net",
+            docker_swarm_payload_secret="osimflow-payload-hmac",
+        )
+        executor = _build_executor_from_request(req)
+        assert isinstance(executor, DockerSwarmExecutor)
+        assert executor.poll_interval_s == 2.0
+        assert executor.max_poll_interval_s == 30.0
+        assert executor.image == "nrel/openstudio:3.11.0"
+        assert executor.network == "osimflow-net"
+        assert executor.payload_secret == "osimflow-payload-hmac"
+
+    def test_docker_swarm_executor_accepts_minimal_request(self) -> None:
+        """The factory must construct a DockerSwarmExecutor even when
+        the request omits every optional ``docker_swarm_*`` field —
+        the kwargs builder fills the documented defaults."""
+        from osimflow import DockerSwarmExecutor
+
+        req = _req("docker_swarm")
+        executor = _build_executor_from_request(req)
+        assert isinstance(executor, DockerSwarmExecutor)
+        # Defaults from the docker_swarm.add_arguments hook (issue #1681):
+        assert executor.image == "nrel/openstudio:3.11.0"
+        assert executor.poll_interval_s == 5.0
+        assert executor.max_poll_interval_s == 60.0
+        assert executor.payload_secret is None
+        assert executor.network is None
+
+    @pytest.mark.skipif(not _HAS_DOCKER, reason="docker package not installed")
+    @pytest.mark.parametrize(
+        "executor_name",
+        [
+            "local",
+            "slurm",
+            "aws_batch",
+            "azure_batch",
+            "google_batch",
+            "kubernetes",
+            "nomad",
+            "pbs",
+            "dask_jobqueue",
+            "docker_swarm",
+        ],
+    )
+    def test_all_ten_builtin_executors_constructible(self, executor_name: str) -> None:
+        """Issue #1681: every built-in executor name must be constructible
+        through the API surface. This is the regression test for the
+        ``docker_swarm`` gap that the pre-#1681 hand-rolled mirror
+        missed.
+        """
+        from osimflow.executors import ExecutorRegistry
+
+        if executor_name not in ExecutorRegistry.list_available():
+            pytest.skip(f"{executor_name} not in ExecutorRegistry")
+        # Per-substrate SDK gate (mirrors the existing test file's
+        # skip pattern): the test asserts the factory path, not the
+        # substrate SDK availability.
+        sdk_map = {
+            "aws_batch": ["boto3"],
+            "azure_batch": ["azure.batch"],
+            "google_batch": ["google.cloud.batch"],
+            "kubernetes": ["kubernetes"],
+            "docker_swarm": ["docker"],
+            "slurm": ["submitit"],
+        }
+        for sdk in sdk_map.get(executor_name, []):
+            pytest.importorskip(sdk)
+        executor = _build_executor_from_request(_req(executor_name))
+        cls = ExecutorRegistry.get(executor_name)
+        assert isinstance(executor, cls)
 
     def test_unknown_executor_raises(self) -> None:
         req = _req("unknown_executor")

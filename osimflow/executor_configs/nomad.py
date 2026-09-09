@@ -9,6 +9,7 @@ executor. Registered as the ``nomad`` argument hook by
 import argparse
 import dataclasses
 from pathlib import Path
+from typing import Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -230,3 +231,80 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "(e.g., to leverage a pre-registered job spec)."
         ),
     )
+
+
+def _coerce_path(value: str | Path | None) -> Path | None:
+    """Normalise CLI/API path strings to ``pathlib.Path`` (issue #1681).
+
+    The pre-#1681 API mirror wrapped ``body.nomad_cert`` and friends
+    in :class:`Path`; the CLI passes them as plain ``str`` (argparse's
+    default). ``NomadExecutor`` stores the value on the instance and
+    downstream code compares against a :class:`Path` in tests — so
+    the shared factory normalises to ``Path`` once, regardless of
+    which surface originated the call.
+    """
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, Path) else Path(value)
+
+
+def _dispatch_job_id_from_outdir(outdir: str | Path | None) -> str | None:
+    """Mirror ``osimflow.__main__._build_executor``'s per-campaign dispatch id (issue #1316)."""
+    if not outdir:
+        return None
+    return f"osimflow-worker-{abs(hash(str(outdir)))}"
+
+
+def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
+    """Translate the flat CLI / API kwargs into ``NomadExecutor`` kwargs (issue #1681).
+
+    Preserves the CLI's per-campaign dispatch-job-id derivation from
+    the campaign outdir hash (issue #1316) so multiple concurrent
+    campaigns on the same Nomad cluster never overwrite each other's
+    parameterized job spec. API callers can override the id explicitly
+    via ``--nomad-dispatch-job-id`` (the matching ``CampaignCreateRequest``
+    field is not yet surfaced; the CLI flag remains the override path).
+
+    Defaults mirror the ``add_arguments`` registration above so the
+    factory can be called without a fully-populated argparse
+    Namespace (e.g. the contract test, or a future REST surface that
+    lets users opt out of every Nomad-specific knob).
+    """
+    dispatch_job_id = kwargs.get("nomad_dispatch_job_id") or _dispatch_job_id_from_outdir(
+        kwargs.get("outdir")
+    )
+    nomad_rps = kwargs.get("submit_rps")
+    if nomad_rps is None:
+        nomad_rps = kwargs.get("nomad_fanout_submit_rate_per_sec")
+    poll_interval_s = kwargs.get("nomad_poll_interval_s")
+    if poll_interval_s is None:
+        poll_interval_s = 5.0
+    max_poll_interval_s = kwargs.get("nomad_max_poll_interval_s")
+    if max_poll_interval_s is None:
+        max_poll_interval_s = 60.0
+    allocation_resolution_timeout_s = kwargs.get("nomad_allocation_resolution_timeout_s")
+    if allocation_resolution_timeout_s is None:
+        allocation_resolution_timeout_s = 30.0
+    return {
+        "address": kwargs.get("nomad_address"),
+        "datacentre": kwargs.get("nomad_datacentre") or "dc1",
+        "dispatch_policy": kwargs.get("nomad_dispatch_policy"),
+        "estimated_run_size": (
+            int(kwargs["n_samples"]) if kwargs.get("n_samples") is not None else None
+        ),
+        "fanout_submit_chunk_size": int(kwargs.get("nomad_fanout_submit_chunk_size", 0) or 0),
+        "allocation_resolution_timeout_s": allocation_resolution_timeout_s,
+        "poll_interval_s": poll_interval_s,
+        "max_poll_interval_s": max_poll_interval_s,
+        "remote_results_only": kwargs.get("nomad_remote_results_only", True),
+        "verify_tls": bool(kwargs.get("nomad_tls_verify", True)),
+        "tls": bool(kwargs.get("nomad_tls", False)),
+        "cert": _coerce_path(kwargs.get("nomad_cert")),
+        "key": _coerce_path(kwargs.get("nomad_key")),
+        "ca_cert": _coerce_path(kwargs.get("nomad_ca_cert")),
+        "dispatch_job_id": dispatch_job_id,
+        "allow_insecure_token": bool(kwargs.get("nomad_allow_insecure_token", False)),
+        "submit_rps": nomad_rps,
+        "vault_secret_path": kwargs.get("nomad_vault_secret_path"),
+        "vault_secret_key": kwargs.get("nomad_vault_secret_key") or "payload_secret",
+    }

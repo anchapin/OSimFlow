@@ -854,6 +854,16 @@ SDKs into its import graph.
 - `nomad.py` — `NomadConfig` + the `--nomad-*` flags.
 - `pbs.py` — the `--pbs-*` flags.
 - `slurm.py` — `SlurmConfig` + the `--slurm-*` flags.
+- `factory.py` — the shared `build_executor(name, **kwargs)` factory
+  (issue #1681) that maps an `ExecutorRegistry` name to constructor
+  kwargs. Both `osimflow.__main__._build_executor` (CLI) and
+  `osimflow.api.campaigns._build_executor_from_request` (REST) call
+  into this module so the two surfaces cannot drift. Per-executor
+  `kwargs_for_executor(**kwargs)` hooks live next to each
+  `add_arguments` hook in the per-executor modules above and are
+  registered in `osimflow/executor_configs/__init__.py` next to the
+  argument hooks. Plug-in executors without a `kwargs_for_executor`
+  hook fall back to forwarding `**kwargs` directly to the constructor.
 
 ### `osimflow/executors/` (contract-checked)
 

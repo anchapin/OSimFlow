@@ -8,6 +8,7 @@ hook by ``osimflow/executor_configs/__init__.py``.
 
 import argparse
 import dataclasses
+from typing import Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -109,3 +110,17 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "with the same value for signing. See docs/secret-management.md."
         ),
     )
+
+
+def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
+    """Translate the flat CLI / API kwargs into ``GoogleBatchExecutor`` kwargs (issue #1681)."""
+    return {
+        "project_id": kwargs.get("google_batch_project_id"),
+        "region": kwargs.get("google_batch_region") or "us-central1",
+        "batch_service_account": kwargs.get("google_batch_service_account"),
+        "use_spot": bool(kwargs.get("google_use_spot", False)),
+        "fallback_to_on_demand": bool(kwargs.get("google_fallback_to_on_demand", False)),
+        "max_retries": int(kwargs.get("google_max_retries", 3)),
+        "submit_rps": kwargs.get("submit_rps"),
+        "payload_secret_name": kwargs.get("google_batch_payload_secret_name"),
+    }
