@@ -24,7 +24,7 @@ from typing import Any
 
 from ._campaign_observability import ObservabilityManager
 from ._campaign_types import SampleSpec
-from .algorithms import AlgorithmRegistry
+from .algorithms import AlgorithmRegistry, parse_failure_threshold
 from .config import CampaignConfig
 from .monitoring import RunTrace
 
@@ -182,11 +182,9 @@ class CampaignAnalysisMixin:
         failure_thresholds: dict[str, tuple[float, str]] | None = None
         if self.cfg.uq_failure_thresholds:
             failure_thresholds = {}
-            from osimflow.algorithms.uq import _parse_failure_threshold  # noqa: PLC0415
-
             for raw in self.cfg.uq_failure_thresholds:
                 try:
-                    kpi_name, threshold = _parse_failure_threshold(raw)
+                    kpi_name, threshold = parse_failure_threshold(raw)
                     failure_thresholds[kpi_name] = (threshold, "greater")
                 except ValueError as exc:
                     log.warning("invalid failure threshold %r: %s", raw, exc, exc_info=True)
