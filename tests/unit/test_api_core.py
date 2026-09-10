@@ -672,10 +672,20 @@ class TestRateLimiting:
 
         When behind a load balancer, the real client IP is passed via
         X-Forwarded-For.  The rate limiter must use this header to enforce
-        per-client limits correctly in horizontal scaling deployments.
+        per-client limits correctly in horizontal scaling deployments —
+        but only when the operator explicitly opts in via
+        ``trust_x_forwarded_for`` + a ``trusted_proxies`` allowlist
+        (issue #1683).  TestClient connects from the ``testclient``
+        peer, so the allowlist must include it for the XFF chain to
+        be honored.
         """
         (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
-        app = create_app(outdir=tmp_path, rate_limit="2/minute")
+        app = create_app(
+            outdir=tmp_path,
+            rate_limit="2/minute",
+            trust_x_forwarded_for=True,
+            trusted_proxies=["testclient"],
+        )
         client = TestClient(app)
 
         # Simulate two different clients via X-Forwarded-For.
@@ -696,7 +706,12 @@ class TestRateLimiting:
     def test_rate_limit_x_forwarded_for_with_port(self, tmp_path: Path) -> None:
         """X-Forwarded-For may contain port numbers; only the IP is used."""
         (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
-        app = create_app(outdir=tmp_path, rate_limit="1/minute")
+        app = create_app(
+            outdir=tmp_path,
+            rate_limit="1/minute",
+            trust_x_forwarded_for=True,
+            trusted_proxies=["testclient"],
+        )
         client = TestClient(app)
 
         # X-Forwarded-For with port should still identify the client correctly.
@@ -705,6 +720,180 @@ class TestRateLimiting:
         # Second request from same IP:port combo is rate limited.
         resp2 = client.get("/health", headers={"X-Forwarded-For": "192.168.1.100:8080"})
         assert resp2.status_code == 429
+
+    # --- issue #1683: default-deny X-Forwarded-For, opt-in trust gate ---
+
+    def test_rate_limit_ignores_spoofed_xff_by_default(self, tmp_path: Path) -> None:
+        """Default: spoofed X-Forwarded-For must NOT bypass the rate limit.
+
+        Without ``trust_x_forwarded_for=True``, every request from
+        TestClient collapses to the same ``testclient`` peer bucket, so
+        rotating the XFF value cannot grant a fresh bucket.  N distinct
+        spoofed XFF values under the same real client IP must share
+        ONE bucket (issue #1683 acceptance criterion).
+        """
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        app = create_app(outdir=tmp_path, rate_limit="2/minute")
+        client = TestClient(app)
+
+        # First two requests (any XFF) succeed.
+        resp1 = client.get("/health", headers={"X-Forwarded-For": "203.0.113.1"})
+        assert resp1.status_code == 200
+        resp2 = client.get("/health", headers={"X-Forwarded-For": "203.0.113.2"})
+        assert resp2.status_code == 200
+
+        # Third request, regardless of XFF, is rate-limited because the
+        # socket peer bucket is shared.
+        resp3 = client.get("/health", headers={"X-Forwarded-For": "203.0.113.99"})
+        assert resp3.status_code == 429, (
+            "Spoofed XFF must not reset the rate-limit bucket when "
+            "trust_x_forwarded_for is disabled (issue #1683)."
+        )
+
+        # Same real peer, different spoofed XFF: still rate-limited.
+        resp4 = client.get("/health", headers={"X-Forwarded-For": "198.51.100.7"})
+        assert resp4.status_code == 429
+
+    def test_rate_limit_trusted_peer_xff_only_when_in_allowlist(self, tmp_path: Path) -> None:
+        """Opt-in XFF trust: only honored when peer is in the allowlist.
+
+        With ``trust_x_forwarded_for=True`` + a ``trusted_proxies``
+        allowlist, XFF is honored only if the immediate upstream (the
+        socket peer) matches the allowlist (issue #1683).
+
+        TestClient connects from ``testclient``; when the allowlist
+        permits ``testclient``, the XFF chain is honored and different
+        spoofed XFF values yield different buckets.  When the allowlist
+        excludes the peer, XFF is ignored and all requests share the
+        peer bucket.
+        """
+        # Sub-case A: allowlist matches peer → XFF honored, distinct
+        # spoofed XFFs yield distinct buckets.
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        app_trusted = create_app(
+            outdir=tmp_path,
+            rate_limit="1/minute",
+            trust_x_forwarded_for=True,
+            trusted_proxies=["testclient"],
+        )
+        client_trusted = TestClient(app_trusted)
+
+        # Spoofed XFF #1: first hit, allowed.
+        r = client_trusted.get("/health", headers={"X-Forwarded-For": "203.0.113.1"})
+        assert r.status_code == 200
+        # Same spoofed XFF: rate-limited.
+        r = client_trusted.get("/health", headers={"X-Forwarded-For": "203.0.113.1"})
+        assert r.status_code == 429
+        # Different spoofed XFF: new bucket, allowed (this is the
+        # opt-in semantics — operator accepted the trust gate, XFF is
+        # the client identity).
+        r = client_trusted.get("/health", headers={"X-Forwarded-For": "203.0.113.2"})
+        assert r.status_code == 200
+
+        # Sub-case B: allowlist does NOT match peer → XFF ignored, all
+        # requests collapse to the peer bucket.
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        app_untrusted = create_app(
+            outdir=tmp_path,
+            rate_limit="1/minute",
+            trust_x_forwarded_for=True,
+            # ``10.0.0.0/8`` does NOT cover the ``testclient`` peer.
+            trusted_proxies=["10.0.0.0/8"],
+        )
+        client_untrusted = TestClient(app_untrusted)
+
+        r1 = client_untrusted.get("/health", headers={"X-Forwarded-For": "203.0.113.1"})
+        assert r1.status_code == 200
+        r2 = client_untrusted.get("/health", headers={"X-Forwarded-For": "203.0.113.2"})
+        assert r2.status_code == 429, (
+            "When the socket peer is not in the trusted-proxy allowlist, "
+            "XFF must be ignored even with trust_x_forwarded_for=True "
+            "(issue #1683)."
+        )
+
+    def test_rate_limit_first_untrusted_hop_in_xff_chain(self, tmp_path: Path) -> None:
+        """Opt-in XFF trust: the "first untrusted hop" rule is honored.
+
+        When the immediate upstream is trusted and the XFF chain is
+        ``client, proxy1, proxy2``, the client IP is the first (leftmost)
+        entry that is NOT in the allowlist — i.e. the ``client`` IP.
+        This is the canonical RFC 7239 / nginx ``real_ip`` behavior
+        (issue #1683).
+        """
+        (tmp_path / "run.json").write_text(json.dumps({"campaign_id": "x"}))
+        # Trust ``testclient`` (TestClient peer) AND ``198.51.100.0/24``
+        # (one of the trusted proxies in the chain).  The client
+        # ``203.0.113.50`` is NOT trusted, so it must be the resolved
+        # client IP.
+        app = create_app(
+            outdir=tmp_path,
+            rate_limit="1/minute",
+            trust_x_forwarded_for=True,
+            trusted_proxies=["testclient", "198.51.100.0/24"],
+        )
+        client = TestClient(app)
+
+        # XFF chain: true client ``203.0.113.50``, trusted proxy
+        # ``198.51.100.10``, peer ``testclient``.  Resolved client IP
+        # is ``203.0.113.50``.
+        r = client.get(
+            "/health",
+            headers={"X-Forwarded-For": "203.0.113.50, 198.51.100.10"},
+        )
+        assert r.status_code == 200
+        # Same true client (different left-most hop order preserved),
+        # second request → rate-limited.
+        r = client.get(
+            "/health",
+            headers={"X-Forwarded-For": "203.0.113.50, 198.51.100.99"},
+        )
+        assert r.status_code == 429
+
+        # A DIFFERENT true client (leftmost untrusted IP) gets a fresh
+        # bucket.
+        r = client.get(
+            "/health",
+            headers={"X-Forwarded-For": "203.0.113.99, 198.51.100.10"},
+        )
+        assert r.status_code == 200
+
+    def test_trust_xff_without_allowlist_fails_closed(self, tmp_path: Path) -> None:
+        """Opting into XFF trust without a proxy allowlist must fail closed.
+
+        Issue #1683 requires that turning the gate on without an
+        allowlist raises ``ValueError`` at app creation — accepting
+        XFF from any upstream would silently re-introduce the bypass.
+        """
+        with pytest.raises(ValueError, match="trusted_proxies"):
+            create_app(
+                outdir=tmp_path,
+                trust_x_forwarded_for=True,
+                trusted_proxies=[],
+            )
+
+        # Empty env-var + env-enabled trust also fails closed.
+        import os
+
+        from osimflow import api as _api_pkg  # noqa: PLC0415
+
+        prior = os.environ.pop("OSIMFLOW_TRUSTED_PROXIES", None)
+        os.environ["OSIMFLOW_TRUST_X_FORWARDED_FOR"] = "1"
+        try:
+            with pytest.raises(ValueError, match="trusted_proxies"):
+                _api_pkg.create_app(trust_x_forwarded_for=False)
+        finally:
+            os.environ.pop("OSIMFLOW_TRUST_X_FORWARDED_FOR", None)
+            if prior is not None:
+                os.environ["OSIMFLOW_TRUSTED_PROXIES"] = prior
+
+    def test_invalid_trusted_proxy_raises(self, tmp_path: Path) -> None:
+        """Bad CIDR / IP entries in ``trusted_proxies`` fail at app creation."""
+        with pytest.raises(ValueError, match="Invalid trusted-proxy"):
+            create_app(
+                outdir=tmp_path,
+                trust_x_forwarded_for=True,
+                trusted_proxies=["bad@entry"],
+            )
 
     def test_rate_limit_redis_backed_allows_under_limit(self, tmp_path: Path) -> None:
         """Redis-backed rate limiter allows requests under the limit (issue #663).
@@ -943,6 +1132,158 @@ class TestRateLimitKeyValidation:
         """Unknown rate_limit_key value should raise ValueError."""
         with pytest.raises(ValueError, match="must be one of"):
             create_app(outdir=tmp_outdir, rate_limit_key="unknown")
+
+
+class TestRealRemoteAddressHelper:
+    """Direct unit tests for ``_make_real_remote_address_func`` (issue #1683).
+
+    These bypass the TestClient stack to keep the helper's contract
+    visible at a glance: default-deny, opt-in trust, first-untrusted-hop.
+    """
+
+    def _request(self, *, peer: str = "testclient", xff: str | None = None) -> Request:
+        """Build a Starlette ``Request`` with a controllable peer + XFF."""
+        from starlette.requests import Request as StarletteRequest  # noqa: PLC0415
+
+        headers: list[tuple[bytes, bytes]] = []
+        if xff is not None:
+            headers.append((b"x-forwarded-for", xff.encode()))
+        scope: dict[str, object] = {
+            "type": "http",
+            "method": "GET",
+            "path": "/health",
+            "raw_path": b"/health",
+            "query_string": b"",
+            "headers": headers,
+            "client": (peer, 12345),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+        return StarletteRequest(scope)
+
+    def test_default_deny_ignores_xff(self) -> None:
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(trust_x_forwarded_for=False, trusted_proxies=[])
+        req = self._request(peer="203.0.113.5", xff="198.51.100.7")
+        assert key_func(req) == "203.0.113.5"
+
+    def test_opt_in_untrusted_peer_falls_back_to_peer(self) -> None:
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(
+            trust_x_forwarded_for=True,
+            trusted_proxies=[_parse_trusted_proxies(["10.0.0.0/8"])[0]],
+        )
+        req = self._request(peer="203.0.113.5", xff="198.51.100.7")
+        # Peer is NOT in the trusted set → XFF ignored, return peer.
+        assert key_func(req) == "203.0.113.5"
+
+    def test_opt_in_trusted_peer_first_untrusted_hop(self) -> None:
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(
+            trust_x_forwarded_for=True,
+            trusted_proxies=_parse_trusted_proxies(["testclient", "198.51.100.0/24"]),
+        )
+        # Right-to-left: testclient (trusted), 198.51.100.10 (trusted),
+        # 203.0.113.50 (untrusted) → resolved client IP is 203.0.113.50.
+        req = self._request(peer="testclient", xff="203.0.113.50, 198.51.100.10")
+        assert key_func(req) == "203.0.113.50"
+
+    def test_opt_in_all_trusted_chain_falls_back_to_peer(self) -> None:
+        """When every XFF entry is itself a trusted proxy (or the chain
+        is empty), fall back to the socket peer rather than returning
+        an attacker-controlled header value (issue #1683)."""
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(
+            trust_x_forwarded_for=True,
+            trusted_proxies=_parse_trusted_proxies(["testclient", "198.51.100.0/24"]),
+        )
+        req = self._request(peer="testclient", xff="198.51.100.10, 198.51.100.20")
+        assert key_func(req) == "testclient"
+
+    def test_opt_in_strips_ipv4_port(self) -> None:
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(
+            trust_x_forwarded_for=True,
+            trusted_proxies=_parse_trusted_proxies(["testclient"]),
+        )
+        req = self._request(peer="testclient", xff="203.0.113.50:8080")
+        assert key_func(req) == "203.0.113.50"
+
+    def test_opt_in_strips_ipv6_bracketed_port(self) -> None:
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(
+            trust_x_forwarded_for=True,
+            trusted_proxies=_parse_trusted_proxies(["testclient"]),
+        )
+        req = self._request(peer="testclient", xff="[2001:db8::1]:8080")
+        assert key_func(req) == "2001:db8::1"
+
+    def test_opt_in_garbage_xff_falls_back_to_peer(self) -> None:
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(
+            trust_x_forwarded_for=True,
+            trusted_proxies=_parse_trusted_proxies(["testclient"]),
+        )
+        # Garbage entry that fails ipaddress parsing → fail-closed,
+        # fall back to the peer rather than returning the attacker text.
+        req = self._request(peer="testclient", xff="not-a-valid-ip-at-all")
+        assert key_func(req) == "testclient"
+
+    def test_opt_in_xff_garbage_skipped_walks_to_real_client(self) -> None:
+        """When a garbage XFF entry is followed by a real client IP,
+        the trust gate skips the garbage and returns the real client.
+
+        This mirrors what nginx / haproxy / envoy do: a malformed XFF
+        entry that the proxy itself did not produce is silently
+        dropped (issue #1683).
+        """
+        from osimflow.api.app import _make_real_remote_address_func  # noqa: PLC0415
+
+        key_func = _make_real_remote_address_func(
+            trust_x_forwarded_for=True,
+            trusted_proxies=_parse_trusted_proxies(["testclient"]),
+        )
+        # Garbage first (right-most), real client second (left-most).
+        # Walk right-to-left: "garbage123" skipped (not an IP),
+        # "203.0.113.5" is untrusted → returned.
+        req = self._request(peer="testclient", xff="203.0.113.5, garbage123")
+        assert key_func(req) == "203.0.113.5"
+
+    def test_parse_trusted_proxies_accepts_cidr_and_bare_ip(self) -> None:
+        nets = _parse_trusted_proxies(["10.0.0.1", "192.168.0.0/16", "2001:db8::/32"])
+        assert len(nets) == 3
+        # CIDR membership:
+        from ipaddress import ip_address  # noqa: PLC0415
+
+        assert ip_address("10.0.0.1") in nets[0]
+        assert ip_address("192.168.5.7") in nets[1]
+        assert ip_address("2001:db8::1") in nets[2]
+
+    def test_parse_trusted_proxies_rejects_garbage(self) -> None:
+        with pytest.raises(ValueError, match="Invalid trusted-proxy"):
+            _parse_trusted_proxies(["bad@entry"])
+        with pytest.raises(ValueError, match="Invalid trusted-proxy"):
+            _parse_trusted_proxies(["10.0.0.0/99"])
+
+    def test_parse_trusted_proxies_handles_empty_input(self) -> None:
+        assert _parse_trusted_proxies(None) == []
+        assert _parse_trusted_proxies([]) == []
+        # Whitespace-only entries are skipped, not validated.
+        assert _parse_trusted_proxies(["   "]) == []
+
+
+def _parse_trusted_proxies(values):
+    """Local re-export to keep the helper's API obvious in tests."""
+    from osimflow.api.app import _parse_trusted_proxies as _impl  # noqa: PLC0415
+
+    return _impl(values)
 
 
 class TestReadOnlyDefault:

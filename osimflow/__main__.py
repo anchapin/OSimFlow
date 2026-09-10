@@ -1240,6 +1240,33 @@ def _add_serve_args(serve: argparse.ArgumentParser) -> None:
         ),
     )
     serve.add_argument(
+        "--rate-limit-trust-x-forwarded-for",
+        action="store_true",
+        default=False,
+        help=(
+            "Honor the X-Forwarded-For header for rate-limit identity "
+            "ONLY when the immediate upstream is in --trusted-proxies "
+            "(issue #1683). Defaults to off: XFF is ignored and the "
+            "socket peer is the only rate-limit identity, so a client "
+            "cannot rotate a spoofed XFF value to obtain a fresh "
+            "bucket. Can also be enabled via OSIMFLOW_TRUST_X_FORWARDED_FOR."
+        ),
+    )
+    serve.add_argument(
+        "--trusted-proxies",
+        default=None,
+        help=(
+            "Comma-separated list of trusted-proxy CIDR blocks / IPs "
+            "used by the X-Forwarded-For trust gate (issue #1683). "
+            "Each entry accepts a single IP ('10.0.0.1', "
+            "'2001:db8::1') or a CIDR block ('10.0.0.0/8', "
+            "'2001:db8::/32'). Required whenever "
+            "--rate-limit-trust-x-forwarded-for is set; otherwise "
+            "the API refuses to start (fail-closed). Can also be "
+            "set via OSIMFLOW_TRUSTED_PROXIES."
+        ),
+    )
+    serve.add_argument(
         "--tls-cert",
         default=None,
         type=Path,
@@ -2090,6 +2117,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0912
         cors_origins=cors_origins,
         rate_limit=args.rate_limit,
         rate_limit_key=args.rate_limit_key,
+        trust_x_forwarded_for=args.rate_limit_trust_x_forwarded_for,
+        trusted_proxies=(
+            [p.strip() for p in args.trusted_proxies.split(",") if p.strip()]
+            if args.trusted_proxies
+            else None
+        ),
         ui_enabled=args.ui,
         variable_editor=args.editor,
         results_viewer=args.dashboard,
