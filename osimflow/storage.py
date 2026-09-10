@@ -724,13 +724,25 @@ class AzureBlobStorage(ResultStorage):
     def upload_file(self, local_path: Path, remote_path: str) -> None:
         import asyncio  # noqa: PLC0415
 
+        # Issue #1690: refuse calls made from inside a running event loop.
+        # Bridging through ``asyncio.run`` inside a thread-pool worker would
+        # otherwise block the caller's loop for the full upload duration
+        # (sync wrappers must only be used from sync contexts — async callers
+        # should use ``upload_file_async`` or ``ResultStorageUploader``).
+        # The raise is placed in the ``else`` clause so it fires OUTSIDE the
+        # ``except RuntimeError`` handler below; an earlier version of this
+        # guard raised inside the same ``try`` and was swallowed by its own
+        # ``except RuntimeError: pass`` — dead code that let async callers
+        # fall through to the thread-pool bridge.
         try:
             asyncio.get_running_loop()
-            raise RuntimeError(
-                "AzureBlobStorage.upload_file is async; use ResultStorageUploader for batch uploads"
-            )
         except RuntimeError:
             pass
+        else:
+            raise RuntimeError(
+                "AzureBlobStorage.upload_file is sync-only; a running event loop "
+                "is active. Use upload_file_async or ResultStorageUploader instead."
+            )
         try:
             import concurrent.futures  # noqa: PLC0415
 
@@ -805,14 +817,20 @@ class AzureBlobStorage(ResultStorage):
         import asyncio  # noqa: PLC0415
         import concurrent.futures  # noqa: PLC0415
 
+        # Issue #1690: mirror the upload-side guard. The ``raise`` lives in
+        # the ``else`` clause so the ``except RuntimeError: pass`` below
+        # cannot swallow it (the previous version raised inside the same
+        # ``try`` block and was dead-code; see ``upload_file`` for the full
+        # rationale).
         try:
             asyncio.get_running_loop()
-            raise RuntimeError(
-                "AzureBlobStorage.download_file is async; use "
-                "ResultStorageUploader for batch downloads"
-            )
         except RuntimeError:
             pass
+        else:
+            raise RuntimeError(
+                "AzureBlobStorage.download_file is sync-only; a running event "
+                "loop is active. Use download_file_async or ResultStorageUploader instead."
+            )
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 fut = pool.submit(
