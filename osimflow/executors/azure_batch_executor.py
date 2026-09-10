@@ -334,9 +334,9 @@ class AzureBatchExecutor(BaseExecutor):
 
     def __init__(
         self,
-        account_name: str,
-        account_url: str,
-        pool_id: str,
+        account_name: str | None = None,
+        account_url: str | None = None,
+        pool_id: str = "osimflow-pool",
         location: str = "eastus",
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
@@ -352,8 +352,15 @@ class AzureBatchExecutor(BaseExecutor):
 
         self._azure_batch = azure.batch
         self._azure_identity = azure.identity
+        # Issue #1755: validate-on-submit. ``account_name`` / ``account_url``
+        # are only required when ``submit()`` is called, not at
+        # construction time. ``AWSBatchExecutor`` and ``GoogleBatchExecutor``
+        # already followed this pattern; the shared factory contract
+        # (issue #1681) exercises ``build_executor(name)`` with no
+        # substrate-specific kwargs, which previously crashed here on
+        # ``None.rstrip``. Defer the rstrip until we know the URL is set.
         self.account_name = account_name
-        self.account_url = account_url.rstrip("/")
+        self.account_url = account_url
         self.pool_id = pool_id
         self.location = location
         self.poll_interval_s = poll_interval_s
@@ -384,9 +391,19 @@ class AzureBatchExecutor(BaseExecutor):
         ``BatchServiceClient`` and no account-name argument.
         """
         if self._client is None:
+            # Issue #1755: validate-on-submit. ``account_url`` /
+            # ``account_name`` are required for any submission; raising
+            # here (rather than at __init__ time) lets the shared factory
+            # construct an instance without substrate-specific kwargs.
+            if not self.account_url or not self.account_name:
+                raise ValueError(
+                    "AzureBatchExecutor requires account_name and account_url "
+                    "at submit time; configure --azure-batch-account-name and "
+                    "--azure-batch-account-url before invoking Campaign.run()."
+                )
             credential = self._azure_identity.DefaultAzureCredential()
             self._client = self._azure_batch.BatchClient(
-                endpoint=self.account_url,
+                endpoint=self.account_url.rstrip("/"),
                 credential=credential,
             )
             assert self._client is not None
