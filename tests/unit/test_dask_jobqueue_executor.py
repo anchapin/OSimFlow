@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -764,3 +765,183 @@ class TestDaskWrappedClosure:
             assert os.environ["OSIMFLOW_OS_VERSION"] == "external-baseline"
         finally:
             os.environ.pop("OSIMFLOW_OS_VERSION", None)
+
+
+class TestDaskJobQueuePerSampleLogCapture:
+    """Per-sample stdout/stderr capture (issue #1688).
+
+    The Dask-JobQueue executor previously discarded the
+    ``stdout_path`` / ``stderr_path`` arguments forwarded by
+    :meth:`BaseExecutor.submit`. That left a failed dask-jobqueue
+    sample with nothing on the orchestrator side to ``cat`` once the
+    worker scaled down — the documented `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`
+    contract was broken on every dask_jobqueue cluster backend
+    (``SLURMCluster`` / ``PBSCluster`` / ``KubernetesCluster``).
+
+    The closure handed to ``cluster.get_client().submit`` must
+    redirect ``fn``'s ``print()`` / ``sys.stderr`` writes to those
+    paths so the orchestrator's per-sample log discovery
+    (campaign.py:work side) keeps working unmodified.
+
+    These tests also compose with #1689's env-isolation changes
+    (``_apply_env_isolated``): the captured-fn wrapper runs INSIDE
+    the env-isolated scope so env overrides are visible to the inner
+    fn, and stdout/stderr files are flushed+closed atomically with
+    env restore.
+    """
+
+    def _make_executor(self) -> DaskJobQueueExecutor:
+        ex = DaskJobQueueExecutor.__new__(DaskJobQueueExecutor)
+        ex.cluster_type = "slurm"
+        ex.min_workers = 1
+        ex.max_workers = 10
+        ex.cpus_per_worker = 2
+        ex.memory_per_worker = "4GiB"
+        ex.walltime = "01:00:00"
+        ex.queue = "debug"
+        ex._scaler_running = False
+        ex._cluster = MagicMock()
+        ex.name = "dask_jobqueue"
+        return ex
+
+    def _capture_wrapped(
+        self,
+        fn: object,
+        tmp_path: Path,
+        stdout_path: Path | None,
+        stderr_path: Path | None,
+        *,
+        container: str | None = "nrel/openstudio:3.11.0",
+    ) -> object:
+        """Invoke ``_do_submit`` with a mocked cluster and return the
+        callable handed to ``cluster.get_client().submit``.
+
+        Mirrors how a real Dask worker would invoke ``_wrapped`` after
+        the orchestrator pickles the closure across the wire: same
+        kwargs, same capture stack.
+        """
+        ex = self._make_executor()
+        client = MagicMock()
+        ex._cluster.get_client.return_value = client
+        with patch(
+            "osimflow.executors.dask_jobqueue_executor.validate_transport_mode"
+        ):
+            ex._do_submit(
+                name="test",
+                cpus=2,
+                memory_mb=4096,
+                time_min=60,
+                container=container,
+                container_digest=None,
+                fn=fn,
+                args=(),
+                openstudio_version="3.11.0",
+                variables_json=None,
+                env=None,
+                result_hint=None,
+                remote_command=None,
+                transport=None,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        return client.submit.call_args.args[0]
+
+    def test_captures_stdout_and_stderr_to_files(
+        self, tmp_path: Path
+    ) -> None:
+        out_path = tmp_path / "out.log"
+        err_path = tmp_path / "err.log"
+
+        def fn() -> str:
+            print("hello stdout", flush=True)
+            print("hello stderr", file=sys.stderr, flush=True)
+            return "ok"
+
+        wrapped = self._capture_wrapped(
+            fn, tmp_path, out_path, err_path
+        )
+        result = wrapped()
+
+        assert result == "ok"
+        assert out_path.read_text() == "hello stdout\n"
+        assert err_path.read_text() == "hello stderr\n"
+
+    def test_captures_stdout_only(self, tmp_path: Path) -> None:
+        out_path = tmp_path / "out.log"
+
+        def fn() -> str:
+            print("only stdout", flush=True)
+            return "ok"
+
+        wrapped = self._capture_wrapped(fn, tmp_path, out_path, None)
+        result = wrapped()
+
+        assert result == "ok"
+        assert out_path.read_text() == "only stdout\n"
+
+    def test_captures_stderr_only(self, tmp_path: Path) -> None:
+        err_path = tmp_path / "err.log"
+
+        def fn() -> str:
+            print("only stderr", file=sys.stderr, flush=True)
+            return "ok"
+
+        wrapped = self._capture_wrapped(fn, tmp_path, None, err_path)
+        result = wrapped()
+
+        assert result == "ok"
+        assert err_path.read_text() == "only stderr\n"
+
+    def test_no_capture_is_fast_path(self, tmp_path: Path) -> None:
+        """When neither stdout_path nor stderr_path is given, the closure
+        takes a fast path: no file open, no redirect. Just calls fn.
+        """
+
+        def fn() -> str:
+            return "fast"
+
+        wrapped = self._capture_wrapped(fn, tmp_path, None, None)
+        assert wrapped() == "fast"
+
+    def test_files_appended_to_on_subsequent_calls(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-running a sample should append to the same files, not
+        overwrite — supports the retry-the-same-sample workflow.
+        """
+        out_path = tmp_path / "out.log"
+
+        def fn() -> str:
+            print("line1", flush=True)
+            return "ok"
+
+        wrapped = self._capture_wrapped(fn, tmp_path, out_path, None)
+        wrapped()
+        wrapped()
+        wrapped()
+
+        text = out_path.read_text()
+        assert text.count("line1") == 3
+
+    def test_exception_in_fn_still_closes_files(
+        self, tmp_path: Path
+    ) -> None:
+        """The file context managers release even if ``fn`` raises, so
+        a retried sample can re-open the same paths without a
+        ``ResourceWarning`` / leaked-fd error.
+        """
+        out_path = tmp_path / "out.log"
+
+        def boom() -> None:
+            print("before raise", flush=True)
+            raise ValueError("boom")
+
+        wrapped = self._capture_wrapped(boom, tmp_path, out_path, None)
+        with pytest.raises(ValueError, match="boom"):
+            wrapped()
+        # Pre-raise text is flushed.
+        assert "before raise" in out_path.read_text()
+        # And the file is re-openable (descriptor was released).
+        with out_path.open("a") as f:
+            f.write("after-retry\n")
+        assert "after-retry" in out_path.read_text()

@@ -278,7 +278,7 @@ class DaskJobQueueExecutor(BaseExecutor):
         validate_transport_mode(self.name, transport.mode if transport is not None else None)
         del result_hint, remote_command, transport  # noqa: F841
         del variables_json, env  # noqa: F841
-        del stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841
+        del max_retries, worker_id, kwargs  # noqa: F841
         log.info(
             "dask_jobqueue submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
             name,
@@ -298,20 +298,69 @@ class DaskJobQueueExecutor(BaseExecutor):
             t.start()
             log.info("dask_jobqueue: auto-scaler started")
 
+        # Issue #1688: hoist the per-sample log paths out of the closures
+        # and stringify them now so they survive Dask's pickle round-trip
+        # to the worker. The wrapped fn's ``print()`` / ``sys.stderr``
+        # writes are redirected to these files via ``contextlib`` so the
+        # orchestrator-side
+        # ``${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`` contract
+        # — documented in AGENTS.md §6 and satisfied by every other
+        # substrate's ``run_subprocess`` (Local) / submitit per-job files
+        # (Slurm / PBS) / cluster-side log capture (AWS / Azure / Google
+        # Batch / Kubernetes / Nomad) — is restored on the three
+        # dask_jobqueue backends (``SLURMCluster`` / ``PBSCluster`` /
+        # ``KubernetesCluster``). Files are opened in line-buffered append
+        # mode so a retried sample appends to the same files rather than
+        # overwriting earlier progress.
+        out_path_str = str(stdout_path) if stdout_path is not None else None
+        err_path_str = str(stderr_path) if stderr_path is not None else None
+
         def _wrapped() -> Any:
-            # Issue #1689: build the per-task env overrides and route
-            # through ``_apply_env_isolated`` so each Dask task gets a
-            # fresh snapshot (per-call, NOT per-worker) and the original
-            # ``os.environ`` keys are restored on exit even when ``fn``
-            # raises. See ``_apply_env_isolated`` for the full rationale.
+            # Compose issue #1689 (per-task env snapshot/restore via
+            # ``_apply_env_isolated``) with issue #1688 (per-task
+            # stdout/stderr capture). Both features apply to the same
+            # inner fn invocation; the env overrides are visible inside
+            # the redirected streams, and the captured streams are
+            # visible inside the env override scope.
+            from contextlib import (  # noqa: PLC0415
+                redirect_stderr,
+                redirect_stdout,
+            )
+            from pathlib import Path as _Path  # noqa: PLC0415
+
             overrides: dict[str, str] = {}
             if openstudio_version is not None:
                 overrides["OSIMFLOW_OS_VERSION"] = str(openstudio_version)
             if container is not None:
                 overrides["OSIMFLOW_CONTAINER"] = container
+
+            def _captured_fn(*a: Any) -> Any:
+                if out_path_str is None and err_path_str is None:
+                    return fn(*a)
+                if out_path_str is not None and err_path_str is not None:
+                    with (
+                        _Path(out_path_str).open("a", buffering=1, encoding="utf-8") as out_f,
+                        _Path(err_path_str).open("a", buffering=1, encoding="utf-8") as err_f,
+                        redirect_stdout(out_f),
+                        redirect_stderr(err_f),
+                    ):
+                        return fn(*a)
+                if out_path_str is not None:
+                    with (
+                        _Path(out_path_str).open("a", buffering=1, encoding="utf-8") as out_f,
+                        redirect_stdout(out_f),
+                    ):
+                        return fn(*a)
+                assert err_path_str is not None
+                with (
+                    _Path(err_path_str).open("a", buffering=1, encoding="utf-8") as err_f,
+                    redirect_stderr(err_f),
+                ):
+                    return fn(*a)
+
             if overrides:
-                return _apply_env_isolated(overrides, fn, *args)
-            return fn(*args)
+                return _apply_env_isolated(overrides, _captured_fn, *args)
+            return _captured_fn(*args)
 
         future = cluster.get_client().submit(_wrapped)
         job_id = f"dask-{name}-{id(future)}"
