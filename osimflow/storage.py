@@ -120,12 +120,29 @@ def _validate_storage_endpoint(endpoint_url: str | None, *, allow_insecure: bool
 # ---------------------------------------------------------------------------
 # Transient-error retry for remote storage I/O (issue #1398)
 # ---------------------------------------------------------------------------
+#
+# Issue #1781: this module used to hand-roll an exponential-backoff
+# loop with deterministic delays (``time.sleep(delay)``).  That loop
+# is now a thin wrapper over the shared ``retry_with_backoff`` helper
+# from :mod:`osimflow.executors.base` (issue #1540) so a fleet of
+# concurrent workers hitting a transient 503 all wake up under full
+# jitter rather than at the same deterministic instant.
+#
+# Behaviour preserved:
+#   - "3 attempts / 30s cap" (issue #1398 acceptance)
+#   - same log.warning text — substrate-style ``on_retry`` callback
+#     emits the historic line through the storage logger
+#   - same permanent-error classification (5xx / throttling / 429)
+#
+# Behaviour changed:
+#   - per-retry sleep is now ``random.uniform(0, min(delay, cap))``
+#     instead of the deterministic ``delay`` schedule
 
-#: Total attempts per operation (1 initial + this many retries - 1 ... i.e.
-#: ``_TRANSIENT_RETRY_ATTEMPTS`` calls total). Issue #1398 acceptance:
-#: "3 attempts / 30s cap".
+#: Total attempts per operation (1 initial + 2 retries). Issue #1398
+#: acceptance: "3 attempts / 30s cap".
 _TRANSIENT_RETRY_ATTEMPTS = 3
-#: Exponential backoff base (attempt N sleeps ``base * 2**(N-1)``).
+#: Exponential backoff base — the window before jitter is
+#: ``min(base * 2**(attempt-1), cap)`` (issue #1540 helper convention).
 _TRANSIENT_RETRY_BASE_S = 2.0
 #: Backoff ceiling so a pathological outage doesn't stall the orchestrator.
 _TRANSIENT_RETRY_CAP_S = 30.0
@@ -166,30 +183,39 @@ def _is_transient_storage_error(exc: BaseException) -> bool:
 
 
 def _retry_transient_storage(op: str, fn: Callable[[], None]) -> None:
-    """Run *fn* with exponential backoff on transient storage errors.
+    """Run *fn* with jittered exponential backoff on transient storage errors.
 
-    Retries up to ``_TRANSIENT_RETRY_ATTEMPTS`` total attempts, sleeping
-    ``min(base * 2**(attempt-1), cap)`` between them (issue #1398:
-    "3 attempts / 30s cap"). Permanent errors and exhausted retries
-    propagate immediately.
+    Thin wrapper over :func:`osimflow.executors.base.retry_with_backoff`
+    (issue #1781) that preserves the historic
+    ``"<op> transient failure (attempt N/3), retrying in {delay}s: {exc}"``
+    log line via an ``on_retry`` callback and re-uses the existing
+    ``_is_transient_storage_error`` classifier.  Permanent errors and
+    exhausted retries propagate immediately.  Sleep uses full jitter
+    (``random.uniform(0, min(delay, cap))``) so a fleet of concurrent
+    workers hitting a transient 503 no longer wake up at the same
+    deterministic instant.
     """
-    for attempt in range(1, _TRANSIENT_RETRY_ATTEMPTS + 1):
-        try:
-            fn()
-            return
-        except Exception as exc:  # noqa: BLE001 — classified below
-            if attempt >= _TRANSIENT_RETRY_ATTEMPTS or not _is_transient_storage_error(exc):
-                raise
-            delay = min(_TRANSIENT_RETRY_BASE_S * (2 ** (attempt - 1)), _TRANSIENT_RETRY_CAP_S)
-            log.warning(
-                "%s transient failure (attempt %d/%d), retrying in %.1fs: %s",
-                op,
-                attempt,
-                _TRANSIENT_RETRY_ATTEMPTS,
-                delay,
-                exc,
-            )
-            time.sleep(delay)
+    from osimflow.executors.base import retry_with_backoff  # noqa: PLC0415
+
+    def _on_retry(exc: BaseException, attempt: int, window: float) -> None:
+        log.warning(
+            "%s transient failure (attempt %d/%d), retrying in %.1fs: %s",
+            op,
+            attempt,
+            _TRANSIENT_RETRY_ATTEMPTS,
+            window,
+            exc,
+        )
+
+    retry_with_backoff(
+        fn,
+        retry_on=_is_transient_storage_error,
+        max_attempts=_TRANSIENT_RETRY_ATTEMPTS,
+        initial_delay_s=_TRANSIENT_RETRY_BASE_S,
+        max_delay_s=_TRANSIENT_RETRY_CAP_S,
+        jitter=True,
+        on_retry=_on_retry,
+    )
 
 
 class ResultStorage(ABC):
