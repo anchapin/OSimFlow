@@ -57,7 +57,7 @@ _SEED_PCT: dict[str, float] = {
     # --- issue #1571 origin/main commit 30f3c79 ---
     "osimflow/_campaign_artifacts.py": 91.28,
     "osimflow/_campaign_baseline.py": 98.44,
-    "osimflow/_campaign_chaos.py": 29.33,
+    "osimflow/_campaign_chaos.py": 99.00,  # raised by issue #1692 (build_default_chaos_engine + CampaignChaosWiring directly tested)
     "osimflow/_campaign_code_hashes.py": 92.99,
     "osimflow/_campaign_cost_tracker.py": 91.75,
     "osimflow/_campaign_epw.py": 89.52,
