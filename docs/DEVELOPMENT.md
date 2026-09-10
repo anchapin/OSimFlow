@@ -582,11 +582,11 @@ so the gate now measures them. The remaining omissions are:
   dependency as nsga2.py.
 - `osimflow/algorithms/ga.py` — genetic algorithm requires the optional
   `[ga]` extra (DEAP).
-- `osimflow/api/*` — REST surface behind the optional `[api]` extra.
-  Its tests (`tests/unit/test_api_core.py` and friends) exist but are a
-  separate surface from the core campaign pipeline; the omission stays
-  for now (issue #1452 prioritized storage.py and taskqueue.py) and
-  should be revisited when API coverage is folded into the global gate.
+- `osimflow/api/*` is **not** in the omit list anymore — issue #1694
+  removed it so the per-module floor check in `tools/check_module_coverage.py`
+  can measure api/ files individually. Aggregate api/ coverage is
+  78–100% per file (sits above the 82% gate; aggregate is 88.59% in the
+  seeded measurement), so the move does not weaken the global gate.
 - `osimflow/viz/dashboard.py` — Streamlit dashboard UI (`[viz]` extra);
   presentation-layer code that additionally requires an optional
   dependency to import.
