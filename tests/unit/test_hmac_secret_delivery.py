@@ -428,9 +428,9 @@ class TestAzureBatchSecretDelivery:
         # literal-secret path so operators get a single, consistent migration
         # signal — drives them to the pool-level managed-identity + Key Vault
         # pattern documented in docs/secret-management.md (issue #1633).
-        assert any(
-            "SECURITY (issue #1682)" in r.message for r in caplog.records
-        ), "expected Azure literal-secret SECURITY warning (issue #1682)"
+        assert any("SECURITY (issue #1682)" in r.message for r in caplog.records), (
+            "expected Azure literal-secret SECURITY warning (issue #1682)"
+        )
 
     def test_default_mode_no_secret_no_warning(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -454,9 +454,9 @@ class TestAzureBatchSecretDelivery:
         # Legacy unsigned mode: no secret, no signature, no warning.
         names = {e["name"] for e in env}
         assert TASK_PAYLOAD_SECRET_ENV not in names
-        assert not any(
-            "SECURITY (issue #1682)" in r.message for r in caplog.records
-        ), "Azure must not emit the SECURITY warning when no secret is set"
+        assert not any("SECURITY (issue #1682)" in r.message for r in caplog.records), (
+            "Azure must not emit the SECURITY warning when no secret is set"
+        )
 
 
 class TestGoogleBatchSecretDelivery:

@@ -468,7 +468,13 @@ class TestGoogleBatchHandleHooks:
         handle = _GoogleBatchHandle(
             job_name="abc/projects/p/locations/l/jobs/osimflow-x",
             executor=ex,
-            submit_params={"name": "x", "cpus": 1, "memory_mb": 1024, "time_min": 60, "environment": []},
+            submit_params={
+                "name": "x",
+                "cpus": 1,
+                "memory_mb": 1024,
+                "time_min": 60,
+                "environment": [],
+            },
         )
         assert handle._poll_job_id() == "abc/projects/p/locations/l/jobs/osimflow-x"  # noqa: SLF001
 
@@ -562,7 +568,13 @@ class TestGoogleBatchHandleHooks:
         handle = _GoogleBatchHandle(
             job_name="kill-me",
             executor=ex,
-            submit_params={"name": "kill-me", "cpus": 1, "memory_mb": 1024, "time_min": 60, "environment": []},
+            submit_params={
+                "name": "kill-me",
+                "cpus": 1,
+                "memory_mb": 1024,
+                "time_min": 60,
+                "environment": [],
+            },
         )
         assert handle._cancel_job() is True  # noqa: SLF001
         ex._client.delete_job.assert_called_once_with(name="kill-me")
@@ -1006,9 +1018,7 @@ class TestGoogleBatchExecutorInternals:
             status=MagicMock(state=ex._batch_v1.JobStatus.State.SUCCEEDED)
         )
         result = ex._get_job("projects/p/locations/l/jobs/j")  # noqa: SLF001
-        ex._client.get_job.assert_called_once_with(
-            "projects/p/locations/l/jobs/j"
-        )
+        ex._client.get_job.assert_called_once_with("projects/p/locations/l/jobs/j")
         assert result is not None
 
     def test_submit_job_happy_path_constructs_full_payload(self) -> None:
@@ -1026,9 +1036,7 @@ class TestGoogleBatchExecutorInternals:
             environment=env,
         )
         # The job name is the full resource path.
-        assert result == (
-            "projects/test-project/locations/us-central1/jobs/osimflow-unit-test-job"
-        )
+        assert result == ("projects/test-project/locations/us-central1/jobs/osimflow-unit-test-job")
         # The BatchServiceClient.create_job was called.
         ex._client.create_job.assert_called_once()
 
@@ -1089,9 +1097,7 @@ class TestGoogleBatchExecutorInternals:
         task_spec_kwargs = ex._batch_v1.TaskSpec.call_args.kwargs  # type: ignore[attr-defined]
         environment_map = task_spec_kwargs["environment"]
         assert "secret_variables" in environment_map
-        assert environment_map["secret_variables"] == {
-            TASK_PAYLOAD_SECRET_ENV: "gb-payload-secret"
-        }
+        assert environment_map["secret_variables"] == {TASK_PAYLOAD_SECRET_ENV: "gb-payload-secret"}
 
     def test_submit_job_custom_command_overrides_default(self) -> None:
         """A caller-supplied ``command`` is plumbed into the ``ContainerSpec``."""

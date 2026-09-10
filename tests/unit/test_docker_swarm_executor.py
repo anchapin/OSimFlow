@@ -803,9 +803,7 @@ class TestDockerSwarmHandleCancelAndResolve:
         ex = self._make_executor()
         response = requests.Response()
         response.status_code = 404
-        api_err = docker.errors.APIError(
-            "service not found", response=response
-        )
+        api_err = docker.errors.APIError("service not found", response=response)
         ex._client.services.get.side_effect = api_err  # type: ignore[method-assign]
 
         handle = _DockerSwarmHandle(
@@ -1147,9 +1145,7 @@ class TestDockerSwarmExecutorInternalHelpers:
         ex = self._make_executor()
         ex._get_client = MagicMock(  # type: ignore[method-assign]
             return_value=MagicMock(
-                services=MagicMock(
-                    get=MagicMock(side_effect=RuntimeError("probe failed"))
-                )
+                services=MagicMock(get=MagicMock(side_effect=RuntimeError("probe failed")))
             )
         )
         result = ex._get_service_status("svc-x")  # noqa: SLF001
@@ -1296,9 +1292,7 @@ class TestDockerSwarmExecutorInternalHelpers:
             return MagicMock(name="osimflow-test")
 
         ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
-        with patch.dict(
-            os.environ, {TASK_PAYLOAD_SECRET_ENV: "orch-shared-secret"}
-        ):
+        with patch.dict(os.environ, {TASK_PAYLOAD_SECRET_ENV: "orch-shared-secret"}):
             ex._submit_service(  # noqa: SLF001
                 name="test",
                 cpus=1,
@@ -1487,29 +1481,27 @@ class TestDockerSwarmExecutorInternalHelpers:
             with pytest.raises(RuntimeError, match="Docker daemon is not reachable"):
                 ex._get_client()  # noqa: SLF001
 
-    def test_constructor_logs_warning_for_latest_tag(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_constructor_logs_warning_for_latest_tag(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """``__init__`` warns when the image tag is ``:latest`` (supply-chain)."""
 
         caplog.set_level("WARNING", logger="osimflow.executors.docker_swarm")
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("DOCKER_HOST", None)
             DockerSwarmExecutor(image="nrel/openstudio:latest")
-        assert any(
-            "using 'latest' is not recommended" in rec.message
-            for rec in caplog.records
-        )
+        assert any("using 'latest' is not recommended" in rec.message for rec in caplog.records)
 
-    def test_constructor_does_not_warn_for_pinned_tag(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_constructor_does_not_warn_for_pinned_tag(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """No supply-chain warning fires when the image tag is pinned."""
 
         caplog.set_level("WARNING", logger="osimflow.executors.docker_swarm")
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("DOCKER_HOST", None)
             DockerSwarmExecutor(image="nrel/openstudio:3.11.0")
-        assert not any(
-            "using 'latest' is not recommended" in rec.message
-            for rec in caplog.records
-        )
+        assert not any("using 'latest' is not recommended" in rec.message for rec in caplog.records)
 
     def test_requires_remote_runner_payload_true(self) -> None:
         """``requires_remote_runner_payload`` is ``True`` (DockerSwarm dispatches remote_runner)."""
@@ -1551,10 +1543,7 @@ class TestDockerSwarmExecutorInternalHelpers:
                     "svc-no-tasks", timeout=0.05
                 )
         # The "no-tasks yet" info-log fires once before the timeout.
-        assert any(
-            "no-tasks yet" in str(call_args)
-            for call_args in mock_log.info.call_args_list
-        )
+        assert any("no-tasks yet" in str(call_args) for call_args in mock_log.info.call_args_list)
 
     def test_submit_service_skips_unset_transport_field_env(self) -> None:
         """With a transport whose storage fields are None, only the mode env var is emitted."""
