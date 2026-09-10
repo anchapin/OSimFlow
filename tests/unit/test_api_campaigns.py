@@ -612,6 +612,111 @@ class TestCompareCampaigns:
         assert resp.status_code == 422
 
 
+class TestCompareCampaignsGetPathContainment:
+    """Issue #1761 — the GET compare handler must not probe arbitrary paths.
+
+    Before the fix, ``GET /api/v1/campaigns/compare`` accepted any
+    ``outdir`` the caller supplied and resolved it via
+    ``_resolve_by_outdir`` with no permission gate and no containment
+    check.  An authenticated ``readonly`` key could therefore:
+
+    * enumerate the existence of arbitrary server directories
+      (``?outdir=/etc`` — 200 vs 404 leaks the file-existence oracle),
+    * read campaign metadata (``run.json``) and aggregated KPI CSVs
+      from directories the operator never authorised.
+
+    These tests pin the post-fix behaviour:
+
+    * ``require_permission(request, "readonly")`` is the first call in
+      the handler — even a fully-privileged request that supplies an
+      outdir outside ``campaigns_base_dir`` receives 403.
+    * Any outdir that resolves outside ``campaigns_base_dir`` is
+      rejected with 403, regardless of the caller's role.
+    """
+
+    def test_outdir_outside_base_returns_403(
+        self, client_ro: TestClient, tmp_path: Path
+    ) -> None:
+        """An outdir outside ``campaigns_base_dir`` returns 403.
+
+        Uses two sibling campaign directories both *outside* the
+        configured base.  Without the containment check the handler
+        would happily read each side's run.json and aggregated CSVs.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        outside_c1 = outside / "evil-camp-1"
+        outside_c1.mkdir()
+        (outside_c1 / "run.json").write_text(
+            json.dumps({"campaign_id": "evil-camp-1", "started_at": 1.0})
+        )
+        outside_c2 = outside / "evil-camp-2"
+        outside_c2.mkdir()
+        (outside_c2 / "run.json").write_text(
+            json.dumps({"campaign_id": "evil-camp-2", "started_at": 1.0})
+        )
+
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={"outdir": [str(outside_c1), str(outside_c2)]},
+        )
+        assert resp.status_code == 403
+
+    def test_etc_probe_blocked(self, client_ro: TestClient) -> None:
+        """``?outdir=/etc`` is rejected with 403 (filesystem oracle closed).
+
+        Pre-fix this resolved ``/etc`` (or returned 404 if it didn't
+        exist as a campaign directory), letting the caller probe
+        directory existence via the response code.
+        """
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={"outdir": ["/etc", "/etc/passwd"]},
+        )
+        assert resp.status_code == 403
+
+    def test_mixed_in_and_out_returns_403(
+        self, client_ro: TestClient, tmp_path: Path
+    ) -> None:
+        """Mixing an in-base outdir with an out-of-base outdir still 403s.
+
+        The containment check runs per-outdir and the first escape
+        triggers the response; the legitimate in-base entry never
+        gets resolved.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        evil = outside / "evil"
+        evil.mkdir()
+        (evil / "run.json").write_text(json.dumps({"campaign_id": "evil"}))
+
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={
+                "outdir": [
+                    str(client_ro.app.state.campaigns_base_dir / "campaign-aaa"),
+                    str(evil),
+                ]
+            },
+        )
+        assert resp.status_code == 403
+
+    def test_in_base_still_works_after_fix(
+        self, client_ro: TestClient, campaigns_base: Path
+    ) -> None:
+        """In-base outdirs still resolve (regression guard for the fix)."""
+        resp = client_ro.get(
+            "/api/v1/campaigns/compare",
+            params={
+                "outdir": [
+                    str(campaigns_base / "campaign-aaa"),
+                    str(campaigns_base / "campaign-bbb"),
+                ]
+            },
+        )
+        assert resp.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/campaigns/compare — multi-campaign comparison (issue #404)
 # ---------------------------------------------------------------------------
