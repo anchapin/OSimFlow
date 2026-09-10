@@ -583,6 +583,32 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
         ),
     )
     run.add_argument(
+        "--init-script-timeout",
+        type=float,
+        default=600.0,
+        help=(
+            "Wall-clock timeout in seconds for the --init-script "
+            "subprocess (issue #1685). On expiry the child process group "
+            "is SIGKILLed and the campaign aborts with a CampaignError "
+            "before any step runs. Default: 600 s — a hung init script "
+            "(e.g. stuck on an NFS mount or a lock) used to block "
+            "Campaign.run() forever."
+        ),
+    )
+    run.add_argument(
+        "--finalize-script-timeout",
+        type=float,
+        default=600.0,
+        help=(
+            "Wall-clock timeout in seconds for the --finalize-script "
+            "subprocess (issue #1685). On expiry the child process group "
+            "is SIGKILLed and a warning is logged, but the finalize hook "
+            "returns normally so the Campaign.run() finally block can "
+            "still rewrite run.json, fire the webhook, and cache.close(). "
+            "Default: 600 s."
+        ),
+    )
+    run.add_argument(
         "--skip-preflight",
         action="store_true",
         help=(

@@ -124,14 +124,66 @@ class CancelRegistry:
 
 cancel_registry = CancelRegistry()
 
+# Issue #1685: SIGINT escalation counter.  The first SIGINT requests
+# cancellation (preserved pre-#1685 behaviour — the Campaign unwinds
+# through the existing finally block so ``run.json`` is rewritten and
+# the webhook fires).  A second SIGINT restores the default handler
+# and re-raises the signal so the operator can escape a wedged
+# ``run_init_script`` / ``run_finalize_script`` (or any other step
+# that ignores the cancel flag) without resorting to SIGKILL — which
+# would forfeit the graceful run.json write that restart-by-replay
+# depends on.  Tracked per-signal so SIGTERM escalation is
+# independent of SIGINT escalation.
+_sigint_count: int = 0
+_sigterm_count: int = 0
+
 
 def handle_signal(signum: int, _frame: object) -> None:
     """Signal handler that requests cancellation on the registered Campaign.
 
     Uses the global registry so the signal can reach the running Campaign
     even though the signal callback only receives (signum, frame).
+
+    Issue #1685: the first invocation of a given signal (SIGINT or
+    SIGTERM) requests cancellation and returns, preserving the
+    pre-#1685 behaviour.  A second invocation of the same signal
+    escalates by restoring the default signal handler and re-raising
+    the signal — this gives the operator an escape hatch against a
+    wedged hook subprocess (init/finalize) or any step that ignores
+    the cancel flag, without forcing them to reach for SIGKILL (which
+    would skip the graceful run.json rewrite that restart-by-replay
+    depends on).
     """
+    global _sigint_count, _sigterm_count  # noqa: PLW0603
     sig_name = signal.Signals(signum).name
+    if signum == signal.SIGINT.value:
+        _sigint_count += 1
+        if _sigint_count >= 2:
+            log.warning(
+                "received second SIGINT — escalating: restoring default "
+                "handler and re-raising so the operator can escape a "
+                "wedged hook (issue #1685)",
+            )
+            # Restore default handler so the third SIGINT is honoured
+            # by Python's default KeyboardInterrupt path.  Re-raise
+            # the current signal to actually trigger the escalation
+            # *now* (the second signal would otherwise be swallowed by
+            # the default handler re-installing our handler again on
+            # some platforms).
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGINT)
+            return
+    elif signum == signal.SIGTERM.value:
+        _sigterm_count += 1
+        if _sigterm_count >= 2:
+            log.warning(
+                "received second SIGTERM — escalating: restoring default "
+                "handler and re-raising so the operator can escape a "
+                "wedged hook (issue #1685)",
+            )
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
     log.warning("received %s — requesting cancellation", sig_name)
     cancel_registry.request_cancel()
 
