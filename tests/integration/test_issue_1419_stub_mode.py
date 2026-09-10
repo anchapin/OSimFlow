@@ -28,6 +28,11 @@ These tests assert:
 The fixture layout mirrors ``test_local_executor.py`` so the two test
 files exercise the same Campaign code path through different
 assertions.
+
+Note: this module runs in ~18s combined for its 7 stub-mode tests (well
+under the 120s per-test timeout). It is intentionally NOT marked
+``@pytest.mark.slow`` so the #1419 regression suite runs in the required
+merge gate (issue #1796).
 """
 
 from __future__ import annotations
@@ -42,8 +47,6 @@ import pytest
 from osimflow import Campaign, CampaignConfig
 from osimflow.executors import LocalExecutor
 from osimflow.work import _write_stub_eplusout_sql
-
-pytestmark = pytest.mark.slow
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"

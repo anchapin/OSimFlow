@@ -247,6 +247,12 @@ physically live in their executor's config module, not in
   `--nomad-remote-results-only`, `--nomad-tls`, `--nomad-tls-verify`,
   `--nsga2-reference-directions`, `--nsga2-reference-points`,
   `--pbs-queue`, `--pbs-real`, `--pbs-server`, `--preset`,
+  `--preset` accepts one of the named bundles defined in
+  `osimflow/__main__.py:73-155` (issue #384): `local-quick`,
+  `local-large`, `slurm-hpc`, `slurm-gpu`, `aws-batch-cloud`,
+  `sensitivity-morris`, `sensitivity-fast99`, `optimization-de`,
+  `optimization-nsga2`. Individual flags override preset values;
+  see `docs/user-guide.md` for the full reference table.
   `--redis-url`, `--s3-artifact-bucket`, `--s3-artifact-endpoint`,
   `--s3-artifact-prefix`, `--s3-artifact-presigned-url-expiration`,
   `--s3-artifact-region`, `--shard-count`, `--shard-end`,

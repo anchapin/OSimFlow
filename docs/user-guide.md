@@ -451,6 +451,15 @@ SMTP credentials never come from CLI flags or committed config files:
 These apply when an `email` destination is configured in the
 `--alert-destinations` YAML file (see [runjson-guide.md](runjson-guide.md)).
 
+#### API server (issue #1683)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OSIMFLOW_TRUST_X_FORWARDED_FOR` | `0` | Opt-in gate: when set (any non-empty value), the `serve` command honors `X-Forwarded-For` for rate-limit key derivation. **Requires** `OSIMFLOW_TRUSTED_PROXIES` to also be set; the API refuses to start otherwise (fail-closed). Mirrors `--rate-limit-trust-x-forwarded-for`. |
+| `OSIMFLOW_TRUSTED_PROXIES` | *(none)* | Comma-separated list of upstream CIDR blocks, IPs, or hostnames whose `X-Forwarded-For` claims the API will trust. Mirrors `--trusted-proxies`. Required whenever `OSIMFLOW_TRUST_X_FORWARDED_FOR` is set. |
+
+See [API reverse-proxy / XFF trust gate](api.md#reverse-proxy--x-forwarded-for-trust-gate-issue-1683) for the worked example and the spoofing-prevention rationale.
+
 ---
 
 ## 5. Running Campaigns
@@ -1523,7 +1532,7 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 | `--outdir PATH` | **required** | Output directory. |
 | `--openstudio_version STRING` | `3.11.0` | OpenStudio version (drives the `nrel/openstudio:<version>` tag). |
 | `--archive_intermediates` | off | Preserve per-sample `.osw`/`.osm`/`eplusout.sql`. |
-| `--preset NAME` | none | Named preset of recommended flag values (issue #384); individual flags override the preset. |
+| `--preset NAME` | none | Named preset of recommended flag values (issue #384); individual flags override the preset. See [`--preset` reference table](#--preset-name-reference-table) below for the full list of available presets. |
 | `--init-script` / `--finalize-script PATH` | none | Pre/post-campaign shell hooks (issue #108). |
 | `--init-script-timeout` / `--finalize-script-timeout SECONDS` | `600` | Wall-clock timeout (seconds) for the init/finalize hook subprocess (issue #1685). On expiry the child process group is `SIGKILL`ed: for `--finalize-script` a warning is logged and the hook returns normally so `Campaign.run()`'s `finally` block can still rewrite `run.json`, fire the webhook, and `cache.close()`; for `--init-script` the campaign aborts with `CampaignError` before any step runs. |
 | `--webhook-url URL` | none | Campaign-completion webhook callback (issue #283). |
@@ -1546,6 +1555,24 @@ The remaining four DAG steps do **not** consume `--max-sample-retries`:
 **Interaction with Kubernetes `backoffLimit`** — `--max-sample-retries` and `--kubernetes-backoff-limit` are **alternatives, not complements**. The kubelet-side `backoffLimit` restarts a failed pod inside the same Job without a resubmit round-trip through the orchestrator; `--max-sample-retries` resubmits the entire Job with the same parameter sample. Running both will **double-count failures** (a K8s pod restart counts as one failure to the orchestrator, which may then resubmit again). Pick one. See [`docs/kubernetes-deployment.md`](kubernetes-deployment.md#cli-flags) for the full `--kubernetes-backoff-limit` table and the "Kueue Interplay" section for the trade-off analysis.
 
 **Per-sample cost impact** — the retry knob is a primary lever on campaign cost and result completeness. With `--max-sample-retries 3` and a transient-failure rate of `p`, the expected number of orchestrator-side submissions per sample is roughly `1 / (1 - p)` for `p < 1`, so a 5% transient-failure rate on a 1000-sample campaign adds ~50 expected resubmits. Set to `0` for hard-fail-fast (debug) workflows.
+
+#### `--preset NAME` reference table
+
+`--preset` (issue #384) bundles a curated set of flag values so users do not have to memorise the 50+ CLI surface for each environment. The full list of available presets is hard-coded in `osimflow/__main__.py:73-155` and validated at parse time — `--preset nonexistent` fails with a hint listing every valid name. Individual flags always override preset values (see `_apply_preset` precedence rules in `osimflow/__main__.py:158`).
+
+| Preset | Executor | Algorithm | Key flags | When to use |
+|---|---|---|---|---|
+| `local-quick` | `local` | `lhs` | `--max-workers 2 --max-generations 1` | Smoke testing on a laptop; 3-sample campaigns in <2 min |
+| `local-large` | `local` | `lhs` | `--max-workers 8 --max-generations 1` | Larger local sweeps on a workstation (8+ cores) |
+| `slurm-hpc` | `slurm` | `lhs` | `--slurm-real --slurm-partition short --max-generations 1` | Production campaign on a real Slurm cluster |
+| `slurm-gpu` | `slurm` | `lhs` | `--slurm-real --slurm-partition gpu --slurm-qos high --slurm-constraint gpu --slurm-gres gpu:1 --max-generations 1` | GPU-accelerated Slurm campaigns |
+| `aws-batch-cloud` | `aws_batch` | `lhs` | `--aws-batch-fallback-to-on-demand --aws-batch-max-retries 3 --max-generations 1` | Large-scale campaign on AWS Batch (auto-falls-back to on-demand if spot pre-empts) |
+| `sensitivity-morris` | `local` | `morris` | `--max-workers 4 --max-generations 1` | Morris sensitivity analysis (SALib) — needs `[sensitivity]` extra |
+| `sensitivity-fast99` | `local` | `fast99` | `--max-workers 4 --max-generations 1` | FAST99 sensitivity analysis (SALib) — needs `[sensitivity]` extra |
+| `optimization-de` | `slurm` | `de` | `--slurm-real --slurm-partition short --max-generations 50` | Differential-evolution optimization (iterative, 50 generations) |
+| `optimization-nsga2` | `slurm` | `nsga2` | `--slurm-real --slurm-partition short --max-generations 50` | NSGA-II multi-objective optimization (needs `[optimization]` extra) |
+
+All presets set `--openstudio_version 3.11.0` — override with an explicit `--openstudio_version` flag if needed.
 
 #### Algorithm & sampling
 

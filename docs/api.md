@@ -76,6 +76,36 @@ osimflow serve --outdir ./results --tls-cert /path/to/cert.pem --tls-key /path/t
 
 Both `--tls-cert` and `--tls-key` must be provided together. Omitting either one produces a clear error message at startup rather than a cryptic traceback.
 
+## Reverse-proxy / X-Forwarded-For trust gate (issue #1683)
+
+When the API is deployed behind a reverse proxy (nginx, HAProxy, AWS ALB, Envoy, Cloudflare), every request arrives with an `X-Forwarded-For` (XFF) header that names the **originating client**. The naïve approach — trust the XFF chain to derive the client IP for rate-limiting — is a well-known spoofing vector: any unauthenticated caller can rotate the header value to obtain a fresh rate-limit bucket, defeating the per-IP throttle entirely.
+
+The API's `--rate-limit-trust-x-forwarded-for` flag is the **opt-in** gate that says "honor the XFF chain, but only when the immediate upstream is in `--trusted-proxies`". **Fail-closed** semantics apply: setting `--rate-limit-trust-x-forwarded-for` without `--trusted-proxies` makes the API **refuse to start**. The same gate is exposed as env vars (`OSIMFLOW_TRUST_X_FORWARDED_FOR` and `OSIMFLOW_TRUSTED_PROXIES`) for container/systemd deployments where env vars are the configuration channel.
+
+### CLI flags
+
+| Flag | Description |
+|---|---|
+| `--rate-limit-trust-x-forwarded-for` | Honor `X-Forwarded-For` for rate-limit key derivation. **Requires `--trusted-proxies`.** Default: off (XFF is ignored). Env var: `OSIMFLOW_TRUST_X_FORWARDED_FOR`. |
+| `--trusted-proxies CIDRS,...` | Comma-separated list of upstream CIDR blocks, IPs, or hostnames whose XFF claims the API will trust. The immediate upstream must resolve into this set; otherwise the XFF chain is treated as untrusted and rate-limit key derivation falls back to the socket peer. Env var: `OSIMFLOW_TRUSTED_PROXIES`. |
+
+### Worked reverse-proxy example
+
+```bash
+# Production behind nginx (nginx sees client IP, terminates TLS, forwards to API on 127.0.0.1:8000)
+osimflow serve \
+  --outdir ./results \
+  --read-write \
+  --tls-cert /etc/osimflow/tls/cert.pem --tls-key /etc/osimflow/tls/key.pem \
+  --rate-limit-trust-x-forwarded-for \
+  --trusted-proxies 127.0.0.1/32,::1/32,10.0.0.0/8 \
+  --host 0.0.0.0 --port 8000
+```
+
+In this setup nginx must forward the original client IP via the standard `X-Forwarded-For` and `X-Real-IP` headers; only the loopback and RFC1918 ranges are trusted, so a caller who can spoof an XFF header from outside the trusted CIDRs cannot influence the rate-limit key.
+
+> **Important (issue #1683):** the API deliberately **does not trust the XFF chain by default** — every reverse-proxy deployment must opt in explicitly. This avoids the silent-rate-limit-bypass trap where a freshly-spoofed XFF yields a fresh bucket. Always document `--trusted-proxies` to match your actual proxy topology; if the proxy moves (new egress IP, new container), update the allowlist.
+
 ## Health & Readiness
 
 ### GET /health
