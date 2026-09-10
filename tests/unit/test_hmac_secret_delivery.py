@@ -423,6 +423,40 @@ class TestAzureBatchSecretDelivery:
         env_map = _parse_env_list(env)
         assert env_map[TASK_PAYLOAD_SECRET_ENV] == "super-secret"  # literal legacy mode
         assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, "super-secret")
+        # Issue #1682: Azure emits the same SECURITY warning the other five
+        # substrates (AWS / Google / K8s / Nomad / Swarm) emit on the
+        # literal-secret path so operators get a single, consistent migration
+        # signal — drives them to the pool-level managed-identity + Key Vault
+        # pattern documented in docs/secret-management.md (issue #1633).
+        assert any(
+            "SECURITY (issue #1682)" in r.message for r in caplog.records
+        ), "expected Azure literal-secret SECURITY warning (issue #1682)"
+
+    def test_default_mode_no_secret_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Issue #1682: no warning fires when ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is unset.
+
+        Regression guard — the warning must gate on the env var being
+        present, not on every ``_build_environment`` call (legacy
+        unsigned mode would spam operators without it).
+        """
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
+
+        monkeypatch.delenv(TASK_PAYLOAD_SECRET_ENV, raising=False)
+        ex = self._executor()
+        with caplog.at_level(logging.WARNING):
+            env = ex._build_environment(  # noqa: SLF001
+                container="nrel/openstudio:3.11.0",
+                openstudio_version="3.11.0",
+                task_payload=TASK_PAYLOAD,
+            )
+        # Legacy unsigned mode: no secret, no signature, no warning.
+        names = {e["name"] for e in env}
+        assert TASK_PAYLOAD_SECRET_ENV not in names
+        assert not any(
+            "SECURITY (issue #1682)" in r.message for r in caplog.records
+        ), "Azure must not emit the SECURITY warning when no secret is set"
 
 
 class TestGoogleBatchSecretDelivery:
