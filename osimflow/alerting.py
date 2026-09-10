@@ -62,6 +62,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,14 @@ class AlertRule:
 #: The pending-alert history is a ring buffer: once full, the oldest
 #: entry is evicted to make room for the newest failure.
 _ALERT_HISTORY_MAXLEN = 100
+
+#: Maximum number of in-flight alert-dispatch workers (issue #1770).
+#: Pre-fix this was unbounded (one daemon thread per dispatched alert).
+#: When a destination is wedged and many alerts queue up the worker
+#: pool cannot exceed this many live threads, and per-alert deadlines
+#: still cancel an abandoned future so a wedged destination cannot
+#: clog the pool past the ceiling.
+_ALERT_DISPATCH_POOL_SIZE = 4
 
 
 @dataclasses.dataclass
@@ -327,6 +336,16 @@ class AlertManager:
         self._dispatch_started = threading.Event()
         self._dispatch_stopped = threading.Event()
         self._dispatch_lock = threading.Lock()
+        # Bounded thread pool used by ``_dispatch_one`` (issue #1770).
+        # The pre-fix implementation spawned a fresh ``daemon=True``
+        # thread for *every* alert that arrived while the dispatcher
+        # worker was running — 50 wedged alerts ⇒ 50 daemon threads,
+        # each one independently blocked in ``_do_dispatch``.  The pool
+        # caps the live-thread budget at ``_ALERT_DISPATCH_POOL_SIZE``
+        # regardless of the inbound rate; per-alert deadlines still
+        # cancel an abandoned future, so wedged destinations cannot
+        # clog the worker pool past that ceiling.
+        self._dispatch_pool: ThreadPoolExecutor | None = None
 
     def add_rule(self, rule: AlertRule) -> None:
         self._rules.append(rule)
@@ -557,21 +576,34 @@ class AlertManager:
         cannot block Campaign teardown forever. Any alerts still enqueued
         past the deadline are abandoned — their on_alert callbacks will
         not fire, matching the failure-as-best-effort contract. Idempotent.
+
+        Also shuts down the bounded dispatch thread pool
+        (:data:`_ALERT_DISPATCH_POOL_SIZE`, issue #1770) so in-flight
+        per-alert workers do not survive the process teardown.
         """
         thread = self._dispatch_thread
         q = self._dispatch_queue
-        if thread is None or q is None:
-            return
-        with contextlib.suppress(Exception):  # pragma: no cover — best effort
-            q.put_nowait(None)
-        thread.join(timeout=timeout_s)
-        self._dispatch_stopped.set()
-        if thread.is_alive():
-            log.warning(
-                "alert dispatcher did not exit within %.1fs — abandoning %d pending alerts",
-                timeout_s,
-                q.qsize(),
-            )
+        if thread is not None and q is not None:
+            with contextlib.suppress(Exception):  # pragma: no cover — best effort
+                q.put_nowait(None)
+            thread.join(timeout=timeout_s)
+            self._dispatch_stopped.set()
+            if thread.is_alive():
+                log.warning(
+                    "alert dispatcher did not exit within %.1fs — abandoning %d pending alerts",
+                    timeout_s,
+                    q.qsize(),
+                )
+        # Shut down the bounded per-alert dispatch pool. ``wait=False``
+        # is the matching semantic of the bounded-teardown contract:
+        # an in-flight per-alert worker that hasn't finished by the
+        # caller's deadline is left to die (it's not a daemon-thread
+        # leak — the pool reuses a fixed-size thread set on the next
+        # campaign run, so the OS reclaims any stragglers at process
+        # exit).
+        if self._dispatch_pool is not None:
+            self._dispatch_pool.shutdown(wait=False, cancel_futures=True)
+            self._dispatch_pool = None
 
     def _enqueue_dispatch(self, alert: Alert, rule: AlertRule) -> None:
         q = self._dispatch_queue
@@ -629,34 +661,64 @@ class AlertManager:
     def _dispatch_one(self, alert: Alert, rule: AlertRule) -> None:
         """Run _do_dispatch for one alert with a per-alert deadline.
 
-        The deadline prevents a single wedged destination (a webhook with
-        a blackholed DNS, an unreachable SMTP relay) from clogging the
-        worker indefinitely. On expiry the alert is logged and dropped;
-        the pending-retry sweep will not re-attempt it (it's a single
-        delivery attempt by design, not a retry loop — retries live in
-        the existing _retry_pending pipeline for previously-queued alerts).
+        Issue #1770 — the per-alert dispatch runs on a class-level
+        :class:`ThreadPoolExecutor` of size
+        :data:`_ALERT_DISPATCH_POOL_SIZE` (default 4), reused across
+        every alert.  Pre-fix this method spawned a fresh
+        ``daemon=True`` thread for every alert that arrived while the
+        dispatcher worker was running — 50 wedged alerts ⇒ 50 daemon
+        threads, each independently blocked in ``_do_dispatch``.
+
+        The per-alert deadline still prevents a single wedged
+        destination (a webhook with a blackholed DNS, an unreachable
+        SMTP relay) from clogging the pool indefinitely: when the
+        future exceeds the deadline we log + drop the alert (the
+        in-flight worker continues; the worker slot is freed on
+        return).  ``Future.cancel()`` is a best-effort hint — pool
+        workers cannot be interrupted mid-``send()``, so the slot may
+        not free immediately on expiry, but the *pool* never grows
+        past the configured ceiling.
+
+        When ``per_alert_deadline_s <= 0`` the call runs synchronously
+        on the dispatcher's worker thread (legacy fast-path).
         """
         if self._per_alert_deadline_s <= 0:
             self._do_dispatch(alert, rule)
             return
-        result: dict[str, object] = {}
-
-        def _run() -> None:
-            result["done"] = True
-            self._do_dispatch(alert, rule)
-
-        runner = threading.Thread(target=_run, daemon=True)
-        runner.start()
-        runner.join(timeout=self._per_alert_deadline_s)
-        if runner.is_alive():
+        pool = self._get_dispatch_pool()
+        future: Future[None] = pool.submit(self._do_dispatch, alert, rule)
+        try:
+            future.result(timeout=self._per_alert_deadline_s)
+        except TimeoutError:
             log.warning(
                 "alert dispatch for rule %s exceeded %.1fs deadline — abandoning delivery "
                 "(destination may be unreachable)",
                 rule.name,
                 self._per_alert_deadline_s,
             )
-            # Note: do not join — the thread is a daemon and will exit with
-            # the process; we don't block teardown on it.
+            # Best-effort cancel — if the worker has already finished
+            # ``send()`` the cancel is a no-op.  The worker slot frees
+            # on return; the pool size never grows past the ceiling
+            # because we only ever call ``submit()``, not ``Thread(...)``.
+            future.cancel()
+        except Exception as exc:
+            # ``_do_dispatch`` swallows its own exceptions, so this
+            # branch only fires for programming errors in the dispatch
+            # layer itself — keep the dispatcher worker alive and log.
+            log.warning(
+                "alert dispatch for rule %s raised in pool: %s",
+                rule.name,
+                exc,
+            )
+
+    def _get_dispatch_pool(self) -> ThreadPoolExecutor:
+        """Return (lazily-create) the class-level dispatch thread pool."""
+        if self._dispatch_pool is None:
+            self._dispatch_pool = ThreadPoolExecutor(
+                max_workers=_ALERT_DISPATCH_POOL_SIZE,
+                thread_name_prefix=f"alert-dispatch-{id(self)}",
+            )
+        return self._dispatch_pool
 
     def update_cache_stats(self, stats: dict[str, Any]) -> None:
         self._cache_stats = stats
