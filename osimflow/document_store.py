@@ -107,6 +107,39 @@ log = logging.getLogger("osimflow.document_store")
 # Only alphanumeric characters, dots (for nested keys), and underscores are allowed.
 # This prevents SQL injection via malicious field names (issue #1269).
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9._]+$")
+# Stricter pattern for filter keys interpolated into WHERE-clause fragments.
+# Must start with a letter or underscore (not a digit — matches typical
+# JSON key naming), and only contains alphanumerics, dots, and underscores.
+# Used to validate keys against SQL injection attempts containing `'`,
+# `;`, `--`, ` OR 1=1 `, etc. (issue #1779).
+_FILTER_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+
+
+def _validate_filter_key(key: str) -> None:
+    """Reject filter keys that look like SQL injection attempts (issue #1779).
+
+    ``_build_where_clause`` interpolates every filter key into a
+    ``json_extract(doc, '$.{key}')`` fragment via f-string — the values
+    are parameterized, but the path is not. Library users (or REST
+    callers routing through ``osimflow/api/*``) passing
+    ``{"foo'; DROP TABLE documents; --": 1}`` get a fully exploitable
+    SQL injection; even the more constrained ``{"$regex": {"x' OR 1=1
+    --": "y"}}`` breaks out of the LIKE-quoted literal.
+
+    This validator enforces the same shape ``_collection_table`` uses
+    for collection names plus the additional leading-character rule
+    typical of JSON keys.
+
+    Raises
+    ------
+    DocumentStoreError
+        When *key* contains anything outside ``[A-Za-z0-9_.]`` or does
+        not start with a letter / underscore.
+    """
+    if not isinstance(key, str) or not _FILTER_KEY_RE.match(key):
+        raise DocumentStoreError(
+            f"invalid filter key {key!r}: must match {_FILTER_KEY_RE.pattern}"
+        )
 
 
 class DocumentStoreError(OSimFlowError):
@@ -221,6 +254,15 @@ def _build_where_clause(
     params: list[Any] = []
 
     for key, value in filter_spec.items():
+        # Validate every filter key before any other access (issue #1779).
+        # Keys are interpolated into the WHERE clause via
+        # ``f"json_extract(doc, '$.{key}')"`` — values are bound, but
+        # the path is not. Malicious keys like ``"foo'; DROP TABLE
+        # documents; --"`` would otherwise yield a fully exploitable
+        # SQL injection. ``_validate_filter_key`` also rejects
+        # non-string keys (e.g. ``None``) which would otherwise crash
+        # the ``startswith`` check below.
+        _validate_filter_key(key)
         if key.startswith("$"):
             continue  # Skip logical operators at field level
 
