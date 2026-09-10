@@ -394,7 +394,23 @@ async def compare_campaigns_get(
     Unlike the legacy GET endpoint (which accepted ``id1``/``id2`` registry
     IDs), this version supports N campaigns and uses ``CrossRunAggregator``
     internally to compute aligned KPI statistics across all runs (issue #588).
+
+    Security: every ``outdir`` query value is contained-checked against
+    ``campaigns_base_dir`` via the same helper the POST counterpart uses
+    (issue #1761).  An authenticated ``readonly`` API key can no longer
+    probe arbitrary server directories (``?outdir=/etc``,
+    ``/home/<other-user>/...``) by virtue of the missing permission
+    check; a write-enabled key calling with an outdir outside
+    ``campaigns_base_dir`` now receives a 403.
     """
+    # Issue #1761: mirror the POST handler's read-only permission gate
+    # so even an authenticated client must hold ``readonly`` to call
+    # the comparison endpoint.  Without this, ``readonly`` keys could
+    # probe arbitrary filesystem directories via the ``outdir`` query
+    # parameter and read campaign metadata + aggregated KPI CSVs from
+    # anywhere on the server.
+    require_permission(request, "readonly")
+
     # Normalise: accept comma-separated or repeated query params
     raw_dirs: list[str] = []
     for item in outdir:
@@ -406,6 +422,13 @@ async def compare_campaigns_get(
             detail="At least two campaign directories are required",
         )
 
+    # Issue #1761: each outdir must be contained within
+    # ``campaigns_base_dir`` — refuse any path that escapes the
+    # configured root.  This mirrors the issue #1669 / #1639
+    # containment pattern used elsewhere in this module.
+    base = _campaigns_base_dir(request)
+    base_resolved = base.resolve()
+
     # Build CrossRunAggregator from the outdir list
     campaigns_spec: list[tuple[Path, str | None]] = []
     for d in raw_dirs:
@@ -415,6 +438,19 @@ async def compare_campaigns_get(
                 status_code=404,
                 detail=f"Campaign directory not found: {d}",
             )
+        try:
+            validate_path_within_base(resolved.resolve(), base_resolved)
+        except ValidationError as exc:
+            log.warning(
+                "compare_campaigns_get: rejected outdir %s (outside campaigns_base_dir %s): %s",
+                d,
+                base_resolved,
+                exc,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=f"outdir {d!r} is outside the campaigns base directory",
+            ) from exc
         campaigns_spec.append((resolved, None))
 
     aggregator = CrossRunAggregator(campaigns=campaigns_spec)
