@@ -12,6 +12,10 @@ Covers:
     terminally (result-verified Succeeded or explicit Failed with
     "job deleted before result retrieval") instead of polling to
     TimeoutError; empty pod list + existing Job stays Pending.
+  - Version-check pod loop (issue #1687): terminal Failed/Error
+    phases and bad payloads raise immediately (with the pod's
+    ``message`` field) instead of being silently retried for the full
+    60-second window and then misreported as a timeout.
 """
 
 from __future__ import annotations
@@ -1056,6 +1060,319 @@ class TestKubernetesHandle:
         handle = _KubernetesHandle(job_name="test", executor=mock_ex, submit_params={})
         with pytest.raises(RuntimeError, match="exit code 3"):
             handle.result()
+
+
+class TestNegotiateContractVersion:
+    """Issue #1687: the version-check pod loop must surface terminal failures immediately.
+
+    Pre-#1687, the broad ``except Exception`` retry handler in
+    ``negotiate_contract_version`` also caught the loop's own
+    classification ``RuntimeError`` raises (Failed/Error phase, ``ok: false``
+    payload, invalid JSON), so an ImagePullBackOff / OOMKilled / runner
+    crash was retried pointlessly for the full 60-second window and then
+    reported as a misleading "version-check pod timed out after 60s".
+
+    Acceptance criterion (issue #1687):
+      * the only calls inside the retry ``try`` are the transient
+        ``read_namespaced_pod_status`` / ``read_namespaced_pod_log`` API
+        calls;
+      * terminal ``Failed`` / ``Error`` phases and bad payloads raise
+        immediately;
+      * the surfaced error message includes the pod's ``message`` field.
+    """
+
+    @staticmethod
+    def _make_executor() -> KubernetesExecutor:
+        """Build a bare executor with the K8s client stubbed out."""
+        ex = KubernetesExecutor.__new__(KubernetesExecutor)  # noqa: SLF001
+        ex._client = MagicMock()
+        ex.namespace = "default"
+        ex.poll_interval_s = 5.0
+        ex.max_poll_interval_s = 60.0
+        ex.backoff_limit = 0
+        ex.ttl_seconds_after_finished = None
+        ex.queue_name = None
+        ex.security_context_strict = True
+        ex._negotiated_versions = None  # bypass the cache short-circuit
+        ex._negotiated_image = None
+        ex._container_digest = None
+        return ex
+
+    @staticmethod
+    def _make_pod_status(phase: str, message: str | None = None) -> MagicMock:
+        """Build a ``V1Pod``-shaped mock with ``status.phase`` / ``status.message``."""
+        pod_status = MagicMock()
+        pod_status.phase = phase
+        if message is not None:
+            pod_status.message = message
+        else:
+            del pod_status.message  # make ``getattr(..., None)`` return ``None``
+        pod = MagicMock()
+        pod.status = pod_status
+        return pod
+
+    @staticmethod
+    def _make_core_api(*, pod_status: Any, logs: str | None = None) -> MagicMock:
+        """Build a ``CoreV1Api`` mock with the version-check pod surface stubbed."""
+        core_api = MagicMock()
+        core_api.create_namespaced_pod.return_value = None
+        core_api.read_namespaced_pod_status.return_value = pod_status
+        if logs is not None:
+            core_api.read_namespaced_pod_log.return_value = logs
+        core_api.delete_namespaced_pod.return_value = None
+        return core_api
+
+    def test_failed_phase_surfaces_immediately_with_pod_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Failed phase must raise on the first poll, not after the 60s deadline."""
+        ex = self._make_executor()
+        core_api = self._make_core_api(
+            pod_status=self._make_pod_status(
+                phase="Failed",
+                message='ImagePullBackOff: pull access denied for "nrel/openstudio:3.11.0"',
+            )
+        )
+        start = time.monotonic()
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.testing.patch_targets.time.sleep"),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                ex.negotiate_contract_version(
+                    container="nrel/openstudio:3.11.0",
+                )
+        elapsed = time.monotonic() - start
+
+        # The error must reference the terminal phase (issue #1687 acceptance).
+        assert "failed" in str(excinfo.value).lower()
+        # The pod's diagnostic message must be surfaced so the operator
+        # sees the root cause instead of a misleading timeout.
+        assert "ImagePullBackOff" in str(excinfo.value)
+        # The 60-second timeout string must NOT appear — that would mean
+        # the broad retry handler ate the terminal raise (pre-#1687 bug).
+        assert "timed out after 60s" not in str(excinfo.value)
+        # The fix raises on the first poll; allow generous slack for CI noise.
+        assert elapsed < 5.0, f"Failed phase took {elapsed:.2f}s — should raise on the first poll"
+        # The status API was polled exactly once — no retry loop.
+        assert core_api.read_namespaced_pod_status.call_count == 1
+        # Cleanup ran.
+        core_api.delete_namespaced_pod.assert_called_once()
+
+    def test_error_phase_surfaces_immediately(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The ``Error`` phase (cronjob-style aborts) is treated as terminal."""
+        ex = self._make_executor()
+        core_api = self._make_core_api(
+            pod_status=self._make_pod_status(
+                phase="Error",
+                message="OOMKilled",
+            )
+        )
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.testing.patch_targets.time.sleep"),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                ex.negotiate_contract_version(container="nrel/openstudio:3.11.0")
+
+        assert "error" in str(excinfo.value).lower()
+        assert "OOMKilled" in str(excinfo.value)
+        assert "timed out after 60s" not in str(excinfo.value)
+        assert core_api.read_namespaced_pod_status.call_count == 1
+        core_api.delete_namespaced_pod.assert_called_once()
+
+    def test_failed_phase_without_message_still_surfaces_phase(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Failed pod with no status.message still surfaces the phase."""
+        ex = self._make_executor()
+        core_api = self._make_core_api(
+            pod_status=self._make_pod_status(phase="Failed"),
+        )
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.testing.patch_targets.time.sleep"),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                ex.negotiate_contract_version(container="nrel/openstudio:3.11.0")
+
+        assert "failed" in str(excinfo.value).lower()
+        # No trailing ":\u00a0<message>" — the error is still actionable.
+        assert "timed out after 60s" not in str(excinfo.value)
+        assert core_api.read_namespaced_pod_status.call_count == 1
+        core_api.delete_namespaced_pod.assert_called_once()
+
+    def test_invalid_json_payload_surfaces_immediately(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Succeeded pod whose logs aren't valid JSON must NOT be retried for 60s."""
+        ex = self._make_executor()
+        core_api = self._make_core_api(
+            pod_status=self._make_pod_status(phase="Succeeded"),
+            logs="not-json-at-all",
+        )
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.testing.patch_targets.time.sleep"),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                ex.negotiate_contract_version(container="nrel/openstudio:3.11.0")
+
+        assert "invalid JSON" in str(excinfo.value)
+        assert "timed out after 60s" not in str(excinfo.value)
+        # The status + log APIs were each called once — the terminal
+        # payload raise must not loop on them.
+        assert core_api.read_namespaced_pod_status.call_count == 1
+        assert core_api.read_namespaced_pod_log.call_count == 1
+
+    def test_ok_false_payload_surfaces_immediately(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A Succeeded pod whose JSON reports ``ok: false`` must NOT be retried."""
+        ex = self._make_executor()
+        core_api = self._make_core_api(
+            pod_status=self._make_pod_status(phase="Succeeded"),
+            logs=json.dumps({"ok": False, "error": "incompatible"}),
+        )
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.testing.patch_targets.time.sleep"),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                ex.negotiate_contract_version(container="nrel/openstudio:3.11.0")
+
+        assert "version check returned error" in str(excinfo.value)
+        assert "timed out after 60s" not in str(excinfo.value)
+        assert core_api.read_namespaced_pod_status.call_count == 1
+        assert core_api.read_namespaced_pod_log.call_count == 1
+
+    def test_succeeded_with_valid_payload_returns_versions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Happy path: Succeeded + valid payload returns the negotiated versions.
+
+        Regression guard — the refactor must not break the success path.
+        """
+        ex = self._make_executor()
+        core_api = self._make_core_api(
+            pod_status=self._make_pod_status(phase="Succeeded"),
+            logs=json.dumps({"ok": True, "supported_versions": ["1.0.0", "1.1.0"]}),
+        )
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.testing.patch_targets.time.sleep"),
+        ):
+            versions = ex.negotiate_contract_version(
+                container="nrel/openstudio:3.11.0",
+            )
+
+        assert versions == ["1.0.0", "1.1.0"]
+        # Result is cached on the executor for the image.
+        assert ex._negotiated_versions == ["1.0.0", "1.1.0"]
+        assert ex._negotiated_image == "nrel/openstudio:3.11.0"
+        assert core_api.read_namespaced_pod_status.call_count == 1
+        assert core_api.read_namespaced_pod_log.call_count == 1
+
+    def test_transient_poll_error_is_retried_until_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Transient ``read_namespaced_pod_status`` errors must keep retrying.
+
+        Pre-#1687 this whole body was retried, which is correct for
+        transient API blips. The fix preserves that: only the
+        ``read_namespaced_pod_status`` API call sits inside the retry
+        ``try``, so a transient ``ApiException`` is logged and the loop
+        continues. Once the pod actually surfaces Failed, the loop exits
+        with the terminal raise — not a timeout.
+        """
+        ex = self._make_executor()
+        core_api = MagicMock()
+        core_api.create_namespaced_pod.return_value = None
+        # First two calls raise transiently, third returns Failed.
+        core_api.read_namespaced_pod_status.side_effect = [
+            ConnectionError("transient blip 1"),
+            TimeoutError("transient blip 2"),
+            self._make_pod_status(phase="Failed", message="OOMKilled"),
+        ]
+        core_api.delete_namespaced_pod.return_value = None
+
+        # Shorten the deadline so the test can't hit the 60s ceiling.
+        # Issue #1566 patches ``time.monotonic`` to bound the deadline;
+        # we mirror that here.
+        clock = [0.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        def fake_sleep(_seconds: float) -> None:
+            # Advance the fake clock so the deadline loop can terminate.
+            clock[0] += 2.0
+
+        monkeypatch.setattr("osimflow.executors.kubernetes_executor.time.monotonic", fake_monotonic)
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.executors.kubernetes_executor.time.sleep", fake_sleep),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                ex.negotiate_contract_version(container="nrel/openstudio:3.11.0")
+
+        # Terminal phase wins — not a timeout.
+        assert "failed" in str(excinfo.value).lower()
+        assert "OOMKilled" in str(excinfo.value)
+        assert "timed out after 60s" not in str(excinfo.value)
+        # The transient errors were each retried exactly once.
+        assert core_api.read_namespaced_pod_status.call_count == 3
+
+    def test_transient_log_fetch_error_is_retried_until_terminal_payload(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Transient ``read_namespaced_pod_log`` errors must retry (issue #1687).
+
+        Splitting the Succeeded branch into a helper introduced a
+        separate retry path for log-fetch transient errors. Without the
+        retry the loop would falsely report a 60s timeout on a single
+        network blip during log retrieval; with it, a transient log
+        fetch is retried and the next iteration either succeeds (happy
+        path) or hits a terminal failure.
+        """
+        ex = self._make_executor()
+        core_api = MagicMock()
+        core_api.create_namespaced_pod.return_value = None
+        core_api.delete_namespaced_pod.return_value = None
+        # First two iterations: Pending. Third: Succeeded with a
+        # transient log-fetch error. Fourth: Succeeded with a valid
+        # payload. The transient log-fetch must NOT escalate to a
+        # timeout — the loop should keep going.
+        core_api.read_namespaced_pod_status.side_effect = [
+            self._make_pod_status(phase="Pending"),
+            self._make_pod_status(phase="Pending"),
+            self._make_pod_status(phase="Succeeded"),
+            self._make_pod_status(phase="Succeeded"),
+        ]
+        core_api.read_namespaced_pod_log.side_effect = [
+            ConnectionError("transient log blip"),
+            json.dumps({"ok": True, "supported_versions": ["1.0.0"]}),
+        ]
+
+        clock = [0.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        def fake_sleep(_seconds: float) -> None:
+            clock[0] += 2.0
+
+        monkeypatch.setattr("osimflow.executors.kubernetes_executor.time.monotonic", fake_monotonic)
+        with (
+            patch.object(ex, "_get_core_api", return_value=core_api),
+            patch("osimflow.executors.kubernetes_executor.time.sleep", fake_sleep),
+        ):
+            versions = ex.negotiate_contract_version(container="nrel/openstudio:3.11.0")
+
+        # Happy path wins after the transient log-fetch error is retried.
+        assert versions == ["1.0.0"]
+        assert ex._negotiated_versions == ["1.0.0"]
+        assert "timed out after 60s" not in str(versions)
+        # Log fetch was tried twice (one transient error + one success).
+        assert core_api.read_namespaced_pod_log.call_count == 2
 
 
 class TestKubernetesDeletedJob:
