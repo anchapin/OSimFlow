@@ -115,8 +115,7 @@ class TestRetryTransientStorageDelegation:
         assert sleeps == [0.1, 0.1]
         # The historic log line is preserved.
         assert any(
-            "test op transient failure" in rec.message
-            and "attempt 1/3" in rec.message
+            "test op transient failure" in rec.message and "attempt 1/3" in rec.message
             for rec in caplog.records
         )
 
@@ -136,9 +135,7 @@ class TestRetryTransientStorageDelegation:
         with pytest.raises(ValueError, match="auth denied"):
             _retry_transient_storage("test op", _fatal)
 
-        assert sleeps == [], (
-            "permanent errors must not trigger retry sleeps"
-        )
+        assert sleeps == [], "permanent errors must not trigger retry sleeps"
 
     def test_succeeds_on_retry_after_transient(
         self,

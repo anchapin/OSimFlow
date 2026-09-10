@@ -634,9 +634,7 @@ class TestCompareCampaignsGetPathContainment:
       rejected with 403, regardless of the caller's role.
     """
 
-    def test_outdir_outside_base_returns_403(
-        self, client_ro: TestClient, tmp_path: Path
-    ) -> None:
+    def test_outdir_outside_base_returns_403(self, client_ro: TestClient, tmp_path: Path) -> None:
         """An outdir outside ``campaigns_base_dir`` returns 403.
 
         Uses two sibling campaign directories both *outside* the
@@ -675,9 +673,7 @@ class TestCompareCampaignsGetPathContainment:
         )
         assert resp.status_code == 403
 
-    def test_mixed_in_and_out_returns_403(
-        self, client_ro: TestClient, tmp_path: Path
-    ) -> None:
+    def test_mixed_in_and_out_returns_403(self, client_ro: TestClient, tmp_path: Path) -> None:
         """Mixing an in-base outdir with an out-of-base outdir still 403s.
 
         The containment check runs per-outdir and the first escape
