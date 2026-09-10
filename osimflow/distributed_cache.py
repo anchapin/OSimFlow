@@ -64,9 +64,11 @@ from __future__ import annotations
 
 __all__ = ["DistributedCache", "build_cache", "campaign_state_namespace"]
 
+import contextlib
 import hashlib
 import json
 import logging
+import os
 import ssl
 import threading
 import time
@@ -159,6 +161,76 @@ log = logging.getLogger("osimflow.distributed_cache")
 # Lazy import holders — replaced in tests via patch().
 _redis_asyncio_module: dict[str, Any] = {}
 _redis_sync_module: dict[str, Any] = {}
+
+
+# ---------------------------------------------------------------------------
+# Stale pid-private file sweep (issue #1691)
+# ---------------------------------------------------------------------------
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if *pid* is alive on this host (issue #1691).
+
+    Uses ``os.kill(pid, 0)`` — the POSIX-standard "no-op signal" probe
+    that returns the same errors as a real signal but never sends one:
+
+    * ``ProcessLookupError`` (POSIX ``ESRCH``) — no such process. The
+      pid is dead; safe to sweep.
+    * ``PermissionError`` (``EPERM``) — process exists but is owned by
+      another user. Conservatively treated as alive: we cannot verify
+      ownership of the sibling file, so we leave it alone rather than
+      risk deleting an active peer's database.
+    * Any other ``OSError`` (network FS hiccup, transient /proc
+      unmounted, ...) — also conservatively alive. We refuse to sweep
+      unless we can positively prove the pid is dead.
+
+    Returns True for the *current* process's pid without any syscall
+    (the caller's own pid is trivially alive by construction).
+    """
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but not ours; leave its file alone
+    except OSError:
+        # Conservatively skip — we can't prove the pid is dead, so we
+        # leave the file in place rather than risk deleting an active
+        # peer's database.
+        return True
+    return True
+
+
+def _parse_pid_from_sibling(sibling: Path, *, stem: str, suffix: str) -> int | None:
+    """Extract the pid from a ``<stem>.p<pid>.<suffix>`` filename.
+
+    Returns ``None`` for filenames that don't match the expected shape
+    (defensive: never sweep a file whose pid we can't parse). Used by
+    :meth:`DistributedCache._sweep_stale_pid_siblings` (issue #1691).
+    """
+    name = sibling.name
+    prefix = f"{stem}.p"
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return None
+    pid_str = name[len(prefix) : -len(suffix)]
+    if not pid_str:
+        return None
+    try:
+        pid = int(pid_str)
+    except ValueError:
+        return None
+    # ``os.getpid()`` is always > 0; a non-positive integer can never
+    # be a real pid even though ``int("0")`` parses cleanly.
+    if pid <= 0:
+        return None
+    return pid
+
+
+# ---------------------------------------------------------------------------
+# Redis client (lazy, thread-safe)
+# ---------------------------------------------------------------------------
 
 
 def _get_redis_asyncio() -> Any:
@@ -276,6 +348,7 @@ class DistributedCache:
         campaign_id: str,
         *,
         redis_ssl_context: ssl.SSLContext | None = None,
+        unlink_pid_file_on_close: bool = False,
     ) -> None:
         """Initialize the distributed cache.
 
@@ -300,12 +373,33 @@ class DistributedCache:
             When provided, it is passed to ``redis.from_url()`` as the
             ``ssl`` argument, enabling custom CA bundle or disabled
             verification for air-gapped deployments (issue #1327).
+        unlink_pid_file_on_close
+            When ``True`` (``osimflow`` does *not* enable this by default
+            to preserve the SQLiteCache-compatible contract that
+            ``close()`` leaves the local file in place for lazy re-open),
+            :meth:`close` unlinks the pid-private SQLite file (and the
+            WAL aux files) at the end of a graceful shutdown so the
+            campaign outdir does not leak the multi-megabyte local file.
+            The startup sweep (:meth:`_sweep_stale_pid_siblings`) runs
+            unconditionally regardless of this flag, so the SIGKILL path
+            is always bounded by the next campaign's sweep — the
+            ``unlink_pid_file_on_close`` flag only tightens the
+            graceful-exit path. Issue #1691.
         """
         self.requested_db_path = db_path
+        # Issue #1691: sweep stale pid-private SQLite siblings from prior
+        # SIGKILL'd / OOM'd / crashed-otherwise campaigns before opening
+        # our own. Each sweep happens before ``SQLiteCache`` opens the
+        # current process's file, so the current pid is never on disk
+        # yet and is therefore not subject to removal. Runs
+        # unconditionally — this is the issue's primary acceptance
+        # criterion (covers the SIGKILL restart-by-replay path).
+        self._sweep_stale_pid_siblings()
         self._local = SQLiteCache(_private_db_path(db_path))
         self._redis_url = redis_url
         self._campaign_id = campaign_id
         self._redis_ssl_context = redis_ssl_context
+        self._unlink_pid_file_on_close = unlink_pid_file_on_close
         self._channel = f"osimflow:cache:invalidate:{campaign_id}"
         self._shared_key = f"osimflow:cache:entries:{campaign_id}"
         # Stable per-process identifier used to drop self-published
@@ -326,6 +420,147 @@ class DistributedCache:
         self._subscriber_thread: threading.Thread | None = None
         self._stop_subscriber = threading.Event()
         self._sub_lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Pid-private file lifecycle (issue #1691)
+    # ------------------------------------------------------------------
+    def _pid_private_db_path(self) -> Path:
+        """Return the path to this process's pid-private local SQLite file.
+
+        Computed from ``requested_db_path`` via :func:`per_pid_path`. Used
+        by :meth:`_delete_pid_private_files` to clean up after a graceful
+        ``close()``. Exposed as a method (not a stored attribute) so the
+        file location stays derived from the single source of truth and
+        can't drift from :func:`per_pid_path`'s naming scheme (issue #1691).
+        """
+        return per_pid_path(self.requested_db_path)
+
+    def _sweep_stale_pid_siblings(self, *, ttl_seconds: float = 0.0) -> int:
+        """Unlink ``<stem>.p<pid>.<suffix>`` siblings whose pid is dead (issue #1691).
+
+        Each ``DistributedCache`` opens a pid-suffixed sibling of the
+        requested SQLite path (see :func:`per_pid_path`) so concurrent
+        campaigns coordinating on the same outdir never lock one
+        database. Nothing previously unlinked those files: a clean
+        ``close()`` left the local SQLite in place (the Redis layer owns
+        the canonical state, so removing the file was considered
+        disposable), and a SIGKILL'd process obviously could not run
+        ``close()`` at all. Each campaign restart therefore minted a new
+        multi-megabyte SQLite file in the outdir forever, bloating
+        ``artifact_manifest.json`` (which keys on suffix to classify the
+        file as cache).
+
+        This sweep runs on construction, before the *current* process's
+        file is opened, so the live pid is never subject to removal:
+
+        1. Glob the requested-db parent for ``<stem>.p*.sqlite`` siblings.
+        2. Skip the current pid (trivially alive by construction).
+        3. Skip any sibling whose pid is unparseable (defensive: never
+           delete a file whose identity we can't confirm).
+        4. Probe each remaining pid with ``os.kill(pid, 0)`` via
+           :func:`_pid_alive`. A dead pid is the primary sweep trigger;
+           the optional ``ttl_seconds`` adds a hard age cap that catches
+           the (rare) pid-reuse window before the kernel reuses the
+           number for a new process whose file we must not touch.
+
+        Logs the removed-file count at INFO. Returns the number of files
+        unlinked (used by tests).
+
+        Parameters
+        ----------
+        ttl_seconds
+            Optional age cap in seconds; non-positive disables it.
+            ``0`` (the default) sweeps only by dead-pid check. A future
+            CLI flag could thread this through ``build_cache`` for
+            operators that want a hard bound independent of pid status.
+        """
+        parent = self.requested_db_path.parent
+        stem = self.requested_db_path.stem
+        suffix = self.requested_db_path.suffix
+        if not parent.exists():
+            return 0
+        # Snapshot the glob: the local ``SQLiteCache.__init__`` call below
+        # is about to *create* the current pid's file, but we deliberately
+        # ran the sweep first so it isn't in the result yet.
+        siblings = sorted(parent.glob(f"{stem}.p*.sqlite"))
+        if not siblings:
+            return 0
+        current_pid = os.getpid()
+        # ``st_mtime`` is wall-clock based (seconds since epoch), so the
+        # TTL comparison must also use ``time.time()`` — ``monotonic()``
+        # is undefined relative to ``st_mtime`` and the difference would
+        # be a meaningless epoch offset.
+        now = time.time() if ttl_seconds > 0 else 0.0
+        removed = 0
+        for sibling in siblings:
+            pid = _parse_pid_from_sibling(sibling, stem=stem, suffix=suffix)
+            if pid is None or pid == current_pid:
+                continue
+            if _pid_alive(pid):
+                # Live pid: only sweep if the file is older than the TTL
+                # (rare — would mean pid reuse on the same outdir; the
+                # operator should investigate).
+                if ttl_seconds > 0:
+                    try:
+                        age_s = now - sibling.stat().st_mtime
+                    except OSError:
+                        continue
+                    if age_s < ttl_seconds:
+                        continue
+                else:
+                    continue
+            try:
+                sibling.unlink()
+            except FileNotFoundError:
+                # Raced with a peer sweep — the file is already gone, no-op.
+                continue
+            except OSError as exc:
+                log.warning(
+                    "DistributedCache: failed to unlink stale pid sibling %s (pid=%d): %s",
+                    sibling,
+                    pid,
+                    exc,
+                )
+                continue
+            removed += 1
+        if removed:
+            log.info(
+                "DistributedCache: swept %d stale pid-private SQLite file(s) for %s",
+                removed,
+                self.requested_db_path,
+            )
+        return removed
+
+    def _delete_pid_private_files(self) -> None:
+        """Unlink this process's pid-private SQLite file (and WAL aux).
+
+        Best-effort: called from :meth:`close` so a graceful shutdown
+        removes the multi-megabyte local cache file the SIGKILL path
+        previously leaked. WAL aux files (``-wal`` and ``-shm``) are
+        produced by SQLite in WAL mode (see :func:`osimflow._sqlite_store.connect`)
+        and are unlinked alongside the main file so the outdir is clean.
+
+        Idempotent (a missing file is silently skipped). The current
+        process has already closed its SQLite connection via
+        ``self._local.close()`` before this runs, so there is no risk
+        of unlinking an open database.
+        """
+        db_path = self._pid_private_db_path()
+        for candidate in (
+            db_path,
+            db_path.with_suffix(db_path.suffix + "-wal"),
+            db_path.with_suffix(db_path.suffix + "-shm"),
+        ):
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                log.warning(
+                    "DistributedCache: failed to unlink pid-private file %s: %s",
+                    candidate,
+                    exc,
+                )
 
     # ------------------------------------------------------------------
     # Sync Redis client for the shared entry store (lazy, thread-safe)
@@ -750,6 +985,19 @@ class DistributedCache:
 
         # Close the local SQLite cache.
         self._local.close()
+        # Issue #1691: when the operator opted in to strict cleanup,
+        # unlink the pid-private SQLite file (and its WAL aux) so a
+        # clean shutdown does not leak the multi-megabyte local file
+        # into the campaign outdir. Best-effort: a peer sweep racing
+        # us, a missing file, or a permission error is logged and
+        # swallowed — the Redis layer is the source of truth and the
+        # file is recoverable from Redis via the backfill path. When
+        # ``unlink_pid_file_on_close`` is False (the default) the file
+        # is preserved across ``close()`` so post-close ``lookup()``
+        # etc. transparently re-open it via ``SQLiteCache``'s lazy
+        # reconnect — matches the historical SQLiteCache contract.
+        if self._unlink_pid_file_on_close:
+            self._delete_pid_private_files()
         log.debug("DistributedCache closed for campaign=%s", self._campaign_id)
 
     def __enter__(self) -> DistributedCache:
@@ -759,7 +1007,15 @@ class DistributedCache:
         self.close()
 
     def __del__(self) -> None:
-        self.close()
+        # Defensive: during interpreter shutdown ``sys.meta_path`` is
+        # already torn down (returns ``None``), and ``pathlib.Path``
+        # operations in :meth:`_pid_private_db_path` raise
+        # ``ImportError`` in that state. The file unlink is best-effort
+        # — the next campaign's startup sweep will collect whatever
+        # ``__del__`` couldn't — so swallow every exception and let the
+        # interpreter exit cleanly (issue #1691).
+        with contextlib.suppress(BaseException):
+            self.close()
 
 
 def build_cache(

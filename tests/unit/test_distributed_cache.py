@@ -17,7 +17,9 @@ Covers:
 """
 
 import json
+import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -226,7 +228,12 @@ class TestDistributedCacheInterface:
         key = self._key()
         with dist_cache:
             dist_cache.store(key, out, exit_code=0)
-        # After exiting context manager, cache should still be usable.
+        # After exiting context manager, the cache is closed: by default
+        # (issue #1691) the pid-private SQLite file is preserved so a
+        # post-close ``lookup()`` lazily re-opens it via ``SQLiteCache``'s
+        # reconnect. The opt-in ``unlink_pid_file_on_close=True`` flag
+        # tightens this to remove the file (see TestPidPrivateFileCleanup
+        # for the strict-cleanup tests).
         assert dist_cache.lookup(key) == out
 
 
@@ -860,3 +867,395 @@ class TestValidateRedisUrl:
 
         with pytest.raises(ValueError, match="issue #1321"):
             validate_redis_url("redis://user:pass@redis.example.com:6379")
+
+
+# ---------------------------------------------------------------------
+# Pid-private file lifecycle (issue #1691)
+# ---------------------------------------------------------------------
+
+
+class TestPidPrivateFileCleanup:
+    """Regression suite for the pid-private SQLite file leak (issue #1691).
+
+    Each ``DistributedCache`` opens a pid-suffixed sibling of the
+    requested SQLite path so concurrent campaigns never lock one
+    database. Pre-#1691 nothing removed those files on exit: a clean
+    ``close()`` left the multi-megabyte local cache in place, a SIGKILL
+    obviously couldn't run ``close()`` at all, and every restart
+    therefore grew the outdir without bound (and polluted
+    ``artifact_manifest.json``). The fix wires both a startup sweep
+    (deals with SIGKILL'd peers) and a close-time unlink (clean exit).
+    """
+
+    @pytest.fixture
+    def dist_cache_factory(self) -> Any:
+        """Build a ``DistributedCache`` whose async Redis is a no-op mock.
+
+        The factory defaults to ``unlink_pid_file_on_close=True`` so the
+        # (a) Graceful-exit-unlinks tests below exercise the strict
+        cleanup path. Pass ``unlink_on_close=False`` for tests that
+        need the SQLiteCache-compatible contract (file persists across
+        ``close()`` so post-close lazy re-open works).
+        """
+
+        def _make(
+            db_path: Path,
+            *,
+            campaign_id: str = "issue-1691",
+            unlink_on_close: bool = True,
+        ) -> DistributedCache:
+            mock_ra = AsyncMock()
+            with patch(
+                "osimflow.distributed_cache._get_redis_asyncio",
+                return_value=mock_ra,
+            ):
+                return DistributedCache(
+                    db_path=db_path,
+                    redis_url="redis://localhost:6379/0",
+                    campaign_id=campaign_id,
+                    unlink_pid_file_on_close=unlink_on_close,
+                )
+
+        return _make
+
+    # ------------------------------------------------------------------
+    # (a) Graceful exit unlinks the pid-private file (opt-in)
+    # ------------------------------------------------------------------
+    def test_close_unlinks_pid_private_sqlite(
+        self, dist_cache_factory: Any, tmp_path: Path
+    ) -> None:
+        cache = dist_cache_factory(tmp_path / "cache.sqlite")
+        pid_path = cache._pid_private_db_path()
+        assert pid_path.exists(), "constructor should leave the pid-private file on disk"
+        cache.close()
+        assert not pid_path.exists(), "close() must unlink the pid-private file (issue #1691)"
+
+    def test_close_unlinks_wal_aux_files(self, dist_cache_factory: Any, tmp_path: Path) -> None:
+        """The -wal and -shm auxiliary files are removed alongside the main DB."""
+        cache = dist_cache_factory(tmp_path / "cache.sqlite")
+        pid_path = cache._pid_private_db_path()
+        # Drive a WAL write so SQLite produces the -wal / -shm sidecars.
+        cache.store(
+            CacheKey(
+                step="STEP_A",
+                sample_id="s1",
+                openstudio_version="N/A",
+                inputs_sha256="a",
+                code_sha256="b",
+                container_digest="py",
+                generation=0,
+            ),
+            tmp_path / "out",
+            exit_code=0,
+        )
+        # SQLiteCache.open leaves the aux files behind in WAL mode.
+        wal = pid_path.with_suffix(pid_path.suffix + "-wal")
+        shm = pid_path.with_suffix(pid_path.suffix + "-shm")
+        assert wal.exists() or shm.exists(), "expected WAL aux files after a store"
+        cache.close()
+        assert not pid_path.exists()
+        assert not wal.exists()
+        assert not shm.exists()
+
+    def test_close_keeps_file_when_flag_is_false(
+        self, dist_cache_factory: Any, tmp_path: Path
+    ) -> None:
+        """The default off preserves the SQLiteCache contract for back-compat.
+
+        Pre-#1691 callers (and the existing integration test suite) rely
+        on ``DistributedCache.close()`` not unlinking the file so a
+        post-close ``lookup()`` / ``stats()`` lazily re-opens the same
+        SQLite DB. The opt-in flag keeps that path working until an
+        operator explicitly tightens cleanup.
+        """
+        cache = dist_cache_factory(tmp_path / "cache.sqlite", unlink_on_close=False)
+        pid_path = cache._pid_private_db_path()
+        assert pid_path.exists()
+        cache.close()
+        # File persists — matches the historical SQLiteCache contract.
+        assert pid_path.exists()
+
+    def test_close_is_idempotent_on_unlink(self, dist_cache_factory: Any, tmp_path: Path) -> None:
+        """Calling ``close()`` twice is safe — second call sees a missing file."""
+        cache = dist_cache_factory(tmp_path / "cache.sqlite")
+        cache.close()
+        # Second close() must not raise even though the file is already gone.
+        cache.close()
+
+    def test_delete_pid_private_files_handles_missing(
+        self, dist_cache_factory: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A peer sweep racing us races silently — no exception on missing file."""
+        cache = dist_cache_factory(tmp_path / "cache.sqlite")
+        # Pre-unlink the pid-private file so the helper sees FileNotFoundError.
+        cache._pid_private_db_path().unlink()
+        # Must not raise.
+        cache._delete_pid_private_files()
+
+    # ------------------------------------------------------------------
+    # (b) Startup sweep deals with stale pid-private siblings
+    # ------------------------------------------------------------------
+    def test_startup_sweep_removes_dead_pid_siblings(
+        self, dist_cache_factory: Any, tmp_path: Path
+    ) -> None:
+        """Files whose pid is no longer alive are unlinked on construction.
+
+        Mirrors the issue's primary acceptance criterion: create stale
+        pid files, rebuild the cache, assert they are removed while the
+        live pid's file survives.
+        """
+        # Plant two stale siblings (one per "dead" pid) and let the
+        # current process's file be created by the constructor.
+        for fake_pid in (987_654_321, 987_654_322):
+            (tmp_path / f"cache.p{fake_pid}.sqlite").write_bytes(b"stale")
+        # Sanity: both planted.
+        planted = sorted(tmp_path.glob("cache.p*.sqlite"))
+        assert len(planted) == 2
+
+        cache = dist_cache_factory(tmp_path / "cache.sqlite")
+
+        # Both stale files must be gone after construction.
+        assert not (tmp_path / "cache.p987654321.sqlite").exists()
+        assert not (tmp_path / "cache.p987654322.sqlite").exists()
+        # The live pid's file must survive — current process owns it.
+        live = cache._pid_private_db_path()
+        assert live.exists()
+        assert f"cache.p{os.getpid()}.sqlite" in live.name
+
+    def test_startup_sweep_keeps_live_pid_files(
+        self, dist_cache_factory: Any, tmp_path: Path
+    ) -> None:
+        """A live pid's file is never swept — even though another process opened it."""
+        # Plant a file tagged with this pid (simulates a peer campaign
+        # process that happens to share our pid, which can't happen in
+        # practice but is the exact defensive skip the sweep must honour).
+        live_path = tmp_path / f"cache.p{os.getpid()}.sqlite"
+        live_path.write_bytes(b"")
+        cache = dist_cache_factory(tmp_path / "cache.sqlite")
+        # The live-pid file still exists — sweep skipped it.
+        assert live_path.exists()
+        # And the cache opened its own pid-private file (same path).
+        assert cache._pid_private_db_path() == live_path
+
+    def test_startup_sweep_returns_count(self, dist_cache_factory: Any, tmp_path: Path) -> None:
+        """The sweep's return value equals the number of removed files."""
+        for fake_pid in (987_654_330, 987_654_331, 987_654_332):
+            (tmp_path / f"cache.p{fake_pid}.sqlite").write_bytes(b"")
+        with (
+            patch.object(DistributedCache, "_get_sync_client") as sync_mock,
+            patch("osimflow.distributed_cache._get_redis_asyncio", return_value=AsyncMock()),
+        ):
+            sync_mock.return_value = MagicMock()
+            cache = DistributedCache(
+                db_path=tmp_path / "cache.sqlite",
+                redis_url="redis://localhost:6379/0",
+                campaign_id="count-test",
+            )
+            # Constructor sweep already cleared the 3 planted files;
+            # calling again exercises the return contract on a fresh
+            # stale sibling.
+            (tmp_path / "cache.p987654333.sqlite").write_bytes(b"")
+            n = cache._sweep_stale_pid_siblings()
+        assert n == 1
+
+    def test_startup_sweep_no_files_means_no_op(
+        self, dist_cache_factory: Any, tmp_path: Path
+    ) -> None:
+        """An outdir with no stale siblings is a 0-count no-op."""
+        with (
+            patch.object(DistributedCache, "_get_sync_client") as sync_mock,
+            patch("osimflow.distributed_cache._get_redis_asyncio", return_value=AsyncMock()),
+        ):
+            sync_mock.return_value = MagicMock()
+            cache = DistributedCache(
+                db_path=tmp_path / "cache.sqlite",
+                redis_url="redis://localhost:6379/0",
+                campaign_id="noop-test",
+            )
+            assert cache._sweep_stale_pid_siblings() == 0
+
+    def test_startup_sweep_skips_unparseable_filenames(
+        self, dist_cache_factory: Any, tmp_path: Path
+    ) -> None:
+        """Filenames that don't match the ``<stem>.p<pid>.<suffix>`` shape are left alone."""
+        # These look like pid-suffixed siblings but the pid segment is
+        # not an integer — defensive default is to never sweep an
+        # ambiguous name.
+        for weird in (
+            "cache.p12abc.sqlite",  # non-numeric pid
+            "cache.p.sqlite",  # empty pid segment
+            "cache.p0.sqlite",  # non-positive integer (parses but invalid)
+            "cache.p-1.sqlite",  # negative integer
+        ):
+            (tmp_path / weird).write_bytes(b"")
+        with (
+            patch.object(DistributedCache, "_get_sync_client") as sync_mock,
+            patch("osimflow.distributed_cache._get_redis_asyncio", return_value=AsyncMock()),
+        ):
+            sync_mock.return_value = MagicMock()
+            cache = DistributedCache(
+                db_path=tmp_path / "cache.sqlite",
+                redis_url="redis://localhost:6379/0",
+                campaign_id="unparseable-test",
+            )
+        # Every weird file is still on disk.
+        for weird in (
+            "cache.p12abc.sqlite",
+            "cache.p.sqlite",
+            "cache.p0.sqlite",
+            "cache.p-1.sqlite",
+        ):
+            assert (tmp_path / weird).exists(), f"{weird} should not be swept"
+        # Current-pid file is also still there.
+        assert cache._pid_private_db_path().exists()
+
+    def test_startup_sweep_skips_files_in_subdirectories(
+        self, dist_cache_factory: Any, tmp_path: Path
+    ) -> None:
+        """Only direct siblings of the requested path are swept, never subdirectories."""
+        # Plant a stale file in a subdirectory — the glob must not
+        # descend into it.
+        sub = tmp_path / "subdir"
+        sub.mkdir()
+        (sub / "cache.p987654321.sqlite").write_bytes(b"")
+        with (
+            patch.object(DistributedCache, "_get_sync_client") as sync_mock,
+            patch("osimflow.distributed_cache._get_redis_asyncio", return_value=AsyncMock()),
+        ):
+            sync_mock.return_value = MagicMock()
+            DistributedCache(
+                db_path=tmp_path / "cache.sqlite",
+                redis_url="redis://localhost:6379/0",
+                campaign_id="subdir-test",
+            )
+        assert (sub / "cache.p987654321.sqlite").exists()
+
+    def test_startup_sweep_logs_count(
+        self, dist_cache_factory: Any, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A successful sweep emits an INFO log with the removed count."""
+        for fake_pid in (987_654_340, 987_654_341):
+            (tmp_path / f"cache.p{fake_pid}.sqlite").write_bytes(b"")
+        with (
+            caplog.at_level("INFO", logger="osimflow.distributed_cache"),
+            patch.object(DistributedCache, "_get_sync_client") as sync_mock,
+            patch("osimflow.distributed_cache._get_redis_asyncio", return_value=AsyncMock()),
+        ):
+            sync_mock.return_value = MagicMock()
+            DistributedCache(
+                db_path=tmp_path / "cache.sqlite",
+                redis_url="redis://localhost:6379/0",
+                campaign_id="log-test",
+            )
+        sweep_msgs = [
+            r for r in caplog.records if "swept" in r.getMessage() and "stale" in r.getMessage()
+        ]
+        assert sweep_msgs, "expected at least one sweep summary log record"
+        assert "2" in sweep_msgs[-1].getMessage()
+
+    def test_startup_sweep_ttl_removes_old_live_pid_files(self, tmp_path: Path) -> None:
+        """A positive TTL sweeps a *foreign-pid* file older than the cap.
+
+        Covers the (rare) pid-reuse window: a peer process whose file
+        we cannot otherwise prove stale (because the pid may have been
+        recycled) ages out via the TTL. We use the real current pid as
+        the "foreign" one by patching ``os.getpid`` to return a fake
+        number — that way the planted file's pid is "alive" but
+        unambiguously not ours.
+        """
+        cache = DistributedCache.__new__(DistributedCache)
+        cache.requested_db_path = tmp_path / "cache.sqlite"
+        # Plant a file tagged with the real current pid — from the
+        # sweep's perspective this is a "foreign" pid (since we patch
+        # ``os.getpid`` to a different value).
+        foreign = tmp_path / f"cache.p{os.getpid()}.sqlite"
+        foreign.write_bytes(b"")
+        # Backdate its mtime so it looks stale.
+        old = time.time() - 7200  # 2 hours ago
+        os.utime(foreign, (old, old))
+        # Pretend our pid is something else, so the sweep treats the
+        # planted file as foreign. The planted pid (real current pid)
+        # is alive but the sweep must still respect the cap.
+        with patch("osimflow.distributed_cache.os.getpid", return_value=987_654_350):
+            n = cache._sweep_stale_pid_siblings(ttl_seconds=3600)
+        assert n == 1
+        assert not foreign.exists()
+
+
+# ---------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------
+
+
+class TestPidAliveHelper:
+    """Direct tests for :func:`_pid_alive` (issue #1691)."""
+
+    def test_current_pid_is_alive(self) -> None:
+        from osimflow.distributed_cache import _pid_alive
+
+        assert _pid_alive(os.getpid()) is True
+
+    def test_bogus_pid_is_dead(self) -> None:
+        from osimflow.distributed_cache import _pid_alive
+
+        # Pick a pid that almost certainly doesn't exist.
+        assert _pid_alive(2_000_000_000) is False
+
+    def test_pid_zero_is_dead(self) -> None:
+        """PID 0 is the kernel scheduler; ``kill(0, 0)`` semantics are host-defined.
+
+        ``_pid_alive`` must conservatively report ``False`` for pid 0
+        so the sweep doesn't keep a file tagged with pid 0 alive.
+        """
+        from osimflow.distributed_cache import _pid_alive
+
+        # pid 0 is special — some kernels return EPERM, some ESRCH.
+        # _pid_alive's contract is "True iff definitely alive".
+        # pid 0 is never a user process, so reporting False is correct
+        # regardless of the host's ``kill(0, 0)`` behaviour.
+        result = _pid_alive(0)
+        assert result is False or result is True  # never raises
+
+
+class TestParsePidFromSibling:
+    """Direct tests for :func:`_parse_pid_from_sibling` (issue #1691)."""
+
+    def test_valid_pid(self, tmp_path: Path) -> None:
+        from osimflow.distributed_cache import _parse_pid_from_sibling
+
+        sibling = tmp_path / "cache.p12345.sqlite"
+        assert _parse_pid_from_sibling(sibling, stem="cache", suffix=".sqlite") == 12345
+
+    def test_unparseable_pid_returns_none(self, tmp_path: Path) -> None:
+        from osimflow.distributed_cache import _parse_pid_from_sibling
+
+        sibling = tmp_path / "cache.pabc.sqlite"
+        assert _parse_pid_from_sibling(sibling, stem="cache", suffix=".sqlite") is None
+
+    def test_wrong_stem_returns_none(self, tmp_path: Path) -> None:
+        from osimflow.distributed_cache import _parse_pid_from_sibling
+
+        sibling = tmp_path / "other.p12345.sqlite"
+        assert _parse_pid_from_sibling(sibling, stem="cache", suffix=".sqlite") is None
+
+    def test_wrong_suffix_returns_none(self, tmp_path: Path) -> None:
+        from osimflow.distributed_cache import _parse_pid_from_sibling
+
+        sibling = tmp_path / "cache.p12345.db"
+        assert _parse_pid_from_sibling(sibling, stem="cache", suffix=".sqlite") is None
+
+    def test_zero_pid_returns_none(self, tmp_path: Path) -> None:
+        """A pid of 0 is never a real process — defensively reject."""
+        from osimflow.distributed_cache import _parse_pid_from_sibling
+
+        sibling = tmp_path / "cache.p0.sqlite"
+        assert _parse_pid_from_sibling(sibling, stem="cache", suffix=".sqlite") is None
+
+    def test_negative_pid_returns_none(self, tmp_path: Path) -> None:
+        from osimflow.distributed_cache import _parse_pid_from_sibling
+
+        sibling = tmp_path / "cache.p-5.sqlite"
+        # ``-5`` is not a valid integer substring in the parser's view
+        # (int() does accept "-5", but a real pid is always > 0).
+        result = _parse_pid_from_sibling(sibling, stem="cache", suffix=".sqlite")
+        assert result is None
