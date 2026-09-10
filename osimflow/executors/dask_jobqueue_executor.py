@@ -15,14 +15,65 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any
+from typing import Any, cast
 
 from osimflow.executors.base import BaseExecutor, Handle
 from osimflow.executors.transport import ResultTransportConfig, validate_transport_mode
 
 log = logging.getLogger("osimflow.executors")
 
-__all__ = ["DaskJobQueueExecutor"]
+__all__ = ["DaskJobQueueExecutor", "_apply_env_isolated"]
+
+
+# Module-level sentinel for "key absent from os.environ" — distinct from
+# any string an env var could legitimately hold (issue #1689).
+_ENV_KEY_ABSENT: object = object()
+
+
+def _apply_env_isolated(
+    overrides: dict[str, str],
+    fn: Callable[..., Any],
+    *args: Any,
+) -> Any:
+    """Run ``fn(*args)`` with ``overrides`` applied to ``os.environ`` and
+    restored on exit — even when ``fn`` raises.
+
+    Issue #1689: Dask workers run many tasks on the same process
+    (sequentially, and concurrently when ``worker_threads > 1``). The
+    previous ``_wrapped`` closure mutated ``os.environ`` without
+    restoring it, so a stale ``OSIMFLOW_OS_VERSION`` /
+    ``OSIMFLOW_CONTAINER`` from one task leaked into every subsequent
+    unrelated task on that worker — including tasks from a *different*
+    campaign sharing the cluster. That was a silent correctness hazard:
+    a stale OS version could select the wrong container tag for later
+    samples, and cache keys cannot detect the env mutation because it
+    happens below the cache layer on the worker.
+
+    This helper snapshots each overridden key per-call (NOT per-worker
+    — every task starts from a fresh ``os.environ`` snapshot), applies
+    the per-task values, runs ``fn``, and restores the originals in a
+    ``finally`` so the restore is guaranteed even on exception.
+
+    Cross-thread caveat: ``os.environ`` is process-shared and the GIL
+    serialises dict mutations but NOT a concurrent task's read inside
+    ``fn`` against another task's exit-time restore. Callers must not
+    rely on cross-thread ``os.environ`` reads inside ``fn`` for
+    correctness — this mirrors the LocalExecutor #1406 note.
+    """
+    import os as _os  # noqa: PLC0415 — stdlib only; importable on any worker
+
+    snapshot: dict[str, object] = {}
+    for key, value in overrides.items():
+        snapshot[key] = _os.environ.get(key, _ENV_KEY_ABSENT)
+        _os.environ[key] = value
+    try:
+        return fn(*args)
+    finally:
+        for key, previous in snapshot.items():
+            if previous is _ENV_KEY_ABSENT:
+                _os.environ.pop(key, None)
+            else:
+                _os.environ[key] = cast(str, previous)
 
 
 class _DaskJobQueueHandle(Handle):
@@ -248,12 +299,18 @@ class DaskJobQueueExecutor(BaseExecutor):
             log.info("dask_jobqueue: auto-scaler started")
 
         def _wrapped() -> Any:
-            import os as _os  # noqa: PLC0415
-
+            # Issue #1689: build the per-task env overrides and route
+            # through ``_apply_env_isolated`` so each Dask task gets a
+            # fresh snapshot (per-call, NOT per-worker) and the original
+            # ``os.environ`` keys are restored on exit even when ``fn``
+            # raises. See ``_apply_env_isolated`` for the full rationale.
+            overrides: dict[str, str] = {}
             if openstudio_version is not None:
-                _os.environ["OSIMFLOW_OS_VERSION"] = str(openstudio_version)
+                overrides["OSIMFLOW_OS_VERSION"] = str(openstudio_version)
             if container is not None:
-                _os.environ["OSIMFLOW_CONTAINER"] = container
+                overrides["OSIMFLOW_CONTAINER"] = container
+            if overrides:
+                return _apply_env_isolated(overrides, fn, *args)
             return fn(*args)
 
         future = cluster.get_client().submit(_wrapped)
