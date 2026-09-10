@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -608,13 +607,17 @@ class TestDistributedJobQueueCircuitBreaker:
         dq.enqueue("sample_0_job_done", {})
         mock_redis.publish.reset_mock()
 
-        start = time.monotonic()
         dq.mark_failed("sample_0_job_failed", "boom")
         dq.mark_completed("sample_0_job_done")
-        elapsed = time.monotonic() - start
 
-        # Immediate: no per-transition socket-timeout burn.
-        assert elapsed < 0.05
+        # Immediate: no per-transition socket-timeout burn.  Verified
+        # structurally below — the wall-clock upper-bound this test
+        # originally carried (``elapsed < 0.05``) was a flake factory under
+        # ``-n 2 --dist loadgroup`` on shared 2-core runners (issue #1693).
+        # ``mock_redis.publish.call_count == 0`` plus ``dq._redis_client
+        # is None`` together prove the synchronous pre-check inside
+        # ``_publish`` short-circuited before any async work or client
+        # construction happened; no wall-clock measurement is needed.
         # Documented fail-fast sentinel: local-only degradation, still open.
         assert dq.breaker_state == "open"
         # Drain the executor: nothing may have been dispatched at all.
