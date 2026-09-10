@@ -184,6 +184,18 @@ source = ["osimflow"]
 # config and start coverage automatically via the installed `coverage.pth`.
 concurrency = ["multiprocessing", "thread"]
 patch = ["subprocess"]
+# Omit list (issues #1557 + #1694):
+#   * `__main__.py` — 139 KB argparse CLI; tested end-to-end but never
+#     imported as a library, so it has no per-module floor.
+#   * `algorithms/{fast99,morris,nsga2,pso,ga}.py` — pulled in via
+#     optional `[sensitivity]` (SALib) / `[optimization]` (pymoo) /
+#     `[ga]` (DEAP) extras; not in the per-module scope.
+#   * `viz/dashboard.py` — optional `[viz]` streamlit dashboard.
+# `osimflow/api/*` was removed from this list by issue #1694 so the
+# per-module floor check in `tools/check_module_coverage.py` can see
+# those files; the 82% aggregate gate is preserved because the
+# measured api/ coverage (78-100% per file) sits comfortably above
+# the gate's 82% floor (aggregate is 88.59% in the seeded measurement).
 omit = [
     "osimflow/__main__.py",
     "osimflow/algorithms/fast99.py",
@@ -191,7 +203,6 @@ omit = [
     "osimflow/algorithms/nsga2.py",
     "osimflow/algorithms/pso.py",
     "osimflow/algorithms/ga.py",
-    "osimflow/api/*",
     "osimflow/viz/dashboard.py",
 ]
 
@@ -202,7 +213,9 @@ omit = [
 # the TOTAL — the gate then tracks "all source files" rather than
 # "measured code". The previous 82% gate baseline (85.20% TOTAL on
 # commit 30f3c79) was implicitly measured-only; this key preserves
-# that semantic after subprocess coverage is enabled.
+# that semantic after subprocess coverage is enabled. Issue #1694
+# removed `osimflow/api/*` from this list for the same reason it was
+# removed from `[tool.coverage.run] omit` above.
 omit = [
     "osimflow/__main__.py",
     "osimflow/algorithms/fast99.py",
@@ -210,7 +223,6 @@ omit = [
     "osimflow/algorithms/nsga2.py",
     "osimflow/algorithms/pso.py",
     "osimflow/algorithms/ga.py",
-    "osimflow/api/*",
     "osimflow/viz/dashboard.py",
 ]
 show_missing = true
