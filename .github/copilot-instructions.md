@@ -15,7 +15,7 @@ project conventions, architecture, and task routing.
   - Exceptions: catch, log with exc_info=True, re-raise. Never swallow.
   
   Commands:
-    make install    # pip install -e ".[dev,aws,slurm]"
+    make install    # pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
     make test       # full pytest suite
     make lint       # ruff check
     make typecheck  # mypy --strict osimflow/

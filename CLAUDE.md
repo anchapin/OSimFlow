@@ -21,7 +21,7 @@ Architecture: Orchestrator (`osimflow/campaign.py`) → Executor (`osimflow/exec
 ## Commands
 
 ```bash
-make install    # pip install -e ".[dev,aws,slurm]"
+make install    # pip install -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
 make test       # full pytest suite (via .venv)
 make lint       # ruff check
 make typecheck  # mypy --strict osimflow/
