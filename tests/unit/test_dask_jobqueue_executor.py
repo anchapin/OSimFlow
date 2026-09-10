@@ -7,6 +7,7 @@ import sys
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -823,9 +824,7 @@ class TestDaskJobQueuePerSampleLogCapture:
         ex = self._make_executor()
         client = MagicMock()
         ex._cluster.get_client.return_value = client
-        with patch(
-            "osimflow.executors.dask_jobqueue_executor.validate_transport_mode"
-        ):
+        with patch("osimflow.executors.dask_jobqueue_executor.validate_transport_mode"):
             ex._do_submit(
                 name="test",
                 cpus=2,
@@ -846,9 +845,7 @@ class TestDaskJobQueuePerSampleLogCapture:
             )
         return client.submit.call_args.args[0]
 
-    def test_captures_stdout_and_stderr_to_files(
-        self, tmp_path: Path
-    ) -> None:
+    def test_captures_stdout_and_stderr_to_files(self, tmp_path: Path) -> None:
         out_path = tmp_path / "out.log"
         err_path = tmp_path / "err.log"
 
@@ -857,9 +854,7 @@ class TestDaskJobQueuePerSampleLogCapture:
             print("hello stderr", file=sys.stderr, flush=True)
             return "ok"
 
-        wrapped = self._capture_wrapped(
-            fn, tmp_path, out_path, err_path
-        )
+        wrapped = self._capture_wrapped(fn, tmp_path, out_path, err_path)
         result = wrapped()
 
         assert result == "ok"
@@ -903,9 +898,7 @@ class TestDaskJobQueuePerSampleLogCapture:
         wrapped = self._capture_wrapped(fn, tmp_path, None, None)
         assert wrapped() == "fast"
 
-    def test_files_appended_to_on_subsequent_calls(
-        self, tmp_path: Path
-    ) -> None:
+    def test_files_appended_to_on_subsequent_calls(self, tmp_path: Path) -> None:
         """Re-running a sample should append to the same files, not
         overwrite — supports the retry-the-same-sample workflow.
         """
@@ -923,9 +916,7 @@ class TestDaskJobQueuePerSampleLogCapture:
         text = out_path.read_text()
         assert text.count("line1") == 3
 
-    def test_exception_in_fn_still_closes_files(
-        self, tmp_path: Path
-    ) -> None:
+    def test_exception_in_fn_still_closes_files(self, tmp_path: Path) -> None:
         """The file context managers release even if ``fn`` raises, so
         a retried sample can re-open the same paths without a
         ``ResourceWarning`` / leaked-fd error.
