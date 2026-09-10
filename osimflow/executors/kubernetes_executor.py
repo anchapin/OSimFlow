@@ -96,6 +96,18 @@ _DELETED_JOB_REASON = "JobDeleted"
 _DELETED_JOB_NO_RESULT_MESSAGE = "job deleted before result retrieval"
 
 
+class _VersionCheckLogFetchError(Exception):
+    """Internal sentinel: a transient ``read_namespaced_pod_log`` failure (issue #1687).
+
+    Raised from ``_handle_version_check_succeeded`` to signal the outer
+    poll loop that the log fetch failed transiently and the next
+    iteration should retry. Terminal payload errors (invalid JSON,
+    ``ok: false``) raise ``RuntimeError`` directly so they cannot be
+    confused with this transient signal — the broad retry handler
+    ignores them.
+    """
+
+
 class _KubernetesHandle(PollingHandle):
     """Handle that polls Kubernetes on `.result()`.
 
@@ -1069,7 +1081,6 @@ class KubernetesExecutor(BaseExecutor):
             if cached_image == current_image:
                 return cast("list[str]", self._negotiated_versions)
 
-        import json
         import uuid
 
         from kubernetes import client
@@ -1138,34 +1149,40 @@ class KubernetesExecutor(BaseExecutor):
         try:
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
+                # Only the transient K8s API call sits inside the retry
+                # ``try`` (issue #1687). The terminal classification raises
+                # below must NOT be swallowed by the broad poll-error
+                # handler — an ImagePullBackOff / OOMKilled / runner crash
+                # in the version-check pod should surface immediately, not
+                # after a wasted 60-second retry window.
                 try:
                     status = core_api.read_namespaced_pod_status(
                         name=job_name, namespace=self.namespace
                     )
-                    phase = status.status.phase if status.status else "Pending"
-                    if phase == "Succeeded":
-                        logs = core_api.read_namespaced_pod_log(
-                            name=job_name,
-                            namespace=self.namespace,
-                            container="osimflow",
-                        )
-                        try:
-                            parsed = json.loads(logs.strip())
-                            if not parsed.get("ok"):
-                                raise RuntimeError(f"version check returned error: {parsed}")
-                            self._negotiated_versions = parsed.get("supported_versions", [])
-                            self._negotiated_image = container_image
-                            return self._negotiated_versions
-                        except json.JSONDecodeError as exc:
-                            raise RuntimeError(
-                                f"invalid JSON from version-check pod: {logs!r}"
-                            ) from exc
-                    elif phase in ("Failed", "Error"):
-                        raise RuntimeError(
-                            f"version-check pod {phase.lower()} for image {container_image!r}"
-                        )
                 except Exception as exc:
                     log.debug("version-check pod status poll error (retrying): %s", exc)
+                    time.sleep(2)
+                    continue
+                phase = status.status.phase if status.status else "Pending"
+                if phase == "Succeeded":
+                    # The helper may signal a transient log-fetch failure
+                    # via ``_VersionCheckLogFetchError`` (issue #1687). The
+                    # terminal payload raises inside the helper propagate
+                    # up — they must NOT be retried.
+                    try:
+                        return self._handle_version_check_succeeded(
+                            core_api=core_api,
+                            job_name=job_name,
+                            container_image=container_image,
+                        )
+                    except _VersionCheckLogFetchError:
+                        continue
+                if phase in ("Failed", "Error"):
+                    raise RuntimeError(
+                        self._format_version_check_failure(
+                            status=status, phase=phase, container_image=container_image
+                        )
+                    )
                 time.sleep(2)
             raise RuntimeError(
                 f"version-check pod timed out after 60s for image {container_image!r}"
@@ -1185,6 +1202,66 @@ class KubernetesExecutor(BaseExecutor):
         from kubernetes import client
 
         return client.CoreV1Api()
+
+    def _handle_version_check_succeeded(
+        self,
+        core_api: Any,
+        job_name: str,
+        container_image: str,
+    ) -> list[str]:
+        """Fetch + parse the version-check pod's log payload (issue #1687).
+
+        Split out of ``negotiate_contract_version`` so the transient
+        ``read_namespaced_pod_log`` retry can be isolated from the
+        terminal payload-validation raises (``json.JSONDecodeError``,
+        ``ok: false``). Raises ``RuntimeError`` on bad payload — those
+        raises intentionally propagate UP to the caller, NOT through
+        any retry handler.
+        """
+        import json
+
+        try:
+            logs = core_api.read_namespaced_pod_log(
+                name=job_name,
+                namespace=self.namespace,
+                container="osimflow",
+            )
+        except Exception as exc:
+            log.debug("version-check pod log fetch error (retrying): %s", exc)
+            time.sleep(2)
+            # Re-raise as a sentinel so the outer loop can ``continue``.
+            # We use a typed exception (not ``RuntimeError``) so the
+            # caller's broad retry handler — if any — cannot confuse
+            # the transient signal with a terminal failure.
+            raise _VersionCheckLogFetchError(str(exc)) from exc
+        try:
+            parsed = json.loads(logs.strip())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"invalid JSON from version-check pod: {logs!r}") from exc
+        if not parsed.get("ok"):
+            raise RuntimeError(f"version check returned error: {parsed}")
+        supported = parsed.get("supported_versions", [])
+        self._negotiated_versions = supported
+        self._negotiated_image = container_image
+        return cast("list[str]", supported)
+
+    @staticmethod
+    def _format_version_check_failure(
+        status: Any,
+        phase: str,
+        container_image: str,
+    ) -> str:
+        """Build the terminal-failure message for a Failed/Error pod (issue #1687).
+
+        Surfaces the pod's ``status.message`` (e.g. ``ImagePullBackOff:
+        pull access denied`` / ``OOMKilled``) so operators see the
+        real root cause instead of a misleading 60s timeout.
+        """
+        pod_message: str | None = None
+        if status.status is not None and getattr(status.status, "message", None):
+            pod_message = status.status.message
+        detail = f": {pod_message}" if pod_message else ""
+        return f"version-check pod {phase.lower()} for image {container_image!r}{detail}"
 
     def _resolve_container_image(
         self,
