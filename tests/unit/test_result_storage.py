@@ -1169,6 +1169,96 @@ class TestAzureBlobStorageTransfer:
         assert settings.download_calls == 1
         assert settings.uploaded == ["a.txt"]
 
+    def test_upload_file_refuses_running_event_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1690: ``upload_file`` must raise (not swallow) when a loop
+        is already running. The previous inverted guard raised a
+        ``RuntimeError`` inside the same ``try`` whose ``except RuntimeError``
+        caught it, so the thread-pool bridge ran anyway and blocked the
+        caller's loop for the full upload duration.
+        """
+        import asyncio
+
+        from osimflow.storage import AzureBlobStorage
+
+        settings = _AzureFake()
+        _install_fake_azure_modules(monkeypatch, settings)
+        store = AzureBlobStorage(container="c")
+        src = tmp_path / "kpi.json"
+        src.write_text("{}", encoding="utf-8")
+
+        async def _caller() -> None:
+            store.upload_file(src, "kpi.json")
+
+        with pytest.raises(RuntimeError, match="running event loop"):
+            asyncio.run(_caller())
+        # The guard must fire BEFORE the async bridge — the fake azure
+        # module's upload counter stays at zero, proving no upload was
+        # attempted on a borrowed loop.
+        assert settings.upload_calls == 0
+        assert settings.uploaded == []
+
+    def test_download_file_refuses_running_event_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1690: ``download_file`` symmetric guard — must raise on a
+        running loop and never reach the thread-pool bridge.
+        """
+        import asyncio
+
+        from osimflow.storage import AzureBlobStorage
+
+        settings = _AzureFake()
+        _install_fake_azure_modules(monkeypatch, settings)
+        store = AzureBlobStorage(container="c")
+        out = tmp_path / "out" / "kpi.json"
+
+        async def _caller() -> None:
+            store.download_file("kpi.json", out)
+
+        with pytest.raises(RuntimeError, match="running event loop"):
+            asyncio.run(_caller())
+        assert settings.download_calls == 0
+        assert out.parent.exists() is False or not out.exists()
+
+    def test_upload_file_thread_pool_bridge_when_no_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1690: regression — when NO loop is running, the
+        thread-pool bridge must still work (this is the happy path).
+        """
+        from osimflow.storage import AzureBlobStorage
+
+        settings = _AzureFake()
+        _install_fake_azure_modules(monkeypatch, settings)
+        store = AzureBlobStorage(container="c")
+        src = tmp_path / "kpi.json"
+        src.write_text("{}", encoding="utf-8")
+
+        # Called from sync context (no running loop): must succeed and
+        # perform the upload via the thread-pool bridge.
+        store.upload_file(src, "kpi.json")
+        assert settings.upload_calls == 1
+        assert settings.uploaded == ["kpi.json"]
+
+    def test_download_file_thread_pool_bridge_when_no_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #1690: regression — sync-context ``download_file`` must
+        still bridge to the async implementation via the thread pool.
+        """
+        from osimflow.storage import AzureBlobStorage
+
+        settings = _AzureFake()
+        _install_fake_azure_modules(monkeypatch, settings)
+        store = AzureBlobStorage(container="c")
+        out = tmp_path / "out" / "kpi.json"
+
+        store.download_file("kpi.json", out)
+        assert settings.download_calls == 1
+        assert out.read_text() == "data"
+
 
 class TestResultStorageBaseUploadDir:
     """Default ``ResultStorage.upload_dir`` walk (issue #1452 coverage)."""
