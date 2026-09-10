@@ -384,9 +384,7 @@ class TestSQLiteDocumentStore:
         with pytest.raises(DocumentStoreError, match="invalid filter key"):
             store.count_documents("kpis", {"foo'; DROP TABLE kpis; --": 1})
 
-    def test_sql_injection_via_regex_value_rejected(
-        self, store: SQLiteDocumentStore
-    ) -> None:
+    def test_sql_injection_via_regex_value_rejected(self, store: SQLiteDocumentStore) -> None:
         """The same guard covers the ``$regex`` (LIKE) branch (issue #1779).
 
         ``{"x' OR 1=1 --": {"$regex": "y"}}`` would otherwise interpolate

@@ -137,9 +137,7 @@ def _validate_filter_key(key: str) -> None:
         not start with a letter / underscore.
     """
     if not isinstance(key, str) or not _FILTER_KEY_RE.match(key):
-        raise DocumentStoreError(
-            f"invalid filter key {key!r}: must match {_FILTER_KEY_RE.pattern}"
-        )
+        raise DocumentStoreError(f"invalid filter key {key!r}: must match {_FILTER_KEY_RE.pattern}")
 
 
 class DocumentStoreError(OSimFlowError):

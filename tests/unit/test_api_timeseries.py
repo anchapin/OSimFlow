@@ -203,22 +203,14 @@ class TestRouteRegistration:
             for r in getattr(routes, "routes", []) or []:
                 if isinstance(r, APIRoute):
                     paths.add(r.path)
-                inner = getattr(r, "app", None) or getattr(
-                    r, "original_router", None
-                )
+                inner = getattr(r, "app", None) or getattr(r, "original_router", None)
                 if inner is not None:
                     paths |= _paths(inner)
             return paths
 
         paths = _paths(client_ro.app)
-        assert (
-            "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries"
-            in paths
-        )
-        assert (
-            "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries/variables"
-            in paths
-        )
+        assert "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries" in paths
+        assert "/api/v1/campaigns/{campaign_id}/samples/{sample_id}/timeseries/variables" in paths
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +221,7 @@ class TestRouteRegistration:
 class TestGetTimeseries:
     """Coverage for ``get_timeseries`` (issue #1773 acceptance (a))."""
 
-    def test_hourly_returns_aggregated_rows(
-        self, client_ro: TestClient
-    ) -> None:
+    def test_hourly_returns_aggregated_rows(self, client_ro: TestClient) -> None:
         resp = client_ro.get(
             "/api/v1/campaigns/campaign-001/samples/sample_000/timeseries",
             params={"variable": "Zone Air Temperature", "freq": "hourly"},
@@ -243,10 +233,7 @@ class TestGetTimeseries:
         assert body["units"] == "C"
         assert body["n_points"] > 0
         assert isinstance(body["data"], list)
-        assert all(
-            {"timestamp", "value", "units", "key"} <= set(row)
-            for row in body["data"]
-        )
+        assert all({"timestamp", "value", "units", "key"} <= set(row) for row in body["data"])
 
     def test_daily_returns_aggregated_rows(self, client_ro: TestClient) -> None:
         resp = client_ro.get(
@@ -258,9 +245,7 @@ class TestGetTimeseries:
         assert body["frequency"] == "daily"
         assert body["n_points"] >= 1
 
-    def test_monthly_returns_aggregated_rows(
-        self, client_ro: TestClient
-    ) -> None:
+    def test_monthly_returns_aggregated_rows(self, client_ro: TestClient) -> None:
         resp = client_ro.get(
             "/api/v1/campaigns/campaign-001/samples/sample_000/timeseries",
             params={"variable": "Zone Air Temperature", "freq": "monthly"},
@@ -284,9 +269,7 @@ class TestGetTimeseries:
         )
         assert resp.status_code == 404
 
-    def test_missing_eplusout_sql_returns_404(
-        self, client_ro: TestClient, tmp_path: Path
-    ) -> None:
+    def test_missing_eplusout_sql_returns_404(self, client_ro: TestClient, tmp_path: Path) -> None:
         # Build a separate client whose campaign has no eplusout.sql.
         base = tmp_path / "no_sql"
         base.mkdir()
@@ -307,9 +290,7 @@ class TestGetTimeseries:
 class TestListVariables:
     """Coverage for ``list_timeseries_variables`` (issue #1773 acceptance (b))."""
 
-    def test_listing_returns_distinct_variable_keys(
-        self, client_ro: TestClient
-    ) -> None:
+    def test_listing_returns_distinct_variable_keys(self, client_ro: TestClient) -> None:
         resp = client_ro.get(
             "/api/v1/campaigns/campaign-001/samples/sample_000/timeseries/variables"
         )
@@ -368,8 +349,7 @@ class TestSampleIdPathTraversalGuard:
         :class:`TestSimDirFromSampleHelper` below.
         """
         resp = client_ro.get(
-            "/api/v1/campaigns/campaign-001/samples/"
-            f"{bad_sample_id}/timeseries",
+            f"/api/v1/campaigns/campaign-001/samples/{bad_sample_id}/timeseries",
             params={"variable": "Zone Air Temperature", "freq": "hourly"},
         )
         assert resp.status_code == 404

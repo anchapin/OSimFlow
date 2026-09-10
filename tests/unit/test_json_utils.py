@@ -67,9 +67,7 @@ class TestSafeJsonLoads:
         path.write_text("not json")
         with caplog.at_level(logging.WARNING, logger="osimflow.json_utils"):
             safe_json_loads(path)
-        assert any(
-            "Failed to read/parse" in rec.message for rec in caplog.records
-        )
+        assert any("Failed to read/parse" in rec.message for rec in caplog.records)
 
     def test_log_warnings_false_suppresses_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -80,9 +78,9 @@ class TestSafeJsonLoads:
         with caplog.at_level(logging.WARNING, logger="osimflow.json_utils"):
             result = safe_json_loads(path, default={}, log_warnings=False)
         assert result == {}
-        assert not any(
-            "Failed to read/parse" in rec.message for rec in caplog.records
-        ), "log_warnings=False must suppress the warning"
+        assert not any("Failed to read/parse" in rec.message for rec in caplog.records), (
+            "log_warnings=False must suppress the warning"
+        )
 
     def test_default_default_is_none(self, tmp_path: Path) -> None:
         """The default ``default`` kwarg is ``None`` (per docstring)."""
@@ -144,9 +142,7 @@ class TestSafeJsonDumps:
         payload = json.loads(path.read_text())
         assert payload["file"] == str(tmp_path)
 
-    def test_no_default_raises_type_error_on_non_serialisable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_default_raises_type_error_on_non_serialisable(self, tmp_path: Path) -> None:
         """Without ``default``, a non-serialisable object → TypeError caught."""
         path = tmp_path / "fail.json"
         # Path is not JSON-serialisable without a default handler.
@@ -168,6 +164,7 @@ class TestSafeJsonDumps:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``raise_on_error=True`` re-raises OSError too (e.g. read-only FS)."""
+
         # Build a payload that's serialisable so we hit the OSError path
         # via ``path.write_text`` rather than the TypeError path.
         def _failing_write_text(self: Path, *args: object, **kwargs: object) -> None:
@@ -180,8 +177,11 @@ class TestSafeJsonDumps:
     def test_raise_on_error_false_returns_false(self, tmp_path: Path) -> None:
         """``raise_on_error=False`` (default) returns False on failure."""
         path = tmp_path / "fail.json"
-        assert safe_json_dumps(
-            {"file": tmp_path},  # TypeError without default
-            path,
-            raise_on_error=False,
-        ) is False
+        assert (
+            safe_json_dumps(
+                {"file": tmp_path},  # TypeError without default
+                path,
+                raise_on_error=False,
+            )
+            is False
+        )
