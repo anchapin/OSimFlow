@@ -139,6 +139,7 @@ from .cosign import (
 from .data_point_manager import DataPointManager
 from .distributed_cache import build_cache, campaign_state_namespace
 from .distributed_jobqueue import build_job_queue
+from .document_store import build_document_store
 from .errors import OSimFlowRuntimeError
 from .executors import BaseExecutor, Handle
 from .executors.transport import ResultTransportConfig
@@ -653,6 +654,22 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             db_path=cfg.cache_db,
             redis_url=cfg.redis_url,
             campaign_id=self._cache_namespace,
+        )
+        # Document store (issue #1769): the RedisDocumentStore breaker
+        # was previously wired to a ``self._document_store`` attribute
+        # that was never assigned (the original branch was extracted in
+        # the refactor without preserving the assignment, so the
+        # ``getattr(self, "_document_store", None)`` call below always
+        # saw ``None`` and the Redis control-plane breaker events were
+        # silently dropped from run.json).  Build the store alongside
+        # the cache so the wire-up actually fires for both
+        # ``SQLiteDocumentStore`` (single-node) and
+        # ``RedisDocumentStore`` (four-plane Redis control plane, issue
+        # #1562 / ADR-0004).
+        self._document_store = build_document_store(
+            db_path=cfg.work_dir / "documents.sqlite",
+            redis_url=cfg.redis_url,
+            namespace=self._cache_namespace,
         )
         self._python_container_image = os.environ.get(
             "OSIMFLOW_PYTHON_CONTAINER_IMAGE",
