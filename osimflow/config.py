@@ -471,6 +471,20 @@ class DAGConfig:
         Path to pre-campaign initialization script.
     finalize_script
         Path to post-campaign finalization script.
+    init_script_timeout
+        Wall-clock timeout in seconds for the ``--init-script``
+        subprocess (issue #1685).  On expiry the child process group
+        is killed and the campaign aborts with ``CampaignError``
+        before any step runs.  Defaults to 600 s — a hung init script
+        (e.g. stuck on an NFS mount or a lock) used to block
+        ``Campaign.run()`` forever.
+    finalize_script_timeout
+        Wall-clock timeout in seconds for the ``--finalize-script``
+        subprocess (issue #1685).  On expiry the child process group
+        is killed and the timeout is logged as a warning, but the
+        campaign returns normally so the ``finally`` block in
+        ``Campaign.run()`` can still rewrite ``run.json``, fire the
+        webhook, and call ``cache.close()``.  Defaults to 600 s.
     baseline
         Baseline comparison configuration (issue #64).
     weather_dir
@@ -536,6 +550,8 @@ class DAGConfig:
     skip_preflight: bool = False
     init_script: Path | None = None
     finalize_script: Path | None = None
+    init_script_timeout: float = 600.0
+    finalize_script_timeout: float = 600.0
     baseline: dict[str, object] | None = None
     weather_dir: str = "weather"
     archive_intermediates: bool = False
@@ -887,6 +903,8 @@ class CampaignConfig:
     skip_preflight: bool = False
     init_script: Path | None = None
     finalize_script: Path | None = None
+    init_script_timeout: float = 600.0
+    finalize_script_timeout: float = 600.0
     baseline: dict[str, object] | None = None
     weather_dir: str = "weather"
     archive_intermediates: bool = False
@@ -1037,6 +1055,8 @@ class CampaignConfig:
             skip_preflight=self.skip_preflight,
             init_script=self.init_script,
             finalize_script=self.finalize_script,
+            init_script_timeout=self.init_script_timeout,
+            finalize_script_timeout=self.finalize_script_timeout,
             baseline=self.baseline,
             weather_dir=self.weather_dir,
             archive_intermediates=self.archive_intermediates,
@@ -1179,6 +1199,8 @@ class CampaignConfig:
                 "skip_preflight": ("dag", "skip_preflight"),
                 "init_script": ("dag", "init_script"),
                 "finalize_script": ("dag", "finalize_script"),
+                "init_script_timeout": ("dag", "init_script_timeout"),
+                "finalize_script_timeout": ("dag", "finalize_script_timeout"),
                 "baseline": ("dag", "baseline"),
                 "weather_dir": ("dag", "weather_dir"),
                 "archive_intermediates": ("dag", "archive_intermediates"),
@@ -1667,6 +1689,21 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
         init_script=(Path(str(args["init_script"])).resolve() if args.get("init_script") else None),
         finalize_script=(
             Path(str(args["finalize_script"])).resolve() if args.get("finalize_script") else None
+        ),
+        # Issue #1685: hook subprocess wall-clock timeouts.  Both
+        # default to 600 s — a hung init script used to block
+        # ``Campaign.run()`` before any step ran, and a hung
+        # finalize script used to block the ``finally`` block that
+        # writes ``run.json`` and fires the webhook.
+        init_script_timeout=(
+            float(str(args["init_script_timeout"]))
+            if args.get("init_script_timeout") is not None
+            else 600.0
+        ),
+        finalize_script_timeout=(
+            float(str(args["finalize_script_timeout"]))
+            if args.get("finalize_script_timeout") is not None
+            else 600.0
         ),
         skip_preflight=bool(args.get("skip_preflight", False)),
         max_generations=int(str(args.get("max_generations", 1))),

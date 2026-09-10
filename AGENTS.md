@@ -259,7 +259,18 @@ physically live in their executor's config module, not in
 - **Inputs / outputs:** `--allow-insecure-storage-endpoint`,
   `--archive_intermediates`,
   `--bcl-api-key`, `--dry-run`, `--finalize-script`,
-  `--init-script`, `--input_variables`, `--kpis`, `--log_level`,
+  `--finalize-script-timeout` (issue #1685 — wall-clock
+  timeout in seconds for the `--finalize-script` subprocess;
+  on expiry the child process group is SIGKILLed and a warning
+  is logged, but the finalize hook returns normally so
+  `Campaign.run()`'s `finally` block can still rewrite `run.json`,
+  fire the webhook, and `cache.close()`. Default: 600 s),
+  `--init-script`, `--init-script-timeout` (issue #1685 —
+  wall-clock timeout in seconds for the `--init-script`
+  subprocess; on expiry the child process group is SIGKILLed
+  and the campaign aborts with `CampaignError` before any
+  step runs. Default: 600 s),
+  `--input_variables`, `--kpis`, `--log_level`,
   `--n_samples`, `--no-tui`, `--offline`, `--offline-bundle`,
   `--openstudio_version`, `--outdir`, `--result-storage-backend`,
   `--result-storage-bucket`, `--result-storage-endpoint`,
