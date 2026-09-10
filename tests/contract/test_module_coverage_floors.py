@@ -7,19 +7,24 @@ collaborator (the failure mode #1462/#1463/#1464 opened up). Issue
 silent shrink of a floor (e.g. "I'll just lower the floor a bit so
 the PR lands") fails here immediately.
 
+Issue #1694 widens the scope to ``osimflow/*.py`` and
+``osimflow/api/*.py`` so the same structural-blindness gap cannot
+re-open on a freshly added top-level or REST module. The contract
+mirror that wider scope.
+
 Three invariants — all hermetic file reads:
 
   1. The script exists and runs to completion with ``.coverage`` present.
-  2. Every in-scope file (``osimflow/_campaign_*.py``,
-     ``osimflow/executors/*.py``) has a ``FLOORS`` entry — new
-     modules landing without a floor fail here before the gate.
-  3. No floor is raised above the seed value (current measurement
-     on ``origin/main`` commit ``30f3c79``) — the floor is a regression
-     guard, not an aspirational target (issue #1571 acceptance).
-     Lowering a floor is also flagged: the only sanctioned reason is
-     the documented one (a module legitimately shrank; that is a
-     refactor, not a coverage change). See #1571 for the ratchet-up
-     procedure.
+  2. Every in-scope file (per the wider issue #1694 globs, minus the
+     documented ``OMITTED`` set) has a ``FLOORS`` entry — new modules
+     landing without a floor fail here before the gate.
+  3. No floor is raised above the seed value (current measurement on
+     this branch — see the script's docstring seed table) — the floor
+     is a regression guard, not an aspirational target (issue #1571
+     acceptance). Lowering a floor is also flagged: the only sanctioned
+     reason is the documented one (a module legitimately shrank; that
+     is a refactor, not a coverage change). See #1571 for the
+     ratchet-up procedure.
 """
 
 from __future__ import annotations
@@ -38,7 +43,18 @@ _SCRIPT = REPO_ROOT / "tools" / "check_module_coverage.py"
 # `measured - 1.0%` — the regression guard epsilon.  These are the
 # ratchet-up ceilings; bumping a floor above this requires a fresh
 # measurement comment in the script's docstring (issue #1571).
+#
+# Issue #1694 widened the scope to ``osimflow/*.py`` and
+# ``osimflow/api/*.py``; the corresponding seed measurements were
+# captured from a fresh `make test-cov` invocation on the
+# scope-widening branch (see the script's docstring seed table for
+# the full reading list and rationale). The ``_MIN_EPSILON_PCT``
+# floor-pin handles the ``results_viewer.py`` / ``timeseries.py``
+# measurements which sit below the 1.0% epsilon because their render
+# / chart code paths exercise only under the optional `[viz]`
+# streamlit dashboard.
 _SEED_PCT: dict[str, float] = {
+    # --- issue #1571 origin/main commit 30f3c79 ---
     "osimflow/_campaign_artifacts.py": 91.28,
     "osimflow/_campaign_baseline.py": 98.44,
     "osimflow/_campaign_chaos.py": 29.33,
@@ -64,6 +80,76 @@ _SEED_PCT: dict[str, float] = {
     "osimflow/executors/pbs_executor.py": 90.34,
     "osimflow/executors/slurm_executor.py": 100.00,
     "osimflow/executors/transport.py": 83.84,
+    # --- issue #1694 scope-widening measurements ---
+    "osimflow/__init__.py": 80.95,
+    "osimflow/_eval_safe.py": 81.36,
+    "osimflow/_sqlite_store.py": 67.69,
+    "osimflow/_subprocess_utils.py": 85.45,
+    "osimflow/aggregation.py": 93.40,
+    "osimflow/alerting.py": 78.16,
+    "osimflow/apply_params.py": 86.40,
+    "osimflow/audit.py": 92.11,
+    "osimflow/byos.py": 88.30,
+    "osimflow/byos_contract.py": 100.00,
+    "osimflow/cache.py": 97.32,
+    "osimflow/campaign.py": 86.50,
+    "osimflow/chaos.py": 93.94,
+    "osimflow/circuit_breaker.py": 100.00,
+    "osimflow/client.py": 83.77,
+    "osimflow/config.py": 87.26,
+    "osimflow/cosign.py": 92.59,
+    "osimflow/cost_tracking.py": 97.18,
+    "osimflow/cross_run_aggregator.py": 94.98,
+    "osimflow/data_point_manager.py": 77.81,
+    "osimflow/distributed_cache.py": 87.50,
+    "osimflow/distributed_jobqueue.py": 73.38,
+    "osimflow/document_store.py": 81.19,
+    "osimflow/errors.py": 100.00,
+    "osimflow/event_log.py": 100.00,
+    "osimflow/handoff_record.py": 100.00,
+    "osimflow/health.py": 76.77,
+    "osimflow/jobqueue.py": 85.54,
+    "osimflow/json_utils.py": 57.58,
+    "osimflow/logging.py": 93.18,
+    "osimflow/manifest.py": 89.47,
+    "osimflow/measure_resolver.py": 82.26,
+    "osimflow/measure_versioning.py": 90.21,
+    "osimflow/measures.py": 53.09,
+    "osimflow/mlflow_hook.py": 100.00,
+    "osimflow/monitoring.py": 87.39,
+    "osimflow/notify.py": 100.00,
+    "osimflow/observability.py": 97.17,
+    "osimflow/offline_bundle.py": 94.20,
+    "osimflow/pareto.py": 97.09,
+    "osimflow/registry.py": 98.20,
+    "osimflow/remote_runner.py": 82.23,
+    "osimflow/results_db.py": 94.83,
+    "osimflow/results_query.py": 59.82,
+    "osimflow/storage.py": 95.27,
+    "osimflow/task_payload_hmac.py": 100.00,
+    "osimflow/taskqueue.py": 92.96,
+    "osimflow/tui.py": 94.12,
+    "osimflow/validation.py": 95.94,
+    "osimflow/version_detection.py": 91.72,
+    "osimflow/weather.py": 97.50,
+    "osimflow/webhook.py": 89.24,
+    "osimflow/work.py": 80.26,
+    "osimflow/api/__init__.py": 100.00,
+    "osimflow/api/app.py": 78.27,
+    "osimflow/api/auth.py": 91.95,
+    "osimflow/api/campaigns.py": 76.32,
+    "osimflow/api/coordinator.py": 79.29,
+    "osimflow/api/dashboard.py": 96.77,
+    "osimflow/api/events.py": 93.24,
+    "osimflow/api/files.py": 88.33,
+    "osimflow/api/measures.py": 87.28,
+    "osimflow/api/pat_compat.py": 96.74,
+    "osimflow/api/results_query.py": 81.61,
+    "osimflow/api/results_viewer.py": 38.60,
+    "osimflow/api/schemas.py": 100.00,
+    "osimflow/api/timeseries.py": 20.99,
+    "osimflow/api/variable_designer.py": 88.89,
+    "osimflow/api/variables.py": 79.01,
 }
 
 # Expected epsilon: floor = measured - EPSILON.
@@ -127,24 +213,43 @@ def _in_scope_files() -> set[str]:
     """Return the set of in-scope file paths per the globs in the script.
 
     Mirrors the patterns the floor script declares (issue #1571 +
-    #1557 extension): every ``_campaign_*.py`` collaborator, every
-    ``executors/*.py`` module, and — since the subprocess coverage
-    bootstrap turned on in #1557 — every ``_work_scripts/*.py`` per-step
-    script. The ``test_every_in_scope_file_has_floor`` /
+    #1557 + #1694): every ``_campaign_*.py`` collaborator, every
+    ``executors/*.py`` module, every ``_work_scripts/*.py`` per-step
+    script (subprocess coverage, #1557), every top-level
+    ``osimflow/*.py`` module, and every ``osimflow/api/*.py`` REST
+    module — minus the documented ``OMITTED`` set (CLI,
+    generated code; see the script's docstring). The
+    ``test_every_in_scope_file_has_floor`` /
     ``test_no_extra_floors`` invariants below rely on this set being
-    exactly the union of the floor script's ``GLOBS``.
+    exactly the union of the floor script's ``GLOBS`` minus
+    ``OMITTED``.
     """
     out: set[str] = set()
     for pattern in (
+        "osimflow/*.py",
         "osimflow/_campaign_*.py",
         "osimflow/executors/*.py",
         "osimflow/_work_scripts/*.py",
+        "osimflow/api/*.py",
     ):
         out.update(
             str(p.relative_to(REPO_ROOT)).replace("\\", "/")
             for p in (REPO_ROOT).glob(pattern)
             if p.is_file()
         )
+    # Mirror the script's OMITTED set (issue #1694): CLI + generated
+    # code match the globs above but carry no per-module floor. The
+    # parser below parses the script's OMITTED literal; we use a
+    # hard-coded copy here because the script's literal can change
+    # format (frozen set, tuple, etc.) and we want this contract to
+    # keep working. Keeping this list in sync is the responsibility of
+    # anyone who adds to OMITTED in the script — the assertion below
+    # will flag drift via ``test_no_extra_floors``.
+    for path in (
+        "osimflow/__main__.py",
+        "osimflow/_byos_runner_generated.py",
+    ):
+        out.discard(path)
     return out
 
 
