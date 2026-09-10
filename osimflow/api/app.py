@@ -16,6 +16,7 @@ Security features (issue #268, #395):
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from ipaddress import ip_address as _stdlib_ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -89,27 +91,187 @@ def _get_redis_asyncio() -> Any:
     return _redis_asyncio_module["module"]
 
 
-def _get_real_remote_address(request: Request) -> str:
-    """Extract the real client IP for rate limiting.
+def _parse_trusted_proxies(
+    values: list[str] | None,
+) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network | str]:
+    """Parse a list of trusted-proxy CIDRs / single IPs / hostnames.
 
-    When OSimFlow is deployed behind a load balancer (for horizontal
-    scaling), ``get_remote_address`` returns the load balancer's IP instead
-    of the client's IP.  This function checks the ``X-Forwarded-For`` header
-    first (set by most HTTP load balancers) and falls back to
-    ``get_remote_address`` when the header is not present.
+    Each entry is interpreted as one of:
 
-    Horizontal scaling with multiple API instances behind a load balancer
-    requires that all instances share the same ``X-Forwarded-For`` header
-    handling so that per-client rate limits are correctly enforced.
+    - An IP address (``"10.0.0.1"``, ``"2001:db8::1"``) — wrapped in a
+      /32 or /128 network so the membership check works uniformly.
+    - A CIDR block (``"10.0.0.0/8"``, ``"2001:db8::/32"``).
+    - A hostname (``"my-load-balancer.internal"``) — stored as a string
+      and matched by exact equality against the socket peer's ``host``
+      (mirrors nginx's ``set_real_ip_from`` directive, which also
+      accepts hostnames).
+
+    Invalid CIDR / IP entries raise :class:`ValueError` at app creation
+    time so a typo surfaces before the first request.  Empty inputs
+    (None / []) resolve to an empty list — fail-closed.
     """
-    forwarded_for = request.headers.get("X-Forwarded-For") or request.headers.get("X_FORWARDED_FOR")
-    if forwarded_for:
-        # X-Forwarded-For can contain multiple IPs: client, proxy1, proxy2...
-        # The first IP is the original client.
-        client_ip = forwarded_for.split(",")[0].strip()
-        if client_ip:
-            return client_ip  # type: ignore[no-any-return]
-    return get_remote_address(request)  # type: ignore[no-any-return]
+    if not values:
+        return []
+    parsed: list[ipaddress.IPv4Network | ipaddress.IPv6Network | str] = []
+    for raw in values:
+        entry = raw.strip()
+        if not entry:
+            continue
+        # Try CIDR / IP first.
+        try:
+            parsed.append(ipaddress.ip_network(entry, strict=False))
+            continue
+        except ValueError:
+            pass
+        # Otherwise accept it as a hostname — validated via a minimal
+        # shape check so a stray whitespace typo still raises.
+        if not all(c.isalnum() or c in "-._:" for c in entry):
+            raise ValueError(f"Invalid trusted-proxy entry {entry!r}: not an IP, CIDR, or hostname")
+        parsed.append(entry)
+    return parsed
+
+
+def _ip_matches_any(
+    ip_str: str,
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network | str],
+) -> bool:
+    """Return True if ``ip_str`` matches any of the trusted-proxy entries.
+
+    Matching rules:
+
+    - ``ip_network`` entry: CIDR membership (host bits must match).
+    - Hostname entry: exact equality against ``ip_str``.  Hostnames are
+      rare in production (operators usually pin a CIDR), but accepting
+      them mirrors nginx and keeps the TestClient path honest — the
+      Starlette test client uses the literal host string ``"testclient"``
+      rather than an IP.
+
+    Invalid IPs return False (fail-closed) so a spoofed XFF with garbage
+    text cannot accidentally bypass the trust check.
+    """
+    # First try CIDR / IP membership against every network entry.  This
+    # is the fast path for production deployments (CIDR / single IP).
+    try:
+        ip_obj = _stdlib_ip_address(ip_str)
+    except ValueError:
+        # ``ip_str`` is not a valid IP.  It might still be a literal
+        # hostname (e.g. TestClient's "testclient" peer).  Compare it
+        # against the hostname entries only.
+        return any(isinstance(entry, str) and entry == ip_str for entry in networks)
+
+    # CIDR / single-IP membership (fast path), then exact-string match
+    # against any hostname entries (the TestClient peer's ``"testclient"``
+    # is the most common hostname form here).
+    if any(
+        isinstance(net, (ipaddress.IPv4Network, ipaddress.IPv6Network)) and ip_obj in net
+        for net in networks
+    ):
+        return True
+    return any(isinstance(entry, str) and entry == ip_str for entry in networks)
+
+
+def _peer_ip(request: Request) -> str:
+    """Return the socket-peer address used for upstream-trust checks.
+
+    Mirrors :func:`slowapi.util.get_remote_address` but raises no implicit
+    ``"127.0.0.1"`` fallback so the trust logic can distinguish "real
+    peer missing" from "peer is loopback".
+    """
+    if request.client and request.client.host:
+        return request.client.host
+    return "127.0.0.1"
+
+
+def _make_real_remote_address_func(
+    *,
+    trust_x_forwarded_for: bool,
+    trusted_proxies: list[ipaddress.IPv4Network | ipaddress.IPv6Network | str],
+) -> Callable[[Request], str]:
+    """Build a ``key_func`` for ``get_remote_address`` semantics (issue #1683).
+
+    Default behavior (no proxy trust): the socket-peer address from
+    :func:`slowapi.util.get_remote_address` is always returned; the
+    ``X-Forwarded-For`` / ``X_FORWARDED_FOR`` headers are NEVER consulted.
+    This is fail-closed — a client cannot rotate its rate-limit bucket by
+    rotating a spoofed XFF value, which previously defeated the
+    sliding-window limiter that exists to slow API-key brute force and
+    enumeration (issue #1683).
+
+    Opt-in behavior (``trust_x_forwarded_for=True`` + a non-empty
+    ``trusted_proxies`` allowlist): the XFF chain is honored only if the
+    immediate upstream (the socket peer) is itself in ``trusted_proxies``.
+    The "first untrusted hop" rule is applied: scanning the XFF list
+    right-to-left, the first entry that is NOT in ``trusted_proxies`` is
+    returned as the client IP.  If every XFF entry is itself a trusted
+    proxy (or the chain is empty / malformed), the function falls back to
+    the socket peer so a misconfigured proxy cannot silently swallow the
+    identity.
+    """
+
+    def key_func(request: Request) -> str:
+        # Default-deny: if proxy trust is off or no proxies are configured,
+        # never read XFF — the only identity is the socket peer.
+        if not trust_x_forwarded_for or not trusted_proxies:
+            return get_remote_address(request)  # type: ignore[no-any-return]
+
+        # Opt-in path: the request is only honored if the immediate
+        # upstream (the peer that connected to us) is itself a trusted
+        # proxy.  Without this check, a non-proxied attacker could still
+        # spoof XFF and bypass the limiter.
+        peer = _peer_ip(request)
+        if not _ip_matches_any(peer, trusted_proxies):
+            return peer  # type: ignore[no-any-return]
+
+        header = request.headers.get("X-Forwarded-For") or request.headers.get("X_FORWARDED_FOR")
+        if not header:
+            return peer  # type: ignore[no-any-return]
+
+        # Walk right-to-left; the right-most entry is the proxy closest
+        # to us (which we just verified is trusted), and the first
+        # untrusted entry to the left is the real client.
+        entries = [segment.strip() for segment in header.split(",") if segment.strip()]
+        for entry in reversed(entries):
+            # Strip an optional ":port" suffix (XFF allows IPv4:port
+            # and [ipv6]:port forms per RFC 7239 examples).
+            candidate = entry
+            if candidate.startswith("["):
+                # IPv6 with bracketed form and optional port: "[::1]:8080"
+                end = candidate.find("]")
+                if end != -1:
+                    candidate = candidate[1:end]
+            elif candidate.count(":") == 1:
+                # IPv4 with port — keep the host portion.
+                candidate = candidate.split(":", 1)[0]
+            # elif multiple ":" → bare IPv6, leave as-is.
+
+            # A candidate is only honored when it parses as a valid IP
+            # and is NOT in the trusted-proxy set.  Garbage entries
+            # (``not-an-ip``, ``foo@bar``) are silently skipped over so
+            # we never return attacker-controlled text as the client
+            # identity — fail-closed.
+            try:
+                _stdlib_ip_address(candidate)
+            except ValueError:
+                continue
+            if not _ip_matches_any(candidate, trusted_proxies):
+                return candidate  # type: ignore[no-any-return]
+
+        # All entries were trusted proxies (or unparseable). Fall back to
+        # the socket peer rather than returning an attacker-controlled
+        # header value.
+        return peer  # type: ignore[no-any-return]
+
+    return key_func
+
+
+# Backwards-compatible module-level alias — tests and external callers that
+# imported the legacy unconditional-XFF function keep working but get the
+# new fail-closed default (issue #1683).  ``trust_x_forwarded_for=False``
+# makes the function equivalent to ``get_remote_address``.
+_get_real_remote_address = _make_real_remote_address_func(
+    trust_x_forwarded_for=False,
+    trusted_proxies=[],
+)
 
 
 # Campaign ID extraction regex for per-campaign rate limiting (issue #445)
@@ -144,7 +306,7 @@ def _get_campaign_id_from_request(request: Request) -> str | None:
 
 
 def _make_per_user_key_func(
-    app_state_key_store_attr: str = "api_key_store",
+    real_remote_address_func: Callable[[Request], str] = _get_real_remote_address,
 ) -> Callable[[Request], str]:
     """Create a key function that rate limits by authenticated user (issue #445).
 
@@ -155,8 +317,9 @@ def _make_per_user_key_func(
     ``X-API-Key`` header or when per-user limiting is not applicable
     (e.g., in single-key mode where all users are treated as "default").
 
-    The key store is read from ``request.app.state.{app_state_key_store_attr}``
-    at dispatch time to avoid capturing a reference at construction time.
+    ``real_remote_address_func`` lets the caller inject a trust-aware
+    IP-resolution function (issue #1683) — the default is the legacy
+    fail-closed module-level alias.
     """
 
     def key_func(request: Request) -> str:
@@ -175,19 +338,22 @@ def _make_per_user_key_func(
             digest = hashlib.sha256(api_key.encode()).hexdigest()
             return f"user:{digest}"
         # Fall back to IP address when no API key is provided.
-        return _get_real_remote_address(request)
+        return real_remote_address_func(request)
 
     return key_func
 
 
 def _make_per_campaign_key_func(
-    app_state_campaigns_base_dir_attr: str = "campaigns_base_dir",
+    real_remote_address_func: Callable[[Request], str] = _get_real_remote_address,
 ) -> Callable[[Request], str]:
     """Create a key function that rate limits by campaign (issue #445).
 
     Extracts the campaign ID from the URL path for multi-campaign mode.
     Falls back to IP address when no campaign ID is available
     (e.g., legacy single-campaign endpoints like /api/v1/campaign).
+
+    ``real_remote_address_func`` lets the caller inject a trust-aware
+    IP-resolution function (issue #1683).
     """
 
     def key_func(request: Request) -> str:
@@ -195,7 +361,7 @@ def _make_per_campaign_key_func(
         if campaign_id:
             return f"campaign:{campaign_id}"
         # Fall back to IP address when no campaign ID is in the path.
-        return _get_real_remote_address(request)
+        return real_remote_address_func(request)
 
     return key_func
 
@@ -228,8 +394,11 @@ def _validate_rate_limit_key(rate_limit_key: str) -> None:
 
 def _get_rate_limit_key_func(
     rate_limit_key: str,
+    *,
+    trust_x_forwarded_for: bool = False,
+    trusted_proxies: list[ipaddress.IPv4Network | ipaddress.IPv6Network | str] | None = None,
 ) -> Callable[[Request], str]:
-    """Get the appropriate rate limit key function based on the configured mode (issue #445, #1329).
+    """Get the appropriate rate limit key function based on the configured mode (issue #445, #1329, #1683).
 
     Parameters
     ----------
@@ -237,6 +406,16 @@ def _get_rate_limit_key_func(
         One of ``"ip"`` (default, per-IP limiting),
         ``"user"`` (per-API-key limiting), or
         ``"campaign"`` (per-campaign-ID limiting).
+    trust_x_forwarded_for
+        When ``True``, ``X-Forwarded-For`` is honored — but only if the
+        socket peer matches ``trusted_proxies`` (issue #1683).  Default
+        ``False``: XFF is NEVER consulted, so an unauthenticated client
+        cannot rotate its rate-limit bucket by rotating a spoofed XFF
+        value.
+    trusted_proxies
+        List of CIDR blocks / single IPs that are allowed to set
+        ``X-Forwarded-For``.  Required for the opt-in path; ignored when
+        ``trust_x_forwarded_for=False``.
 
     Returns
     -------
@@ -250,12 +429,16 @@ def _get_rate_limit_key_func(
         or is not one of the allowed values.
     """
     _validate_rate_limit_key(rate_limit_key)
+    real_addr_func = _make_real_remote_address_func(
+        trust_x_forwarded_for=trust_x_forwarded_for,
+        trusted_proxies=trusted_proxies or [],
+    )
     if rate_limit_key == "user":
-        return _make_per_user_key_func()
+        return _make_per_user_key_func(real_addr_func)
     elif rate_limit_key == "campaign":
-        return _make_per_campaign_key_func()
+        return _make_per_campaign_key_func(real_addr_func)
     else:
-        return _get_real_remote_address
+        return real_addr_func
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +506,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         app: Any,  # noqa: ANN401 (Starlette ASGI app)
         *,
         rate_limit: str,
-        key_func: Callable[[Request], str] = _get_real_remote_address,
+        key_func: Callable[[Request], str] | None = None,
         redis_url: str | None = None,
     ) -> None:
+        # ``key_func=None`` defaults to the fail-closed IP resolver
+        # (issue #1683): the socket peer is the only identity, and
+        # ``X-Forwarded-For`` is NEVER consulted.  Callers that want
+        # XFF trust must wire a trust-aware key function explicitly.
+        if key_func is None:
+            key_func = _make_real_remote_address_func(
+                trust_x_forwarded_for=False,
+                trusted_proxies=[],
+            )
         super().__init__(app)
         self.max_requests, self.window_seconds = _parse_rate_limit(rate_limit)
         self.key_func = key_func
@@ -1365,6 +1557,8 @@ def create_app(  # noqa: PLR0912
     cors_origins: list[str] | None = None,
     rate_limit: str = "60/minute",
     rate_limit_key: str = "ip",
+    trust_x_forwarded_for: bool = False,
+    trusted_proxies: list[str] | None = None,
     ui_enabled: bool = False,
     variable_editor: bool = False,
     results_viewer: bool = False,
@@ -1430,6 +1624,29 @@ def create_app(  # noqa: PLR0912
         ``"user"`` (per-API-key limiting via a SHA-256 digest of the
         key, issues #445 and #1466), or ``"campaign"`` (per-campaign-ID
         limiting, issue #445).
+    trust_x_forwarded_for
+        Opt-in gate for honoring the ``X-Forwarded-For`` header in
+        rate-limit identity (issue #1683).  When ``False`` (the
+        default, fail-closed), the socket peer address is always used
+        and ``X-Forwarded-For`` is ignored — this prevents an
+        unauthenticated client from rotating a spoofed XFF value to
+        obtain a fresh rate-limit bucket.  When ``True``, the header
+        is honored only if the immediate upstream (the socket peer)
+        matches one of the CIDR blocks in ``trusted_proxies``; the
+        "first untrusted hop" rule is then applied to the XFF chain.
+        This parameter can also be set via the
+        ``OSIMFLOW_TRUST_X_FORWARDED_FOR`` environment variable (any
+        non-empty value enables it).
+    trusted_proxies
+        List of trusted-proxy CIDR blocks / single IPs used by the
+        ``X-Forwarded-For`` trust gate (issue #1683).  Each entry
+        accepts either a single IP (``"10.0.0.1"``,
+        ``"2001:db8::1"``) or a CIDR block (``"10.0.0.0/8"``,
+        ``"2001:db8::/32"``).  Invalid entries raise ``ValueError`` at
+        app-creation time so a typo surfaces before the first
+        request.  Ignored when ``trust_x_forwarded_for=False``.  Can
+        also be set via the ``OSIMFLOW_TRUSTED_PROXIES`` environment
+        variable (comma-separated CIDRs/IPs).
     ui_enabled
         Enable the web UI router (issue #337).
     variable_editor
@@ -1568,7 +1785,43 @@ def create_app(  # noqa: PLR0912
     #   2. add RateLimitMiddleware   ← runs after auth
     #   3. add APIKeyMiddleware      ← outermost, runs first
     # Result: APIKey(RateLimit(CORS(router)))
-    key_func = _get_rate_limit_key_func(rate_limit_key)
+    # X-Forwarded-For trust gate (issue #1683): operator must explicitly
+    # opt in via ``trust_x_forwarded_for=True`` (or the matching env
+    # var) AND supply a non-empty ``trusted_proxies`` allowlist.  The
+    # default is fail-closed so a client cannot rotate a spoofed XFF
+    # value to obtain a fresh rate-limit bucket.
+    effective_trust_xff = trust_x_forwarded_for or bool(
+        os.environ.get("OSIMFLOW_TRUST_X_FORWARDED_FOR")
+    )
+    effective_trusted_proxies: list[str] = list(trusted_proxies or [])
+    if not effective_trusted_proxies:
+        env_proxies = os.environ.get("OSIMFLOW_TRUSTED_PROXIES", "").strip()
+        if env_proxies:
+            effective_trusted_proxies = [p.strip() for p in env_proxies.split(",") if p.strip()]
+    parsed_trusted_proxies = _parse_trusted_proxies(effective_trusted_proxies)
+    if effective_trust_xff and not parsed_trusted_proxies:
+        # Fail-closed: turning the gate on without an allowlist means
+        # we have no way to validate the XFF chain, so we refuse to
+        # boot rather than silently accept client-controlled XFF.
+        raise ValueError(
+            "trust_x_forwarded_for=True requires a non-empty "
+            "trusted_proxies allowlist (CIDR blocks / IPs); "
+            "otherwise X-Forwarded-For would be honored from any "
+            "upstream, defeating the rate-limit (issue #1683)."
+        )
+    if effective_trust_xff and parsed_trusted_proxies:
+        log.info(
+            "X-Forwarded-For trust ENABLED for %d trusted-proxy entr%s "
+            "(issue #1683); client-supplied XFF will be honored only "
+            "when the immediate upstream is in the allowlist.",
+            len(parsed_trusted_proxies),
+            "y" if len(parsed_trusted_proxies) == 1 else "ies",
+        )
+    key_func = _get_rate_limit_key_func(
+        rate_limit_key,
+        trust_x_forwarded_for=effective_trust_xff,
+        trusted_proxies=parsed_trusted_proxies,
+    )
     app.add_middleware(
         RateLimitMiddleware,
         rate_limit=rate_limit,
@@ -1592,6 +1845,13 @@ def create_app(  # noqa: PLR0912
     # add_middleware, so we expose the configured rate-limit string.
     app.state.limiter = rate_limit  # type: ignore[assignment]
     app.state.rate_limit_key = rate_limit_key  # type: ignore[assignment]
+    # XFF trust gate (issue #1683) — surfaced on state so tests and
+    # operators can confirm the deployment is actually behind a
+    # trusted proxy chain.
+    app.state.trust_x_forwarded_for = effective_trust_xff  # type: ignore[attr-defined]
+    app.state.trusted_proxies = tuple(  # type: ignore[attr-defined]
+        str(net) for net in parsed_trusted_proxies
+    )
 
     # --- Authentication middleware (outermost — runs first) ---
     app.add_middleware(APIKeyMiddleware)

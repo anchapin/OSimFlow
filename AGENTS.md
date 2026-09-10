@@ -314,7 +314,18 @@ physically live in their executor's config module, not in
   `--allow-insecure-api-keys-file`,
   `--api-key`, `--api-keys-file`, `--api-redis-url`, `--cors-origins`,
   `--dashboard`, `--editor`, `--enable-writes`, `--host`, `--port`,
-  `--rate-limit`, `--rate-limit-key`, `--read-only`,
+  `--rate-limit`, `--rate-limit-key`,
+  `--rate-limit-trust-x-forwarded-for` (issue #1683 — opt-in
+  trust gate that honors ``X-Forwarded-For`` only when the immediate
+  upstream is in ``--trusted-proxies``; defaults off so a client
+  cannot rotate a spoofed XFF value to obtain a fresh rate-limit
+  bucket),
+  `--trusted-proxies` (issue #1683 — comma-separated list of
+  trusted-proxy CIDR blocks / IPs / hostnames used by the XFF
+  trust gate; required whenever
+  ``--rate-limit-trust-x-forwarded-for`` is set, otherwise the
+  API refuses to start fail-closed),
+  `--read-only`,
   `--read-write`, `--registry`, `--tls-cert`, `--tls-key`, `--ui`;
   `export` — `--algorithm`, `--format`, `--limit`, `--n_samples`,
   `--openstudio_version`, `--outdir`, `--target`;
