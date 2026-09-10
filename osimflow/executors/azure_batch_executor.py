@@ -60,7 +60,11 @@ from osimflow.executors.transport import (
     ResultTransportConfig,
     resolve_and_materialize,
 )
-from osimflow.task_payload_hmac import build_signature_env, build_transport_signature_env
+from osimflow.task_payload_hmac import (
+    TASK_PAYLOAD_SECRET_ENV,
+    build_signature_env,
+    build_transport_signature_env,
+)
 
 log = logging.getLogger("osimflow.executors.azure_batch")
 
@@ -448,7 +452,7 @@ class AzureBatchExecutor(BaseExecutor):
 
     signs_task_payload = True
 
-    def _build_environment(
+    def _build_environment(  # noqa: PLR0912 — env assembly branches by substrate knob
         self,
         *,
         container: str | None,
@@ -464,6 +468,13 @@ class AzureBatchExecutor(BaseExecutor):
         object storage (issue #996). ``OSIMFLOW_STUB_SIM`` is propagated
         from the orchestrator environment when set so remote pods honour
         the orchestrator's stub-vs-real CLI choice.
+
+        Issue #1682: when ``OSIMFLOW_TASK_PAYLOAD_SECRET`` is set in the
+        orchestrator environment the raw secret ships as a literal task
+        environment setting (Azure Batch exposes no task-level
+        secret-injection channel) — emits the same SECURITY warning as
+        AWS / Google / K8s / Nomad / Swarm to drive operators toward the
+        pool-level managed-identity + Key Vault pattern.
         """
         env: list[dict[str, str]] = []
         if openstudio_version is not None:
@@ -511,6 +522,34 @@ class AzureBatchExecutor(BaseExecutor):
             env.append({"name": "OSIMFLOW_TASK_PAYLOAD", "value": task_payload})
             # Issue #1281: verify BYOS contract version compatibility.
             env.append({"name": "OSIMFLOW_CONTRACT_VERSION", "value": BYOS_CONTRACT_VERSION})
+            # Issue #1682: Azure Batch has no task-level secret-injection
+            # channel (the ``payload_secret_id`` branch above raises
+            # ``ValueError`` for exactly this reason — verified against
+            # azure-batch 15.x ``EnvironmentSetting`` which exposes only
+            # ``{name, value}``), so the literal default mode embeds the
+            # raw HMAC secret directly in the task environment, where it
+            # is readable via ``az batch task show`` and persisted in
+            # job history — collapsing the HMAC to a no-op against the
+            # exact threat (#1177/#1205) it was built for. The other
+            # five substrates (AWS / Google / K8s / Nomad / Swarm) ship
+            # the same ``SECURITY (issue #1633)`` warning; Azure was the
+            # gap closed by #1682. The supported production migration is
+            # the pool-level managed-identity + Key Vault pattern
+            # documented in ``docs/secret-management.md``.
+            if TASK_PAYLOAD_SECRET_ENV in os.environ:
+                log.warning(
+                    "SECURITY (issue #1682): %s is shipping as a literal "
+                    "env value on the Batch task because Azure Batch has "
+                    "no task-level secret-injection channel "
+                    "(azure-batch 15.x EnvironmentSetting exposes only "
+                    "{name, value}, and --azure-batch-payload-secret-id "
+                    "is refused for exactly that reason). Anyone with "
+                    "Batch task-read can read the secret and forge "
+                    "task-payload signatures. Migrate to the pool-level "
+                    "managed-identity + Key Vault pattern documented in "
+                    "docs/secret-management.md (issue #1633).",
+                    TASK_PAYLOAD_SECRET_ENV,
+                )
             # Issue #1177/#1384: when a shared secret is configured, sign the
             # exact payload bytes and propagate secret + signature so the
             # remote_runner verifies before decoding/executing. No-op in
