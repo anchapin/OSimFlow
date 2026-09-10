@@ -189,6 +189,8 @@ SERVE_INLINE_DESTS: frozenset[str] = frozenset(
         "cors_origins",
         "rate_limit",
         "rate_limit_key",
+        "rate_limit_trust_x_forwarded_for",
+        "trusted_proxies",
         "tls_cert",
         "tls_key",
         "read_only",
