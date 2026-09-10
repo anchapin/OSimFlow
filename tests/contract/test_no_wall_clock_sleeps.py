@@ -90,6 +90,14 @@ _EXEMPT_MAX_CALLS: dict[str, int] = {
     # the stub parked (and is interrupted by the kill), not asserting on
     # elapsed wall-clock.
     "tests/unit/test_executor_cancel.py": 3,
+    # 3 deadline-bounded condition-poll loops from issue #1756: the
+    # alerting dispatcher tests park the worker inside a destination
+    # gate, then poll ``dest.received`` (the externally observable list
+    # of dequeued alerts) inside a ``time.monotonic()`` deadline loop —
+    # the test fails on timeout, not on an elapsed-time assumption, and
+    # the dispatcher's per-call observable has no synchronizable hook
+    # without restructuring osimflow.alerting internals.
+    "tests/unit/test_alerting.py": 3,
 }
 
 # Per-file budget of allowed sub-second wall-clock upper-bound assertions
