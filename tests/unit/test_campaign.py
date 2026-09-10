@@ -215,6 +215,39 @@ class TestCampaignInit:
         assert campaign.cache is not None
         assert cfg.cache_db.exists()
 
+    def test_assigns_document_store_for_breaker_wiring(
+        self, variables_yml: Path, template_pkg: Path, outdir: Path
+    ) -> None:
+        """Issue #1769 — ``self._document_store`` MUST be assigned in __init__.
+
+        Before the fix, ``_wire_circuit_breaker_callbacks`` did
+        ``getattr(self, "_document_store", None)`` and always saw
+        ``None`` because ``__init__`` never assigned the attribute.
+        The RedisDocumentStore breaker events were silently dropped
+        from run.json and ``_document_store``'s close() was never
+        called by the campaign lifecycle.
+
+        After the fix, ``self._document_store`` is a concrete
+        ``DocumentStore`` instance (SQLiteDocumentStore in
+        single-node mode, RedisDocumentStore when ``--redis-url``
+        is set), so:
+
+        * the breaker wire-up inside ``_wire_circuit_breaker_callbacks``
+          actually fires,
+        * ``DocumentStore.close()`` is reachable through ``self._document_store``
+          in teardown.
+        """
+        from osimflow.document_store import DocumentStore
+
+        cfg = _cfg(variables_yml, template_pkg, outdir)
+        campaign = Campaign(cfg=cfg, executor=MockExecutor())
+        assert hasattr(campaign, "_document_store"), (
+            "Campaign.__init__ must assign self._document_store so the "
+            "RedisDocumentStore breaker wire-up actually fires (issue #1769)."
+        )
+        assert isinstance(campaign._document_store, DocumentStore)
+        assert campaign._document_store is not None
+
     def test_creates_trace(self, variables_yml: Path, template_pkg: Path, outdir: Path) -> None:
         cfg = _cfg(variables_yml, template_pkg, outdir)
         campaign = Campaign(cfg=cfg, executor=MockExecutor())
