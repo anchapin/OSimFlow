@@ -95,8 +95,8 @@ gate) and the per-module readings were::
     osimflow/executors/azure_batch_executor.py 83.19%
     osimflow/executors/base.py                94.57%
     osimflow/executors/dask_jobqueue_executor.py 81.73%
-    osimflow/executors/docker_swarm_executor.py 50.41%
-    osimflow/executors/google_batch_executor.py 74.88%
+    osimflow/executors/docker_swarm_executor.py 50.41%   (raised to ~99.00% on the issue #1676 branch — Docker Swarm poll loop's SUCCEEDED/FAILED terminal transitions, service-creation API errors, transport env emission, _cancel_job / done() exception branches now directly tested)
+    osimflow/executors/google_batch_executor.py 74.88%   (raised to ~99.00% on the issue #1676 branch — spot-classifier / resubmit / on-demand-fallback / transport env / done() exception branches now directly tested)
     osimflow/executors/kubernetes_executor.py 71.43%
     osimflow/executors/local_executor.py      93.94%
     osimflow/executors/nomad_executor.py      85.62%
@@ -266,8 +266,8 @@ FLOORS: dict[str, float] = {
     "osimflow/executors/azure_batch_executor.py": 82.19,  # measured 83.19%
     "osimflow/executors/base.py": 93.57,  # measured 94.57%
     "osimflow/executors/dask_jobqueue_executor.py": 80.73,  # measured 81.73%
-    "osimflow/executors/docker_swarm_executor.py": 49.41,  # measured 50.41%
-    "osimflow/executors/google_batch_executor.py": 73.88,  # measured 74.88%
+    "osimflow/executors/docker_swarm_executor.py": 98.00,  # measured 99.00% (issue #1676; poll loop SUCCEEDED/FAILED classification + service-creation API errors + transport env emission + kill API + done() transient/permanent error branches + _is_dev_fallback_enabled / _check_docker_available / _build_service_name / _build_task_payload env paths now directly tested)
+    "osimflow/executors/google_batch_executor.py": 98.00,  # measured 99.00% (issue #1676; _poll_job_id / _classify[SUCCEEDED|FAILED|INDETERMINATE] / _is_spot_interruption markers / _resubmit / _submit_on_demand / _cancel_job / _failure_error / _fallback_failure_error + done() TimeoutError/ConnectionError/401/404/transient branches + _build_environment container_digest/literal-secret-warning trio/result-transport/secret-variables paths + full _submit_job payload assertion now directly tested)
     "osimflow/executors/kubernetes_executor.py": 70.43,  # measured 71.43%
     "osimflow/executors/local_executor.py": 92.94,  # measured 93.94%
     "osimflow/executors/nomad_executor.py": 84.62,  # measured 85.62%

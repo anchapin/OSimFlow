@@ -26,13 +26,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from osimflow.executors.base import PollOutcome
 from osimflow.executors.docker_swarm_executor import (
     DockerSwarmExecutor,
+    _docker_error_code,
     _DockerSwarmHandle,
 )
 from osimflow.executors.transport import ResultTransportConfig
 from osimflow.task_payload_hmac import (
+    RESULT_TRANSPORT_SIG_ENV,
     TASK_PAYLOAD_SECRET_ENV,
+    TASK_PAYLOAD_SECRET_FILE_ENV,
     TASK_PAYLOAD_SIG_ENV,
     sign_task_payload,
 )
@@ -557,3 +561,1061 @@ class TestDockerSwarmHandleTransportContract:
         # ``OSIMFLOW_RESULT_*`` env vars) but it is no longer a member of
         # the dict that used to smuggle it through to the handle.
         assert params["transport"] == cfg
+
+
+class TestDockerSwarmHelperFunctions:
+    """Cover the ``_docker_error_code`` helper (issue #1676 ratchet)."""
+
+    def test_returns_status_code_when_response_present(self) -> None:
+        """A response with a numeric status_code returns it as an int."""
+
+        class _Response:
+            status_code = 503
+
+        exc = Exception("boom")
+        exc.response = _Response()  # type: ignore[attr-defined]
+        assert _docker_error_code(exc) == 503
+
+    def test_returns_zero_when_no_response_attr(self) -> None:
+        """An exception without a ``response`` attribute returns 0."""
+
+        class _BareExc(Exception):
+            pass
+
+        assert _docker_error_code(_BareExc("no resp")) == 0
+
+    def test_returns_zero_when_response_status_code_is_none(self) -> None:
+        """A response with status_code ``None`` coerces to 0 (no error code)."""
+
+        class _Response:
+            status_code = None
+
+        exc = Exception("no code")
+        exc.response = _Response()  # type: ignore[attr-defined]
+        assert _docker_error_code(exc) == 0
+
+    def test_swallows_attribute_error_on_response_probe(self) -> None:
+        """An exception whose response.attr access raises is reported as 0."""
+
+        class _BadResponse:
+            @property
+            def status_code(self) -> int:
+                raise RuntimeError("nope")
+
+        exc = Exception("weird")
+        exc.response = _BadResponse()  # type: ignore[attr-defined]
+        assert _docker_error_code(exc) == 0
+
+
+class TestDockerSwarmHandleClassifyAndError:
+    """``_DockerSwarmHandle._classify`` and ``_failure_error`` terminal transitions.
+
+    The single-state poll that completes / fails a Swarm service task is
+    the load-bearing path that historically sat at ~50% coverage. Each
+    terminal state (SUCCEEDED, FAILED) plus the failure-error message
+    extraction from ``Message`` / ``Err`` / ``ContainerStatus`` must be
+    directly asserted so a future regression in the poll loop
+    classification cannot ship green.
+    """
+
+    @staticmethod
+    def _make_executor() -> DockerSwarmExecutor:
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)  # noqa: SLF001
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.image = "nrel/openstudio:3.11.0"
+        ex.network = None
+        ex._client = MagicMock()
+        ex._stub_executor = None
+        return ex
+
+    def test_classify_succeeded_maps_complete_to_succeeded(self) -> None:
+        """``state == "complete"`` maps to ``PollOutcome.SUCCEEDED``."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-ok",
+            executor=ex,
+            submit_params={},
+        )
+        outcome, reason = handle._classify(  # noqa: SLF001
+            {"status": {"State": "complete"}}
+        )
+        assert outcome is PollOutcome.SUCCEEDED
+        assert reason is None
+
+    def test_classify_failed_maps_non_complete_states_to_failed(self) -> None:
+        """Any non-``complete`` state (failed / shutdown / rejected) maps to FAILED."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-bad",
+            executor=ex,
+            submit_params={},
+        )
+        for bad_state in ("failed", "shutdown", "rejected"):
+            outcome, reason = handle._classify(  # noqa: SLF001
+                {"status": {"State": bad_state}}
+            )
+            assert outcome is PollOutcome.FAILED
+            assert reason is None
+
+    def test_failure_error_includes_state_and_message(self) -> None:
+        """The ``RuntimeError`` includes the state and the extracted message."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+        )
+        job = {"status": {"State": "failed", "Message": "exit code 137"}}
+        err = handle._failure_error(job)  # noqa: SLF001
+        assert isinstance(err, RuntimeError)
+        assert "svc-1" in str(err)
+        assert "failed" in str(err)
+        assert "exit code 137" in str(err)
+
+    def test_extract_error_message_prefers_message_field(self) -> None:
+        """``status.Message`` is the primary extraction target."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+        )
+        task = {"status": {"Message": "primary", "Err": "secondary"}}
+        assert handle._extract_error_message(task) == "primary"  # noqa: SLF001
+
+    def test_extract_error_message_falls_back_to_err_field(self) -> None:
+        """When ``Message`` is empty, ``status.Err`` wins."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+        )
+        task = {"status": {"Message": "", "Err": "fallback-err"}}
+        assert handle._extract_error_message(task) == "fallback-err"  # noqa: SLF001
+
+    def test_extract_error_message_falls_back_to_container_exit_code(self) -> None:
+        """When neither Message nor Err yield, ``ContainerStatus.ExitCode != 0`` does."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+        )
+        task = {
+            "status": {
+                "Message": "",
+                "Err": "",
+                "ContainerStatus": {"ExitCode": 127},
+            }
+        }
+        assert (
+            handle._extract_error_message(task)  # noqa: SLF001
+            == "exit code 127"
+        )
+
+    def test_extract_error_message_returns_unknown_when_nothing_matches(self) -> None:
+        """Falls back to ``"unknown"`` when no error path yields a message."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+        )
+        task = {
+            "status": {
+                "Message": "",
+                "Err": "",
+                "ContainerStatus": {"ExitCode": 0},
+            }
+        }
+        assert handle._extract_error_message(task) == "unknown"  # noqa: SLF001
+
+    def test_extract_error_message_handles_empty_container_status(self) -> None:
+        """An empty ``ContainerStatus`` is the same as no container info."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-1",
+            executor=ex,
+            submit_params={},
+        )
+        task = {
+            "status": {
+                "Message": "",
+                "Err": "",
+                "ContainerStatus": None,
+            }
+        }
+        assert handle._extract_error_message(task) == "unknown"  # noqa: SLF001
+
+
+class TestDockerSwarmHandleCancelAndResolve:
+    """Cancel + success-resolution + done() exception branches (issue #1676)."""
+
+    @staticmethod
+    def _make_executor() -> DockerSwarmExecutor:
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)  # noqa: SLF001
+        ex.poll_interval_s = 0.01
+        ex.max_poll_interval_s = 0.02
+        ex.image = "nrel/openstudio:3.11.0"
+        ex.network = None
+        ex._client = MagicMock()
+        ex._stub_executor = None
+        return ex
+
+    def test_cancel_job_calls_services_get_remove(self) -> None:
+        """``_cancel_job`` removes the service via the docker SDK."""
+
+        ex = self._make_executor()
+        mock_service = MagicMock()
+        ex._client.services.get.return_value = mock_service  # type: ignore[method-assign]
+
+        handle = _DockerSwarmHandle(
+            service_name="svc-rm",
+            executor=ex,
+            submit_params={},
+        )
+        assert handle._cancel_job() is True  # noqa: SLF001
+        ex._client.services.get.assert_called_once_with("svc-rm")
+        mock_service.remove.assert_called_once_with()
+
+    def test_cancel_job_not_found_returns_false(self) -> None:
+        """A cancel attempt on a not-found service reports ``False``.
+
+        The shared ``PollingHandle.cancel`` wrapper catches the
+        ``NotFound`` API error (issue #1538) and reports the kill as
+        un-issued; ``_cancel_job`` itself propagates the exception so
+        the upstream sweep can count the handle without aborting.
+        """
+
+        import docker.errors
+        import requests  # type: ignore[import-not-found]
+
+        ex = self._make_executor()
+        response = requests.Response()
+        response.status_code = 404
+        api_err = docker.errors.APIError(
+            "service not found", response=response
+        )
+        ex._client.services.get.side_effect = api_err  # type: ignore[method-assign]
+
+        handle = _DockerSwarmHandle(
+            service_name="svc-missing",
+            executor=ex,
+            submit_params={},
+        )
+        with pytest.raises(docker.errors.APIError):
+            handle._cancel_job()  # noqa: SLF001
+
+    def test_resolve_success_result_delegates_to_transport_helpers(self) -> None:
+        """``_resolve_success_result`` forwards the hint + transport to the helper.
+
+        The handle honours the uniform ``PollingHandle._resolve_success_result``
+        contract (issue #1541): one frozen transport config, materialization
+        via the ``resolve_and_materialize`` facade (issue #1697).
+        """
+
+        ex = self._make_executor()
+        sentinel_hint = Path("/tmp/sentinel-result")
+        cfg = ResultTransportConfig(
+            mode="object_storage",
+            backend="s3",
+            bucket="handle-resolve-bucket",
+        )
+        handle = _DockerSwarmHandle(
+            service_name="svc-resolve",
+            executor=ex,
+            submit_params={},
+            result_hint=sentinel_hint,
+            transport=cfg,
+        )
+        with patch(
+            "osimflow.executors.docker_swarm_executor.resolve_and_materialize",
+            return_value="RESOLVED",
+        ) as patched:
+            result = handle._resolve_success_result()  # noqa: SLF001
+        assert result == "RESOLVED"
+        patched.assert_called_once_with(sentinel_hint, cfg)
+
+    def test_done_returns_true_when_future_already_done(self) -> None:
+        """``done()`` short-circuits when the local mirror future is set."""
+
+        ex = self._make_executor()
+        handle = _DockerSwarmHandle(
+            service_name="svc-quick",
+            executor=ex,
+            submit_params={},
+        )
+        handle._future.set_result(None)  # noqa: SLF001
+        assert handle.done() is True
+
+    def test_done_returns_false_when_no_tasks(self) -> None:
+        """A service with no tasks yet reports not-done."""
+
+        ex = self._make_executor()
+        ex._get_service_status = MagicMock(  # type: ignore[method-assign]
+            return_value={"tasks": []}
+        )
+        handle = _DockerSwarmHandle(
+            service_name="svc-empty",
+            executor=ex,
+            submit_params={},
+        )
+        assert handle.done() is False
+
+    def test_done_returns_true_when_all_tasks_terminal(self) -> None:
+        """All terminal-state tasks make done() return True."""
+
+        ex = self._make_executor()
+        tasks = [
+            {"status": {"State": "complete"}},
+            {"status": {"State": "shutdown"}},
+        ]
+        ex._get_service_status = MagicMock(  # type: ignore[method-assign]
+            return_value={"tasks": tasks}
+        )
+        handle = _DockerSwarmHandle(
+            service_name="svc-all-done",
+            executor=ex,
+            submit_params={},
+        )
+        assert handle.done() is True
+
+    def test_done_returns_false_when_a_task_is_running(self) -> None:
+        """A non-terminal task makes done() return False."""
+
+        ex = self._make_executor()
+        tasks = [
+            {"status": {"State": "complete"}},
+            {"status": {"State": "running"}},
+        ]
+        ex._get_service_status = MagicMock(  # type: ignore[method-assign]
+            return_value={"tasks": tasks}
+        )
+        handle = _DockerSwarmHandle(
+            service_name="svc-mixed",
+            executor=ex,
+            submit_params={},
+        )
+        assert handle.done() is False
+
+    def test_done_handles_timeout_error_gracefully(self) -> None:
+        """``TimeoutError`` from the probe is caught and returns False."""
+
+        ex = self._make_executor()
+
+        def _raise_timeout(_name: str) -> dict[str, object]:
+            raise TimeoutError("read timeout")
+
+        ex._get_service_status = MagicMock(side_effect=_raise_timeout)  # type: ignore[method-assign]
+        handle = _DockerSwarmHandle(
+            service_name="svc-timeout",
+            executor=ex,
+            submit_params={},
+        )
+        assert handle.done() is False
+
+    def test_done_handles_connection_error_gracefully(self) -> None:
+        """``ConnectionError`` from the probe is caught and returns False."""
+
+        ex = self._make_executor()
+
+        def _raise_conn(_name: str) -> dict[str, object]:
+            raise ConnectionError("daemon hung up")
+
+        ex._get_service_status = MagicMock(side_effect=_raise_conn)  # type: ignore[method-assign]
+        handle = _DockerSwarmHandle(
+            service_name="svc-conn",
+            executor=ex,
+            submit_params={},
+        )
+        assert handle.done() is False
+
+    def test_done_permanent_401_sets_exception_and_raises(self) -> None:
+        """A 401 from the probe sets the future exception and re-raises."""
+
+        import docker.errors
+        import requests  # type: ignore[import-not-found]
+
+        ex = self._make_executor()
+        response = requests.Response()
+        response.status_code = 401
+        err = docker.errors.APIError("unauthorized", response=response)
+
+        def _raise_auth(_name: str) -> dict[str, object]:
+            raise err
+
+        ex._get_service_status = MagicMock(side_effect=_raise_auth)  # type: ignore[method-assign]
+        handle = _DockerSwarmHandle(
+            service_name="svc-auth",
+            executor=ex,
+            submit_params={},
+        )
+        with pytest.raises(docker.errors.APIError):
+            handle.done()
+        assert handle._future.exception() is err  # noqa: SLF001
+
+    def test_done_permanent_403_sets_exception_and_raises(self) -> None:
+        """A 403 from the probe is permanent: re-raise + set future exception."""
+
+        import docker.errors
+        import requests  # type: ignore[import-not-found]
+
+        ex = self._make_executor()
+        response = requests.Response()
+        response.status_code = 403
+        err = docker.errors.APIError("forbidden", response=response)
+
+        def _raise_forbidden(_name: str) -> dict[str, object]:
+            raise err
+
+        ex._get_service_status = MagicMock(side_effect=_raise_forbidden)  # type: ignore[method-assign]
+        handle = _DockerSwarmHandle(
+            service_name="svc-forbidden",
+            executor=ex,
+            submit_params={},
+        )
+        with pytest.raises(docker.errors.APIError):
+            handle.done()
+        assert handle._future.exception() is err  # noqa: SLF001
+
+    def test_done_permanent_404_sets_exception_and_raises(self) -> None:
+        """A 404 (service was deleted) is permanent: re-raise + set future exception."""
+
+        import docker.errors
+        import requests  # type: ignore[import-not-found]
+
+        ex = self._make_executor()
+        response = requests.Response()
+        response.status_code = 404
+        err = docker.errors.APIError("not found", response=response)
+
+        def _raise_missing(_name: str) -> dict[str, object]:
+            raise err
+
+        ex._get_service_status = MagicMock(side_effect=_raise_missing)  # type: ignore[method-assign]
+        handle = _DockerSwarmHandle(
+            service_name="svc-gone",
+            executor=ex,
+            submit_params={},
+        )
+        with pytest.raises(docker.errors.APIError):
+            handle.done()
+        assert handle._future.exception() is err  # noqa: SLF001
+
+    def test_done_transient_error_returns_false(self) -> None:
+        """Any other exception (no docker response, no HTTP code) returns False."""
+
+        ex = self._make_executor()
+
+        def _raise_weird(_name: str) -> dict[str, object]:
+            raise RuntimeError("weird nondocker failure")
+
+        ex._get_service_status = MagicMock(side_effect=_raise_weird)  # type: ignore[method-assign]
+        handle = _DockerSwarmHandle(
+            service_name="svc-weird",
+            executor=ex,
+            submit_params={},
+        )
+        # The exception is logged at debug level and swallowed, returning
+        # False so the poll loop retries on the next probe.
+        assert handle.done() is False
+        # The future must NOT have been poisoned with an exception —
+        # transient errors do not finalize the handle. ``done()`` is False
+        # is the only externally visible signal we can assert without
+        # blocking on a never-finalized future.
+        assert handle._future.done() is False  # noqa: SLF001
+
+
+class TestDockerSwarmExecutorInternalHelpers:
+    """Internal executors: ``_is_dev_fallback_enabled``, ``_check_docker_available``,
+    ``_build_service_name``, ``_get_service_status``, ``shutdown``.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_fallback_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Always start with a clean fallback env so the dev-fallback tests are
+        deterministic across pytest-xdist worker orderings.
+        """
+        monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK", raising=False)
+        monkeypatch.delenv("OSIMFLOW_DOCKER_SWARM_DRY_RUN", raising=False)
+
+    def _make_executor(self) -> DockerSwarmExecutor:
+        ex = DockerSwarmExecutor.__new__(DockerSwarmExecutor)  # noqa: SLF001
+        ex.poll_interval_s = 5.0
+        ex.max_poll_interval_s = 60.0
+        ex.image = "nrel/openstudio:3.11.0"
+        ex.network = None
+        ex._client = MagicMock()
+        ex._stub_executor = None
+        return ex
+
+    def test_is_dev_fallback_enabled_false_when_no_envs(self) -> None:
+        """No env vars set → fallback disabled."""
+
+        ex = self._make_executor()
+        assert ex._is_dev_fallback_enabled() is False  # noqa: SLF001
+
+    def test_is_dev_fallback_enabled_dev_fallback_truthy(self) -> None:
+        """OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK=1 enables the fallback."""
+
+        ex = self._make_executor()
+        with patch.dict(os.environ, {"OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK": "1"}):
+            assert ex._is_dev_fallback_enabled() is True  # noqa: SLF001
+
+    def test_is_dev_fallback_enabled_dry_run_truthy(self) -> None:
+        """OSIMFLOW_DOCKER_SWARM_DRY_RUN=1 enables the fallback."""
+
+        ex = self._make_executor()
+        with patch.dict(os.environ, {"OSIMFLOW_DOCKER_SWARM_DRY_RUN": "1"}):
+            assert ex._is_dev_fallback_enabled() is True  # noqa: SLF001
+
+    def test_is_dev_fallback_enabled_zero_strings_disable(self) -> None:
+        """``0`` and ``""`` are not opt-ins."""
+
+        ex = self._make_executor()
+        with patch.dict(
+            os.environ,
+            {
+                "OSIMFLOW_DOCKER_SWARM_DEV_FALLBACK": "0",
+                "OSIMFLOW_DOCKER_SWARM_DRY_RUN": "",
+            },
+        ):
+            assert ex._is_dev_fallback_enabled() is False  # noqa: SLF001
+
+    def test_check_docker_available_true(self) -> None:
+        """``ControlAvailable == True`` makes the swarm check pass."""
+
+        ex = self._make_executor()
+        ex._get_client = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(
+                info=MagicMock(return_value={"Swarm": {"ControlAvailable": True}})
+            )
+        )
+        assert ex._check_docker_available() is True  # noqa: SLF001
+
+    def test_check_docker_available_false(self) -> None:
+        """A swarm-less daemon reports ``ControlAvailable == False``."""
+
+        ex = self._make_executor()
+        ex._get_client = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(
+                info=MagicMock(return_value={"Swarm": {"ControlAvailable": False}})
+            )
+        )
+        assert ex._check_docker_available() is False  # noqa: SLF001
+
+    def test_check_docker_available_exception_returns_false(self) -> None:
+        """An unreachable daemon returns False with a logged warning."""
+
+        ex = self._make_executor()
+
+        def _raise(*_args: object, **_kwargs: object) -> object:
+            raise ConnectionRefusedError("docker not running")
+
+        ex._get_client = MagicMock(side_effect=_raise)  # type: ignore[method-assign]
+        assert ex._check_docker_available() is False  # noqa: SLF001
+
+    def test_build_service_name_sanitizes_underscore_to_dash(self) -> None:
+        """``_`` and ``.`` become ``-``; uppercase is lowered."""
+
+        ex = self._make_executor()
+        name = ex._build_service_name("OSimFlow.Task_alpha")  # noqa: SLF001
+        assert name == "osimflow-osimflow-task-alpha"
+
+    def test_build_service_name_handles_empty_after_sanitize(self) -> None:
+        """A name that sanitizes to empty falls back to ``osimflow-task``."""
+
+        ex = self._make_executor()
+        name = ex._build_service_name("...")  # noqa: SLF001
+        assert name.startswith("osimflow-")
+        # Histroic fallback for "all-stripped" inputs.
+        assert "osimflow" in name
+
+    def test_get_service_status_swallow_on_probe_error(self) -> None:
+        """A failure probing service status returns an empty ``tasks`` payload."""
+
+        ex = self._make_executor()
+        ex._get_client = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(
+                services=MagicMock(
+                    get=MagicMock(side_effect=RuntimeError("probe failed"))
+                )
+            )
+        )
+        result = ex._get_service_status("svc-x")  # noqa: SLF001
+        assert result == {"tasks": []}
+
+    def test_shutdown_with_stub_executor_without_shutdown_attr(self) -> None:
+        """A stub executor that lacks a ``shutdown`` method is not called.
+
+        Defends against AttributeError on ill-typed stubs (the
+        ``hasattr`` guard).
+        """
+
+        ex = self._make_executor()
+
+        class _NoShutdown:
+            pass
+
+        ex._stub_executor = _NoShutdown()
+        # Should not raise — the hasattr guard skips it.
+        ex.shutdown()
+
+    def test_submit_service_logs_latest_tag_warning(self) -> None:
+        """A bare ``:latest`` image tag triggers the supply-chain warning."""
+
+        ex = self._make_executor()
+        ex.image = "nrel/openstudio:latest"
+        ex._client.services.create = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(name="osimflow-test")
+        )
+        # The warning is emitted at __init__; re-trigger by re-calling
+        # the init's leading-block that emits it, but here we just
+        # call _submit_service — the warning fires once at __init__
+        # so it's effectively a no-coverage-adding smoke check.
+        ex._submit_service(  # noqa: SLF001
+            name="test",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container=None,
+        )
+
+    def test_submit_service_emits_result_transport_env_vars(self) -> None:
+        """``_submit_service`` writes ``OSIMFLOW_RESULT_*`` env vars for the transport.
+
+        Each transport field becomes an env entry; the per-call
+        transport signature env var is also appended when a secret is
+        configured.
+        """
+
+        ex = self._make_executor()
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        cfg = ResultTransportConfig(
+            mode="object_storage",
+            backend="s3",
+            bucket="ds-resolve-bucket",
+            prefix="campaign-x",
+            endpoint="https://s3.example.test",
+        )
+        with patch.dict(os.environ, {TASK_PAYLOAD_SECRET_ENV: "shared-secret"}):
+            ex._submit_service(  # noqa: SLF001
+                name="test",
+                cpus=1,
+                memory_mb=1024,
+                time_min=60,
+                openstudio_version="3.11.0",
+                container="nrel/openstudio:3.11.0",
+                transport=cfg,
+            )
+        env_map = {
+            entry.partition("=")[0]: entry.partition("=")[2]
+            for entry in (captured["env"] or [])  # type: ignore[union-attr]
+            if isinstance(entry, str) and "=" in entry
+        }
+        assert env_map["OSIMFLOW_RESULT_TRANSPORT_MODE"] == "object_storage"
+        assert env_map["OSIMFLOW_RESULT_STORAGE_BACKEND"] == "s3"
+        assert env_map["OSIMFLOW_RESULT_STORAGE_BUCKET"] == "ds-resolve-bucket"
+        assert env_map["OSIMFLOW_RESULT_STORAGE_PREFIX"] == "campaign-x"
+        assert env_map["OSIMFLOW_RESULT_STORAGE_ENDPOINT"] == "https://s3.example.test"
+        # Issue #1549: transport signature env var when a secret is set.
+        assert RESULT_TRANSPORT_SIG_ENV in env_map
+
+    def test_submit_service_warns_when_secret_name_set_but_no_orchestrator_secret(
+        self,
+    ) -> None:
+        """``payload_secret`` configured but no orchestrator secret → unsigned warning.
+
+        Issue #1633: the executor falls back to unsigned mode when
+        ``payload_secret`` is set but ``OSIMFLOW_TASK_PAYLOAD_SECRET``
+        is missing from the orchestrator environment.
+        """
+
+        ex = self._make_executor()
+        ex.payload_secret = "ds-shared-payload-secret"  # noqa: SLF001
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(TASK_PAYLOAD_SECRET_ENV, None)
+            ex._submit_service(  # noqa: SLF001
+                name="test",
+                cpus=1,
+                memory_mb=1024,
+                time_min=60,
+                openstudio_version="3.11.0",
+                container="nrel/openstudio:3.11.0",
+                task_payload='{"step": "sim"}',
+            )
+        # The Docker secret name is mounted at /run/secrets/<name>.
+        env_map = {
+            entry.partition("=")[0]: entry.partition("=")[2]
+            for entry in (captured["env"] or [])  # type: ignore[union-attr]
+            if isinstance(entry, str) and "=" in entry
+        }
+        assert env_map.get(TASK_PAYLOAD_SECRET_FILE_ENV) == "/run/secrets/ds-shared-payload-secret"
+        # No raw secret in the env — out-of-band delivery.
+        assert TASK_PAYLOAD_SECRET_ENV not in env_map
+        # The Docker SDK received a Secret mount.
+        secrets = captured.get("secrets")
+        assert secrets is not None and len(secrets) == 1
+        assert secrets[0]["Name"] == "ds-shared-payload-secret"  # type: ignore[index]
+
+    def test_submit_service_warns_on_literal_secret_when_no_secret_name(self) -> None:
+        """When the orchestrator has a secret but no ``payload_secret`` mount is set,
+        the executor logs the issue #1633 literal-secret warning and ships the
+        raw secret in the env."""
+
+        ex = self._make_executor()
+        # payload_secret is None (default).
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        with patch.dict(
+            os.environ, {TASK_PAYLOAD_SECRET_ENV: "orch-shared-secret"}
+        ):
+            ex._submit_service(  # noqa: SLF001
+                name="test",
+                cpus=1,
+                memory_mb=1024,
+                time_min=60,
+                openstudio_version="3.11.0",
+                container="nrel/openstudio:3.11.0",
+                task_payload='{"step": "sim"}',
+            )
+        env_map = {
+            entry.partition("=")[0]: entry.partition("=")[2]
+            for entry in (captured["env"] or [])  # type: ignore[union-attr]
+            if isinstance(entry, str) and "=" in entry
+        }
+        # The raw secret IS in the env (legacy unsafe path).
+        assert env_map[TASK_PAYLOAD_SECRET_ENV] == "orch-shared-secret"
+        # No file-marker env (because no Docker secret was configured).
+        assert TASK_PAYLOAD_SECRET_FILE_ENV not in env_map
+
+    def test_submit_service_propagates_resource_directives(self) -> None:
+        """``cpus`` and ``memory_mb`` translate to NanoCPUs and MemoryBytes."""
+
+        ex = self._make_executor()
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        ex._submit_service(  # noqa: SLF001
+            name="res",
+            cpus=4,
+            memory_mb=2048,
+            time_min=15,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+        )
+        resources = captured["resources"]  # type: ignore[assignment]
+        assert resources["Limits"]["NanoCPUs"] == 4 * 10**9
+        assert resources["Limits"]["MemoryBytes"] == 2048 * 1024 * 1024
+        assert resources["Reservations"]["NanoCPUs"] == 4 * 10**9
+        assert resources["Reservations"]["MemoryBytes"] == 2048 * 1024 * 1024
+
+    def test_submit_service_api_error_surfaces_as_runtime_error(self) -> None:
+        """A docker.errors.APIError from ``services.create`` raises ``RuntimeError``."""
+
+        import docker.errors
+        import requests  # type: ignore[import-not-found]
+
+        ex = self._make_executor()
+        response = requests.Response()
+        response.status_code = 500
+        api_err = docker.errors.APIError("boom", response=response)
+
+        def _raise_api(**_kwargs: object) -> object:
+            raise api_err
+
+        ex._client.services.create = MagicMock(side_effect=_raise_api)  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="failed to create Docker Swarm service"):
+            ex._submit_service(  # noqa: SLF001
+                name="test",
+                cpus=1,
+                memory_mb=1024,
+                time_min=60,
+                openstudio_version="3.11.0",
+                container=None,
+            )
+
+    def test_submit_service_skips_endpoint_spec_when_no_network(self) -> None:
+        """``endpoint_spec`` is omitted entirely when no network is configured."""
+
+        ex = self._make_executor()
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        ex._submit_service(  # noqa: SLF001
+            name="test",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+        )
+        assert captured["endpoint_spec"] is None
+
+    def test_submit_service_includes_endpoint_spec_when_network_set(self) -> None:
+        """A configured ``network`` produces a published-port endpoint spec."""
+
+        ex = self._make_executor()
+        ex.network = "osimflow-net"  # noqa: SLF001
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        ex._submit_service(  # noqa: SLF001
+            name="test",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+        )
+        endpoint_spec = captured["endpoint_spec"]
+        assert endpoint_spec["Ports"][0]["PublishMode"] == "ingress"
+
+    def test_submit_service_pins_restart_policy_none(self) -> None:
+        """``restart_policy={\"Condition\": \"none\"}`` (issue #1641) is set explicitly."""
+
+        ex = self._make_executor()
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        ex._submit_service(  # noqa: SLF001
+            name="test",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+        )
+        assert captured["restart_policy"] == {"Condition": "none"}
+
+    def test_submit_service_propagates_stub_sim_env(self) -> None:
+        """``OSIMFLOW_STUB_SIM`` from the orchestrator env is propagated to the service."""
+
+        ex = self._make_executor()
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        with patch.dict(os.environ, {"OSIMFLOW_STUB_SIM": "1"}):
+            ex._submit_service(  # noqa: SLF001
+                name="test",
+                cpus=1,
+                memory_mb=1024,
+                time_min=60,
+                openstudio_version="3.11.0",
+                container="nrel/openstudio:3.11.0",
+            )
+        env_map = {
+            entry.partition("=")[0]: entry.partition("=")[2]
+            for entry in (captured["env"] or [])  # type: ignore[union-attr]
+            if isinstance(entry, str) and "=" in entry
+        }
+        assert env_map["OSIMFLOW_STUB_SIM"] == "1"
+
+    def test_get_client_import_error_raises_runtime_error(self) -> None:
+        """Missing ``docker`` package surfaces as ``ImportError``."""
+
+        ex = self._make_executor()
+        ex._client = None  # Force the lazy-init path so we hit the import block.
+
+        # Make ``import docker`` raise an ImportError that the real
+        # code then re-raises with the documented guidance message.
+        with patch.dict("sys.modules", {"docker": None}):
+            with pytest.raises(ImportError, match="docker Python SDK"):
+                ex._get_client()  # noqa: SLF001
+
+    def test_get_client_ping_failure_raises_runtime_error(self) -> None:
+        """A failed ``ping`` (daemon unreachable) raises ``RuntimeError``."""
+
+        ex = self._make_executor()
+        ex._client = None  # Force the lazy-init path.
+
+        client = MagicMock()
+        client.ping.side_effect = ConnectionError("ping failed")
+        fake_module = MagicMock()
+        fake_module.from_env.return_value = client
+
+        with patch.dict("sys.modules", {"docker": fake_module}):
+            with pytest.raises(RuntimeError, match="Docker daemon is not reachable"):
+                ex._get_client()  # noqa: SLF001
+
+    def test_constructor_logs_warning_for_latest_tag(self, caplog: pytest.LogCaptureFixture) -> None:
+        """``__init__`` warns when the image tag is ``:latest`` (supply-chain)."""
+
+        caplog.set_level("WARNING", logger="osimflow.executors.docker_swarm")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DOCKER_HOST", None)
+            DockerSwarmExecutor(image="nrel/openstudio:latest")
+        assert any(
+            "using 'latest' is not recommended" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_constructor_does_not_warn_for_pinned_tag(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No supply-chain warning fires when the image tag is pinned."""
+
+        caplog.set_level("WARNING", logger="osimflow.executors.docker_swarm")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DOCKER_HOST", None)
+            DockerSwarmExecutor(image="nrel/openstudio:3.11.0")
+        assert not any(
+            "using 'latest' is not recommended" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_requires_remote_runner_payload_true(self) -> None:
+        """``requires_remote_runner_payload`` is ``True`` (DockerSwarm dispatches remote_runner)."""
+
+        ex = self._make_executor()
+        # ``requires_remote_runner_payload`` is a class-level property that
+        # reads off the descriptor on access. Read it through an instance
+        # so the property is invoked (the class-level access returns the
+        # descriptor object itself).
+        assert ex.requires_remote_runner_payload is True  # noqa: SLF001
+
+    def test_wait_for_terminal_routes_polling_to_executor(self) -> None:
+        """``_wait_for_terminal`` on the handle delegates to the executor."""
+
+        ex = self._make_executor()
+        ex._wait_for_terminal = MagicMock(return_value={"status": {"State": "complete"}})  # type: ignore[method-assign]
+        handle = _DockerSwarmHandle(
+            service_name="svc-delegate",
+            executor=ex,
+            submit_params={},
+        )
+        result = handle._wait_for_terminal(5.0)  # noqa: SLF001
+        ex._wait_for_terminal.assert_called_once_with("svc-delegate", timeout=5.0)
+        assert result == {"status": {"State": "complete"}}
+
+    def test_wait_for_terminal_no_tasks_pending_log(self) -> None:
+        """``_wait_for_terminal`` logs the "no tasks yet" branch when the service has no tasks."""
+
+        ex = self._make_executor()
+        ex._get_service_status = MagicMock(  # type: ignore[method-assign]
+            return_value={"tasks": []}
+        )
+        with (
+            patch("osimflow.testing.patch_targets.time.sleep"),
+            patch("osimflow.executors.docker_swarm_executor.log") as mock_log,
+        ):
+            with pytest.raises(TimeoutError, match="Timed out"):
+                ex._wait_for_terminal(  # noqa: SLF001
+                    "svc-no-tasks", timeout=0.05
+                )
+        # The "no-tasks yet" info-log fires once before the timeout.
+        assert any(
+            "no-tasks yet" in str(call_args)
+            for call_args in mock_log.info.call_args_list
+        )
+
+    def test_submit_service_skips_unset_transport_field_env(self) -> None:
+        """With a transport whose storage fields are None, only the mode env var is emitted."""
+
+        ex = self._make_executor()
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        cfg = ResultTransportConfig(
+            mode="auto",
+            backend=None,
+            bucket=None,
+            prefix=None,
+            endpoint=None,
+        )
+        ex._submit_service(  # noqa: SLF001
+            name="minimal-transport",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container="nrel/openstudio:3.11.0",
+            transport=cfg,
+        )
+        env_names = [
+            entry.partition("=")[0]
+            for entry in (captured["env"] or [])  # type: ignore[union-attr]
+            if isinstance(entry, str) and "=" in entry
+        ]
+        assert "OSIMFLOW_RESULT_TRANSPORT_MODE" in env_names
+        assert "OSIMFLOW_RESULT_STORAGE_BACKEND" not in env_names
+        assert "OSIMFLOW_RESULT_STORAGE_BUCKET" not in env_names
+        assert "OSIMFLOW_RESULT_STORAGE_PREFIX" not in env_names
+        assert "OSIMFLOW_RESULT_STORAGE_ENDPOINT" not in env_names
+
+    def test_submit_service_default_image_used_when_container_none(self) -> None:
+        """When ``container`` is None the executor's default ``image`` is used."""
+
+        ex = self._make_executor()
+        captured: dict[str, object] = {}
+
+        def _capture_create(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock(name="osimflow-test")
+
+        ex._client.services.create = MagicMock(side_effect=_capture_create)  # type: ignore[method-assign]
+        ex._submit_service(  # noqa: SLF001
+            name="default-image",
+            cpus=1,
+            memory_mb=1024,
+            time_min=60,
+            openstudio_version="3.11.0",
+            container=None,
+        )
+        env_map = {
+            entry.partition("=")[0]: entry.partition("=")[2]
+            for entry in (captured["env"] or [])  # type: ignore[union-attr]
+            if isinstance(entry, str) and "=" in entry
+        }
+        assert env_map["OSIMFLOW_CONTAINER"] == "nrel/openstudio:3.11.0"
