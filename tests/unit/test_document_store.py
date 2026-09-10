@@ -123,6 +123,53 @@ class TestBuildWhereClause:
         assert clause == "json_extract(doc, '$.name') LIKE ?"
         assert params == ["%test%"]
 
+    def test_dotted_nested_key_accepted(self) -> None:
+        clause, params = _build_where_clause({"nested.key.path": "v"})
+        assert clause == "json_extract(doc, '$.nested.key.path') = ?"
+        assert params == ["v"]
+
+    def test_injection_in_filter_key_rejected(self) -> None:
+        """Issue #1779 — unsanitized filter keys must raise DocumentStoreError.
+
+        Library users (or REST callers) passing ``{"foo'; DROP TABLE
+        documents; --": 1}`` previously got a fully exploitable SQL
+        injection because ``_build_where_clause`` interpolated the key
+        directly into the WHERE clause. The fix validates every key
+        against ``^[A-Za-z_][A-Za-z0-9_.]*$`` and raises
+        ``DocumentStoreError`` on mismatch — *before* any SQL is built.
+        """
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            _build_where_clause({"foo'; DROP TABLE documents; --": 1})
+
+    def test_injection_with_semicolon_and_comment_rejected(self) -> None:
+        """Independent variant covering ``;`` + ``--`` in the same key."""
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            _build_where_clause({"name; --": "v"})
+
+    def test_injection_with_quote_only_rejected(self) -> None:
+        """A bare single-quote in the key is enough to break out of a literal."""
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            _build_where_clause({"name'": "v"})
+
+    def test_key_starting_with_digit_rejected(self) -> None:
+        """Numeric-prefixed keys fail the leading-character rule."""
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            _build_where_clause({"1sample": "v"})
+
+    def test_non_string_key_rejected(self) -> None:
+        """Non-string keys (e.g. ``None``) cannot be interpolated safely."""
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            _build_where_clause({None: "v"})  # type: ignore[dict-item]
+
+    def test_injection_via_regex_inner_key_rejected(self) -> None:
+        """Issue #1779 — the LIKE branch builds its own key fragment.
+
+        ``{"x' OR 1=1 --": {"$regex": "y"}}`` would otherwise interpolate
+        the malicious key into the LIKE clause. Same key guard catches it.
+        """
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            _build_where_clause({"x' OR 1=1 --": {"$regex": "y"}})
+
 
 class TestSQLiteDocumentStore:
     """Tests for SQLiteDocumentStore implementation."""
@@ -301,6 +348,55 @@ class TestSQLiteDocumentStore:
         store.insert_one("kpis", {"sample_id": "s0003", "eui": 100.0})
         count = store.count_documents("kpis", {"eui": {"$gt": 150}})
         assert count == 1
+
+    def test_find_one_rejects_sql_injection_key(self, store: SQLiteDocumentStore) -> None:
+        """Issue #1779 — ``find_one`` raises DocumentStoreError on a malicious key.
+
+        Without the guard the call would build ``WHERE json_extract(doc,
+        '$.foo'; DROP TABLE kpis; --') = ?`` and SQLite would execute the
+        injected statement. The test fails against the pre-fix code.
+        """
+        store.insert_one("kpis", {"sample_id": "s0001"})
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            store.find_one("kpis", {"foo'; DROP TABLE kpis; --": 1})
+
+    def test_find_many_rejects_sql_injection_key(self, store: SQLiteDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001"})
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            store.find_many("kpis", {"foo'; DROP TABLE kpis; --": 1})
+
+    def test_update_one_rejects_sql_injection_key(self, store: SQLiteDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001"})
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            store.update_one(
+                "kpis",
+                {"foo'; DROP TABLE kpis; --": 1},
+                {"$set": {"eui": 1.0}},
+            )
+
+    def test_delete_one_rejects_sql_injection_key(self, store: SQLiteDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001"})
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            store.delete_one("kpis", {"foo'; DROP TABLE kpis; --": 1})
+
+    def test_count_documents_rejects_sql_injection_key(self, store: SQLiteDocumentStore) -> None:
+        store.insert_one("kpis", {"sample_id": "s0001"})
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            store.count_documents("kpis", {"foo'; DROP TABLE kpis; --": 1})
+
+    def test_sql_injection_via_regex_value_rejected(
+        self, store: SQLiteDocumentStore
+    ) -> None:
+        """The same guard covers the ``$regex`` (LIKE) branch (issue #1779).
+
+        ``{"x' OR 1=1 --": {"$regex": "y"}}`` would otherwise interpolate
+        the malicious key into ``LIKE ?`` — every outer key in any
+        operator dict is still a JSON-path fragment, so the same guard
+        catches it before SQL is built.
+        """
+        store.insert_one("kpis", {"sample_id": "s0001"})
+        with pytest.raises(DocumentStoreError, match="invalid filter key"):
+            store.find_one("kpis", {"x' OR 1=1 --": {"$regex": "y"}})
 
     def test_context_manager(self, store: SQLiteDocumentStore) -> None:
         with store:
