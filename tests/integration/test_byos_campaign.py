@@ -20,9 +20,11 @@ This module fills that gap with two tests:
    - Asserts ``run.json`` records ``custom_kpi_extractor`` in its config.
    - Asserts all 4 artifacts are produced.
 
-Both tests use the LocalExecutor (stub simulation) and are marked ``slow`` so
-they are skipped in ``make test-fast`` / pre-commit but included in the full
-``make test`` suite.
+Both tests use the LocalExecutor (stub simulation); the full module runs in
+~12s combined (well under the 120s per-test timeout). It is intentionally NOT
+marked ``@pytest.mark.slow`` so the BYOS Campaign end-to-end path runs in the
+required merge gate (issue #1796). For the pre-commit mirror (`make test-fast`)
+the per-step runtime is short enough that no marker is needed.
 """
 
 from __future__ import annotations
@@ -34,8 +36,6 @@ import pytest
 
 from osimflow import Campaign, CampaignConfig
 from osimflow.executors import LocalExecutor
-
-pytestmark = pytest.mark.slow
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"

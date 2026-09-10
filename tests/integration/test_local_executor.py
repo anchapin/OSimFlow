@@ -47,7 +47,10 @@ from osimflow import Campaign, CampaignConfig
 from osimflow.apply_params import _build_mappings
 from osimflow.executors import LocalExecutor
 
-pytestmark = pytest.mark.slow
+# Note: this file is a stub-mode 3-sample mini-campaign that runs in ~13s
+# (well under the 120s per-test timeout). It is intentionally NOT marked
+# `@pytest.mark.slow` so the canonical Campaign-via-LocalExecutor path runs
+# in the required merge gate (issue #1796).
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
