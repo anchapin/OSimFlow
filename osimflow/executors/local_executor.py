@@ -180,19 +180,48 @@ class LocalExecutor(BaseExecutor):
         )
 
     def cancel(self) -> None:
-        """Terminate in-flight work subprocesses, then sweep the futures (issue #1538).
+        """Cancel queued futures, then terminate in-flight work subprocesses
+        (issues #1538, #1686).
 
         The local substrate's "job" is the work subprocess spawned by
         :func:`run_subprocess` inside a pool thread (e.g. the real
-        ``openstudio.cli run`` invocation). Terminating the registered
-        children unblocks those threads; the ``super().cancel()`` sweep
-        then cancels any future that was queued but never started (the
-        pool threads themselves cannot — and should not — be killed).
+        ``openstudio.cli run`` invocation). The order of operations is
+        load-bearing for cancellation correctness:
+
+        1. ``super().cancel()`` runs first — it snapshots every live
+           handle, clears the registry, and calls ``Handle.cancel()``
+           on each. For ``LocalExecutor`` that means ``Future.cancel()``:
+           queued (never-started) futures return ``True`` and are
+           cancelled outright; running futures return ``False`` and
+           keep executing until the kill below takes effect.
+
+        2. ``terminate_active_subprocesses()`` then sends SIGTERM to
+           each registered child, waits the bounded grace period
+           (issue #1686), and escalates to SIGKILL if needed. The
+           running worker threads' ``communicate()`` returns once the
+           child is reaped, freeing the pool worker.
+
+        Pre-#1686 the order was reversed (kill first, then cancel),
+        but that exposed a race: with the new SIGKILL grace period
+        the kill takes hundreds of milliseconds to a few seconds, so a
+        queued future could be dequeued and started by the freed pool
+        worker between the kill and the cancel sweep — ``super().cancel()``
+        would then see the queued future as already-running and skip
+        it. Cancelling queued futures *first* removes the race because
+        the cancellation runs atomically against the pool's task
+        queue: once ``Future.cancel()`` returns ``True`` for a queued
+        future, the pool will skip it on dequeue regardless of when
+        the worker thread frees up.
+
+        The pool threads themselves are not killed (and should not
+        be — they are shared between tasks). Killing the registered
+        children is the local analogue of TerminateJob / scancel /
+        allocation stop on the remote substrates.
         """
+        super().cancel()
         killed = terminate_active_subprocesses()
         if killed:
             log.info("local executor: terminated %d in-flight subprocess(es)", killed)
-        super().cancel()
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=True)
