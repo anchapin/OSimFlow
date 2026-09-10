@@ -40,6 +40,7 @@ __all__ = [
 
 import logging
 import re
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -55,6 +56,19 @@ EPW_REPOSITORY_BASE = "https://energyplus-weather.s3.amazonaws.com"
 # 1–5 MB; anything larger is likely an error or corrupted download.
 MAX_EPW_DOWNLOAD_BYTES = 50 * 1024 * 1024
 
+# Permitted charset for the ``station_name``/``region``/``country`` URL
+# segments (issue #1684). Restricting to a known-safe set — letters,
+# digits, ``_``, ``.``, ``-`` — prevents both filesystem path traversal
+# (e.g. ``"../../evil"``) and URL injection (e.g. ``"foo?bar=baz"``).
+# The character class also accepts a single ``.`` (used in real station
+# identifiers like ``USA_CA_Los.Angeles``); the explicit ``..`` check in
+# :func:`_validate_epw_segment` rejects parent-directory sequences.
+_EPW_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+# Per-segment length cap (issue #1684). Real EPW station identifiers are
+# well under 100 characters; anything longer is almost certainly hostile.
+_EPW_SEGMENT_MAX_LEN = 128
+
 
 class EPWValidationError(OSimFlowValueError):
     """Raised when a file fails EPW format validation."""
@@ -62,6 +76,51 @@ class EPWValidationError(OSimFlowValueError):
 
 class EPWDownloadError(OSimFlowRuntimeError):
     """Raised when an EPW file download fails."""
+
+
+def _validate_epw_segment(value: str, role: str) -> str:
+    """Validate an EPW URL/path segment against the restricted charset.
+
+    Used by :func:`download_epw` to vet ``station_name``, ``region``, and
+    ``country`` *before* they are interpolated into a filesystem path or
+    URL. Issue #1684 — without this gate, an attacker-controlled value
+    can escape ``dest_dir`` (``station_name="../../evil/pwned"``) or
+    inject URL segments (``station_name="foo?bar=baz"``).
+
+    Args:
+        value: the candidate segment string.
+        role: human-readable name for the offending argument
+            (``"station_name"``, ``"region"``, ``"country"``); used in
+            the exception message so users can locate the bad input.
+
+    Returns:
+        The input unchanged (validated).
+
+    Raises:
+        EPWValidationError: ``value`` is empty, exceeds the length cap,
+            contains characters outside ``[A-Za-z0-9_.-]``, or contains
+            the ``..`` parent-directory sequence.
+    """
+    if not isinstance(value, str):
+        # Defensive: the public signature is str, but guard against bad
+        # callers before length/regex checks choke on non-strings.
+        raise EPWValidationError(f"{role} must be a string, got {type(value).__name__}")
+    if not value:
+        raise EPWValidationError(f"{role} must not be empty")
+    if len(value) > _EPW_SEGMENT_MAX_LEN:
+        raise EPWValidationError(
+            f"{role} too long: {len(value)} chars (max {_EPW_SEGMENT_MAX_LEN})"
+        )
+    if ".." in value:
+        raise EPWValidationError(
+            f"{role} contains forbidden parent-directory sequence '..': {value!r}"
+        )
+    if not _EPW_SEGMENT_PATTERN.match(value):
+        raise EPWValidationError(
+            f"{role} contains invalid characters: {value!r}. "
+            f"Allowed: letters, digits, '_', '.', '-'."
+        )
+    return value
 
 
 def validate_epw(path: Path) -> bool:
@@ -248,7 +307,19 @@ def download_epw(
     Raises:
         EPWDownloadError: the download failed (network error, HTTP
             error, or the file exceeds the size limit).
+        EPWValidationError: ``station_name``, ``region``, or ``country``
+            fails the restricted-charset validation (issue #1684). This
+            is raised *before* any filesystem or network call, so an
+            invalid input never reaches ``dest_dir`` or the remote host.
     """
+    # Validate BEFORE touching the filesystem (issue #1684). The
+    # restricted charset prevents path traversal (e.g. ``"../../evil"``)
+    # and URL injection (e.g. ``"foo?bar=baz"``) in both the on-disk
+    # destination and the request URL.
+    station_name = _validate_epw_segment(station_name, "station_name")
+    region = _validate_epw_segment(region, "region")
+    country = _validate_epw_segment(country, "country")
+
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / f"{station_name}.epw"
 
@@ -256,7 +327,17 @@ def download_epw(
         log.info("EPW file already exists at %s; skipping download", dest_path)
         return dest_path
 
-    url = f"{EPW_REPOSITORY_BASE}/{region}/{country}/{station_name}/{station_name}.epw"
+    # URL-encode each segment (issue #1684). The restricted charset above
+    # means this is a no-op for valid input, but quoting explicitly here
+    # documents intent and keeps the function safe even if the validator
+    # is ever loosened.
+    url = (
+        f"{EPW_REPOSITORY_BASE}/"
+        f"{urllib.parse.quote(region, safe='')}/"
+        f"{urllib.parse.quote(country, safe='')}/"
+        f"{urllib.parse.quote(station_name, safe='')}/"
+        f"{urllib.parse.quote(station_name, safe='')}.epw"
+    )
     log.info("downloading EPW: %s -> %s", url, dest_path)
 
     try:

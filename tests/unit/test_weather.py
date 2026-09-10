@@ -570,6 +570,189 @@ class TestDownloadEpw:
 
 
 # ---------------------------------------------------------------------------
+# Tests: download_epw input validation (issue #1684)
+# ---------------------------------------------------------------------------
+class TestDownloadEpwInputValidation:
+    """Tests for download_epw path-traversal / URL-injection guards (issue #1684).
+
+    download_epw interpolates ``station_name``/``region``/``country`` into
+    both a filesystem path and a remote URL. Without validation, a hostile
+    value like ``"../../evil/pwned"`` escapes ``dest_dir`` and the same
+    value flows unencoded into the request URL path.
+
+    These tests assert the validator rejects every documented attack vector
+    *before* any filesystem or network call. ``EPWValidationError`` is the
+    public exception type (and it is a ``ValueError`` subclass, so callers
+    catching ``ValueError`` per the issue's acceptance criteria also work).
+    """
+
+    # --- Valid inputs (must NOT be rejected) -------------------------------
+
+    def test_valid_station_name_with_dot(self, tmp_path: Path) -> None:
+        """A station name containing a single ``.`` (e.g. ``USA_CA_Los.Angeles``) is allowed."""
+        dest_dir = tmp_path / "dest"
+        existing = dest_dir / "USA_CA_Los.Angeles.epw"
+        existing.parent.mkdir(parents=True, exist_ok=True)
+        _write_valid_epw(existing)
+
+        result = download_epw("USA_CA_Los.Angeles", dest_dir)
+        assert result == existing
+
+    @pytest.mark.parametrize(
+        ("region", "country"),
+        [
+            ("USA_CA", "San_Francisco"),  # underscore + hyphen + letters
+            ("region4", "USA"),
+            ("north_and_central_america_wmo_region_4", "USA"),
+        ],
+    )
+    def test_valid_region_and_country(self, region: str, country: str, tmp_path: Path) -> None:
+        """Region/country using only [A-Za-z0-9_-] are accepted."""
+        dest_dir = tmp_path / "dest"
+        station = "USA_CA_San.Francisco"
+        existing = dest_dir / f"{station}.epw"
+        existing.parent.mkdir(parents=True, exist_ok=True)
+        _write_valid_epw(existing)
+
+        result = download_epw(station, dest_dir, region=region, country=country)
+        assert result == existing
+
+    # --- Invalid station_name ----------------------------------------------
+
+    @pytest.mark.parametrize(
+        "bad_station",
+        [
+            "",  # empty
+            "..",  # parent-directory reference
+            "../",  # parent-dir + separator
+            "..\\evil",  # Windows-style parent-dir
+            "../../etc/passwd",  # classic path traversal
+            "foo/bar",  # forward slash (separator)
+            "foo\\bar",  # backslash (Windows separator)
+            "foo?bar=baz",  # URL-injection (query)
+            "foo#frag",  # URL-injection (fragment)
+            "foo&bar",  # URL-injection (param separator)
+            "foo bar",  # whitespace
+            "foo\tbar",  # tab whitespace
+            "foo\nbar",  # newline whitespace
+            "foo/bar/baz",  # multi-segment
+            "/etc/passwd",  # absolute path
+            "foo;rm",  # command-injection-like
+            "foo$VAR",  # shell-expansion-like
+            "foo`id`",  # shell-command-substitution
+            "foo|d",  # pipe
+            "foo\x00bar",  # NUL byte
+            "station\x00.epw",  # NUL byte in filename
+            "café",  # non-ASCII (outside [A-Za-z0-9_.-])
+            "日本",  # CJK non-ASCII
+        ],
+    )
+    def test_invalid_station_name_rejected(self, bad_station: str, tmp_path: Path) -> None:
+        """Path-traversal and URL-injection vectors in station_name are rejected."""
+        with pytest.raises(EPWValidationError):
+            download_epw(bad_station, tmp_path / "dest")
+
+    # --- Invalid region ----------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "bad_region",
+        [
+            "",
+            "../etc",
+            "region4/sub",
+            "region?evil",
+            "region space",
+        ],
+    )
+    def test_invalid_region_rejected(self, bad_region: str, tmp_path: Path) -> None:
+        """Separator-bearing region values are rejected before any IO."""
+        with pytest.raises(EPWValidationError):
+            download_epw("USA_CA_Los.Angeles", tmp_path / "dest", region=bad_region)
+
+    # --- Invalid country ---------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "bad_country",
+        [
+            "",
+            "../",
+            "USA/evil",
+            "USA?x",
+            "USA space",
+        ],
+    )
+    def test_invalid_country_rejected(self, bad_country: str, tmp_path: Path) -> None:
+        """Separator-bearing country values are rejected before any IO."""
+        with pytest.raises(EPWValidationError):
+            download_epw("USA_CA_Los.Angeles", tmp_path / "dest", country=bad_country)
+
+    # --- Exception-type contract (issue #1684 acceptance criteria) ---------
+
+    def test_invalid_input_raises_value_error_subclass(self, tmp_path: Path) -> None:
+        """``EPWValidationError`` is a ``ValueError`` subclass (issue acceptance criterion)."""
+        with pytest.raises(ValueError):
+            download_epw("../evil/pwned", tmp_path / "dest")
+
+    # --- Side-effect isolation --------------------------------------------
+
+    def test_invalid_station_does_not_create_dest_dir(self, tmp_path: Path) -> None:
+        """Invalid input is rejected BEFORE ``dest_dir.mkdir`` runs.
+
+        No filesystem side effect should occur for an invalid station_name,
+        so the caller can be confident the validation gate ran first.
+        """
+        dest_dir = tmp_path / "should_never_exist"
+        with pytest.raises(EPWValidationError):
+            download_epw("../evil", dest_dir)
+        assert not dest_dir.exists(), f"dest_dir was created despite invalid input: {dest_dir}"
+
+    @patch("osimflow.weather.urllib.request.urlopen")
+    def test_invalid_input_never_hits_network(
+        self, mock_urlopen: MagicMock, tmp_path: Path
+    ) -> None:
+        """Invalid input is rejected BEFORE the network call."""
+        mock_urlopen.side_effect = AssertionError("urlopen must not be called for invalid input")
+        with pytest.raises(EPWValidationError):
+            download_epw("foo?bar=baz", tmp_path / "dest")
+        mock_urlopen.assert_not_called()
+
+    # --- URL injection defense-in-depth (urllib.parse.quote) --------------
+
+    @patch("osimflow.weather.urllib.request.urlopen")
+    def test_valid_input_url_contains_expected_segments(
+        self, mock_urlopen: MagicMock, tmp_path: Path
+    ) -> None:
+        """The constructed URL embeds each segment exactly once (defense-in-depth)."""
+        epw_content = (
+            b"LOCATION,TestCity,State,Country,123456,40.0,-74.0,-5.0,10.0\n"
+            b"DATA PERIODS,1,1,Data,Mon,1/1,12/31,8760,\n"
+        )
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Length": str(len(epw_content))}
+        mock_response.read.return_value = epw_content
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        dest_dir = tmp_path / "weather"
+        download_epw("USA_CA_Los.Angeles", dest_dir)
+
+        # urlopen called once with the expected request URL.
+        assert mock_urlopen.call_count == 1
+        request_obj = mock_urlopen.call_args[0][0]
+        url = request_obj.full_url if hasattr(request_obj, "full_url") else str(request_obj)
+        # Each valid segment appears unquoted in the URL.
+        assert "USA_CA_Los.Angeles" in url
+        assert "USA" in url
+        assert url.endswith("/USA_CA_Los.Angeles.epw")
+
+    def test_double_dot_segment_rejected(self, tmp_path: Path) -> None:
+        """``..`` (parent-directory) anywhere in any segment is rejected."""
+        with pytest.raises(EPWValidationError, match=r"\.\."):
+            download_epw("foo..bar", tmp_path / "dest")
+
+
+# ---------------------------------------------------------------------------
 # Tests: detect_climate_zone_from_stat (issue #424)
 # ---------------------------------------------------------------------------
 class TestDetectClimateZoneFromStat:
