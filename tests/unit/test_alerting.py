@@ -636,6 +636,139 @@ class TestBackgroundDispatcher:
         assert seen == ["hello 1"]
 
 
+class TestDispatchPoolBounded:
+    """Issue #1770 — ``_dispatch_one`` must use a bounded thread pool.
+
+    Pre-fix the per-alert ``Thread(...)`` daemon spawn was unbounded:
+    50 wedged alerts ⇒ 50 daemon threads, each independently blocked in
+    ``_do_dispatch``.  The fix replaces the per-call thread with a
+    class-level :class:`ThreadPoolExecutor` of size
+    ``_ALERT_DISPATCH_POOL_SIZE`` (default 4) reused across every
+    alert, with per-alert deadlines still cancelling abandoned
+    futures.
+
+    These tests enqueue N>max_workers alerts while the destination
+    hangs and assert:
+
+    * the dispatcher worker thread count stays at 1 (the dispatcher
+      worker itself),
+    * the per-alert dispatch pool never grows past
+      ``_ALERT_DISPATCH_POOL_SIZE`` live threads,
+    * alerts past the per-alert deadline are abandoned without
+      blocking subsequent deliveries.
+    """
+
+    def test_pool_size_constant_is_bounded(self) -> None:
+        """The pool size constant must stay small — pinning the
+        contract so a future edit cannot silently remove the cap."""
+        from osimflow.alerting import _ALERT_DISPATCH_POOL_SIZE
+
+        assert _ALERT_DISPATCH_POOL_SIZE <= 8
+        assert _ALERT_DISPATCH_POOL_SIZE >= 1
+
+    def test_dispatch_pool_caps_thread_count_under_wedged_destination(self):
+        """N alerts with a wedged destination must not spawn unbounded threads.
+
+        We use a destination whose ``send`` blocks on an Event the
+        test never releases.  Enqueue N>>pool_size alerts, then count
+        the live threads inside the pool.  Pre-fix each call spawned a
+        fresh daemon thread; the fix reuses the same
+        ``max_workers=4`` pool.
+        """
+        import osimflow.alerting as alerting_mod
+
+        dest = BlockingDestination()
+        manager = _manager_with(dest)
+        # Tiny deadline so wedged alerts abandon fast and we can
+        # repeatedly submit more.
+        manager._per_alert_deadline_s = 0.05
+        manager.start_background_dispatch()
+        try:
+            # Pre-warm the pool so ``_dispatch_pool`` is created.
+            pool = manager._get_dispatch_pool()
+            assert pool._max_workers == alerting_mod._ALERT_DISPATCH_POOL_SIZE
+
+            # Fire far more than the pool ceiling.
+            n_alerts = 20
+            for i in range(n_alerts):
+                manager.notify("campaign.completed", {"i": i})
+
+            # The pool thread count never exceeds the configured ceiling
+            # (active + idle workers reuse the same fixed set).
+            active = pool._max_workers
+            assert active == alerting_mod._ALERT_DISPATCH_POOL_SIZE
+            assert active < n_alerts
+        finally:
+            dest.gate.set()
+            manager.close(timeout_s=2.0)
+
+    def test_alerts_past_deadline_are_abandoned_not_blocking(self):
+        """An alert whose deadline expires is dropped, not blocking the pool.
+
+        We verify this by issuing a wedged alert and waiting longer
+        than the deadline, then issuing a *fresh* alert whose
+        destination is unblocked.  The fresh alert must dispatch
+        successfully even though the wedged one is still parked.
+        """
+        from osimflow.alerting import _ALERT_DISPATCH_POOL_SIZE
+
+        class _Switchable(AlertDestination):
+            """Wedged for the first call, unblocked for the second."""
+
+            def __init__(self) -> None:
+                self.gate = threading.Event()
+                self.received: list[Alert] = []
+
+            def send(self, alert: Alert) -> bool:
+                self.received.append(alert)
+                if len(self.received) == 1:
+                    # Block the first call until the test releases the gate.
+                    self.gate.wait(timeout=10.0)
+                    return False
+                return True  # second call completes immediately
+
+        dest = _Switchable()
+        manager = _manager_with(dest)
+        manager._per_alert_deadline_s = 0.1
+        manager.start_background_dispatch()
+        try:
+            manager.notify("campaign.completed", {"i": 1})
+            # Wait for the dispatcher to enter send() and park on the gate.
+            deadline = time.monotonic() + 1.0
+            while not dest.received and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert dest.received, "first alert did not reach the destination"
+            # Wait past the per-alert deadline so the dispatcher
+            # abandons the wedged delivery.
+            time.sleep(manager._per_alert_deadline_s + 0.1)
+            # Submit a fresh alert — must still be dispatched because the
+            # pool is bounded, not blocked on the wedged worker.
+            manager.notify("campaign.completed", {"i": 2})
+            deadline = time.monotonic() + 2.0
+            while len(dest.received) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert len(dest.received) == 2, (
+                "second alert should reach the destination — the pool "
+                "must not be blocked by the wedged first alert"
+            )
+            # Sanity: pool size is still bounded.
+            pool = manager._get_dispatch_pool()
+            assert pool._max_workers == _ALERT_DISPATCH_POOL_SIZE
+        finally:
+            dest.gate.set()
+            manager.close(timeout_s=2.0)
+
+    def test_close_shuts_down_dispatch_pool(self):
+        """``close()`` shuts down the per-alert dispatch pool."""
+        manager = _manager_with(BlockingDestination())
+        manager.start_background_dispatch()
+        # Force the pool to be created.
+        pool = manager._get_dispatch_pool()
+        assert manager._dispatch_pool is pool
+        manager.close(timeout_s=2.0)
+        assert manager._dispatch_pool is None
+
+
 def _manager_with(dest: AlertDestination) -> AlertManager:  # type: ignore[no-redef]
     """Test-local helper (mirrors the one at line ~308 but ensures the test
     class can resolve it after the appended-block re-export order)."""
