@@ -178,7 +178,8 @@ def _peer_ip(request: Request) -> str:
     peer missing" from "peer is loopback".
     """
     if request.client and request.client.host:
-        return request.client.host
+        host = request.client.host
+        return str(host)
     return "127.0.0.1"
 
 

@@ -1525,6 +1525,7 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 | `--archive_intermediates` | off | Preserve per-sample `.osw`/`.osm`/`eplusout.sql`. |
 | `--preset NAME` | none | Named preset of recommended flag values (issue #384); individual flags override the preset. |
 | `--init-script` / `--finalize-script PATH` | none | Pre/post-campaign shell hooks (issue #108). |
+| `--init-script-timeout` / `--finalize-script-timeout SECONDS` | `600` | Wall-clock timeout (seconds) for the init/finalize hook subprocess (issue #1685). On expiry the child process group is `SIGKILL`ed: for `--finalize-script` a warning is logged and the hook returns normally so `Campaign.run()`'s `finally` block can still rewrite `run.json`, fire the webhook, and `cache.close()`; for `--init-script` the campaign aborts with `CampaignError` before any step runs. |
 | `--webhook-url URL` | none | Campaign-completion webhook callback (issue #283). |
 | `--max-sample-retries INT` | `3` | Max retries for transient per-sample failures. Honored by the `APPLY_PARAMETERS`, `RUN_OPENSTUDIO_SIM`, and `EXTRACT_KPIS` fan-out submits (issue #1394); see [Which DAG steps honor `--max-sample-retries`](#which-dag-steps-honor---max-sample-retries) below. |
 
@@ -1715,6 +1716,8 @@ for the endpoint reference and `osimflow serve --help` for the full list.
 | `--cors-origins` | Comma-separated allowed CORS origins (e.g. `http://localhost:3000`). |
 | `--rate-limit` | Rate limit string, e.g. `60/minute` (default: `60/minute`). |
 | `--rate-limit-key` | Rate limit key type: `ip` (default), `user`, or `campaign` (issue #445). |
+| `--rate-limit-trust-x-forwarded-for` | Opt-in trust gate (issue #1683): when set, the API honors `X-Forwarded-For` from the immediate upstream **only** when that upstream is in `--trusted-proxies`. Defaults off so a client cannot rotate a spoofed XFF value to obtain a fresh rate-limit bucket. |
+| `--trusted-proxies` | Comma-separated list of trusted-proxy CIDR blocks / IPs / hostnames used by the XFF trust gate (issue #1683). Required whenever `--rate-limit-trust-x-forwarded-for` is set, otherwise the API refuses to start fail-closed. |
 | `--tls-cert` | Path to PEM-encoded TLS certificate (SEC-004; requires `--tls-key`). |
 | `--tls-key` | Path to PEM-encoded TLS private key (SEC-004; requires `--tls-cert`). |
 
