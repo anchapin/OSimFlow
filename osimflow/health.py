@@ -42,6 +42,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
@@ -1164,7 +1165,12 @@ def _check_redis_deployment_mode(redis_url: str | None) -> CheckResult:
 
         info: dict[str, object] = {}
         try:
-            info = client.info()
+            # redis-py's sync ``Redis.info()`` returns ``dict[str, Any]`` at
+            # runtime, but the stub makes sync ``Redis`` inherit from
+            # ``AsyncCoreCommands`` so mypy resolves ``client.info()`` to
+            # ``Awaitable[Any] | Any``. Narrow with ``cast`` so downstream
+            # ``isinstance(info, dict)`` checks stay type-correct.
+            info = cast(dict[str, object], client.info())
         except Exception as exc:  # noqa: BLE001, PERF203 — INFO is best-effort
             log.debug("redis INFO failed for %s: %s", redacted, exc)
 
