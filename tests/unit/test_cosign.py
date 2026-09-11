@@ -244,7 +244,6 @@ class TestCampaignWiring:
 
 class TestCliFlag:
     def test_flags_parse_into_config_namespace(self) -> None:
-
         from osimflow.__main__ import _build_parser
 
         parser = _build_parser()
