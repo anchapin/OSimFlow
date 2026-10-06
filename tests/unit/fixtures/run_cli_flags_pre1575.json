@@ -1012,6 +1012,21 @@
     "required": false,
     "type": "Path"
   },
+  "--finalize-script-timeout": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": "600.0",
+    "dest": "finalize_script_timeout",
+    "help": "Wall-clock timeout in seconds for the --finalize-script subprocess (issue #1685). On expiry the child process group is SIGKILLed and a warning is logged, but the finalize hook returns normally so the Campaign.run() finally block can still rewrite run.json, fire the webhook, and cache.close(). Default: 600 s.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--finalize-script-timeout"
+    ],
+    "required": false,
+    "type": "float"
+  },
   "--google-batch-payload-secret-name": {
     "action": "_StoreAction",
     "choices": null,
@@ -1131,6 +1146,21 @@
     ],
     "required": false,
     "type": "Path"
+  },
+  "--init-script-timeout": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": "600.0",
+    "dest": "init_script_timeout",
+    "help": "Wall-clock timeout in seconds for the --init-script subprocess (issue #1685). On expiry the child process group is SIGKILLed and the campaign aborts with a CampaignError before any step runs. Default: 600 s \u2014 a hung init script (e.g. stuck on an NFS mount or a lock) used to block Campaign.run() forever.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--init-script-timeout"
+    ],
+    "required": false,
+    "type": "float"
   },
   "--input_variables": {
     "action": "_StoreAction",

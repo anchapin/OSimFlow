@@ -162,14 +162,19 @@ class TestAlgorithmRegistry:
         """Reloading the package must not replace the registry state."""
         import osimflow.algorithms as algorithms
 
-        original_base_algorithm = algorithms.BaseAlgorithm
+        # reload rebinds every class in the module namespace; restore them
+        # so other tests holding pre-reload references keep identity.
+        original_namespace = dict(vars(algorithms))
+        original_registry = dict(AlgorithmRegistry._registry)
         name = "reload_stability_test"
         AlgorithmRegistry.register(name, LHSAlgorithm)
         try:
             reloaded = importlib.reload(algorithms)
             assert reloaded.AlgorithmRegistry.get(name).__class__ is LHSAlgorithm
         finally:
-            algorithms.BaseAlgorithm = original_base_algorithm
+            vars(algorithms).update(original_namespace)
+            AlgorithmRegistry._registry.clear()
+            AlgorithmRegistry._registry.update(original_registry)
             AlgorithmRegistry._registry.pop(name, None)
 
     def test_get_creates_new_instance_each_time(self) -> None:

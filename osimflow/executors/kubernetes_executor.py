@@ -63,6 +63,7 @@ from typing import Any, cast
 
 from osimflow.byos_contract import BYOS_CONTRACT_VERSION
 from osimflow.cache import digest_pinned_image_ref
+from osimflow.errors import OSimFlowError
 from osimflow.executors.base import (
     BaseExecutor,
     Handle,
@@ -96,7 +97,7 @@ _DELETED_JOB_REASON = "JobDeleted"
 _DELETED_JOB_NO_RESULT_MESSAGE = "job deleted before result retrieval"
 
 
-class _VersionCheckLogFetchError(Exception):
+class _VersionCheckLogFetchError(OSimFlowError):
     """Internal sentinel: a transient ``read_namespaced_pod_log`` failure (issue #1687).
 
     Raised from ``_handle_version_check_succeeded`` to signal the outer
