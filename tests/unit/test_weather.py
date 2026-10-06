@@ -28,6 +28,7 @@ from osimflow.executors import LocalExecutor
 from osimflow.weather import (
     EPWDownloadError,
     EPWValidationError,
+    _validate_epw_segment,
     detect_climate_zone_from_stat,
     discover_epw_files,
     download_epw,
@@ -792,3 +793,21 @@ class TestDetectClimateZoneFromStat:
         stat = tmp_path / "unknown.stat"
         stat.write_text("SomeUnknownFile - Unknown Source\n")
         assert detect_climate_zone_from_stat(stat) is None
+
+    def test_blank_first_line_returns_none(self, tmp_path: Path) -> None:
+        """A stat file whose first line is only whitespace should return None."""
+        stat = tmp_path / "blank.stat"
+        stat.write_text("   \nrest of file\n")
+        assert detect_climate_zone_from_stat(stat) is None
+
+
+class TestValidateEpwSegment:
+    """Direct tests for the path-segment guard used by download_epw."""
+
+    def test_non_string_rejected(self) -> None:
+        with pytest.raises(EPWValidationError, match="must be a string"):
+            _validate_epw_segment(123, "region")  # type: ignore[arg-type]
+
+    def test_over_length_rejected(self) -> None:
+        with pytest.raises(EPWValidationError, match="too long"):
+            _validate_epw_segment("a" * 129, "region")
