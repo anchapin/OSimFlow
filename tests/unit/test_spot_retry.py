@@ -33,6 +33,8 @@ def _make_executor(
         ex._ec2_client = MagicMock()  # noqa: SLF001
         ex.job_queue = "test-queue"
         ex.job_definition = "test-job-def"
+        ex.on_demand_job_queue = "test-ondemand-queue" if fallback_to_on_demand else None
+        ex.on_demand_job_definition = None
         ex.poll_interval_s = poll_interval_s
         ex.max_poll_interval_s = 0.02
         ex.max_spot_price_usd = max_spot_price_usd
@@ -207,6 +209,60 @@ class TestFallbackToOnDemand:
             handle.result()
 
         assert handle.job_id == "ondemand-1"
+
+
+class TestOnDemandRouting:
+    """Issue #1816: fallback must change the capacity route."""
+
+    def test_retry_exhaustion_switches_queue(self) -> None:
+        ex = _make_executor(max_retries=0, fallback_to_on_demand=True)
+        client = ex._get_client()  # noqa: SLF001
+        client.submit_job.side_effect = [
+            _mock_submit_response("spot-fail"),
+            _mock_submit_response("ondemand-ok"),
+        ]
+        client.describe_jobs.side_effect = [
+            _mock_describe_response("FAILED", "Spot interruption"),
+            _mock_describe_response("SUCCEEDED"),
+        ]
+        with patch("osimflow.testing.patch_targets.time.sleep"):
+            handle = ex.submit(lambda: None, name="test")
+            handle.result()
+        queues = [c.kwargs["jobQueue"] for c in client.submit_job.call_args_list]
+        assert queues == ["test-queue", "test-ondemand-queue"]
+
+    def test_price_ceiling_fallback_submits_to_on_demand_queue(self) -> None:
+        ex = _make_executor(max_spot_price_usd=0.05, fallback_to_on_demand=True)
+        ex._get_ec2_client().describe_spot_price_history.return_value = (  # noqa: SLF001
+            _mock_spot_price(0.10)
+        )
+        client = ex._get_client()  # noqa: SLF001
+        client.submit_job.return_value = _mock_submit_response("job-od")
+        ex.submit(lambda: None, name="test")
+        assert client.submit_job.call_args.kwargs["jobQueue"] == "test-ondemand-queue"
+
+    def test_on_demand_job_definition_override(self) -> None:
+        ex = _make_executor(fallback_to_on_demand=True)
+        ex.on_demand_job_definition = "od-def"
+        client = ex._get_client()  # noqa: SLF001
+        client.submit_job.return_value = _mock_submit_response("x")
+        ex._submit_job(  # noqa: SLF001
+            name="n",
+            cpus=1,
+            memory_mb=1,
+            time_min=1,
+            environment=[],
+            **ex._on_demand_route(),  # noqa: SLF001
+        )
+        assert client.submit_job.call_args.kwargs["jobDefinition"] == "od-def"
+
+    def test_fallback_without_on_demand_queue_rejected(self) -> None:
+        with pytest.raises(ValueError, match="on_demand_job_queue"):
+            AWSBatchExecutor(fallback_to_on_demand=True)
+
+    def test_fallback_with_same_queue_rejected(self) -> None:
+        with pytest.raises(ValueError, match="must differ"):
+            AWSBatchExecutor(job_queue="q", on_demand_job_queue="q", fallback_to_on_demand=True)
 
 
 class TestMaxRetriesExhaustion:

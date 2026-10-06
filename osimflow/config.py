@@ -937,6 +937,8 @@ class CampaignConfig:
 
     aws_batch_max_spot_price_usd: float | None = None
     aws_batch_fallback_to_on_demand: bool = False
+    aws_batch_on_demand_queue: str | None = None
+    aws_batch_on_demand_job_definition: str | None = None
     aws_batch_max_retries: int = 3
     aws_batch_submit_rps: float | None = None
     # Issue #1633: surface the containerOverrides.secrets-based HMAC
@@ -1125,6 +1127,8 @@ class CampaignConfig:
             self.aws_batch = AWSBatchConfig(
                 max_spot_price_usd=self.aws_batch_max_spot_price_usd,
                 fallback_to_on_demand=self.aws_batch_fallback_to_on_demand,
+                on_demand_job_queue=self.aws_batch_on_demand_queue,
+                on_demand_job_definition=self.aws_batch_on_demand_job_definition,
                 max_retries=self.aws_batch_max_retries,
                 submit_rps=self.aws_batch_submit_rps,
             )
@@ -1260,6 +1264,8 @@ class CampaignConfig:
                 # AWS Batch executor delegation
                 "aws_batch_max_spot_price_usd": ("aws_batch", "max_spot_price_usd"),
                 "aws_batch_fallback_to_on_demand": ("aws_batch", "fallback_to_on_demand"),
+                "aws_batch_on_demand_queue": ("aws_batch", "on_demand_job_queue"),
+                "aws_batch_on_demand_job_definition": ("aws_batch", "on_demand_job_definition"),
                 "aws_batch_max_retries": ("aws_batch", "max_retries"),
                 "aws_batch_submit_rps": ("aws_batch", "submit_rps"),
                 # Azure Batch executor delegation
@@ -1713,6 +1719,16 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             else None
         ),
         aws_batch_fallback_to_on_demand=bool(args.get("aws_batch_fallback_to_on_demand", False)),
+        aws_batch_on_demand_queue=(
+            str(args["aws_batch_on_demand_queue"])
+            if args.get("aws_batch_on_demand_queue")
+            else None
+        ),
+        aws_batch_on_demand_job_definition=(
+            str(args["aws_batch_on_demand_job_definition"])
+            if args.get("aws_batch_on_demand_job_definition")
+            else None
+        ),
         aws_batch_max_retries=int(str(args.get("aws_batch_max_retries", 3))),
         aws_batch_submit_rps=(
             float(str(args["aws_batch_submit_rps"]))

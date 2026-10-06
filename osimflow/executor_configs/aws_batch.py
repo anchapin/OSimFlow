@@ -24,6 +24,11 @@ class AWSBatchConfig:
     fallback_to_on_demand
         Whether to fall back to on-demand instances when Spot price
         exceeds the ceiling or max retries are exhausted.
+    on_demand_job_queue
+        On-demand-capable Batch job queue the fallback resubmits to
+        (required with ``fallback_to_on_demand``; issue #1816).
+    on_demand_job_definition
+        Optional job definition used for the on-demand fallback.
     max_retries
         Maximum number of times a spot-interrupted job is retried before
         falling back or failing.
@@ -43,6 +48,8 @@ class AWSBatchConfig:
 
     max_spot_price_usd: float | None = None
     fallback_to_on_demand: bool = False
+    on_demand_job_queue: str | None = None
+    on_demand_job_definition: str | None = None
     max_retries: int = 3
     submit_rps: float | None = None
     payload_secret_arn: str | None = None
@@ -72,6 +79,20 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "failing. Requires --aws-batch-max-spot-price-usd or spot "
             "interruption retries."
         ),
+    )
+    parser_group.add_argument(
+        "--aws-batch-on-demand-queue",
+        default=None,
+        help=(
+            "On-demand-capable Batch job queue used by "
+            "--aws-batch-fallback-to-on-demand. Required with the fallback "
+            "flag and must differ from --aws-batch-queue (issue #1816)."
+        ),
+    )
+    parser_group.add_argument(
+        "--aws-batch-on-demand-job-definition",
+        default=None,
+        help="Optional job definition used for the on-demand fallback.",
     )
     parser_group.add_argument(
         "--aws-batch-max-retries",
@@ -173,6 +194,8 @@ def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
             float(max_spot_price_usd) if max_spot_price_usd is not None else None
         ),
         "fallback_to_on_demand": bool(kwargs.get("aws_batch_fallback_to_on_demand", False)),
+        "on_demand_job_queue": kwargs.get("aws_batch_on_demand_queue"),
+        "on_demand_job_definition": kwargs.get("aws_batch_on_demand_job_definition"),
         "max_retries": int(kwargs.get("aws_batch_max_retries", 3)),
         "instance_type": kwargs.get("aws_batch_instance_type"),
         "submit_rps": submit_rps,

@@ -216,7 +216,8 @@ physically live in their executor's config module, not in
 
 - **Executor + parallelism:** `--algorithm`,
   `--aws-batch-instance-type`, `--aws-batch-job-definition`,
-  `--aws-batch-max-retries`, `--aws-batch-max-spot-price-usd`,
+  `--aws-batch-max-retries`, `--aws-batch-on-demand-job-definition`,
+  `--aws-batch-on-demand-queue`, `--aws-batch-max-spot-price-usd`,
   `--aws-batch-on-demand-price`, `--aws-batch-payload-secret-arn`,
 `--aws-batch-queue`, `--aws-batch-spot-price`,
   `--aws-batch-submit-rps`, `--aws-batch-fallback-to-on-demand`, `--submit-rps`,
