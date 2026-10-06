@@ -41,6 +41,11 @@ ALLOWLISTED_NON_TEST_MODULES: dict[str, str] = {
     "integration/_resource_contract.py": (
         "shared helper module imported by the real-substrate integration tests"
     ),
+    # Evidence verifiers imported by test_aws_batch_acceptance.py and
+    # tests/unit/test_aws_batch_acceptance_evidence.py (issue #1815).
+    "integration/_aws_batch_acceptance.py": (
+        "AWS Batch acceptance evidence helpers imported by live + unit tests"
+    ),
 }
 
 _ALLOWED_BASENAMES = {"conftest.py", "__init__.py"}
