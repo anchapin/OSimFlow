@@ -30,7 +30,7 @@ PRECOMMIT := $(VENV)/bin/pre-commit
 # dedicated, NON-gating `chaos` CI job (`pytest -m chaos`), so a flake
 # there cannot block PRs. tests/contract/test_ci_marker_policy.py pins
 # this policy to the marker docs in pyproject.toml.
-PYTEST_CI_FLAGS := -n 2 --dist loadgroup --timeout=120 --ignore=tests/contract -m "not nomad_e2e and not slow and not chaos"
+PYTEST_CI_FLAGS := -n 2 --dist loadgroup --timeout=120 -v -o faulthandler_timeout=150 --ignore=tests/contract -m "not nomad_e2e and not slow and not chaos"
 # Subprocess coverage bootstrap (issue #1557): `bin/*.py` shims spawn
 # `python -m osimflow._work_scripts.*` workers; without
 # `COVERAGE_PROCESS_START` the auto-installed `coverage.pth` would not
