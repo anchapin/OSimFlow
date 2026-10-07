@@ -12,6 +12,7 @@ live here so every test file can use them without local fixture duplication.
 """
 
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -235,3 +236,30 @@ def pytest_configure(config: pytest.Config) -> None:
     # trio is optional and not installed in all environments (issue #875).
     # Setting the mode to "auto" with only asyncio available ensures tests run.
     config.option.asyncio_mode = "auto"
+
+
+# ---------------------------------------------------------------------------
+# Signal-escalation counter isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_signal_escalation_counters() -> Iterator[None]:
+    """Keep ``handle_signal``'s process-global SIGINT/SIGTERM counters per-test.
+
+    ``osimflow._campaign_lifecycle.handle_signal`` escalates on the second
+    signal of a kind by restoring ``SIG_DFL`` and ``os.kill``-ing the
+    process (issue #1685).  The counters are module globals, so counts
+    leaked from ``TestSigintEscalation`` made a later, unrelated
+    ``handle_signal(SIGINT)`` call on the same xdist worker the "second"
+    one: the worker SIGINTed itself under ``SIG_DFL``, died
+    (``node down: Not properly terminated``) and wedged the ``make test-cov``
+    session until the CI job timeout.
+    """
+    from osimflow import _campaign_lifecycle as lifecycle
+
+    lifecycle._sigint_count = 0
+    lifecycle._sigterm_count = 0
+    yield
+    lifecycle._sigint_count = 0
+    lifecycle._sigterm_count = 0
