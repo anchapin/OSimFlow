@@ -5,9 +5,11 @@
 #   • OIDC identity federation (GitHub Actions + workload identity)
 #   • CloudWatch log retention policy
 #   • Cost anomaly and budget alerts
-#   • DynamoDB encryption (for Terraform state lock table)
 #
-# Remote state (S3 backend with DynamoDB locking) is configured in versions.tf.
+# Remote state (S3 backend with DynamoDB locking) is configured in versions.tf;
+# the bucket and lock table are created by
+# infra/aws/scripts/bootstrap-terraform-backend.sh (Terraform cannot manage its
+# own backend).
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -20,29 +22,6 @@ resource "aws_cloudwatch_log_group" "batch" {
 
   tags = {
     Name = "${local.name_prefix}-batch-logs"
-  }
-}
-
-# ---------------------------------------------------------------------------
-# 2. DynamoDB table for Terraform state locking (referenced by backend)
-# ---------------------------------------------------------------------------
-
-resource "aws_dynamodb_table" "terraform_locks" {
-  name         = "osimflow-terraform-locks"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  server_side_encryption {
-    enabled = true
-  }
-
-  tags = {
-    Name = "${local.name_prefix}-terraform-locks"
   }
 }
 
@@ -66,17 +45,17 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
 
     condition {
       test     = "StringEquals"
-      variable = "StringEquals:sub"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
       values = [
         "repo:anchapin/OSimFlow:ref:refs/heads/main",
         "repo:anchapin/OSimFlow:pull_request",
       ]
-    }
-
-    condition {
-      test     = "ForAnyValue:StringEquals"
-      variable = "iat-normally-openstack:sub"
-      values   = ["*"]
     }
   }
 }
