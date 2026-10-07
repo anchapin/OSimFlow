@@ -462,10 +462,11 @@ class KubernetesExecutor(BaseExecutor):
         if self._client is None:
             from kubernetes import client, config
 
+            k8s_config: Any = config
             try:
-                config.load_kube_config()
+                k8s_config.load_kube_config()
             except Exception:
-                config.load_incluster_config()
+                k8s_config.load_incluster_config()
             self._client = client.BatchV1Api()
         return self._client
 
@@ -949,8 +950,8 @@ class KubernetesExecutor(BaseExecutor):
             spec=client.V1JobSpec(**job_spec_kwargs),
         )
 
-        client = self._get_client()
-        client.create_namespaced_job(namespace=self.namespace, body=job)
+        batch_api = self._get_client()
+        batch_api.create_namespaced_job(namespace=self.namespace, body=job)
 
         log.info(
             "kubernetes submit_job -> job=%s namespace=%s",
