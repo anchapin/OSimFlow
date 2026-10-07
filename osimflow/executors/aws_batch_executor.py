@@ -1059,10 +1059,15 @@ class AWSBatchExecutor(BaseExecutor):
         # work function in container-local storage.
         step_name = self._infer_step_name(name)
         self.validate_work_fn(step_name, fn)
+        # Issue #1809: the Batch container shares no filesystem with the
+        # controller — stage every Path in S3 and ship references instead.
+        staged_args, staged_kwargs = self._stage_task_inputs(
+            tuple(args), {}, result_hint=result_hint, transport=transport
+        )
         task_payload = self._build_task_payload(
             step_name=step_name,
-            args=args,
-            kwargs={},
+            args=staged_args,
+            kwargs=staged_kwargs,
             result_hint=result_hint,
             name=name,
         )

@@ -580,6 +580,25 @@ The executor polls `batch.describe_jobs` with exponential backoff (5s start,
 60s cap) until each task completes. Failed tasks raise a `RuntimeError`
 with the Batch `statusReason`.
 
+**Input staging (issue #1809).** Batch containers share no filesystem with
+the controller, so `aws_batch` requires object storage
+(`--result-storage-backend s3 --result-storage-bucket <bucket>`). Every
+`Path` in a step call (template package with OSW/OSM/EPW/measures and nested
+files, and the intermediate apply/simulation outputs consumed by later
+stages) is uploaded as immutable, content-addressed objects under
+`<outdir-name>/_inputs/` plus a SHA-256 manifest. The worker downloads and
+verifies them into container scratch (`OSIMFLOW_SCRATCH_DIR`, default a temp
+dir, removed afterwards), runs the step against the scratch paths, and
+uploads outputs under the key derived from the controller path so the
+controller materializes them in place. Missing objects, short/corrupt
+downloads, invalid or tampered manifests and S3 permission errors fail the
+sample explicitly; there is no fallback to controller-local paths. The
+worker's role needs `s3:GetObject`/`s3:PutObject`/`s3:ListBucket` on the
+bucket, and the controller `s3:PutObject`/`s3:GetObject`. Re-running the same
+`--outdir` rewrites the same result keys (stale objects from a failed earlier
+attempt are overwritten, not versioned). A live S3/Batch smoke run is covered
+by the AWS Batch E2E workflow.
+
 For the full setup guide including IAM roles, S3 buckets, and job
 definitions, see [deployment/aws-batch.md](deployment/aws-batch.md).
 
