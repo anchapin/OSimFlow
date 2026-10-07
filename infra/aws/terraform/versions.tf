@@ -15,6 +15,8 @@ terraform {
   # PREREQUISITE (must exist before `terraform init`):
   #   • S3 bucket  : osimflow-terraform-state   (or custom via -backend-config)
   #   • DynamoDB table: osimflow-terraform-locks (with partition key LockID)
+  # Terraform cannot create its own backend; create both idempotently with:
+  #   ../scripts/bootstrap-terraform-backend.sh
   #
   # To override at init time:
   #   terraform init -backend-config="bucket=your-bucket" -backend-config="key=prod/terraform.tfstate"

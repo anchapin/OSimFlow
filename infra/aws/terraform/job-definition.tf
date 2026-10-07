@@ -44,7 +44,7 @@ resource "aws_batch_job_definition" "osimflow" {
     },
     # Issue #1808: Fargate requires resourceRequirements + networkConfiguration;
     # EC2 keeps the legacy vcpus/memory/privileged fields.
-    local.is_fargate ? merge({
+    jsondecode(local.is_fargate ? jsonencode(merge({
       resourceRequirements = [
         { type = "VCPU", value = tostring(var.job_vcpus) },
         { type = "MEMORY", value = tostring(var.job_memory_mb) },
@@ -59,11 +59,11 @@ resource "aws_batch_job_definition" "osimflow" {
       var.fargate_ephemeral_storage_gib == null ? {} : {
         ephemeralStorage = { sizeInGiB = var.fargate_ephemeral_storage_gib }
       }
-      ) : {
+      )) : jsonencode({
       vcpus      = var.job_vcpus
       memory     = var.job_memory_mb
       privileged = false
-    },
+    })),
     # Issue #1811: SubmitJob cannot carry secrets; inject the task-payload
     # HMAC secret here so the execution role resolves it at container start.
     var.payload_secret_arn == null ? {} : {

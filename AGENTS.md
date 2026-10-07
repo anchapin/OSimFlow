@@ -1164,6 +1164,8 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
   changes.
 - `infra/aws/scripts/sync-openstudio-to-ecr.sh` — ECR mirror
   script (exponential-backoff retry, multi-region).
+- `infra/aws/scripts/bootstrap-terraform-backend.sh` — idempotent
+  creation of the Terraform remote-state S3 bucket + DynamoDB lock table.
 - `infra/nomad/examples/ha/` — native host-OS Nomad HA
   cluster recipe (3-server Raft, ACL bootstrap, mTLS).
   `infra/nomad/acl/policies/` for agent/worker policies.

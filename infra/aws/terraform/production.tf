@@ -5,9 +5,11 @@
 #   • OIDC identity federation (GitHub Actions + workload identity)
 #   • CloudWatch log retention policy
 #   • Cost anomaly and budget alerts
-#   • DynamoDB encryption (for Terraform state lock table)
 #
-# Remote state (S3 backend with DynamoDB locking) is configured in versions.tf.
+# Remote state (S3 backend with DynamoDB locking) is configured in versions.tf;
+# the bucket and lock table are created by
+# infra/aws/scripts/bootstrap-terraform-backend.sh (Terraform cannot manage its
+# own backend).
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -24,30 +26,7 @@ resource "aws_cloudwatch_log_group" "batch" {
 }
 
 # ---------------------------------------------------------------------------
-# 2. DynamoDB table for Terraform state locking (referenced by backend)
-# ---------------------------------------------------------------------------
-
-resource "aws_dynamodb_table" "terraform_locks" {
-  name         = "osimflow-terraform-locks"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  server_side_encryption {
-    enabled = true
-  }
-
-  tags = {
-    Name = "${local.name_prefix}-terraform-locks"
-  }
-}
-
-# ---------------------------------------------------------------------------
-# 3. OIDC identity provider — federated GitHub Actions workload identity
+# 2. OIDC identity provider — federated GitHub Actions workload identity
 # ---------------------------------------------------------------------------
 # Allows GitHub Actions workflows to assume an IAM role without storing
 # long-lived AWS credentials. Used by the nightly aws-batch-e2e workflow.
@@ -66,17 +45,17 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
 
     condition {
       test     = "StringEquals"
-      variable = "StringEquals:sub"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
       values = [
         "repo:anchapin/OSimFlow:ref:refs/heads/main",
         "repo:anchapin/OSimFlow:pull_request",
       ]
-    }
-
-    condition {
-      test     = "ForAnyValue:StringEquals"
-      variable = "iat-normally-openstack:sub"
-      values   = ["*"]
     }
   }
 }
@@ -107,6 +86,7 @@ data "aws_iam_policy_document" "github_actions" {
     actions = [
       "batch:SubmitJob",
       "batch:DescribeJobs",
+      "batch:DescribeJobDefinitions",
       "batch:ListJobs",
       "batch:TerminateJob",
     ]
@@ -156,7 +136,7 @@ resource "aws_iam_role_policy" "github_actions" {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Cost alerts — budget at 80 % of monthly limit + daily anomaly
+# 3. Cost alerts — budget at 80 % of monthly limit + daily anomaly
 # ---------------------------------------------------------------------------
 
 resource "aws_budgets_budget" "monthly_cost" {
@@ -167,12 +147,16 @@ resource "aws_budgets_budget" "monthly_cost" {
   time_period_start = "2024-01-01_00:00"
   time_unit         = "MONTHLY"
 
-  notification {
-    comparison_operator = "GREATER_THAN"
-    threshold           = 80
-    threshold_type      = "PERCENTAGE"
-    notification_type   = "ACTUAL"
-    subscriber_email_addresses = var.alert_email_addresses
+  # AWS requires at least one subscriber per notification.
+  dynamic "notification" {
+    for_each = length(var.alert_email_addresses) > 0 ? [1] : []
+    content {
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = 80
+      threshold_type             = "PERCENTAGE"
+      notification_type          = "ACTUAL"
+      subscriber_email_addresses = var.alert_email_addresses
+    }
   }
 }
 
@@ -181,8 +165,8 @@ resource "aws_cloudwatch_metric_alarm" "daily_cost_anomaly" {
   comparison_operator = "LessThanLowerThreshold"
   evaluation_periods  = 1
   datapoints_to_alarm = 1
-  threshold           = 0
-  treat_missing_data  = "BREACHING"
+  threshold_metric_id = "anomalyDetection"
+  treat_missing_data  = "breaching"
 
   metric_query {
     id          = "anomalyDetection"
@@ -192,7 +176,8 @@ resource "aws_cloudwatch_metric_alarm" "daily_cost_anomaly" {
   }
 
   metric_query {
-    id = "monthly_cost"
+    id          = "monthly_cost"
+    return_data = true # alarms on anomaly bands need both series to return data
     metric {
       namespace   = "AWS/Billing"
       metric_name = "EstimatedCharges"

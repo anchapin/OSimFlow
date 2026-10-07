@@ -164,7 +164,8 @@ resource "aws_batch_compute_environment" "osimflow" {
       }
     }
 
-    tags = {
+    # Batch rejects compute-resource tags on Fargate environments.
+    tags = local.is_fargate ? null : {
       Name = "${local.name_prefix}-batch-compute"
     }
   }

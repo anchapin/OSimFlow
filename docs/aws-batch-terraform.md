@@ -29,9 +29,18 @@ This guide walks you through provisioning the AWS Batch infrastructure for OSimF
 
 ### 1. Initialize Terraform
 
+The remote-state S3 bucket and DynamoDB lock table must exist before
+`terraform init`. Create whatever is missing (safe to re-run):
+
+```bash
+infra/aws/scripts/bootstrap-terraform-backend.sh          # defaults from versions.tf
+# bucket names are global; if taken, pick another and re-init with it:
+# infra/aws/scripts/bootstrap-terraform-backend.sh --bucket my-unique-bucket
+```
+
 ```bash
 cd infra/aws/terraform
-terraform init
+terraform init   # add -reconfigure -backend-config="bucket=my-unique-bucket" if you changed it
 ```
 
 ### 2. Review the plan

@@ -106,7 +106,7 @@ ensure_ecr_repo() {
 # ---------------------------------------------------------------------------
 
 echo "=== Resolving digest for ${SOURCE_IMAGE} ==="
-DIGEST=$(docker manifest inspect "${SOURCE_IMAGE}" | jq -r '.[0].digest')
+DIGEST=$(docker manifest inspect "${SOURCE_IMAGE}" | jq -r '.manifests[0].digest // .digest')
 
 if [[ -z "$DIGEST" || "$DIGEST" == "null" ]]; then
   echo ":: ERROR: Failed to resolve digest for ${SOURCE_IMAGE}" >&2
