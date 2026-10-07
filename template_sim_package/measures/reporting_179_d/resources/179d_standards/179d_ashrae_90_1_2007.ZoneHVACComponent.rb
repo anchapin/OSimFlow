@@ -16,7 +16,7 @@ class ACM179dASHRAE9012007
     # Zone HVAC operating schedule if providing ventilation
     # Zone HVAC components return an OptionalSchedule object for supplyAirFanOperatingModeSchedule
     # except for ZoneHVACTerminalUnitVariableRefrigerantFlow which returns a Schedule
-    # and starting at 3.5.0, PTAC / PTHP also return a Schedule, optional before that
+    # and starting at 3.10.0, PTAC / PTHP also return a Schedule, optional before that
     existing_sch = nil
     if zone_hvac_component.to_ZoneHVACFourPipeFanCoil.is_initialized
       zone_hvac_component = zone_hvac_component.to_ZoneHVACFourPipeFanCoil.get

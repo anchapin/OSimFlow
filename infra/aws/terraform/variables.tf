@@ -30,7 +30,7 @@ variable "instance_types" {
 variable "openstudio_version" {
   description = "OpenStudio version tag used in the container image"
   type        = string
-  default     = "3.5.0"
+  default     = "3.10.0"
 }
 
 variable "compute_platform" {

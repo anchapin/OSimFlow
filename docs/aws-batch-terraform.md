@@ -69,7 +69,7 @@ osimflow run \
   --executor aws_batch \
   --aws-batch-queue osimflow-dev-job-queue \
   --aws-batch-job-definition osimflow-dev-openstudio-job \
-  --openstudio_version 3.5.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 100 \
@@ -93,7 +93,7 @@ Copy this command and give it to the engineering team along with the handoff det
 | `region` | `us-east-1` | AWS region |
 | `project_name` | `osimflow` | Resource name prefix |
 | `environment` | `dev` | Environment label (dev/staging/prod) |
-| `openstudio_version` | `3.5.0` | Container image tag |
+| `openstudio_version` | `3.10.0` | Container image tag |
 | `use_spot` | `true` | Use Spot instances (60–90% cheaper) |
 | `max_vcpus` | `256` | Maximum compute capacity |
 | `job_vcpus` | `2` | vCPUs per simulation job |
@@ -185,7 +185,7 @@ After running `terraform apply`, give the engineering team the following informa
 | **Batch job definition name** | `terraform output batch_job_definition_name` | `osimflow-dev-openstudio-job` |
 | **S3 bucket name** | `terraform output s3_bucket_name` | `osimflow-dev-artifacts-a1b2c3d4` |
 | **AWS region** | `terraform output region` | `us-east-1` |
-| **OpenStudio version** | The value of `openstudio_version` | `3.5.0` |
+| **OpenStudio version** | The value of `openstudio_version` | `3.10.0` |
 | **Ready-to-run command** | `terraform output -raw osimflow_run_command` | (full osimflow CLI command) |
 
 The engineering team needs:

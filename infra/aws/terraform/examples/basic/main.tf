@@ -24,7 +24,7 @@ module "osimflow" {
   project_name       = "osimflow"
   environment        = "dev"
   region             = "us-east-1"
-  openstudio_version = "3.5.0"
+  openstudio_version = "3.10.0"
 
   # On-demand instances (cost-predictable, no interruption)
   use_spot       = false

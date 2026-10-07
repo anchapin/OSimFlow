@@ -434,7 +434,7 @@ class TestApplyEnvIsolated:
         state is restored.
         """
         seen: list[str] = []
-        for value in ("3.5.0", "3.11.0", "3.12.0"):
+        for value in ("3.10.0", "3.11.0", "3.12.0"):
             observed = _apply_env_isolated(
                 {"OSIMFLOW_DASK_TEST_KEY": value},
                 lambda: os.environ.get("OSIMFLOW_DASK_TEST_KEY"),
@@ -446,7 +446,7 @@ class TestApplyEnvIsolated:
                 f"task with value={value!r} left a residual key"
             )
 
-        assert seen == ["3.5.0", "3.11.0", "3.12.0"], seen
+        assert seen == ["3.10.0", "3.11.0", "3.12.0"], seen
 
     def test_concurrent_tasks_do_not_leak_between_each_other(self) -> None:
         """Acceptance criteria #1: concurrent tasks with unique keys don't
@@ -680,7 +680,7 @@ class TestDaskWrappedClosure:
             ex_a,
             make_task_body("a"),
             name="a",
-            openstudio_version="3.5.0",
+            openstudio_version="3.10.0",
         )
 
         ex_b = self._make_executor()
@@ -710,7 +710,7 @@ class TestDaskWrappedClosure:
         # would have left the LAST-set value lingering and the
         # second-to-run closure would observe it; the snapshot/restore
         # code guarantees the override was applied per-task).
-        assert seen_a.startswith("a:") and seen_a.endswith(":3.5.0"), seen_a
+        assert seen_a.startswith("a:") and seen_a.endswith(":3.10.0"), seen_a
         assert seen_b.startswith("b:") and seen_b.endswith(":3.11.0"), seen_b
 
         # Acceptance criteria #2: a third task sees no residual keys.

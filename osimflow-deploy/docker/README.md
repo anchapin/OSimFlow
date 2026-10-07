@@ -25,7 +25,7 @@ For AWS Batch production workloads, mirror the upstream image to ECR to avoid Do
 ```bash
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
   --repository <account-id>.dkr.ecr.<region>.amazonaws.com/osimflow-openstudio \
-  --versions 3.4.0 3.5.0
+  --versions 3.4.0 3.10.0
 ```
 
 The ECR lifecycle policy keeps the last 5 tagged `3.*` images.
@@ -35,7 +35,7 @@ The ECR lifecycle policy keeps the last 5 tagged `3.*` images.
 On Slurm clusters with Singularity/Apptainer, convert the Docker image:
 
 ```bash
-singularity pull openstudio-3.5.0.sif docker://nrel/openstudio:3.5.0
+singularity pull openstudio-3.10.0.sif docker://nrel/openstudio:3.10.0
 ```
 
 ## Version pinning
@@ -43,7 +43,7 @@ singularity pull openstudio-3.5.0.sif docker://nrel/openstudio:3.5.0
 The container version is pinned via the `--openstudio_version` CLI flag. This becomes the dynamic container tag passed to the executor:
 
 ```bash
-osimflow run --openstudio_version 3.5.0 ...
+osimflow run --openstudio_version 3.10.0 ...
 ```
 
 ## See also
