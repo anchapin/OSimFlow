@@ -26,7 +26,7 @@ resource "aws_cloudwatch_log_group" "batch" {
 }
 
 # ---------------------------------------------------------------------------
-# 3. OIDC identity provider — federated GitHub Actions workload identity
+# 2. OIDC identity provider — federated GitHub Actions workload identity
 # ---------------------------------------------------------------------------
 # Allows GitHub Actions workflows to assume an IAM role without storing
 # long-lived AWS credentials. Used by the nightly aws-batch-e2e workflow.
@@ -135,7 +135,7 @@ resource "aws_iam_role_policy" "github_actions" {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Cost alerts — budget at 80 % of monthly limit + daily anomaly
+# 3. Cost alerts — budget at 80 % of monthly limit + daily anomaly
 # ---------------------------------------------------------------------------
 
 resource "aws_budgets_budget" "monthly_cost" {
@@ -147,10 +147,10 @@ resource "aws_budgets_budget" "monthly_cost" {
   time_unit         = "MONTHLY"
 
   notification {
-    comparison_operator = "GREATER_THAN"
-    threshold           = 80
-    threshold_type      = "PERCENTAGE"
-    notification_type   = "ACTUAL"
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 80
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
     subscriber_email_addresses = var.alert_email_addresses
   }
 }
