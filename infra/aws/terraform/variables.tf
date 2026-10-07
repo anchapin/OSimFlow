@@ -115,3 +115,15 @@ variable "alert_email_addresses" {
   type        = list(string)
   default     = []
 }
+
+variable "payload_secret_arn" {
+  description = "ARN of a Secrets Manager secret or SSM parameter holding the task-payload HMAC secret (OSIMFLOW_TASK_PAYLOAD_SECRET). Injected via the job definition's containerProperties.secrets (SubmitJob cannot carry secrets) and readable by the task execution role. Pass the same ARN to --aws-batch-payload-secret-arn."
+  type        = string
+  default     = null
+}
+
+variable "payload_secret_kms_key_arn" {
+  description = "ARN of the customer-managed KMS key encrypting payload_secret_arn, if any. Grants kms:Decrypt to the task execution role."
+  type        = string
+  default     = null
+}

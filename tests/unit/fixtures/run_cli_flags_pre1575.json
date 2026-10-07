@@ -200,7 +200,7 @@
     "const": null,
     "default": null,
     "dest": "aws_batch_payload_secret_arn",
-    "help": "ARN of an AWS Secrets Manager secret (or SSM Parameter Store parameter) holding the task-payload HMAC secret (key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, the job spec emits containerOverrides.secrets (valueFrom) instead of a literal env value, so the raw secret never appears in the job spec where it is readable via DescribeJobs and persists in job history (issue #1633). The job's task role needs secretsmanager:GetSecretValue (or ssm:GetParameter + kms:Decrypt) on the ARN. Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing. See docs/secret-management.md.",
+    "help": "ARN of an AWS Secrets Manager secret (or SSM Parameter Store parameter) holding the task-payload HMAC secret (key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, the job definition must inject it via containerProperties.secrets (validated via describe_job_definitions before submission; SubmitJob has no containerOverrides.secrets) so the raw secret never appears in the job spec where it is readable via DescribeJobs (issues #1633/#1811). The job's EXECUTION role needs secretsmanager:GetSecretValue (or ssm:GetParameter + kms:Decrypt) on the ARN. Requires OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the same value for signing. See docs/secret-management.md.",
     "metavar": null,
     "nargs": null,
     "option_strings": [

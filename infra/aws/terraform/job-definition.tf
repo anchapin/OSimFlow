@@ -17,7 +17,7 @@ resource "aws_batch_job_definition" "osimflow" {
     attempt_duration_seconds = var.job_timeout_seconds
   }
 
-  container_properties = jsonencode({
+  container_properties = jsonencode(merge({
     image      = local.container_image
     vcpus      = var.job_vcpus
     memory     = var.job_memory_mb
@@ -41,7 +41,15 @@ resource "aws_batch_job_definition" "osimflow" {
         "awslogs-stream-prefix" = "osimflow"
       }
     }
-  })
+    },
+    # Issue #1811: SubmitJob cannot carry secrets; inject the task-payload
+    # HMAC secret here so the execution role resolves it at container start.
+    var.payload_secret_arn == null ? {} : {
+      secrets = [
+        { name = "OSIMFLOW_TASK_PAYLOAD_SECRET", valueFrom = var.payload_secret_arn },
+      ]
+    }
+  ))
 
   tags = {
     Name = "${local.name_prefix}-openstudio-job-def"

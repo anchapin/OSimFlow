@@ -502,7 +502,7 @@ class AzureBatchExecutor(BaseExecutor):
         # ``value``; no ``value_ref``/Key Vault variant exists, and the
         # newest stable data-plane API 2025-06-01 matches) — so an
         # out-of-band delivery comparable to K8s secretKeyRef / Nomad
-        # Vault / AWS containerOverrides.secrets / Google
+        # Vault / AWS job-definition containerProperties.secrets / Google
         # secret_variables is not implementable from task submission.
         # Refuse the configured flag loudly instead of silently
         # shipping the raw secret as a literal task environment

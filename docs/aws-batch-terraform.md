@@ -219,3 +219,14 @@ terraform destroy
 ```
 
 > **Warning:** this deletes all created resources. Set `s3_force_destroy = true` to remove the S3 bucket even if it contains objects.
+
+## Task-payload HMAC secret (issue #1811)
+
+`SubmitJob` cannot carry secrets. Set the Terraform variable
+`payload_secret_arn` (Secrets Manager or SSM parameter ARN, optionally
+`payload_secret_kms_key_arn`) to inject `OSIMFLOW_TASK_PAYLOAD_SECRET` through
+the job definition's `containerProperties.secrets`; the **execution** role is
+granted `secretsmanager:GetSecretValue` / `ssm:GetParameter` and `kms:Decrypt`.
+Pass the same ARN as `--aws-batch-payload-secret-arn` and export the same value
+as `OSIMFLOW_TASK_PAYLOAD_SECRET` on the orchestrator; the executor verifies the
+job definition references the ARN before submitting.

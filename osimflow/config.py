@@ -946,7 +946,7 @@ class CampaignConfig:
     aws_batch_on_demand_job_definition: str | None = None
     aws_batch_max_retries: int = 3
     aws_batch_submit_rps: float | None = None
-    # Issue #1633: surface the containerOverrides.secrets-based HMAC
+    # Issue #1633: surface the job-definition-secret-validated HMAC
     # secret delivery on the CLI — without it the secret ships as a
     # literal env value in the Batch job spec (readable via
     # DescribeJobs, persisted in job history).

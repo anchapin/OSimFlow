@@ -489,10 +489,12 @@ class AWSBatchExecutor(BaseExecutor):
         # Issue #1633: ARN of an AWS Secrets Manager secret or SSM
         # Parameter Store parameter holding the task-payload HMAC
         # secret. When set, the secret ships via
-        # ``containerOverrides.secrets`` (resolved by the ECS/Batch
-        # agent at container start) instead of a literal env value in
-        # the job spec, where it would be readable via DescribeJobs and
-        # persist in job history.
+        # the job definition's ``containerProperties.secrets`` (resolved
+        # by the ECS/Batch agent at container start via the execution
+        # role) instead of a literal env value in the job spec, where it
+        # would be readable via DescribeJobs. Issue #1811: SubmitJob has
+        # no ``containerOverrides.secrets``, so the ARN is only validated
+        # against the job definition before submission.
         self.payload_secret_arn = payload_secret_arn
         # boto3 retry config with adaptive mode for ThrottlingException
         # handling (issue #1010). Adaptive mode uses client-side rate
@@ -667,7 +669,7 @@ class AWSBatchExecutor(BaseExecutor):
             # paths). No-op in legacy unsigned mode. When a
             # ``payload_secret_arn`` is configured (issue #1633) the
             # signature ships alone — the raw secret is delivered
-            # out-of-band via ``containerOverrides.secrets`` so it never
+            # via the job definition's ``containerProperties.secrets`` so it never
             # appears in the job spec (readable via DescribeJobs).
             payload_secret_arn = getattr(self, "payload_secret_arn", None)
             if payload_secret_arn and not os.environ.get(TASK_PAYLOAD_SECRET_ENV):
@@ -683,7 +685,7 @@ class AWSBatchExecutor(BaseExecutor):
                     TASK_PAYLOAD_SECRET_ENV,
                 )
             if not payload_secret_arn and TASK_PAYLOAD_SECRET_ENV in os.environ:
-                # Issue #1633: without containerOverrides.secrets the
+                # Issue #1633: without a job-definition secret the
                 # shared secret ships as a literal env value serialized
                 # into the job spec, where anyone with
                 # batch:DescribeJobs can read it and forge signatures.
@@ -694,8 +696,8 @@ class AWSBatchExecutor(BaseExecutor):
                     "with batch:DescribeJobs can read the secret and "
                     "forge task-payload signatures. Store the secret in "
                     "AWS Secrets Manager (or SSM Parameter Store) and "
-                    "pass --aws-batch-payload-secret-arn <arn> to emit "
-                    "containerOverrides.secrets instead.",
+                    "pass --aws-batch-payload-secret-arn <arn> with a job "
+                    "definition that injects it via containerProperties.secrets.",
                     TASK_PAYLOAD_SECRET_ENV,
                 )
             env.extend(
@@ -728,22 +730,50 @@ class AWSBatchExecutor(BaseExecutor):
             env.append({"name": "OSIMFLOW_STUB_SIM", "value": stub_sim})
         return env
 
-    def _payload_secret_overrides(self) -> list[dict[str, str]]:
-        """Return the ``containerOverrides.secrets`` entries (issue #1633).
+    def _validate_job_definition_secret(self, job_definition: str) -> None:
+        """Fail before submission unless the job definition injects the secret.
 
-        When ``payload_secret_arn`` is configured, the HMAC secret is
-        delivered out-of-band: the ECS/Batch agent resolves the ARN
-        (Secrets Manager secret or SSM Parameter Store parameter — the
-        job's task role needs ``secretsmanager:GetSecretValue`` or
-        ``ssm:GetParameter`` + ``kms:Decrypt`` on it) at container
-        start and injects it as the ``OSIMFLOW_TASK_PAYLOAD_SECRET``
-        env var, so the raw value never appears in the job spec.
-        Returns an empty list in legacy mode.
+        AWS Batch ``SubmitJob`` has no ``containerOverrides.secrets``
+        (issue #1811); secrets can only be injected through the job
+        definition's ``containerProperties.secrets``. When
+        ``payload_secret_arn`` is configured, the selected definition
+        must map ``OSIMFLOW_TASK_PAYLOAD_SECRET`` to that exact ARN,
+        otherwise workers would reject every signed task.
         """
         arn = getattr(self, "payload_secret_arn", None)
         if not arn:
-            return []
-        return [{"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": arn}]
+            return
+        validated: set[str] = self.__dict__.setdefault("_validated_secret_job_defs", set())
+        if job_definition in validated:
+            return
+        client = self._get_client()
+        if ":" in job_definition:
+            response = client.describe_job_definitions(jobDefinitions=[job_definition])
+        else:
+            response = client.describe_job_definitions(
+                jobDefinitionName=job_definition, status="ACTIVE"
+            )
+        definitions: list[dict[str, Any]] = list(response.get("jobDefinitions", []))
+        if not definitions:
+            raise RuntimeError(
+                f"aws-batch-payload-secret-arn is set but job definition "
+                f"{job_definition!r} was not found (or has no ACTIVE revision)"
+            )
+        definition = max(definitions, key=lambda d: int(d.get("revision", 0)))
+        secrets = (definition.get("containerProperties") or {}).get("secrets") or []
+        mapped = {s.get("name"): s.get("valueFrom") for s in secrets}
+        if mapped.get(TASK_PAYLOAD_SECRET_ENV) != arn:
+            raise RuntimeError(
+                f"Job definition {job_definition!r} (revision "
+                f"{definition.get('revision')}) does not map "
+                f"{TASK_PAYLOAD_SECRET_ENV} to the configured "
+                f"--aws-batch-payload-secret-arn. Add "
+                f'{{"name": "{TASK_PAYLOAD_SECRET_ENV}", "valueFrom": "<arn>"}} '
+                f"to containerProperties.secrets (SubmitJob cannot inject "
+                f"secrets; issue #1811) and ensure the execution role can "
+                f"read it."
+            )
+        validated.add(job_definition)
 
     def _build_container_overrides(
         self,
@@ -752,7 +782,6 @@ class AWSBatchExecutor(BaseExecutor):
         memory_mb: int,
         environment: list[dict[str, str]],
         command: list[str] | None = None,
-        secrets: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Translate OSimFlow resource directives to Batch overrides.
 
@@ -764,9 +793,8 @@ class AWSBatchExecutor(BaseExecutor):
         When ``command`` is provided, it overrides the job definition's
         container command (e.g. to run ``python -m osimflow.remote_runner``).
 
-        When *secrets* is provided (issue #1633), it is passed through
-        as ``containerOverrides.secrets`` — the substrate-resolved
-        out-of-band secret channel.
+        ``SubmitJob`` does not accept ``containerOverrides.secrets``
+        (issue #1811); secrets are injected by the job definition.
         """
         overrides: dict[str, Any] = {
             "vcpus": cpus,
@@ -775,8 +803,6 @@ class AWSBatchExecutor(BaseExecutor):
         }
         if command is not None:
             overrides["command"] = command
-        if secrets:
-            overrides["secrets"] = secrets
         return overrides
 
     def _calculate_job_cost(
@@ -906,14 +932,12 @@ class AWSBatchExecutor(BaseExecutor):
         container command (e.g. to run ``python -m osimflow.remote_runner``).
         """
         queue = job_queue or self.job_queue
+        self._validate_job_definition_secret(job_definition or self.job_definition)
         overrides = self._build_container_overrides(
             cpus=cpus,
             memory_mb=memory_mb,
             environment=environment,
             command=command,
-            # Issue #1633: out-of-band HMAC secret delivery via
-            # containerOverrides.secrets when a secret ARN is configured.
-            secrets=self._payload_secret_overrides(),
         )
         attempt_duration_seconds = int(time_min) * 60
         submit_kwargs: dict[str, Any] = {
