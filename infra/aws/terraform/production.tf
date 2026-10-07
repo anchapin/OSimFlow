@@ -175,7 +175,8 @@ resource "aws_cloudwatch_metric_alarm" "daily_cost_anomaly" {
   }
 
   metric_query {
-    id = "monthly_cost"
+    id          = "monthly_cost"
+    return_data = true # alarms on anomaly bands need both series to return data
     metric {
       namespace   = "AWS/Billing"
       metric_name = "EstimatedCharges"
