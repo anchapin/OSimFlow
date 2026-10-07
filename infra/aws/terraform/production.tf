@@ -86,6 +86,7 @@ data "aws_iam_policy_document" "github_actions" {
     actions = [
       "batch:SubmitJob",
       "batch:DescribeJobs",
+      "batch:DescribeJobDefinitions",
       "batch:ListJobs",
       "batch:TerminateJob",
     ]
