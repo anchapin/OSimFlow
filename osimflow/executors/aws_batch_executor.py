@@ -862,7 +862,14 @@ class AWSBatchExecutor(BaseExecutor):
         # The per-call ``container`` is the campaign's generic default and is
         # not an operator pin, so only executor-level pins are enforced.
         del container
-        if self._container_digest or self.ecr_repository:
+        digest = self._container_digest
+        if digest:
+            # The campaign passes cache-form digests, including the
+            # ``unresolved`` sentinel when nothing was pinned; that is not a pin.
+            if "sha256:" not in digest:
+                return None
+            return digest
+        if self.ecr_repository:
             return self._resolve_container_image(openstudio_version)
         return None
 
