@@ -1890,6 +1890,7 @@ exempt — see `tools/check_docs_sync.py::INDEX_EXEMPT_DOCS`).
 | [Deployment: Slurm](deployment/slurm.md) | Full Slurm/HPC setup guide |
 | [Deployment: AWS Batch](deployment/aws-batch.md) | Full cloud deployment guide |
 | [AWS Batch Terraform](aws-batch-terraform.md) | Zero-to-running AWS Batch IaC |
+| [AWS Batch worker runtime](aws-batch-worker-runtime.md) | Worker image (OpenStudio + Python 3.12 + OSimFlow), ECR publish, image/job-definition rules |
 | [Deployment: Multi-Executor](deployment/multi-executor.md) | Azure / Google / PBS / Dask-JobQueue / Docker Swarm |
 | [Nomad Production](nomad-production.md) | HA Nomad cluster topology and ACLs |
 | [Kubernetes Deployment](kubernetes-deployment.md) | K8s Job-based deployment (with HMAC task payloads) |

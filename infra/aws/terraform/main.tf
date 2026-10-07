@@ -32,9 +32,11 @@ data "aws_caller_identity" "current" {}
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 
-  # Container image referencing the NREL-published OpenStudio CLI image.
-  # The executor passes the tag via OSIMFLOW_CONTAINER env var at runtime.
-  container_image = "nrel/openstudio:${var.openstudio_version}"
+  # Worker image launched by the job definition. It MUST be the OSimFlow worker
+  # runtime (docker/osimflow-worker/Dockerfile, docs/aws-batch-worker-runtime.md),
+  # which layers Python 3.12 + osimflow onto nrel/openstudio. The launched image
+  # is fixed here; OSIMFLOW_CONTAINER is informational and cannot change it.
+  container_image = var.worker_image != "" ? var.worker_image : "nrel/openstudio:${var.openstudio_version}"
 }
 
 # =============================================================================

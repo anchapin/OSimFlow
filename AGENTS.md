@@ -1136,6 +1136,13 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
   (independent `osimflow-deploy-v` tag prefix, CODEOWNERS
   for IaC). Links to actual IaC in `infra/`; does not
   duplicate it.
+- `docker/osimflow-worker/` — AWS Batch worker runtime image (issue
+  #1810): `Dockerfile` layers Python 3.12 + `osimflow[aws]` onto
+  `nrel/openstudio`, no ENTRYPOINT, non-root, `/scratch`; `smoke_test.py`
+  is the in-container smoke test. The job definition's image is
+  authoritative (`AWSBatchExecutor._validate_job_definition_image`);
+  `OSIMFLOW_CONTAINER` does not change the launched image. See
+  `docs/aws-batch-worker-runtime.md`.
 - `infra/aws/terraform/` — Terraform module for AWS Batch
   (VPC, S3, IAM, compute env, job queue, job definition
   using `nrel/openstudio`). IAM in `iam.tf`, job

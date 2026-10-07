@@ -775,6 +775,63 @@ class AWSBatchExecutor(BaseExecutor):
             )
         validated.add(job_definition)
 
+    def _validate_job_definition_image(self, job_definition: str, expected_image: str) -> None:
+        """Fail unless the job definition launches the requested image (issue #1810).
+
+        AWS Batch launches ``containerProperties.image`` from the registered
+        job definition; ``OSIMFLOW_CONTAINER`` in the job environment is
+        informational only and cannot change it. A pinned tag/digest therefore
+        has to select a matching job definition or fail loudly.
+        """
+        validated: set[str] = self.__dict__.setdefault("_validated_image_job_defs", set())
+        key = f"{job_definition}|{expected_image}"
+        if key in validated:
+            return
+        client = self._get_client()
+        if ":" in job_definition:
+            response = client.describe_job_definitions(jobDefinitions=[job_definition])
+        else:
+            response = client.describe_job_definitions(
+                jobDefinitionName=job_definition, status="ACTIVE"
+            )
+        definitions: list[dict[str, Any]] = list(response.get("jobDefinitions", []))
+        if not definitions:
+            raise RuntimeError(
+                f"Job definition {job_definition!r} was not found (or has no ACTIVE "
+                f"revision); cannot verify it launches the requested image "
+                f"{expected_image!r}"
+            )
+        definition = max(definitions, key=lambda d: int(d.get("revision", 0)))
+        actual = str((definition.get("containerProperties") or {}).get("image") or "")
+        if not self._image_matches(actual, expected_image):
+            raise RuntimeError(
+                f"Requested image {expected_image!r} does not match the image "
+                f"{actual!r} launched by job definition {job_definition!r} "
+                f"(revision {definition.get('revision')}). AWS Batch runs the job "
+                f"definition's image; OSIMFLOW_CONTAINER does not change it. "
+                f"Register a job definition for the requested image and pass it "
+                f"with --aws-batch-job-definition."
+            )
+        validated.add(key)
+
+    def _pinned_image(self, container: str | None, openstudio_version: str | None) -> str | None:
+        """Return the image the caller explicitly pinned, else ``None`` (issue #1810)."""
+        # The per-call ``container`` is the campaign's generic default and is
+        # not an operator pin, so only executor-level pins are enforced.
+        del container
+        if self._container_digest or self.ecr_repository:
+            return self._resolve_container_image(openstudio_version)
+        return None
+
+    @staticmethod
+    def _image_matches(actual: str, expected: str) -> bool:
+        if actual == expected:
+            return True
+        if "@sha256:" in expected or expected.startswith("sha256:"):
+            digest = "sha256:" + expected.split("sha256:", 1)[1]
+            return digest in actual
+        return False
+
     def _build_container_overrides(
         self,
         *,
@@ -915,8 +972,13 @@ class AWSBatchExecutor(BaseExecutor):
         command: list[str] | None = None,
         job_queue: str | None = None,
         job_definition: str | None = None,
+        expected_image: str | None = None,
     ) -> str:
         """Submit a single Batch job and return the jobId.
+
+        ``expected_image`` (issue #1810) is the image the caller pinned; the
+        launched image is fixed by the job definition, so a mismatch fails
+        before submission.
 
         Uses *job_queue* / *job_definition* if provided, otherwise
         ``self.job_queue`` / ``self.job_definition``.
@@ -933,6 +995,10 @@ class AWSBatchExecutor(BaseExecutor):
         """
         queue = job_queue or self.job_queue
         self._validate_job_definition_secret(job_definition or self.job_definition)
+        if expected_image:
+            self._validate_job_definition_image(
+                job_definition or self.job_definition, expected_image
+            )
         overrides = self._build_container_overrides(
             cpus=cpus,
             memory_mb=memory_mb,
@@ -1125,6 +1191,9 @@ class AWSBatchExecutor(BaseExecutor):
             "environment": environment,
             "command": command,
         }
+        expected_image = self._pinned_image(container, openstudio_version)
+        if expected_image:
+            submit_params["expected_image"] = expected_image
         if price_fallback:
             submit_params.update(self._on_demand_route())
         job_id = self._submit_job(**submit_params)
