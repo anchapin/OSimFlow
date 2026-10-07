@@ -1118,6 +1118,51 @@ class BaseExecutor(abc.ABC):
         return encode_transport_value(value)
 
     @staticmethod
+    def _stage_task_inputs(
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        result_hint: Any,  # noqa: ANN401
+        transport: ResultTransportConfig | None,
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Stage controller-local ``Path`` args in object storage (issue #1809).
+
+        For substrates with no shared filesystem: uploads every existing
+        input path as an immutable content-addressed object and replaces
+        each ``Path`` with a tagged reference the worker materializes into
+        scratch.  Raises (never falls back to the controller path) when a
+        ``Path`` is present but no object-storage transport is configured.
+        """
+        from osimflow.input_staging import (  # noqa: PLC0415
+            InputStager,
+            InputStagingError,
+            _collect_path_leaves,
+        )
+        from osimflow.storage import build_result_storage  # noqa: PLC0415
+
+        has_paths = bool(_collect_path_leaves([args, kwargs]))
+        if not has_paths:
+            return args, kwargs
+        if (
+            transport is None
+            or transport.mode != "object_storage"
+            or not transport.backend
+            or not transport.bucket
+        ):
+            raise InputStagingError(
+                "this executor has no shared filesystem with its workers: configure "
+                "--result-storage-backend/--result-storage-bucket so inputs are staged "
+                "in object storage (refusing to pass controller-local paths)"
+            )
+        storage = build_result_storage(
+            backend=transport.backend,
+            bucket=transport.bucket,
+            prefix=str(transport.prefix or ""),
+            endpoint_url=transport.endpoint,
+        )
+        return InputStager(storage).stage_task_paths(args, kwargs, result_hint=result_hint)
+
+    @staticmethod
     def _build_task_payload(
         *,
         step_name: str,

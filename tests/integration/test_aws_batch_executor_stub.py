@@ -181,6 +181,19 @@ class _StubAWSBatchExecutor(AWSBatchExecutor):
     back) is a separate concern.
     """
 
+    @staticmethod
+    def _stage_task_inputs(  # type: ignore[override]
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        *,
+        result_hint: object,
+        transport: object,
+    ) -> tuple[tuple[object, ...], dict[str, object]]:
+        # The stub runs the work on the shared local filesystem, so there
+        # is nothing to stage in S3 (issue #1809 covers the real path).
+        del result_hint, transport
+        return args, kwargs
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         # The local pool runs the work in parallel — the same fan-out

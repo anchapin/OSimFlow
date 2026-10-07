@@ -9,6 +9,7 @@ and use the remote_runner command, instead of discarding fn/args and running
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -16,8 +17,13 @@ from osimflow.executors import AWSBatchExecutor
 from osimflow.executors.azure_batch_executor import AzureBatchExecutor
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor
-from osimflow.executors.transport import decode_transport_value
+from osimflow.executors.transport import ResultTransportConfig, decode_transport_value
+from osimflow.input_staging import WorkerPathRemapper
 from osimflow.work import default_apply_parameters, extract_kpis
+
+_OBJECT_STORAGE_TRANSPORT = ResultTransportConfig(
+    mode="object_storage", backend="local", bucket="bucket", prefix="out"
+)
 
 
 def _make_mock_aws_executor():
@@ -378,16 +384,18 @@ class TestTaskPayloadSerialization:
         ex._submit_job = MagicMock(return_value="test-job-id")
 
         path_arg = Path("/campaign/out/work/apply/s0")
-        ex.submit(lambda p: p, path_arg, name="sim_s0")
+        ex.submit(lambda p: p, path_arg, name="sim_s0", transport=_OBJECT_STORAGE_TRANSPORT)
 
         call_kwargs = ex._submit_job.call_args.kwargs
         env = {e["name"]: e["value"] for e in call_kwargs["environment"]}
         payload = json.loads(env["OSIMFLOW_TASK_PAYLOAD"])
 
-        # Path should be encoded with __osimflow_type__ marker
+        # Controller paths are replaced by staged references (issue #1809);
+        # a path that does not exist yet is an output-only reference.
         assert payload["args"][0] == {
-            "__osimflow_type__": "path",
-            "value": "/campaign/out/work/apply/s0",
+            "__osimflow_type__": "staged_output",
+            "path": "/campaign/out/work/apply/s0",
+            "kind": "unknown",
         }
 
     def test_result_hint_encoding_in_payload(self):
@@ -415,12 +423,15 @@ class TestTaskPayloadSerialization:
         ex._submit_job = MagicMock(return_value="test-job-id")
 
         path_arg = Path("/campaign/out/work/apply/s0")
-        ex.submit(lambda p: p, path_arg, name="sim_s0")
+        ex.submit(lambda p: p, path_arg, name="sim_s0", transport=_OBJECT_STORAGE_TRANSPORT)
 
         call_kwargs = ex._submit_job.call_args.kwargs
         env = {e["name"]: e["value"] for e in call_kwargs["environment"]}
         payload = json.loads(env["OSIMFLOW_TASK_PAYLOAD"])
 
-        # Simulate remote_runner decoding
-        decoded_args = [decode_transport_value(v) for v in payload["args"]]
-        assert decoded_args[0] == Path("/campaign/out/work/apply/s0")
+        # Simulate remote_runner: staged refs resolve to scratch, then decode.
+        with tempfile.TemporaryDirectory() as scratch:
+            remapper = WorkerPathRemapper(MagicMock(), Path(scratch))
+            decoded_args = [decode_transport_value(remapper.resolve(v)) for v in payload["args"]]
+            assert decoded_args[0] != path_arg
+            assert remapper.to_original(decoded_args[0]) == path_arg

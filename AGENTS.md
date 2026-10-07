@@ -771,6 +771,19 @@ name in this section.
   `python -m osimflow.remote_runner` worker for Nomad /
   Kubernetes Jobs (decodes `OSIMFLOW_TASK_PAYLOAD`, pushes
   artifacts to object storage).
+- `osimflow/input_staging.py` — controller-to-worker input staging
+  for executors with no shared filesystem (issue #1809; AWS Batch):
+  `InputStager` (uploads each payload `Path` as content-addressed
+  blobs + a SHA-256 manifest under `_inputs/` and replaces it with a
+  tagged `staged_input`/`staged_output` reference — the manifest digest
+  rides inside the HMAC-signed `OSIMFLOW_TASK_PAYLOAD`),
+  `WorkerPathRemapper` (verified materialization into worker scratch,
+  scratch<->controller path mapping so result keys line up with
+  `materialize_object_storage_result`), `result_upload_plan`,
+  `InputStagingError` (every failure is explicit — never a fallback to
+  controller paths). `BaseExecutor._stage_task_inputs` is the shared
+  entry used by `AWSBatchExecutor._do_submit`; `remote_runner` verifies
+  the transport signature before fetching inputs.
 - `osimflow/task_payload_hmac.py` — HMAC-SHA256 signing/verification
   for `OSIMFLOW_TASK_PAYLOAD` (issue #1177):
   `sign_task_payload`, `verify_task_payload`,
