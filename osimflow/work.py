@@ -609,6 +609,15 @@ def default_apply_parameters(
             type or instance name that does not exist in the model.
     """
     osm_path = out / "model.osm"
+    if not parameters:
+        # Nothing to mutate (issue #1812): never load the OpenStudio
+        # bindings or rewrite the staged package, so an existing OSW runs
+        # byte-for-byte as supplied.
+        if not (out / "workflow.osw").is_file() and not osm_path.is_file():
+            raise FileNotFoundError(f"neither workflow.osw nor model.osm found in {out!r}")
+        log.info("default_apply_parameters: no parameters; package left unmodified")
+        return out
+
     if not osm_path.is_file():
         raise FileNotFoundError(f"model.osm not found in {out!r}")
 

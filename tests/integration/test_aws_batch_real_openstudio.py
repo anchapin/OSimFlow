@@ -158,41 +158,6 @@ def _ensure_real_fixture() -> Path:
     return MODEL_OSM
 
 
-# BYOS apply shim: invokes the real ``openstudio.cli run`` so the workflow is
-# exercised against the real CLI (production path, issue #248) without depending
-# on the OpenStudio Python bindings. Rendered to a file under tmp_path so the
-# Campaign can load it via the standard BYOS discovery (custom_apply_script).
-# Mirrors the validated shim from tests/integration/test_real_openstudio_campaign.py.
-_BYOS_APPLY_TEMPLATE = '''\
-"""BYOS apply shim for the real-openstudio AWS Batch E2E (issue #942).
-
-Invokes ``openstudio.cli run -w workflow.osw`` directly so the full measure +
-EnergyPlus pipeline runs through the real CLI, producing ``eplusout.sql`` in the
-package's ``run/`` directory. The campaign's RUN_OPENSTUDIO_SIM step then reuses
-that output. This mirrors the production ``_apply_parameters_via_cli`` design
-(issue #248) while avoiding a hard dependency on the OpenStudio Python bindings.
-"""
-from __future__ import annotations
-
-import shutil
-import subprocess
-from pathlib import Path
-
-
-def apply_parameters(sim_dir: Path, variables: dict) -> Path:  # noqa: ARG001
-    workflow = sim_dir / "workflow.osw"
-    if not workflow.is_file():
-        raise FileNotFoundError(f"workflow.osw not found in {sim_dir}")
-    cmd_name = "openstudio.cli" if shutil.which("openstudio.cli") else "openstudio"
-    subprocess.run(  # noqa: S603
-        [cmd_name, "run", "-w", str(workflow)],
-        cwd=str(sim_dir),
-        check=True,
-    )
-    return sim_dir
-'''
-
-
 def _build_real_template(tmp_path: Path) -> Path:
     """Build a real-CLI-capable template package under *tmp_path*.
 
@@ -300,9 +265,6 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
 
     template_pkg = _build_real_template(tmp_path)
 
-    byos_script = workdir / "byos_apply.py"
-    byos_script.write_text(_BYOS_APPLY_TEMPLATE)
-
     outdir = tmp_path / "out"
     outdir.mkdir()
 
@@ -313,7 +275,7 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
         outdir=outdir,
         openstudio_version=version,
         archive_intermediates=False,
-        custom_apply_script=byos_script,
+        prebuilt_workflow=True,
     )
 
     executor = AWSBatchExecutor(

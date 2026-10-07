@@ -17,6 +17,7 @@ from osimflow.executors.azure_batch_executor import AzureBatchExecutor
 from osimflow.executors.docker_swarm_executor import DockerSwarmExecutor
 from osimflow.executors.google_batch_executor import GoogleBatchExecutor
 from osimflow.executors.transport import decode_transport_value
+from osimflow.work import default_apply_parameters, extract_kpis
 
 
 def _make_mock_aws_executor():
@@ -130,7 +131,7 @@ class TestAWSBatchExecutorFnArgsMarshal:
         ex._get_spot_price = MagicMock(return_value=0.03)
         ex._submit_job = MagicMock(return_value="test-job-id")
 
-        ex.submit(lambda: None, name="apply_s0")
+        ex.submit(default_apply_parameters, name="apply_s0")
 
         call_kwargs = ex._submit_job.call_args.kwargs
         env = {e["name"]: e["value"] for e in call_kwargs["environment"]}
@@ -142,7 +143,7 @@ class TestAWSBatchExecutorFnArgsMarshal:
         ex._get_spot_price = MagicMock(return_value=0.03)
         ex._submit_job = MagicMock(return_value="test-job-id")
 
-        ex.submit(lambda: None, name="kpi_s0")
+        ex.submit(extract_kpis, name="kpi_s0")
 
         call_kwargs = ex._submit_job.call_args.kwargs
         env = {e["name"]: e["value"] for e in call_kwargs["environment"]}

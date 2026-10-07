@@ -969,6 +969,32 @@ class AWSBatchExecutor(BaseExecutor):
             on_retry=_on_retry,
         )
 
+    @staticmethod
+    def validate_work_fn(step_name: str, fn: Callable[..., Any]) -> None:
+        """Reject a work function the Batch container would silently replace.
+
+        The remote runner resolves ``step_name`` to the built-in step function,
+        so any other callable (a BYOS hook) cannot be honoured (issue #1812).
+        """
+        from osimflow.remote_runner import StepFunctionRegistry  # noqa: PLC0415
+
+        if not StepFunctionRegistry._registry:
+            from osimflow.remote_runner import _register_builtin_steps  # noqa: PLC0415
+
+            _register_builtin_steps()
+        if step_name not in ("apply", "extract"):
+            return
+        if step_name not in StepFunctionRegistry._registry:
+            return
+        if fn is not StepFunctionRegistry.get(step_name):
+            raise NotImplementedError(
+                f"AWS Batch cannot run a custom {step_name!r} hook "
+                f"({getattr(fn, '__qualname__', fn)!r}): the remote runner only executes "
+                "the built-in step function. Remove --custom_apply_script / "
+                "--custom_kpi_extractor (or the apply_fn/extract_fn argument), or use a "
+                "local executor (issue #1812)."
+            )
+
     def _do_submit(
         self,
         fn: Callable[..., Any],
@@ -1008,6 +1034,7 @@ class AWSBatchExecutor(BaseExecutor):
         # ``python -m osimflow.remote_runner`` decodes it and executes the
         # work function in container-local storage.
         step_name = self._infer_step_name(name)
+        self.validate_work_fn(step_name, fn)
         task_payload = self._build_task_payload(
             step_name=step_name,
             args=args,
