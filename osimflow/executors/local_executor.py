@@ -69,7 +69,7 @@ class LocalExecutor(BaseExecutor):
         fn: Callable[..., Any],
         *args: Any,
         name: str = "task",
-        cpus: int = 1,
+        cpus: float = 1,
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,

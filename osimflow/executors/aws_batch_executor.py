@@ -56,6 +56,40 @@ def _aws_error_code(exc: BaseException) -> str:
         return ""
 
 
+# Valid Fargate vCPU -> memory (MiB) combinations (AWS Batch Fargate job
+# definitions, issue #1808).  Keys are vCPU values.
+_FARGATE_MEMORY_MIB: dict[float, tuple[int, ...]] = {
+    0.25: (512, 1024, 2048),
+    0.5: tuple(range(1024, 4096 + 1, 1024)),
+    1.0: tuple(range(2048, 8192 + 1, 1024)),
+    2.0: tuple(range(4096, 16384 + 1, 1024)),
+    4.0: tuple(range(8192, 30720 + 1, 1024)),
+    8.0: tuple(range(16384, 61440 + 1, 4096)),
+    16.0: tuple(range(32768, 122880 + 1, 8192)),
+}
+
+
+def _validate_fargate_resources(cpus: float, memory_mb: int) -> None:
+    """Raise ``ValueError`` unless (*cpus*, *memory_mb*) is a legal Fargate pair.
+
+    Never rounds: an invalid explicit request must be corrected by the
+    operator, not silently changed.
+    """
+    allowed = _FARGATE_MEMORY_MIB.get(float(cpus))
+    if allowed is None:
+        valid_cpus = ", ".join(f"{c:g}" for c in _FARGATE_MEMORY_MIB)
+        raise ValueError(
+            f"Invalid Fargate vCPU value {cpus!r}; Fargate supports only {valid_cpus}."
+        )
+    if int(memory_mb) not in allowed:
+        raise ValueError(
+            f"Invalid Fargate resource pair: {cpus:g} vCPU / {memory_mb} MiB. "
+            f"{cpus:g} vCPU supports {allowed[0]}-{allowed[-1]} MiB "
+            f"(valid values: {', '.join(str(m) for m in allowed)}). "
+            f"See https://docs.aws.amazon.com/batch/latest/userguide/fargate-job-definitions.html"
+        )
+
+
 class _AWSBatchHandle(PollingHandle):
     """Handle that polls Batch on `.result()`.
 
@@ -832,13 +866,48 @@ class AWSBatchExecutor(BaseExecutor):
             return digest in actual
         return False
 
+    def _job_definition_platform(self, job_definition: str) -> str:
+        """Return ``"FARGATE"`` or ``"EC2"`` for *job_definition* (issue #1808).
+
+        Derived from the registered definition's ``platformCapabilities``;
+        an unknown/empty result keeps the legacy EC2 behaviour.
+        """
+        cache: dict[str, str] = self.__dict__.setdefault("_job_def_platforms", {})
+        if job_definition in cache:
+            return cache[job_definition]
+        client = self._get_client()
+        try:
+            if ":" in job_definition:
+                response = client.describe_job_definitions(jobDefinitions=[job_definition])
+            else:
+                response = client.describe_job_definitions(
+                    jobDefinitionName=job_definition, status="ACTIVE"
+                )
+        except Exception:
+            log.warning(
+                "could not describe job definition %r to detect its platform; "
+                "assuming EC2 (grant batch:DescribeJobDefinitions for Fargate)",
+                job_definition,
+                exc_info=True,
+            )
+            return "EC2"
+        definitions: list[dict[str, Any]] = list(response.get("jobDefinitions", []))
+        platform = "EC2"
+        if definitions:
+            definition = max(definitions, key=lambda d: int(d.get("revision", 0)))
+            if "FARGATE" in (definition.get("platformCapabilities") or []):
+                platform = "FARGATE"
+        cache[job_definition] = platform
+        return platform
+
     def _build_container_overrides(
         self,
         *,
-        cpus: int,
+        cpus: float,
         memory_mb: int,
         environment: list[dict[str, str]],
         command: list[str] | None = None,
+        platform: str = "EC2",
     ) -> dict[str, Any]:
         """Translate OSimFlow resource directives to Batch overrides.
 
@@ -847,17 +916,33 @@ class AWSBatchExecutor(BaseExecutor):
         Batch's documented unit is MiB, so 1:1 keeps the intent clear
         to anyone reading the submit_job call).
 
+        EC2 job definitions keep the legacy ``vcpus`` / ``memory``
+        overrides. Fargate job definitions require
+        ``resourceRequirements`` (VCPU / MEMORY) with a legal pair, which
+        is validated here (issue #1808).
+
         When ``command`` is provided, it overrides the job definition's
         container command (e.g. to run ``python -m osimflow.remote_runner``).
 
         ``SubmitJob`` does not accept ``containerOverrides.secrets``
         (issue #1811); secrets are injected by the job definition.
         """
-        overrides: dict[str, Any] = {
-            "vcpus": cpus,
-            "memory": memory_mb,
-            "environment": environment,
-        }
+        overrides: dict[str, Any]
+        if platform == "FARGATE":
+            _validate_fargate_resources(cpus, memory_mb)
+            overrides = {
+                "resourceRequirements": [
+                    {"type": "VCPU", "value": f"{cpus:g}"},
+                    {"type": "MEMORY", "value": str(int(memory_mb))},
+                ],
+                "environment": environment,
+            }
+        else:
+            overrides = {
+                "vcpus": int(cpus) if float(cpus).is_integer() else cpus,
+                "memory": memory_mb,
+                "environment": environment,
+            }
         if command is not None:
             overrides["command"] = command
         return overrides
@@ -865,7 +950,7 @@ class AWSBatchExecutor(BaseExecutor):
     def _calculate_job_cost(
         self,
         job: dict[str, Any],
-        vcpus: int = 1,
+        vcpus: float = 1,
     ) -> tuple[float, float]:
         """Estimate cost for a completed Batch job (issue #126).
 
@@ -965,7 +1050,7 @@ class AWSBatchExecutor(BaseExecutor):
         self,
         *,
         name: str,
-        cpus: int,
+        cpus: float,
         memory_mb: int,
         time_min: int,
         environment: list[dict[str, str]],
@@ -1004,6 +1089,7 @@ class AWSBatchExecutor(BaseExecutor):
             memory_mb=memory_mb,
             environment=environment,
             command=command,
+            platform=self._job_definition_platform(job_definition or self.job_definition),
         )
         attempt_duration_seconds = int(time_min) * 60
         submit_kwargs: dict[str, Any] = {
@@ -1090,7 +1176,7 @@ class AWSBatchExecutor(BaseExecutor):
         fn: Callable[..., Any],
         *args: Any,
         name: str = "task",
-        cpus: int = 1,
+        cpus: float = 1,
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
@@ -1111,7 +1197,7 @@ class AWSBatchExecutor(BaseExecutor):
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
 
         log.info(
-            "aws_batch submit name=%s cpus=%d mem=%dMB time_min=%d container=%s",
+            "aws_batch submit name=%s cpus=%g mem=%dMB time_min=%d container=%s",
             name,
             cpus,
             memory_mb,

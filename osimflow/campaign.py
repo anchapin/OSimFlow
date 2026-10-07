@@ -2898,7 +2898,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                     exec_kwargs={
                         "name": f"apply_{sid}",
                         "cpus": 1,
-                        "memory_mb": 512,
+                        "memory_mb": 2048,
                         "time_min": 5,
                         "container": self._python_container_image,
                         "container_digest": self._python_container_digest,
@@ -3451,7 +3451,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             baseline_sample_id=baseline_sample_id,
             name="plots",
             cpus=1,
-            memory_mb=1024,
+            memory_mb=2048,
             time_min=10,
             container=self._python_container_image,
             container_digest=self._python_container_digest,

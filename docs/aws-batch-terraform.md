@@ -230,3 +230,64 @@ granted `secretsmanager:GetSecretValue` / `ssm:GetParameter` and `kms:Decrypt`.
 Pass the same ARN as `--aws-batch-payload-secret-arn` and export the same value
 as `OSIMFLOW_TASK_PAYLOAD_SECRET` on the orchestrator; the executor verifies the
 job definition references the ARN before submitting.
+
+## Fargate (on-demand) and existing-infrastructure onboarding (issue #1808)
+
+`AWSBatchExecutor` detects the platform of the selected job definition
+(`platformCapabilities` from `describe_job_definitions`; needs
+`batch:DescribeJobDefinitions` on the submitter, otherwise EC2 is assumed with a
+warning).
+
+| Platform | `SubmitJob` `containerOverrides` |
+|---|---|
+| EC2 (default) | legacy `vcpus` / `memory` |
+| FARGATE | `resourceRequirements` `VCPU` / `MEMORY` |
+
+On Fargate the (vCPU, MiB) pair is validated **before submission** and never
+rounded. `0.25`, `0.5`, `1`, `2`, `4`, `8`, `16` vCPU are accepted:
+0.25 → 512–2048; 0.5 → 1024–4096; 1 → 2048–8192; 2 → 4096–16384;
+4 → 8192–30720; 8 → 16384–61440 (4096 steps); 16 → 32768–122880 (8192 steps);
+other values in 1024 MiB steps. e.g. `0.5 vCPU / 1024 MiB` is valid and
+`1 vCPU / 512 MiB` fails with an explanatory `ValueError`. Default stage
+resources (apply 1/2048, sim 4/8192, extract 1/2048, aggregate 2/4096, plots
+1/2048) are all legal Fargate pairs. Fractional `cpus` can be passed to
+`submit()` directly (e.g. `cpus=0.5`).
+
+### Minimal on-demand Fargate with Terraform
+
+```bash
+terraform apply -var compute_platform=FARGATE -var use_spot=false \
+  -var job_vcpus=1 -var job_memory_mb=2048 -var worker_image=<ecr-digest-ref>
+```
+
+Optional: `-var fargate_ephemeral_storage_gib=50` (scratch disk; Fargate default
+is 20 GiB), `-var fargate_assign_public_ip=false` (private subnets).
+
+### Using an existing queue / job definition (no new stack)
+
+Register a Fargate job definition and an existing Fargate compute environment
+queue yourself, then pass `--aws-batch-queue` / `--aws-batch-job-definition`.
+Checklist:
+
+- **Roles:** *execution role* (ECR pull, CloudWatch Logs, `secretsmanager:GetSecretValue`
+  for the payload secret); *task/job role* (S3 get/put on the campaign bucket
+  only); *submitter* (`batch:SubmitJob`, `DescribeJobs`, `TerminateJob`,
+  `DescribeJobDefinitions`, plus S3 access to stage inputs). The job definition
+  needs `platformCapabilities: ["FARGATE"]`, `resourceRequirements`,
+  `networkConfiguration.assignPublicIp`, `fargatePlatformConfiguration`, and the
+  `awslogs` log configuration.
+- **Image architecture:** the worker image must match `runtimePlatform.cpuArchitecture`
+  (`X86_64` for `nrel/openstudio` based images).
+- **Scratch disk:** set `ephemeralStorage.sizeInGiB` (21–200) when simulations
+  produce large `eplusout.sql`; the default is 20 GiB.
+- **Networking:** tasks need a route to ECR, S3 and CloudWatch Logs — public
+  subnets with `assignPublicIp=ENABLED`, or private subnets with NAT or VPC
+  endpoints (ECR api/dkr, S3 gateway, logs).
+- **Quotas:** Fargate on-demand vCPU service quota and the compute
+  environment's `maxvCpus` bound concurrency.
+- **Ownership:** resources you register yourself are not managed by this
+  Terraform module; do not point `terraform destroy` at them and keep their
+  lifecycle with their owner.
+
+Real-account job evidence (job ID/artifacts) must be added by an operator with
+AWS access; it was not produced by the offline test suite.
