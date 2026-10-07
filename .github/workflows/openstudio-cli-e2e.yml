@@ -90,13 +90,36 @@ jobs:
           python-version: "3.12"
 
       - name: Install OSimFlow with dev extras
-        run: pip install -e ".[dev]"
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
 
       - name: Pull OpenStudio container
         run: |
           docker pull nrel/openstudio:${{ steps.inputs.outputs.openstudio_version }}
           docker tag nrel/openstudio:${{ steps.inputs.outputs.openstudio_version }} \
             nrel/openstudio:latest
+
+      - name: Install OpenStudio CLI from NREL release
+        # Install the real openstudio.cli onto the host runner PATH so the
+        # campaign's real-CLI path (shutil.which) resolves it. The .deb asset
+        # name carries a commit-SHA suffix, so resolve it dynamically via the
+        # GitHub release API (prefers Ubuntu 22.04, then 20.04).
+        env:
+          OS_VERSION: ${{ steps.inputs.outputs.openstudio_version }}
+        run: |
+          set -euo pipefail
+          ASSET_URL="$(
+            curl -fsSL "https://api.github.com/repos/NREL/OpenStudio/releases/tags/v${OS_VERSION}" \
+              | python3 scripts/resolve_openstudio_deb.py
+          )"
+          echo "Downloading: ${ASSET_URL}"
+          curl -fsSL -o "${RUNNER_TEMP}/openstudio.deb" "${ASSET_URL}"
+          sudo apt-get update
+          sudo apt-get install -y "${RUNNER_TEMP}/openstudio.deb"
+          # Confirm the CLI is resolvable (openstudio and/or openstudio.cli).
+          (openstudio --version || openstudio.cli --version) 2>/dev/null \
+            || { echo "openstudio CLI not on PATH after install"; exit 1; }
 
       - name: Run real OpenStudio CLI E2E tests
         env:
@@ -105,16 +128,18 @@ jobs:
         run: |
           .venv/bin/pytest \
             tests/unit/test_run_openstudio_sim.py::TestRealOpenStudioE2E \
-            -v --timeout=600 --no-cov -ra
+            -v --timeout=600 --no-cov -ra \
+            --junitxml=e2e-artifacts/openstudio-cli-e2e-junit.xml
 
-      - name: Upload test logs on failure
-        if: failure()
+      - name: Verify tests actually executed (JUnit)
+        run: python3 scripts/e2e_gate.py junit --label openstudio-cli-e2e --report e2e-artifacts/openstudio-cli-e2e-junit.xml
+
+      - name: Upload JUnit evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: openstudio-cli-e2e-logs
-          path: |
-            tests/unit/test_run_openstudio_sim.py
-            osimflow/_work_scripts/
+          name: openstudio-cli-e2e-evidence
+          path: e2e-artifacts/
           retention-days: 7
 
   # -------------------------------------------------------------------------
@@ -140,12 +165,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install OSimFlow with dev extras
-        run: pip install -e ".[dev]"
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
 
       - name: Fetch real OpenStudio example fixture (.osm + .epw)
         # Materialise the real, simulation-capable example_package/ fixture
         # (gitignored) so the campaign has a genuine seed model + weather file.
-        run: python3 scripts/fetch_example_fixture.py
+        run: .venv/bin/python scripts/fetch_example_fixture.py
 
       - name: Install OpenStudio CLI from NREL release
         # Install the real openstudio.cli onto the host runner PATH so the
@@ -158,26 +185,12 @@ jobs:
           set -euo pipefail
           ASSET_URL="$(
             curl -fsSL "https://api.github.com/repos/NREL/OpenStudio/releases/tags/v${OS_VERSION}" \
-              | python3 -c '
-                import json, sys
-                rel = json.load(sys.stdin)
-                urls = [a["browser_download_url"] for a in rel.get("assets", [])]
-                debs = [u for u in urls if "Ubuntu" in u and u.endswith(".deb")]
-                if not debs:
-                    sys.exit("no Ubuntu .deb asset found for this release")
-                # Prefer 22.04 then 20.04.
-                for pref in ("22.04", "20.04"):
-                    for u in debs:
-                        if pref in u:
-                            print(u)
-                            sys.exit(0)
-                print(debs[0])
-              '
+              | python3 scripts/resolve_openstudio_deb.py
           )"
           echo "Downloading: ${ASSET_URL}"
-          curl -fsSL -o /tmp/openstudio.deb "${ASSET_URL}"
+          curl -fsSL -o "${RUNNER_TEMP}/openstudio.deb" "${ASSET_URL}"
           sudo apt-get update
-          sudo apt-get install -y /tmp/openstudio.deb
+          sudo apt-get install -y "${RUNNER_TEMP}/openstudio.deb"
           # Confirm the CLI is resolvable (openstudio and/or openstudio.cli).
           (openstudio --version || openstudio.cli --version) 2>/dev/null \
             || { echo "openstudio CLI not on PATH after install"; exit 1; }
@@ -189,14 +202,17 @@ jobs:
         run: |
           .venv/bin/pytest \
             tests/integration/test_real_openstudio_campaign.py \
-            -v --timeout=3600 --no-cov -ra
+            -v --timeout=3600 --no-cov -ra \
+            --junitxml=e2e-artifacts/full-campaign-e2e-junit.xml \
+            --basetemp=e2e-artifacts/full-campaign-results
 
-      - name: Upload campaign artifacts on failure
-        if: failure()
+      - name: Verify tests actually executed (JUnit)
+        run: python3 scripts/e2e_gate.py junit --label full-campaign-e2e --report e2e-artifacts/full-campaign-e2e-junit.xml
+
+      - name: Upload JUnit + campaign result artifacts
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: full-campaign-e2e-artifacts
-          path: |
-            tests/integration/test_real_openstudio_campaign.py
-            example_package/workflow.osw
+          name: full-campaign-e2e-evidence
+          path: e2e-artifacts/
           retention-days: 7
