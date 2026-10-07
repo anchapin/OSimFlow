@@ -146,6 +146,28 @@ Each row marked with `#1020` above addresses the "stub-mode
 integration test" criterion. The OpenStudio CLI row's
 `release-required` trigger column addresses the PR-blocking criterion.
 
+## Implemented tests vs. live evidence (issue #1813)
+
+The matrix lists what is **implemented and wired into a workflow**. It is
+not evidence that the tests have passed against real infrastructure. A
+live run counts only when all of the following hold:
+
+- The workflow's `scripts/e2e_gate.py preflight` step reported
+  `available=true`. Missing AWS configuration (`AWS_ROLE_ARN`,
+  `OSIMFLOW_TASK_PAYLOAD_SECRET`, `AWS_REGION`, `AWS_BATCH_QUEUE`,
+  `AWS_BATCH_JOB_DEFINITION`, `AWS_BATCH_RESULT_BUCKET`, plus
+  `AWS_BATCH_CONTAINER_DIGEST` for the acceptance job) is shown as
+  **UNAVAILABLE (not verified)** on the nightly schedule and **fails**
+  a `workflow_dispatch` run with `strict=true` (the default).
+- `scripts/e2e_gate.py junit` confirmed the JUnit report has executed
+  (non-skipped) tests and no failures; an empty or all-skipped report
+  fails the job.
+- The run's job ID, JUnit XML and pytest result artifacts are attached
+  (`*-evidence` workflow artifacts).
+
+Last successful live evidence: **none recorded** for rows 3, 4, 4b, 4c
+and 12. Record the run URL here when a configured run passes.
+
 ## Skip-gate contract
 
 Every real-substrate test file follows the same pattern (see

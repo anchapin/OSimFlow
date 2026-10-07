@@ -1102,6 +1102,10 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
   `excel_to_variables.py`. ~25 lines each, re-exporting from
   `_work_scripts/`. Do not add logic here.
 - `scripts/` — CLI utilities:
+  `e2e_gate.py` (real-E2E workflow preflight + JUnit
+  executed-test verification, issue #1813),
+  `resolve_openstudio_deb.py` (picks the OpenStudio Ubuntu `.deb`
+  release asset for `openstudio-cli-e2e.yml`, issue #1813),
   `fetch_example_fixture.py` (downloads a real `.osm`+`.epw`,
   gitignored), `generate_openapi.py` (regenerates
   `docs/openapi.json`), `bundle_offline.py` (for
