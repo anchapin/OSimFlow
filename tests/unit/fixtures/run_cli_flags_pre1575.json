@@ -1198,13 +1198,13 @@
     "const": null,
     "default": null,
     "dest": "input_variables",
-    "help": null,
+    "help": "Path to variables.yml. Required unless --prebuilt-workflow is set, in which case an empty variable set is synthesised.",
     "metavar": null,
     "nargs": null,
     "option_strings": [
       "--input_variables"
     ],
-    "required": true,
+    "required": false,
     "type": null
   },
   "--kpis": {
@@ -1894,6 +1894,21 @@
     "nargs": null,
     "option_strings": [
       "--pbs-server"
+    ],
+    "required": false,
+    "type": null
+  },
+  "--prebuilt-workflow": {
+    "action": "_StoreTrueAction",
+    "choices": null,
+    "const": "True",
+    "default": "False",
+    "dest": "prebuilt_workflow",
+    "help": "Execute the existing OSW package in --template_sim_package as-is (issue #1812): no parameter mutation, no OpenStudio Python bindings, no variables required. Rejects non-empty variables and, on remote executors, custom apply/extract hooks.",
+    "metavar": null,
+    "nargs": "0",
+    "option_strings": [
+      "--prebuilt-workflow"
     ],
     "required": false,
     "type": null

@@ -153,7 +153,7 @@ def validate_path_within(
 # ======================================================================
 
 
-def validate_variables_yml(path: Path) -> list[dict[str, Any]]:
+def validate_variables_yml(path: Path, *, allow_empty: bool = False) -> list[dict[str, Any]]:
     """Load and validate a ``variables.yml`` file.
 
     Parameters
@@ -199,6 +199,9 @@ def validate_variables_yml(path: Path) -> list[dict[str, Any]]:
             f"'variables' must be a list, got {type(variables).__name__}",
             field="variables",
         )
+
+    if len(variables) == 0 and allow_empty:
+        return []
 
     if len(variables) == 0:
         raise ValidationError(

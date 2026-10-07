@@ -467,6 +467,9 @@ class DAGConfig:
         Single-sample mode index (issue #59).
     skip_preflight
         Whether to skip the preflight model run (issue #107).
+    prebuilt_workflow
+        Execute the supplied OSW package as-is: no model mutation and no
+        variables (issue #1812).
     init_script
         Path to pre-campaign initialization script.
     finalize_script
@@ -548,6 +551,7 @@ class DAGConfig:
     dry_run: bool = False
     sample: int | None = None
     skip_preflight: bool = False
+    prebuilt_workflow: bool = False
     init_script: Path | None = None
     finalize_script: Path | None = None
     init_script_timeout: float = 600.0
@@ -901,6 +905,7 @@ class CampaignConfig:
     dry_run: bool = False
     sample: int | None = None
     skip_preflight: bool = False
+    prebuilt_workflow: bool = False
     init_script: Path | None = None
     finalize_script: Path | None = None
     init_script_timeout: float = 600.0
@@ -1055,6 +1060,7 @@ class CampaignConfig:
             dry_run=self.dry_run,
             sample=self.sample,
             skip_preflight=self.skip_preflight,
+            prebuilt_workflow=self.prebuilt_workflow,
             init_script=self.init_script,
             finalize_script=self.finalize_script,
             init_script_timeout=self.init_script_timeout,
@@ -1201,6 +1207,7 @@ class CampaignConfig:
                 "dry_run": ("dag", "dry_run"),
                 "sample": ("dag", "sample"),
                 "skip_preflight": ("dag", "skip_preflight"),
+                "prebuilt_workflow": ("dag", "prebuilt_workflow"),
                 "init_script": ("dag", "init_script"),
                 "finalize_script": ("dag", "finalize_script"),
                 "init_script_timeout": ("dag", "init_script_timeout"),
@@ -1495,6 +1502,19 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
     FileNotFoundError
         When required input files do not exist.
     """
+    if args.get("input_variables") is None:
+        if not args.get("prebuilt_workflow"):
+            raise ValidationError(
+                "--input_variables is required unless --prebuilt-workflow is set",
+                field="variables",
+            )
+        # Prebuilt mode (issue #1812): synthesise an empty variable set so
+        # callers need no dummy variables.yml.
+        prebuilt_outdir = Path(str(args["outdir"])).resolve()
+        prebuilt_outdir.mkdir(parents=True, exist_ok=True)
+        synthesised = prebuilt_outdir / "prebuilt_variables.yml"
+        synthesised.write_text("algorithm: lhs\nvariables: []\n")
+        args = {**args, "input_variables": str(synthesised)}
     variables_yml = Path(str(args["input_variables"])).resolve()
     template = Path(str(args["template_sim_package"])).resolve()
     if not variables_yml.exists():
@@ -1511,7 +1531,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
 
     # 1. variables.yml schema validation.
     try:
-        validate_variables_yml(variables_yml)
+        validate_variables_yml(variables_yml, allow_empty=bool(args.get("prebuilt_workflow")))
     except ValidationError:
         raise
 
@@ -1712,6 +1732,7 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             else 600.0
         ),
         skip_preflight=bool(args.get("skip_preflight", False)),
+        prebuilt_workflow=bool(args.get("prebuilt_workflow", False)),
         max_generations=int(str(args.get("max_generations", 1))),
         aws_batch_max_spot_price_usd=(
             float(str(args["aws_batch_max_spot_price_usd"]))

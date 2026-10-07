@@ -247,7 +247,12 @@ physically live in their executor's config module, not in
   `--nomad-vault-secret-key`, `--nomad-vault-secret-path`, `--nomad-poll-interval-s`,
   `--nomad-remote-results-only`, `--nomad-tls`, `--nomad-tls-verify`,
   `--nsga2-reference-directions`, `--nsga2-reference-points`,
-  `--pbs-queue`, `--pbs-real`, `--pbs-server`, `--preset`,
+  `--pbs-queue`, `--pbs-real`, `--pbs-server`, `--prebuilt-workflow`
+  (issue #1812 — execute the existing OSW package as supplied: no
+  `--input_variables` needed, no model mutation / OpenStudio bindings,
+  non-empty variables rejected; remote executors reject custom
+  apply/extract hooks before submission — `AWSBatchExecutor.validate_work_fn`),
+  `--preset`,
   `--preset` accepts one of the named bundles defined in
   `osimflow/__main__.py:73-155` (issue #384): `local-quick`,
   `local-large`, `slurm-hpc`, `slurm-gpu`, `aws-batch-cloud`,

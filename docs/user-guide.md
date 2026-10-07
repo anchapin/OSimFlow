@@ -764,6 +764,29 @@ osimflow run \
 This skips the LHS generation step and reuses the existing `samples.json`.
 Useful for debugging a specific failing sample.
 
+### 5.12 Executing an Existing OSW Package (`--prebuilt-workflow`)
+
+To run an existing OpenStudio workflow package as-is (e.g. on AWS Batch),
+pass `--prebuilt-workflow`; `--input_variables` is then optional:
+
+```bash
+osimflow run --executor aws_batch --prebuilt-workflow \
+  --template_sim_package ./my_osw_package --n_samples 1 --outdir ./results \
+  --aws-batch-queue Q --aws-batch-job-definition JD
+```
+
+- The package (seed, weather, measures, supporting files) is staged unchanged;
+  the OSW is not rewritten and no OpenStudio Python bindings are needed.
+- Non-empty variables are rejected. Without the flag, an empty-variable apply
+  step is also a no-op.
+- Remote executors that cannot carry custom hooks (AWS Batch) raise a clear
+  `NotImplementedError` *before submission* if `--custom_apply_script` /
+  `--custom_kpi_extractor` is set; use a local executor for BYOS hooks.
+- Mixed models: run one campaign per package (`--outdir` per model); each has
+  stable `sample_id`s and per-sample status in `run.json` and
+  `failed_simulations.csv`. Per-sample `seed_model` overrides via the
+  `DataPointManager` remain available for library users.
+
 ---
 
 ## 6. Understanding Results

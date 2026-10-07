@@ -1402,6 +1402,14 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
     # EPW file helpers (issue #55 → #1462: logic lives in
     # CampaignEpwResolver; thin delegators below).
     # ------------------------------------------------------------------
+    def _reject_unsupported_remote_hooks(self) -> None:
+        """Fail before submission when a remote executor cannot carry a hook (issue #1812)."""
+        check = getattr(self.executor, "validate_work_fn", None)
+        if check is None:
+            return
+        check("apply", self.apply_fn)
+        check("extract", self.extract_fn)
+
     def _load_variable_defs(self) -> list[dict[str, Any]]:
         """Load variable definitions from ``cfg.input_variables`` (variables.yml)."""
         return self._epw.load_variable_defs()
@@ -1718,6 +1726,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 "is reachable) so the executed image matches the cache key "
                 "(issue #1536)."
             )
+        self._reject_unsupported_remote_hooks()
         log.info("=" * 60)
         log.info("OSimFlow campaign start")
         log.info("  executor:      %s", self.executor.name)
@@ -2442,12 +2451,29 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             log.warning("Cache entry %s is corrupted; treating as cache-miss", key)
 
         out_dir = self.cfg.work_dir / algo.name()
-        result_path = algo.generate_samples(
-            variables=variables,
-            n_samples=self.cfg.n_samples,
-            seed=None,
-            outdir=out_dir,
-        )
+        if self.cfg.prebuilt_workflow:
+            # Issue #1812: one empty-valued sample per prebuilt package run,
+            # with stable zero-padded IDs; no sampler is involved.
+            out_dir.mkdir(parents=True, exist_ok=True)
+            result_path = out_dir / "samples.json"
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "samples": [
+                            {"sample_id": f"{i + 1:04d}", "values": {}}
+                            for i in range(self.cfg.n_samples)
+                        ]
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            result_path = algo.generate_samples(
+                variables=variables,
+                n_samples=self.cfg.n_samples,
+                seed=None,
+                outdir=out_dir,
+            )
         try:
             self.cache.store(key, Path(result_path), exit_code=0)
             run_samples_data = safe_json_loads(Path(result_path), default=None, log_warnings=False)
@@ -2733,6 +2759,12 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 self.cfg.template_sim_package,
             )
 
+        if self.cfg.prebuilt_workflow and all_param_keys:
+            raise ValueError(
+                "--prebuilt-workflow executes the OSW as supplied and cannot apply "
+                f"variables; got {sorted(all_param_keys)} (issue #1812)"
+            )
+
         out: SampleDict = {}
         cache_label = "MISS×N" if samples else "SKIPPED"
         self.trace.step_started("APPLY_PARAMETERS", total=len(samples))
@@ -2759,13 +2791,14 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             )
             # Include seed_model_override in the cache key so a different
             # seed model for the same sample params is a distinct cache entry.
-            inputs_hash = sha256_of_dict(
-                {
-                    "params": resolved_params,
-                    "sid": sid,
-                    "seed_model": seed_model_override,
-                }
-            )
+            apply_inputs: dict[str, Any] = {
+                "params": resolved_params,
+                "sid": sid,
+                "seed_model": seed_model_override,
+            }
+            if self.cfg.prebuilt_workflow:
+                apply_inputs["prebuilt_workflow"] = True
+            inputs_hash = sha256_of_dict(apply_inputs)
             key = CacheKey(
                 step="APPLY_PARAMETERS",
                 sample_id=sid,

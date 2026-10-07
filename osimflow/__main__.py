@@ -433,7 +433,14 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "Default: 0.03 (i.e., $0.03/vCPU·hour, ~40%% savings)."
         ),
     )
-    run.add_argument("--input_variables", required=True)
+    run.add_argument(
+        "--input_variables",
+        default=None,
+        help=(
+            "Path to variables.yml. Required unless --prebuilt-workflow is set, "
+            "in which case an empty variable set is synthesised."
+        ),
+    )
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)
     run.add_argument("--outdir", required=True)
@@ -605,6 +612,16 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
             "returns normally so the Campaign.run() finally block can "
             "still rewrite run.json, fire the webhook, and cache.close(). "
             "Default: 600 s."
+        ),
+    )
+    run.add_argument(
+        "--prebuilt-workflow",
+        action="store_true",
+        help=(
+            "Execute the existing OSW package in --template_sim_package as-is "
+            "(issue #1812): no parameter mutation, no OpenStudio Python "
+            "bindings, no variables required. Rejects non-empty variables "
+            "and, on remote executors, custom apply/extract hooks."
         ),
     )
     run.add_argument(
