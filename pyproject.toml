@@ -42,6 +42,7 @@ dependencies = [
     "submitit>=1.5; platform_system != 'Windows'",
     "jsonschema>=4.17",
     "fasteners>=0.19",
+    "requests>=2.28",
 ]
 
 [project.optional-dependencies]

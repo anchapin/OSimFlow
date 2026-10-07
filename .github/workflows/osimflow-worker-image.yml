@@ -1,0 +1,30 @@
+# Builds the AWS Batch worker runtime image and runs its container smoke test
+# (issue #1810). Needs Docker Hub access to nrel/openstudio only; no AWS creds.
+name: osimflow-worker-image
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build worker image
+        run: |
+          docker build -f docker/osimflow-worker/Dockerfile \
+            --build-arg OPENSTUDIO_VERSION=3.11.0 -t osimflow-worker:3.11.0 .
+      - name: Container smoke test
+        run: |
+          docker run --rm --entrypoint python osimflow-worker:3.11.0 \
+            /opt/osimflow/smoke_test.py
+      - name: Batch command override
+        run: |
+          docker run --rm osimflow-worker:3.11.0 \
+            python -m osimflow.remote_runner --negotiate-version

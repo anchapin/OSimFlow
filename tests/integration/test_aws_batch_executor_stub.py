@@ -145,6 +145,17 @@ def mocked_aws_batch_client() -> Iterator[MagicMock]:
         return {"jobs": jobs}
 
     fake_client.submit_job.side_effect = fake_submit_job
+    # The digest-pinned executor verifies the job definition's image (#1810).
+    fake_client.describe_job_definitions.return_value = {
+        "jobDefinitions": [
+            {
+                "revision": 1,
+                "containerProperties": {
+                    "image": "docker.io/nrel/openstudio@sha256:" + "a1b2c3d4" * 8
+                },
+            }
+        ]
+    }
     fake_client.describe_jobs.side_effect = fake_describe_jobs
     # Attach the recorded calls so the test can inspect them after the
     # `with` block.

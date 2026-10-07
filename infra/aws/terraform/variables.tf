@@ -127,3 +127,9 @@ variable "payload_secret_kms_key_arn" {
   type        = string
   default     = null
 }
+
+variable "worker_image" {
+  description = "OSimFlow worker runtime image (ECR URI, preferably digest-pinned). Empty falls back to plain nrel/openstudio, which lacks OSimFlow/Python 3.12 and cannot run the remote runner."
+  type        = string
+  default     = ""
+}
