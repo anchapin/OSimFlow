@@ -865,8 +865,11 @@ class AWSBatchExecutor(BaseExecutor):
         digest = self._container_digest
         if digest:
             # The campaign passes cache-form digests, including the
-            # ``unresolved`` sentinel when nothing was pinned; that is not a pin.
-            if "sha256:" not in digest:
+            # ``unresolved`` sentinel when nothing was pinned; not a pin.
+            # Auto-resolved cache-form digests look like
+            # ``<label>@<repo>@sha256:<hex>`` (two ``@``); an operator pin is
+            # a single ``<repo>@sha256:<hex>`` (or bare ``sha256:<hex>``).
+            if "sha256:" not in digest or digest.count("@") > 1:
                 return None
             return digest
         if self.ecr_repository:
