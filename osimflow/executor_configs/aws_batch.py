@@ -39,11 +39,13 @@ class AWSBatchConfig:
     payload_secret_arn
         ARN of an AWS Secrets Manager secret or SSM Parameter Store
         parameter holding the task-payload HMAC secret. When set, the
-        secret ships via ``containerOverrides.secrets`` (resolved by
-        the Batch agent at container start; the job's task role needs
-        ``secretsmanager:GetSecretValue`` or ``ssm:GetParameter`` +
-        ``kms:Decrypt`` on it) instead of a literal env value in the
-        job spec (issue #1633).
+        secret is injected by the job definition's
+        ``containerProperties.secrets`` (SubmitJob has no
+        ``containerOverrides.secrets``; issue #1811). The executor
+        validates before submission that the job definition maps
+        ``OSIMFLOW_TASK_PAYLOAD_SECRET`` to this ARN. The job's
+        *execution* role needs ``secretsmanager:GetSecretValue`` or
+        ``ssm:GetParameter`` + ``kms:Decrypt`` on it.
     """
 
     max_spot_price_usd: float | None = None
@@ -163,11 +165,12 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "ARN of an AWS Secrets Manager secret (or SSM Parameter Store "
             "parameter) holding the task-payload HMAC secret "
             "(key/parameter value = OSIMFLOW_TASK_PAYLOAD_SECRET). When set, "
-            "the job spec emits containerOverrides.secrets (valueFrom) "
-            "instead of a literal env value, so the raw secret never "
-            "appears in the job spec where it is readable via "
-            "DescribeJobs and persists in job history (issue #1633). "
-            "The job's task role needs secretsmanager:GetSecretValue (or "
+            "the job definition must inject it via containerProperties.secrets "
+            "(validated via describe_job_definitions before submission; "
+            "SubmitJob has no containerOverrides.secrets) so the raw "
+            "secret never appears in the job spec where it is readable via "
+            "DescribeJobs (issues #1633/#1811). "
+            "The job's EXECUTION role needs secretsmanager:GetSecretValue (or "
             "ssm:GetParameter + kms:Decrypt) on the ARN. Requires "
             "OSIMFLOW_TASK_PAYLOAD_SECRET on the orchestrator with the "
             "same value for signing. See docs/secret-management.md."

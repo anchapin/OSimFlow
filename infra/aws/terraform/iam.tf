@@ -119,6 +119,38 @@ resource "aws_iam_role_policy_attachment" "task_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Issue #1811: the ECS agent (execution role, not the task role) resolves
+# job-definition secrets at container start.
+locals {
+  payload_secret_is_ssm = var.payload_secret_arn != null ? can(regex("^arn:[^:]+:ssm:", var.payload_secret_arn)) : false
+}
+
+data "aws_iam_policy_document" "task_execution_payload_secret" {
+  count = var.payload_secret_arn == null ? 0 : 1
+
+  statement {
+    effect    = "Allow"
+    actions   = local.payload_secret_is_ssm ? ["ssm:GetParameters", "ssm:GetParameter"] : ["secretsmanager:GetSecretValue"]
+    resources = [var.payload_secret_arn]
+  }
+
+  dynamic "statement" {
+    for_each = var.payload_secret_kms_key_arn == null ? [] : [1]
+    content {
+      effect    = "Allow"
+      actions   = ["kms:Decrypt"]
+      resources = [var.payload_secret_kms_key_arn]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "task_execution_payload_secret" {
+  count  = var.payload_secret_arn == null ? 0 : 1
+  name   = "${local.name_prefix}-payload-secret"
+  role   = aws_iam_role.task_execution.id
+  policy = data.aws_iam_policy_document.task_execution_payload_secret[0].json
+}
+
 # ---------------------------------------------------------------------------
 # 4. Batch service role
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ The module is stdlib-only (``hmac`` + ``hashlib`` + ``pathlib``) so the
 remote runner keeps its no-extra-dependencies property. For maximum
 benefit on real clusters, inject ``OSIMFLOW_TASK_PAYLOAD_SECRET`` into
 worker pods via the substrate's secret store (Kubernetes Secret /
-Nomad Vault template / AWS ``containerOverrides.secrets`` / Google
+Nomad Vault template / AWS job-definition ``containerProperties.secrets`` / Google
 Batch ``secret_variables`` / Docker Swarm secret files) rather than a
 literal orchestrator environment variable (issues #1449, #1535,
 #1633).
@@ -159,7 +159,7 @@ def build_signature_env(
 
     *include_secret=False* is the signature-only mode for substrates
     that deliver the secret out-of-band (issue #1633: AWS Batch
-    ``containerOverrides.secrets``, Google Batch ``secret_variables``,
+    job-definition ``containerProperties.secrets``, Google Batch ``secret_variables``,
     Docker Swarm secret files): the signature is public by design and
     still ships as a literal, but the raw secret never appears in the
     job spec. The remote runner reads the secret from the

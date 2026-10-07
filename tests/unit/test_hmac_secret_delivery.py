@@ -258,8 +258,6 @@ class TestAwsBatchSecretDelivery:
         assert env_map[TASK_PAYLOAD_SECRET_ENV] == "super-secret"  # literal, warned
         assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, "super-secret")
         assert any("SECURITY (issue #1633)" in r.message for r in caplog.records)
-        # No secrets channel in legacy mode.
-        assert ex._payload_secret_overrides() == []  # noqa: SLF001
         overrides = ex._build_container_overrides(  # noqa: SLF001
             cpus=1, memory_mb=1024, environment=env
         )
@@ -288,45 +286,106 @@ class TestAwsBatchSecretDelivery:
         assert env_map[TASK_PAYLOAD_SIG_ENV] == sign_task_payload(TASK_PAYLOAD, "super-secret")
         assert TASK_PAYLOAD_SECRET_ENV not in env_map
         assert "super-secret" not in json.dumps(env)
-        # Substrate-specific secret reference present.
-        assert ex._payload_secret_overrides() == [  # noqa: SLF001
-            {"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": AWS_SECRET_ARN}
-        ]
         assert not any("SECURITY (issue #1633)" in r.message for r in caplog.records)
 
-    def test_submit_job_secrets_in_container_overrides(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def _submit(
+        self, monkeypatch: pytest.MonkeyPatch, job_def_secrets: list[dict[str, str]] | None
+    ) -> dict[str, Any]:
         from osimflow.executors import AWSBatchExecutor
-        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV, TASK_PAYLOAD_SIG_ENV
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
 
         monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, "super-secret")
         ex = AWSBatchExecutor(payload_secret_arn=AWS_SECRET_ARN)
-        captured: dict[str, Any] = {}
-
-        def fake_submit(kwargs: dict[str, Any]) -> dict[str, Any]:
-            captured.update(kwargs)
-            return {"jobId": "j-1"}
-
-        ex._submit_job_with_retry = fake_submit  # type: ignore[method-assign]  # noqa: SLF001
+        client = MagicMock()
+        props: dict[str, Any] = {}
+        if job_def_secrets is not None:
+            props["secrets"] = job_def_secrets
+        client.describe_job_definitions.return_value = {
+            "jobDefinitions": [{"revision": 1, "containerProperties": props}]
+        }
+        client.submit_job.return_value = {"jobId": "j-1"}
+        ex._client = client  # noqa: SLF001
         environment = ex._build_environment(  # noqa: SLF001
             container="nrel/openstudio:3.11.0",
             openstudio_version="3.11.0",
             task_payload=TASK_PAYLOAD,
         )
         ex._submit_job(  # noqa: SLF001
-            name="sim_0001",
-            cpus=1,
-            memory_mb=1024,
-            time_min=1,
-            environment=environment,
+            name="sim_0001", cpus=1, memory_mb=1024, time_min=1, environment=environment
         )
-        overrides = captured["containerOverrides"]
-        assert overrides["secrets"] == [
-            {"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": AWS_SECRET_ARN}
-        ]
+        return dict(client.submit_job.call_args.kwargs)
+
+    def test_submit_job_has_no_secrets_override_and_passes_botocore_schema(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import botocore.session
+        from botocore.validate import validate_parameters
+
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV, TASK_PAYLOAD_SIG_ENV
+
+        kwargs = self._submit(
+            monkeypatch, [{"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": AWS_SECRET_ARN}]
+        )
+        overrides = kwargs["containerOverrides"]
+        assert "secrets" not in overrides
         assert any(e["name"] == TASK_PAYLOAD_SIG_ENV for e in overrides["environment"])
-        assert "super-secret" not in json.dumps(captured)
+        assert "super-secret" not in json.dumps(kwargs)
+        model = botocore.session.get_session().get_service_model("batch")
+        validate_parameters(kwargs, model.operation_model("SubmitJob").input_shape)
+
+    def test_botocore_schema_rejects_old_overrides_secrets_shape(self) -> None:
+        import botocore.session
+        from botocore.exceptions import ParamValidationError
+        from botocore.validate import validate_parameters
+
+        from osimflow.task_payload_hmac import TASK_PAYLOAD_SECRET_ENV
+
+        old = {
+            "jobName": "j",
+            "jobQueue": "q",
+            "jobDefinition": "d",
+            "containerOverrides": {
+                "secrets": [{"name": TASK_PAYLOAD_SECRET_ENV, "valueFrom": AWS_SECRET_ARN}]
+            },
+        }
+        model = botocore.session.get_session().get_service_model("batch")
+        with pytest.raises(ParamValidationError, match="secrets"):
+            validate_parameters(old, model.operation_model("SubmitJob").input_shape)
+
+    def test_describe_job_definitions_request_matches_schema(self) -> None:
+        import botocore.session
+        from botocore.validate import validate_parameters
+
+        model = botocore.session.get_session().get_service_model("batch")
+        shape = model.operation_model("DescribeJobDefinitions").input_shape
+        validate_parameters({"jobDefinitionName": "d", "status": "ACTIVE"}, shape)
+        validate_parameters({"jobDefinitions": ["d:1"]}, shape)
+
+    @pytest.mark.parametrize(
+        "secrets",
+        [
+            None,
+            [],
+            [{"name": "OSIMFLOW_TASK_PAYLOAD_SECRET", "valueFrom": "arn:other"}],
+        ],
+    )
+    def test_missing_or_mismatched_job_def_secret_fails_before_submit(
+        self, monkeypatch: pytest.MonkeyPatch, secrets: list[dict[str, str]] | None
+    ) -> None:
+        from osimflow.executors import AWSBatchExecutor
+
+        ex = AWSBatchExecutor(payload_secret_arn=AWS_SECRET_ARN)
+        client = MagicMock()
+        props: dict[str, Any] = {} if secrets is None else {"secrets": secrets}
+        client.describe_job_definitions.return_value = {
+            "jobDefinitions": [{"revision": 2, "containerProperties": props}]
+        }
+        ex._client = client  # noqa: SLF001
+        with pytest.raises(RuntimeError, match="containerProperties.secrets"):
+            ex._submit_job(  # noqa: SLF001
+                name="n", cpus=1, memory_mb=1, time_min=1, environment=[]
+            )
+        client.submit_job.assert_not_called()
 
     def test_ref_without_secret_warns_unsigned(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
