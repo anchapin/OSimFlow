@@ -160,6 +160,13 @@ class CampaignCreateRequest(BaseModel):
     aws_batch_fallback_to_on_demand: bool = Field(
         default=False, description="Fall back to on-demand when Spot price exceeds ceiling"
     )
+    aws_batch_on_demand_queue: str | None = Field(
+        default=None,
+        description="On-demand Batch job queue for fallback (required with fallback)",
+    )
+    aws_batch_on_demand_job_definition: str | None = Field(
+        default=None, description="Job definition used for the on-demand fallback"
+    )
     aws_batch_max_retries: int = Field(default=3, description="Max Spot interruption retries")
     aws_batch_submit_rps: float | None = Field(
         default=None,

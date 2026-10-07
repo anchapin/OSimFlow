@@ -149,6 +149,21 @@
     "required": false,
     "type": "float"
   },
+  "--aws-batch-on-demand-job-definition": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "aws_batch_on_demand_job_definition",
+    "help": "Optional job definition used for the on-demand fallback.",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--aws-batch-on-demand-job-definition"
+    ],
+    "required": false,
+    "type": null
+  },
   "--aws-batch-on-demand-price": {
     "action": "_StoreAction",
     "choices": null,
@@ -163,6 +178,21 @@
     ],
     "required": false,
     "type": "float"
+  },
+  "--aws-batch-on-demand-queue": {
+    "action": "_StoreAction",
+    "choices": null,
+    "const": null,
+    "default": null,
+    "dest": "aws_batch_on_demand_queue",
+    "help": "On-demand-capable Batch job queue used by --aws-batch-fallback-to-on-demand. Required with the fallback flag and must differ from --aws-batch-queue (issue #1816).",
+    "metavar": null,
+    "nargs": null,
+    "option_strings": [
+      "--aws-batch-on-demand-queue"
+    ],
+    "required": false,
+    "type": null
   },
   "--aws-batch-payload-secret-arn": {
     "action": "_StoreAction",

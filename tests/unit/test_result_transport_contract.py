@@ -226,6 +226,7 @@ def test_aws_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPatc
         fallback_to_on_demand=True,
         _calculate_job_cost=lambda job: (0.0, 0.0),
         _submit_job=_fake_submit,
+        _on_demand_route=lambda: {"job_queue": "od-queue"},
         _is_spot_interruption=lambda reason: reason == "SpotInterruption",
     )
     executor._wait_for_terminal = lambda job_id, timeout=None: next(polls)  # noqa: SLF001
@@ -274,6 +275,7 @@ def test_azure_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyPa
         fallback_to_on_demand=True,
         location="eastus",
         _submit_job=_fake_submit,
+        _on_demand_route=lambda: {"job_queue": "od-queue"},
         _is_spot_interruption=lambda reason: reason == "SpotInterruption",
     )
     executor._wait_for_terminal = lambda job_id, timeout=None: next(polls)  # noqa: SLF001
@@ -324,6 +326,7 @@ def test_google_handle_materializes_on_fallback_path(monkeypatch: pytest.MonkeyP
         fallback_to_on_demand=True,
         region="us-central1",
         _submit_job=_fake_submit,
+        _on_demand_route=lambda: {"job_queue": "od-queue"},
         _is_spot_interruption=lambda details: True,
     )
     executor._batch_v1 = state  # noqa: SLF001

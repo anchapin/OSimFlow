@@ -112,7 +112,6 @@ PRESETS: dict[str, dict[str, object]] = {
     "aws-batch-cloud": {
         "executor": "aws_batch",
         "aws_batch_queue": "osimflow-batch-queue",
-        "aws_batch_fallback_to_on_demand": True,
         "aws_batch_max_retries": 3,
         "openstudio_version": "3.11.0",
         "algorithm": "lhs",

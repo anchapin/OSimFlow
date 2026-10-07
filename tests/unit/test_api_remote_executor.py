@@ -78,6 +78,8 @@ def _req(
         "aws_batch_job_definition": None,
         "aws_batch_max_spot_price_usd": None,
         "aws_batch_fallback_to_on_demand": False,
+        "aws_batch_on_demand_queue": None,
+        "aws_batch_on_demand_job_definition": None,
         "aws_batch_max_retries": 3,
         "aws_batch_submit_rps": None,
         "ecr_repository": None,
@@ -182,6 +184,7 @@ class TestBuildExecutorFromRequest:
             aws_batch_job_definition="my-def",
             aws_batch_max_spot_price_usd=0.5,
             aws_batch_fallback_to_on_demand=True,
+            aws_batch_on_demand_queue="my-ondemand-queue",
             aws_batch_max_retries=5,
         )
         executor = _build_executor_from_request(req)

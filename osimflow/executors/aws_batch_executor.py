@@ -156,9 +156,11 @@ class _AWSBatchHandle(PollingHandle):
         self.worker_id = self.job_id
 
     def _submit_on_demand(self) -> None:
-        # AWS falls back by resubmitting with the same submit params —
-        # the queue/spot selection is implicit in the job queue.
-        self.job_id = self._executor._submit_job(**self._submit_params)  # noqa: SLF001
+        # Issue #1816: fallback must change the capacity route — resubmit
+        # to the explicitly configured on-demand queue/definition, never
+        # the original (Spot) queue.
+        params = {**self._submit_params, **self._executor._on_demand_route()}  # noqa: SLF001
+        self.job_id = self._executor._submit_job(**params)  # noqa: SLF001
         self.worker_id = self.job_id
 
     def _cancel_job(self) -> bool:
@@ -372,7 +374,25 @@ class AWSBatchExecutor(BaseExecutor):
         submit_rps: float | None = None,
         allow_long_lived_credentials: bool = False,
         payload_secret_arn: str | None = None,
+        on_demand_job_queue: str | None = None,
+        on_demand_job_definition: str | None = None,
     ):
+        # Issue #1816: fallback must route to real on-demand capacity.
+        if fallback_to_on_demand:
+            if not on_demand_job_queue:
+                raise ValueError(
+                    "fallback_to_on_demand requires on_demand_job_queue "
+                    "(--aws-batch-on-demand-queue): an on-demand-capable Batch "
+                    "queue distinct from the Spot queue."
+                )
+            if on_demand_job_queue == job_queue and (
+                not on_demand_job_definition or on_demand_job_definition == job_definition
+            ):
+                raise ValueError(
+                    "on_demand_job_queue must differ from job_queue (or a distinct "
+                    "on_demand_job_definition must be set); resubmitting to the same "
+                    "route is not an on-demand fallback."
+                )
         # Lazy import: keeps the boto3 import cost off the local /
         # slurm executor paths. ImportError here is intentional: the
         # user opted into the [aws] extra, so a missing boto3 is a
@@ -452,6 +472,8 @@ class AWSBatchExecutor(BaseExecutor):
         self._ec2_client: Any = None
         self.job_queue = job_queue
         self.job_definition = job_definition or "osimflow-job-def"
+        self.on_demand_job_queue = on_demand_job_queue
+        self.on_demand_job_definition = on_demand_job_definition
         # Issue #1081: digest pinning. Initialized in the constructor so
         # ``_resolve_container_image`` is callable without going through
         # ``submit()`` (e.g. unit tests); overridden by ``submit()``.
@@ -847,6 +869,15 @@ class AWSBatchExecutor(BaseExecutor):
             ),
         )
 
+    def _on_demand_route(self) -> dict[str, str]:
+        """Return ``_submit_job`` overrides selecting on-demand capacity."""
+        route: dict[str, str] = {}
+        if self.on_demand_job_queue:
+            route["job_queue"] = self.on_demand_job_queue
+        if self.on_demand_job_definition:
+            route["job_definition"] = self.on_demand_job_definition
+        return route
+
     def _submit_job(
         self,
         *,
@@ -857,10 +888,12 @@ class AWSBatchExecutor(BaseExecutor):
         environment: list[dict[str, str]],
         command: list[str] | None = None,
         job_queue: str | None = None,
+        job_definition: str | None = None,
     ) -> str:
         """Submit a single Batch job and return the jobId.
 
-        Uses *job_queue* if provided, otherwise ``self.job_queue``.
+        Uses *job_queue* / *job_definition* if provided, otherwise
+        ``self.job_queue`` / ``self.job_definition``.
 
         Throttling is owned by :meth:`BaseExecutor.submit` (issue #1563)
         — every AWS Batch submission acquires a token from the shared
@@ -886,7 +919,7 @@ class AWSBatchExecutor(BaseExecutor):
         submit_kwargs: dict[str, Any] = {
             "jobName": name,
             "jobQueue": queue,
-            "jobDefinition": self.job_definition,
+            "jobDefinition": job_definition or self.job_definition,
             "containerOverrides": overrides,
             "timeout": {"attemptDurationSeconds": attempt_duration_seconds},
         }
@@ -1000,6 +1033,7 @@ class AWSBatchExecutor(BaseExecutor):
         # either raise or fall back to on-demand. This gate runs before
         # any job submission so we don't waste a Batch task that would
         # immediately be more expensive than the ceiling.
+        price_fallback = False
         if self.max_spot_price_usd is not None:
             if self._instance_type is None:
                 log.warning(
@@ -1017,6 +1051,7 @@ class AWSBatchExecutor(BaseExecutor):
                     )
                     if self.fallback_to_on_demand:
                         log.warning("%s — falling back to on-demand", msg)
+                        price_fallback = True
                     else:
                         raise RuntimeError(msg)
             except RuntimeError:
@@ -1039,6 +1074,8 @@ class AWSBatchExecutor(BaseExecutor):
             "environment": environment,
             "command": command,
         }
+        if price_fallback:
+            submit_params.update(self._on_demand_route())
         job_id = self._submit_job(**submit_params)
 
         return _AWSBatchHandle(

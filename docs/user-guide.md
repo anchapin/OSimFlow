@@ -1566,7 +1566,7 @@ The remaining four DAG steps do **not** consume `--max-sample-retries`:
 | `local-large` | `local` | `lhs` | `--max-workers 8 --max-generations 1` | Larger local sweeps on a workstation (8+ cores) |
 | `slurm-hpc` | `slurm` | `lhs` | `--slurm-real --slurm-partition short --max-generations 1` | Production campaign on a real Slurm cluster |
 | `slurm-gpu` | `slurm` | `lhs` | `--slurm-real --slurm-partition gpu --slurm-qos high --slurm-constraint gpu --slurm-gres gpu:1 --max-generations 1` | GPU-accelerated Slurm campaigns |
-| `aws-batch-cloud` | `aws_batch` | `lhs` | `--aws-batch-fallback-to-on-demand --aws-batch-max-retries 3 --max-generations 1` | Large-scale campaign on AWS Batch (auto-falls-back to on-demand if spot pre-empts) |
+| `aws-batch-cloud` | `aws_batch` | `lhs` | `--aws-batch-max-retries 3 --max-generations 1` | Large-scale campaign on AWS Batch (add `--aws-batch-fallback-to-on-demand --aws-batch-on-demand-queue <queue>` for on-demand fallback) |
 | `sensitivity-morris` | `local` | `morris` | `--max-workers 4 --max-generations 1` | Morris sensitivity analysis (SALib) — needs `[sensitivity]` extra |
 | `sensitivity-fast99` | `local` | `fast99` | `--max-workers 4 --max-generations 1` | FAST99 sensitivity analysis (SALib) — needs `[sensitivity]` extra |
 | `optimization-de` | `slurm` | `de` | `--slurm-real --slurm-partition short --max-generations 50` | Differential-evolution optimization (iterative, 50 generations) |
@@ -1606,6 +1606,8 @@ See [deployment/slurm.md](deployment/slurm.md) for the full Slurm guide.
 | `--aws-batch-job-definition STRING` | Job definition ARN or name. |
 | `--aws-batch-max-spot-price-usd USD` | Spot price ceiling in USD/vCPU-hour (issue #131). |
 | `--aws-batch-fallback-to-on-demand` | Fall back to on-demand when Spot exceeds ceiling or retries exhaust. |
+| `--aws-batch-on-demand-queue STRING` | On-demand-capable Batch queue the fallback resubmits to. Required with `--aws-batch-fallback-to-on-demand` and must differ from `--aws-batch-queue` (issue #1816). |
+| `--aws-batch-on-demand-job-definition STRING` | Optional job definition used for the on-demand fallback. |
 | `--aws-batch-max-retries INT` | Max Spot-interruption retries (default: 3). |
 
 See [deployment/aws-batch.md](deployment/aws-batch.md) and

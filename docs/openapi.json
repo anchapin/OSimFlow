@@ -3410,6 +3410,30 @@
             "description": "Fall back to on-demand when Spot price exceeds ceiling",
             "default": false
           },
+          "aws_batch_on_demand_queue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch On Demand Queue",
+            "description": "On-demand Batch job queue for fallback (required with fallback)"
+          },
+          "aws_batch_on_demand_job_definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aws Batch On Demand Job Definition",
+            "description": "Job definition used for the on-demand fallback"
+          },
           "aws_batch_max_retries": {
             "type": "integer",
             "title": "Aws Batch Max Retries",
