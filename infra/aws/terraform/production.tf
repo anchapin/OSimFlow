@@ -146,12 +146,16 @@ resource "aws_budgets_budget" "monthly_cost" {
   time_period_start = "2024-01-01_00:00"
   time_unit         = "MONTHLY"
 
-  notification {
-    comparison_operator        = "GREATER_THAN"
-    threshold                  = 80
-    threshold_type             = "PERCENTAGE"
-    notification_type          = "ACTUAL"
-    subscriber_email_addresses = var.alert_email_addresses
+  # AWS requires at least one subscriber per notification.
+  dynamic "notification" {
+    for_each = length(var.alert_email_addresses) > 0 ? [1] : []
+    content {
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = 80
+      threshold_type             = "PERCENTAGE"
+      notification_type          = "ACTUAL"
+      subscriber_email_addresses = var.alert_email_addresses
+    }
   }
 }
 
@@ -160,7 +164,7 @@ resource "aws_cloudwatch_metric_alarm" "daily_cost_anomaly" {
   comparison_operator = "LessThanLowerThreshold"
   evaluation_periods  = 1
   datapoints_to_alarm = 1
-  threshold           = 0
+  threshold_metric_id = "anomalyDetection"
   treat_missing_data  = "BREACHING"
 
   metric_query {
