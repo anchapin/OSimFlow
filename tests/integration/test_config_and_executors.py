@@ -14,6 +14,7 @@ import pytest
 
 from osimflow.config import CampaignConfig, load_config
 from osimflow.executors import AWSBatchExecutor, LocalExecutor, NomadExecutor, SlurmExecutor
+from tests.integration._aws_patch import patch_boto3_client
 
 
 # ---------------------------------------------------------------------------
@@ -232,14 +233,14 @@ def test_aws_batch_executor_submits() -> None:
     """Smoke test: the executor accepts a boto3.client-patched environment
     and returns a Handle. The real polling behavior is covered in
     `test_awsbatch_boto3_wiring.py`."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     fake_client = MagicMock()
     fake_client.submit_job.return_value = {"jobId": "stub-job"}
     fake_client.describe_jobs.return_value = {
         "jobs": [{"jobId": "stub-job", "status": "SUCCEEDED", "statusReason": "OK"}]
     }
-    with patch("boto3.client", return_value=fake_client):
+    with patch_boto3_client(fake_client):
         ex = AWSBatchExecutor()
         handle = ex.submit(lambda: None, name="t", cpus=1)
         assert handle.result(timeout=5) is None

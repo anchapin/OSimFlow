@@ -575,6 +575,15 @@ class AWSBatchExecutor(BaseExecutor):
             kwargs["botocore_session"] = botocore_session
         return kwargs
 
+    def _make_client(self, service: str) -> Any:
+        """Build a boto3 client; ``boto3.client`` has no ``botocore_session``
+        kwarg, so the IAM-only session must go through ``boto3.Session``."""
+        kwargs = self._client_kwargs()
+        botocore_session = kwargs.pop("botocore_session", None)
+        if botocore_session is not None:
+            return self._boto3.Session(botocore_session=botocore_session).client(service, **kwargs)
+        return self._boto3.client(service, **kwargs)
+
     def _get_client(self) -> Any:
         """Lazy boto3 Batch client construction.
 
@@ -585,13 +594,13 @@ class AWSBatchExecutor(BaseExecutor):
         role / ~/.aws/config in place.
         """
         if self._client is None:
-            self._client = self._boto3.client("batch", **self._client_kwargs())
+            self._client = self._make_client("batch")
         return self._client
 
     def _get_ec2_client(self) -> Any:
         """Lazy boto3 EC2 client for Spot price queries."""
         if self._ec2_client is None:
-            self._ec2_client = self._boto3.client("ec2", **self._client_kwargs())
+            self._ec2_client = self._make_client("ec2")
         return self._ec2_client
 
     def _get_spot_price(self) -> float:

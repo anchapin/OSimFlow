@@ -282,6 +282,7 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
         job_queue=queue,
         job_definition=job_def,
         region_name=region,
+        allow_long_lived_credentials=True,  # SSO/OIDC env creds
     )
 
     campaign = Campaign(cfg=cfg, executor=executor)

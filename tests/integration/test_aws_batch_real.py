@@ -86,6 +86,7 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
         job_queue=queue,
         job_definition=job_def,
         region_name=region,
+        allow_long_lived_credentials=True,  # SSO/OIDC env creds
     )
 
     from tests.integration._resource_contract import (  # noqa: PLC0415

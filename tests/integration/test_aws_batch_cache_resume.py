@@ -170,6 +170,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
             job_queue=queue,
             job_definition=job_def,
             region_name=region,
+            allow_long_lived_credentials=True,  # SSO/OIDC env creds
         )
 
     # --- Cold run: first time the campaign sees this outdir ------------
