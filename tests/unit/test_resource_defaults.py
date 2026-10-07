@@ -50,7 +50,7 @@ class TestDefaultStepResources:
 
     def test_get_step_resources_unknown_step_returns_fallback(self) -> None:
         resources = get_step_resources("NONEXISTENT_STEP")
-        assert resources == {"cpus": 1, "memory_mb": 1024, "time_min": 60}
+        assert resources == {"cpus": 1, "memory_mb": 2048, "time_min": 60}
 
     def test_apply_parameters_is_lightweight(self) -> None:
         apply = DEFAULT_STEP_RESOURCES["APPLY_PARAMETERS"]

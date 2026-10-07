@@ -192,12 +192,12 @@ DEFAULT_STEP_RESOURCES: dict[str, dict[str, int]] = {
 def get_step_resources(step_name: str) -> dict[str, int]:
     """Return resource defaults for a DAG step.
 
-    Falls back to ``{"cpus": 1, "memory_mb": 1024, "time_min": 60}``
+    Falls back to ``{"cpus": 1, "memory_mb": 2048, "time_min": 60}``
     when *step_name* is not in :data:`DEFAULT_STEP_RESOURCES`.
     """
     return DEFAULT_STEP_RESOURCES.get(
         step_name,
-        {"cpus": 1, "memory_mb": 1024, "time_min": 60},
+        {"cpus": 1, "memory_mb": 2048, "time_min": 60},
     )  # ======================================================================
 
 

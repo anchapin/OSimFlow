@@ -257,7 +257,7 @@ class CampaignKpisMixin:
                     exec_kwargs={
                         "name": f"kpi_{sid}",
                         "cpus": 1,
-                        "memory_mb": 1024,
+                        "memory_mb": 2048,
                         "time_min": 10,
                         "container": self._python_container_image,
                         "container_digest": self._python_container_digest,
