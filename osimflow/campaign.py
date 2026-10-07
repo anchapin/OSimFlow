@@ -3410,7 +3410,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             },
             transport=self._result_transport_config,
         )
-        result_obj: object = handle.result(timeout=300)
+        result_obj: object = handle.result(timeout=900)
         result = cast_aggregate_result(result_obj)
         self.cache.store(key, result["csv"], exit_code=0)
         elapsed = time.time() - t0
@@ -3458,7 +3458,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             result_hint=[],
             transport=self._result_transport_config,
         )
-        result_obj: object = handle.result(timeout=120)
+        result_obj: object = handle.result(timeout=900)
         result = cast_plot_paths(result_obj)
         elapsed = time.time() - t0
         self.trace.step_finished(

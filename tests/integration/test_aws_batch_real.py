@@ -96,6 +96,8 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     directives = record_submit_directives(executor)
 
     campaign = Campaign(cfg=cfg, executor=executor)
+    result = campaign.run()
+    executor.shutdown()
     # --- Resource-directive propagation (issue #1403) ---
     from tests.integration._resource_contract import (  # noqa: PLC0415
         assert_sim_fanout_directives,
@@ -116,8 +118,6 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     for res in aws_describe_jobs_resources(sim_job_ids):
         assert res["vcpus"] == 4, f"AWS Batch dropped cpus: {res}"
         assert res["memory"] == 8192, f"AWS Batch dropped memory_mb: {res}"
-    result = campaign.run()
-    executor.shutdown()
 
     # --- 4 output artifacts ---
     csv_path = outdir / "aggregated_results.csv"
