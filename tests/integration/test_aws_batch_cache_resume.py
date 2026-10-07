@@ -138,7 +138,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
 
     # --- Hermetic fixtures (same pattern as test_aws_batch_real.py) ---
     example_pkg = REPO_ROOT / "example_package"
-    example_vars = REPO_ROOT / "variables.yml"
+    example_vars = REPO_ROOT / "example_package" / "variables.yml"
 
     workdir = tmp_path / "work"
     workdir.mkdir()
