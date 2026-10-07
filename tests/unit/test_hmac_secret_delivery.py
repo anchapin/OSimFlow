@@ -387,6 +387,32 @@ class TestAwsBatchSecretDelivery:
             )
         client.submit_job.assert_not_called()
 
+    def test_job_def_validation_variants(self) -> None:
+        from osimflow.executors import AWSBatchExecutor
+
+        legacy = AWSBatchExecutor()
+        legacy._get_client = MagicMock(side_effect=AssertionError)  # type: ignore[method-assign]  # noqa: SLF001
+        legacy._validate_job_definition_secret("d")  # noqa: SLF001  # no ARN: no AWS call
+
+        ex = AWSBatchExecutor(payload_secret_arn=AWS_SECRET_ARN)
+        client = MagicMock()
+        ex._client = client  # noqa: SLF001
+        client.describe_job_definitions.return_value = {"jobDefinitions": []}
+        with pytest.raises(RuntimeError, match="not found"):
+            ex._validate_job_definition_secret("d")  # noqa: SLF001
+
+        good = {
+            "revision": 3,
+            "containerProperties": {
+                "secrets": [{"name": "OSIMFLOW_TASK_PAYLOAD_SECRET", "valueFrom": AWS_SECRET_ARN}]
+            },
+        }
+        client.describe_job_definitions.return_value = {"jobDefinitions": [good]}
+        ex._validate_job_definition_secret("d:3")  # noqa: SLF001
+        client.describe_job_definitions.assert_called_with(jobDefinitions=["d:3"])
+        ex._validate_job_definition_secret("d:3")  # noqa: SLF001  # cached
+        assert client.describe_job_definitions.call_count == 2
+
     def test_ref_without_secret_warns_unsigned(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
