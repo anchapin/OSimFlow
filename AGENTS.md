@@ -1237,7 +1237,7 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
 - **Executor resource directives:** `cpus`, `memory_mb`,
   `time_min` are advisory on `LocalExecutor`, propagated to
   Slurm via `submitit`'s `update_parameters`, and translated
-  to Boto3 `containerOverrides` for `AWSBatchExecutor`. Add
+  to Boto3 `containerOverrides` for `AWSBatchExecutor` (legacy `vcpus`/`memory` on EC2; `resourceRequirements` with a validated, never-rounded vCPU/MiB pair on Fargate job definitions, fractional `cpus` allowed — issue #1808, `docs/aws-batch-terraform.md`). Add
   new resource kinds by extending the `submit()` signature,
   not by adding process-local config.
 - **Enforcement:** ruff (lint + format), `mypy --strict`, and

@@ -181,7 +181,7 @@ __all__ = [
 # Values are dicts with {cpus, memory_mb, time_min}.
 DEFAULT_STEP_RESOURCES: dict[str, dict[str, int]] = {
     "GENERATE_LHS_SAMPLES": {"cpus": 1, "memory_mb": 2048, "time_min": 5},
-    "APPLY_PARAMETERS": {"cpus": 1, "memory_mb": 512, "time_min": 10},
+    "APPLY_PARAMETERS": {"cpus": 1, "memory_mb": 2048, "time_min": 10},
     "RUN_OPENSTUDIO_SIM": {"cpus": 4, "memory_mb": 8192, "time_min": 240},
     "EXTRACT_KPIS": {"cpus": 1, "memory_mb": 2048, "time_min": 10},
     "AGGREGATE_RESULTS": {"cpus": 2, "memory_mb": 4096, "time_min": 15},

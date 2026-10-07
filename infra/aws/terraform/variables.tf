@@ -33,6 +33,29 @@ variable "openstudio_version" {
   default     = "3.5.0"
 }
 
+variable "compute_platform" {
+  description = "Batch compute platform: EC2 (default) or FARGATE (issue #1808). With FARGATE, set use_spot=false for on-demand FARGATE; job_vcpus/job_memory_mb must be a valid Fargate pair (e.g. 1 / 2048)."
+  type        = string
+  default     = "EC2"
+
+  validation {
+    condition     = contains(["EC2", "FARGATE"], var.compute_platform)
+    error_message = "compute_platform must be EC2 or FARGATE."
+  }
+}
+
+variable "fargate_ephemeral_storage_gib" {
+  description = "Fargate task scratch disk in GiB (21-200; the default 20 GiB is used when null)"
+  type        = number
+  default     = null
+}
+
+variable "fargate_assign_public_ip" {
+  description = "Assign a public IP to Fargate tasks so they can reach ECR/S3/CloudWatch from public subnets (use private subnets + NAT/VPC endpoints otherwise)"
+  type        = bool
+  default     = true
+}
+
 variable "use_spot" {
   description = "Use Spot instances for the compute environment"
   type        = bool

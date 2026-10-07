@@ -31,6 +31,7 @@ data "aws_caller_identity" "current" {}
 
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
+  is_fargate  = var.compute_platform == "FARGATE"
 
   # Worker image launched by the job definition. It MUST be the OSimFlow worker
   # runtime (docker/osimflow-worker/Dockerfile, docs/aws-batch-worker-runtime.md),
@@ -140,20 +141,27 @@ resource "aws_batch_compute_environment" "osimflow" {
   type = "MANAGED"
 
   compute_resources {
-    type                = var.use_spot ? "SPOT" : "EC2"
-    allocation_strategy = var.use_spot ? "SPOT_CAPACITY_OPTIMIZED" : "BEST_FIT"
-    min_vcpus           = var.min_vcpus
+    type = (
+      local.is_fargate
+      ? (var.use_spot ? "FARGATE_SPOT" : "FARGATE")
+      : (var.use_spot ? "SPOT" : "EC2")
+    )
+    allocation_strategy = local.is_fargate ? null : (var.use_spot ? "SPOT_CAPACITY_OPTIMIZED" : "BEST_FIT")
+    min_vcpus           = local.is_fargate ? null : var.min_vcpus
     max_vcpus           = var.max_vcpus
-    desired_vcpus       = var.desired_vcpus
+    desired_vcpus       = local.is_fargate ? null : var.desired_vcpus
 
-    instance_type = var.instance_types
-    instance_role = aws_iam_instance_profile.batch.arn
+    instance_type = local.is_fargate ? null : var.instance_types
+    instance_role = local.is_fargate ? null : aws_iam_instance_profile.batch.arn
 
     security_group_ids = [aws_security_group.batch.id]
     subnets            = data.aws_subnets.default.ids
 
-    ec2_configuration {
-      image_type = "ECS_AL2"
+    dynamic "ec2_configuration" {
+      for_each = local.is_fargate ? [] : [1]
+      content {
+        image_type = "ECS_AL2"
+      }
     }
 
     tags = {

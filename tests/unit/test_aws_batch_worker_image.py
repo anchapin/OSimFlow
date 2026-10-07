@@ -63,10 +63,12 @@ def test_missing_job_definition_fails() -> None:
         _submit(ex, expected_image="x:1")
 
 
-def test_no_pin_means_no_describe_call() -> None:
+def test_no_pin_means_no_image_validation() -> None:
+    # Only the platform probe (issue #1808) describes the definition; the
+    # image check does not run without a pin.
     ex, client = _executor("anything")
     _submit(ex)
-    client.describe_job_definitions.assert_not_called()
+    assert client.describe_job_definitions.call_count == 1
 
 
 def test_do_submit_pins_only_when_requested() -> None:

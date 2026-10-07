@@ -55,7 +55,8 @@ class TestDefaultStepResources:
     def test_apply_parameters_is_lightweight(self) -> None:
         apply = DEFAULT_STEP_RESOURCES["APPLY_PARAMETERS"]
         assert apply["cpus"] == 1
-        assert apply["memory_mb"] <= 1024
+        # 2048 MiB: smallest legal Fargate memory for 1 vCPU (issue #1808)
+        assert apply["memory_mb"] <= 2048
 
     def test_sim_step_at_least_4_cpus(self) -> None:
         sim = DEFAULT_STEP_RESOURCES["RUN_OPENSTUDIO_SIM"]

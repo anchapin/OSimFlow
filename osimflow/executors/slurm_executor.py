@@ -10,6 +10,7 @@ from ``osimflow/executors/__init__.py`` (issue #1463).
 from __future__ import annotations
 
 import logging
+import math
 import os
 from collections.abc import Callable
 from typing import Any
@@ -166,7 +167,7 @@ class SlurmExecutor(BaseExecutor):
         fn: Callable[..., Any],
         *args: Any,
         name: str = "task",
-        cpus: int = 1,
+        cpus: float = 1,
         memory_mb: int = 1024,
         time_min: int = 60,
         container: str | None = None,
@@ -237,7 +238,7 @@ class SlurmExecutor(BaseExecutor):
             call_ex,
             partition=self.partition,
             account=self.account,
-            cpus_per_task=cpus,
+            cpus_per_task=max(1, math.ceil(cpus)),
             mem_gb=mem_gb_override,
             time_min=time_min,
             qos=self.qos,
