@@ -165,7 +165,7 @@ resource "aws_cloudwatch_metric_alarm" "daily_cost_anomaly" {
   evaluation_periods  = 1
   datapoints_to_alarm = 1
   threshold_metric_id = "anomalyDetection"
-  treat_missing_data  = "BREACHING"
+  treat_missing_data  = "breaching"
 
   metric_query {
     id          = "anomalyDetection"
