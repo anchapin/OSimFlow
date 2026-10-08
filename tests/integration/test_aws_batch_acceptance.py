@@ -84,7 +84,6 @@ class _CountingExecutor:
             job_definition=os.environ["OSIMFLOW_AWS_BATCH_JOB_DEFINITION"],
             region_name=os.environ["OSIMFLOW_AWS_REGION"],
             allow_long_lived_credentials=True,  # SSO/OIDC env creds
-            container_digest=os.environ["OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"],
         )
 
 
