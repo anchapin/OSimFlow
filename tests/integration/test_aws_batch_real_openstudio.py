@@ -83,6 +83,7 @@ _REQUIRED_ENV = (
     "OSIMFLOW_AWS_BATCH_QUEUE",
     "OSIMFLOW_AWS_BATCH_JOB_DEFINITION",
     "OSIMFLOW_AWS_REGION",
+    "OSIMFLOW_AWS_BATCH_RESULT_BUCKET",
 )
 
 _MISSING = [v for v in _REQUIRED_ENV if os.environ.get(v) in (None, "")]
@@ -275,6 +276,8 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
         outdir=outdir,
         openstudio_version=version,
         archive_intermediates=False,
+        result_storage_backend="s3",
+        result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
         prebuilt_workflow=True,
     )
 

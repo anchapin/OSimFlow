@@ -80,6 +80,8 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
         outdir=outdir,
         openstudio_version="3.11.0",
         archive_intermediates=False,
+        result_storage_backend="s3",
+        result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
     )
 
     executor = AWSBatchExecutor(
