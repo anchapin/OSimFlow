@@ -18,9 +18,12 @@ from osimflow.executors.transport import (
 )
 from osimflow.input_staging import (
     INPUT_KEY_PREFIX,
+    PAYLOAD_REF_KEY,
     InputStager,
     InputStagingError,
     WorkerPathRemapper,
+    fetch_spilled_payload,
+    spill_task_payload,
 )
 from osimflow.storage import ResultStorage
 from osimflow.task_payload_hmac import (
@@ -313,3 +316,18 @@ def test_unsigned_staged_payload_without_object_storage_fails(
     monkeypatch.delenv("OSIMFLOW_RESULT_TRANSPORT_MODE", raising=False)
     assert remote_runner.main() == 1
     assert "refusing to fall back" in capsys.readouterr().err
+
+
+def test_spilled_payload_roundtrip_and_tamper_detection(tmp_path: Path) -> None:
+    storage = DirStorage(tmp_path / "bucket")
+    raw = json.dumps({"step": "aggregate", "args": ["x" * 20000]})
+    pointer = json.loads(spill_task_payload(storage, raw))
+    sha = pointer[PAYLOAD_REF_KEY]
+    assert sha == hashlib.sha256(raw.encode()).hexdigest()
+    assert fetch_spilled_payload(storage, sha) == raw
+
+    (tmp_path / "bucket" / INPUT_KEY_PREFIX / "payloads" / f"{sha}.json").write_text("{}")
+    with pytest.raises(InputStagingError, match="integrity"):
+        fetch_spilled_payload(storage, sha)
+    with pytest.raises(InputStagingError, match="invalid"):
+        fetch_spilled_payload(storage, "../etc/passwd")

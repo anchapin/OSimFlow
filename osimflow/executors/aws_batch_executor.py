@@ -1190,6 +1190,33 @@ class AWSBatchExecutor(BaseExecutor):
                 "local executor (issue #1812)."
             )
 
+    # Batch rejects containerOverrides over 8192 bytes; leave headroom for the
+    # other env vars (signature, transport settings, secret).
+    _MAX_INLINE_PAYLOAD_BYTES = 3072
+
+    def _spill_oversized_payload(
+        self, task_payload: str, transport: ResultTransportConfig | None
+    ) -> str:
+        if len(task_payload.encode("utf-8")) <= self._MAX_INLINE_PAYLOAD_BYTES:
+            return task_payload
+        from osimflow.input_staging import spill_task_payload  # noqa: PLC0415
+        from osimflow.storage import build_result_storage  # noqa: PLC0415
+
+        if (
+            transport is None
+            or transport.mode != "object_storage"
+            or not transport.backend
+            or not transport.bucket
+        ):
+            return task_payload
+        storage = build_result_storage(
+            backend=transport.backend,
+            bucket=transport.bucket,
+            prefix=str(transport.prefix or ""),
+            endpoint_url=transport.endpoint,
+        )
+        return spill_task_payload(storage, task_payload)
+
     def _do_submit(
         self,
         fn: Callable[..., Any],
@@ -1213,6 +1240,9 @@ class AWSBatchExecutor(BaseExecutor):
         **kwargs: Any,
     ) -> Handle:
         self._container_digest = container_digest
+        # ``timeout_s`` bounds the real OpenStudio CLI on the worker, so it must
+        # reach the work function; the other submit-only kwargs stay local.
+        sim_timeout_s = kwargs.pop("timeout_s", None)
         del variables_json, env, stdout_path, stderr_path, max_retries, worker_id, kwargs  # noqa: F841, ARG002
 
         log.info(
@@ -1232,8 +1262,13 @@ class AWSBatchExecutor(BaseExecutor):
         self.validate_work_fn(step_name, fn)
         # Issue #1809: the Batch container shares no filesystem with the
         # controller — stage every Path in S3 and ship references instead.
+        work_kwargs: dict[str, Any] = (
+            {"timeout_s": float(sim_timeout_s)}
+            if step_name == "sim" and sim_timeout_s is not None
+            else {}
+        )
         staged_args, staged_kwargs = self._stage_task_inputs(
-            tuple(args), {}, result_hint=result_hint, transport=transport
+            tuple(args), work_kwargs, result_hint=result_hint, transport=transport
         )
         task_payload = self._build_task_payload(
             step_name=step_name,
@@ -1242,6 +1277,7 @@ class AWSBatchExecutor(BaseExecutor):
             result_hint=result_hint,
             name=name,
         )
+        task_payload = self._spill_oversized_payload(task_payload, transport)
 
         if remote_command:
             command: list[str] = ["/bin/sh", "-c", remote_command]

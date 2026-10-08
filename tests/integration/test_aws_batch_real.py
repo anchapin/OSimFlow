@@ -33,7 +33,7 @@ pytestmark = pytest.mark.skipif(
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
+def test_real_aws_batch_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3-sample campaign against real AWS Batch.
 
     This test exercises the full production path:
@@ -51,7 +51,7 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     the executor wiring, the container image, or the Batch
     infrastructure.
     """
-    import shutil
+    monkeypatch.delenv("OSIMFLOW_STUB_SIM", raising=False)
 
     from osimflow import Campaign, CampaignConfig
     from osimflow.executors import AWSBatchExecutor
@@ -61,15 +61,15 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     region = os.environ["OSIMFLOW_AWS_REGION"]
 
     # Set up hermetic test fixtures (same pattern as other executor tests).
-    example_pkg = REPO_ROOT / "example_package"
-    example_vars = REPO_ROOT / "example_package" / "variables.yml"
-
     workdir = tmp_path / "work"
     workdir.mkdir()
-    (workdir / "variables.yml").write_text(example_vars.read_text())
+    (workdir / "variables.yml").write_text("algorithm: lhs\nvariables: []\n")
 
-    template_pkg = workdir / "template"
-    shutil.copytree(example_pkg, template_pkg)
+    from tests.integration.test_aws_batch_real_openstudio import (  # noqa: PLC0415
+        _build_real_template,
+    )
+
+    template_pkg = _build_real_template(tmp_path / "tpl")
 
     outdir = tmp_path / f"out-{uuid.uuid4().hex[:8]}"
     outdir.mkdir()
@@ -83,6 +83,8 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
         archive_intermediates=False,
         result_storage_backend="s3",
         result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
+        container_digest=os.environ.get("OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"),
+        prebuilt_workflow=True,
     )
 
     executor = AWSBatchExecutor(

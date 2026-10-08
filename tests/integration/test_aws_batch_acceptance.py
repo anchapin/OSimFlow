@@ -72,7 +72,7 @@ def _fixture() -> None:
 
 
 class _CountingExecutor:
-    """Factory for an AWSBatchExecutor that counts real Batch submissions."""
+    """Factory for an AWSBatchExecutor that counts real Batch simulation submissions."""
 
     @staticmethod
     def make() -> object:
@@ -83,7 +83,10 @@ class _CountingExecutor:
 
             def _do_submit(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
                 handle = super()._do_submit(*args, **kwargs)  # type: ignore[misc]
-                type(self).submissions.append(str(getattr(handle, "job_id", "unknown")))
+                # Acceptance bounds *simulation* submissions; the apply/KPI/
+                # aggregate/plot steps are not duplicate-sensitive.
+                if str(kwargs.get("name", "")).startswith("sim_"):
+                    type(self).submissions.append(str(getattr(handle, "job_id", "unknown")))
                 return handle
 
         Counting.submissions = []
@@ -170,7 +173,8 @@ def test_bounded_campaign_and_resume_no_duplicate_submissions(tmp_path: Path) ->
     _fixture()
     outdir = tmp_path / f"bounded-{uuid.uuid4().hex[:8]}"
     t0 = time.monotonic()
-    ex, _ = _run(tmp_path, outdir, N_BOUNDED)
+    template = real_os._build_real_template(tmp_path / "tpl_bounded")
+    ex, _ = _run(tmp_path, outdir, N_BOUNDED, template=template)
     wall = time.monotonic() - t0
     ids = _ids(outdir)
     acc.verify_acceptance(outdir, expected_success=ids, min_successes=len(ids))
@@ -179,7 +183,7 @@ def test_bounded_campaign_and_resume_no_duplicate_submissions(tmp_path: Path) ->
     _write_evidence("bounded", _record(ex, outdir, wall))
 
     # Same retained outdir: cached samples must not be resubmitted.
-    ex2, _ = _run(tmp_path, outdir, N_BOUNDED)
+    ex2, _ = _run(tmp_path, outdir, N_BOUNDED, template=template)
     assert type(ex2).submissions == [], (  # type: ignore[attr-defined]
         f"resume resubmitted cached samples: {type(ex2).submissions}"  # type: ignore[attr-defined]
     )

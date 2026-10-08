@@ -26,8 +26,10 @@ from .executors.transport import (
     local_path_to_storage_key,
 )
 from .input_staging import (
+    PAYLOAD_REF_KEY,
     InputStagingError,
     WorkerPathRemapper,
+    fetch_spilled_payload,
     result_upload_plan,
 )
 from .storage import ResultStorage, build_result_storage
@@ -224,6 +226,16 @@ def _load_payload() -> dict[str, Any]:
         raise RuntimeError("invalid OSIMFLOW task payload JSON") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("invalid OSIMFLOW task payload: expected object")
+    return payload
+
+
+def _decode_spilled_payload(raw: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("invalid spilled OSIMFLOW task payload JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("invalid spilled OSIMFLOW task payload: expected object")
     return payload
 
 
@@ -468,6 +480,16 @@ def main() -> int:
         _verify_contract_version()
         remapper: WorkerPathRemapper | None = None
         context: tuple[ResultStorage, str | None] | None = None
+        if PAYLOAD_REF_KEY in payload:
+            context = _object_storage_context()
+            if context is None:
+                raise InputStagingError(
+                    "task payload was spilled to object storage but result transport "
+                    "mode is not object_storage"
+                )
+            payload = _decode_spilled_payload(
+                fetch_spilled_payload(context[0], str(payload[PAYLOAD_REF_KEY]))
+            )
         if _payload_has_staged_refs(payload):
             context = _object_storage_context()
             if context is None:
