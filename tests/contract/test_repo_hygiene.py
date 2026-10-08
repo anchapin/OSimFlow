@@ -46,6 +46,8 @@ ALLOWLISTED_NON_TEST_MODULES: dict[str, str] = {
     "integration/_aws_batch_acceptance.py": (
         "AWS Batch acceptance evidence helpers imported by live + unit tests"
     ),
+    # boto3.Session patch helper imported by the AWS Batch stub/wiring tests.
+    "integration/_aws_patch.py": "boto3 patch helper imported by AWS Batch integration tests",
 }
 
 _ALLOWED_BASENAMES = {"conftest.py", "__init__.py"}
