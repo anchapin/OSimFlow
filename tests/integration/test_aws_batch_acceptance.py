@@ -113,6 +113,7 @@ def _run(
         result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
         container_digest=os.environ["OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"],
         byos_timeout_s=timeout_s,
+        prebuilt_workflow=True,
     )
     ex = executor or _CountingExecutor.make()
     try:
