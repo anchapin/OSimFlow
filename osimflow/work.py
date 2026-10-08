@@ -1580,6 +1580,20 @@ def _run_real_openstudio(
         )
         raise
 
+    # The CLI runs with cwd=modified_sim_package, so EnergyPlus outputs land in
+    # <package>/run/. Publish them into sim_out, which is what downstream
+    # steps and remote result transport consume.
+    if not _reuse_existing_simulation_output(
+        modified_sim_package=modified_sim_package,
+        sim_out=sim_out,
+        sample_id=sample_id,
+    ):
+        log.warning(
+            "openstudio.cli exited 0 but produced no eplusout.sql under %s/run for sample=%s",
+            modified_sim_package,
+            sample_id,
+        )
+
     register_values = _parse_register_values(stdout_path)
     if register_values is not None:
         rv_path = sim_out / "register_values.json"

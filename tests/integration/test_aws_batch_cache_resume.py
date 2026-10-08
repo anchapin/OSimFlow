@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -147,7 +148,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
     template_pkg = workdir / "template"
     shutil.copytree(example_pkg, template_pkg)
 
-    outdir = tmp_path / "out"
+    outdir = tmp_path / f"out-{uuid.uuid4().hex[:8]}"
     outdir.mkdir()
 
     def make_cfg() -> CampaignConfig:

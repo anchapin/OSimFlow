@@ -20,6 +20,7 @@ environment.  To run locally::
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -70,7 +71,7 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     template_pkg = workdir / "template"
     shutil.copytree(example_pkg, template_pkg)
 
-    outdir = tmp_path / "out"
+    outdir = tmp_path / f"out-{uuid.uuid4().hex[:8]}"
     outdir.mkdir()
 
     cfg = CampaignConfig(

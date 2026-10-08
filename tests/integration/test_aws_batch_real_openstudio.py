@@ -69,6 +69,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -274,7 +275,7 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
 
     template_pkg = _build_real_template(tmp_path)
 
-    outdir = tmp_path / "out"
+    outdir = tmp_path / f"out-{uuid.uuid4().hex[:8]}"
     outdir.mkdir()
 
     cfg = CampaignConfig(

@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -156,7 +157,7 @@ def _record(ex: object, outdir: Path, wall: float) -> dict[str, object]:
 
 def test_one_model_cold_smoke(tmp_path: Path) -> None:
     _fixture()
-    outdir = tmp_path / "smoke"
+    outdir = tmp_path / f"smoke-{uuid.uuid4().hex[:8]}"
     t0 = time.monotonic()
     ex, _ = _run(tmp_path, outdir, 1)
     wall = time.monotonic() - t0
@@ -167,7 +168,7 @@ def test_one_model_cold_smoke(tmp_path: Path) -> None:
 
 def test_bounded_campaign_and_resume_no_duplicate_submissions(tmp_path: Path) -> None:
     _fixture()
-    outdir = tmp_path / "bounded"
+    outdir = tmp_path / f"bounded-{uuid.uuid4().hex[:8]}"
     t0 = time.monotonic()
     ex, _ = _run(tmp_path, outdir, N_BOUNDED)
     wall = time.monotonic() - t0
@@ -189,7 +190,7 @@ def test_invalid_workflow_fails_with_retained_reason(tmp_path: Path) -> None:
     _fixture()
     template = real_os._build_real_template(tmp_path / "tpl_bad")
     (template / "workflow.osw").write_text('{"seed_file": "does_not_exist.osm", "steps": []}')
-    outdir = tmp_path / "invalid"
+    outdir = tmp_path / f"invalid-{uuid.uuid4().hex[:8]}"
     try:
         _run(tmp_path, outdir, 1, template=template)
     except Exception:  # noqa: BLE001 -- campaign may abort on all-failed
@@ -206,7 +207,7 @@ def test_invalid_workflow_fails_with_retained_reason(tmp_path: Path) -> None:
 
 def test_timeout_fails_and_is_not_reported_as_success(tmp_path: Path) -> None:
     _fixture()
-    outdir = tmp_path / "timeout"
+    outdir = tmp_path / f"timeout-{uuid.uuid4().hex[:8]}"
     try:
         _run(tmp_path, outdir, 1, timeout_s=3.0)
     except Exception:  # noqa: BLE001 -- timeout surfaces as sample failure/abort
