@@ -3455,11 +3455,18 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             time_min=10,
             container=self._python_container_image,
             container_digest=self._python_container_digest,
-            result_hint=[],
+            # The plot file names are unknown up front, so hint the directory;
+            # object-storage transport downloads it for remote workers.
+            result_hint=[plots_dir],
             transport=self._result_transport_config,
         )
         result_obj: object = handle.result(timeout=900)
-        result = cast_plot_paths(result_obj)
+        result = []
+        for item in cast_plot_paths(result_obj):
+            if item.is_dir():
+                result.extend(sorted(p for p in item.iterdir() if p.is_file()))
+            else:
+                result.append(item)
         elapsed = time.time() - t0
         self.trace.step_finished(
             "GENERATE_BASIC_PLOTS",
