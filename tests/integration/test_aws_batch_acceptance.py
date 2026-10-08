@@ -56,6 +56,13 @@ pytestmark = pytest.mark.skipif(
 N_BOUNDED = min(int(os.environ.get("OSIMFLOW_AWS_BATCH_ACCEPTANCE_N", "10")), 20)
 
 
+@pytest.fixture(autouse=True)
+def _real_worker_not_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The root conftest forces OSIMFLOW_STUB_SIM=1, which the executor forwards
+    to the Batch worker; drop it so the worker runs the real OpenStudio CLI."""
+    monkeypatch.delenv("OSIMFLOW_STUB_SIM", raising=False)
+
+
 def _fixture() -> None:
     try:
         real_os._ensure_real_fixture()

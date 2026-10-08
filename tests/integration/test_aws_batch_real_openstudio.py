@@ -98,6 +98,14 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
+
+@pytest.fixture(autouse=True)
+def _real_worker_not_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The root conftest forces OSIMFLOW_STUB_SIM=1, which the executor forwards
+    to the Batch worker; drop it so the worker runs the real OpenStudio CLI."""
+    monkeypatch.delenv("OSIMFLOW_STUB_SIM", raising=False)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PACKAGE = REPO_ROOT / "example_package"
 MODEL_OSM = EXAMPLE_PACKAGE / "model.osm"
