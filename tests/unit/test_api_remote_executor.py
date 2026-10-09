@@ -343,7 +343,7 @@ class TestBuildExecutorFromRequest:
         executor = _build_executor_from_request(req)
         assert isinstance(executor, DockerSwarmExecutor)
         # Defaults from the docker_swarm.add_arguments hook (issue #1681):
-        assert executor.image == "nrel/openstudio:3.11.0"
+        assert executor.image == "nrel/openstudio:3.10.0"
         assert executor.poll_interval_s == 5.0
         assert executor.max_poll_interval_s == 60.0
         assert executor.payload_secret is None

@@ -28,8 +28,8 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
     )
     parser_group.add_argument(
         "--docker-swarm-image",
-        default="nrel/openstudio:3.11.0",
-        help="Docker image for Swarm services (default: nrel/openstudio:3.11.0). "
+        default="nrel/openstudio:3.10.0",
+        help="Docker image for Swarm services (default: nrel/openstudio:3.10.0). "
         "WARNING: Using 'latest' is not recommended for production due to "
         "supply-chain risk — the image digest can change over time.",
     )
@@ -67,7 +67,7 @@ def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
     return {
         "poll_interval_s": kwargs.get("docker_swarm_poll_interval_s") or 5.0,
         "max_poll_interval_s": kwargs.get("docker_swarm_max_poll_interval_s") or 60.0,
-        "image": kwargs.get("docker_swarm_image") or "nrel/openstudio:3.11.0",
+        "image": kwargs.get("docker_swarm_image") or "nrel/openstudio:3.10.0",
         "network": kwargs.get("docker_swarm_network"),
         "submit_rps": kwargs.get("submit_rps"),
         "payload_secret": kwargs.get("docker_swarm_payload_secret"),

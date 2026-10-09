@@ -24,7 +24,7 @@ osimflow run \
   --template_sim_package ./template_sim_package \
   --n_samples 20 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ## Expected Output

@@ -7,7 +7,7 @@ image:
 # OpenStudio container image.
 openstudio:
   # Container image tag (version). Maps to docker tag nrel/openstudio:<version>.
-  version: "3.11.0"
+  version: "3.10.0"
   repository: nrel/openstudio
 
 # Kubernetes Job configuration.

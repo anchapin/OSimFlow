@@ -219,7 +219,7 @@ All flags are passed to the `osimflow run` subcommand.
 | `--template_sim_package` | path | **required** | Path to the template simulation package directory. |
 | `--n_samples` | int | **required** | Number of LHS samples to generate. |
 | `--outdir` | path | **required** | Output directory for campaign results. |
-| `--openstudio_version` | string | `3.11.0` | OpenStudio version. Determines the container image tag. |
+| `--openstudio_version` | string | `3.10.0` | OpenStudio version. Determines the container image tag. |
 | `--archive_intermediates` | flag | off | Archive per-sample `.osw`/`.osm`/`eplusout.sql` files. |
 | `--project` | string | `""` | Campaign name used for registry grouping (e.g. `--project 'Building Energy Analysis Q1 2026'`). |
 | `--kpis` | string list | all KPIs | Restrict KPI extraction to the named KPIs (e.g. `--kpis eui peak_demand`). All KPIs extracted when omitted. |
@@ -1210,13 +1210,13 @@ image is used. The version maps directly to the Docker Hub tag:
 | `3.8.0` | `docker.io/nrel/openstudio:3.8.0` | |
 | `3.9.0` | `docker.io/nrel/openstudio:3.9.0` | |
 | `3.10.0` | `docker.io/nrel/openstudio:3.10.0` | |
-| `3.11.0` | `docker.io/nrel/openstudio:3.11.0` | latest stable (default) |
+| `3.10.0` | `docker.io/nrel/openstudio:3.10.0` | latest stable (default) |
 
 **When to pin:** Always pin in production campaigns for reproducibility.
 Changing the version invalidates the cache for the simulation step.
 
 **When to float:** During development, you may omit the flag (defaults to
-`3.11.0`) or update it to test compatibility with a new OpenStudio release.
+`3.10.0`) or update it to test compatibility with a new OpenStudio release.
 
 For the full supported-version policy and how to add a new tag, see
 [openstudio-image-distribution.md](openstudio-image-distribution.md) and
@@ -1260,7 +1260,7 @@ osimflow run \
   --n_samples 1000 \
   --outdir ./results \
   --redis-url redis://redis.internal:6379/0 \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 Completed steps hit the cache (`work/cache.sqlite` for the
@@ -1573,7 +1573,7 @@ job definition's timeout. See [resource-allocation.md](resource-allocation.md).
 | `--template_sim_package PATH` | **required** | Template simulation package directory. |
 | `--n_samples INT` | **required** | Number of samples to generate. |
 | `--outdir PATH` | **required** | Output directory. |
-| `--openstudio_version STRING` | `3.11.0` | OpenStudio version (drives the `nrel/openstudio:<version>` tag). |
+| `--openstudio_version STRING` | `3.10.0` | OpenStudio version (drives the `nrel/openstudio:<version>` tag). |
 | `--archive_intermediates` | off | Preserve per-sample `.osw`/`.osm`/`eplusout.sql`. |
 | `--preset NAME` | none | Named preset of recommended flag values (issue #384); individual flags override the preset. See [`--preset` reference table](#--preset-name-reference-table) below for the full list of available presets. |
 | `--init-script` / `--finalize-script PATH` | none | Pre/post-campaign shell hooks (issue #108). |
@@ -1615,7 +1615,7 @@ The remaining four DAG steps do **not** consume `--max-sample-retries`:
 | `optimization-de` | `slurm` | `de` | `--slurm-real --slurm-partition short --max-generations 50` | Differential-evolution optimization (iterative, 50 generations) |
 | `optimization-nsga2` | `slurm` | `nsga2` | `--slurm-real --slurm-partition short --max-generations 50` | NSGA-II multi-objective optimization (needs `[optimization]` extra) |
 
-All presets set `--openstudio_version 3.11.0` — override with an explicit `--openstudio_version` flag if needed.
+All presets set `--openstudio_version 3.10.0` — override with an explicit `--openstudio_version` flag if needed.
 
 #### Algorithm & sampling
 

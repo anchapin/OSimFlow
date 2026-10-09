@@ -4,7 +4,7 @@
 Usage:
     # Bundle everything (pip + docker + weather)
     python scripts/bundle_offline.py \
-        --openstudio-version 3.11.0 \
+        --openstudio-version 3.10.0 \
         --pip-extras dev,aws,slurm \
         --output /tmp/osimflow-offline.tar.gz
 
@@ -13,7 +13,7 @@ Usage:
 
     # Bundle Docker images only
     python scripts/bundle_offline.py --docker-only \
-        --openstudio-version 3.11.0 \
+        --openstudio-version 3.10.0 \
         --output /tmp/docker-bundle.tar.gz
 
     # Bundle weather files from a variables.yml
@@ -324,9 +324,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--openstudio-version",
-        default="3.11.0",
+        default="3.10.0",
         choices=SUPPORTED_OS_VERSIONS,
-        help="OpenStudio version to bundle (default: 3.11.0)",
+        help="OpenStudio version to bundle (default: 3.10.0)",
     )
     p.add_argument(
         "--pip-extras",

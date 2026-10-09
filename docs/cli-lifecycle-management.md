@@ -196,7 +196,7 @@ Then run the container with a custom entrypoint:
 
 ```bash
 docker run --rm \
-  nrel/openstudio:3.11.0 \
+  nrel/openstudio:3.10.0 \
   /usr/bin/supervisord -c /etc/supervisord.conf
 ```
 
@@ -254,7 +254,7 @@ Add a health check to the `Dockerfile` that validates the CLI is responsive:
 
 ```dockerfile
 # Part of a custom Dockerfile extending nrel/openstudio
-FROM nrel/openstudio:3.11.0
+FROM nrel/openstudio:3.10.0
 
 HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=3 \
   CMD openstudio.cli openstudio --version || exit 1
@@ -266,7 +266,7 @@ The `HEALTHCHECK` makes Docker monitor the container's health. When combined wit
 docker run --rm \
   --restart=on-failure:3 \
   -v $(pwd):/workdir \
-  nrel/openstudio:3.11.0 \
+  nrel/openstudio:3.10.0 \
   openstudio.cli run -w /workdir/workflow.osw
 ```
 

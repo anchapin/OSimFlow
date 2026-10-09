@@ -103,7 +103,7 @@ machine **with** internet access:
 
 | Asset | Approximate size |
 |---|---|
-| `nrel/openstudio:3.11.0` Docker image | ~2 GB |
+| `nrel/openstudio:3.10.0` Docker image | ~2 GB |
 | Scientific Python image | ~1.5 GB |
 | pip wheels (all extras) | ~500 MB – 1 GB |
 | Weather files (per file) | ~1–3 MB |
@@ -128,7 +128,7 @@ pip install -e ".[dev,aws,slurm]"
 
 # Bundle everything: pip wheels + Docker images + weather files
 python scripts/bundle_offline.py \
-    --openstudio-version 3.11.0 \
+    --openstudio-version 3.10.0 \
     --pip-extras "dev,aws,slurm" \
     --variables variables.yml \
     --weather-dir ./example_package/weather \
@@ -138,7 +138,7 @@ python scripts/bundle_offline.py \
 The script downloads:
 
 - All pip wheels for the requested extras into `offline/pip/`.
-- The `nrel/openstudio:3.11.0` Docker image as a tar archive into
+- The `nrel/openstudio:3.10.0` Docker image as a tar archive into
   `offline/docker/`.
 - The scientific Python image
   (`ghcr.io/anchapin/scientific_python_image:latest`) as a tar archive into
@@ -158,7 +158,7 @@ python scripts/bundle_offline.py --pip-only \
 
 # Docker images only
 python scripts/bundle_offline.py --docker-only \
-    --openstudio-version 3.11.0 \
+    --openstudio-version 3.10.0 \
     --output /tmp/docker-bundle.tar.gz
 
 # Weather files only
@@ -168,7 +168,7 @@ python scripts/bundle_offline.py --weather-only \
 
 # Everything (default when no --*-only flag is set)
 python scripts/bundle_offline.py \
-    --openstudio-version 3.11.0 \
+    --openstudio-version 3.10.0 \
     --pip-extras "dev,aws,slurm" \
     --output /tmp/osimflow-offline.tar.gz
 ```
@@ -178,7 +178,7 @@ python scripts/bundle_offline.py \
 | Flag | Default | Description |
 |---|---|---|
 | `--output`, `-o` | `osimflow-offline.tar.gz` | Output tarball path |
-| `--openstudio-version` | `3.11.0` | OpenStudio version to bundle. Choices: `3.7.0`, `3.8.0`, `3.9.0`, `3.10.0`, `3.11.0` |
+| `--openstudio-version` | `3.10.0` | OpenStudio version to bundle. Choices: `3.7.0`, `3.8.0`, `3.9.0`, `3.10.0`, `3.11.0` |
 | `--pip-extras` | `dev,aws,slurm` | Comma-separated pip extras to include (e.g. `aws,slurm,mlflow,sensitivity,optimization,api,tui`) |
 | `--variables` | *(none)* | Path to `variables.yml` to extract weather-file references from |
 | `--weather-dir` | *(none)* | Directory containing `.epw` weather files to bundle |
@@ -196,7 +196,7 @@ offline/
 │   ├── numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.whl
 │   └── ... (all pip wheels for the requested extras)
 ├── docker/
-│   ├── nrel_openstudio_3.11.0.tar
+│   ├── nrel_openstudio_3.10.0.tar
 │   └── ghcr.io_anchapin_scientific_python_image_latest.tar
 ├── weather/
 │   └── USA_CA_San.Francisco.Intl.AP.724940_TMY3.epw
@@ -240,7 +240,7 @@ mkdir -p /opt/osimflow
 tar -xzf /data/osimflow/osimflow-offline.tar.gz -C /opt/osimflow/
 
 # Load Docker images from the tar archives
-docker load -i /opt/osimflow/offline/docker/nrel_openstudio_3.11.0.tar
+docker load -i /opt/osimflow/offline/docker/nrel_openstudio_3.10.0.tar
 docker load -i /opt/osimflow/offline/docker/ghcr.io_anchapin_scientific_python_image_latest.tar
 docker images | grep -E "openstudio|scientific"
 
@@ -268,7 +268,7 @@ osimflow run \
     --template_sim_package /data/models/example_package \
     --n_samples 50 \
     --outdir /data/results/run01 \
-    --openstudio_version 3.11.0
+    --openstudio_version 3.10.0
 ```
 
 ### 4.2 What the flags mean
@@ -334,7 +334,7 @@ osimflow run \
     --input_variables /data/models/variables.yml \
     --template_sim_package /data/models/example_package \
     --outdir /data/results/dry-run \
-    --openstudio_version 3.11.0
+    --openstudio_version 3.10.0
 ```
 
 The `--dry-run` flag forces `LocalExecutor`, 1 sample, and steps 1–4 only
@@ -374,12 +374,12 @@ set -euo pipefail
 
 # Single region
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
-    --version 3.11.0 \
+    --version 3.10.0 \
     --region us-east-1
 
 # Multi-region replication
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
-    --version 3.11.0 \
+    --version 3.10.0 \
     --region us-east-1 \
     --regions us-east-1,us-west-2,eu-west-1
 ```
@@ -411,7 +411,7 @@ osimflow run \
     --aws-batch-queue osimflow-batch-queue \
     --aws-batch-job-definition osimflow-openstudio-job-def \
     --ecr-repository 123456789012.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio \
-    --openstudio_version 3.11.0 \
+    --openstudio_version 3.10.0 \
     --offline \
     --input_variables variables.yml \
     --template_sim_package ./example_package \
@@ -460,16 +460,16 @@ you still have internet access:
 set -euo pipefail
 
 # Option A: Pull directly from Docker Hub and convert to SIF
-singularity pull docker://nrel/openstudio:3.11.0 \
-    --name openstudio-3.11.0.sif
+singularity pull docker://nrel/openstudio:3.10.0 \
+    --name openstudio-3.10.0.sif
 
 # Or with Apptainer (the successor to Singularity)
-apptainer pull docker://nrel/openstudio:3.11.0 \
-    --name openstudio-3.11.0.sif
+apptainer pull docker://nrel/openstudio:3.10.0 \
+    --name openstudio-3.10.0.sif
 
 # Option B: Convert from a Docker tar archive (if you already have one)
-singularity build openstudio-3.11.0.sif \
-    docker-archive://nrel-openstudio-3.11.0.tar
+singularity build openstudio-3.10.0.sif \
+    docker-archive://nrel-openstudio-3.10.0.tar
 ```
 
 Place the `.sif` file on shared storage accessible to all compute nodes:
@@ -477,7 +477,7 @@ Place the `.sif` file on shared storage accessible to all compute nodes:
 ```bash
 set -euo pipefail
 mkdir -p /scratch/$USER/singularity-images
-mv openstudio-3.11.0.sif /scratch/$USER/singularity-images/
+mv openstudio-3.10.0.sif /scratch/$USER/singularity-images/
 ```
 
 ### 6.2 Transfer the offline bundle + SIF
@@ -487,7 +487,7 @@ set -euo pipefail
 
 # Transfer the bundle and the SIF together to the HPC login node
 rsync -avP /opt/osimflow/offline/ airgap-hpc:/opt/osimflow/offline/
-scp openstudio-3.11.0.sif airgap-hpc:/scratch/$USER/singularity-images/
+scp openstudio-3.10.0.sif airgap-hpc:/scratch/$USER/singularity-images/
 ```
 
 ### 6.3 Run a Slurm campaign offline
@@ -510,7 +510,7 @@ osimflow run \
     --template_sim_package /data/models/example_package \
     --n_samples 500 \
     --outdir /scratch/$USER/results/run01 \
-    --openstudio_version 3.11.0
+    --openstudio_version 3.10.0
 ```
 
 Key points for offline Slurm:
@@ -592,7 +592,7 @@ osimflow run \
     --aws-batch-queue osimflow-batch-queue \
     --aws-batch-job-definition osimflow-openstudio-job-def \
     --ecr-repository 123456789012.dkr.ecr.us-east-1.amazonaws.com/osimflow/openstudio \
-    --openstudio_version 3.11.0 \
+    --openstudio_version 3.10.0 \
     --offline \
     --result-storage-backend s3 \
     --result-storage-bucket osimflow-campaign-artifacts \
@@ -629,7 +629,7 @@ set -euo pipefail
 # Build on the online machine
 docker build -f infra/offline/Dockerfile.offline \
     --build-arg PIP_EXTRAS=dev,aws,slurm \
-    --build-arg OS_VERSION=3.11.0 \
+    --build-arg OS_VERSION=3.10.0 \
     -t osimflow-offline:latest .
 
 # Save to tar for air-gapped transfer
@@ -648,7 +648,7 @@ set -euo pipefail
 
 # On the air-gapped machine
 docker load -i /data/images/osimflow-offline.tar
-docker load -i /data/images/nrel-openstudio-3.11.0.tar
+docker load -i /data/images/nrel-openstudio-3.10.0.tar
 
 # Smoke test
 docker run --rm osimflow-offline:latest --help
@@ -679,7 +679,7 @@ docker compose -f infra/offline/docker-compose.airgapped.yml \
         --template_sim_package /data/inputs/example_package \
         --n_samples 10 \
         --outdir /data/outputs/run01 \
-        --openstudio_version 3.11.0
+        --openstudio_version 3.10.0
 ```
 
 The Compose file also includes an optional `pip-mirror` service (under the
@@ -710,14 +710,14 @@ cache before the campaign started.
 docker images | grep openstudio
 
 # If missing, load it from the bundle
-docker load -i /opt/osimflow/offline/docker/nrel_openstudio_3.11.0.tar
+docker load -i /opt/osimflow/offline/docker/nrel_openstudio_3.10.0.tar
 ```
 
 For Singularity, verify the `.sif` file exists on shared storage and the
 path is accessible from compute nodes:
 
 ```bash
-ls -lh /scratch/$USER/singularity-images/openstudio-3.11.0.sif
+ls -lh /scratch/$USER/singularity-images/openstudio-3.10.0.sif
 ```
 
 ### 9.2 pip install fails with "No matching distribution"

@@ -67,7 +67,7 @@ have the venv activated and want to run a longer campaign by hand,
   --template_sim_package ./example_package \
   --n_samples 5 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 - **`variables.yml`** defines the parameters to vary and their probability distributions (uniform, normal, lognormal, etc.) for the Latin Hypercube Sampler.

@@ -82,7 +82,7 @@ config = CampaignConfig(
     template_sim_package=Path("./template_package"),
     n_samples=100,
     algorithm="lhs",
-    openstudio_version="3.11.0",
+    openstudio_version="3.10.0",
     outdir=Path("./results"),
 )
 campaign = Campaign(executor=LocalExecutor(), config=config)
@@ -121,7 +121,7 @@ config = CampaignConfig(
     template_sim_package=Path("./example_package"),
     n_samples=500,
     algorithm="lhs",
-    openstudio_version="3.11.0",
+    openstudio_version="3.10.0",
     outdir=Path("./results"),
     max_workers=16,
     archive_intermediates=True,
@@ -405,7 +405,7 @@ config = CampaignConfig(
     template_sim_package=Path("./template_package"),
     n_samples=100,
     algorithm="lhs",
-    openstudio_version="3.11.0",
+    openstudio_version="3.10.0",
     outdir=Path("./results"),
 )
 campaign = Campaign(executor=LocalExecutor(), config=config)

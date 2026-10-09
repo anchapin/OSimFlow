@@ -3,7 +3,7 @@
 #
 # Usage:
 #   helm install osimflow ./osimflow \
-#     --set openstudio.version=3.11.0 \
+#     --set openstudio.version=3.10.0 \
 #     --set executor.queue=osimflow-batch-queue
 #
 # Prerequisites:

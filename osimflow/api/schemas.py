@@ -118,7 +118,7 @@ class CampaignCreateRequest(BaseModel):
     input_variables: str = Field(description="Path to variables.yml")
     template_sim_package: str = Field(description="Path to the template simulation package")
     n_samples: int = Field(ge=1, description="Number of LHS samples")
-    openstudio_version: str = Field(default="3.11.0")
+    openstudio_version: str = Field(default="3.10.0")
     executor: str = Field(
         default="local",
         description=(
@@ -258,7 +258,7 @@ class CampaignCreateRequest(BaseModel):
     docker_swarm_image: str | None = Field(
         default=None,
         description=(
-            "Docker image for Swarm services (default: nrel/openstudio:3.11.0). "
+            "Docker image for Swarm services (default: nrel/openstudio:3.10.0). "
             "Avoid 'latest' for production due to supply-chain risk."
         ),
     )
@@ -759,7 +759,7 @@ class CoordinatorHandoffPayload(BaseModel):
     name: str = Field(description="Human-readable campaign name")
     n_samples: int = Field(ge=1, description="Number of samples to run")
     executor: str = Field(description="Executor type: local | slurm | aws_batch | nomad | ...")
-    openstudio_version: str = Field(description="OpenStudio version tag (e.g., 3.11.0)")
+    openstudio_version: str = Field(description="OpenStudio version tag (e.g., 3.10.0)")
     input_variables: str | None = Field(default=None, description="URL or path to variables.yml")
     template_sim_package: str | None = Field(
         default=None, description="URL or path to template sim package"

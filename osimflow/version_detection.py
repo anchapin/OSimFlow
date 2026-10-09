@@ -263,6 +263,38 @@ def verify_version_compatibility(detected: str, expected: str) -> bool:
     return compatible
 
 
+_MISMATCH_WARNED: set[tuple[str, str]] = set()
+
+
+def warn_on_cli_version_mismatch(requested: str) -> str | None:
+    """Warn (never fail) when the installed CLI differs from ``requested``.
+
+    The requested ``openstudio_version`` otherwise only selects the container
+    tag, so a worker image built on another version would run silently
+    (issue #1834). Compares major.minor like :func:`verify_version_compatibility`;
+    each (requested, detected) pair is logged once per process.
+
+    Returns
+    -------
+    str | None
+        The detected CLI version when it mismatches, else ``None``.
+    """
+    detected = _check_openstudio_cli()
+    if detected is None or verify_version_compatibility(detected, requested):
+        return None
+    if (requested, detected) not in _MISMATCH_WARNED:
+        _MISMATCH_WARNED.add((requested, detected))
+        log.warning(
+            "OpenStudio CLI version mismatch: requested openstudio_version=%s but the "
+            "installed CLI reports %s; results will come from %s. Rebuild the worker "
+            "image or align --openstudio_version (issue #1834).",
+            requested,
+            detected,
+            detected,
+        )
+    return detected
+
+
 def _parse_version_tuple(version: str) -> tuple[int, int, int]:
     """Parse a version string into a (major, minor, patch) tuple.
 

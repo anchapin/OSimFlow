@@ -1223,7 +1223,7 @@ class NomadExecutor(BaseExecutor):
         """
         default_image = self._resolve_nomad_image(
             container=os.environ.get("OSIMFLOW_NOMAD_PREFERRED_IMAGE"),
-            openstudio_version="3.11.0",
+            openstudio_version="3.10.0",
         )
         tmpfs_size = self._DISPATCH_TMPFS_SIZE_BYTES
         # The Nomad Docker driver expects ``mount`` as a list of mount
@@ -1303,7 +1303,7 @@ class NomadExecutor(BaseExecutor):
                 },
                 "Meta": {
                     "variables_json": "{}",
-                    "openstudio_version": "3.11.0",
+                    "openstudio_version": "3.10.0",
                     "container_image": default_image,
                     "task_payload": "{}",
                     "result_transport_mode": "auto",

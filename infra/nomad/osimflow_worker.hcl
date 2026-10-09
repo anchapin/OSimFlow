@@ -25,7 +25,7 @@
 
 variable "container_image" {
   type    = string
-  default = "nrel/openstudio:3.11.0"
+  default = "nrel/openstudio:3.10.0"
 }
 
 job "osimflow-worker" {
@@ -50,8 +50,8 @@ job "osimflow-worker" {
   # Default meta values (used when the dispatcher omits the optional metas).
   meta = {
     variables_json     = "{}"
-    openstudio_version = "3.11.0"
-    container_image    = "nrel/openstudio:3.11.0"
+    openstudio_version = "3.10.0"
+    container_image    = "nrel/openstudio:3.10.0"
   }
 
   group "osimflow" {

@@ -34,7 +34,7 @@
 #                            (scripts/fetch_example_fixture.py) drives the run.
 #
 # Prerequisites:
-#   vars.OPENSTUDIO_VERSION — OpenStudio version to test (e.g. 3.11.0)
+#   vars.OPENSTUDIO_VERSION — OpenStudio version to test (e.g. 3.10.0)
 #
 # Uses the nrel/openstudio container from Docker Hub. No credentials needed.
 # =============================================================================
@@ -46,9 +46,9 @@ on:
   workflow_dispatch:
     inputs:
       openstudio_version:
-        description: 'OpenStudio version (e.g. 3.11.0)'
+        description: 'OpenStudio version (e.g. 3.10.0)'
         required: false
-        default: '3.11.0'
+        default: '3.10.0'
       n_samples:
         description: 'Number of samples to run'
         required: false
@@ -70,7 +70,7 @@ permissions:
 
 jobs:
   openstudio-cli-e2e:
-    name: openstudio-cli-e2e (${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.11.0' }})
+    name: openstudio-cli-e2e (${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.10.0' }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -79,7 +79,7 @@ jobs:
       - name: Set inputs
         id: inputs
         run: |
-          VERSION="${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.11.0' }}"
+          VERSION="${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.10.0' }}"
           SAMPLES="${{ inputs.n_samples || '1' }}"
           echo "openstudio_version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "n_samples=${SAMPLES}" >> "$GITHUB_OUTPUT"
@@ -147,7 +147,7 @@ jobs:
   # steps. Skipped in normal PR CI (no openstudio.cli); runs nightly.
   # -------------------------------------------------------------------------
   full-campaign-e2e:
-    name: full-Campaign real-CLI E2E (${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.11.0' }})
+    name: full-Campaign real-CLI E2E (${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.10.0' }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -156,7 +156,7 @@ jobs:
       - name: Set inputs
         id: inputs
         run: |
-          VERSION="${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.11.0' }}"
+          VERSION="${{ inputs.openstudio_version || vars.OPENSTUDIO_VERSION || '3.10.0' }}"
           echo "openstudio_version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python

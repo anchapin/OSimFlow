@@ -273,7 +273,7 @@ class DockerSwarmExecutor(BaseExecutor):
         self,
         poll_interval_s: float = 5.0,
         max_poll_interval_s: float = 60.0,
-        image: str = "nrel/openstudio:3.11.0",
+        image: str = "nrel/openstudio:3.10.0",
         network: str | None = None,
         submit_rps: float | None = None,
         payload_secret: str | None = None,
@@ -303,7 +303,7 @@ class DockerSwarmExecutor(BaseExecutor):
             log.warning(
                 "docker-swarm-image is set to %r — using 'latest' is not recommended "
                 "for production due to supply-chain risk. "
-                "Pin to a specific version tag (e.g. 'nrel/openstudio:3.11.0') "
+                "Pin to a specific version tag (e.g. 'nrel/openstudio:3.10.0') "
                 "or use --container-digest for immutable references.",
                 self.image,
             )

@@ -84,7 +84,7 @@ python --version  # Must be 3.12 or higher
 pip install -e ".[dev,aws,slurm]"
 
 # Optional: Docker for OpenStudio container
-docker pull nrel/openstudio:3.11.0
+docker pull nrel/openstudio:3.10.0
 ```
 
 ### 3.2 Knowledge Requirements
@@ -204,7 +204,7 @@ osimflow run \
   --template_sim_package ./my_template \
   --n_samples 3 \
   --outdir ./test_results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 This runs in stub mode (fast, no real OpenStudio) to verify your configuration.
@@ -221,7 +221,7 @@ osimflow run \
   --template_sim_package ./my_template \
   --n_samples 50 \
   --outdir ./campaign_results \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --max-workers 4
 
 # Or on HPC cluster
@@ -233,7 +233,7 @@ osimflow run \
   --template_sim_package ./my_template \
   --n_samples 500 \
   --outdir ./campaign_results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ### Step 6: Migrate Custom Ruby Measures to Python (Optional)

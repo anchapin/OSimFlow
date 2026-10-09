@@ -84,7 +84,7 @@ smoke: ## 3-sample stub-mode local campaign into ./results_smoke (validates the 
 	  --input_variables example_package/variables.yml \
 	  --template_sim_package ./example_package \
 	  --n_samples 3 --outdir ./results_smoke \
-	  --openstudio_version 3.11.0 \
+	  --openstudio_version 3.10.0 \
 	  --log_level WARNING
 	@echo "Smoke run complete. Artifacts: ./results_smoke"
 

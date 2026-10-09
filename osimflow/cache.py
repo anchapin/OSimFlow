@@ -222,7 +222,7 @@ def _resolve_image_digest(
     silently using a deterministic-but-content-agnostic fallback.
 
     Issue #1023: the cache key used to store the mutable tag string
-    (``docker.io/nrel/openstudio:3.11.0``) instead of the digest. Two
+    (``docker.io/nrel/openstudio:3.10.0``) instead of the digest. Two
     rebuilds of the same tag produced identical cache keys, so a
     silently stale simulation could be served from cache. Resolving at
     config/campaign-init time means every cache lookup agrees on the
@@ -282,7 +282,7 @@ def _container_digest_for(label: str) -> str:
     rather than silently reusing potentially-stale cached results.
 
     Backward-compatibility (issue #1023): an old cache row that stored
-    just the label (``docker.io/nrel/openstudio:3.11.0``) no longer
+    just the label (``docker.io/nrel/openstudio:3.10.0``) no longer
     matches the new ``<label>@<digest>`` form and is treated as a cache
     miss. The DB schema is unchanged — no migration is required.
     """
@@ -309,7 +309,7 @@ def digest_pinned_image_ref(label: str, container_digest: str | None) -> str | N
     issue #1218, or a malformed value) so callers can decide their own
     fallback instead of submitting a broken image reference.
 
-    The *label* (e.g. ``docker.io/nrel/openstudio:3.11.0``) contributes
+    The *label* (e.g. ``docker.io/nrel/openstudio:3.10.0``) contributes
     the repository when the digest itself does not carry one; its
     mutable tag is intentionally dropped — the whole point (issue
     #1536) is that the executed image must not resolve by tag.

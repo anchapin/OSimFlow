@@ -159,12 +159,12 @@ make smoke                    # preferred — uses $(PY) -m osimflow, no venv ac
   --input_variables example_package/variables.yml \
   --template_sim_package ./example_package \
   --n_samples 3 --outdir ./results_smoke \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 
 # Slurm (real cluster — debug=False)
 .venv/bin/osimflow run --executor slurm --slurm-real --slurm-partition short \
   --input_variables variables.yml --n_samples 500 \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 
 # AWS Batch — IAM role on the Batch compute env, no long-lived keys.
 .venv/bin/osimflow run --executor aws_batch \

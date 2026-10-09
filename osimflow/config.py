@@ -793,7 +793,7 @@ class CampaignConfig:
     outdir
         Output directory for campaign results.
     openstudio_version
-        OpenStudio version string (e.g., "3.11.0").
+        OpenStudio version string (e.g., "3.10.0").
     dag
         Composed DAG execution, sharding, retries, and hook settings.
     storage

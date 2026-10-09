@@ -8,7 +8,7 @@
 #   # Build the offline image
 #   docker build -f infra/offline/Dockerfile.offline \
 #       --build-arg PIP_EXTRAS=dev,aws,slurm \
-#       --build-arg OS_VERSION=3.11.0 \
+#       --build-arg OS_VERSION=3.10.0 \
 #       -t osimflow-offline:latest .
 #
 #   # Save to tar for air-gapped transfer
@@ -25,7 +25,7 @@
 FROM python:3.12-slim AS builder
 
 ARG PIP_EXTRAS="dev,aws,slurm"
-ARG OS_VERSION="3.11.0"
+ARG OS_VERSION="3.10.0"
 ARG PIP_CACHE_DIR="/opt/pip-cache"
 ARG DOCKER_CACHE_DIR="/opt/docker-cache"
 
@@ -63,7 +63,7 @@ RUN echo '{"created_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","os_version":"'"${O
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
-ARG OS_VERSION="3.11.0"
+ARG OS_VERSION="3.10.0"
 
 # Install system dependencies needed by common pip wheels
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -7,7 +7,7 @@ Usage:
         --template_sim_package ./example_package \\
         --n_samples 10 \\
         --outdir ./results \\
-        --openstudio_version 3.11.0
+        --openstudio_version 3.10.0
 
 After `pip install -e .`, also available as:
     osimflow run --executor local ...
@@ -75,7 +75,7 @@ PRESETS: dict[str, dict[str, object]] = {
     "local-quick": {
         "executor": "local",
         "max_workers": 2,
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "lhs",
         "max_generations": 1,
     },
@@ -83,7 +83,7 @@ PRESETS: dict[str, dict[str, object]] = {
     "local-large": {
         "executor": "local",
         "max_workers": 8,
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "lhs",
         "max_generations": 1,
     },
@@ -92,7 +92,7 @@ PRESETS: dict[str, dict[str, object]] = {
         "executor": "slurm",
         "slurm_real": True,
         "slurm_partition": "short",
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "lhs",
         "max_generations": 1,
     },
@@ -104,7 +104,7 @@ PRESETS: dict[str, dict[str, object]] = {
         "slurm_qos": "high",
         "slurm_constraint": "gpu",
         "slurm_gres": "gpu:1",
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "lhs",
         "max_generations": 1,
     },
@@ -113,7 +113,7 @@ PRESETS: dict[str, dict[str, object]] = {
         "executor": "aws_batch",
         "aws_batch_queue": "osimflow-batch-queue",
         "aws_batch_max_retries": 3,
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "lhs",
         "max_generations": 1,
     },
@@ -121,7 +121,7 @@ PRESETS: dict[str, dict[str, object]] = {
     "sensitivity-morris": {
         "executor": "local",
         "max_workers": 4,
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "morris",
         "max_generations": 1,
     },
@@ -129,7 +129,7 @@ PRESETS: dict[str, dict[str, object]] = {
     "sensitivity-fast99": {
         "executor": "local",
         "max_workers": 4,
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "fast99",
         "max_generations": 1,
     },
@@ -138,7 +138,7 @@ PRESETS: dict[str, dict[str, object]] = {
         "executor": "slurm",
         "slurm_real": True,
         "slurm_partition": "short",
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "de",
         "max_generations": 50,
     },
@@ -147,7 +147,7 @@ PRESETS: dict[str, dict[str, object]] = {
         "executor": "slurm",
         "slurm_real": True,
         "slurm_partition": "short",
-        "openstudio_version": "3.11.0",
+        "openstudio_version": "3.10.0",
         "algorithm": "nsga2",
         "max_generations": 50,
     },
@@ -444,7 +444,7 @@ def _add_run_args(run: argparse.ArgumentParser) -> None:  # noqa: PLR0915
     run.add_argument("--template_sim_package", required=True)
     run.add_argument("--n_samples", type=int, required=True)
     run.add_argument("--outdir", required=True)
-    run.add_argument("--openstudio_version", default="3.11.0")
+    run.add_argument("--openstudio_version", default="3.10.0")
     run.add_argument(
         "--container-digest",
         default=None,
@@ -1165,8 +1165,8 @@ def _add_export_args(exp: argparse.ArgumentParser) -> None:
     )
     exp.add_argument(
         "--openstudio_version",
-        default="3.11.0",
-        help="OpenStudio CLI version (default: 3.11.0)",
+        default="3.10.0",
+        help="OpenStudio CLI version (default: 3.10.0)",
     )
     exp.add_argument("--log_level", default="INFO")
 
@@ -2803,7 +2803,7 @@ def _build_coordinator_payload(args: argparse.Namespace, cfg: CampaignConfig) ->
         "name": str(cfg.outdir.name) if cfg.outdir else f"campaign-{int(time.time())}",
         "n_samples": cfg.n_samples,
         "executor": args.executor or "local",
-        "openstudio_version": cfg.openstudio_version or "3.11.0",
+        "openstudio_version": cfg.openstudio_version or "3.10.0",
         "algorithm": cfg.algorithm,
         "max_generations": cfg.max_generations,
         "input_variables": str(cfg.input_variables) if cfg.input_variables else None,

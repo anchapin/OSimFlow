@@ -60,10 +60,10 @@ To run actual OpenStudio simulations instead of stub mode:
 ```bash
 # Install Docker Desktop
 # Pull the OpenStudio container image
-docker pull nrel/openstudio:3.11.0
+docker pull nrel/openstudio:3.10.0
 
 # Verify the image works
-docker run --rm nrel/openstudio:3.11.0 openstudio.cli --version
+docker run --rm nrel/openstudio:3.10.0 openstudio.cli --version
 ```
 
 > **No Docker?** OSimFlow automatically falls back to stub mode when OpenStudio CLI is unavailable. All outputs are generated but use placeholder values. This is perfect for learning the workflow or testing your campaign structure.
@@ -139,7 +139,7 @@ osimflow run \
   --template_sim_package path/to/template_sim_package \
   --n_samples 3 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 This runs in stub mode if OpenStudio CLI is not available.
@@ -190,7 +190,7 @@ osimflow run \
   --template_sim_package ./my_template \
   --n_samples 50 \
   --outdir ./campaign_results \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --max-workers 4
 ```
 
@@ -280,7 +280,7 @@ osimflow run \
   --template_sim_package ./template \
   --n_samples 100 \
   --outdir ./sensitivity_results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ### 5.2 Optimization Study
@@ -294,7 +294,7 @@ osimflow run \
   --template_sim_package ./template \
   --n_samples 200 \
   --outdir ./optimization_results \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --algorithm de \
   --max-generations 50
 ```
@@ -310,7 +310,7 @@ osimflow run \
   --template_sim_package ./template \
   --n_samples 1000 \
   --outdir ./uncertainty_results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ---

@@ -6,14 +6,14 @@
 # Defaults:
 #   n_samples: 100 (population size per generation)
 #   max_generations: 50
-#   openstudio_version: 3.11.0
+#   openstudio_version: 3.10.0
 
 set -euo pipefail
 
 # Configuration
 N_SAMPLES="${1:-100}"
 MAX_GENERATIONS="${2:-50}"
-OPENSTUDIO_VERSION="${3:-3.11.0}"
+OPENSTUDIO_VERSION="${3:-3.10.0}"
 OUTDIR="./optimization_results"
 
 # Get directory of this script

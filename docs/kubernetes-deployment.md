@@ -63,10 +63,10 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 50 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
-**Worker image prerequisite:** the container images must ship the `osimflow` package for `python -m osimflow.remote_runner` to resolve. The Python-side steps (apply/KPI/aggregate/plots) use the image resolved from `OSIMFLOW_PYTHON_CONTAINER_IMAGE` (default `ghcr.io/anchapin/scientific_python_image:latest`); the sim steps use `nrel/openstudio:<version>`, which must be extended with `pip install osimflow` (e.g. `FROM nrel/openstudio:3.11.0` + `RUN pip install osimflow` in a thin derived image pushed to your registry).
+**Worker image prerequisite:** the container images must ship the `osimflow` package for `python -m osimflow.remote_runner` to resolve. The Python-side steps (apply/KPI/aggregate/plots) use the image resolved from `OSIMFLOW_PYTHON_CONTAINER_IMAGE` (default `ghcr.io/anchapin/scientific_python_image:latest`); the sim steps use `nrel/openstudio:<version>`, which must be extended with `pip install osimflow` (e.g. `FROM nrel/openstudio:3.10.0` + `RUN pip install osimflow` in a thin derived image pushed to your registry).
 
 **Service account permissions:** when using object-storage transport, the worker service account (or the nodes' cloud identity — IRSA on EKS, Workload Identity on GKE, Azure AD Workload Identity on AKS) needs read/write access to the result bucket in addition to the Kubernetes RBAC permissions below. For S3-compatible endpoints, provide the credentials via the environment the pods run in (e.g. a Kubernetes Secret projected into the Job env).
 
@@ -98,7 +98,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 50 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ## CLI Flags
@@ -296,8 +296,8 @@ external executor (Slurm, AWS Batch).
 ```bash
 helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
   --set worker.enabled=true \
-  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0" \
-  --set openstudio.version=3.11.0
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.10.0" \
+  --set openstudio.version=3.10.0
 ```
 
 ### Worker Configuration
@@ -324,8 +324,8 @@ helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
   --set worker.replica_count=3 \
   --set worker.job_queue=redis \
   --set worker.redis.enabled=true \
-  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.11.0" \
-  --set openstudio.version=3.11.0
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.10.0" \
+  --set openstudio.version=3.10.0
 ```
 
 ### Worker with Dask Job Queue
@@ -335,8 +335,8 @@ helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
   --set worker.enabled=true \
   --set worker.job_queue=dask \
   --set worker.dask.scheduler_address="tcp://dask-scheduler:8786" \
-  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.11.0" \
-  --set openstudio.version=3.11.0
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.10.0" \
+  --set openstudio.version=3.10.0
 ```
 
 ### Mounting Campaign Data
@@ -349,7 +349,7 @@ with a `PersistentVolumeClaim` to persist results across pod restarts:
 # values-overrides.yaml
 worker:
   enabled: true
-  campaign_args: "--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0"
+  campaign_args: "--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.10.0"
 
 # In your overrides, replace the emptyDir with a PVC:
 volumes:
@@ -384,8 +384,8 @@ Deploy both the REST API server and the worker in the same Helm release:
 helm install osimflow ./osimflow-deploy/kubernetes/helm/osimflow \
   --set api.enabled=true \
   --set worker.enabled=true \
-  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0" \
-  --set openstudio.version=3.11.0
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.10.0" \
+  --set openstudio.version=3.10.0
 ```
 
 The API server (`osimflow serve`) provides monitoring endpoints; the worker

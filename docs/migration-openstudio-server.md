@@ -188,7 +188,7 @@ osimflow run \
   --template_sim_package ./template_sim_package \
   --n_samples 100 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ### Step 5: Verify Results
@@ -278,7 +278,7 @@ osimflow run \
   --template_sim_package ./template_sim_package \
   --n_samples 500 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 See [deployment/slurm.md](deployment/slurm.md) for the full Slurm setup
@@ -735,7 +735,7 @@ terraform init && terraform apply
 osimflow import-osa large_study.osa --output variables.yml
 
 # 3. Mirror OpenStudio image to ECR (avoids Docker Hub rate limits)
-infra/aws/scripts/sync-openstudio-to-ecr.sh 3.11.0 us-east-1
+infra/aws/scripts/sync-openstudio-to-ecr.sh 3.10.0 us-east-1
 
 # 4. Run on AWS Batch
 osimflow run \

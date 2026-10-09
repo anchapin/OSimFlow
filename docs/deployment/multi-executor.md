@@ -59,8 +59,8 @@ az acr create \
 
 # Login for docker push
 az acr login --name "$ACR_NAME"
-docker tag nrel/openstudio:3.11.0 "$ACR_NAME.azurecr.io/openstudio:3.11.0"
-docker push "$ACR_NAME.azurecr.io/openstudio:3.11.0"
+docker tag nrel/openstudio:3.10.0 "$ACR_NAME.azurecr.io/openstudio:3.10.0"
+docker push "$ACR_NAME.azurecr.io/openstudio:3.10.0"
 ```
 
 #### 3. Configure Pool
@@ -346,7 +346,7 @@ docker network create -d overlay osimflow-net
 osimflow run \
   --executor docker_swarm \
   --docker-swarm-network osimflow-net \
-  --docker-swarm-image "nrel/openstudio:3.11.0" \
+  --docker-swarm-image "nrel/openstudio:3.10.0" \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 100 \

@@ -227,7 +227,7 @@ for the full list):
 | 3.8.0 | `nrel/openstudio:3.8.0` | |
 | 3.9.0 | `nrel/openstudio:3.9.0` | |
 | 3.10.0 | `nrel/openstudio:3.10.0` | |
-| 3.11.0 | `nrel/openstudio:3.11.0` | latest stable |
+| 3.10.0 | `nrel/openstudio:3.10.0` | latest stable |
 
 ---
 

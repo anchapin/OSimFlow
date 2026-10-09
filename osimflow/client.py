@@ -878,7 +878,7 @@ class OSimFlowClient:
         n_samples
             Number of samples (must be >= 1).
         openstudio_version
-            OpenStudio version string (e.g. ``"3.11.0"``).
+            OpenStudio version string (e.g. ``"3.10.0"``).
         **kwargs
             Additional config fields forwarded as-is in the request body.
         """

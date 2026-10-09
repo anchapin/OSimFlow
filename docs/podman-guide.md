@@ -258,7 +258,7 @@ images you need:
 
 ```bash
 podman pull docker.io/nrel/openstudio:3.10.0
-podman pull docker.io/nrel/openstudio:3.11.0
+podman pull docker.io/nrel/openstudio:3.10.0
 ```
 
 ### 5.4. Docker Compose compatibility
