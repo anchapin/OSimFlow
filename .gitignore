@@ -55,6 +55,9 @@ sqlite3.db
 !example_package/model.osm
 !example_package/workflow.osw
 
+# Real OpenStudio fixtures fetched for real-substrate E2E tests
+.fixtures/
+
 # Container build artifacts
 *.tar
 *.tar.gz
