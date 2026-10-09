@@ -40,6 +40,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ._campaign_observability import ObservabilityManager
+from ._campaign_sample_trace import CampaignSampleTraceRecorder
 from ._campaign_types import SampleSpec
 from .algorithms import BaseAlgorithm
 from .config import CampaignConfig
@@ -65,6 +66,8 @@ class CampaignOptimizationMixin:
     cfg: CampaignConfig
     trace: RunTrace
     _obs: ObservabilityManager
+    _sample_state: dict[str, dict[str, object]]
+    _sample_traces: CampaignSampleTraceRecorder
     _latest_samples_file: Path
 
     def _check_cancel_requested(self) -> bool:
@@ -312,9 +315,22 @@ class CampaignOptimizationMixin:
 
         # Per-generation monitoring (issue #270).
         gen_elapsed = time.time() - gen_t0
-        gen_samples = [s for s in self.trace.per_sample if s.generation == generation]
-        n_succeeded = sum(1 for s in gen_samples if s.status == "ok")
-        n_failed = sum(1 for s in gen_samples if s.status == "failed")
+        # ``trace.per_sample`` is only populated at campaign end and rows carry
+        # no generation, so count from the live per-sample state instead
+        # (issue #1835).
+        n_succeeded = 0
+        n_failed = 0
+        for spec in samples:
+            state = self._sample_state.get(str(spec["sample_id"]))
+            if state is None:
+                continue
+            row = self._sample_traces._build_sample_trace(
+                str(spec["sample_id"]), state, record_cost=False
+            )
+            if row.status == "ok":
+                n_succeeded += 1
+            else:
+                n_failed += 1
         best_objective = self._extract_best_objective(algo, kpi_files)
         self.trace.generation_done(
             GenerationTrace(
