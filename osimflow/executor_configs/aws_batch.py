@@ -46,6 +46,10 @@ class AWSBatchConfig:
         ``OSIMFLOW_TASK_PAYLOAD_SECRET`` to this ARN. The job's
         *execution* role needs ``secretsmanager:GetSecretValue`` or
         ``ssm:GetParameter`` + ``kms:Decrypt`` on it.
+    allow_long_lived_credentials
+        Opt in to env / shared-file / SSO credentials instead of only
+        IAM-role credentials (issue #1833). Default off; not recommended
+        for production.
     """
 
     max_spot_price_usd: float | None = None
@@ -55,6 +59,7 @@ class AWSBatchConfig:
     max_retries: int = 3
     submit_rps: float | None = None
     payload_secret_arn: str | None = None
+    allow_long_lived_credentials: bool = False
 
 
 def add_arguments(parser_group: argparse.ArgumentParser) -> None:
@@ -176,6 +181,18 @@ def add_arguments(parser_group: argparse.ArgumentParser) -> None:
             "same value for signing. See docs/secret-management.md."
         ),
     )
+    parser_group.add_argument(
+        "--aws-batch-allow-long-lived-credentials",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow the AWS Batch executor to use long-lived / workstation "
+            "credentials (AWS_ACCESS_KEY_ID, shared credentials file, SSO "
+            "or OIDC env credentials) instead of only IAM-role credentials "
+            "from the EC2/ECS metadata service (issue #1833). Default off; "
+            "a warning is logged when enabled. Not recommended for production."
+        ),
+    )
 
 
 def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
@@ -203,4 +220,7 @@ def kwargs_for_executor(**kwargs: Any) -> dict[str, Any]:
         "instance_type": kwargs.get("aws_batch_instance_type"),
         "submit_rps": submit_rps,
         "payload_secret_arn": kwargs.get("aws_batch_payload_secret_arn"),
+        "allow_long_lived_credentials": bool(
+            kwargs.get("aws_batch_allow_long_lived_credentials", False)
+        ),
     }

@@ -197,6 +197,7 @@ The engineering team needs:
 
 - **No hardcoded secrets.** Credentials come from the IAM role attached to the compute environment.
 - **Least-privilege IAM.** The task role has S3 access scoped to the campaign bucket and CloudWatch Logs scoped to the Batch log group. The task-execution role uses the AWS-managed `AmazonECSTaskExecutionRolePolicy`.
+- **Long-lived credentials are ignored by default.** `AWSBatchExecutor` only uses IAM-role credentials (EC2/ECS metadata). Operators running `osimflow run --executor aws_batch` from a workstation with SSO/OIDC or env credentials can opt in with `--aws-batch-allow-long-lived-credentials` (default off; a warning is logged when enabled; not recommended for production; issue #1833).
 - **S3 bucket** has versioning, AES256 encryption, and full public access blocking.
 - **No inbound rules** on the security group — Batch tasks are egress-only.
 

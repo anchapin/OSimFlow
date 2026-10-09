@@ -493,6 +493,12 @@ class AWSBatchExecutor(BaseExecutor):
             # routing credentials through IAM-role providers only.
             self._botocore_session: Any = session
         else:
+            log.warning(
+                "AWSBatchExecutor: allow_long_lived_credentials=True — "
+                "environment / shared-file / SSO credentials may be used "
+                "instead of IAM-role credentials only. Not recommended for "
+                "production (issue #1833)."
+            )
             self._botocore_session = None
 
         self._boto3 = boto3
