@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
-"""Fetch a real, simulation-capable OpenStudio fixture into ``example_package/``.
+"""Fetch a real, simulation-capable OpenStudio fixture into ``tests/fixtures/real/``.
 
 The committed ``example_package/model.osm`` is a *test-mode JSON placeholder*
 (see ``osimflow/apply_params.py``) that lets the parameter-application step run
 on hosts without the OpenStudio Python bindings. It cannot drive a real
 ``openstudio.cli run`` invocation, so the real-OpenStudio end-to-end tests
-(companion issues) need a genuine ``.osm`` plus a ``.epw`` weather file.
+need a genuine ``.osm`` plus a ``.epw`` weather file.
 
 Per ``AGENTS.md`` §10 and the repository ``.gitignore``, ``.osm`` and ``.epw``
-files are **never** committed. This script therefore downloads them at dev/test
-time from stable public sources and writes them into ``example_package/``. The
-original JSON placeholder is preserved on disk as
-``example_package/model.osm.placeholder`` so stub-mode tests can be restored
-with ``cp example_package/model.osm.placeholder example_package/model.osm``.
+files are **never** committed. This script downloads them at dev/test time from
+stable public sources into the separate, gitignored ``tests/fixtures/real/``
+directory. It never touches ``example_package/`` (issue #1832), so the
+hermetic stub-mode tests that read the JSON placeholder keep passing after a
+fetch. Real-substrate tests copy ``example_package/`` into a scratch directory
+and overlay the files from ``tests/fixtures/real/``.
 
 Usage::
 
-    # default: download into ./example_package/
+    # default: download into ./tests/fixtures/real/
     python scripts/fetch_example_fixture.py
 
     # re-download even if a real fixture is already present
     python scripts/fetch_example_fixture.py --force
 
-    # write into a different template package directory
-    python scripts/fetch_example_fixture.py --dest /tmp/my_package
+    # write into a different directory
+    python scripts/fetch_example_fixture.py --dest ./my_fixture
 
 Sources (verified to resolve, pinned for stability):
 
@@ -81,7 +82,8 @@ INITIAL_BACKOFF_S = 1.0
 MAX_BACKOFF_S = 8.0
 REQUEST_TIMEOUT_S = 60
 
-PLACEHOLDER_FILENAME = "model.osm.placeholder"
+
+DEFAULT_DEST = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "real"
 
 
 def _log(msg: str) -> None:
@@ -158,33 +160,6 @@ def _download(url: str, dest: Path, marker: str) -> None:
     raise SystemExit(f"ERROR: failed to download {url} after {MAX_ATTEMPTS} attempts: {last_err}")
 
 
-def _preserve_placeholder(dest_dir: Path) -> None:
-    """Copy the committed JSON ``model.osm`` to ``model.osm.placeholder``.
-
-    Idempotent: only copies if the source is still the JSON placeholder (i.e.
-    not a previously-fetched real model). This guarantees stub-mode tests can
-    always restore the JSON fixture via
-    ``cp model.osm.placeholder model.osm``.
-    """
-    model = dest_dir / "model.osm"
-    placeholder = dest_dir / PLACEHOLDER_FILENAME
-    if not model.is_file():
-        return
-    if _is_real_osm(model):
-        # A real model is already in place; don't clobber a previously-saved
-        # placeholder with binary OSM content.
-        if placeholder.is_file():
-            return
-        raise SystemExit(
-            f"ERROR: {model} is already a real OpenStudio model but no "
-            f"{placeholder.name} exists to restore the JSON stub. Re-run from a "
-            "clean checkout or restore model.osm from git first."
-        )
-    # model.osm is the JSON placeholder — snapshot it.
-    shutil.copyfile(model, placeholder)
-    _log(f"preserved JSON placeholder -> {placeholder}")
-
-
 def fetch(dest_dir: Path, force: bool) -> int:
     dest_dir = dest_dir.resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -197,8 +172,6 @@ def fetch(dest_dir: Path, force: bool) -> int:
     if already_model and already_weather and not force:
         _log("real fixture already present, use --force to refetch")
         return 0
-
-    _preserve_placeholder(dest_dir)
 
     if not already_model or force:
         _download(MODEL_URL, model, MODEL_MARKER)
@@ -216,24 +189,19 @@ def fetch(dest_dir: Path, force: bool) -> int:
     _log(f"  weather: {weather} ({weather.stat().st_size / 1024:.1f} KiB)")
     _log("")
     _log("NOTE: .osm and .epw are gitignored — they are NOT committed.")
-    _log(f"Restore the JSON stub with: cp {dest_dir / PLACEHOLDER_FILENAME} {model}")
-    _log(
-        "For a full `openstudio.cli run`, workflow.osw must also resolve its "
-        "measures (bundle them under example_package/measures/). See "
-        "example_package/README.md and companion issue #939."
-    )
+    _log("example_package/ is left untouched; copy it and overlay these files for real runs.")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fetch a real OpenStudio .osm + .epw fixture into example_package/.",
+        description="Fetch a real OpenStudio .osm + .epw fixture into tests/fixtures/real/.",
     )
     parser.add_argument(
         "--dest",
         type=Path,
-        default=Path("example_package"),
-        help="destination template package directory (default: example_package)",
+        default=DEFAULT_DEST,
+        help="destination fixture directory (default: tests/fixtures/real)",
     )
     parser.add_argument(
         "--force",

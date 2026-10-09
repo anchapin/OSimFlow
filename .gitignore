@@ -57,6 +57,7 @@ sqlite3.db
 
 # Real OpenStudio fixtures fetched for real-substrate E2E tests
 .fixtures/
+tests/fixtures/real/
 
 # Container build artifacts
 *.tar

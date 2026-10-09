@@ -55,13 +55,9 @@ This JSON placeholder **cannot** drive a real `openstudio.cli run`
 invocation. To get a real, simulation-capable fixture see
 [Real-sim fixture](#real-sim-fixture) below.
 
-A snapshot of this JSON placeholder is also kept as
-`model.osm.placeholder` so stub mode can always be restored after fetching a
-real model (the fetcher overwrites `model.osm` in place):
-
-```bash
-cp example_package/model.osm.placeholder example_package/model.osm
-```
+The real model fetched by `scripts/fetch_example_fixture.py` is written to the
+separate gitignored `tests/fixtures/real/` directory, so this placeholder is
+never overwritten (issue #1832).
 
 ### Real-sim fixture
 
@@ -71,9 +67,9 @@ are **not committed** — per `AGENTS.md` §10 and the repository `.gitignore`,
 time from stable public sources (NREL):
 
 ```bash
-python scripts/fetch_example_fixture.py            # into ./example_package/
+python scripts/fetch_example_fixture.py            # into ./tests/fixtures/real/
 python scripts/fetch_example_fixture.py --force     # re-download
-python scripts/fetch_example_fixture.py --dest /tmp/pkg
+python scripts/fetch_example_fixture.py --dest ./my_fixture
 ```
 
 The fetcher:
@@ -88,7 +84,7 @@ The fetcher:
   retries 3× with exponential backoff, and writes via an atomic rename.
 - Is idempotent: re-running prints `real fixture already present, use --force
   to refetch` and exits 0.
-- Preserves the JSON placeholder as `model.osm.placeholder` on first run.
+- Never writes into `example_package/`; real-substrate tests copy this package and overlay the fetched files.
 
 The weather file drives the actual simulation climate (EnergyPlus uses the
 EPW `LOCATION` header, which overrides the model's `OS:Site`). The fetched

@@ -17,8 +17,7 @@ Requirements (all must hold for the test to run, otherwise it skips):
      OpenStudio CLI is installed (natively, or inside the ``nrel/openstudio``
      container).
   3. A real, simulation-capable example fixture is present in
-     ``example_package/``. If the committed JSON placeholder is still in place,
-     the test invokes ``scripts/fetch_example_fixture.py`` to materialise the
+     ``tests/fixtures/real/`` (gitignored). If absent, the test invokes ``scripts/fetch_example_fixture.py`` to materialise the
      real ``.osm`` + ``.epw``. If that download fails (e.g. no network), the
      test skips with a clear reason rather than erroring.
 
@@ -86,7 +85,10 @@ pytestmark = pytest.mark.skipif(
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PACKAGE = REPO_ROOT / "example_package"
-MODEL_OSM = EXAMPLE_PACKAGE / "model.osm"
+# Real model + weather live in a gitignored dir so the tracked JSON stub at
+# example_package/model.osm is never overwritten (issue #1832).
+REAL_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "real"
+MODEL_OSM = REAL_FIXTURE_DIR / "model.osm"
 FETCH_SCRIPT = REPO_ROOT / "scripts" / "fetch_example_fixture.py"
 
 # The 7 DAG steps that must all appear in run.json on a cold run.
@@ -116,10 +118,10 @@ def _is_real_osm(path: Path) -> bool:
 
 
 def _ensure_real_fixture() -> Path:
-    """Ensure a real ``.osm`` + ``.epw`` are present in ``example_package/``.
+    """Ensure a real ``.osm`` + ``.epw`` are present in ``REAL_FIXTURE_DIR``.
 
-    If the committed JSON placeholder is still in place, invoke
-    ``scripts/fetch_example_fixture.py`` to download the real fixture. Returns
+    If absent, invoke ``scripts/fetch_example_fixture.py`` to download the real
+    fixture. Returns
     the path to the real ``model.osm``. Raises ``pytest.skip`` if the download
     fails (e.g. no network in the sandbox) so the test degrades gracefully.
     """
@@ -186,12 +188,16 @@ def apply_parameters(sim_dir: Path, variables: dict) -> Path:  # noqa: ARG001
 def _build_real_template(tmp_path: Path) -> Path:
     """Build a real-CLI-capable template package under *tmp_path*.
 
-    Copies ``example_package/`` (with the real ``.osm`` + ``.epw``) and rewrites
+    Copies ``example_package/``, overlays the real ``.osm`` + ``.epw`` from
+    ``REAL_FIXTURE_DIR`` and rewrites
     ``workflow.osw`` to a minimal seed-only workflow with the weather file set,
     so ``openstudio.cli run`` simulates the seed model directly.
     """
     template = tmp_path / "template"
     shutil.copytree(EXAMPLE_PACKAGE, template)
+    shutil.copy2(MODEL_OSM, template / "model.osm")
+    for epw in REAL_FIXTURE_DIR.glob("*.epw"):
+        shutil.copy2(epw, template / epw.name)
 
     # Locate the fetched weather file name (gitignored, materialised by the
     # fetch script). Fall back to the canonical NREL Golden filename.

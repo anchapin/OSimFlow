@@ -8,6 +8,7 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 ## [Unreleased]
 
 ### Added
+- `scripts/fetch_example_fixture.py` now writes the real fixture to the gitignored `tests/fixtures/real/` instead of `example_package/`, so hermetic stub-mode tests stay green after a fetch; real-substrate tests overlay it onto a copy of `example_package/` (fixes #1832).
 - `scripts/fetch_example_fixture.py`: downloads a real OpenStudio `.osm` model + `.epw` weather file into `example_package/` for real-OpenStudio E2E tests; the fetched binary files stay gitignored per the `.osm`/`.epw` policy, and the original placeholder model is preserved as `model.osm.placeholder` for stub-mode tests (fixes #938).
 
 ### Fixed

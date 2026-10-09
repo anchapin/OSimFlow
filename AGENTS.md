@@ -1125,8 +1125,9 @@ re-exported from that module (``_AWSBatchHandle``, ``_TokenBucketRateLimiter``,
   executed-test verification, issue #1813),
   `resolve_openstudio_deb.py` (picks the OpenStudio Ubuntu `.deb`
   release asset for `openstudio-cli-e2e.yml`, issue #1813),
-  `fetch_example_fixture.py` (downloads a real `.osm`+`.epw`,
-  gitignored), `generate_openapi.py` (regenerates
+  `fetch_example_fixture.py` (downloads a real `.osm`+`.epw` into the
+  gitignored `tests/fixtures/real/`; never touches `example_package/`,
+  issue #1832), `generate_openapi.py` (regenerates
   `docs/openapi.json`), `bundle_offline.py` (for
   `--offline-bundle`), `migrate_from_mongodb.py`,
    `apply_branch_protection.sh` (post-merge
