@@ -263,12 +263,13 @@ def test_cancel_terminates_batch_jobs_and_leaves_no_orphans(tmp_path: Path) -> N
     outdir = tmp_path / f"cancel-{uuid.uuid4().hex[:8]}"
 
     watcher_errors: list[str] = []
+    _pause = threading.Event()  # never set: wait() is a bounded poll interval
 
     def _cancel_after_first_submit() -> None:
         # Campaign installs signal handlers, so it must own the main thread.
         deadline = time.monotonic() + 300
         while not Tracking.handles and time.monotonic() < deadline:
-            time.sleep(0.5)
+            _pause.wait(0.5)
         if not Tracking.handles:
             watcher_errors.append("campaign never submitted a Batch job")
             return
@@ -292,7 +293,7 @@ def test_cancel_terminates_batch_jobs_and_leaves_no_orphans(tmp_path: Path) -> N
         live = [i for i, j in jobs.items() if j["status"] not in _TERMINAL]
         if not live or time.monotonic() > deadline:
             break
-        time.sleep(5)
+        _pause.wait(5)
 
     assert not live, f"orphaned live Batch jobs after cancel: {live}"
     assert jobs[first]["status"] == "FAILED"
