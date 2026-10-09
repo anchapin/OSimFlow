@@ -47,23 +47,15 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         run: uv python install 3.12
 
-      - name: Cache venv
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
-
       - name: Install (editable + all extras)
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
-          uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra azure --extra slurm --extra kubernetes --extra api --extra sensitivity --extra optimization --extra ga
 
       - name: pytest -m slow
         run: |
@@ -87,22 +79,15 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         run: uv python install 3.12
 
-      - name: Cache venv
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
-
       - name: Install (editable + all extras)
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra azure --extra slurm --extra kubernetes --extra api --extra sensitivity --extra optimization --extra ga
 
       - name: pytest -m chaos
         run: |
