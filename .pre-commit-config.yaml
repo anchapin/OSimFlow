@@ -16,7 +16,8 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-yaml
-        exclude: ^mkdocs\.yml$
+        # mkdocs uses custom tags; Helm/K8s templates contain Go templating.
+        exclude: ^(mkdocs\.yml|osimflow-deploy/kubernetes/helm/.*/templates/.*|infra/kubernetes/templates/.*)$
       - id: check-toml
       - id: check-added-large-files
       - id: check-merge-conflict

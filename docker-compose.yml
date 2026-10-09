@@ -63,8 +63,8 @@ services:
       DISABLE_SECURITY_PLUGIN: "true"
       OPENSEARCH_SETUP_SAMPLE_DATA: "false"
     ports:
-      "${OPENSEARCH_PORT:-9200}:9200"
-      "${OPENSEARCH_DASHBOARD_PORT:-5601}:5601"
+      - "${OPENSEARCH_PORT:-9200}:9200"
+      - "${OPENSEARCH_DASHBOARD_PORT:-5601}:5601"
     volumes:
       - opensearch_data:/var/lib/opensearch
     ulimits:
