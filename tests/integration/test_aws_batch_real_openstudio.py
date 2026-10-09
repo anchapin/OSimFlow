@@ -66,13 +66,15 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sqlite3
 import subprocess
 import sys
 import uuid
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _aws_batch_acceptance import real_energyplus_sql_problems  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Skip gate — the AWS Batch E2E gate + the distinct real-openstudio gate +
@@ -212,26 +214,13 @@ def _build_real_template(tmp_path: Path) -> Path:
 # eplusout.sql validation helpers (issue #942 acceptance: real SQLite w/ E+ tables).
 # ---------------------------------------------------------------------------
 def _is_real_energyplus_sql(path: Path) -> bool:
-    """True iff *path* is a valid SQLite db with at least one EnergyPlus table.
+    """True iff *path* is genuine EnergyPlus SQL (not the stub's SQLite).
 
-    Rejects the stub placeholder (``-- placeholder sql``) and any non-SQLite
-    file. Checks for the canonical EnergyPlus tables (TabularDataWithStrings,
-    ReportData, Errors) per issue #246.
+    The stub also creates ``TabularDataWithStrings``/``ReportData``/``Errors``, so
+    require the EnergyPlus-only ``Simulations`` and ``ReportDataDictionary``
+    tables via the shared offline verifier (issue #1836).
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if not text or text.lstrip().startswith("--"):
-        return False
-    try:
-        with sqlite3.connect(str(path)) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
-                "('TabularDataWithStrings', 'ReportData', 'Errors')"
-            )
-            tables = {row[0] for row in cur.fetchall()}
-    except sqlite3.DatabaseError:
-        return False
-    return len(tables) > 0
+    return not real_energyplus_sql_problems(path)
 
 
 def _sql_in_tree(root: Path) -> list[Path]:
