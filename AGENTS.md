@@ -427,9 +427,12 @@ plotter (`generate_plots.py`), Excel adapter (`excel_to_variables.py`)
 `typecheck` (mypy --strict), `test` (pytest + 82%), `contract`
 (drift checks + the bounded `tests/contract` pytest suite, issue
 #1629), `security` (pip-audit + gitleaks), `mlflow-real` (real MLflow
-smoke), `slow` (-m slow), `chaos` (-m chaos, non-gating —
-deselected from the required `test` gate via PYTEST_CI_FLAGS,
-issue #1468), per-PR Nomad E2E. Per-substrate E2E
+smoke), per-PR Nomad E2E. The non-gating `slow` (-m slow) and
+`chaos` (-m chaos; deselected from the required `test` gate via
+PYTEST_CI_FLAGS, issue #1468) jobs live in the separate
+`.github/workflows/slow-chaos.yml` (issue #1856): push to `main`,
+nightly, `workflow_dispatch`, and a path-filtered PR variant — never
+in `ci.yml`, which must not gain workflow-level `paths` filters. Per-substrate E2E
 (`aws-batch-e2e.yml`, `slurm-e2e.yml`, `kubernetes-e2e.yml`,
 `google-batch-e2e.yml`, `azure-batch-e2e.yml`,
 `nomad-e2e.yml`, `openstudio-cli-e2e.yml`) are nightly or

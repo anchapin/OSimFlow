@@ -1,0 +1,113 @@
+# =============================================================================
+# OSimFlow — slow + chaos suites (issue #1856)
+# =============================================================================
+# `slow` (@pytest.mark.slow, issue #623) and `chaos` (fault-injection wiring,
+# issues #1213 / #1468) are NOT required merge gates, so they no longer run on
+# every PR in ci.yml. They run here on push to main, nightly, on demand, and on
+# PRs that touch slow/chaos-relevant code or tests.
+#
+# This workflow is intentionally NOT in the required-checks list
+# (docs/branch-protection.md). Its `paths` filter is safe because no required
+# context depends on it; never add a workflow-level `paths` filter to ci.yml.
+# =============================================================================
+name: slow-chaos
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "osimflow/**"
+      - "tests/**"
+      - "bin/**"
+      - "pyproject.toml"
+      - "Makefile"
+      - ".github/workflows/slow-chaos.yml"
+
+concurrency:
+  group: slow-chaos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  slow:
+    name: slow (@pytest.mark.slow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + all extras)
+        run: |
+          uv venv .venv --clear --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
+          uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
+
+      - name: pytest -m slow
+        run: |
+          .venv/bin/pytest \
+            -m slow \
+            -n 2 \
+            --dist loadgroup \
+            --timeout=300 \
+            --no-cov \
+            -q
+
+  # Chaos scenarios are probabilistic; non-gating by design (issue #1468).
+  chaos:
+    name: chaos (fault-injection wiring)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.x"
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Cache venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      - name: Install (editable + all extras)
+        run: |
+          uv venv .venv --clear --python 3.12
+          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
+
+      - name: pytest -m chaos
+        run: |
+          .venv/bin/pytest \
+            -m chaos \
+            -v \
+            --no-cov \
+            --timeout=300
