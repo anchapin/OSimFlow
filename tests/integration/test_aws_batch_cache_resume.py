@@ -160,10 +160,11 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
             template_sim_package=template_pkg,
             n_samples=N_SAMPLES,
             outdir=outdir,
-            openstudio_version="3.11.0",
+            openstudio_version="3.10.0",
             archive_intermediates=False,
             result_storage_backend="s3",
             result_storage_bucket=bucket,
+            container_digest=os.environ.get("OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"),
         )
 
     def make_executor() -> AWSBatchExecutor:
