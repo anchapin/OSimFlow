@@ -1,7 +1,7 @@
 """Contract tests pinning the CI pytest marker policy (issue #1468).
 
 pyproject.toml documents the ``chaos`` marker as "deselected by default
-in fast-CI", and the dedicated ``chaos`` job in ci.yml is intentionally
+in fast-CI", and the dedicated ``chaos`` job in slow-chaos.yml is intentionally
 NON-gating ("chaos scenarios are probabilistic [...] a flake here should
 not block PRs"). Issue #1468 found that the required ``test`` job's
 ``-m`` filter did NOT deselect chaos — the gate and the documented
@@ -15,8 +15,8 @@ so the marker docs and the merge-gate filter cannot drift apart again:
   1. PYTEST_CI_FLAGS deselects nomad_e2e, slow AND chaos -> test_pytest_ci_flags_deselect_gating_markers
   2. pyproject.toml registers the chaos marker           -> test_pyproject_registers_chaos_marker
   3. chaos marker doc and the filter agree bidirectionally -> test_chaos_marker_doc_matches_filter
-  4. ci.yml's chaos job selects chaos explicitly          -> test_ci_chaos_job_selects_chaos_explicitly
-  5. ci.yml's chaos job ignores the Makefile gate flags   -> test_ci_chaos_job_does_not_consume_pytest_ci_flags
+  4. slow-chaos.yml's chaos job selects chaos explicitly          -> test_ci_chaos_job_selects_chaos_explicitly
+  5. slow-chaos.yml's chaos job ignores the Makefile gate flags   -> test_ci_chaos_job_does_not_consume_pytest_ci_flags
 
 Pure file reads — hermetic and fast.
 """
@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _MAKEFILE = REPO_ROOT / "Makefile"
 _PYPROJECT = REPO_ROOT / "pyproject.toml"
-_CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+_CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "slow-chaos.yml"
 
 _PYTEST_CI_FLAGS_RE = re.compile(r"^PYTEST_CI_FLAGS\s*:=\s*(.+)$", re.MULTILINE)
 _MARKER_EXPR_RE = re.compile(r"-m\s+\"([^\"]+)\"")
@@ -62,7 +62,7 @@ def _deselected_markers() -> set[str]:
 
 
 def _ci_job_block(name: str) -> str:
-    """Return the raw ci.yml text of one job, from `  <name>:` to the next job key."""
+    """Return the raw slow-chaos.yml text of one job, from `  <name>:` to the next job key."""
     lines = _CI_WORKFLOW.read_text(encoding="utf-8").splitlines(keepends=True)
     start = next((i for i, ln in enumerate(lines) if ln.rstrip("\n") == f"  {name}:"), None)
     assert start is not None, f"No `{name}:` job found in {_CI_WORKFLOW}."
@@ -129,14 +129,14 @@ def test_chaos_marker_doc_matches_filter() -> None:
 
 
 def test_ci_chaos_job_selects_chaos_explicitly() -> None:
-    """The ci.yml chaos job must invoke chaos tests with its own `-m chaos`.
+    """The slow-chaos.yml chaos job must invoke chaos tests with its own `-m chaos`.
 
     It must not depend on the merge gate's (deselecting) filter, otherwise
     chaos coverage would silently vanish.
     """
     block = _ci_job_block("chaos")
     assert "-m chaos" in block, (
-        "The ci.yml `chaos` job no longer runs `pytest -m chaos` explicitly. "
+        "The slow-chaos.yml `chaos` job no longer runs `pytest -m chaos` explicitly. "
         "It has its own invocation on purpose (issue #1468): the Makefile's "
         "PYTEST_CI_FLAGS deselects chaos for the required gate."
     )
@@ -152,7 +152,7 @@ def test_ci_chaos_job_does_not_consume_pytest_ci_flags() -> None:
     block = _ci_job_block("chaos")
     for forbidden in ("PYTEST_CI_FLAGS", "PYTEST_COV_FLAGS", "make test-cov", "make test"):
         assert forbidden not in block, (
-            f"The ci.yml `chaos` job references `{forbidden}` — it must keep "
+            f"The slow-chaos.yml `chaos` job references `{forbidden}` — it must keep "
             f"its own `pytest -m chaos` invocation because PYTEST_CI_FLAGS "
             f"deselects chaos in the merge gate (issue #1468)."
         )

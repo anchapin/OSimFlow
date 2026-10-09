@@ -193,8 +193,8 @@ Use `--admin` only when **all** of the following are true:
    coverage gate) all pass on the candidate commit.
 2. **The failing CI check is one of the explicitly non-gating
    jobs** — the `slow (@pytest.mark.slow)` job is *intentionally* a
-   non-gating diagnostic (see `.github/workflows/ci.yml` lines
-   299-308), and the AWS Batch / Nomad / Azure / GCP / Kubernetes /
+   non-gating diagnostic (see `.github/workflows/slow-chaos.yml`; it runs on
+   push to `main`, nightly, and path-filtered PRs, not in `ci.yml`), and the AWS Batch / Nomad / Azure / GCP / Kubernetes /
    Slurm / Docker-Swarm / Dask / OpenStudio-CLI / real-MLflow E2E
    jobs are skip-gated outside their respective `*-e2e.yml`
    workflows. A flake in any of these is not a blocking gate.
