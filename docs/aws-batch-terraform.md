@@ -138,6 +138,23 @@ This produces a command with `--aws-batch-max-spot-price-usd 0.05`, `--aws-batch
 
 **How retries work:** When AWS reclaims a Spot instance, the Batch job transitions to `FAILED` with a Spot interruption status. OSimFlow detects this and resubmits the same sample up to `--aws-batch-max-retries` times. If all retries are exhausted and `--aws-batch-fallback-to-on-demand` is set, the sample is resubmitted on an On-Demand instance.
 
+**Evidence (issues #1848, #1849):**
+
+- *Retry and Spot→on-demand fallback* — a live Spot reclamation cannot be forced, so
+  `tests/integration/test_aws_batch_spot_fallback_retry_mocked.py` drives the real
+  `AWSBatchExecutor` against moto's Batch API with Spot-interruption `statusReason`s on the Spot
+  queue. It asserts that (a) an interrupted sample is resubmitted to the same queue and then
+  succeeds, (b) exhausted retries without fallback raise `Spot retries exhausted`, (c) with
+  `--aws-batch-fallback-to-on-demand` the final `submit_job` goes to
+  `--aws-batch-on-demand-queue` / `--aws-batch-on-demand-job-definition` (never the Spot route)
+  and succeeds, and (d) an on-demand failure after fallback is reported, not retried again.
+  Live Spot capacity remains unverified; the routing contract is verified at the Batch API level.
+- *Cancellation* — `test_cancel_terminates_batch_jobs_and_leaves_no_orphans` in
+  `tests/integration/test_aws_batch_acceptance.py` runs a real campaign on Fargate, cancels via
+  `executor.cancel()` as soon as the first job is submitted (cost-bounded: the job is still
+  starting), then asserts the Batch job is `FAILED` with the cancellation `statusReason` from
+  `terminate_job` and no job from the campaign remains in a live state.
+
 ### Cost-Tagging
 
 All resources created by the Terraform module carry these default tags:

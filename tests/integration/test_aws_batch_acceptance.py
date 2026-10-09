@@ -220,3 +220,90 @@ def test_timeout_fails_and_is_not_reported_as_success(tmp_path: Path) -> None:
         acc.verify_acceptance(
             outdir, expected_success=[], expected_failed=_ids(outdir), min_successes=0
         )
+
+
+_TERMINAL = ("SUCCEEDED", "FAILED")
+
+
+def _describe(batch: object, job_ids: list[str]) -> dict[str, dict[str, object]]:
+    found: dict[str, dict[str, object]] = {}
+    for i in range(0, len(job_ids), 100):
+        resp = batch.describe_jobs(jobs=job_ids[i : i + 100])  # type: ignore[attr-defined]
+        found.update({j["jobId"]: j for j in resp["jobs"]})
+    return found
+
+
+def test_cancel_terminates_batch_jobs_and_leaves_no_orphans(tmp_path: Path) -> None:
+    """Cancel right after submit (while STARTING, bounded cost): every Batch job
+    the campaign created ends terminated and none stays in a live state (#1848)."""
+    import threading
+
+    import boto3
+
+    from osimflow.executors import AWSBatchExecutor
+
+    _fixture()
+
+    class Tracking(AWSBatchExecutor):
+        handles: list[object] = []
+
+        def _do_submit(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+            handle = super()._do_submit(*args, **kwargs)  # type: ignore[misc]
+            type(self).handles.append(handle)
+            return handle
+
+    Tracking.handles = []
+    ex = Tracking(
+        job_queue=os.environ["OSIMFLOW_AWS_BATCH_QUEUE"],
+        job_definition=os.environ["OSIMFLOW_AWS_BATCH_JOB_DEFINITION"],
+        region_name=os.environ["OSIMFLOW_AWS_REGION"],
+        allow_long_lived_credentials=True,
+    )
+    batch = boto3.client("batch", region_name=os.environ["OSIMFLOW_AWS_REGION"])
+    outdir = tmp_path / f"cancel-{uuid.uuid4().hex[:8]}"
+
+    watcher_errors: list[str] = []
+    _pause = threading.Event()  # never set: wait() is a bounded poll interval
+
+    def _cancel_after_first_submit() -> None:
+        # Campaign installs signal handlers, so it must own the main thread.
+        deadline = time.monotonic() + 300
+        while not Tracking.handles and time.monotonic() < deadline:
+            _pause.wait(0.5)
+        if not Tracking.handles:
+            watcher_errors.append("campaign never submitted a Batch job")
+            return
+        ex.cancel()
+
+    watcher = threading.Thread(target=_cancel_after_first_submit, name="cancel-watcher")
+    watcher.start()
+    try:
+        _run(tmp_path, outdir, 1, executor=ex)
+    except Exception:  # noqa: BLE001 -- cancelled campaign is expected to fail
+        pass
+    watcher.join(timeout=330)
+    assert not watcher_errors, watcher_errors
+    first = str(Tracking.handles[0].job_id)  # type: ignore[attr-defined]
+    ex.cancel()  # sweep anything submitted while the cancel was racing
+
+    job_ids = sorted({str(h.job_id) for h in Tracking.handles})  # type: ignore[attr-defined]
+    deadline = time.monotonic() + 600
+    while True:
+        jobs = _describe(batch, job_ids)
+        live = [i for i, j in jobs.items() if j["status"] not in _TERMINAL]
+        if not live or time.monotonic() > deadline:
+            break
+        _pause.wait(5)
+
+    assert not live, f"orphaned live Batch jobs after cancel: {live}"
+    assert jobs[first]["status"] == "FAILED"
+    assert "cancellation" in str(jobs[first].get("statusReason", "")).lower(), jobs[first]
+    _write_evidence(
+        "cancel",
+        {
+            "job_ids": job_ids,
+            "first_job_status": jobs[first]["status"],
+            "first_job_reason": jobs[first].get("statusReason"),
+            "orphans": live,
+        },
+    )
