@@ -1686,4 +1686,3 @@ hint pointing at the regenerate command above. Volatile keys
 (`info.version`, `x-timestamp`, etc.) are stripped before diffing so
 the check focuses on schema content. Pass `--strict` to also fail on
 volatile-field drift.
-

@@ -26,8 +26,3 @@ Set to true to hardsize model HVAC, set to false to leave model autosized
 **Units:** ,
 **Required:** true,
 **Model Dependent:** false
-
-
-
-
-

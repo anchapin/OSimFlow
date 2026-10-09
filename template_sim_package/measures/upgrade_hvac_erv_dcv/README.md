@@ -26,7 +26,3 @@ Select whether to add an exhaust air energy or heat recovery system (ERV) or dem
 **Units:** ,
 **Required:** true,
 **Model Dependent:** false
-
-
-
-
