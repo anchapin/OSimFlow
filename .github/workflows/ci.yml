@@ -310,7 +310,27 @@ jobs:
         # Flags live in the Makefile (PYTEST_CI_FLAGS / PYTEST_COV_FLAGS,
         # issue #1476) — the single source of truth shared with the local
         # `make test` / `make test-cov` targets. Do not inline them here.
-        run: make test-cov
+        run: |
+          start=$(date +%s)
+          make test-cov 2>&1 | tee pytest-output.log
+          echo "$(( $(date +%s) - start ))" > pytest-wall-seconds.txt
+
+      - name: Per-step timing summary (issue #1855)
+        if: steps.changed.outputs.any_changed == 'true' && always()
+        run: |
+          {
+            echo "### Test job timing"
+            if [ -f pytest-wall-seconds.txt ]; then
+              echo "- pytest + coverage wall time: $(cat pytest-wall-seconds.txt)s"
+            fi
+            echo
+            echo "#### Slowest 20 tests (pytest --durations=20)"
+            echo '```'
+            if [ -f pytest-output.log ]; then
+              sed -n '/slowest .* durations/,/^$/p' pytest-output.log | head -30
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage
         if: steps.changed.outputs.any_changed == 'true' && success()

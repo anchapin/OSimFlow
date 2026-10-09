@@ -1908,6 +1908,24 @@ To force stub mode even when the CLI is installed:
 OSIMFLOW_STUB_SIM=1 osimflow run --executor local ...
 ```
 
+### Reading CI test timings (issue #1855)
+
+`PYTEST_CI_FLAGS` in the `Makefile` includes `--durations=20`, so every
+`make test` / `make test-cov` run prints the 20 slowest tests. In CI the
+`test` job also writes a "Test job timing" section to the run's step
+summary (`$GITHUB_STEP_SUMMARY`): total pytest + coverage wall time and
+the slowest-20 table. Open the workflow run page and scroll to
+**Summary** to read it. Locally, run `make test` and look at the
+"slowest 20 durations" block at the end of the output.
+
+Baselines are to be filled in from CI runs; none are recorded yet.
+
+| Measurement | Baseline (CI) | Source run |
+|---|---|---|
+| `test` job pytest + coverage wall time | _TBD_ | _TBD_ |
+| Slowest single test | _TBD_ | _TBD_ |
+| Sum of slowest 20 tests | _TBD_ | _TBD_ |
+
 ### "Coverage gate fails"
 
 ```bash
