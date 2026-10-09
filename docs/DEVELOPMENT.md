@@ -302,11 +302,12 @@ Two installers deliberately coexist:
 | Context | Installer | Why |
 |---|---|---|
 | **Local dev (authoritative)** | **pip** via `make install` | Zero extra tooling for contributors; the Makefile and every doc example hard-code `.venv/bin/`. |
-| **CI** | **uv** via `astral-sh/setup-uv` | ~10x faster installs + runner venv caching keyed on `pyproject.toml`. |
+| **CI** | **uv** via `astral-sh/setup-uv` | ~10x faster installs; `uv sync --locked` honours `uv.lock`, and setup-uv caches downloads keyed on `uv.lock` (issue #1854). |
 
-Both resolve the *same* `pyproject.toml` constraint set (CI uses
-`uv pip install`, the pip-compatible interface — neither consumes
-`uv.lock`). Because uv and pip are different resolvers, the installed
+Both start from the *same* `pyproject.toml` constraint set, but CI
+installs with `uv sync --locked` (fails if `uv.lock` is stale — run
+`uv lock` after editing dependencies) while local `make install` uses
+pip and does not consume `uv.lock`. Because uv and pip are different resolvers, the installed
 versions of transitive dependencies can occasionally differ; when they
 do, **the CI-resolved set is the merge gate**. If CI fails locally
 green code, re-run `make install` to re-resolve with pip, or compare
@@ -342,9 +343,9 @@ The fix pattern, applied in #1582 and enforced by
    + `azure-identity`) in `pyproject.toml`.
 2. Add the extra to **both** install worlds so the gate is deterministic:
    `make install` (local pip) *and* the CI `typecheck` job's
-   `uv pip install -e ".[dev,aws,azure,slurm,kubernetes]"`.
+   `uv sync --locked --extra dev --extra aws --extra azure --extra slurm --extra kubernetes`.
 3. Re-run `uv lock` so `uv.lock` carries the closure (and `uv lock
-   --check` passes), keeping the advisory lock from drifting.
+   --check` passes); CI installs with `--locked`, so a stale lock fails the job.
 4. Fix the executor against the pinned SDK's real API surface
    (azure-batch 15.x track-2: `BatchClient`, `BatchTaskCreateOptions`,
    `timedelta` wall-clock constraints — no legacy `BatchServiceClient`).
