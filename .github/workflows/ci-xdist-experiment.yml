@@ -1,0 +1,72 @@
+# =============================================================================
+# OSimFlow — pytest-xdist worker-count experiment (issue #1855)
+# =============================================================================
+# Runs the exact `make test-cov` invocation from ci.yml's `test` job with
+# `-n 1`, `-n 2` (the shipped default) and `-n auto`, two repetitions each, and
+# writes install / pytest wall time + vCPU count to the job summary. Used to
+# pick between a larger runner and matrix sharding (issue #1857).
+#
+# NOT a required check and never gates merges. The coverage gate and per-module
+# floors still run here (they are part of `make test-cov`); a failure of those
+# does not invalidate the timing numbers.
+# =============================================================================
+name: ci-xdist-experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  timing:
+    name: xdist -n ${{ matrix.workers }} (rep ${{ matrix.rep }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        workers: ["1", "2", "auto"]
+        rep: ["1", "2"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Install
+        run: |
+          start=$(date +%s)
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra azure --extra slurm --extra kubernetes --extra api --extra sensitivity --extra optimization --extra ga
+          echo "$(( $(date +%s) - start ))" > install-seconds.txt
+
+      - name: pytest (make test-cov, -n ${{ matrix.workers }})
+        env:
+          WORKERS: ${{ matrix.workers }}
+        run: |
+          start=$(date +%s)
+          make test-cov PYTEST_WORKERS="${WORKERS}" 2>&1 | tee pytest-output.log
+          echo "$(( $(date +%s) - start ))" > pytest-wall-seconds.txt
+
+      - name: Summary
+        if: always()
+        env:
+          WORKERS: ${{ matrix.workers }}
+          REP: ${{ matrix.rep }}
+        run: |
+          {
+            echo "### xdist -n ${WORKERS} (rep ${REP})"
+            echo "- vCPUs (nproc): $(nproc)"
+            echo "- RAM: $(free -m | awk '/Mem:/ {print $2}') MiB"
+            [ -f install-seconds.txt ] && echo "- uv sync wall time: $(cat install-seconds.txt)s"
+            [ -f pytest-wall-seconds.txt ] && echo "- pytest + coverage wall time: $(cat pytest-wall-seconds.txt)s"
+            grep -E "(passed|failed).* in [0-9.]+s" pytest-output.log | tail -1 || true
+          } >> "$GITHUB_STEP_SUMMARY"
