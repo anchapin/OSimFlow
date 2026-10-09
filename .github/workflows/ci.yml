@@ -15,8 +15,9 @@
 #                  pre-commit pytest-fast mirror; parallel; ~2 min)
 #   - security   : pip-audit dependency vulnerability check (parallel; ~30s)
 #
-# Install uses `uv` (~10x faster than pip) and the venv is cached on a hash
-# of `pyproject.toml` so unchanged PRs reuse the install. The uv version is
+# Install uses `uv sync --locked` (honours uv.lock; ~10x faster than pip);
+# setup-uv caches uv's download cache keyed on uv.lock (issue #1854), and each
+# job builds a fresh .venv with exactly the extras it needs. The uv version is
 # pinned via setup-uv's `version:` input — keep the pin IDENTICAL in every
 # workflow that uses setup-uv (ci.yml, bench.yml, release.yml,
 # release-installers.yml, nomad-e2e.yml); issue #1477. Toolchain split:
@@ -53,6 +54,8 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         run: uv python install 3.12
@@ -94,28 +97,20 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
-      - name: Cache venv
-        if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
-
       - name: Install (editable + dev extras)
         if: steps.changed.outputs.any_changed == 'true'
         run: |
-          uv venv .venv --clear --python 3.12
           # azure extra included so mypy --strict resolves azure.batch and
           # actually type-checks osimflow/executors/azure_batch_executor.py
           # (issue #1582).
-          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes]"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra azure --extra slurm --extra kubernetes
 
       - name: mypy osimflow/
         if: steps.changed.outputs.any_changed == 'true'
@@ -132,25 +127,18 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         run: uv python install 3.12
-
-      - name: Cache venv
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
 
       - name: Install (editable + dev + api extras)
         # `api` extra (issue #1629): tests/contract's openapi-sync and
         # API-contract tests import osimflow.api / fastapi; without the
         # extra they importorskip and the gate silently loses coverage.
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes,api]"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra slurm --extra kubernetes --extra api
 
       - name: AGENTS.md / code drift
         run: .venv/bin/python tools/check_agents_contract.py
@@ -194,6 +182,8 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
@@ -206,20 +196,10 @@ jobs:
         # `uv venv --python 3.12` environment; issue #1477).
         run: uv python install 3.12
 
-      - name: Cache venv
-        if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
-
       - name: Install (editable + dev extras)
         if: steps.changed.outputs.any_changed == 'true'
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra slurm --extra kubernetes
 
       - name: Install pip-audit
         if: steps.changed.outputs.any_changed == 'true'
@@ -284,26 +264,17 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
-      - name: Cache venv
-        if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
-
       - name: Install (editable + all extras + pytest-xdist)
         if: steps.changed.outputs.any_changed == 'true'
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,azure,slurm,kubernetes,api,sensitivity,optimization,ga]"
-          uv pip install --python .venv/bin/python "pytest-xdist>=3.5" "pytest-timeout>=2.3" "httpx>=0.27"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra azure --extra slurm --extra kubernetes --extra api --extra sensitivity --extra optimization --extra ga
 
       - name: pytest with coverage gate
         if: steps.changed.outputs.any_changed == 'true'
@@ -385,25 +356,17 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
-      - name: Cache venv
-        if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-mlflow-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-mlflow-
-
       - name: Install (editable + dev + mlflow extras)
         if: steps.changed.outputs.any_changed == 'true'
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,mlflow]"
+          uv sync --locked --python 3.12 --extra dev --extra mlflow
 
       - name: pytest (real MLflow file-tracking smoke test)
         if: steps.changed.outputs.any_changed == 'true'
@@ -447,25 +410,17 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
-      - name: Cache venv
-        if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
-
       - name: Install (editable + dev + aws extras)
         if: steps.changed.outputs.any_changed == 'true'
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra slurm --extra kubernetes
 
       - name: pytest (AWS Batch mocked tests)
         if: steps.changed.outputs.any_changed == 'true'
@@ -508,25 +463,17 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.x"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Setup Python
         if: steps.changed.outputs.any_changed == 'true'
         run: uv python install 3.12
 
-      - name: Cache venv
-        if: steps.changed.outputs.any_changed == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py3.12-
-
       - name: Install (editable + dev extras)
         if: steps.changed.outputs.any_changed == 'true'
         run: |
-          uv venv .venv --clear --python 3.12
-          uv pip install --python .venv/bin/python -e ".[dev,aws,slurm,kubernetes]"
+          uv sync --locked --python 3.12 --extra dev --extra aws --extra slurm --extra kubernetes
 
       # -------------------------------------------------------------------
       # Docker diagnostics (issue #195)
