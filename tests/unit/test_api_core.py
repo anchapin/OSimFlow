@@ -925,10 +925,10 @@ class TestRateLimiting:
             )
             client = TestClient(app)
 
-        # Requests under limit should succeed
-        for _ in range(5):
-            resp = client.get("/health")
-            assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
+            # Requests under limit should succeed
+            for _ in range(5):
+                resp = client.get("/health")
+                assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
 
     def test_rate_limit_redis_backed_blocks_over_limit(self, tmp_path: Path) -> None:
         """Redis-backed rate limiter blocks requests over the limit (issue #663).
@@ -973,13 +973,13 @@ class TestRateLimiting:
             )
             client = TestClient(app)
 
-        # First two requests should succeed
-        assert client.get("/health").status_code == 200
-        assert client.get("/health").status_code == 200
-        # Third request should be rate limited
-        resp = client.get("/health")
-        assert resp.status_code == 429, f"Expected 429 but got {resp.status_code}"
-        assert "Retry-After" in resp.headers
+            # First two requests should succeed
+            assert client.get("/health").status_code == 200
+            assert client.get("/health").status_code == 200
+            # Third request should be rate limited
+            resp = client.get("/health")
+            assert resp.status_code == 429, f"Expected 429 but got {resp.status_code}"
+            assert "Retry-After" in resp.headers
 
     def test_rate_limit_redis_backed_fallback_on_redis_error(self, tmp_path: Path) -> None:
         """Redis-backed rate limiter falls back to in-process on Redis failure (issue #663).
@@ -1002,13 +1002,13 @@ class TestRateLimiting:
             )
             client = TestClient(app)
 
-        # Should fall back to in-process and work normally
-        assert client.get("/health").status_code == 200
-        assert client.get("/health").status_code == 200
-        resp = client.get("/health")
-        assert resp.status_code == 429, (
-            f"Expected 429 (fallback to in-process) but got {resp.status_code}"
-        )
+            # Should fall back to in-process and work normally
+            assert client.get("/health").status_code == 200
+            assert client.get("/health").status_code == 200
+            resp = client.get("/health")
+            assert resp.status_code == 429, (
+                f"Expected 429 (fallback to in-process) but got {resp.status_code}"
+            )
 
 
 class TestApiRedisUrlValidation:
