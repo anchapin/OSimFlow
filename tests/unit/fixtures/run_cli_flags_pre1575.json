@@ -74,6 +74,21 @@
     "required": false,
     "type": null
   },
+  "--aws-batch-allow-long-lived-credentials": {
+    "action": "_StoreTrueAction",
+    "choices": null,
+    "const": "True",
+    "default": "False",
+    "dest": "aws_batch_allow_long_lived_credentials",
+    "help": "Allow the AWS Batch executor to use long-lived / workstation credentials (AWS_ACCESS_KEY_ID, shared credentials file, SSO or OIDC env credentials) instead of only IAM-role credentials from the EC2/ECS metadata service (issue #1833). Default off; a warning is logged when enabled. Not recommended for production.",
+    "metavar": null,
+    "nargs": "0",
+    "option_strings": [
+      "--aws-batch-allow-long-lived-credentials"
+    ],
+    "required": false,
+    "type": null
+  },
   "--aws-batch-fallback-to-on-demand": {
     "action": "_StoreTrueAction",
     "choices": null,

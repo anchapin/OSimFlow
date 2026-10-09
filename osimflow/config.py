@@ -951,6 +951,7 @@ class CampaignConfig:
     # literal env value in the Batch job spec (readable via
     # DescribeJobs, persisted in job history).
     aws_batch_payload_secret_arn: str | None = None
+    aws_batch_allow_long_lived_credentials: bool = False
 
     azure_batch_account_name: str | None = None
     azure_batch_account_url: str | None = None
@@ -1137,6 +1138,7 @@ class CampaignConfig:
                 on_demand_job_definition=self.aws_batch_on_demand_job_definition,
                 max_retries=self.aws_batch_max_retries,
                 submit_rps=self.aws_batch_submit_rps,
+                allow_long_lived_credentials=self.aws_batch_allow_long_lived_credentials,
             )
 
         # Azure Batch config
@@ -1275,6 +1277,10 @@ class CampaignConfig:
                 "aws_batch_on_demand_job_definition": ("aws_batch", "on_demand_job_definition"),
                 "aws_batch_max_retries": ("aws_batch", "max_retries"),
                 "aws_batch_submit_rps": ("aws_batch", "submit_rps"),
+                "aws_batch_allow_long_lived_credentials": (
+                    "aws_batch",
+                    "allow_long_lived_credentials",
+                ),
                 # Azure Batch executor delegation
                 "azure_batch_account_name": ("azure_batch", "account_name"),
                 "azure_batch_account_url": ("azure_batch", "account_url"),
@@ -1755,6 +1761,9 @@ def load_config(args: dict[str, object]) -> CampaignConfig:  # noqa: PLR0912
             float(str(args["aws_batch_submit_rps"]))
             if args.get("aws_batch_submit_rps") is not None
             else None
+        ),
+        aws_batch_allow_long_lived_credentials=bool(
+            args.get("aws_batch_allow_long_lived_credentials", False)
         ),
         ecr_repository=str(args["ecr_repository"]) if args.get("ecr_repository") else None,
         azure_batch_account_name=(
