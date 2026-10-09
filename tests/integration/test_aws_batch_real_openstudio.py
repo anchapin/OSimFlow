@@ -112,8 +112,8 @@ def _real_worker_not_stub(monkeypatch: pytest.MonkeyPatch) -> None:
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PACKAGE = REPO_ROOT / "example_package"
 # Real model + weather live in a gitignored dir so the tracked JSON stub at
-# example_package/model.osm is never overwritten.
-REAL_FIXTURE_DIR = REPO_ROOT / ".fixtures" / "real_package"
+# example_package/model.osm is never overwritten (issue #1832).
+REAL_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "real"
 MODEL_OSM = REAL_FIXTURE_DIR / "model.osm"
 FETCH_SCRIPT = REPO_ROOT / "scripts" / "fetch_example_fixture.py"
 

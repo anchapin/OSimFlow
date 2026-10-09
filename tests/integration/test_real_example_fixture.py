@@ -1,6 +1,6 @@
-"""Skip-gated tests for the *real* OpenStudio example fixture (issue #938).
+"""Skip-gated tests for the *real* OpenStudio example fixture (issues #938, #1832).
 
-These tests exercise the real, simulation-capable ``example_package/`` fixture
+These tests exercise the real, simulation-capable fixture in ``tests/fixtures/real/``
 that ``scripts/fetch_example_fixture.py`` materializes at dev/test time:
 
 * a real ``.osm`` model containing ``OS:Version``, and
@@ -24,8 +24,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PACKAGE = REPO_ROOT / "example_package"
-MODEL_OSM = EXAMPLE_PACKAGE / "model.osm"
-WEATHER_EPW = EXAMPLE_PACKAGE / "USA_CO_Golden-NREL.724666_TMY3.epw"
+REAL_DIR = REPO_ROOT / "tests" / "fixtures" / "real"
+MODEL_OSM = REAL_DIR / "model.osm"
+WEATHER_EPW = REAL_DIR / "USA_CO_Golden-NREL.724666_TMY3.epw"
 
 
 def _file_contains(path: Path, marker: str) -> bool:
@@ -81,11 +82,7 @@ def test_workflow_references_seed_model() -> None:
     assert osw["seed_file"] == "model.osm"
 
 
-def test_placeholder_is_preserved() -> None:
-    """The JSON stub must remain restorable for stub-mode tests."""
-    placeholder = EXAMPLE_PACKAGE / "model.osm.placeholder"
-    assert placeholder.is_file(), (
-        "model.osm.placeholder missing — stub-mode tests cannot be restored"
-    )
-    text = placeholder.read_text(encoding="utf-8", errors="replace")
-    assert text.lstrip().startswith("{"), "placeholder should be the JSON stub"
+def test_example_package_stub_untouched() -> None:
+    """The tracked JSON stub in example_package/ must never be overwritten."""
+    text = (EXAMPLE_PACKAGE / "model.osm").read_text(encoding="utf-8", errors="replace")
+    assert text.lstrip().startswith("{"), "example_package/model.osm is not the JSON stub"
