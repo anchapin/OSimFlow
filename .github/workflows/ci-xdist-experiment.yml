@@ -14,10 +14,6 @@ name: ci-xdist-experiment
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/ci-xdist-experiment.yml"
 
 permissions:
   contents: read
@@ -56,10 +52,8 @@ jobs:
         env:
           WORKERS: ${{ matrix.workers }}
         run: |
-          flags=$(sed -n 's/^PYTEST_CI_FLAGS := //p' Makefile | sed "s/-n 2/-n ${WORKERS}/")
-          echo "flags: $flags"
           start=$(date +%s)
-          make test-cov PYTEST_CI_FLAGS="$flags" 2>&1 | tee pytest-output.log
+          make test-cov PYTEST_WORKERS="${WORKERS}" 2>&1 | tee pytest-output.log
           echo "$(( $(date +%s) - start ))" > pytest-wall-seconds.txt
 
       - name: Summary

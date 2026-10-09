@@ -1919,13 +1919,44 @@ the slowest-20 table. Open the workflow run page and scroll to
 **Summary** to read it. Locally, run `make test` and look at the
 "slowest 20 durations" block at the end of the output.
 
-Baselines are to be filled in from CI runs; none are recorded yet.
+Baselines below were measured on GitHub-hosted `ubuntu-latest` (public
+repo, 4 vCPU / 16 GB) at commit `ff6e5b5` (after #1858 and #1860), 6239
+passed / 68 skipped in every run.
 
-| Measurement | Baseline (CI) | Source run |
+| Measurement | Baseline (CI, `-n 2`) | Source run |
 |---|---|---|
-| `test` job pytest + coverage wall time | _TBD_ | _TBD_ |
-| Slowest single test | _TBD_ | _TBD_ |
-| Sum of slowest 20 tests | _TBD_ | _TBD_ |
+| `test` job pytest + coverage wall time | 596 s (step 602 s); second sample 659 s (step 666 s) | ci.yml runs 37983046757, 37985217320 |
+| `test` job setup (checkout, change detection, uv, Python, `uv sync`) | ~14 s (≈2% of the job) | ci.yml run 37983046757 |
+| Slowest single test | 62.8 s (`tests/unit/test_campaign.py::TestTeardownBestEffort::test_bounded_result_storage_close_does_not_stall_teardown`) | ci.yml run 37983046757 |
+| Sum of slowest 20 tests | 314 s of CPU time (of ~1200 s total serial) | ci.yml run 37983046757 |
+
+xdist worker-count experiment (`ci-xdist-experiment.yml`, same
+`make test-cov` invocation, two repetitions each; pytest-reported time):
+
+| `-n` | Run 1 | Run 2 | Speed-up vs `-n 1` |
+|---|---|---|---|
+| 1 | 1201.7 s | 1209.9 s | 1.0x |
+| 2 (previous default) | 663.1 s | 662.3 s | 1.8x |
+| auto (4 vCPU) | 443.8 s | 444.4 s | 2.7x |
+
+(workflow run 37983978955; `-n auto` resolves to the runner's vCPU count — 4
+on `ubuntu-latest`, inferred from the scaling and the runner spec because the
+nproc value was written to the job summary only.) The coverage gate and
+per-module floors passed in every configuration.
+
+Recommendation:
+
+- Test execution is ~98% of the job; install/setup is not a lever.
+- Use `-n auto` in CI (`make test-cov PYTEST_WORKERS=auto`): −33% wall time
+  (663 s → 444 s) for free. Local `make test` keeps `-n 2` via the
+  `PYTEST_WORKERS ?= 2` default.
+- Scaling is sub-linear (2→4 workers: 1.5x) and a few long tests
+  (62.8 s teardown test, Sobol/Slurm integration tests of 15–22 s) bound the
+  tail, so a larger runner or sharding would give diminishing returns on top
+  of this; see #1857 for the decision. The 62.8 s teardown test is worth
+  investigating on its own.
+- Re-run the experiment (`gh workflow run ci-xdist-experiment.yml`) before
+  changing runner size or worker count.
 
 ### "Coverage gate fails"
 

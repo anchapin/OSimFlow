@@ -30,7 +30,12 @@ PRECOMMIT := $(VENV)/bin/pre-commit
 # dedicated, NON-gating `chaos` CI job (`pytest -m chaos`), so a flake
 # there cannot block PRs. tests/contract/test_ci_marker_policy.py pins
 # this policy to the marker docs in pyproject.toml.
-PYTEST_CI_FLAGS := -n 2 --dist loadgroup --timeout=120 -o faulthandler_timeout=150 --durations=20 --ignore=tests/contract -m "not nomad_e2e and not slow and not chaos"
+#
+# xdist worker count (issue #1855): `PYTEST_WORKERS` defaults to 2 locally; the
+# CI `test` job passes `PYTEST_WORKERS=auto` (4 vCPUs on ubuntu-latest, measured
+# 663 s -> 444 s, see docs/DEVELOPMENT.md "Reading CI test timings").
+PYTEST_WORKERS ?= 2
+PYTEST_CI_FLAGS := -n $(PYTEST_WORKERS) --dist loadgroup --timeout=120 -o faulthandler_timeout=150 --durations=20 --ignore=tests/contract -m "not nomad_e2e and not slow and not chaos"
 # Subprocess coverage bootstrap (issue #1557): `bin/*.py` shims spawn
 # `python -m osimflow._work_scripts.*` workers; without
 # `COVERAGE_PROCESS_START` the auto-installed `coverage.pth` would not
