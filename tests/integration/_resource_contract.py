@@ -114,10 +114,18 @@ def aws_describe_jobs_resources(
     out: list[dict[str, Any]] = []
     for job in described:
         container = job.get("container") or {}
+        # Fargate jobs report resourceRequirements instead of vcpus/memory.
+        reqs = {r["type"]: r["value"] for r in container.get("resourceRequirements") or []}
+        vcpus = container.get("vcpus")
+        memory = container.get("memory")
+        if vcpus is None and "VCPU" in reqs:
+            vcpus = int(float(reqs["VCPU"]))
+        if memory is None and "MEMORY" in reqs:
+            memory = int(reqs["MEMORY"])
         out.append(
             {
-                "vcpus": container.get("vcpus"),
-                "memory": container.get("memory"),
+                "vcpus": vcpus,
+                "memory": memory,
                 "job_id": job.get("jobId"),
             }
         )

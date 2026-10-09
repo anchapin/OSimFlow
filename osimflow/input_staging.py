@@ -50,6 +50,9 @@ __all__ = [
     "INPUT_KEY_PREFIX",
     "MANIFEST_SCHEMA_VERSION",
     "result_upload_plan",
+    "PAYLOAD_REF_KEY",
+    "spill_task_payload",
+    "fetch_spilled_payload",
 ]
 
 log = logging.getLogger("osimflow.input_staging")
@@ -59,6 +62,7 @@ STAGED_OUTPUT_TYPE = "staged_output"
 INPUT_KEY_PREFIX = "_inputs"
 MANIFEST_SCHEMA_VERSION = 1
 _CHUNK = 1024 * 1024
+PAYLOAD_REF_KEY = "payload_ref_sha256"
 
 
 class InputStagingError(OSimFlowRuntimeError):
@@ -407,3 +411,41 @@ def result_upload_plan(
         if key:
             plan.append((remapper.scratch_for(orig), key))
     return plan
+
+
+def spill_task_payload(storage: ResultStorage, raw: str) -> str:
+    """Upload an oversized task payload and return a small pointer payload.
+
+    AWS Batch caps ``containerOverrides`` at 8192 bytes, which fan-in steps
+    (one staged reference per sample) can exceed. The pointer carries the
+    SHA-256 of the real payload; it is what gets HMAC-signed, so the spilled
+    object is integrity-bound to the signature.
+    """
+    data = raw.encode("utf-8")
+    sha = hashlib.sha256(data).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="osimflow-payload-") as tmp:
+        local = Path(tmp) / "payload.json"
+        local.write_bytes(data)
+        try:
+            storage.upload_file(local, f"{INPUT_KEY_PREFIX}/payloads/{sha}.json")
+        except Exception as exc:
+            log.error("input staging: payload spill failed: %s", exc, exc_info=True)
+            raise InputStagingError(f"failed to stage oversized task payload: {exc}") from exc
+    return json.dumps({"schema_version": 1, PAYLOAD_REF_KEY: sha}, separators=(",", ":"))
+
+
+def fetch_spilled_payload(storage: ResultStorage, sha256: str) -> str:
+    """Download and integrity-check a payload written by :func:`spill_task_payload`."""
+    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+        raise InputStagingError("invalid spilled payload reference")
+    with tempfile.TemporaryDirectory(prefix="osimflow-payload-") as tmp:
+        dest = Path(tmp) / "payload.json"
+        try:
+            storage.download_file(f"{INPUT_KEY_PREFIX}/payloads/{sha256}.json", dest)
+        except Exception as exc:
+            log.error("input staging: payload fetch failed: %s", exc, exc_info=True)
+            raise InputStagingError(f"failed to fetch spilled task payload: {exc}") from exc
+        data = dest.read_bytes()
+    if hashlib.sha256(data).hexdigest() != sha256:
+        raise InputStagingError("spilled task payload failed integrity check")
+    return data.decode("utf-8")

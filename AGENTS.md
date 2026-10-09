@@ -777,6 +777,7 @@ name in this section.
   blobs + a SHA-256 manifest under `_inputs/` and replaces it with a
   tagged `staged_input`/`staged_output` reference — the manifest digest
   rides inside the HMAC-signed `OSIMFLOW_TASK_PAYLOAD`),
+  `spill_task_payload` / `fetch_spilled_payload` (oversized payloads — AWS Batch caps `containerOverrides` at 8192 B — are uploaded content-addressed under `_inputs/payloads/` and replaced by a signed SHA-256 pointer that `remote_runner` resolves),
   `WorkerPathRemapper` (verified materialization into worker scratch,
   scratch<->controller path mapping so result keys line up with
   `materialize_object_storage_result`), `result_upload_plan`,

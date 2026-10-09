@@ -6,8 +6,8 @@
 # rate limits.
 #
 # Usage:
-#   ./sync-openstudio-to-ecr.sh --version 3.5.0 --region us-east-1
-#   ./sync-openstudio-to-ecr.sh --version 3.5.0 --region us-east-1 --regions us-east-1,us-west-2,eu-west-1
+#   ./sync-openstudio-to-ecr.sh --version 3.10.0 --region us-east-1
+#   ./sync-openstudio-to-ecr.sh --version 3.10.0 --region us-east-1 --regions us-east-1,us-west-2,eu-west-1
 #
 # Requires: docker, aws CLI v2, authenticated AWS credentials.
 #
@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
     -h | --help)
       echo "Usage: $0 --version VERSION --region REGION [--regions r1,r2,...]"
       echo ""
-      echo "  --version   OpenStudio version tag (e.g. 3.5.0). Required."
+      echo "  --version   OpenStudio version tag (e.g. 3.10.0). Required."
       echo "  --region    Primary AWS region for ECR. Required."
       echo "  --regions   Comma-separated list of regions to replicate to."
       echo "              Defaults to --region if omitted."

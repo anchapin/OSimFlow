@@ -38,12 +38,13 @@ import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from osimflow import Campaign, CampaignConfig
 from osimflow.executors import AWSBatchExecutor
+from tests.integration._aws_patch import patch_boto3_client
 
 # ---------------------------------------------------------------------------
 # Fixtures — same shape as the other executor test files
@@ -162,7 +163,7 @@ def mocked_aws_batch_client() -> Iterator[MagicMock]:
     fake_client.submit_job_calls = submit_calls  # type: ignore[attr-defined]
     fake_client.describe_jobs_calls = describe_calls  # type: ignore[attr-defined]
 
-    with patch("boto3.client", return_value=fake_client):
+    with patch_boto3_client(fake_client):
         yield fake_client
 
 

@@ -107,6 +107,7 @@ jobs:
           OSIMFLOW_AWS_REGION: ${{ vars.AWS_REGION }}
           OSIMFLOW_TASK_PAYLOAD_SECRET: ${{ secrets.OSIMFLOW_TASK_PAYLOAD_SECRET }}
         run: >
+          mkdir -p e2e-artifacts &&
           .venv/bin/pytest tests/integration/test_aws_batch_real.py tests/integration/test_aws_batch_cache_resume.py -v -ra --no-cov --timeout=3600
           --junitxml=e2e-artifacts/aws-batch-e2e-junit.xml
           --basetemp=e2e-artifacts/aws-batch-e2e-results
@@ -179,6 +180,7 @@ jobs:
           OSIMFLOW_AWS_REGION: ${{ vars.AWS_REGION }}
           OSIMFLOW_TASK_PAYLOAD_SECRET: ${{ secrets.OSIMFLOW_TASK_PAYLOAD_SECRET }}
         run: >
+          mkdir -p e2e-artifacts &&
           .venv/bin/pytest tests/integration/test_aws_batch_real_openstudio.py -v -ra --no-cov --timeout=3600
           --junitxml=e2e-artifacts/aws-batch-real-openstudio-e2e-junit.xml
           --basetemp=e2e-artifacts/aws-batch-real-openstudio-e2e-results
@@ -256,6 +258,7 @@ jobs:
           OSIMFLOW_AWS_REGION: ${{ vars.AWS_REGION }}
           OSIMFLOW_TASK_PAYLOAD_SECRET: ${{ secrets.OSIMFLOW_TASK_PAYLOAD_SECRET }}
         run: >
+          mkdir -p e2e-artifacts &&
           .venv/bin/pytest tests/integration/test_aws_batch_acceptance.py -v -ra --no-cov --timeout=7200
           --junitxml=e2e-artifacts/aws-batch-acceptance-junit.xml
           --basetemp=e2e-artifacts/aws-batch-acceptance-results

@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -138,7 +139,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
 
     # --- Hermetic fixtures (same pattern as test_aws_batch_real.py) ---
     example_pkg = REPO_ROOT / "example_package"
-    example_vars = REPO_ROOT / "variables.yml"
+    example_vars = REPO_ROOT / "example_package" / "variables.yml"
 
     workdir = tmp_path / "work"
     workdir.mkdir()
@@ -147,7 +148,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
     template_pkg = workdir / "template"
     shutil.copytree(example_pkg, template_pkg)
 
-    outdir = tmp_path / "out"
+    outdir = tmp_path / f"out-{uuid.uuid4().hex[:8]}"
     outdir.mkdir()
 
     def make_cfg() -> CampaignConfig:
@@ -170,6 +171,7 @@ def test_real_aws_batch_cache_warm_resume(tmp_path: Path) -> None:
             job_queue=queue,
             job_definition=job_def,
             region_name=region,
+            allow_long_lived_credentials=True,  # SSO/OIDC env creds
         )
 
     # --- Cold run: first time the campaign sees this outdir ------------

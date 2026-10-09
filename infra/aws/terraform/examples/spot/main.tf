@@ -28,7 +28,7 @@ module "osimflow" {
   project_name       = "osimflow"
   environment        = "prod"
   region             = "us-east-1"
-  openstudio_version = "3.5.0"
+  openstudio_version = "3.10.0"
 
   # Spot instances — best cost, capacity-optimized allocation
   use_spot       = true

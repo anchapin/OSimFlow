@@ -69,6 +69,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,7 @@ _REQUIRED_ENV = (
     "OSIMFLOW_AWS_BATCH_QUEUE",
     "OSIMFLOW_AWS_BATCH_JOB_DEFINITION",
     "OSIMFLOW_AWS_REGION",
+    "OSIMFLOW_AWS_BATCH_RESULT_BUCKET",
 )
 
 _MISSING = [v for v in _REQUIRED_ENV if os.environ.get(v) in (None, "")]
@@ -97,9 +99,20 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
+
+@pytest.fixture(autouse=True)
+def _real_worker_not_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The root conftest forces OSIMFLOW_STUB_SIM=1, which the executor forwards
+    to the Batch worker; drop it so the worker runs the real OpenStudio CLI."""
+    monkeypatch.delenv("OSIMFLOW_STUB_SIM", raising=False)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_PACKAGE = REPO_ROOT / "example_package"
-MODEL_OSM = EXAMPLE_PACKAGE / "model.osm"
+# Real model + weather live in a gitignored dir so the tracked JSON stub at
+# example_package/model.osm is never overwritten.
+REAL_FIXTURE_DIR = REPO_ROOT / ".fixtures" / "real_package"
+MODEL_OSM = REAL_FIXTURE_DIR / "model.osm"
 FETCH_SCRIPT = REPO_ROOT / "scripts" / "fetch_example_fixture.py"
 
 # Bounded to 2 samples to control real AWS spend (issue #942 acceptance:
@@ -125,10 +138,10 @@ def _is_real_osm(path: Path) -> bool:
 
 
 def _ensure_real_fixture() -> Path:
-    """Ensure a real ``.osm`` + ``.epw`` are present in ``example_package/``.
+    """Ensure a real ``.osm`` + ``.epw`` are present in ``REAL_FIXTURE_DIR``.
 
-    If the committed JSON placeholder is still in place, invoke
-    ``scripts/fetch_example_fixture.py`` to download the real fixture. Returns
+    If absent, invoke ``scripts/fetch_example_fixture.py --dest`` to download
+    the real fixture into the gitignored directory. Returns
     the path to the real ``model.osm``. Raises ``pytest.skip`` if the download
     fails (e.g. no network) so the test degrades gracefully.
     """
@@ -141,7 +154,7 @@ def _ensure_real_fixture() -> Path:
         )
     try:
         subprocess.run(  # noqa: S603 -- trusted in-tree script
-            [sys.executable, str(FETCH_SCRIPT)],
+            [sys.executable, str(FETCH_SCRIPT), "--dest", str(REAL_FIXTURE_DIR)],
             cwd=str(REPO_ROOT),
             check=True,
             capture_output=True,
@@ -161,12 +174,17 @@ def _ensure_real_fixture() -> Path:
 def _build_real_template(tmp_path: Path) -> Path:
     """Build a real-CLI-capable template package under *tmp_path*.
 
-    Copies ``example_package/`` (with the real ``.osm`` + ``.epw``) and rewrites
+    Copies ``example_package/``, overlays the real ``.osm`` + ``.epw`` from
+    ``REAL_FIXTURE_DIR`` (fetching them if needed) and rewrites
     ``workflow.osw`` to a minimal seed-only workflow with the weather file set,
     so ``openstudio.cli run`` simulates the seed model directly.
     """
     template = tmp_path / "template"
+    _ensure_real_fixture()
     shutil.copytree(EXAMPLE_PACKAGE, template)
+    shutil.copy2(MODEL_OSM, template / "model.osm")
+    for epw in REAL_FIXTURE_DIR.glob("*.epw"):
+        shutil.copy2(epw, template / epw.name)
 
     # Locate the fetched weather file name (gitignored, materialised by the
     # fetch script). Fall back to the canonical NREL Golden filename.
@@ -265,7 +283,7 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
 
     template_pkg = _build_real_template(tmp_path)
 
-    outdir = tmp_path / "out"
+    outdir = tmp_path / f"out-{uuid.uuid4().hex[:8]}"
     outdir.mkdir()
 
     cfg = CampaignConfig(
@@ -275,6 +293,8 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
         outdir=outdir,
         openstudio_version=version,
         archive_intermediates=False,
+        result_storage_backend="s3",
+        result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
         prebuilt_workflow=True,
     )
 
@@ -282,6 +302,7 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
         job_queue=queue,
         job_definition=job_def,
         region_name=region,
+        allow_long_lived_credentials=True,  # SSO/OIDC env creds
     )
 
     campaign = Campaign(cfg=cfg, executor=executor)

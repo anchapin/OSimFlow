@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,13 @@ pytestmark = pytest.mark.skipif(
 N_BOUNDED = min(int(os.environ.get("OSIMFLOW_AWS_BATCH_ACCEPTANCE_N", "10")), 20)
 
 
+@pytest.fixture(autouse=True)
+def _real_worker_not_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The root conftest forces OSIMFLOW_STUB_SIM=1, which the executor forwards
+    to the Batch worker; drop it so the worker runs the real OpenStudio CLI."""
+    monkeypatch.delenv("OSIMFLOW_STUB_SIM", raising=False)
+
+
 def _fixture() -> None:
     try:
         real_os._ensure_real_fixture()
@@ -64,7 +72,7 @@ def _fixture() -> None:
 
 
 class _CountingExecutor:
-    """Factory for an AWSBatchExecutor that counts real Batch submissions."""
+    """Factory for an AWSBatchExecutor that counts real Batch simulation submissions."""
 
     @staticmethod
     def make() -> object:
@@ -75,7 +83,10 @@ class _CountingExecutor:
 
             def _do_submit(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
                 handle = super()._do_submit(*args, **kwargs)  # type: ignore[misc]
-                type(self).submissions.append(str(getattr(handle, "job_id", "unknown")))
+                # Acceptance bounds *simulation* submissions; the apply/KPI/
+                # aggregate/plot steps are not duplicate-sensitive.
+                if str(kwargs.get("name", "")).startswith("sim_"):
+                    type(self).submissions.append(str(getattr(handle, "job_id", "unknown")))
                 return handle
 
         Counting.submissions = []
@@ -83,7 +94,7 @@ class _CountingExecutor:
             job_queue=os.environ["OSIMFLOW_AWS_BATCH_QUEUE"],
             job_definition=os.environ["OSIMFLOW_AWS_BATCH_JOB_DEFINITION"],
             region_name=os.environ["OSIMFLOW_AWS_REGION"],
-            container_digest=os.environ["OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"],
+            allow_long_lived_credentials=True,  # SSO/OIDC env creds
         )
 
 
@@ -113,6 +124,7 @@ def _run(
         result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
         container_digest=os.environ["OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"],
         byos_timeout_s=timeout_s,
+        prebuilt_workflow=True,
     )
     ex = executor or _CountingExecutor.make()
     try:
@@ -148,7 +160,7 @@ def _record(ex: object, outdir: Path, wall: float) -> dict[str, object]:
 
 def test_one_model_cold_smoke(tmp_path: Path) -> None:
     _fixture()
-    outdir = tmp_path / "smoke"
+    outdir = tmp_path / f"smoke-{uuid.uuid4().hex[:8]}"
     t0 = time.monotonic()
     ex, _ = _run(tmp_path, outdir, 1)
     wall = time.monotonic() - t0
@@ -159,9 +171,10 @@ def test_one_model_cold_smoke(tmp_path: Path) -> None:
 
 def test_bounded_campaign_and_resume_no_duplicate_submissions(tmp_path: Path) -> None:
     _fixture()
-    outdir = tmp_path / "bounded"
+    outdir = tmp_path / f"bounded-{uuid.uuid4().hex[:8]}"
     t0 = time.monotonic()
-    ex, _ = _run(tmp_path, outdir, N_BOUNDED)
+    template = real_os._build_real_template(tmp_path / "tpl_bounded")
+    ex, _ = _run(tmp_path, outdir, N_BOUNDED, template=template)
     wall = time.monotonic() - t0
     ids = _ids(outdir)
     acc.verify_acceptance(outdir, expected_success=ids, min_successes=len(ids))
@@ -170,7 +183,7 @@ def test_bounded_campaign_and_resume_no_duplicate_submissions(tmp_path: Path) ->
     _write_evidence("bounded", _record(ex, outdir, wall))
 
     # Same retained outdir: cached samples must not be resubmitted.
-    ex2, _ = _run(tmp_path, outdir, N_BOUNDED)
+    ex2, _ = _run(tmp_path, outdir, N_BOUNDED, template=template)
     assert type(ex2).submissions == [], (  # type: ignore[attr-defined]
         f"resume resubmitted cached samples: {type(ex2).submissions}"  # type: ignore[attr-defined]
     )
@@ -181,7 +194,7 @@ def test_invalid_workflow_fails_with_retained_reason(tmp_path: Path) -> None:
     _fixture()
     template = real_os._build_real_template(tmp_path / "tpl_bad")
     (template / "workflow.osw").write_text('{"seed_file": "does_not_exist.osm", "steps": []}')
-    outdir = tmp_path / "invalid"
+    outdir = tmp_path / f"invalid-{uuid.uuid4().hex[:8]}"
     try:
         _run(tmp_path, outdir, 1, template=template)
     except Exception:  # noqa: BLE001 -- campaign may abort on all-failed
@@ -198,7 +211,7 @@ def test_invalid_workflow_fails_with_retained_reason(tmp_path: Path) -> None:
 
 def test_timeout_fails_and_is_not_reported_as_success(tmp_path: Path) -> None:
     _fixture()
-    outdir = tmp_path / "timeout"
+    outdir = tmp_path / f"timeout-{uuid.uuid4().hex[:8]}"
     try:
         _run(tmp_path, outdir, 1, timeout_s=3.0)
     except Exception:  # noqa: BLE001 -- timeout surfaces as sample failure/abort

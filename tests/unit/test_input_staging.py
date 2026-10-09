@@ -18,9 +18,12 @@ from osimflow.executors.transport import (
 )
 from osimflow.input_staging import (
     INPUT_KEY_PREFIX,
+    PAYLOAD_REF_KEY,
     InputStager,
     InputStagingError,
     WorkerPathRemapper,
+    fetch_spilled_payload,
+    spill_task_payload,
 )
 from osimflow.storage import ResultStorage
 from osimflow.task_payload_hmac import (
@@ -313,3 +316,97 @@ def test_unsigned_staged_payload_without_object_storage_fails(
     monkeypatch.delenv("OSIMFLOW_RESULT_TRANSPORT_MODE", raising=False)
     assert remote_runner.main() == 1
     assert "refusing to fall back" in capsys.readouterr().err
+
+
+def test_spilled_payload_roundtrip_and_tamper_detection(tmp_path: Path) -> None:
+    storage = DirStorage(tmp_path / "bucket")
+    raw = json.dumps({"step": "aggregate", "args": ["x" * 20000]})
+    pointer = json.loads(spill_task_payload(storage, raw))
+    sha = pointer[PAYLOAD_REF_KEY]
+    assert sha == hashlib.sha256(raw.encode()).hexdigest()
+    assert fetch_spilled_payload(storage, sha) == raw
+
+    (tmp_path / "bucket" / INPUT_KEY_PREFIX / "payloads" / f"{sha}.json").write_text("{}")
+    with pytest.raises(InputStagingError, match="integrity"):
+        fetch_spilled_payload(storage, sha)
+    with pytest.raises(InputStagingError, match="invalid"):
+        fetch_spilled_payload(storage, "../etc/passwd")
+
+
+class TestRunnerSpilledPayload:
+    """remote_runner.main() end-to-end over the signed spill pointer."""
+
+    SECRET = "s3cret"
+
+    def _setup(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        storage_available: bool = True,
+    ) -> tuple[DirStorage, str, list[dict[str, Any]]]:
+        storage = DirStorage(tmp_path / "bucket")
+        real = json.dumps({"step": "x", "args": [], "kwargs": {}})
+        pointer = spill_task_payload(storage, real)
+        ran: list[dict[str, Any]] = []
+        monkeypatch.setenv(TASK_PAYLOAD_SECRET_ENV, self.SECRET)
+        monkeypatch.setattr(remote_runner, "_verify_contract_version", lambda: None)
+        monkeypatch.setattr(
+            remote_runner,
+            "_object_storage_context",
+            lambda: (storage, None) if storage_available else None,
+        )
+        monkeypatch.setattr(
+            remote_runner,
+            "_run_payload",
+            lambda payload, remapper=None: ran.append(payload) or {"ok": 1},
+        )
+        monkeypatch.setattr(
+            remote_runner, "_upload_artifacts_for_object_storage", lambda *a, **k: None
+        )
+        return storage, pointer, ran
+
+    def _env(
+        self, monkeypatch: pytest.MonkeyPatch, pointer: str, signed: str | None = None
+    ) -> None:
+        monkeypatch.setenv("OSIMFLOW_TASK_PAYLOAD", pointer)
+        env = build_signature_env(signed if signed is not None else pointer, secret=self.SECRET)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+
+    def test_valid_pointer_runs_expanded_payload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, pointer, ran = self._setup(tmp_path, monkeypatch)
+        self._env(monkeypatch, pointer)
+        assert remote_runner.main() == 0
+        assert ran and ran[0]["step"] == "x"
+
+    def test_tampered_pointer_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, pointer, ran = self._setup(tmp_path, monkeypatch)
+        forged = json.dumps({"schema_version": 1, PAYLOAD_REF_KEY: "b" * 64})
+        self._env(monkeypatch, forged, signed=pointer)  # signature is for the original
+        assert remote_runner.main() == 1
+        assert not ran
+
+    def test_tampered_stored_object_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage, pointer, ran = self._setup(tmp_path, monkeypatch)
+        sha = json.loads(pointer)[PAYLOAD_REF_KEY]
+        (storage.root / storage.prefix / f"{INPUT_KEY_PREFIX}/payloads/{sha}.json").write_text(
+            '{"step": "evil"}'
+        )
+        self._env(monkeypatch, pointer)
+        assert remote_runner.main() == 1
+        assert not ran
+
+    def test_non_object_storage_transport_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, pointer, ran = self._setup(tmp_path, monkeypatch, storage_available=False)
+        self._env(monkeypatch, pointer)
+        assert remote_runner.main() == 1
+        assert not ran

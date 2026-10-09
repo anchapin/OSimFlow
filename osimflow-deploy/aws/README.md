@@ -34,7 +34,7 @@ osimflow run \
   --executor aws_batch \
   --aws-batch-queue osimflow-batch-queue \
   --aws-batch-job-definition osimflow-openstudio-job-def \
-  --openstudio_version 3.5.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --n_samples 1000 \
   --outdir ./results
@@ -67,7 +67,7 @@ OSimFlow consumes the upstream `nrel/openstudio` image from Docker Hub. For prod
 ```bash
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
   --repository <account-id>.dkr.ecr.<region>.amazonaws.com/osimflow-openstudio \
-  --versions 3.4.0 3.5.0
+  --versions 3.4.0 3.10.0
 ```
 
 See [`docs/container-image-strategy.md`](../../docs/container-image-strategy.md) for details.

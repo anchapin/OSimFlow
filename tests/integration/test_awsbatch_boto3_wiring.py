@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from osimflow.executors import AWSBatchExecutor
+from tests.integration._aws_patch import patch_boto3_client
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +71,7 @@ def test_aws_batch_submit_builds_container_overrides() -> None:
         ]
     }
 
-    with patch("boto3.client", return_value=fake_client) as boto3_client:
+    with patch_boto3_client(fake_client) as boto3_client:
         ex = AWSBatchExecutor(job_queue="my-queue", job_definition="my-job-def")
         handle = ex.submit(
             lambda: "ok",
@@ -137,7 +138,7 @@ def test_aws_batch_submit_uses_minimum_resource_defaults() -> None:
         ]
     }
 
-    with patch("boto3.client", return_value=fake_client):
+    with patch_boto3_client(fake_client):
         ex = AWSBatchExecutor()
         ex.submit(lambda: None, name="t")
 
@@ -169,7 +170,7 @@ def test_aws_batch_submit_omits_env_when_not_provided() -> None:
         ]
     }
 
-    with patch("boto3.client", return_value=fake_client):
+    with patch_boto3_client(fake_client):
         ex = AWSBatchExecutor()
         ex.submit(lambda: None, name="t")
 
@@ -208,7 +209,7 @@ def test_aws_batch_result_returns_none_on_success() -> None:
         ]
     }
 
-    with patch("boto3.client", return_value=fake_client):
+    with patch_boto3_client(fake_client):
         ex = AWSBatchExecutor(poll_interval_s=0.01, max_poll_interval_s=0.02)
         handle = ex.submit(lambda: 42, name="ok-job")
         result = handle.result(timeout=5)
@@ -241,7 +242,7 @@ def test_aws_batch_failed_raises_with_status_reason() -> None:
         ]
     }
 
-    with patch("boto3.client", return_value=fake_client):
+    with patch_boto3_client(fake_client):
         ex = AWSBatchExecutor(
             poll_interval_s=0.01,
             max_poll_interval_s=0.02,
@@ -286,7 +287,7 @@ def test_aws_batch_polling_uses_exponential_backoff() -> None:
         sleep_durations.append(seconds)
 
     with (
-        patch("boto3.client", return_value=fake_client),
+        patch_boto3_client(fake_client),
         patch("time.sleep", side_effect=fake_sleep),
     ):
         ex = AWSBatchExecutor(
@@ -353,7 +354,7 @@ def test_aws_batch_does_not_pin_aws_region_in_code() -> None:
         ]
     }
 
-    with patch("boto3.client", return_value=fake_client) as boto3_client:
+    with patch_boto3_client(fake_client) as boto3_client:
         # Clear AWS region env vars so we know nothing leaks from the
         # test environment into the executor's boto3.client call.
         env_before = os.environ.pop("AWS_DEFAULT_REGION", None)

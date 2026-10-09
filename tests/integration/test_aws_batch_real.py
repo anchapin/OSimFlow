@@ -20,6 +20,7 @@ environment.  To run locally::
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,7 @@ pytestmark = pytest.mark.skipif(
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
+def test_real_aws_batch_3_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """3-sample campaign against real AWS Batch.
 
     This test exercises the full production path:
@@ -50,7 +51,7 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     the executor wiring, the container image, or the Batch
     infrastructure.
     """
-    import shutil
+    monkeypatch.delenv("OSIMFLOW_STUB_SIM", raising=False)
 
     from osimflow import Campaign, CampaignConfig
     from osimflow.executors import AWSBatchExecutor
@@ -60,17 +61,17 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     region = os.environ["OSIMFLOW_AWS_REGION"]
 
     # Set up hermetic test fixtures (same pattern as other executor tests).
-    example_pkg = REPO_ROOT / "example_package"
-    example_vars = REPO_ROOT / "variables.yml"
-
     workdir = tmp_path / "work"
     workdir.mkdir()
-    (workdir / "variables.yml").write_text(example_vars.read_text())
+    (workdir / "variables.yml").write_text("algorithm: lhs\nvariables: []\n")
 
-    template_pkg = workdir / "template"
-    shutil.copytree(example_pkg, template_pkg)
+    from tests.integration.test_aws_batch_real_openstudio import (  # noqa: PLC0415
+        _build_real_template,
+    )
 
-    outdir = tmp_path / "out"
+    template_pkg = _build_real_template(tmp_path / "tpl")
+
+    outdir = tmp_path / f"out-{uuid.uuid4().hex[:8]}"
     outdir.mkdir()
 
     cfg = CampaignConfig(
@@ -80,12 +81,17 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
         outdir=outdir,
         openstudio_version="3.11.0",
         archive_intermediates=False,
+        result_storage_backend="s3",
+        result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
+        container_digest=os.environ.get("OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"),
+        prebuilt_workflow=True,
     )
 
     executor = AWSBatchExecutor(
         job_queue=queue,
         job_definition=job_def,
         region_name=region,
+        allow_long_lived_credentials=True,  # SSO/OIDC env creds
     )
 
     from tests.integration._resource_contract import (  # noqa: PLC0415
@@ -95,6 +101,8 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     directives = record_submit_directives(executor)
 
     campaign = Campaign(cfg=cfg, executor=executor)
+    result = campaign.run()
+    executor.shutdown()
     # --- Resource-directive propagation (issue #1403) ---
     from tests.integration._resource_contract import (  # noqa: PLC0415
         assert_sim_fanout_directives,
@@ -115,8 +123,6 @@ def test_real_aws_batch_3_samples(tmp_path: Path) -> None:
     for res in aws_describe_jobs_resources(sim_job_ids):
         assert res["vcpus"] == 4, f"AWS Batch dropped cpus: {res}"
         assert res["memory"] == 8192, f"AWS Batch dropped memory_mb: {res}"
-    result = campaign.run()
-    executor.shutdown()
 
     # --- 4 output artifacts ---
     csv_path = outdir / "aggregated_results.csv"

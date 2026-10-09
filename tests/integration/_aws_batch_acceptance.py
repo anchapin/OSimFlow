@@ -75,8 +75,8 @@ def stub_markers_in_logs(sample_dir: Path) -> list[str]:
 
 
 def energyplus_completion_evidence(sample_dir: Path) -> bool:
-    """True iff a sample log/err shows EnergyPlus completing successfully."""
-    for pattern in ("*.log", "*.err"):
+    """True iff a sample log/err (or eplusout.end) shows EnergyPlus completing successfully."""
+    for pattern in ("*.log", "*.err", "*.end"):
         for f in sample_dir.rglob(pattern):
             text = f.read_text(encoding="utf-8", errors="replace")
             if "EnergyPlus Completed Successfully" in text or "EnergyPlus Run Time" in text:
