@@ -2,7 +2,7 @@
 
 Run inside the image (as the non-root image user, read-only of host, no mounts):
 
-    docker run --rm --entrypoint python osimflow-worker:3.11.0 \
+    docker run --rm --entrypoint python osimflow-worker:3.10.0 \
         /opt/osimflow/smoke_test.py
 
 Checks: Python >= 3.12, non-root, imports, OpenStudio CLI version matches the

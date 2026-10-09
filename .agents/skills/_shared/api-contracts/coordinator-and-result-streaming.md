@@ -39,7 +39,7 @@ Submits a packaged campaign to the Coordinator and returns immediately. The clie
   "variables_url": "s3://osimflow-uploads/.../variables.yml",
   "algorithm": "lhs",
   "n_samples": 50000,
-  "openstudio_version": "3.11.0"
+  "openstudio_version": "3.10.0"
 }
 ```
 

@@ -20,7 +20,7 @@ Python >= 3.12 (the plain `nrel/openstudio` image has no OSimFlow and the
 ## Build and smoke test
 
 ```bash
-OS_VERSION=3.11.0
+OS_VERSION=3.10.0
 docker build -f docker/osimflow-worker/Dockerfile \
   --build-arg OPENSTUDIO_VERSION=$OS_VERSION -t osimflow-worker:$OS_VERSION .
 docker run --rm --entrypoint python osimflow-worker:$OS_VERSION \

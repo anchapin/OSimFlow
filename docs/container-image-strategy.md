@@ -20,7 +20,7 @@ substituted image.
 
 ```bash
 # 1. Resolve the content-addressed digest of the version you validated:
-docker inspect --format '{{index .RepoDigests 0}}' nrel/openstudio:3.11.0
+docker inspect --format '{{index .RepoDigests 0}}' nrel/openstudio:3.10.0
 #    -> docker.io/nrel/openstudio@sha256:abc123...
 
 # 2. Pass it to every campaign:
@@ -44,12 +44,12 @@ Docker Hub availability.
 ```bash
 # Single region
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
-  --version 3.11.0 \
+  --version 3.10.0 \
   --region us-east-1
 
 # Multi-region replication
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
-  --version 3.11.0 \
+  --version 3.10.0 \
   --region us-east-1 \
   --regions us-east-1,us-west-2,eu-west-1
 ```

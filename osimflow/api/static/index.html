@@ -599,7 +599,7 @@ tr:hover td { background: var(--surface-alt); }
           </div>
           <div class="form-group">
             <label for="openstudio_version">OpenStudio Version</label>
-            <input type="text" id="openstudio_version" name="openstudio_version" value="3.11.0" placeholder="3.11.0">
+            <input type="text" id="openstudio_version" name="openstudio_version" value="3.10.0" placeholder="3.10.0">
             <small>OpenStudio container version tag</small>
           </div>
         </div>
@@ -1295,7 +1295,7 @@ document.getElementById('create-form').addEventListener('submit', async e => {
     input_variables: document.getElementById('input_variables').value,
     template_sim_package: document.getElementById('template_sim_package').value,
     n_samples: parseInt(document.getElementById('n_samples').value, 10),
-    openstudio_version: document.getElementById('openstudio_version').value || '3.11.0',
+    openstudio_version: document.getElementById('openstudio_version').value || '3.10.0',
     executor: document.getElementById('executor').value,
     algorithm: document.getElementById('algorithm').value,
     outdir: document.getElementById('outdir').value || null,

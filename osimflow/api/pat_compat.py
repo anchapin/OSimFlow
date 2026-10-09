@@ -104,7 +104,7 @@ class PATAnalysisRequest(BaseModel):
         description="Number of samples (overrides OSA value if provided)",
     )
     openstudio_version: str = Field(
-        default="3.11.0",
+        default="3.10.0",
         description="OpenStudio CLI version for container tag",
     )
     outdir: str | None = Field(

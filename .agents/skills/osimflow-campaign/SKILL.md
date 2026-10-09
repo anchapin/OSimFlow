@@ -24,7 +24,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples <N> \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ### Key Files
@@ -59,7 +59,7 @@ Steps 3–5 fan out in parallel across the executor; steps 6–7 wait for all fa
 | `--executor` | `local` | Execution backend |
 | `--max-workers` | CPU count | Local executor parallelism |
 | `--n_samples` | required | Number of LHS samples |
-| `--openstudio_version` | `3.11.0` | Container image tag |
+| `--openstudio_version` | `3.10.0` | Container image tag |
 | `--algorithm` | `lhs` | Sampling strategy |
 | `--dry-run` | off | Force LocalExecutor, 1 sample, steps 1–4 only |
 | `--sample N` | off | Re-run single sample from existing `samples.json` |
@@ -84,7 +84,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 10 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 The local executor runs steps in a `ThreadPoolExecutor`. Each step's stdout/stderr lands at `${outdir}/work/sim/<sample_id>/{stdout,stderr}.log`.
@@ -105,7 +105,7 @@ osimflow run \
   --slurm-real \
   --slurm_partition short \
   --slurm_account myproject \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --n_samples 500 \
   --outdir ./results
@@ -123,7 +123,7 @@ osimflow run \
   --slurm_qos high \
   --slurm_constraint gpu \
   --slurm_gres gpu:1 \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --n_samples 200
 ```
@@ -141,7 +141,7 @@ osimflow run \
   --executor aws_batch \
   --aws-batch-queue osimflow-batch-queue \
   --aws-batch-job-definition osimflow-openstudio-job-def \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 1000 \

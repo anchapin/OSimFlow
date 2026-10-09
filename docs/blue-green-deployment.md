@@ -393,7 +393,7 @@ osimflow run \
     --input_variables variables.yml \
     --n_samples 500 \
     --outdir /data/campaigns/run-001 \
-    --openstudio_version 3.11.0
+    --openstudio_version 3.10.0
 ```
 
 The API server and the executor share the same `--outdir` via the
@@ -737,7 +737,7 @@ osimflow run \
     --input_variables variables.yml \
     --n_samples 500 \
     --outdir /shared/campaigns/run-001 \
-    --openstudio_version 3.11.0
+    --openstudio_version 3.10.0
 
 # Output:
 #   cache HIT  step=GENERATE_LHS_SAMPLES sample=ALL -> ...

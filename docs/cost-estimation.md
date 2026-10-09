@@ -439,7 +439,7 @@ The `--archive_intermediates` flag archives per-sample `.osw`, `.osm`, and `eplu
 
 ### 5. OpenStudio Version Selection
 
-Newer OpenStudio versions may include EnergyPlus performance improvements. Check the [NREL OpenStudio changelog](https://github.com/NREL/OpenStudio/wiki) for performance notes. Switching from 3.11.0 to 3.11.0 (or newer) might reduce per-sample wall-time by 10–20% at no additional cost.
+Newer OpenStudio versions may include EnergyPlus performance improvements. Check the [NREL OpenStudio changelog](https://github.com/NREL/OpenStudio/wiki) for performance notes. Switching from 3.10.0 to 3.10.0 (or newer) might reduce per-sample wall-time by 10–20% at no additional cost.
 
 ### 6. Batch Concurrency Optimization
 
@@ -623,7 +623,7 @@ osimflow run --executor kubernetes \
 
 # Docker Swarm
 osimflow run --executor docker_swarm \
-  --docker-swarm-image nrel/openstudio:3.11.0 \
+  --docker-swarm-image nrel/openstudio:3.10.0 \
   --n_samples 500 --outdir ./results \
   --input_variables variables.yml --template_sim_package ./pkg
 

@@ -37,7 +37,7 @@ osimflow run \
   --n_samples 100 \
   --max-generations 50 \
   --outdir ./optimization_results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ## Expected Pareto Front

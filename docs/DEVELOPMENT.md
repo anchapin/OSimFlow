@@ -440,7 +440,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 3 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 #### CI/Testing Mode

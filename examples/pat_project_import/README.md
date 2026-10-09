@@ -35,7 +35,7 @@ osimflow run \
   --template_sim_package ./my_template \
   --n_samples 100 \
   --outdir ./campaign_results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ## The Conversion Script

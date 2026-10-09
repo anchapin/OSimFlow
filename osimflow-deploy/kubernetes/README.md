@@ -11,7 +11,7 @@ The [`helm/`](./helm/) directory contains a Helm chart for deploying OSimFlow ba
 ```bash
 # Install the chart
 helm install osimflow ./helm/osimflow \
-  --set openstudio.version=3.11.0
+  --set openstudio.version=3.10.0
 
 # Run a campaign using the KubernetesExecutor
 osimflow run \
@@ -20,7 +20,7 @@ osimflow run \
   --template_sim_package ./example_package \
   --n_samples 100 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 ### Configuration
@@ -43,7 +43,7 @@ helm install osimflow ./helm/osimflow \
   --set api.enabled=true \
   --set ingress.enabled=true \
   --set ingress.host=osimflow.example.com \
-  --set openstudio.version=3.11.0
+  --set openstudio.version=3.10.0
 ```
 
 ### Campaign worker Deployment (issue #583)
@@ -53,8 +53,8 @@ Deploy a worker that runs OSimFlow campaigns natively on Kubernetes:
 ```bash
 helm install osimflow ./helm/osimflow \
   --set worker.enabled=true \
-  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.11.0" \
-  --set openstudio.version=3.11.0
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 100 --openstudio_version 3.10.0" \
+  --set openstudio.version=3.10.0
 ```
 
 Multi-replica workers with Redis-backed coordination:
@@ -65,8 +65,8 @@ helm install osimflow ./helm/osimflow \
   --set worker.replica_count=3 \
   --set worker.job_queue=redis \
   --set worker.redis.enabled=true \
-  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.11.0" \
-  --set openstudio.version=3.11.0
+  --set worker.campaign_args="--input_variables /data/variables.yml --template_sim_package /data/example_package --n_samples 500 --openstudio_version 3.10.0" \
+  --set openstudio.version=3.10.0
 ```
 
 See [docs/kubernetes-deployment.md](../../docs/kubernetes-deployment.md) for full documentation.

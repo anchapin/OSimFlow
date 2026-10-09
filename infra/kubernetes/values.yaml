@@ -36,8 +36,8 @@ tolerations: []
 affinity: {}
 
 openstudio:
-  version: "3.11.0"
-  container: "nrel/openstudio:3.11.0"
+  version: "3.10.0"
+  container: "nrel/openstudio:3.10.0"
 
 executor:
   max_workers: 4

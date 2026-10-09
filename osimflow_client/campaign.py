@@ -165,7 +165,7 @@ class CampaignClient:
         template_sim_package: str,
         n_samples: int,
         *,
-        openstudio_version: str = "3.11.0",
+        openstudio_version: str = "3.10.0",
         executor: str = "local",
         algorithm: str = "lhs",
         outdir: str | None = None,
@@ -183,7 +183,7 @@ class CampaignClient:
         n_samples
             Number of LHS samples to generate.
         openstudio_version
-            OpenStudio version string (default ``"3.11.0"``).
+            OpenStudio version string (default ``"3.10.0"``).
         executor
             Executor backend to use (default ``"local"``).
         algorithm

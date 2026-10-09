@@ -8,12 +8,12 @@
 #
 # Usage:
 #   # Pre-load images (on online machine, then transfer tar files)
-#   docker save nrel/openstudio:3.11.0 -o nrel-openstudio-3.11.0.tar
+#   docker save nrel/openstudio:3.10.0 -o nrel-openstudio-3.10.0.tar
 #   docker save osimflow-offline:latest -o osimflow-offline.tar
 #   scp *.tar airgapped-host:/data/images/
 #
 #   # On air-gapped machine
-#   docker load -i /data/images/nrel-openstudio-3.11.0.tar
+#   docker load -i /data/images/nrel-openstudio-3.10.0.tar
 #   docker load -i /data/images/osimflow-offline.tar
 #
 #   # Run a campaign
@@ -27,7 +27,7 @@
 #           --template_sim_package /data/inputs/example_package \
 #           --n_samples 10 \
 #           --outdir /data/outputs/run01 \
-#           --openstudio_version 3.11.0
+#           --openstudio_version 3.10.0
 #
 # For Singularity HPC environments, convert images using:
 #   singularity build osimflow-offline.sif docker-archive://osimflow-offline.tar

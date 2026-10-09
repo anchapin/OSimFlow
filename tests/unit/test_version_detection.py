@@ -26,6 +26,7 @@ from osimflow.version_detection import (  # noqa: E402
     detect_openstudio_version,
     get_compatible_container_tag,
     verify_version_compatibility,
+    warn_on_cli_version_mismatch,
 )  # noqa: E402
 
 
@@ -253,3 +254,34 @@ class TestVerifyVersionCompatibility:
 
 # Import osimflow.version_detection for mocking internal functions
 import osimflow.version_detection  # noqa: E402
+
+
+class TestWarnOnCliVersionMismatch:
+    """Issue #1834: warn (never fail) when CLI version != requested."""
+
+    def setup_method(self) -> None:
+        import osimflow.version_detection as vd
+
+        vd._MISMATCH_WARNED.clear()
+
+    def test_mismatch_warns_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch("osimflow.version_detection._check_openstudio_cli", return_value="3.10.0"):
+            with caplog.at_level("WARNING", logger="osimflow.version_detection"):
+                assert warn_on_cli_version_mismatch("3.11.0") == "3.10.0"
+                assert warn_on_cli_version_mismatch("3.11.0") == "3.10.0"
+        warnings = [r for r in caplog.records if "mismatch" in r.getMessage()]
+        assert len(warnings) == 1
+        assert "3.11.0" in warnings[0].getMessage()
+        assert "3.10.0" in warnings[0].getMessage()
+
+    def test_match_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch("osimflow.version_detection._check_openstudio_cli", return_value="3.10.2"):
+            with caplog.at_level("WARNING", logger="osimflow.version_detection"):
+                assert warn_on_cli_version_mismatch("3.10.0") is None
+        assert not caplog.records
+
+    def test_no_cli_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch("osimflow.version_detection._check_openstudio_cli", return_value=None):
+            with caplog.at_level("WARNING", logger="osimflow.version_detection"):
+                assert warn_on_cli_version_mismatch("3.10.0") is None
+        assert not caplog.records

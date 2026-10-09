@@ -29,7 +29,7 @@ Both images are consumed at runtime — OSimFlow never builds them during a camp
 
 ### `nrel/openstudio` (NREL, Docker Hub)
 
-NREL publishes official OpenStudio images to Docker Hub. Tags follow the pattern `nrel/openstudio:<version>` (e.g., `nrel/openstudio:3.11.0`).
+NREL publishes official OpenStudio images to Docker Hub. Tags follow the pattern `nrel/openstudio:<version>` (e.g., `nrel/openstudio:3.10.0`).
 
 **What the image provides:**
 
@@ -62,10 +62,10 @@ Extend `nrel/openstudio` when you need custom Ruby gems or pre-installed measure
 ```dockerfile
 # custom-openstudio/Dockerfile
 # Extends nrel/openstudio with custom gems and measures.
-# Build: docker build -t my-registry/custom-openstudio:3.11.0 .
-# Push: docker push my-registry/custom-openstudio:3.11.0
+# Build: docker build -t my-registry/custom-openstudio:3.10.0 .
+# Push: docker push my-registry/custom-openstudio:3.10.0
 
-FROM nrel/openstudio:3.11.0
+FROM nrel/openstudio:3.10.0
 
 # Add custom Ruby gems via Gemfile
 COPY Gemfile /tmp/Gemfile
@@ -101,7 +101,7 @@ gem "openstudio-common-measures", "~> 1.0"
 If you need additional Python packages at container build time (not at OSimFlow runtime), add them to a `requirements.txt` and install with `pip`:
 
 ```dockerfile
-FROM nrel/openstudio:3.11.0
+FROM nrel/openstudio:3.10.0
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
@@ -114,7 +114,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 ```bash
 set -euo pipefail
 
-IMAGE_TAG="my-registry.example.com/custom-openstudio:3.11.0"
+IMAGE_TAG="my-registry.example.com/custom-openstudio:3.10.0"
 docker build -f custom-openstudio/Dockerfile \
     -t "${IMAGE_TAG}" \
     custom-openstudio/
@@ -139,9 +139,9 @@ aws ecr get-login-password --region "${REGION}" \
     | docker login --username AWS --password-stdin "${ECR_URI}"
 
 # Tag and push
-docker tag my-registry/custom-openstudio:3.11.0 \
-    "${ECR_URI}/custom-openstudio:3.11.0"
-docker push "${ECR_URI}/custom-openstudio:3.11.0"
+docker tag my-registry/custom-openstudio:3.10.0 \
+    "${ECR_URI}/custom-openstudio:3.10.0"
+docker push "${ECR_URI}/custom-openstudio:3.10.0"
 ```
 
 **GCR (Google Cloud):**
@@ -153,9 +153,9 @@ PROJECT_ID="my-gcp-project"
 REGION="us-central1"
 GCR_URI="${PROJECT_ID}.region Artifact registry or gcr.io"
 
-docker tag my-registry/custom-openstudio:3.11.0 \
-    "${GCR_URI}/custom-openstudio:3.11.0"
-docker push "${GCR_URI}/custom-openstudio:3.11.0"
+docker tag my-registry/custom-openstudio:3.10.0 \
+    "${GCR_URI}/custom-openstudio:3.10.0"
+docker push "${GCR_URI}/custom-openstudio:3.10.0"
 ```
 
 **Docker Hub:**
@@ -164,9 +164,9 @@ docker push "${GCR_URI}/custom-openstudio:3.11.0"
 set -euo pipefail
 
 docker login -u "${DOCKERHUB_USERNAME}" --password-stdin <<< "${DOCKERHUB_TOKEN}"
-docker tag my-registry/custom-openstudio:3.11.0 \
-    "${DOCKERHUB_USERNAME}/custom-openstudio:3.11.0"
-docker push "${DOCKERHUB_USERNAME}/custom-openstudio:3.11.0"
+docker tag my-registry/custom-openstudio:3.10.0 \
+    "${DOCKERHUB_USERNAME}/custom-openstudio:3.10.0"
+docker push "${DOCKERHUB_USERNAME}/custom-openstudio:3.10.0"
 ```
 
 ---
@@ -189,7 +189,7 @@ osimflow run \
   --aws-batch-queue osimflow-batch-queue \
   --aws-batch-job-definition osimflow-openstudio-job-def \
   --ecr-repository 123456789.dkr.ecr.us-east-1.amazonaws.com/osimflow/custom-openstudio \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 100 \
@@ -208,7 +208,7 @@ def _resolve_container_image(self, version: str | None) -> str:
     return f"nrel/openstudio:{tag}"
 ```
 
-When `--ecr-repository` is set, the executor returns `<ecr_repo>:<version>` (e.g., `123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/custom-openstudio:3.11.0`). When omitted, it falls back to `nrel/openstudio:<version>` on Docker Hub.
+When `--ecr-repository` is set, the executor returns `<ecr_repo>:<version>` (e.g., `123456.dkr.ecr.us-east-1.amazonaws.com/osimflow/custom-openstudio:3.10.0`). When omitted, it falls back to `nrel/openstudio:<version>` on Docker Hub.
 
 ### Configuration in `CampaignConfig`
 
@@ -300,8 +300,8 @@ HPC clusters typically run Singularity instead of Docker. Convert a Docker image
 set -euo pipefail
 
 # Pull the Docker image and convert to SIF
-singularity build /scratch/custom-openstudio-3.11.0.sif \
-    docker://my-registry/custom-openstudio:3.11.0
+singularity build /scratch/custom-openstudio-3.10.0.sif \
+    docker://my-registry/custom-openstudio:3.10.0
 ```
 
 > **Note:** The Docker image must be available on a registry the HPC host can reach. If the cluster has no internet access, build the SIF on a connected machine and `scp` it to the cluster.
@@ -316,7 +316,7 @@ set -euo pipefail
 singularity exec \
     --bind /projects:/projects \
     --bind /data:/data \
-    /scratch/custom-openstudio-3.11.0.sif \
+    /scratch/custom-openstudio-3.10.0.sif \
     openstudio --version
 ```
 
@@ -326,7 +326,7 @@ singularity exec \
 singularity exec \
     --env OSIMFLOW_OFFLINE=1 \
     --env AWS_REGION=us-east-1 \
-    /scratch/custom-openstudio-3.11.0.sif \
+    /scratch/custom-openstudio-3.10.0.sif \
     openstudio run -w workflow.osw
 ```
 
@@ -344,7 +344,7 @@ USER osimflow
 singularity exec \
     --nv \
     --bind /etc/localtime:/etc/localtime \
-    /scratch/custom-openstudio-3.11.0.sif \
+    /scratch/custom-openstudio-3.10.0.sif \
     openstudio run -w workflow.osw
 ```
 
@@ -414,9 +414,9 @@ ECR_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 aws ecr get-login-password --region "${REGION}" \
     | docker login --username AWS --password-stdin "${ECR_URI}"
 
-docker tag my-registry/custom-openstudio:3.11.0 \
-    "${ECR_URI}/custom-openstudio:3.11.0"
-docker push "${ECR_URI}/custom-openstudio:3.11.0"
+docker tag my-registry/custom-openstudio:3.10.0 \
+    "${ECR_URI}/custom-openstudio:3.10.0"
+docker push "${ECR_URI}/custom-openstudio:3.10.0"
 ```
 
 The ECR lifecycle policy in `infra/aws/terraform/ecr.tf` keeps the last 5 tagged images matching `3.*`, so older custom image tags are automatically expired.
@@ -429,7 +429,7 @@ Reference the sync script at `infra/aws/scripts/sync-openstudio-to-ecr.sh` for m
 set -euo pipefail
 
 ./infra/aws/scripts/sync-openstudio-to-ecr.sh \
-    --version 3.11.0 \
+    --version 3.10.0 \
     --region us-east-1 \
     --regions us-east-1,us-west-2,eu-west-1
 ```

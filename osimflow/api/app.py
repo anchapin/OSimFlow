@@ -73,7 +73,7 @@ from osimflow.validation import (
     validate_variables_yml,
 )
 
-# OpenStudio version pattern: must start with digit (e.g. "3.11.0")
+# OpenStudio version pattern: must start with digit (e.g. "3.10.0")
 _OPENSTUDIO_VERSION_RE = re.compile(r"^\d+\.\d+")
 
 log = logging.getLogger("osimflow.api")
@@ -851,7 +851,7 @@ class ValidateConfigRequest(BaseModel):  # type: ignore[no-redef]
     input_variables: str = Field(description="Path to variables.yml")
     template_sim_package: str = Field(description="Path to template simulation package")
     n_samples: int = Field(ge=1, description="Number of samples (must be >= 1)")
-    openstudio_version: str = Field(description="OpenStudio version string (e.g. 3.11.0)")
+    openstudio_version: str = Field(description="OpenStudio version string (e.g. 3.10.0)")
     outdir: str | None = Field(default=None, description="Output directory path")
     archive_intermediates: bool = False
     algorithm: str = "lhs"
@@ -968,7 +968,7 @@ async def validate_config(  # noqa: PLR0912
     # --- OpenStudio version format ---
     if req.openstudio_version and not _OPENSTUDIO_VERSION_RE.match(req.openstudio_version):
         errors.append(
-            f"openstudio_version must start with a digit (e.g. 3.11.0), "
+            f"openstudio_version must start with a digit (e.g. 3.10.0), "
             f"got {req.openstudio_version!r}"
         )
 

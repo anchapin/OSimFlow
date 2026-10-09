@@ -46,7 +46,7 @@ pip install -e ".[dev,aws,slurm,mlflow,sensitivity,optimization,api,tui]"
 
 # Bundle everything
 python scripts/bundle_offline.py \
-    --openstudio-version 3.11.0 \
+    --openstudio-version 3.10.0 \
     --pip-packages "osimflow[dev,aws,slurm]" \
     --output /tmp/osimflow-offline.tar.gz
 ```
@@ -54,7 +54,7 @@ python scripts/bundle_offline.py \
 The script downloads:
 
 - All pip wheels for the requested extras into `offline/pip/`.
-- The `nrel/openstudio:3.11.0` Docker image as a tar archive into
+- The `nrel/openstudio:3.10.0` Docker image as a tar archive into
   `offline/docker/`.
 - The scientific Python image (`ghcr.io/anchapin/scientific_python_image:latest`)
   as a tar archive into `offline/docker/`.
@@ -84,7 +84,7 @@ tar -xzf /data/osimflow/osimflow-offline.tar.gz -C /opt/osimflow/
 cd /opt/osimflow/
 
 # Load Docker images from tar files
-docker load -i offline/docker/nrel-openstudio-3.11.0.tar
+docker load -i offline/docker/nrel-openstudio-3.10.0.tar
 docker load -i offline/docker/scientific-python-image.tar
 
 # Install pip packages from local wheels (no PyPI access needed)
@@ -107,7 +107,7 @@ osimflow run \
     --template_sim_package /data/models/example_package \
     --n_samples 50 \
     --outdir /data/results/run01 \
-    --openstudio_version 3.11.0
+    --openstudio_version 3.10.0
 ```
 
 When `--offline` is set, OSimFlow:
@@ -130,7 +130,7 @@ offline/
 │   ├── numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.whl
 │   └── ... (all pip wheels)
 ├── docker/
-│   ├── nrel-openstudio-3.11.0.tar
+│   ├── nrel-openstudio-3.10.0.tar
 │   └── scientific-python-image.tar
 ├── weather/
 │   └── USA_CA_San.Fransisco.Intl.AP.724940_TMY3.epw
@@ -169,7 +169,7 @@ On HPC systems that run Singularity instead of Docker:
 
 ```bash
 # Convert Docker tar -> Singularity image on the online machine
-singularity pull docker-archive://nrel-openstudio-3.11.0.tar sif://nrel-openstudio-3.11.0.sif
+singularity pull docker-archive://nrel-openstudio-3.10.0.tar sif://nrel-openstudio-3.10.0.sif
 
 # Transfer the .sif file and .tar.gz bundle together
 rsync -avP offline/ airgap-hpc:/opt/osimflow/offline/
@@ -193,7 +193,7 @@ Singularity as the container runtime.
 The Docker image was not loaded into the local registry. Run:
 
 ```bash
-docker load -i /opt/osimflow/offline/docker/nrel-openstudio-3.11.0.tar
+docker load -i /opt/osimflow/offline/docker/nrel-openstudio-3.10.0.tar
 docker images | grep openstudio
 ```
 

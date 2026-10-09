@@ -584,7 +584,7 @@ class SubmitRequest:
             cpus=4,
             memory_mb=8 * 1024,
             time_min=240,
-            container="nrel/openstudio:3.11.0",
+            container="nrel/openstudio:3.10.0",
         )
         handle = executor.submit_request(request)
     """

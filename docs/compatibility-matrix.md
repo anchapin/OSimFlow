@@ -41,7 +41,7 @@ Pass `--openstudio_version` on the CLI:
 ```bash
 osimflow run \
   --executor local \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 10 \

@@ -102,7 +102,7 @@ class CrossRunAggregator:
         Sequence of ``(outdir, label)`` pairs.  ``outdir`` is the path to
         a campaign output directory containing ``aggregated_results.csv``.
         ``label`` is the human-readable name used to identify the campaign
-        in the output (e.g. ``"Run A"``, ``"v3.11.0-baseline"``).  If
+        in the output (e.g. ``"Run A"``, ``"v3.10.0-baseline"``).  If
         ``label`` is ``None`` the ``campaign_id`` from ``run.json`` is used,
         falling back to the outdir stem.
     """

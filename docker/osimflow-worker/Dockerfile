@@ -7,8 +7,8 @@
 #
 # Build (from repo root):
 #   docker build -f docker/osimflow-worker/Dockerfile \
-#     --build-arg OPENSTUDIO_VERSION=3.11.0 \
-#     -t osimflow-worker:3.11.0 .
+#     --build-arg OPENSTUDIO_VERSION=3.10.0 \
+#     -t osimflow-worker:3.10.0 .
 #
 # AWS Batch sets containerOverrides.command = ["python", "-m",
 # "osimflow.remote_runner"]; there is deliberately NO ENTRYPOINT so that
@@ -17,7 +17,7 @@
 #
 # See docs/aws-batch-worker-runtime.md (ECR publish, digest recording).
 # ===========================================================================
-ARG OPENSTUDIO_VERSION=3.11.0
+ARG OPENSTUDIO_VERSION=3.10.0
 FROM nrel/openstudio:${OPENSTUDIO_VERSION}
 
 ARG OPENSTUDIO_VERSION

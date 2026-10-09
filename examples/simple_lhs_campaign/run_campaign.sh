@@ -5,13 +5,13 @@
 #
 # Defaults:
 #   n_samples: 20
-#   openstudio_version: 3.11.0
+#   openstudio_version: 3.10.0
 
 set -euo pipefail
 
 # Configuration
 N_SAMPLES="${1:-20}"
-OPENSTUDIO_VERSION="${2:-3.11.0}"
+OPENSTUDIO_VERSION="${2:-3.10.0}"
 OUTDIR="./results"
 
 # Get directory of this script

@@ -44,7 +44,7 @@ osimflow run \
   --template_sim_package ~/analyses/my_study_package \
   --n_samples 100 \
   --outdir ./results \
-  --openstudio_version 3.11.0
+  --openstudio_version 3.10.0
 ```
 
 The import converts PAT's variable definitions, distributions, and algorithm settings to OSimFlow's `variables.yml` schema. See [Distribution Mapping](#distribution-mapping) for details.

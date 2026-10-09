@@ -547,7 +547,7 @@ def _check_three_sample_stub_campaign(
                     template_sim_package=template,
                     n_samples=n_samples,
                     outdir=outdir,
-                    openstudio_version="3.11.0",
+                    openstudio_version="3.10.0",
                     archive_intermediates=False,
                     skip_preflight=True,
                 )
@@ -955,7 +955,7 @@ class ExecutorConformanceSuite:
             template_sim_package=template,
             n_samples=3,
             outdir=outdir,
-            openstudio_version="3.11.0",
+            openstudio_version="3.10.0",
             archive_intermediates=False,
             skip_preflight=True,
         )

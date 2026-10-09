@@ -59,7 +59,7 @@ def run_measure(
     measure_path: Path,
     arguments: dict[str, str | float | bool],
     workflow_osw: Path,
-    openstudio_version: str = "3.11.0",
+    openstudio_version: str = "3.10.0",
 ) -> subprocess.CompletedProcess:
     """Run a single measure on a model via the OpenStudio CLI.
 
@@ -68,7 +68,7 @@ def run_measure(
         measure_path:   Path to the measure directory.
         arguments:      Dict of argument name -> value.
         workflow_osw:   Path to the ``workflow.osw`` that includes the measure.
-        openstudio_version: OpenStudio container tag (default: ``"3.11.0"``).
+        openstudio_version: OpenStudio container tag (default: ``"3.10.0"``).
 
     Returns:
         CompletedProcess with returncode, stdout, stderr.
@@ -329,7 +329,7 @@ validation, or CI tests.
 ```bash
 set -euo pipefail
 
-OPENSTUDIO_VERSION="3.11.0"
+OPENSTUDIO_VERSION="3.10.0"
 
 openstudio run \
   -w workflow.osw \

@@ -316,7 +316,7 @@ osimflow run \
   --executor slurm \
   --slurm-real \
   --slurm-partition short \
-  --openstudio_version 3.11.0 \
+  --openstudio_version 3.10.0 \
   --input_variables variables.yml \
   --template_sim_package ./example_package \
   --n_samples 500 \

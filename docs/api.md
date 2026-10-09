@@ -743,7 +743,7 @@ curl -X POST http://localhost:8000/api/v1/campaigns \
     "variables_path": "variables.yml",
     "template_sim_package": "example_package",
     "n_samples": 100,
-    "openstudio_version": "3.11.0",
+    "openstudio_version": "3.10.0",
     "auto_start": true
   }'
 ```
@@ -1202,7 +1202,7 @@ curl -X POST http://localhost:8000/api/v1/pat/analyses \
     "osa_path": "imports/my_pat.osa",
     "template_sim_package": "example_package",
     "n_samples": 100,
-    "openstudio_version": "3.11.0",
+    "openstudio_version": "3.10.0",
     "auto_start": true
   }'
 ```
@@ -1304,7 +1304,7 @@ curl -X POST http://localhost:8000/api/v1/validate \
     "input_variables": "variables.yml",
     "template_sim_package": "example_package",
     "n_samples": 500,
-    "openstudio_version": "3.11.0"
+    "openstudio_version": "3.10.0"
   }'
 ```
 
@@ -1460,7 +1460,7 @@ curl http://localhost:8000/api/v1/coordinator/campaigns
     "updated_at": 1718240400.0,
     "n_samples": 100,
     "executor": "aws_batch",
-    "openstudio_version": "3.11.0"
+    "openstudio_version": "3.10.0"
   }
 ]
 ```

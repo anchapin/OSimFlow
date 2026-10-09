@@ -3260,7 +3260,7 @@
           "openstudio_version": {
             "type": "string",
             "title": "Openstudio Version",
-            "default": "3.11.0"
+            "default": "3.10.0"
           },
           "executor": {
             "type": "string",
@@ -3852,7 +3852,7 @@
               }
             ],
             "title": "Docker Swarm Image",
-            "description": "Docker image for Swarm services (default: nrel/openstudio:3.11.0). Avoid 'latest' for production due to supply-chain risk."
+            "description": "Docker image for Swarm services (default: nrel/openstudio:3.10.0). Avoid 'latest' for production due to supply-chain risk."
           },
           "docker_swarm_network": {
             "anyOf": [
@@ -4622,7 +4622,7 @@
           "openstudio_version": {
             "type": "string",
             "title": "Openstudio Version",
-            "description": "OpenStudio version tag (e.g., 3.11.0)"
+            "description": "OpenStudio version tag (e.g., 3.10.0)"
           },
           "input_variables": {
             "anyOf": [
@@ -5751,7 +5751,7 @@
             "type": "string",
             "title": "Openstudio Version",
             "description": "OpenStudio CLI version for container tag",
-            "default": "3.11.0"
+            "default": "3.10.0"
           },
           "outdir": {
             "anyOf": [
@@ -6173,7 +6173,7 @@
           "openstudio_version": {
             "type": "string",
             "title": "Openstudio Version",
-            "description": "OpenStudio version string (e.g. 3.11.0)"
+            "description": "OpenStudio version string (e.g. 3.10.0)"
           },
           "outdir": {
             "anyOf": [
