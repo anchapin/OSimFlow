@@ -285,6 +285,7 @@ def test_real_openstudio_in_aws_batch_container(tmp_path: Path) -> None:
         result_storage_backend="s3",
         result_storage_bucket=os.environ["OSIMFLOW_AWS_BATCH_RESULT_BUCKET"],
         prebuilt_workflow=True,
+        container_digest=os.environ.get("OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST"),
     )
 
     executor = AWSBatchExecutor(
