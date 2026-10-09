@@ -46,9 +46,3 @@ When heating design load exceeds cooling design load, the design cooling capacit
 **Units:** ,
 **Required:** true,
 **Model Dependent:** false
-
-
-
-
-
-

@@ -50,7 +50,3 @@ ModelMeasure
 **Units:** ,
 **Required:** true,
 **Model Dependent:** false
-
-
-
-

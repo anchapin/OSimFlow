@@ -42,8 +42,3 @@ Use upstream arguments instead of input arguments defined in this measure?
 **Units:** ,
 **Required:** true,
 **Model Dependent:** false
-
-
-
-
-

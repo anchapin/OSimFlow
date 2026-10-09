@@ -50,7 +50,3 @@ Automatic Partition will separate the HVAC system by residential/non-residential
 **Units:** ,
 **Required:** true,
 **Model Dependent:** false
-
-
-
-

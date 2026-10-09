@@ -58,8 +58,3 @@ Identify window framing type to be applied to entire building for usage with Ope
 **Units:** ,
 **Required:** true,
 **Model Dependent:** false
-
-
-
-
-
