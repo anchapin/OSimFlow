@@ -367,6 +367,39 @@ class TestIterativeAlgorithmLoop:
             AlgorithmRegistry._registry.pop("mock_iterative", None)
 
 
+class TestGenerationCounts:
+    """Per-generation ok/failed counts must reflect real sample outcomes (issue #1835)."""
+
+    def test_generation_counts_match_sample_outcomes(
+        self, tmp_dirs: tuple[Path, Path, Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        template, variables, outdir = tmp_dirs
+        cfg = _make_cfg(
+            template,
+            variables,
+            outdir,
+            n_samples=2,
+            max_generations=2,
+            algorithm="mock_iterative",
+        )
+
+        from osimflow.algorithms import AlgorithmRegistry
+
+        AlgorithmRegistry.register("mock_iterative", MockIterativeAlgorithm)
+        try:
+            with caplog.at_level("INFO"):
+                campaign = _run_campaign(cfg)
+            gens = campaign.trace.generations
+            assert len(gens) == 2
+            for g in gens:
+                assert g.n_samples == 2
+                assert g.n_succeeded == 2
+                assert g.n_failed == 0
+            assert "generation 0 complete: 2 samples (2 ok, 0 failed)" in caplog.text
+        finally:
+            AlgorithmRegistry._registry.pop("mock_iterative", None)
+
+
 class TestConvergenceStopsLoop:
     """Convergence must stop the generation loop early."""
 
