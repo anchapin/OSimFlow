@@ -263,6 +263,25 @@ resources (apply 1/2048, sim 4/8192, extract 1/2048, aggregate 2/4096, plots
 1/2048) are all legal Fargate pairs. Fractional `cpus` can be passed to
 `submit()` directly (e.g. `cpus=0.5`).
 
+### Resource and timeout rationale (measured)
+
+Evidence from the real Fargate acceptance runs (queue `osimflow-dev-job-queue`,
+~400 jobs, 2026-10): every stage completed with no OOM/exit-137 failures and
+a short runtime. `sim` (4 vCPU / 8192 MiB) averaged ~35 s (max 43 s);
+`apply`, `kpi` and `plots` (1 vCPU / 2048 MiB) averaged ~30 s (max 52 s);
+`aggregate` (2 vCPU / 4096 MiB) averaged ~33 s (max 49 s). Each Fargate job
+also spends roughly 1–1.5 minutes provisioning/starting before it runs, which
+is why the acceptance job takes about an hour.
+
+- **Fallback / light-stage memory is 2048 MiB.** 1 vCPU on Fargate requires at
+  least 2048 MiB, so the former 1024 MiB default was an illegal pair rather
+  than a tuning choice. Peak memory is not recorded (no Container Insights);
+  do not raise it without measurements. The observed runs show no OOMs.
+- **900 s result wait for aggregate/plots** in the live tests covers queue
+  wait + ~90 s startup + under a minute of runtime with generous margin; the
+  earlier 120/300 s waits were shorter than a single cold start under
+  contention. Runtime itself is bounded by each step's `time_min`.
+
 ### Minimal on-demand Fargate with Terraform
 
 ```bash
