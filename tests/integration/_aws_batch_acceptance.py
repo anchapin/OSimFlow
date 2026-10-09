@@ -7,8 +7,7 @@ controller outdir, so the verifiers themselves are unit-tested in normal CI
 
 Why a stricter check than "SQLite with tables": ``osimflow.work`` stub mode
 writes a structurally valid SQLite file with plausible tabular values. Real
-EnergyPlus output uniquely carries a populated ``Simulations`` row (version +
-``CompletedSuccessfully``) and a ``ReportDataDictionary`` table, which the stub
+EnergyPlus output uniquely carries a populated ``Simulations`` row (version) and a ``ReportDataDictionary`` table, which the stub
 never creates. Worker logs are additionally scanned for the stub banner.
 """
 
@@ -32,7 +31,13 @@ class AcceptanceError(AssertionError):
 
 
 def real_energyplus_sql_problems(sql_path: Path) -> list[str]:
-    """Return reasons *sql_path* is not a genuine, completed EnergyPlus SQL."""
+    """Return reasons *sql_path* is not a genuine EnergyPlus SQL.
+
+    ``Simulations.CompletedSuccessfully`` is deliberately not checked: it is the
+    text ``'FALSE'`` in OpenStudio-produced SQL (truthy in Python), so completion
+    is judged from ``eplusout.end``/``.err`` text via
+    :func:`energyplus_completion_evidence` instead.
+    """
     if not sql_path.is_file() or sql_path.stat().st_size == 0:
         return [f"{sql_path} missing or empty"]
     try:
@@ -47,16 +52,13 @@ def real_energyplus_sql_problems(sql_path: Path) -> list[str]:
                 problems.append(f"missing EnergyPlus-only table {needed}")
         if "Simulations" in tables:
             row = conn.execute(
-                "SELECT EnergyPlusVersion, CompletedSuccessfully FROM Simulations "
-                "ORDER BY SimulationIndex DESC LIMIT 1"
+                "SELECT EnergyPlusVersion FROM Simulations ORDER BY SimulationIndex DESC LIMIT 1"
             ).fetchone()
             if row is None:
                 problems.append("Simulations table has no rows")
             else:
                 if not row[0]:
                     problems.append("Simulations.EnergyPlusVersion empty")
-                if not row[1]:
-                    problems.append("Simulations.CompletedSuccessfully is false")
         return problems
     except sqlite3.DatabaseError as exc:
         return [f"{sql_path} unreadable: {exc}"]

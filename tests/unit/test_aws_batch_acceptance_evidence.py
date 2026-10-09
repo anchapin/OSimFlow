@@ -58,11 +58,30 @@ def test_stub_sql_rejected(tmp_path: Path) -> None:
     assert acc.real_energyplus_sql_problems(tmp_path / "eplusout.sql")
 
 
-def test_incomplete_simulation_rejected(tmp_path: Path) -> None:
-    _real_sql(tmp_path / "e.sql", completed=0)
-    assert any(
-        "CompletedSuccessfully" in p for p in acc.real_energyplus_sql_problems(tmp_path / "e.sql")
+def test_text_false_completed_flag_not_used(tmp_path: Path) -> None:
+    # OpenStudio writes the text 'FALSE'; completion is judged from logs instead.
+    conn = sqlite3.connect(tmp_path / "e.sql")
+    conn.execute(
+        "CREATE TABLE Simulations (SimulationIndex INTEGER, EnergyPlusVersion TEXT, "
+        "CompletedSuccessfully TEXT)"
     )
+    conn.execute("INSERT INTO Simulations VALUES (1, 'EnergyPlus 24.2', 'FALSE')")
+    conn.execute("CREATE TABLE ReportDataDictionary (ReportDataDictionaryIndex INTEGER)")
+    conn.commit()
+    conn.close()
+    assert acc.real_energyplus_sql_problems(tmp_path / "e.sql") == []
+
+
+def test_real_openstudio_test_helper_rejects_stub(tmp_path: Path) -> None:
+    import test_aws_batch_real_openstudio as real_os
+
+    _real_sql(tmp_path / "real.sql")
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _write_stub_eplusout_sql(stub_dir, "s0")
+    assert real_os._is_real_energyplus_sql(tmp_path / "real.sql")
+    assert not real_os._is_real_energyplus_sql(stub_dir / "eplusout.sql")
+    assert not real_os._is_real_energyplus_sql(tmp_path / "missing.sql")
 
 
 def test_acceptance_passes_for_mixed_outcome(tmp_path: Path) -> None:
