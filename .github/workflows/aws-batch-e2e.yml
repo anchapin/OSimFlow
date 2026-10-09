@@ -261,13 +261,43 @@ jobs:
           OSIMFLOW_TASK_PAYLOAD_SECRET: ${{ secrets.OSIMFLOW_TASK_PAYLOAD_SECRET }}
         run: >
           mkdir -p e2e-artifacts &&
-          .venv/bin/pytest tests/integration/test_aws_batch_acceptance.py -v -ra --no-cov --timeout=7200
+          .venv/bin/pytest tests/integration/test_aws_batch_acceptance.py -k 'not cancel' -v -ra --no-cov --timeout=7200
           --junitxml=e2e-artifacts/aws-batch-acceptance-junit.xml
           --basetemp=e2e-artifacts/aws-batch-acceptance-results
 
       - name: Verify tests actually executed (JUnit)
         if: steps.preflight.outputs.available == 'true'
         run: python3 scripts/e2e_gate.py junit --label "aws-batch-acceptance" --report e2e-artifacts/aws-batch-acceptance-junit.xml
+
+      - name: Re-configure AWS credentials (OIDC, fresh session for cancellation test)
+        if: steps.preflight.outputs.available == 'true'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run cancellation test (fresh credentials; OIDC session is 1h)
+        if: steps.preflight.outputs.available == 'true'
+        env:
+          OSIMFLOW_AWS_BATCH_E2E: 1
+          OSIMFLOW_AWS_BATCH_ACCEPTANCE: 1
+          OSIMFLOW_AWS_BATCH_ACCEPTANCE_STRICT: 1
+          OSIMFLOW_AWS_BATCH_CONTAINER_DIGEST: ${{ vars.AWS_BATCH_CONTAINER_DIGEST }}
+          OSIMFLOW_AWS_BATCH_ACCEPTANCE_EVIDENCE_DIR: e2e-artifacts/acceptance-evidence
+          OSIMFLOW_AWS_BATCH_QUEUE: ${{ vars.AWS_BATCH_QUEUE }}
+          OSIMFLOW_AWS_BATCH_JOB_DEFINITION: ${{ vars.AWS_BATCH_JOB_DEFINITION }}
+          OSIMFLOW_AWS_BATCH_RESULT_BUCKET: ${{ vars.AWS_BATCH_RESULT_BUCKET }}
+          OSIMFLOW_AWS_REGION: ${{ vars.AWS_REGION }}
+          OSIMFLOW_TASK_PAYLOAD_SECRET: ${{ secrets.OSIMFLOW_TASK_PAYLOAD_SECRET }}
+        run: >
+          mkdir -p e2e-artifacts &&
+          .venv/bin/pytest tests/integration/test_aws_batch_acceptance.py -k cancel -v -ra --no-cov --timeout=1800
+          --junitxml=e2e-artifacts/aws-batch-acceptance-cancel-junit.xml
+          --basetemp=e2e-artifacts/aws-batch-acceptance-cancel-results
+
+      - name: Verify cancellation test actually executed (JUnit)
+        if: steps.preflight.outputs.available == 'true'
+        run: python3 scripts/e2e_gate.py junit --label "aws-batch-acceptance-cancel" --report e2e-artifacts/aws-batch-acceptance-cancel-junit.xml
 
       - name: Upload JUnit + result artifacts
         if: always() && steps.preflight.outputs.available == 'true'
