@@ -3307,6 +3307,11 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 recovery_manager=recovery_manager,
                 resubmit_callback=resubmit_callback,
             )
+        # Issue #1871: remember failed-sample sim dirs so AGGREGATE_RESULTS can
+        # report their measure failure messages (out.osw / run.log).
+        failed_dirs: dict[str, Path] = getattr(self, "_failed_sim_dirs", None) or {}
+        self._failed_sim_dirs = failed_dirs
+        failed_dirs.update({_s: c["out_dir"] for _s, c in pending.items() if _s not in out})
         total_cost, total_savings = self._cost_tracker.sum_sample_costs(self._sample_state)
         self._record_costs("RUN_OPENSTUDIO_SIM", total_cost, total_savings)
 
@@ -3397,6 +3402,10 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 )
 
         sim_dirs = list(simulated.values())
+        for _sid, failed_dir in getattr(self, "_failed_sim_dirs", {}).items():
+            fd = Path(failed_dir)
+            if _sid not in simulated and any((fd / n).is_file() for n in ("out.osw", "run.log")):
+                sim_dirs.append(fd)
         inputs_hash = sha256_of_dict(
             {
                 "kpis": [str(p) for p in kpi_files],

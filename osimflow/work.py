@@ -1030,9 +1030,15 @@ def _publish_run_artifacts(package_dir: Path, sim_out: Path) -> None:
     Done on success and failure so measure-reported values and failure
     messages survive; best effort, never raises.
     """
+    run_dir = package_dir / "run"
+    run_log = run_dir / "run.log"
+    if not run_log.is_file() and run_dir.is_dir():
+        # fall back to the shallowest nested log (sub-workflow runs)
+        nested = sorted(run_dir.rglob("run.log"), key=lambda p: (len(p.parts), str(p)))
+        run_log = nested[0] if nested else run_log
     for src, name in (
         (package_dir / "out.osw", OUT_OSW_NAME),
-        (package_dir / "run" / "run.log", RUN_LOG_NAME),
+        (run_log, RUN_LOG_NAME),
     ):
         try:
             if src.is_file():
@@ -1327,6 +1333,8 @@ def _run_openstudio_sim_impl(
         sim_out=sim_out,
         sample_id=sample_id,
     ):
+        workflow = _find_workflow_osw(modified_sim_package)
+        _publish_run_artifacts(workflow.parent if workflow else modified_sim_package, sim_out)
         return sim_out
 
     # Determine whether to use the real OpenStudio CLI or the stub.

@@ -117,3 +117,23 @@ def test_publish_run_artifacts(tmp_path: Path) -> None:
     assert (sim / "out.osw").read_text() == "{}" and (sim / "run.log").read_text() == "log"
     work._publish_run_artifacts(tmp_path / "empty", tmp_path / "sim2")
     assert not (tmp_path / "sim2").exists()
+
+
+def test_publish_nested_run_log_fallback(tmp_path: Path) -> None:
+    pkg, sim = tmp_path / "pkg", tmp_path / "sim"
+    (pkg / "run" / "a" / "b" / "run").mkdir(parents=True)
+    (pkg / "run" / "a" / "run").mkdir(parents=True)
+    (pkg / "run" / "a" / "b" / "run" / "run.log").write_text("deep")
+    (pkg / "run" / "a" / "run" / "run.log").write_text("shallow")
+    work._publish_run_artifacts(pkg, sim)
+    assert (sim / "run.log").read_text() == "shallow"
+
+
+def test_reused_simulation_publishes_artifacts(tmp_path: Path) -> None:
+    pkg, sim = tmp_path / "pkg", tmp_path / "sim"
+    (pkg / "run").mkdir(parents=True)
+    (pkg / "workflow.osw").write_text('{"steps": []}')
+    (pkg / "run" / "eplusout.sql").write_text("x")
+    (pkg / "out.osw").write_text(json.dumps(OK_OSW))
+    work.run_openstudio_sim(pkg, "0001", "3.10.0", sim)
+    assert (sim / "0001" / "out.osw").is_file()
