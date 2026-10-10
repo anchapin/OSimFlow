@@ -21,6 +21,7 @@ and dashes are used exactly as the flag spells them); ``true`` emits the bare
 flag, ``false``/``null`` omits it, lists expand to repeated values.
 """
 
+import argparse
 import fcntl
 import json
 import logging
@@ -97,20 +98,46 @@ def load_manifest(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return common, batches
 
 
+def _run_actions() -> dict[str, argparse.Action]:
+    """Map every ``osimflow run`` option string to its argparse action."""
+    from .__main__ import _add_run_args  # noqa: PLC0415
+
+    run = argparse.ArgumentParser().add_subparsers().add_parser("run")
+    _add_run_args(run)
+    return {opt: act for act in run._actions for opt in act.option_strings}  # noqa: SLF001
+
+
 def build_run_argv(common: dict[str, Any], entry: dict[str, Any], outdir: Path) -> list[str]:
-    """``osimflow run`` argv for one batch (entry overrides common)."""
+    """``osimflow run`` argv for one batch (entry overrides common).
+
+    Keys are validated against the real ``run`` parser: unknown flags raise
+    :class:`BatchManifestError`; ``append`` flags repeat per list item;
+    ``BooleanOptionalAction`` flags emit ``--no-x`` for ``false``.
+    """
+    actions = _run_actions()
     merged = {**common, **{k: v for k, v in entry.items() if k not in ("id", "name")}}
     merged.pop("outdir", None)
     argv = [sys.executable, "-m", "osimflow", "run"]
     for key, value in merged.items():
-        flag = f"--{key.lstrip('-')}"
+        flag = f"--{str(key).lstrip('-')}"
+        action = actions.get(flag)
+        if action is None:
+            raise BatchManifestError(f"unknown osimflow run flag {flag!r} in manifest")
+        if isinstance(action, argparse.BooleanOptionalAction):
+            if value is not None:
+                argv.append(flag if value else f"--no-{flag[2:]}")
+            continue
         if value is None or value is False:
             continue
         if value is True:
             argv.append(flag)
         elif isinstance(value, list):
-            argv.append(flag)
-            argv.extend(str(v) for v in value)
+            if isinstance(action, argparse._AppendAction):  # noqa: SLF001
+                for v in value:
+                    argv.extend([flag, str(v)])
+            else:
+                argv.append(flag)
+                argv.extend(str(v) for v in value)
         else:
             argv.extend([flag, str(value)])
     argv.extend(["--outdir", str(outdir)])
@@ -149,6 +176,21 @@ def run_batches(
 ) -> list[BatchResult]:
     """Run every batch in order; write and return the per-batch summary."""
     common, batches = load_manifest(manifest)
+    for entry in batches:  # validate every batch before launching any child
+        build_run_argv(common, entry, root / batch_campaign_name(entry["id"], str(entry["name"])))
+    if dry_run:
+        return _execute(common, batches, root, continue_on_error, True)
+    with submit_lock(root, lock_timeout_s):
+        return _execute(common, batches, root, continue_on_error, False)
+
+
+def _execute(
+    common: dict[str, Any],
+    batches: list[dict[str, Any]],
+    root: Path,
+    continue_on_error: bool,
+    dry_run: bool,
+) -> list[BatchResult]:
     results: list[BatchResult] = []
     failed = False
     for entry in batches:
@@ -172,8 +214,7 @@ def run_batches(
             )
             continue
         t0 = time.monotonic()
-        with submit_lock(root, lock_timeout_s):
-            proc = subprocess.run(argv, check=False)  # nosec  # noqa: S603
+        proc = subprocess.run(argv, check=False)  # nosec  # noqa: S603
         ok = proc.returncode == 0
         failed = failed or not ok
         if not ok:

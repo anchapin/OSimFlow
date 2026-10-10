@@ -112,3 +112,36 @@ def test_cli_run_batches_dry_run(tmp_path: Path) -> None:
         "--dry-run",
     ]
     assert main(argv) == 0
+
+
+def test_append_and_boolean_optional_flags(tmp_path: Path) -> None:
+    argv = build_run_argv(
+        {"uq-failure-threshold": [0.1, 0.2], "nomad-remote-results-only": False},
+        {"id": 1, "name": "a"},
+        tmp_path,
+    )
+    assert argv.count("--uq-failure-threshold") == 2
+    assert "--no-nomad-remote-results-only" in argv
+
+
+def test_unknown_flag_rejected_before_any_run(tmp_path: Path) -> None:
+    m = _write(tmp_path, "batches: [{id: 1, name: a, bogus-flag: 3}]")
+    with patch.object(batches.subprocess, "run", side_effect=AssertionError):
+        with pytest.raises(BatchManifestError):
+            run_batches(m, tmp_path / "r")
+
+
+def test_driver_holds_lock_for_whole_run(tmp_path: Path) -> None:
+    seen: list[bool] = []
+
+    def fake_run(argv: list[str], check: bool = False) -> _Proc:
+        try:
+            with submit_lock(tmp_path / "root", timeout_s=0.1, poll_s=0.02):
+                seen.append(False)
+        except SubmitLockTimeout:
+            seen.append(True)
+        return _Proc(0)
+
+    with patch.object(batches.subprocess, "run", fake_run):
+        run_batches(_write(tmp_path), tmp_path / "root")
+    assert seen == [True, True]
