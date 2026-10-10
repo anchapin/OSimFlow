@@ -1541,6 +1541,51 @@ def _add_aggregate_runs_args(agr: argparse.ArgumentParser) -> None:
     agr.add_argument("--log_level", default="INFO")
 
 
+def _add_run_batches_args(rb: argparse.ArgumentParser) -> None:
+    rb.add_argument("--manifest", type=Path, required=True, help="YAML/JSON batch manifest")
+    rb.add_argument(
+        "--root",
+        type=Path,
+        default=Path("batches"),
+        help="Directory holding Batch<id>_<name> campaign dirs, the submit lock and the summary",
+    )
+    rb.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Keep running later batches after one fails (default: skip the rest)",
+    )
+    rb.add_argument(
+        "--submit-lock-timeout-s",
+        type=float,
+        default=3600.0,
+        help="Seconds to wait for the submit lock before giving up (default: 3600)",
+    )
+    rb.add_argument(
+        "--dry-run", action="store_true", help="Print each batch's `osimflow run` command only"
+    )
+    rb.add_argument("--log_level", default="INFO")
+
+
+def _cmd_run_batches(args: argparse.Namespace) -> int:
+    """Handle ``osimflow run-batches`` (issue #1874)."""
+    from .batches import BatchManifestError, SubmitLockTimeout, run_batches  # noqa: PLC0415
+
+    try:
+        results = run_batches(
+            args.manifest,
+            args.root,
+            continue_on_error=args.continue_on_error,
+            dry_run=args.dry_run,
+            lock_timeout_s=args.submit_lock_timeout_s,
+        )
+    except (BatchManifestError, SubmitLockTimeout) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    for r in results:
+        print(f"{r.campaign}\t{r.status}\t{r.elapsed_s:.1f}s")
+    return 1 if any(r.status in ("failed", "skipped") for r in results) else 0
+
+
 def _add_status_args(st: argparse.ArgumentParser) -> None:
     _add_from_s3_args(st)
     st.add_argument(
@@ -1957,6 +2002,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Request graceful cancellation of a running campaign",
     )
     _add_cancel_args(cncl)
+    rb = sub.add_parser(
+        "run-batches",
+        help="Run several named batches sequentially as separate campaigns (issue #1874)",
+    )
+    _add_run_batches_args(rb)
     reanl = sub.add_parser(
         "mark-for-reanalysis",
         help="Mark a completed/failed sample for re-running (issue #420)",
@@ -3864,6 +3914,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR09
         "status": _cmd_status,
         "download": _cmd_download,
         "cancel": _cmd_cancel,
+        "run-batches": _cmd_run_batches,
         "mark-for-reanalysis": _cmd_mark_for_reanalysis,
         "merge": _cmd_merge,
         "pause": _cmd_pause,

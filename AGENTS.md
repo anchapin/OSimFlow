@@ -196,7 +196,8 @@ bypass `_verify_step_inputs` when adding a step.
 `query-results` / `export-results` (cross-campaign),
 `health` (per-executor substrate check; `--executor <name>` promotes
 that one to CRITICAL — issue #1024),
-`cancel` / `pause` / `resume` (campaign lifecycle).
+`cancel` / `pause` / `resume` (campaign lifecycle),
+`run-batches` (sequential multi-batch driver, issue #1874).
 
 ---
 
@@ -268,7 +269,8 @@ physically live in their executor's config module, not in
   `--task-queue`, `--uq-failure-threshold`, `--uq-method`,
   `--uq-n-samples`.
 
-- **Inputs / outputs:** `--allow-insecure-storage-endpoint`, `--allow-partial`,
+- **Inputs / outputs:** `--allow-insecure-storage-endpoint`, `--continue-on-error`,
+  `--manifest`, `--root`, `--submit-lock-timeout-s`, `--allow-partial`,
   `--from-s3`, `--prefix`,
   `--archive_intermediates`,
   `--bcl-api-key`, `--dry-run`, `--finalize-script`,
@@ -799,6 +801,13 @@ name in this section.
   --from-s3` (with `--prefix`, `--allow-partial`) read S3 state, and
   `download` finalizes locally (KPI extract + aggregate +
   `download_data.csv`), skipping already-downloaded samples.
+- `osimflow/batches.py` — sequential multi-batch driver (issue #1874):
+  `run_batches`, `load_manifest`, `build_run_argv`, `batch_campaign_name`,
+  `submit_lock`, `BatchResult`, `BatchManifestError`, `SubmitLockTimeout`.
+  Powers `osimflow run-batches --manifest M [--root DIR] [--continue-on-error]
+  [--submit-lock-timeout-s N] [--dry-run]`: each batch runs as its own
+  `osimflow run` campaign in `<root>/Batch<id>_<name>` under an exclusive
+  flock on `<root>/.submit.lock`; summary in `<root>/batches_summary.json`.
 - `osimflow/handoff_record.py` — `HandoffRecord` +
   `NoHandoffRecordError` + `IDEMPOTENCY_KEY_HEADER` +
   `HANDOFF_RECORD_NAME` + `read_handoff_record`,
