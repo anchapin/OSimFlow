@@ -310,6 +310,18 @@ class ResultStorage(ABC):
         library or by running the sync method in a thread pool.
         """
 
+    def put_if_absent(self, remote_path: str, data: bytes) -> bool:
+        """Atomically create *remote_path* only if it does not exist (issue #1881).
+
+        Returns ``True`` when this call created the object and ``False`` when
+        it already existed. Backends without a conditional-create primitive
+        keep this default and fail closed, because the detached-submit claim
+        record relies on the atomicity.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support conditional create (put_if_absent)"
+        )
+
     def upload_dir(self, local_dir: Path, remote_prefix: str) -> None:
         """Upload all files from a local directory recursively.
 
@@ -502,6 +514,19 @@ class S3Storage(ResultStorage):
     async def list_results_async(self, prefix: str = "") -> list[str]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.list_results, prefix)
+
+    def put_if_absent(self, remote_path: str, data: bytes) -> bool:
+        """S3 conditional write (``If-None-Match: *``); ``False`` if the key exists."""
+        remote = self._remote(remote_path)
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=remote, Body=data, IfNoneMatch="*")
+        except Exception as exc:
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+            if code in {"PreconditionFailed", "ConditionalRequestConflict"}:
+                return False
+            log.error("S3Storage: conditional put failed s3://%s/%s: %s", self.bucket, remote, exc)
+            raise OSError(f"S3Storage: conditional put failed for {remote_path}") from exc
+        return True
 
 
 class GCSStorage(ResultStorage):

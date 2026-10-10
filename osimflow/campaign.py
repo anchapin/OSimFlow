@@ -160,7 +160,15 @@ from .monitoring import (
     sample_log_paths,
 )
 from .registry import CampaignRegistry
-from .s3_campaign import CampaignDetached, S3CampaignStore, new_handoff
+from .s3_campaign import (
+    CLAIM_ACQUIRED,
+    CLAIM_ALREADY_SUBMITTED,
+    CampaignDetached,
+    S3CampaignStore,
+    SubmitClaim,
+    batch_job_name,
+    new_handoff,
+)
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import ConsumerQueue
 from .work import (
@@ -1920,6 +1928,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         finally:
             # Restore signal handlers FIRST, before any other cleanup.
             self._restore_signal_handlers()
+            self._release_detach_claim()
             _cancel_registry.clear()
 
             # Finalize hook (issue #108): best-effort after all steps.
@@ -3205,6 +3214,11 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 )
 
         detached_jobs: dict[str, str | None] = {}
+        detach_claim: SubmitClaim | None = None
+        recorded_jobs: dict[str, str] = {}
+        if self.cfg.detach_s3:
+            detach_claim = self._acquire_detach_claim()
+            recorded_jobs = self._detach_store().recorded_jobs(self.cfg.outdir.name)
         pending_items = list(pending.items())
         if pending_items:
             chunk_size = self._fanout_submit_chunk_size(len(pending_items))
@@ -3238,6 +3252,9 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 # unless ``cfg.chaos.schedule == "per_sample"``, in which
                 # case every sample submits under the configured fault
                 # schedule (network_delay / cpu_spike / kill_switch).
+                if detach_claim is not None and sid in recorded_jobs:
+                    detached_jobs[sid] = recorded_jobs[sid]
+                    continue
                 self._maybe_inject_chaos("RUN_OPENSTUDIO_SIM", "per_sample", target_id=sid)
                 handle: Handle
                 # RUN_OPENSTUDIO_SIM consumes ``--max-sample-retries`` at both
@@ -3259,12 +3276,15 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                     exec_args=(ctx["mod_pkg"], sid, os_version, ctx["out_dir"]),
                     exec_kwargs={
                         **self._build_run_sim_submit_kwargs(ctx, sid, os_version),
+                        **self._detach_submit_kwargs(sid, detach_claim),
                         "transport": self._result_transport_config,
                     },
                 )
 
-                if self.cfg.detach_s3:
-                    detached_jobs[sid] = getattr(handle, "job_id", None)
+                if detach_claim is not None:
+                    job_id = getattr(handle, "job_id", None)
+                    detached_jobs[sid] = job_id
+                    self._record_detached_job(detach_claim, sid, job_id)
                     continue
 
                 key = ctx["key"]
@@ -3379,22 +3399,65 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         )
         return SimResult(samples=out, success=not any_failed)
 
-    def _finish_detached_submit(
-        self, sample_ids: list[str], job_ids: dict[str, str | None]
-    ) -> None:
-        """Write the S3 handoff record and detach (issue #1873)."""
+    def _detach_store(self) -> S3CampaignStore:
         cfg = self.cfg
         if cfg.result_storage_backend != "s3" or not cfg.result_storage_bucket:
             raise CampaignError(
                 "--detach-s3 requires --result-storage-backend s3 and --result-storage-bucket"
             )
-        storage = build_result_storage(
-            "s3",
-            cfg.result_storage_bucket,
-            endpoint_url=cfg.result_storage_endpoint,
-            allow_insecure_endpoint=bool(cfg.allow_insecure_storage_endpoint),
-        )
-        store = S3CampaignStore(storage, cfg.outdir / ".s3_scratch")
+        store: S3CampaignStore | None = getattr(self, "_detach_store_obj", None)
+        if store is None:
+            storage = build_result_storage(
+                "s3",
+                cfg.result_storage_bucket,
+                endpoint_url=cfg.result_storage_endpoint,
+                allow_insecure_endpoint=bool(cfg.allow_insecure_storage_endpoint),
+            )
+            store = S3CampaignStore(storage, cfg.outdir / ".s3_scratch")
+            self._detach_store_obj = store
+        return store
+
+    def _acquire_detach_claim(self) -> SubmitClaim:
+        """Claim the single-submitter lease before any Batch submit (issue #1881)."""
+        cid = self.cfg.outdir.name
+        outcome, claim = self._detach_store().claim_submission(cid)
+        if outcome == CLAIM_ALREADY_SUBMITTED:
+            raise CampaignDetached(cid)
+        if outcome != CLAIM_ACQUIRED or claim is None:
+            raise CampaignError(
+                f"campaign {cid} is being submitted by another process (live claim in S3); "
+                "retry after its lease expires if that submitter crashed"
+            )
+        self._detach_claim = claim
+        return claim
+
+    def _detach_submit_kwargs(self, sid: str, claim: SubmitClaim | None) -> dict[str, Any]:
+        """Deterministic Batch job name; dedupe by name when resuming a crashed submit."""
+        if claim is None:
+            return {}
+        return {
+            "job_name": batch_job_name(self.cfg.outdir.name, sid),
+            "reuse_existing_job": claim.resumed,
+        }
+
+    def _record_detached_job(self, claim: SubmitClaim, sid: str, job_id: str | None) -> None:
+        store = self._detach_store()
+        cid = self.cfg.outdir.name
+        if job_id:
+            store.record_job(cid, sid, job_id, batch_job_name(cid, sid))
+        store.renew_claim(claim)
+
+    def _release_detach_claim(self) -> None:
+        claim: SubmitClaim | None = getattr(self, "_detach_claim", None)
+        if claim is not None:
+            self._detach_store().release_claim(claim)
+
+    def _finish_detached_submit(
+        self, sample_ids: list[str], job_ids: dict[str, str | None]
+    ) -> None:
+        """Write the S3 handoff record and detach (issue #1873)."""
+        cfg = self.cfg
+        store = self._detach_store()
         record = new_handoff(
             cfg.outdir.name,
             sample_ids,
@@ -3404,6 +3467,9 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             executor=self.executor.name,
         )
         store.write_handoff(record, self._latest_samples_file)
+        claim: SubmitClaim | None = getattr(self, "_detach_claim", None)
+        if claim is not None:
+            store.finish_claim(claim)
         shutil.rmtree(cfg.outdir / ".s3_scratch", ignore_errors=True)
         log.info(
             "detached: submitted %d job(s); campaign id %s (bucket %s)",
