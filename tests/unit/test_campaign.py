@@ -2357,6 +2357,10 @@ class TestTeardownBestEffort:
             name = "blocking"
 
             def upload_file(self, local_path: Path, remote_path: str) -> None:
+                # Only the uploader's worker thread parks; direct calls from the
+                # campaign thread must not wait on the release event.
+                if threading.current_thread() is not worker:
+                    return
                 upload_started.set()
                 assert release_upload.wait(timeout=60.0), "upload never released"
 

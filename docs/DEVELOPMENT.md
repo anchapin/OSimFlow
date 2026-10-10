@@ -1927,7 +1927,7 @@ passed / 68 skipped in every run.
 |---|---|---|
 | `test` job pytest + coverage wall time | 596 s (step 602 s); second sample 659 s (step 666 s) | ci.yml runs 37983046757, 37985217320 |
 | `test` job setup (checkout, change detection, uv, Python, `uv sync`) | ~14 s (≈2% of the job) | ci.yml run 37983046757 |
-| Slowest single test | 62.8 s (`tests/unit/test_campaign.py::TestTeardownBestEffort::test_bounded_result_storage_close_does_not_stall_teardown`) | ci.yml run 37983046757 |
+| Slowest single test | 62.8 s (`tests/unit/test_campaign.py::TestTeardownBestEffort::test_bounded_result_storage_close_does_not_stall_teardown`); ~2.8 s after issue #1866 (the stub backend no longer parks the campaign thread) | ci.yml run 37983046757 |
 | Sum of slowest 20 tests | 314 s of CPU time (of ~1200 s total serial) | ci.yml run 37983046757 |
 
 xdist worker-count experiment (`ci-xdist-experiment.yml`, same
