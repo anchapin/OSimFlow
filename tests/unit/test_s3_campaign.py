@@ -126,3 +126,15 @@ def test_download_skips_existing(store: S3CampaignStore, tmp_path: Path) -> None
     second = store.download("camp1", out)
     assert second["fetched"] == []
     assert (out / "work" / "sim" / "0000" / "run.log").is_file()
+
+
+def test_download_rejects_other_campaign_dir(store: S3CampaignStore, tmp_path: Path) -> None:
+    _submit(store, tmp_path, "camp1")
+    _submit(store, tmp_path, "camp2")
+    for sid in ("0000", "0001"):
+        _complete(store, "camp1", sid)
+        _complete(store, "camp2", sid)
+    out = tmp_path / "out"
+    store.download("camp1", out)
+    with pytest.raises(S3CampaignError):
+        store.download("camp2", out)

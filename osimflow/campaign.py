@@ -161,7 +161,6 @@ from .monitoring import (
 )
 from .registry import CampaignRegistry
 from .s3_campaign import CampaignDetached, S3CampaignStore, new_handoff
-from .server_csv import find_samples_json
 from .storage import ResultStorageUploader, build_result_storage
 from .taskqueue import ConsumerQueue
 from .work import (
@@ -2236,6 +2235,8 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         """
         if self.cfg.max_generations < 1:
             raise ValueError(f"max_generations must be >= 1, got {self.cfg.max_generations}")
+        if self.cfg.detach_s3 and self.cfg.max_generations > 1:
+            raise CampaignError("--detach-s3 supports single-generation campaigns only")
 
         # Build algorithm kwargs (issue #529: R-NSGA-II support)
         algo_kwargs: dict[str, Any] = {}
@@ -3402,7 +3403,7 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
             job_ids=job_ids,
             executor=self.executor.name,
         )
-        store.write_handoff(record, find_samples_json(cfg.outdir))
+        store.write_handoff(record, self._latest_samples_file)
         shutil.rmtree(cfg.outdir / ".s3_scratch", ignore_errors=True)
         log.info(
             "detached: submitted %d job(s); campaign id %s (bucket %s)",

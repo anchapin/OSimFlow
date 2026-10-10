@@ -161,6 +161,13 @@ class S3CampaignStore:
                 "samples); re-run later or pass --allow-partial"
             )
         outdir.mkdir(parents=True, exist_ok=True)
+        identity = outdir / ".s3_campaign_id"
+        if identity.is_file() and identity.read_text().strip() != campaign_id:
+            raise S3CampaignError(
+                f"{outdir} holds a download of campaign {identity.read_text().strip()!r}; "
+                f"use a different --output-dir for {campaign_id!r}"
+            )
+        identity.write_text(campaign_id)
         sim_root = outdir / "work" / "sim"
         kpi_dir = outdir / "kpis"
         kpi_dir.mkdir(parents=True, exist_ok=True)
