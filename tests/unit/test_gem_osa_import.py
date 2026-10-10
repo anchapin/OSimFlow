@@ -104,3 +104,46 @@ def test_cli(tmp_path: Path) -> None:
     rc = main(["import-gem-osa", str(_project(tmp_path)), "--output-dir", str(tmp_path / "c")])
     assert rc == 0
     assert (tmp_path / "c/batches.json").is_file()
+
+
+def test_shared_and_reporting_measure_space(tmp_path: Path) -> None:
+    proj = tmp_path / "g"
+    proj.mkdir()
+    (proj / "parametric_space_Batch1_a.json").write_text(json.dumps({"bar": {"x": [0, 1]}}))
+    (proj / "measure_space.json").write_text(
+        json.dumps(
+            {"measure_space": {"bar": {"n": "4"}}, "measure_space_reporting": {"rep": {"k": "2"}}}
+        )
+    )
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "workflow.osw").write_text(
+        json.dumps(
+            {
+                "steps": [
+                    {"measure_dir_name": "bar", "arguments": {"n": 1}},
+                    {"measure_dir_name": "rep", "arguments": {"k": 1}},
+                ]
+            }
+        )
+    )
+    out = tmp_path / "o"
+    import_gem_project(proj, out, template_package=pkg)
+    steps = json.loads((out / "Batch1_a/template/workflow.osw").read_text())["steps"]
+    assert steps[0]["arguments"]["n"] == 4 and steps[1]["arguments"]["k"] == 2
+
+
+def test_bool_choices_and_bad_range() -> None:
+    v = parametric_space_to_variables({"m": {"a": [True, False]}})[0]
+    assert v["values"] == [True, False]
+    with pytest.raises(GemImportError):
+        parametric_space_to_variables({"m": {"a": {"min": True, "max": 5}}})
+    with pytest.raises(GemImportError):
+        parametric_space_to_variables({"m": {"a": {"min": "x", "max": 5}}})
+
+
+def test_partial_reimport_preserves_manifest(tmp_path: Path) -> None:
+    proj = _project(tmp_path)
+    import_gem_project(proj, tmp_path / "o")
+    manifest = import_gem_project(proj, tmp_path / "o", batches=["Batch2_alt"])
+    assert set(manifest["batches"]) == {"Batch1_base", "Batch2_alt"}

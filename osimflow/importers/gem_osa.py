@@ -89,7 +89,12 @@ def discover_batches(project_dir: Path) -> list[GemBatch]:
             GemBatch(batch_id=batch_id, number=int(num) if num else None, name=match.group("name")),
         )
         setattr(batch, match.group("kind"), path)
+    shared = batches.get(DEFAULT_BATCH_ID)
     usable = [b for b in batches.values() if b.parametric_space or b.osa_workflow]
+    if shared is not None and shared.measure_space is not None:
+        for batch in usable:
+            if batch.measure_space is None:
+                batch.measure_space = shared.measure_space
     if not usable:
         raise GemImportError(
             f"no parametric_space*.json or osa_workflow*.json found in {project_dir}"
@@ -118,6 +123,8 @@ def _spec_to_variable(measure: str, argument: str, spec: Any) -> dict[str, Any]:
     if isinstance(spec, dict):
         if "min" not in spec or "max" not in spec:
             raise GemImportError(f"{name}: range spec needs 'min' and 'max', got {sorted(spec)}")
+        if not (_is_number(spec["min"]) and _is_number(spec["max"])):
+            raise GemImportError(f"{name}: range 'min'/'max' must be numbers, got {spec!r}")
         entry.update(distribution="uniform", min=float(spec["min"]), max=float(spec["max"]))
     elif isinstance(spec, list) and spec:
         if len(spec) == 2 and all(_is_number(v) for v in spec):
@@ -125,7 +132,10 @@ def _spec_to_variable(measure: str, argument: str, spec: Any) -> dict[str, Any]:
         elif all(_is_number(v) for v in spec):
             entry.update(distribution="discrete", values=list(spec))
         else:
-            entry.update(distribution="categorical", values=[str(v) for v in spec])
+            if not all(isinstance(v, (str, bool, int, float)) for v in spec):
+                raise GemImportError(f"{name}: unsupported choice values {spec!r}")
+            values = [v if isinstance(v, bool) else str(v) for v in spec]
+            entry.update(distribution="categorical", values=values)
     else:
         raise GemImportError(f"{name}: unsupported parametric_space spec {spec!r}")
     return entry
@@ -271,10 +281,13 @@ def _import_batch(
         osw_path = package_path / "workflow.osw"
         if batch.measure_space is not None and osw_path.is_file():
             raw = _load_json(batch.measure_space)
-            static = raw.get("measure_space", raw)
-            unmatched = _overlay_measure_space(
-                osw_path, static, {str(v["name"]) for v in variables}
-            )
+            static = dict(raw.get("measure_space", raw))
+            reporting = raw.get("measure_space_reporting")
+            if isinstance(reporting, dict):
+                for measure, arguments in reporting.items():
+                    static.setdefault(measure, arguments)
+            varied = {str(v["name"]) for v in variables}
+            unmatched = _overlay_measure_space(osw_path, static, varied)
             for measure in unmatched:
                 log.warning("%s: measure %r has no step in %s", batch.batch_id, measure, osw_path)
 
@@ -335,10 +348,13 @@ def import_gem_project(
         _import_batch(b, output_dir, cfg, Path(template_package) if template_package else None)
         for b in found
     ]
-    manifest: dict[str, Any] = {
-        "project_dir": str(project_dir.resolve()),
-        "batches": {e["batch_id"]: e for e in entries},
-    }
+    merged: dict[str, Any] = {}
+    previous = output_dir / BATCHES_MANIFEST
+    if batches and previous.is_file():
+        # a partial re-import must not drop mappings for other batches
+        merged.update(_load_json(previous).get("batches", {}))
+    merged.update({e["batch_id"]: e for e in entries})
+    manifest: dict[str, Any] = {"project_dir": str(project_dir.resolve()), "batches": merged}
     (output_dir / BATCHES_MANIFEST).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     log.info("imported %d batch(es) into %s", len(entries), output_dir)
     return manifest
