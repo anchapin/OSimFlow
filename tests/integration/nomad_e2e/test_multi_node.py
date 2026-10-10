@@ -555,7 +555,7 @@ def test_failover_campaign_continues(
 
     # Stop the non-leader server.
     subprocess.run(
-        ["docker", "stop", "-t", "5", container_to_stop],
+        ["docker", "kill", container_to_stop],  # crash-stop; `docker stop` can hang
         capture_output=True,
         check=True,
         timeout=60,
