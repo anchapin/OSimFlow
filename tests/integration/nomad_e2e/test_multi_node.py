@@ -298,6 +298,7 @@ class _LocalWorkNomadExecutor(NomadExecutor):
         super().__init__(*args, **kwargs)
         self._local_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="e2e-multi")
         self._allocation_nodes: dict[str, str] = {}
+        self._rr = 0
 
     def submit(  # type: ignore[override]
         self,
@@ -347,6 +348,7 @@ class _LocalWorkNomadExecutor(NomadExecutor):
                 "Name": slug,
                 "Type": "batch",
                 "Datacenters": [self.datacentre],
+                "Constraints": self._node_constraint(),
                 "TaskGroups": [
                     {
                         "Name": "test",
@@ -384,6 +386,21 @@ class _LocalWorkNomadExecutor(NomadExecutor):
                     pass  # best-effort node tracking
         except Exception:
             pass  # log but don't fail
+
+    def _node_constraint(self) -> list[dict[str, str]]:
+        """Pin each job to the next ready client node (round-robin).
+
+        Nomad's bin-packing otherwise places every tiny job on one node,
+        which would make the fan-out assertion depend on scheduler whims.
+        """
+        nodes = sorted(
+            n["ID"] for n in _get_client_nodes(self._client.address) if n.get("Status") == "ready"
+        )
+        if not nodes:
+            return []
+        node_id = nodes[self._rr % len(nodes)]
+        self._rr += 1
+        return [{"LTarget": "${node.unique.id}", "Operand": "=", "RTarget": node_id}]
 
     @property
     def allocation_nodes(self) -> dict[str, str]:
@@ -505,8 +522,8 @@ def test_failover_campaign_continues(
 
     # Pick the first server that is NOT the leader.
     container_to_stop: str | None = None
+    # server-1 is the gateway publishing :4646, so it is never a candidate.
     for candidate in [
-        "nomad-multi-server-1",
         "nomad-multi-server-2",
         "nomad-multi-server-3",
     ]:
@@ -538,10 +555,10 @@ def test_failover_campaign_continues(
 
     # Stop the non-leader server.
     subprocess.run(
-        ["docker", "stop", container_to_stop],
+        ["docker", "stop", "-t", "5", container_to_stop],
         capture_output=True,
         check=True,
-        timeout=30,
+        timeout=60,
     )
 
     # Give the cluster a moment to stabilize after the failure.
