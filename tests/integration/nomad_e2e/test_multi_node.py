@@ -42,12 +42,15 @@ from osimflow.executors import NomadExecutor
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLE_PKG = REPO_ROOT / "example_package"
-EXAMPLE_VARS_YML = REPO_ROOT / "variables.yml"
+EXAMPLE_VARS_YML = EXAMPLE_PKG / "variables.yml"
 
 MULTI_COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.multi.yml"
 NOMAD_ADDRESS = "http://localhost:4646"
 NOMAD_READY_TIMEOUT_S = 60.0
 NOMAD_READY_POLL_S = 1.5
+# Work runs locally in these tests, so the OpenStudio image is never pulled;
+# pin a placeholder digest to satisfy the digest-pinning gate (issue #1536).
+TEST_CONTAINER_DIGEST = "nrel/openstudio@sha256:" + "0" * 64
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +90,7 @@ def cfg_10(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         outdir=outdir,
         openstudio_version="3.11.0",
         archive_intermediates=False,
+        container_digest=TEST_CONTAINER_DIGEST,
     )
 
 
@@ -100,6 +104,7 @@ def cfg_3(workdir: Path, template_pkg: Path, outdir: Path) -> CampaignConfig:
         outdir=outdir,
         openstudio_version="3.11.0",
         archive_intermediates=False,
+        container_digest=TEST_CONTAINER_DIGEST,
     )
 
 
@@ -129,20 +134,32 @@ def _docker_available() -> bool:
     return True
 
 
-def _wait_for_nomad(address: str, timeout_s: float, poll_s: float) -> None:
-    """Poll ``/v1/status/leader`` until it returns 200."""
+def _wait_for_nomad(
+    address: str, timeout_s: float, poll_s: float, min_ready_clients: int = 0
+) -> None:
+    """Poll until a leader is elected and ``min_ready_clients`` clients are ready.
+
+    ``/v1/status/leader`` answers 200 with an empty body before election, and
+    clients register a few seconds after their containers start, so both are
+    checked explicitly (issue #1864).
+    """
     from urllib.error import URLError
     from urllib.request import Request, urlopen
 
-    url = f"{address}/v1/status/leader"
+    def _get(path: str) -> Any:
+        req = Request(f"{address}{path}", method="GET", headers={"Accept": "application/json"})
+        with urlopen(req, timeout=5.0) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            req = Request(url, method="GET", headers={"Accept": "application/json"})
-            with urlopen(req, timeout=5.0) as resp:
-                if resp.status == 200:
+            if _get("/v1/status/leader"):
+                nodes = _get("/v1/nodes") if min_ready_clients else []
+                ready = [n for n in nodes if n.get("Status") == "ready"]
+                if len(ready) >= min_ready_clients:
                     return
-        except (URLError, OSError):
+        except (URLError, OSError, ValueError):
             pass
         time.sleep(poll_s)
     raise TimeoutError(f"Nomad API at {address} did not become ready within {timeout_s:.0f}s")
@@ -206,7 +223,9 @@ def nomad_multi() -> str:  # type: ignore[misc]
         return  # pragma: no cover
 
     try:
-        _wait_for_nomad(NOMAD_ADDRESS, NOMAD_READY_TIMEOUT_S, NOMAD_READY_POLL_S)
+        _wait_for_nomad(
+            NOMAD_ADDRESS, NOMAD_READY_TIMEOUT_S, NOMAD_READY_POLL_S, min_ready_clients=2
+        )
         yield NOMAD_ADDRESS
     except TimeoutError:
         log_proc = subprocess.run(
@@ -279,6 +298,7 @@ class _LocalWorkNomadExecutor(NomadExecutor):
         super().__init__(*args, **kwargs)
         self._local_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="e2e-multi")
         self._allocation_nodes: dict[str, str] = {}
+        self._rr = 0
 
     def submit(  # type: ignore[override]
         self,
@@ -302,6 +322,7 @@ class _LocalWorkNomadExecutor(NomadExecutor):
             def __init__(self, fut: Future[Any]) -> None:
                 self._fut = fut
                 self.job_id = f"local-{id(fut)}"
+                self.worker_id: str | None = None
 
             def result(self, timeout: float | None = None) -> Any:
                 return self._fut.result(timeout=timeout)
@@ -318,15 +339,16 @@ class _LocalWorkNomadExecutor(NomadExecutor):
         node the job was placed on.  Catches errors so the test
         continues even if the Nomad job fails.
         """
-        import osimflow.executors as exec_mod  # noqa: PLC0415
+        from osimflow.executors.nomad_executor import _slugify_job_name  # noqa: PLC0415
 
-        slug = exec_mod._slugify_job_name(f"multi-e2e-{name}")  # noqa: SLF001
+        slug = _slugify_job_name(f"multi-e2e-{name}")
         spec = {
             "Job": {
                 "ID": slug,
                 "Name": slug,
                 "Type": "batch",
                 "Datacenters": [self.datacentre],
+                "Constraints": self._node_constraint(),
                 "TaskGroups": [
                     {
                         "Name": "test",
@@ -350,7 +372,7 @@ class _LocalWorkNomadExecutor(NomadExecutor):
         }
         try:
             response = self._client.submit_job(spec)
-            job_id = response.get("JobID", "")
+            job_id = response.get("JobID") or slug  # register responses carry no JobID
             eval_id = response.get("EvalID", "")
             if job_id and eval_id:
                 # Best-effort: record the node for this allocation.
@@ -364,6 +386,21 @@ class _LocalWorkNomadExecutor(NomadExecutor):
                     pass  # best-effort node tracking
         except Exception:
             pass  # log but don't fail
+
+    def _node_constraint(self) -> list[dict[str, str]]:
+        """Pin each job to the next ready client node (round-robin).
+
+        Nomad's bin-packing otherwise places every tiny job on one node,
+        which would make the fan-out assertion depend on scheduler whims.
+        """
+        nodes = sorted(
+            n["ID"] for n in _get_client_nodes(self._client.address) if n.get("Status") == "ready"
+        )
+        if not nodes:
+            return []
+        node_id = nodes[self._rr % len(nodes)]
+        self._rr += 1
+        return [{"LTarget": "${node.unique.id}", "Operand": "=", "RTarget": node_id}]
 
     @property
     def allocation_nodes(self) -> dict[str, str]:
@@ -485,8 +522,8 @@ def test_failover_campaign_continues(
 
     # Pick the first server that is NOT the leader.
     container_to_stop: str | None = None
+    # server-1 is the gateway publishing :4646, so it is never a candidate.
     for candidate in [
-        "nomad-multi-server-1",
         "nomad-multi-server-2",
         "nomad-multi-server-3",
     ]:
@@ -518,10 +555,10 @@ def test_failover_campaign_continues(
 
     # Stop the non-leader server.
     subprocess.run(
-        ["docker", "stop", container_to_stop],
+        ["docker", "kill", container_to_stop],  # crash-stop; `docker stop` can hang
         capture_output=True,
         check=True,
-        timeout=30,
+        timeout=60,
     )
 
     # Give the cluster a moment to stabilize after the failure.
