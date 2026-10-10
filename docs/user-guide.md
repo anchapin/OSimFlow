@@ -222,7 +222,7 @@ All flags are passed to the `osimflow run` subcommand.
 | `--openstudio_version` | string | `3.10.0` | OpenStudio version. Determines the container image tag. |
 | `--archive_intermediates` | flag | off | Archive per-sample `.osw`/`.osm`/`eplusout.sql` files. |
 | `--project` | string | `""` | Campaign name used for registry grouping (e.g. `--project 'Building Energy Analysis Q1 2026'`). |
-| `--kpis` | string list | all KPIs | Restrict KPI extraction to the named KPIs (e.g. `--kpis eui peak_demand`). All KPIs extracted when omitted. |
+| `--kpis` | string list | all KPIs | Restrict KPI extraction to the named KPIs (e.g. `--kpis eui peak_demand`). All SQL KPIs extracted when omitted. Opt in to measure-reported values from `out.osw` (e.g. the gem's `reporting_179_d.*`) with dotted names / globs (`--kpis 'reporting_179_d.out_*'`) or the `measure_results` token (all of them), keyed `<measure_dir_name>.<attribute>`. Failed samples report the failed measure + first error (ported from the gem's `out.osw` / `run.log` extraction, benign notices filtered) in `failed_simulations.csv` `error_summary`. |
 
 #### Executor selection
 

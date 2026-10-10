@@ -28,8 +28,11 @@ import logging
 import re
 import sqlite3
 import sys
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
+
+from osimflow.osw_results import MEASURE_RESULTS_TOKEN, OUT_OSW_NAME, parse_out_osw
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("extract_kpis")
@@ -730,8 +733,21 @@ def run_extract_kpis(
 
     # Issue #1082: filter to user-requested KPIs when --kpis is set.
     if kpis is not None:
+        # Issue #1871: dotted names / globs (``reporting_179_d.*``) or the
+        # ``measure_results`` token opt in to out.osw measure-reported values.
+        patterns = [k for k in kpis if "." in k]
+        osw_values: dict[str, Any] = {}
+        if MEASURE_RESULTS_TOKEN in kpis or patterns:
+            osw_values = parse_out_osw(simulation_dir / OUT_OSW_NAME)
+            extracted_kpis.update(osw_values)
         _desired = set(kpis)
-        extracted_kpis = {k: v for k, v in extracted_kpis.items() if k in _desired}
+        all_osw = MEASURE_RESULTS_TOKEN in _desired
+        extracted_kpis = {
+            k: v
+            for k, v in extracted_kpis.items()
+            if k in _desired
+            or (k in osw_values and (all_osw or any(fnmatchcase(k, p) for p in patterns)))
+        }
 
     quality = validate_kpis(extracted_kpis, thresholds=quality_thresholds)
 

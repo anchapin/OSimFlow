@@ -482,6 +482,17 @@ name in this section.
   `NomadConfig`) are *defined* in `osimflow/executor_configs/` and
   re-exported here, so `from osimflow.config import SlurmConfig` (and
   the `osimflow` top-level re-export) keep working.
+- `osimflow/osw_results.py` — measure-reported values and failure
+  messages from `out.osw` / `run.log` (issue #1871): `parse_out_osw`,
+  `extract_failure_message_from_osw`,
+  `collect_failure_message_from_run_log`, `failure_message`,
+  `BENIGN_ERROR_PATTERN`, `MEASURE_RESULTS_TOKEN` (`--kpis`
+  opt-in token), `SIMULATION_FAILED_KEY`, `OUT_OSW_NAME`,
+  `RUN_LOG_NAME`. `work._publish_run_artifacts` copies both files into
+  the per-sample sim dir (success or failure); `extract_kpis` adds the
+  `<measure_dir_name>.<attribute>` KPIs only when `--kpis` names them;
+  `aggregate_results.extract_failure` uses the message when
+  `eplusout.sql` is missing.
 - `osimflow/work.py` — per-step work functions + `BYOS` contract
   (`default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`,
   `aggregate_results`, `generate_plots`,
