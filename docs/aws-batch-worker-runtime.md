@@ -62,3 +62,38 @@ register another job definition and pass it with `--aws-batch-job-definition`.
 
 Not run in CI by default: ECR publishing and live AWS Batch execution (need AWS
 credentials).
+
+## Parametric sweeps of gem-style OSW packages (issue #1869)
+
+`APPLY_PARAMETERS` is valid on `aws_batch` with the built-in apply function
+(custom `--custom_apply_script` hooks stay rejected). Measure arguments that
+map to a `workflow.osw` step (`Measure.argument` or an unambiguous plain
+name) and the `epw_file` weather target are written directly into the
+per-sample OSW JSON, so **no OpenStudio Python bindings and no `model.osm`**
+are needed (a gem-style package whose `seed_file` lives under `files/` works).
+Variables that map to `.osm` attributes still require `model.osm` + bindings.
+
+- Discrete / categorical string variables (window type, EPW choice) are
+  written as their label.
+- The `custom` algorithm may emit per-sample `weather_file` / `seed_model`
+  overrides: optional CSV columns of those names in `samples_file`, or keys
+  on the dicts returned by `samples_function`. `seed_model` names a
+  **template package directory** (replacing `template_sim_package` for that
+  sample), not a bare `.osm`. An absolute `weather_file` outside the package
+  is copied into the sample package (`weather/`) before staging; a relative
+  one must exist in the package.
+- Where an OSW measure argument and an `.osm` attribute share a plain name,
+  the OSW argument wins (use `Measure.argument` to be explicit).
+- Ruby measures and bundled gems (for example `openstudio-standards`) must
+  live **inside `template_sim_package`** (`measures/`, and any vendored gems
+  referenced via the OSW `measure_paths`/`file_paths`); the worker image does
+  not install anything at run time. The whole package is staged to S3 per
+  sample, and the OSW run by `openstudio run` on the worker uses the mutated
+  arguments.
+- Cache keys include the per-sample parameters, the `seed_model` override and
+  (for `RUN_OPENSTUDIO_SIM`) a digest of the parameterized
+  `workflow.osw`/`model.osm`, so changed values never reuse a stale result.
+
+Skip-gated E2E: `tests/integration/test_aws_batch_variable_sweep.py`
+(`OSIMFLOW_AWS_BATCH_SWEEP_PACKAGE` / `OSIMFLOW_AWS_BATCH_SWEEP_VARIABLES`
+plus the usual `OSIMFLOW_AWS_BATCH_*` variables).

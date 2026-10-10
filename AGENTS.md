@@ -483,7 +483,12 @@ name in this section.
 - `osimflow/work.py` — per-step work functions + `BYOS` contract
   (`default_apply_parameters`, `run_openstudio_sim`, `extract_kpis`,
   `aggregate_results`, `generate_plots`,
-  `SevereEnergyPlusError`).  `aggregate_results` produces
+  `SevereEnergyPlusError`).  Since issue #1869 `default_apply_parameters` writes
+  OSW measure arguments and the `__epw_file__` weather target straight
+  into `workflow.osw` (no OpenStudio bindings / `model.osm` needed), so
+  `APPLY_PARAMETERS` sweeps gem-style packages on `aws_batch`; the
+  `custom` algorithm may emit per-sample `weather_file` / `seed_model`
+  overrides (`docs/aws-batch-worker-runtime.md`).  `aggregate_results` produces
   `aggregated_results.csv` + `aggregated_results.parquet` (both
   always written) + `failed_simulations.csv` in the campaign
   ``outdir``.

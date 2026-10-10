@@ -506,5 +506,11 @@ def cast_samples(obj: object) -> list[SampleSpec]:
         values = item.get("values")
         if not isinstance(sid, str) or not isinstance(values, dict):
             raise TypeError("sample entry must have str 'sample_id' and dict 'values'")
-        out.append(SampleSpec(sample_id=sid, values=values))
+        spec = SampleSpec(sample_id=sid, values=values)
+        # Per-sample overrides (GAP-009 / issue #1869) must survive the round-trip.
+        for override in ("seed_model", "weather_file"):
+            override_value = item.get(override)
+            if isinstance(override_value, str) and override_value:
+                spec[override] = override_value
+        out.append(spec)
     return out

@@ -38,6 +38,7 @@ __all__ = ["Campaign", "CampaignAbortError", "CampaignError", "QuotaExceededErro
 
 import contextlib
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -2687,6 +2688,35 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
         )
         self._obs.record_step_duration("VALIDATE_MEASURE_VARIABLES", time.time() - t0)
 
+    @staticmethod
+    def _stage_external_epw(
+        params: dict[str, Any], template_pkg: Path, apply_out_dir: Path
+    ) -> dict[str, Any]:
+        """Copy a weather override living outside the package into the sample package.
+
+        Remote executors only see the staged package directory, so an
+        absolute ``__epw_file__`` is copied to ``<package>/weather/`` and the
+        parameter rewritten to that relative path (issue #1869). Package-relative
+        values are validated to exist.
+        """
+        raw = params.get("__epw_file__")
+        if not isinstance(raw, str) or not raw:
+            return params
+        src = Path(raw)
+        resolved = dict(params)
+        if src.is_absolute():
+            if not src.is_file():
+                raise FileNotFoundError(f"weather override not found: {raw}")
+            dest_dir = apply_out_dir / "weather"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest_dir / src.name)
+            resolved["__epw_file__"] = f"weather/{src.name}"
+        elif not (template_pkg / src).is_file() and not (apply_out_dir / src).is_file():
+            raise FileNotFoundError(
+                f"weather override {raw!r} not found in the sample package {template_pkg}"
+            )
+        return resolved
+
     def step_apply_parameters(  # noqa: PLR0912, PLR0915
         self,
         samples: list[SampleSpec],
@@ -2864,6 +2894,9 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                 )
                 apply_out_dir: Path = ctx["out_dir"]
                 shutil.copytree(template_pkg, apply_out_dir, dirs_exist_ok=True)
+                ctx["resolved_params"] = self._stage_external_epw(
+                    ctx["resolved_params"], template_pkg, apply_out_dir
+                )
                 # The BYOS contract (osimflow.byos_contract._BYOS_CONTRACT
                 # — issue #1061) specifies ``apply_parameters(template,
                 # parameters, sample_id, out)``. The orchestrator
@@ -3063,6 +3096,10 @@ class Campaign(CampaignAnalysisMixin, CampaignOptimizationMixin, CampaignKpisMix
                     "modified_sim_package": str(mod_pkg),
                     "sid": sid,
                     "os_version": os_version,
+                    # Content of the parameterized package (issue #1869): the
+                    # path is stable across re-runs, so changed variable
+                    # values must still miss the cache.
+                    "package_content": _package_content_digest(Path(str(mod_pkg))),
                     # Hash the log paths into the cache key so a user
                     # who moves the outdir gets a fresh run (paths
                     # change → cache miss → re-run).
@@ -3561,6 +3598,17 @@ def _make_mlflow_param_view(cfg: CampaignConfig, executor_name: str) -> SimpleNa
 # Cast helpers — narrow YAML/external `object` types to the strict shapes
 # the rest of the code relies on. The cast is a single audit point.
 # ---------------------------------------------------------------------------
+def _package_content_digest(pkg: Path) -> str:
+    """SHA-256 over the parameterized ``workflow.osw`` / ``model.osm`` bytes."""
+    h = hashlib.sha256()
+    for name in ("workflow.osw", "model.osm"):
+        f = pkg / name
+        if f.is_file():
+            h.update(name.encode())
+            h.update(f.read_bytes())
+    return h.hexdigest()
+
+
 def cast_samples(obj: object) -> list[SampleSpec]:
     """Narrow a `samples` JSON value to the canonical SampleSpec list."""
     if not isinstance(obj, list):
@@ -3573,7 +3621,13 @@ def cast_samples(obj: object) -> list[SampleSpec]:
         values = item.get("values")
         if not isinstance(sid, str) or not isinstance(values, dict):
             raise TypeError("sample entry must have str 'sample_id' and dict 'values'")
-        out.append(SampleSpec(sample_id=sid, values=values))
+        spec = SampleSpec(sample_id=sid, values=values)
+        # Per-sample overrides (GAP-009 / issue #1869) must survive the round-trip.
+        for override in ("seed_model", "weather_file"):
+            override_value = item.get(override)
+            if isinstance(override_value, str) and override_value:
+                spec[override] = override_value
+        out.append(spec)
     return out
 
 

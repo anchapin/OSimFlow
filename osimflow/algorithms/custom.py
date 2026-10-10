@@ -39,6 +39,10 @@ from osimflow.algorithms import (
 
 log = logging.getLogger("osimflow.algorithms.custom")
 
+#: Reserved CSV columns / sample keys that override the template per sample
+#: (issue #1869); they are not variables.
+_OVERRIDE_KEYS = ("seed_model", "weather_file")
+
 
 class CustomDOEAlgorithm(BaseAlgorithm):
     """Custom DOE pattern loader.
@@ -144,7 +148,12 @@ class CustomDOEAlgorithm(BaseAlgorithm):
                             values[var_name] = float(raw)
                         except ValueError:
                             values[var_name] = raw
-                    samples.append({"sample_id": f"{i + 1:04d}", "values": values})
+                    sample: dict[str, Any] = {"sample_id": f"{i + 1:04d}", "values": values}
+                    for key in _OVERRIDE_KEYS:
+                        override = (row_stripped.get(key) or "").strip()
+                        if override:
+                            sample[key] = override
+                    samples.append(sample)
 
                 if len(samples) < n_samples:
                     raise ValueError(
@@ -230,7 +239,11 @@ class CustomDOEAlgorithm(BaseAlgorithm):
                     sorted(extra_keys),
                 )
                 values = {k: v for k, v in values.items() if k in expected_names}
-            samples.append({"sample_id": sample_id, "values": values})
+            func_sample: dict[str, Any] = {"sample_id": sample_id, "values": values}
+            for key in _OVERRIDE_KEYS:
+                if item.get(key):
+                    func_sample[key] = str(item[key])
+            samples.append(func_sample)
 
         samples_path.write_text(json.dumps({"samples": samples}, indent=2))
         log.info(
