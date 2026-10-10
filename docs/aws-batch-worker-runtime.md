@@ -77,15 +77,22 @@ Variables that map to `.osm` attributes still require `model.osm` + bindings.
   written as their label.
 - The `custom` algorithm may emit per-sample `weather_file` / `seed_model`
   overrides: optional CSV columns of those names in `samples_file`, or keys
-  on the dicts returned by `samples_function`.
+  on the dicts returned by `samples_function`. `seed_model` names a
+  **template package directory** (replacing `template_sim_package` for that
+  sample), not a bare `.osm`. An absolute `weather_file` outside the package
+  is copied into the sample package (`weather/`) before staging; a relative
+  one must exist in the package.
+- Where an OSW measure argument and an `.osm` attribute share a plain name,
+  the OSW argument wins (use `Measure.argument` to be explicit).
 - Ruby measures and bundled gems (for example `openstudio-standards`) must
   live **inside `template_sim_package`** (`measures/`, and any vendored gems
   referenced via the OSW `measure_paths`/`file_paths`); the worker image does
   not install anything at run time. The whole package is staged to S3 per
   sample, and the OSW run by `openstudio run` on the worker uses the mutated
   arguments.
-- Cache keys already include the per-sample parameters and the per-sample
-  `seed_model` override.
+- Cache keys include the per-sample parameters, the `seed_model` override and
+  (for `RUN_OPENSTUDIO_SIM`) a digest of the parameterized
+  `workflow.osw`/`model.osm`, so changed values never reuse a stale result.
 
 Skip-gated E2E: `tests/integration/test_aws_batch_variable_sweep.py`
 (`OSIMFLOW_AWS_BATCH_SWEEP_PACKAGE` / `OSIMFLOW_AWS_BATCH_SWEEP_VARIABLES`

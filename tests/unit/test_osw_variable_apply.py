@@ -82,3 +82,22 @@ def test_custom_csv_emits_per_sample_overrides(tmp_path: Path) -> None:
     kept = cast_samples(raw)
     assert kept[0]["weather_file"] == "files/a.epw"
     assert "seed_model" not in kept[1]
+
+
+def test_external_epw_override_is_staged_into_sample_package(tmp_path: Path) -> None:
+    from osimflow.campaign import Campaign, _package_content_digest
+
+    pkg = _gem_package(tmp_path)
+    ext = tmp_path / "ext" / "site.epw"
+    ext.parent.mkdir()
+    ext.write_text("epw")
+    out = tmp_path / "sample"
+    params = Campaign._stage_external_epw({"__epw_file__": str(ext)}, pkg, out)
+    assert params["__epw_file__"] == "weather/site.epw"
+    assert (out / "weather" / "site.epw").read_text() == "epw"
+    with pytest.raises(FileNotFoundError):
+        Campaign._stage_external_epw({"__epw_file__": "missing.epw"}, pkg, out)
+
+    before = _package_content_digest(pkg)
+    default_apply_parameters(pkg, {"r_value": 2.0}, "0001", pkg)
+    assert _package_content_digest(pkg) != before
