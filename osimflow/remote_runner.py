@@ -32,7 +32,7 @@ from .input_staging import (
     fetch_spilled_payload,
     result_upload_plan,
 )
-from .s3_campaign import COMPLETE_MARKER
+from .s3_campaign import COMPLETE_MARKER, FAILED_MARKER, RETRYING_STATE
 from .storage import ResultStorage, build_result_storage
 from .task_payload_hmac import (
     RESULT_TRANSPORT_SIG_ENV,
@@ -250,6 +250,7 @@ def _resolve_step_fn(step: str) -> Any:  # noqa: ANN401
 def _run_payload(
     payload: dict[str, Any],
     remapper: WorkerPathRemapper | None = None,
+    context: tuple[ResultStorage, str | None] | None = None,
 ) -> Any:  # noqa: ANN401
     step = str(payload.get("step", "unknown"))
     fn = _resolve_step_fn(step)
@@ -265,6 +266,8 @@ def _run_payload(
         # the controller paths before the work function sees them.
         args_raw = remapper.resolve(args_raw)
         kwargs_raw = remapper.resolve(kwargs_raw)
+        if context is not None:
+            _mark_retrying(remapper, context)
     args = [_decode_payload_value(v) for v in args_raw]
     kwargs = {str(k): _decode_payload_value(v) for k, v in kwargs_raw.items()}
     return fn(*args, **kwargs)
@@ -400,6 +403,78 @@ def _upload_complete_marker(storage: ResultStorage, key: str) -> None:
         storage.upload_file(marker, f"{key}/{COMPLETE_MARKER}")
 
 
+#: Small diagnostic files shipped from a failed sample (issue #1878). The
+#: allow-list keeps multi-GB EnergyPlus outputs (``eplusout.sql``) off the
+#: failure path; ``eplusout.err`` is only shipped under the size cap.
+_FAILURE_ARTIFACT_NAMES = ("out.osw", "run.log", "stdout.log", "stderr.log")
+_FAILURE_ERR_NAME = "eplusout.err"
+_FAILURE_ERR_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _is_dir_output(scratch: Path) -> bool:
+    """True for a directory output, including one the step never created."""
+    return scratch.is_dir() or (not scratch.exists() and not scratch.suffix)
+
+
+def _upload_failed_marker(storage: ResultStorage, key: str, text: str = "") -> None:
+    with tempfile.TemporaryDirectory(prefix="osimflow-marker-") as tmp:
+        marker = Path(tmp) / FAILED_MARKER
+        marker.write_text(text)
+        storage.upload_file(marker, f"{key}/{FAILED_MARKER}")
+
+
+def _mark_retrying(remapper: WorkerPathRemapper, context: tuple[ResultStorage, str | None]) -> None:
+    """On a Batch retry attempt, supersede a stale failure marker (issue #1878).
+
+    ``ResultStorage`` has no delete, so the previous attempt's
+    ``_OSIMFLOW_FAILED`` is overwritten with ``retrying``; readers then treat
+    the sample as still running. Best effort, never raises.
+    """
+    try:
+        attempt = int(os.environ.get("AWS_BATCH_JOB_ATTEMPT", "1"))
+    except ValueError:
+        return
+    if attempt <= 1:
+        return
+    storage, prefix = context
+    for scratch, key in result_upload_plan(remapper, None, prefix):
+        if not _is_dir_output(scratch):
+            continue
+        try:
+            _upload_failed_marker(storage, key, RETRYING_STATE)
+        except Exception:  # noqa: BLE001
+            log.warning("could not mark %s as retrying", key, exc_info=True)
+
+
+def _upload_failure_artifacts(
+    remapper: WorkerPathRemapper,
+    context: tuple[ResultStorage, str | None],
+) -> None:
+    """Best-effort upload of failed-sample diagnostics + ``_OSIMFLOW_FAILED`` (issue #1878).
+
+    Never raises: the original step failure must stay the reported error.
+    """
+    storage, prefix = context
+    for scratch, key in result_upload_plan(remapper, None, prefix):
+        try:
+            if scratch.is_file():
+                if scratch.name in _FAILURE_ARTIFACT_NAMES:
+                    storage.upload_file(scratch, key)
+                continue
+            if not _is_dir_output(scratch):
+                continue
+            for name in _FAILURE_ARTIFACT_NAMES:
+                candidate = scratch / name
+                if candidate.is_file():
+                    storage.upload_file(candidate, f"{key}/{name}")
+            err = scratch / _FAILURE_ERR_NAME
+            if err.is_file() and err.stat().st_size <= _FAILURE_ERR_MAX_BYTES:
+                storage.upload_file(err, f"{key}/{_FAILURE_ERR_NAME}")
+            _upload_failed_marker(storage, key)
+        except Exception:  # noqa: BLE001
+            log.warning("failure-artifact upload failed for %s", key, exc_info=True)
+
+
 def _upload_dir_strict(storage: ResultStorage, directory: Path, key: str) -> None:
     """Upload *directory* file by file; any failure propagates (issue #1809)."""
     for file_path in sorted(directory.rglob("*")):
@@ -464,7 +539,7 @@ def negotiate_version() -> dict[str, Any]:
     }
 
 
-def main() -> int:
+def main() -> int:  # noqa: PLR0912
     _register_builtin_steps()
     StepFunctionRegistry.discover_plugins()
 
@@ -486,11 +561,11 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     scratch: Path | None = None
+    remapper: WorkerPathRemapper | None = None
+    context: tuple[ResultStorage, str | None] | None = None
     try:
         payload = _load_payload()
         _verify_contract_version()
-        remapper: WorkerPathRemapper | None = None
-        context: tuple[ResultStorage, str | None] | None = None
         if PAYLOAD_REF_KEY in payload:
             context = _object_storage_context()
             if context is None:
@@ -515,7 +590,7 @@ def main() -> int:
             else:
                 scratch = Path(tempfile.mkdtemp(prefix="osimflow-scratch-"))
             remapper = WorkerPathRemapper(context[0], scratch)
-        result = _run_payload(payload, remapper)
+        result = _run_payload(payload, remapper, context)
         if remapper is not None:
             result = remapper.to_original(result)
             _upload_artifacts_for_object_storage(result, remapper, context)
@@ -526,6 +601,8 @@ def main() -> int:
         return 0
     except Exception as exc:  # noqa: BLE001
         log.exception("remote runner failed")
+        if remapper is not None and context is not None:
+            _upload_failure_artifacts(remapper, context)
         error_json = json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
         print(error_json, file=sys.stderr)
         return 1

@@ -209,12 +209,25 @@ class _AWSBatchHandle(PollingHandle):
         )
         return True
 
+    def _materialize_failure_artifacts(self) -> None:
+        """Best-effort download of the failed sample's ``out.osw`` / ``run.log`` (issue #1878).
+
+        Lets ``aggregate_results`` report the measure failure message from
+        the controller, as the local executor does. Never raises.
+        """
+        try:
+            resolve_and_materialize(self._result_hint, self._transport)
+        except Exception:  # noqa: BLE001
+            log.warning("no failure artifacts materialized for job %s", self.job_id, exc_info=True)
+
     def _failure_error(self, job: Any) -> RuntimeError:
+        self._materialize_failure_artifacts()
         status = job.get("status")
         reason = job.get("statusReason", "")
         return RuntimeError(f"AWS Batch job {self.job_id!r} {status}: {reason}")
 
     def _fallback_failure_error(self, job: Any) -> RuntimeError:
+        self._materialize_failure_artifacts()
         status = job.get("status")
         reason = job.get("statusReason", "unknown reason")
         return RuntimeError(f"AWS Batch job {self.job_id!r} {status}: {reason}")
