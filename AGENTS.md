@@ -785,7 +785,7 @@ name in this section.
   module (use this module directly).
 - `osimflow/server_csv.py` — openstudio-server `download_data.csv`
   layout export (issue #1872): `build_server_csv_frame`,
-  `SIMULATION_FAILED_COL`. Powers
+  `combine_server_frames`, `SIMULATION_FAILED_COL`. Powers
   `osimflow export-results --format openstudio-server-csv`; columns
   `name,_id,status,status_message`, then `<measure>.<arg>` variables,
   outputs, and `reporting_179_d.simulation_failed_message` last.

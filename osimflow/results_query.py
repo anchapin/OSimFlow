@@ -238,7 +238,7 @@ def _export_server_csv(
     paths: list[tuple[Path, str]], output_path: str | None, include_failed: bool
 ) -> int:
     """Write the openstudio-server ``download_data.csv`` layout (issue #1872)."""
-    from osimflow.server_csv import build_server_csv_frame  # noqa: PLC0415
+    from osimflow.server_csv import build_server_csv_frame, combine_server_frames  # noqa: PLC0415
 
     frames: list[pd.DataFrame] = []
     for campaign_path, _label in paths:
@@ -246,13 +246,15 @@ def _export_server_csv(
         if df.empty:
             log.warning("No results found in %s", campaign_path)
             continue
+        variables = list(df.attrs.get("variables", []))
         if not include_failed:
             df = df[df["status_message"] != "datapoint failure"]
+        df.attrs["variables"] = variables
         frames.append(df)
     if not frames:
         log.error("No results to export")
         return 1
-    combined = pd.concat(frames, ignore_index=True)
+    combined = combine_server_frames(frames)
     content = combined.to_csv(index=False)
     if output_path:
         Path(output_path).write_text(content)

@@ -73,3 +73,38 @@ def test_cli_export_and_no_include_failed(tmp_path: Path) -> None:
     )
     assert rc == 0
     assert len(pd.read_csv(out)) == 1
+
+
+def test_leading_zero_ids_and_kpi_only_aggregate(tmp_path: Path) -> None:
+    d = tmp_path / "c"
+    d.mkdir()
+    (d / "samples.json").write_text(
+        json.dumps({"samples": [{"sample_id": "0001", "values": {"a.x": 1.5}}]})
+    )
+    pd.DataFrame([{"sample_id": "0001", "out": 2.0}]).to_csv(
+        d / "aggregated_results.csv", index=False
+    )
+    df = build_server_csv_frame(d)
+    assert df["name"].tolist() == ["0001"]
+    assert df["_id"].tolist() == ["0001"]
+    assert df["a.x"].tolist() == [1.5]
+
+
+def test_multi_campaign_column_order(tmp_path: Path) -> None:
+    first = _campaign(tmp_path)
+    second = tmp_path / "camp2"
+    second.mkdir()
+    (second / "samples.json").write_text(
+        json.dumps({"samples": [{"sample_id": "t0", "values": {"new.var": 7}}]})
+    )
+    pd.DataFrame([{"sample_id": "t0", "other_out": 1.0}]).to_csv(
+        second / "aggregated_results.csv", index=False
+    )
+    out = tmp_path / "o.csv"
+    rc = export_results_cli(
+        outdirs=[str(first), str(second)], format="openstudio-server-csv", output_path=str(out)
+    )
+    assert rc == 0
+    cols = list(pd.read_csv(out).columns)
+    assert cols.index("new.var") < cols.index("reporting_179_d.out_eui")
+    assert cols[-1] == SIMULATION_FAILED_COL

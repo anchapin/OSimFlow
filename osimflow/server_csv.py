@@ -43,29 +43,33 @@ def _find_samples_json(campaign_dir: Path) -> Path | None:
     return found[0] if found else None
 
 
-def _variable_order(campaign_dir: Path) -> list[str]:
-    """Variable names in samples.json order (empty if unavailable)."""
+def _load_samples(campaign_dir: Path) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    """Variable names (samples.json order) and per-sample values."""
     path = _find_samples_json(campaign_dir)
     if path is None:
-        return []
+        return [], {}
     try:
         data: Any = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         log.warning("Could not read %s: %s", path, exc, exc_info=True)
-        return []
+        return [], {}
     names: list[str] = []
+    values: dict[str, dict[str, Any]] = {}
     for sample in data.get("samples", []):
-        for key in sample.get("values", {}):
+        flat: dict[str, Any] = {}
+        for key, val in sample.get("values", {}).items():
             if key not in names:
                 names.append(key)
-    return names
+            flat[key] = val["label"] if isinstance(val, dict) and "label" in val else val
+        values[str(sample.get("sample_id", ""))] = flat
+    return names, values
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
     if not path.is_file():
         return pd.DataFrame()
     try:
-        return pd.read_csv(path)
+        return pd.read_csv(path, dtype={"sample_id": str})
     except Exception:
         log.warning("Could not read %s", path, exc_info=True)
         return pd.DataFrame()
@@ -78,7 +82,7 @@ def build_server_csv_frame(campaign_dir: Path) -> pd.DataFrame:
     if ok.empty and failed.empty:
         return pd.DataFrame()
 
-    variables = [v for v in _variable_order(campaign_dir) if v in ok.columns]
+    variables, sample_values = _load_samples(campaign_dir)
     outputs = [
         c
         for c in ok.columns
@@ -94,7 +98,9 @@ def build_server_csv_frame(campaign_dir: Path) -> pd.DataFrame:
             "status": STATUS_COMPLETED,
             "status_message": MESSAGE_NORMAL,
         }
-        for col in variables + outputs:
+        for col in variables:
+            row[col] = sample_values.get(sid, {}).get(col, rec.get(col))
+        for col in outputs:
             row[col] = rec.get(col)
         row[SIMULATION_FAILED_COL] = rec.get(SIMULATION_FAILED_COL, "")
         rows.append(row)
@@ -107,9 +113,34 @@ def build_server_csv_frame(campaign_dir: Path) -> pd.DataFrame:
             "status_message": MESSAGE_FAILURE,
             SIMULATION_FAILED_COL: rec.get("error_summary", ""),
         }
+        for col in variables:
+            row[col] = sample_values.get(sid, {}).get(col)
         rows.append(row)
 
     columns = [*IDENTITY_COLUMNS, *variables, *outputs, SIMULATION_FAILED_COL]
     df = pd.DataFrame(rows, columns=columns)
     df[SIMULATION_FAILED_COL] = df[SIMULATION_FAILED_COL].fillna("")
+    df.attrs["variables"] = list(variables)
     return df
+
+
+def combine_server_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Concatenate per-campaign frames keeping identity, variables, outputs, failure order."""
+    variables: list[str] = []
+    outputs: list[str] = []
+    for df in frames:
+        var_names = list(df.attrs.get("variables", []))
+        for col in var_names:
+            if col not in variables:
+                variables.append(col)
+        for col in df.columns:
+            if (
+                col not in IDENTITY_COLUMNS
+                and col != SIMULATION_FAILED_COL
+                and col not in var_names
+                and col not in outputs
+            ):
+                outputs.append(col)
+    outputs = [c for c in outputs if c not in variables]
+    columns = [*IDENTITY_COLUMNS, *variables, *outputs, SIMULATION_FAILED_COL]
+    return pd.concat([f.reindex(columns=columns) for f in frames], ignore_index=True)
