@@ -32,7 +32,7 @@ from .input_staging import (
     fetch_spilled_payload,
     result_upload_plan,
 )
-from .s3_campaign import COMPLETE_MARKER, FAILED_MARKER
+from .s3_campaign import COMPLETE_MARKER, FAILED_MARKER, RETRYING_STATE
 from .storage import ResultStorage, build_result_storage
 from .task_payload_hmac import (
     RESULT_TRANSPORT_SIG_ENV,
@@ -250,6 +250,7 @@ def _resolve_step_fn(step: str) -> Any:  # noqa: ANN401
 def _run_payload(
     payload: dict[str, Any],
     remapper: WorkerPathRemapper | None = None,
+    context: tuple[ResultStorage, str | None] | None = None,
 ) -> Any:  # noqa: ANN401
     step = str(payload.get("step", "unknown"))
     fn = _resolve_step_fn(step)
@@ -265,6 +266,8 @@ def _run_payload(
         # the controller paths before the work function sees them.
         args_raw = remapper.resolve(args_raw)
         kwargs_raw = remapper.resolve(kwargs_raw)
+        if context is not None:
+            _mark_retrying(remapper, context)
     args = [_decode_payload_value(v) for v in args_raw]
     kwargs = {str(k): _decode_payload_value(v) for k, v in kwargs_raw.items()}
     return fn(*args, **kwargs)
@@ -408,6 +411,41 @@ _FAILURE_ERR_NAME = "eplusout.err"
 _FAILURE_ERR_MAX_BYTES = 2 * 1024 * 1024
 
 
+def _is_dir_output(scratch: Path) -> bool:
+    """True for a directory output, including one the step never created."""
+    return scratch.is_dir() or (not scratch.exists() and not scratch.suffix)
+
+
+def _upload_failed_marker(storage: ResultStorage, key: str, text: str = "") -> None:
+    with tempfile.TemporaryDirectory(prefix="osimflow-marker-") as tmp:
+        marker = Path(tmp) / FAILED_MARKER
+        marker.write_text(text)
+        storage.upload_file(marker, f"{key}/{FAILED_MARKER}")
+
+
+def _mark_retrying(remapper: WorkerPathRemapper, context: tuple[ResultStorage, str | None]) -> None:
+    """On a Batch retry attempt, supersede a stale failure marker (issue #1878).
+
+    ``ResultStorage`` has no delete, so the previous attempt's
+    ``_OSIMFLOW_FAILED`` is overwritten with ``retrying``; readers then treat
+    the sample as still running. Best effort, never raises.
+    """
+    try:
+        attempt = int(os.environ.get("AWS_BATCH_JOB_ATTEMPT", "1"))
+    except ValueError:
+        return
+    if attempt <= 1:
+        return
+    storage, prefix = context
+    for scratch, key in result_upload_plan(remapper, None, prefix):
+        if not _is_dir_output(scratch):
+            continue
+        try:
+            _upload_failed_marker(storage, key, RETRYING_STATE)
+        except Exception:  # noqa: BLE001
+            log.warning("could not mark %s as retrying", key, exc_info=True)
+
+
 def _upload_failure_artifacts(
     remapper: WorkerPathRemapper,
     context: tuple[ResultStorage, str | None],
@@ -423,7 +461,7 @@ def _upload_failure_artifacts(
                 if scratch.name in _FAILURE_ARTIFACT_NAMES:
                     storage.upload_file(scratch, key)
                 continue
-            if not scratch.is_dir():
+            if not _is_dir_output(scratch):
                 continue
             for name in _FAILURE_ARTIFACT_NAMES:
                 candidate = scratch / name
@@ -432,10 +470,7 @@ def _upload_failure_artifacts(
             err = scratch / _FAILURE_ERR_NAME
             if err.is_file() and err.stat().st_size <= _FAILURE_ERR_MAX_BYTES:
                 storage.upload_file(err, f"{key}/{_FAILURE_ERR_NAME}")
-            with tempfile.TemporaryDirectory(prefix="osimflow-marker-") as tmp:
-                marker = Path(tmp) / FAILED_MARKER
-                marker.touch()
-                storage.upload_file(marker, f"{key}/{FAILED_MARKER}")
+            _upload_failed_marker(storage, key)
         except Exception:  # noqa: BLE001
             log.warning("failure-artifact upload failed for %s", key, exc_info=True)
 
@@ -555,7 +590,7 @@ def main() -> int:  # noqa: PLR0912
             else:
                 scratch = Path(tempfile.mkdtemp(prefix="osimflow-scratch-"))
             remapper = WorkerPathRemapper(context[0], scratch)
-        result = _run_payload(payload, remapper)
+        result = _run_payload(payload, remapper, context)
         if remapper is not None:
             result = remapper.to_original(result)
             _upload_artifacts_for_object_storage(result, remapper, context)

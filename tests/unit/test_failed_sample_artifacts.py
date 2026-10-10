@@ -200,3 +200,31 @@ def test_success_marker_wins_over_stale_failure(failed_job: dict[str, Any]) -> N
     store = S3CampaignStore(DirStorage(bucket), failed_job["tmp"] / "s")
     record = new_handoff(CAMPAIGN, ["0000"], openstudio_version="", kpis=None, job_ids={})
     assert store.sample_states(record) == {"0000": "complete"}
+
+
+def test_retry_attempt_supersedes_stale_failure_marker(
+    failed_job: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Attempt 2 overwrites attempt 1's marker, so the sample is not terminal mid-retry."""
+    bucket: Path = failed_job["bucket"]
+    marker = bucket / CAMPAIGN / "work" / "sim" / "0000" / FAILED_MARKER
+    store = S3CampaignStore(DirStorage(bucket), failed_job["tmp"] / "s")
+    record = new_handoff(CAMPAIGN, ["0000"], openstudio_version="", kpis=None, job_ids={})
+    assert store.sample_states(record) == {"0000": "failed"}
+    seen: list[str] = []
+
+    def retry_step(pkg_dir: Path, sid: str, out: Path) -> Path:
+        seen.append(marker.read_text())
+        assert store.sample_states(record) == {}  # mid-retry: not terminal
+        raise RuntimeError("fails again")
+
+    monkeypatch.setattr(remote_runner.StepFunctionRegistry, "_registry", {})
+    monkeypatch.setattr(
+        remote_runner,
+        "_register_builtin_steps",
+        lambda: remote_runner.StepFunctionRegistry.register("sim", retry_step),
+    )
+    monkeypatch.setenv("AWS_BATCH_JOB_ATTEMPT", "2")
+    assert remote_runner.main() == 1
+    assert seen == ["retrying"]
+    assert store.sample_states(record) == {"0000": "failed"}  # final failure re-marked

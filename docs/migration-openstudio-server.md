@@ -933,7 +933,9 @@ uploads `out.osw`, `run.log`, the stdout/stderr logs (and `eplusout.err` when
 under 2 MiB) followed by an empty `_OSIMFLOW_FAILED` marker; this counts as
 finished, so `status` lists it under `failed` and `download` reports its
 measure failure message in `failed_simulations.csv` without `--allow-partial`.
-A success marker takes precedence over a stale failure marker (Batch retries).
+A success marker takes precedence over a stale failure marker, and a Batch
+retry attempt (`AWS_BATCH_JOB_ATTEMPT` > 1) overwrites the old marker with
+`retrying` so the sample is not reported finished while the retry runs.
 
 ## Sequential batches (`rake execute_sequential` equivalent, issue #1874)
 

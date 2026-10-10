@@ -799,8 +799,9 @@ name in this section.
   sample result dir) + `FAILED_MARKER` (`_OSIMFLOW_FAILED`, issue
   #1878: a worker whose step raised uploads `out.osw` / `run.log` /
   stdout+stderr logs / size-capped `eplusout.err` best-effort, then this
-  marker; `S3CampaignStore.sample_states` treats either marker as
-  terminal and a success marker wins; `AWSBatchHandle` also
+  marker; a Batch retry attempt overwrites it with `RETRYING_STATE`;
+  `S3CampaignStore.sample_states` treats either marker as terminal
+  (unless `retrying`) and a success marker wins; `AWSBatchHandle` also
   materializes those files on the controller when a job fails).
   `run --detach-s3` writes `<campaign>/_handoff.json`
   + `samples.json` to the bucket and exits; `status|list|download

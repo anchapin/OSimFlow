@@ -27,6 +27,8 @@ COMPLETE_MARKER = "_OSIMFLOW_COMPLETE"
 #: Uploaded last by a worker whose step raised, after best-effort diagnostics
 #: (``out.osw`` / ``run.log``). A success marker, if any, takes precedence.
 FAILED_MARKER = "_OSIMFLOW_FAILED"
+#: Content a retry attempt writes over a stale ``_OSIMFLOW_FAILED`` (no delete API).
+RETRYING_STATE = "retrying"
 HANDOFF_NAME = "_handoff.json"
 SAMPLES_NAME = "samples.json"
 SIM_PREFIX = "work/sim"
@@ -116,6 +118,15 @@ class S3CampaignStore:
                     log.warning("unreadable handoff for %s", parts[0], exc_info=True)
         return sorted(records, key=lambda r: r.submitted_at)
 
+    def _is_retrying(self, failed_marker_key: str) -> bool:
+        local = self.scratch / "failed-marker"
+        self.scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            self.storage.download_file(failed_marker_key, local)
+            return local.read_text().strip() == RETRYING_STATE
+        except OSError:
+            return False
+
     def sample_states(self, record: S3Handoff) -> dict[str, str]:
         """Terminal state per sample: ``"complete"`` or ``"failed"`` (issue #1878).
 
@@ -133,7 +144,7 @@ class S3CampaignStore:
                 continue
             if name == COMPLETE_MARKER:
                 states[sid] = "complete"
-            elif name == FAILED_MARKER:
+            elif name == FAILED_MARKER and not self._is_retrying(key):
                 states.setdefault(sid, "failed")
         return states
 

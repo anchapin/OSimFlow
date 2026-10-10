@@ -359,7 +359,7 @@ class TestRunnerSpilledPayload:
         monkeypatch.setattr(
             remote_runner,
             "_run_payload",
-            lambda payload, remapper=None: ran.append(payload) or {"ok": 1},
+            lambda payload, remapper=None, context=None: ran.append(payload) or {"ok": 1},
         )
         monkeypatch.setattr(
             remote_runner, "_upload_artifacts_for_object_storage", lambda *a, **k: None
