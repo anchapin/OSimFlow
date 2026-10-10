@@ -22,6 +22,8 @@ from typing import Any
 
 import pandas as pd
 
+from osimflow.osw_results import failure_message
+
 # pd.io.sql.DatabaseError may not exist in all pandas versions (issue #889)
 try:
     _PD_SQL_DATABASE_ERROR: type[Exception] | None = pd.io.sql.DatabaseError
@@ -511,10 +513,14 @@ def extract_failure(sim_dir: Path) -> dict[str, Any] | None:
             log.warning("Could not read error file: %s", err_path)
 
     sql_path = sim_dir / "eplusout.sql"
+    severe_summary = err_summary
+    if not err_summary and not sql_path.exists():
+        # Issue #1871: surface the failed measure + first error (out.osw / run.log).
+        err_summary = failure_message(sim_dir)
     if err_summary or not sql_path.exists():
         diagnosis: dict[str, Any] | None = None
-        if err_summary and err_path.exists():
-            diagnosis = diagnose_error(err_summary, err_path)
+        if severe_summary and err_path.exists():
+            diagnosis = diagnose_error(severe_summary, err_path)
 
         result = {
             "sample_id": sim_dir.name,

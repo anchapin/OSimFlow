@@ -35,6 +35,7 @@ from ._subprocess_utils import run_subprocess  # neutral location (issue #910)
 from .apply_params import OSMAttributeError
 from .errors import OSimFlowRuntimeError
 from .json_utils import safe_json_dumps
+from .osw_results import OUT_OSW_NAME, RUN_LOG_NAME
 from .storage import ResultStorage
 from .version_detection import (
     VersionDetectionError,
@@ -1023,6 +1024,30 @@ def _find_sql_in_package_run(package_run_dir: Path) -> Path | None:
         return sorted(candidates)[-1]
 
 
+def _publish_run_artifacts(package_dir: Path, sim_out: Path) -> None:
+    """Copy ``out.osw`` / ``run.log`` into *sim_out* (issue #1871).
+
+    Done on success and failure so measure-reported values and failure
+    messages survive; best effort, never raises.
+    """
+    run_dir = package_dir / "run"
+    run_log = run_dir / "run.log"
+    if not run_log.is_file() and run_dir.is_dir():
+        # fall back to the shallowest nested log (sub-workflow runs)
+        nested = sorted(run_dir.rglob("run.log"), key=lambda p: (len(p.parts), str(p)))
+        run_log = nested[0] if nested else run_log
+    for src, name in (
+        (package_dir / "out.osw", OUT_OSW_NAME),
+        (run_log, RUN_LOG_NAME),
+    ):
+        try:
+            if src.is_file():
+                sim_out.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, sim_out / name)
+        except OSError:
+            log.warning("could not publish %s to %s", src, sim_out, exc_info=True)
+
+
 def _reuse_existing_simulation_output(
     modified_sim_package: Path,
     sim_out: Path,
@@ -1308,6 +1333,8 @@ def _run_openstudio_sim_impl(
         sim_out=sim_out,
         sample_id=sample_id,
     ):
+        workflow = _find_workflow_osw(modified_sim_package)
+        _publish_run_artifacts(workflow.parent if workflow else modified_sim_package, sim_out)
         return sim_out
 
     # Determine whether to use the real OpenStudio CLI or the stub.
@@ -1626,6 +1653,8 @@ def _run_real_openstudio(
             e,
         )
         raise
+    finally:
+        _publish_run_artifacts(workflow_path.parent, sim_out)
 
     # The CLI runs with cwd=modified_sim_package, so EnergyPlus outputs land in
     # <package>/run/. Publish them into sim_out, which is what downstream
