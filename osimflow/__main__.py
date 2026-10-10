@@ -2439,7 +2439,7 @@ def _cmd_s3(args: argparse.Namespace, action: str) -> int:
             result = store.download(cid, dest, allow_partial=args.allow_partial)
             print(
                 f"downloaded {cid}: {result['completed']}/{result['total']} samples, "
-                f"{len(result['fetched'])} new -> {dest}"
+                f"{len(result['fetched'])} new, {len(result['failed'])} failed -> {dest}"
             )
             return 0
         except S3CampaignError as exc:

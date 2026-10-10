@@ -796,7 +796,13 @@ name in this section.
   (issue #1873): `S3CampaignStore`, `S3Handoff`, `new_handoff`,
   `S3CampaignError`, `CampaignDetached`, `COMPLETE_MARKER`
   (`_OSIMFLOW_COMPLETE`, uploaded last by `remote_runner` into each
-  sample result dir). `run --detach-s3` writes `<campaign>/_handoff.json`
+  sample result dir) + `FAILED_MARKER` (`_OSIMFLOW_FAILED`, issue
+  #1878: a worker whose step raised uploads `out.osw` / `run.log` /
+  stdout+stderr logs / size-capped `eplusout.err` best-effort, then this
+  marker; `S3CampaignStore.sample_states` treats either marker as
+  terminal and a success marker wins; `AWSBatchHandle` also
+  materializes those files on the controller when a job fails).
+  `run --detach-s3` writes `<campaign>/_handoff.json`
   + `samples.json` to the bucket and exits; `status|list|download
   --from-s3` (with `--prefix`, `--allow-partial`) read S3 state, and
   `download` finalizes locally (KPI extract + aggregate +

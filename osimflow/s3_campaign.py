@@ -24,6 +24,9 @@ log = logging.getLogger(__name__)
 
 #: Empty object a worker uploads last into each sample result directory.
 COMPLETE_MARKER = "_OSIMFLOW_COMPLETE"
+#: Uploaded last by a worker whose step raised, after best-effort diagnostics
+#: (``out.osw`` / ``run.log``). A success marker, if any, takes precedence.
+FAILED_MARKER = "_OSIMFLOW_FAILED"
 HANDOFF_NAME = "_handoff.json"
 SAMPLES_NAME = "samples.json"
 SIM_PREFIX = "work/sim"
@@ -113,24 +116,41 @@ class S3CampaignStore:
                     log.warning("unreadable handoff for %s", parts[0], exc_info=True)
         return sorted(records, key=lambda r: r.submitted_at)
 
-    def completed_samples(self, record: S3Handoff) -> set[str]:
+    def sample_states(self, record: S3Handoff) -> dict[str, str]:
+        """Terminal state per sample: ``"complete"`` or ``"failed"`` (issue #1878).
+
+        A success marker wins over a failure marker, so a Batch retry that
+        eventually succeeds is reported as complete.
+        """
         cid = record.campaign_id
-        marker_suffix = f"/{COMPLETE_MARKER}"
         head = f"{cid}/{SIM_PREFIX}/"
-        done: set[str] = set()
+        states: dict[str, str] = {}
         for key in self.storage.list_results(head):
-            if key.startswith(head) and key.endswith(marker_suffix):
-                done.add(key[len(head) : -len(marker_suffix)])
-        return done & set(record.sample_ids)
+            if not key.startswith(head):
+                continue
+            sid, _, name = key[len(head) :].partition("/")
+            if sid not in record.sample_ids:
+                continue
+            if name == COMPLETE_MARKER:
+                states[sid] = "complete"
+            elif name == FAILED_MARKER:
+                states.setdefault(sid, "failed")
+        return states
+
+    def completed_samples(self, record: S3Handoff) -> set[str]:
+        """Samples with a terminal marker (succeeded or failed)."""
+        return set(self.sample_states(record))
 
     def status(self, campaign_id: str) -> dict[str, Any]:
         record = self.read_handoff(campaign_id)
-        done = self.completed_samples(record)
+        states = self.sample_states(record)
+        done = set(states)
         total = len(record.sample_ids)
         return {
             "campaign_id": campaign_id,
             "total": total,
             "completed": len(done),
+            "failed": sorted(sid for sid, st in states.items() if st == "failed"),
             "pending": sorted(set(record.sample_ids) - done),
             "state": "completed" if total and len(done) == total else "running",
             "submitted_at": record.submitted_at,
@@ -154,7 +174,8 @@ class S3CampaignStore:
         from .work import aggregate_results, extract_kpis  # noqa: PLC0415
 
         record = self.read_handoff(campaign_id)
-        done = self.completed_samples(record)
+        states = self.sample_states(record)
+        done = set(states)
         if len(done) < len(record.sample_ids) and not allow_partial:
             raise S3CampaignError(
                 f"campaign {campaign_id} is not complete ({len(done)}/{len(record.sample_ids)} "
@@ -181,19 +202,22 @@ class S3CampaignStore:
         fetched: list[str] = []
         for sid in sorted(done):
             sim_dir = sim_root / sid
-            if (sim_dir / COMPLETE_MARKER).is_file():
+            local_marker = sim_dir / (
+                COMPLETE_MARKER if states[sid] == "complete" else FAILED_MARKER
+            )
+            if local_marker.is_file():
                 continue
             head = f"{campaign_id}/{SIM_PREFIX}/{sid}/"
             for key in self.storage.list_results(head):
                 rel = key[len(head) :]
-                if not key.startswith(head) or not rel or rel == COMPLETE_MARKER:
+                if not key.startswith(head) or not rel or rel in {COMPLETE_MARKER, FAILED_MARKER}:
                     continue
                 if not include_artifacts and rel.startswith("run/") and rel != "run/run.log":
                     continue
                 dest = sim_dir / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 self.storage.download_file(key, dest)
-            (sim_dir / COMPLETE_MARKER).touch()
+            local_marker.touch()
             fetched.append(sid)
 
         csv_path = outdir / "aggregated_results.csv"
@@ -232,6 +256,7 @@ class S3CampaignStore:
             "campaign_id": campaign_id,
             "fetched": fetched,
             "completed": len(done),
+            "failed": sorted(sid for sid, st in states.items() if st == "failed"),
             "total": len(record.sample_ids),
             "server_csv": server_csv if server_csv.is_file() else None,
             "aggregated_csv": csv_path,
