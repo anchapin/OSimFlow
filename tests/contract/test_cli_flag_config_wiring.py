@@ -235,6 +235,13 @@ REGISTRY_INLINE_DESTS: frozenset[str] = frozenset(
         "limit",
         "registry",
         "format",
+        # `list` / `status` / `download` --from-s3 (issue #1873)
+        "from_s3",
+        "prefix",
+        "allow_partial",
+        "result_storage_bucket",
+        "result_storage_endpoint",
+        "allow_insecure_storage_endpoint",
         # `show`
         "campaign_id",
         # `compare`

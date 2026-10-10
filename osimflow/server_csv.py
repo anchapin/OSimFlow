@@ -35,7 +35,7 @@ _DROPPED_COLUMNS = frozenset(
 )
 
 
-def _find_samples_json(campaign_dir: Path) -> Path | None:
+def find_samples_json(campaign_dir: Path) -> Path | None:
     for cand in (campaign_dir / "samples.json", campaign_dir / "work" / "samples.json"):
         if cand.is_file():
             return cand
@@ -45,7 +45,7 @@ def _find_samples_json(campaign_dir: Path) -> Path | None:
 
 def _load_samples(campaign_dir: Path) -> tuple[list[str], dict[str, dict[str, Any]]]:
     """Variable names (samples.json order) and per-sample values."""
-    path = _find_samples_json(campaign_dir)
+    path = find_samples_json(campaign_dir)
     if path is None:
         return [], {}
     try:

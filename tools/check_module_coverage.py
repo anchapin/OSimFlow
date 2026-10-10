@@ -331,6 +331,7 @@ FLOORS: dict[str, float] = {
     "osimflow/observability.py": 96.17,  # measured 97.17%
     "osimflow/server_csv.py": 79.0,  # measured 80% (issue #1872)
     "osimflow/osw_results.py": 88.0,  # measured 89% (issue #1871)
+    "osimflow/s3_campaign.py": 90.0,
     "osimflow/offline_bundle.py": 93.20,  # measured 94.20% (issue #1640)
     "osimflow/pareto.py": 96.09,  # measured 97.09%
     "osimflow/registry.py": 97.20,  # measured 98.20%

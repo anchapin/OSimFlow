@@ -896,6 +896,21 @@
     "required": false,
     "type": null
   },
+  "--detach-s3": {
+    "dest": "detach_s3",
+    "option_strings": [
+      "--detach-s3"
+    ],
+    "default": "False",
+    "type": null,
+    "choices": null,
+    "action": "_StoreTrueAction",
+    "nargs": "0",
+    "const": "True",
+    "metavar": null,
+    "help": "AWS Batch only: submit the jobs, write a handoff record + samples.json to the --result-storage-bucket S3 bucket and exit without waiting (issue #1873). Check progress with `osimflow status --from-s3` and fetch results with `osimflow download --from-s3`. Re-running with the same --outdir name is a no-op once the handoff exists.",
+    "required": false
+  },
   "--docker-swarm-image": {
     "action": "_StoreAction",
     "choices": null,

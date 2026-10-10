@@ -912,3 +912,21 @@ unchanged:
 Failed samples are included unless `--no-include-failed` is given. The
 reference fixture is `tests/fixtures/server_download_data_reference.csv`
 (synthetic, sanitized).
+
+## Detached AWS Batch runs with S3 status/download (issue #1873)
+
+```bash
+osimflow run --executor aws_batch --detach-s3 --result-storage-backend s3 \
+  --result-storage-bucket my-bucket ... --outdir ./campaign-001   # submits, exits
+osimflow list     --from-s3 --result-storage-bucket my-bucket --prefix campaign-
+osimflow status   --from-s3 --result-storage-bucket my-bucket ./campaign-001
+osimflow download --from-s3 --result-storage-bucket my-bucket ./campaign-001
+```
+
+The campaign id is the `--outdir` name. Re-running the same submit is a no-op
+once `<id>/_handoff.json` exists. Workers mark each finished sample with an
+empty `_OSIMFLOW_COMPLETE` object. `download` fetches only completed samples
+(re-runs skip ones already local), aggregates locally and writes
+`aggregated_results.csv` plus the server-layout `download_data.csv`. It refuses
+incomplete campaigns unless `--allow-partial`. Failed samples upload nothing
+yet (#1878), so use `--allow-partial` when a batch contains failures.

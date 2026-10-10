@@ -406,3 +406,14 @@ def test_missing_result_path_logs_warning_but_does_not_mask_exit(
     assert succeeding_storage.upload_dir.call_count == 0
     parsed = json.loads(stdout.strip())
     assert parsed["ok"] is True
+
+
+def test_upload_dir_strict_writes_complete_marker(tmp_path: Path) -> None:
+    from osimflow.s3_campaign import COMPLETE_MARKER  # noqa: PLC0415
+
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "a.txt").write_text("x")
+    storage = MagicMock()
+    remote_runner._upload_dir_strict(storage, tmp_path / "d", "c/work/sim/0000")  # noqa: SLF001
+    keys = [c.args[1] for c in storage.upload_file.call_args_list]
+    assert keys == ["c/work/sim/0000/a.txt", f"c/work/sim/0000/{COMPLETE_MARKER}"]

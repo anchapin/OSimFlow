@@ -1723,6 +1723,10 @@ See [§7.1 BYOS Custom Scripts](#71-byos-custom-scripts) for the contract.
 | Flag | Description |
 |---|---|
 | `--detach` | Hand the campaign to a Coordinator service and exit immediately (issue #602). |
+| `--detach-s3` | AWS Batch only: submit, write handoff + `samples.json` to the `--result-storage-bucket` S3 bucket, exit (issue #1873). |
+| `--from-s3` | On `status` / `list` / `download`: read detached-campaign state from S3 (campaign id = last path component of `outdir`). |
+| `--prefix P` | With `list --from-s3`: only campaign ids starting with `P`. |
+| `--allow-partial` | With `download --from-s3`: download although some samples are not complete. |
 | `--coordinator-url URL` | Base URL of the Coordinator service (required with `--detach`). |
 | `--shard-count` / `--shard-index` / `--shard-start` / `--shard-end` | Coordinator shard configuration for distributed execution. |
 
